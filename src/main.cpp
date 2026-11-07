@@ -879,13 +879,22 @@ int pivotTest(QApplication& app)
             ++failures;
         }
 
-        // Disabling the custom pivot returns to the centre.
+        // Disabling the edit mode keeps the pivot for rotation.
         project->entity(id)->data[QStringLiteral("rotPointCustom")] = false;
         mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
-        if (std::abs(mapped.x() - center.x()) > 2.0
-            || std::abs(mapped.y() - center.y()) > 2.0)
+        if (std::abs(mapped.x() - expected.x()) > 2.0
+            || std::abs(mapped.y() - expected.y()) > 2.0)
         {
-            qCritical() << "pivot-test: disabling pivot failed" << mapped;
+            qCritical() << "pivot-test: disabling moved the rotation centre" << mapped;
+            ++failures;
+        }
+
+        // The gizmo however goes back to the entity centre.
+        const QPointF gizmo = viewport->entityPivotForTest(id);
+        if (std::abs(gizmo.x() - center.x()) > 2.0
+            || std::abs(gizmo.y() - center.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: gizmo did not return to the entity" << gizmo;
             ++failures;
         }
 

@@ -294,6 +294,8 @@ QPointF Viewport::entityPivotForTest(EntityId id) const
 
 QPointF Viewport::entityPivotScreen(const Entity& e) const
 {
+    // In pivot-edit mode the gizmo sits on the pivot; otherwise it sits on
+    // the entity itself, even though rotation still uses the pivot.
     QPointF point = entityScreenCenter(e);
     if (e.rotPointCustom())
     {
@@ -310,20 +312,16 @@ QTransform Viewport::entityTransform(const Entity& e) const
     const QPointF origin = entityScreenCenter(e);
     const double rotation = m_project->value(e.id, "rotation", m_frame);
 
+    // The pivot persists even when the custom-pivot mode is off, so rotation
+    // always uses it. A zero pivot means the entity centre.
+    const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
+    const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
+
     QTransform transform;
     transform.translate(origin.x(), origin.y());
-    if (e.rotPointCustom())
-    {
-        const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
-        const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
-        transform.translate(ax, ay);
-        transform.rotate(rotation);
-        transform.translate(-ax, -ay);
-    }
-    else
-    {
-        transform.rotate(rotation);
-    }
+    transform.translate(ax, ay);
+    transform.rotate(rotation);
+    transform.translate(-ax, -ay);
     transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
                     m_project->value(e.id, "scaleY", m_frame) * s);
     return transform;
@@ -335,20 +333,14 @@ QTransform Viewport::entityRotationTransform(const Entity& e) const
     const QPointF origin = entityScreenCenter(e);
     const double rotation = m_project->value(e.id, "rotation", m_frame);
 
+    const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
+    const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
+
     QTransform transform;
     transform.translate(origin.x(), origin.y());
-    if (e.rotPointCustom())
-    {
-        const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
-        const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
-        transform.translate(ax, ay);
-        transform.rotate(rotation);
-        transform.translate(-ax, -ay);
-    }
-    else
-    {
-        transform.rotate(rotation);
-    }
+    transform.translate(ax, ay);
+    transform.rotate(rotation);
+    transform.translate(-ax, -ay);
     return transform;
 }
 
