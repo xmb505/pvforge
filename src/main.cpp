@@ -955,26 +955,32 @@ int timelineFrameTest(QApplication& app)
             loop.exec();
         };
 
-        // A quick right-arrow press advances exactly one frame.
+        // A normal tap (held for a moment) moves exactly one frame. The
+        // continuous repeat only starts after the hold delay.
         window.goToFrame(10);
         sendKey(QEvent::KeyPress, Qt::Key_Right, false);
+        wait(120);
+        sendKey(QEvent::KeyRelease, Qt::Key_Right, false);
+        wait(100);
         if (window.currentFrame() != 11)
         {
-            qCritical() << "timeline-frame-test: tap did not step one frame"
+            qCritical() << "timeline-frame-test: tap did not step exactly one frame"
                         << window.currentFrame();
             ++failures;
         }
 
-        // Holding keeps stepping at the project frame rate.
-        wait(150);
+        // Holding past the delay keeps stepping at the project frame rate.
+        const int holdStart = window.currentFrame();
+        sendKey(QEvent::KeyPress, Qt::Key_Right, false);
+        wait(650);
         const int heldTo = window.currentFrame();
-        if (heldTo <= 11)
+        sendKey(QEvent::KeyRelease, Qt::Key_Right, false);
+        wait(120);
+        if (heldTo <= holdStart)
         {
             qCritical() << "timeline-frame-test: hold did not advance" << heldTo;
             ++failures;
         }
-        sendKey(QEvent::KeyRelease, Qt::Key_Right, false);
-        wait(120);
         if (window.currentFrame() != heldTo)
         {
             qCritical() << "timeline-frame-test: release did not stop"
@@ -982,13 +988,24 @@ int timelineFrameTest(QApplication& app)
             ++failures;
         }
 
-        // Left arrow runs backwards.
+        // Left arrow: one tap is one frame, holding runs backwards.
         window.goToFrame(40);
         sendKey(QEvent::KeyPress, Qt::Key_Left, false);
-        wait(150);
+        wait(120);
+        sendKey(QEvent::KeyRelease, Qt::Key_Left, false);
+        wait(80);
+        if (window.currentFrame() != 39)
+        {
+            qCritical() << "timeline-frame-test: left tap did not step one frame"
+                        << window.currentFrame();
+            ++failures;
+        }
+
+        sendKey(QEvent::KeyPress, Qt::Key_Left, false);
+        wait(650);
         const int reverseTo = window.currentFrame();
         sendKey(QEvent::KeyRelease, Qt::Key_Left, false);
-        if (reverseTo >= 40)
+        if (reverseTo >= 39)
         {
             qCritical() << "timeline-frame-test: reverse hold did not move" << reverseTo;
             ++failures;

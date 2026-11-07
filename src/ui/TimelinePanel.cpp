@@ -141,12 +141,23 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     updateScrollBar();
 
     // Holding an arrow key keeps stepping at the project frame rate, which
-    // turns into forward/backward playback. A quick tap moves one frame.
+    // turns into forward/backward playback. A quick tap moves one frame; the
+    // repeat only starts after a short delay so a normal press never runs on.
     m_holdTimer = new QTimer(this);
     m_holdTimer->setTimerType(Qt::PreciseTimer);
     connect(m_holdTimer, &QTimer::timeout, this, [this] {
         if (m_holdDirection != 0)
             stepFrame(m_holdDirection);
+    });
+
+    m_holdDelay = new QTimer(this);
+    m_holdDelay->setSingleShot(true);
+    m_holdDelay->setInterval(400);
+    connect(m_holdDelay, &QTimer::timeout, this, [this] {
+        if (m_holdDirection == 0)
+            return;
+        m_holdTimer->setInterval(std::max(1, 1000 / std::max(1, m_project->fps)));
+        m_holdTimer->start();
     });
 }
 
@@ -835,8 +846,8 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
             emit scrubStarted();
             m_holdDirection = direction;
             stepFrame(direction);
-            m_holdTimer->setInterval(std::max(1, 1000 / std::max(1, m_project->fps)));
-            m_holdTimer->start();
+            if (m_holdDirection != 0)
+                m_holdDelay->start();
         }
         event->accept();
         return;
@@ -867,8 +878,7 @@ void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
         && !event->isAutoRepeat())
     {
-        m_holdDirection = 0;
-        m_holdTimer->stop();
+        stopHold();
         event->accept();
         return;
     }
@@ -879,8 +889,7 @@ void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
 void TimelinePanel::focusOutEvent(QFocusEvent* event)
 {
     // A key release can be lost when the focus moves mid-hold.
-    m_holdDirection = 0;
-    m_holdTimer->stop();
+    stopHold();
     QWidget::focusOutEvent(event);
 }
 
@@ -891,8 +900,7 @@ void TimelinePanel::stepFrame(int delta)
     if (next < 0)
     {
         next = 0;
-        m_holdDirection = 0;
-        m_holdTimer->stop();
+        stopHold();
     }
 
     const int length = m_project->timelineLength();
@@ -905,12 +913,18 @@ void TimelinePanel::stepFrame(int delta)
         else
         {
             next = length;
-            m_holdDirection = 0;
-            m_holdTimer->stop();
+            stopHold();
         }
     }
 
     emit frameRequested(next);
+}
+
+void TimelinePanel::stopHold()
+{
+    m_holdDirection = 0;
+    m_holdTimer->stop();
+    m_holdDelay->stop();
 }
 
 void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)

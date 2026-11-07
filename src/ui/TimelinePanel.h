@@ -84,6 +84,7 @@ private:
     void zoomAt(double factor, int anchorX);
     void commitRename();
     void stepFrame(int delta);
+    void stopHold();
 
     enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
 
@@ -107,6 +108,7 @@ private:
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
     QTimer* m_holdTimer = nullptr;
+    QTimer* m_holdDelay = nullptr;
     int m_holdDirection = 0;
 
     static constexpr int kNameWidth = 180;
