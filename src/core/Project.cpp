@@ -325,13 +325,73 @@ Entity* Project::entity(EntityId id)
     return nullptr;
 }
 
-void Project::removeEntity(EntityId id)
+int Project::removeEntity(EntityId id)
 {
     const auto it = std::find_if(m_entities.begin(), m_entities.end(),
                                  [id](const Entity& e) { return e.id == id; });
     if (it == m_entities.end())
-        return;
+        return -1;
+    const int index = int(it - m_entities.begin());
     m_entities.erase(it);
+    emit changed();
+    return index;
+}
+
+void Project::insertEntity(const Entity& entity, int index)
+{
+    const int position = std::clamp(index, 0, int(m_entities.size()));
+    m_entities.insert(position, entity);
+    m_nextId = std::max(m_nextId, entity.id + 1);
+    emit changed();
+}
+
+void Project::setEntityFlag(EntityId id, EntityFlag flag, bool value)
+{
+    Entity* e = entity(id);
+    if (!e)
+        return;
+    if (flag == EntityFlag::Hidden)
+        e->hidden = value;
+    else
+        e->locked = value;
+    emit changed();
+}
+
+QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
+{
+    QVector<KeyframeRecord> removed;
+    Entity* e = entity(id);
+    if (!e)
+        return removed;
+
+    for (auto it = e->tracks.begin(); it != e->tracks.end();)
+    {
+        Track& track = it.value();
+        for (int i = int(track.keys.size()) - 1; i >= 0; --i)
+        {
+            if (std::abs(track.keys[i].frame - frame) < 1e-6)
+            {
+                removed.append({id, it.key(), track.keys[i].frame, track.keys[i].value});
+                track.keys.removeAt(i);
+            }
+        }
+        if (track.keys.isEmpty())
+            it = e->tracks.erase(it);
+        else
+            ++it;
+    }
+
+    if (!removed.isEmpty())
+        emit changed();
+    return removed;
+}
+
+void Project::addKeyframe(EntityId id, const QString& property, double frame, double value)
+{
+    Entity* e = entity(id);
+    if (!e)
+        return;
+    e->tracks[property].setKey(frame, value);
     emit changed();
 }
 

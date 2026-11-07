@@ -1,4 +1,6 @@
 #include "app/AppIcon.h"
+#include "core/Commands.h"
+#include "core/History.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
 #include "app/WelcomeWindow.h"
@@ -389,6 +391,106 @@ int timelineInteractionTest(QApplication& app)
 
         qInfo() << "timeline-interaction-test: ruler" << rulerFrame << "empty" << emptyFrame
                 << "key" << beforeKey << "->" << afterKey << "failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int undoTest(QApplication& app)
+{
+    const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_undo.png");
+    QImage img(32, 32, QImage::Format_ARGB32);
+    img.fill(Qt::red);
+    if (!img.save(assetPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project, assetPath] {
+        int failures = 0;
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        auto* redo = window.findChild<QAction*>(QStringLiteral("redoAction"));
+        if (!undo || !redo)
+        {
+            qCritical() << "undo-test: actions missing";
+            app.exit(1);
+            return;
+        }
+
+        // Creating an entity is undoable.
+        if (window.importImageFile(assetPath) == pvf::kInvalidEntity)
+        {
+            qCritical() << "undo-test: import failed";
+            app.exit(1);
+            return;
+        }
+        if (project->entities().size() != 1)
+        {
+            qCritical() << "undo-test: entity not created";
+            ++failures;
+        }
+
+        // Deleting the selected entity is undoable.
+        QKeyEvent deleteEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+        QApplication::sendEvent(&window, &deleteEvent);
+        if (!project->entities().isEmpty())
+        {
+            qCritical() << "undo-test: delete failed";
+            ++failures;
+        }
+        undo->trigger();
+        if (project->entities().size() != 1)
+        {
+            qCritical() << "undo-test: undo delete failed";
+            ++failures;
+        }
+
+        // Undoing again removes the creation.
+        undo->trigger();
+        if (!project->entities().isEmpty())
+        {
+            qCritical() << "undo-test: undo create failed";
+            ++failures;
+        }
+
+        // Redo brings it back.
+        redo->trigger();
+        if (project->entities().size() != 1)
+        {
+            qCritical() << "undo-test: redo create failed";
+            ++failures;
+        }
+
+        // Keyframe removal is undoable on the history level.
+        pvf::History history;
+        if (project->entities().isEmpty())
+        {
+            qCritical() << "undo-test: no entity for keyframe test";
+            app.exit(1);
+            return;
+        }
+        const pvf::EntityId id = project->entities().first().id;
+        project->setValue(id, QStringLiteral("x"), 0, 0, true);
+        project->setValue(id, QStringLiteral("x"), 60, 400, true);
+        const auto records = project->removeKeyframesAt(id, 60);
+        history.push(std::make_unique<pvf::RemoveKeyframesCommand>(records), *project);
+        if (!records.isEmpty() && project->value(id, QStringLiteral("x"), 60) == 400.0)
+        {
+            qCritical() << "undo-test: keyframe not removed";
+            ++failures;
+        }
+        history.undo(*project);
+        if (std::abs(project->value(id, QStringLiteral("x"), 60) - 400.0) > 1e-6)
+        {
+            qCritical() << "undo-test: keyframe not restored";
+            ++failures;
+        }
+
+        QFile::remove(assetPath);
+        qInfo() << "undo-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -804,6 +906,8 @@ int main(int argc, char* argv[])
         return timelineZoomTest(app);
     if (app.arguments().contains(QStringLiteral("--delete-test")))
         return deleteTest(app);
+    if (app.arguments().contains(QStringLiteral("--undo-test")))
+        return undoTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

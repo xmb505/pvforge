@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/History.h"
 #include "core/Project.h"
 
 #include <QElapsedTimer>
@@ -51,10 +52,16 @@ private:
     void updateStatus();
     void toggleWorkbench();
     void deleteSelectedEntity();
+    void onUndo();
+    void onRedo();
+    void onEntityCreated(EntityId id);
+    void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
+    void onDeleteKeyframesRequested();
     void saveProject();
     void saveProjectAs();
 
     Project* m_project = nullptr;
+    History* m_history = nullptr;
     Viewport* m_viewport = nullptr;
     PropertiesPanel* m_props = nullptr;
     AssetLibraryPanel* m_library = nullptr;
@@ -72,6 +79,8 @@ private:
 
     QAction* m_playAction = nullptr;
     QAction* m_autoKeyAction = nullptr;
+    QAction* m_undoAction = nullptr;
+    QAction* m_redoAction = nullptr;
     QAction* m_saveAction = nullptr;
     QAction* m_saveAsAction = nullptr;
     QAction* m_homeAction = nullptr;

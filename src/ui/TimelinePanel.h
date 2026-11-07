@@ -35,11 +35,14 @@ public:
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
+    QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
 
 signals:
     void frameRequested(int frame);
     void entitySelected(EntityId id);
+    void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
+    void deleteKeyframesRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;

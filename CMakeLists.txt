@@ -16,6 +16,8 @@ qt_standard_project_setup()
 add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
+    src/core/History.cpp
+    src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/app/AppIcon.cpp
     src/app/MainWindow.cpp

@@ -201,12 +201,10 @@ void TimelinePanel::handleRowButton(int row, int index)
     switch (index)
     {
     case 0:   // Hide / show
-        entity->hidden = !entity->hidden;
-        m_project->notifyChanged();
+        emit entityFlagChanged(id, EntityFlag::Hidden, !entity->hidden);
         break;
     case 1:   // Lock / unlock
-        entity->locked = !entity->locked;
-        m_project->notifyChanged();
+        emit entityFlagChanged(id, EntityFlag::Locked, !entity->locked);
         break;
     case 2:   // Select every keyframe of the entity
     {
@@ -545,6 +543,16 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
         event->accept();
         return;
     }
+
+    if (event->key() == Qt::Key_Delete && !m_selectedKeyframes.isEmpty())
+    {
+        emit deleteKeyframesRequested();
+        m_selectedKeyframes.clear();
+        update();
+        event->accept();
+        return;
+    }
+
     QWidget::keyPressEvent(event);
 }
 

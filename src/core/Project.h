@@ -77,6 +77,17 @@ struct Template
     QImage thumbnail;        // runtime cache
 };
 
+// A removed keyframe, kept so it can be restored by undo.
+struct KeyframeRecord
+{
+    EntityId entity = kInvalidEntity;
+    QString property;
+    double frame = 0.0;
+    double value = 0.0;
+};
+
+enum class EntityFlag { Hidden, Locked };
+
 class Project : public QObject
 {
     Q_OBJECT
@@ -109,7 +120,11 @@ public:
 
     Entity* entity(EntityId id);
     const Entity* entity(EntityId id) const;
-    void removeEntity(EntityId id);
+    int removeEntity(EntityId id);
+    void insertEntity(const Entity& entity, int index);
+    void setEntityFlag(EntityId id, EntityFlag flag, bool value);
+    QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
+    void addKeyframe(EntityId id, const QString& property, double frame, double value);
     const QVector<Entity>& entities() const { return m_entities; }
     EntityId nextId() const { return m_nextId; }
 

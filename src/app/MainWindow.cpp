@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "core/Commands.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/EnvironmentPanel.h"
@@ -37,6 +38,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     resize(1440, 900);
     setMinimumSize(1000, 620);
 
+    m_history = new History(this);
     m_viewport = new Viewport(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
     m_library = new AssetLibraryPanel(m_project, this);
@@ -137,8 +139,22 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         setFrame(m_frame);
     });
     connect(m_project, &Project::changed, this, &MainWindow::refreshAll);
-    connect(m_workbench, &WorkbenchPanel::created, this,
-            [this](EntityId id) { setSelectedEntity(id); });
+    connect(m_workbench, &WorkbenchPanel::created, this, &MainWindow::onEntityCreated);
+    connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::onEntityCreated);
+    connect(m_timeline, &TimelinePanel::entityFlagChanged, this,
+            &MainWindow::onEntityFlagChanged);
+    connect(m_timeline, &TimelinePanel::deleteKeyframesRequested, this,
+            &MainWindow::onDeleteKeyframesRequested);
+    connect(m_history, &History::changed, this, [this] {
+        m_undoAction->setEnabled(m_history->canUndo());
+        m_redoAction->setEnabled(m_history->canRedo());
+        m_undoAction->setText(m_history->canUndo()
+                                  ? QStringLiteral("撤销 ") + m_history->undoText()
+                                  : QStringLiteral("撤销"));
+        m_redoAction->setText(m_history->canRedo()
+                                  ? QStringLiteral("重做 ") + m_history->redoText()
+                                  : QStringLiteral("重做"));
+    });
 
     createActions();
     createMenus();
@@ -149,6 +165,20 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
 void MainWindow::createActions()
 {
+    m_undoAction = new QAction(QStringLiteral("撤销"), this);
+    m_undoAction->setObjectName(QStringLiteral("undoAction"));
+    m_undoAction->setShortcut(QKeySequence::Undo);
+    m_undoAction->setEnabled(false);
+    connect(m_undoAction, &QAction::triggered, this, &MainWindow::onUndo);
+    addAction(m_undoAction);
+
+    m_redoAction = new QAction(QStringLiteral("重做"), this);
+    m_redoAction->setObjectName(QStringLiteral("redoAction"));
+    m_redoAction->setShortcut(QKeySequence::Redo);
+    m_redoAction->setEnabled(false);
+    connect(m_redoAction, &QAction::triggered, this, &MainWindow::onRedo);
+    addAction(m_redoAction);
+
     m_playAction = new QAction(QStringLiteral("播放"), this);
     m_playAction->setShortcut(QKeySequence(Qt::Key_Space));
     m_playAction->setShortcutContext(Qt::ApplicationShortcut);
@@ -205,6 +235,9 @@ void MainWindow::createMenus()
     fileMenu->addAction(m_quitAction);
 
     auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
+    editMenu->addAction(m_undoAction);
+    editMenu->addAction(m_redoAction);
+    editMenu->addSeparator();
     editMenu->addAction(m_autoKeyAction);
     editMenu->addSeparator();
     auto* deleteAction = new QAction(QStringLiteral("删除实体"), this);
@@ -257,8 +290,14 @@ void MainWindow::deleteSelectedEntity()
 {
     if (m_selected == kInvalidEntity)
         return;
-    m_project->removeEntity(m_selected);
+    const Entity* e = m_project->entity(m_selected);
+    if (!e)
+        return;
+
+    const Entity copy = *e;
+    const int index = m_project->removeEntity(m_selected);
     setSelectedEntity(kInvalidEntity);
+    m_history->push(std::make_unique<RemoveEntityCommand>(copy, index), *m_project);
     statusBar()->showMessage(QStringLiteral("已删除实体"), 2000);
 }
 
@@ -316,7 +355,7 @@ EntityId MainWindow::importImageFile(const QString& path)
         return kInvalidEntity;
 
     const EntityId id = e->id;
-    setSelectedEntity(id);
+    onEntityCreated(id);
     return id;
 }
 
@@ -371,11 +410,67 @@ void MainWindow::applyValue(EntityId id, const QString& prop, double value)
     // Auto-key on by default. With auto-key off, existing animated properties
     // still get edited at the current frame so the viewport stays truthful.
     const bool keyframe = m_project->autoKey || e->tracks.contains(prop);
+    const double oldValue = m_project->value(id, prop, m_frame);
+    if (qFuzzyCompare(oldValue + 1.0, value + 1.0))
+        return;
+
     m_project->setValue(id, prop, m_frame, value, keyframe);
+    m_history->push(std::make_unique<SetValueCommand>(id, prop, m_frame, oldValue, value,
+                                                       keyframe),
+                    *m_project);
+}
+
+void MainWindow::onUndo()
+{
+    m_history->undo(*m_project);
+}
+
+void MainWindow::onRedo()
+{
+    m_history->redo(*m_project);
+}
+
+void MainWindow::onEntityCreated(EntityId id)
+{
+    setSelectedEntity(id);
+
+    const auto& entities = m_project->entities();
+    for (int i = 0; i < int(entities.size()); ++i)
+    {
+        if (entities[i].id != id)
+            continue;
+        m_history->push(std::make_unique<AddEntityCommand>(entities[i], i), *m_project);
+        return;
+    }
+}
+
+void MainWindow::onEntityFlagChanged(EntityId id, EntityFlag flag, bool value)
+{
+    const Entity* e = m_project->entity(id);
+    if (!e)
+        return;
+    const bool oldValue = (flag == EntityFlag::Hidden) ? e->hidden : e->locked;
+    if (oldValue == value)
+        return;
+    m_history->push(std::make_unique<SetEntityFlagCommand>(id, flag, oldValue, value),
+                    *m_project);
+}
+
+void MainWindow::onDeleteKeyframesRequested()
+{
+    QVector<KeyframeRecord> records;
+    for (const KeyframeSelection& selection : m_timeline->selectedKeyframes())
+        records += m_project->removeKeyframesAt(selection.entity, selection.frame);
+    if (records.isEmpty())
+        return;
+    m_history->push(std::make_unique<RemoveKeyframesCommand>(records), *m_project);
+    statusBar()->showMessage(QStringLiteral("已删除关键帧"), 2000);
 }
 
 void MainWindow::refreshAll()
 {
+    if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
+        setSelectedEntity(kInvalidEntity);
     m_viewport->update();
     m_timeline->update();
     m_props->refresh();

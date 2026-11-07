@@ -1,0 +1,93 @@
+#pragma once
+
+#include "core/History.h"
+
+namespace pvf {
+
+// Changing an animated property, with the previous value kept for undo.
+class SetValueCommand : public UndoCommand
+{
+public:
+    SetValueCommand(EntityId id, const QString& property, double frame, double oldValue,
+                    double newValue, bool keyframe);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    QString m_property;
+    double m_frame = 0.0;
+    double m_oldValue = 0.0;
+    double m_newValue = 0.0;
+    bool m_keyframe = true;
+};
+
+// Creating an entity.
+class AddEntityCommand : public UndoCommand
+{
+public:
+    AddEntityCommand(const Entity& entity, int index);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Entity m_entity;
+    int m_index = 0;
+    bool m_present = true;   // the entity already exists when recorded
+};
+
+// Removing an entity, keeping a copy so it can be restored.
+class RemoveEntityCommand : public UndoCommand
+{
+public:
+    RemoveEntityCommand(const Entity& entity, int index);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Entity m_entity;
+    int m_index = 0;
+    bool m_present = false;  // the entity is already gone when recorded
+};
+
+// Toggling the hidden or locked flag of an entity.
+class SetEntityFlagCommand : public UndoCommand
+{
+public:
+    SetEntityFlagCommand(EntityId id, EntityFlag flag, bool oldValue, bool newValue);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    EntityFlag m_flag = EntityFlag::Hidden;
+    bool m_oldValue = false;
+    bool m_newValue = false;
+};
+
+// Deleting keyframes, keeping a copy so they can be restored.
+class RemoveKeyframesCommand : public UndoCommand
+{
+public:
+    explicit RemoveKeyframesCommand(const QVector<KeyframeRecord>& records);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    QVector<KeyframeRecord> m_records;
+};
+
+} // namespace pvf
