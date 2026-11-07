@@ -16,6 +16,7 @@
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -49,7 +50,7 @@ QLabel* infoLabel(const QString& text, QWidget* parent)
     auto* label = new QLabel(text, parent);
     label->setWordWrap(true);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     label->setMinimumWidth(0);
     return label;
 }
@@ -305,13 +306,42 @@ QWidget* SettingsDialog::createDecodePage()
     layout->setSpacing(12);
 
     auto* decode = new QGroupBox(QStringLiteral("当前解码路径"), page);
-    auto* form = new QFormLayout(decode);
+    auto* decodeLayout = new QVBoxLayout(decode);
+    decodeLayout->setSpacing(10);
+    auto* grid = new QGridLayout;
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(14);
+    grid->setVerticalSpacing(8);
+    grid->setColumnStretch(1, 1);
+
     const DecoderInfo info = decoderInfo();
-    form->addRow(QStringLiteral("视频解码"), infoLabel(info.video, decode));
-    form->addRow(QStringLiteral("音频解码"), infoLabel(info.audioDecode, decode));
-    form->addRow(QStringLiteral("音频播放"), infoLabel(info.audioOutput, decode));
-    form->addRow(QStringLiteral("硬件加速"), infoLabel(info.hardware, decode));
-    form->addRow(infoLabel(
+    int row = 0;
+    auto addDecoderRow = [decode, grid, &row](const QString& title,
+                                              const QString& value,
+                                              const QString& objectName) {
+        auto* name = new QLabel(title, decode);
+        name->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        name->setMinimumWidth(64);
+        QLabel* field = infoLabel(value, decode);
+        field->setObjectName(objectName);
+        field->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        grid->addWidget(name, row, 0);
+        grid->addWidget(field, row, 1);
+        ++row;
+    };
+    addDecoderRow(QStringLiteral("解码方式"), info.mode,
+                  QStringLiteral("decoderModeValue"));
+    addDecoderRow(QStringLiteral("视频解码"), info.video,
+                  QStringLiteral("decoderVideoValue"));
+    addDecoderRow(QStringLiteral("音频解码"), info.audioDecode,
+                  QStringLiteral("decoderAudioValue"));
+    addDecoderRow(QStringLiteral("音频播放"), info.audioOutput,
+                  QStringLiteral("decoderOutputValue"));
+    addDecoderRow(QStringLiteral("硬件加速"), info.hardware,
+                  QStringLiteral("decoderHardwareValue"));
+    decodeLayout->addLayout(grid);
+
+    decodeLayout->addWidget(infoLabel(
         QStringLiteral("这里是只读信息，显示当前构建实际使用的路径。"
                        "视频播放接入后再提供可切换的硬件解码选项。"),
         decode));
@@ -321,7 +351,7 @@ QWidget* SettingsDialog::createDecodePage()
     connect(copy, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(decoderInfo().toText());
     });
-    form->addRow(copy);
+    decodeLayout->addWidget(copy);
 
     layout->addWidget(decode);
     layout->addStretch(1);

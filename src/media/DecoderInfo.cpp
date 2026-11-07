@@ -12,6 +12,7 @@ DecoderInfo decoderInfo()
 {
     DecoderInfo info;
     info.ffmpegVersion = QString::fromLatin1(av_version_info());
+    info.mode = QStringLiteral("软件解码（FFmpeg，固定）");
     info.video = QStringLiteral("FFmpeg %1 · 软件解码（视频首帧）")
                      .arg(info.ffmpegVersion);
     info.audioDecode = QStringLiteral("FFmpeg %1 + libswresample · 软件解码")
@@ -25,8 +26,8 @@ DecoderInfo decoderInfo()
 
 QString DecoderInfo::toText() const
 {
-    return QStringLiteral("视频解码：%1\n音频解码：%2\n音频播放：%3\n硬件加速：%4")
-        .arg(video, audioDecode, audioOutput, hardware);
+    return QStringLiteral("解码方式：%1\n视频解码：%2\n音频解码：%3\n音频播放：%4\n硬件加速：%5")
+        .arg(mode, video, audioDecode, audioOutput, hardware);
 }
 
 } // namespace pvf

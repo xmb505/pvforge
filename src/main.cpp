@@ -439,8 +439,8 @@ int settingsTest(QApplication& app)
     pvf::Settings::setSnapPixels(oldSnap);
 
     const pvf::DecoderInfo decoder = pvf::decoderInfo();
-    if (decoder.ffmpegVersion.isEmpty() || decoder.video.isEmpty()
-        || decoder.audioOutput.isEmpty())
+    if (decoder.ffmpegVersion.isEmpty() || decoder.mode.isEmpty()
+        || decoder.video.isEmpty() || decoder.audioOutput.isEmpty())
     {
         qCritical() << "settings-test: decoder info incomplete";
         return 1;
@@ -464,6 +464,26 @@ int settingsTest(QApplication& app)
         QApplication::processEvents();
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings.png"));
 
+        auto* categories =
+            dialog.findChild<QListWidget*>(QStringLiteral("settingsCategories"));
+        if (categories)
+            categories->setCurrentRow(5);
+        QApplication::processEvents();
+        auto* videoValue =
+            dialog.findChild<QLabel*>(QStringLiteral("decoderVideoValue"));
+        auto* modeValue =
+            dialog.findChild<QLabel*>(QStringLiteral("decoderModeValue"));
+        if (!videoValue || !videoValue->text().contains(QStringLiteral("软件解码"))
+            || videoValue->width() < 120 || !modeValue
+            || !modeValue->text().contains(QStringLiteral("软件解码")))
+        {
+            qCritical() << "settings-test: decoder value not visible"
+                        << (videoValue ? videoValue->text() : QString())
+                        << (videoValue ? videoValue->width() : -1);
+            return 1;
+        }
+        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings_decode.png"));
+
         dialog.showAboutPage();
         QApplication::processEvents();
         auto* about = dialog.findChild<QPlainTextEdit*>(QStringLiteral("aboutText"));
@@ -482,8 +502,6 @@ int settingsTest(QApplication& app)
             qCritical() << "settings-test: about copy button missing";
             return 1;
         }
-        auto* categories =
-            dialog.findChild<QListWidget*>(QStringLiteral("settingsCategories"));
         if (!categories || !categories->currentItem()
             || categories->currentItem()->text() != QStringLiteral("关于"))
         {

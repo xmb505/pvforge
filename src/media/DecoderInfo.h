@@ -7,6 +7,7 @@ namespace pvf {
 struct DecoderInfo
 {
     QString ffmpegVersion;
+    QString mode;
     QString video;
     QString audioDecode;
     QString audioOutput;
