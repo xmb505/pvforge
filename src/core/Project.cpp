@@ -1,11 +1,73 @@
 #include "Project.h"
 
+#include "media/VideoDecoder.h"
+
+#include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QSaveFile>
 #include <algorithm>
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+QString typeToString(EntityType type)
+{
+    switch (type)
+    {
+    case EntityType::Image:
+        return QStringLiteral("image");
+    case EntityType::Video:
+        return QStringLiteral("video");
+    case EntityType::Text:
+        return QStringLiteral("text");
+    case EntityType::Vector:
+        return QStringLiteral("vector");
+    }
+    return QStringLiteral("image");
+}
+
+EntityType typeFromString(const QString& text)
+{
+    if (text == QLatin1String("video"))
+        return EntityType::Video;
+    if (text == QLatin1String("text"))
+        return EntityType::Text;
+    if (text == QLatin1String("vector"))
+        return EntityType::Vector;
+    return EntityType::Image;
+}
+
+bool isColorKey(const QString& key)
+{
+    return key == QLatin1String("color") || key == QLatin1String("fill")
+           || key == QLatin1String("stroke");
+}
+
+} // namespace
+
+int Project::timelineLength() const
+{
+    // No fixed project duration: the timeline spans the longest media clip
+    // and the last keyframe, with a two second floor for an empty project.
+    double last = fps * 2.0;
+    for (const Entity& e : m_entities)
+    {
+        const double media = e.data.value(QStringLiteral("duration"), 0.0).toDouble();
+        if (media > 0.0)
+            last = std::max(last, media * fps);
+        for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
+            if (!it->keys.isEmpty())
+                last = std::max(last, it->keys.last().frame);
+    }
+    return std::max(1, int(std::ceil(last)));
+}
 
 double Track::evaluate(double frame, double fallback) const
 {
@@ -140,11 +202,12 @@ Entity* Project::addImage(const QString& path)
     return append(std::move(e));
 }
 
-Entity* Project::addVideo(const QString& path, const QImage& firstFrame)
+Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double duration)
 {
     Entity e = makeBase(EntityType::Video, QFileInfo(path).completeBaseName());
     e.sourcePath = path;
     e.image = firstFrame;
+    e.data["duration"] = duration;
 
     if (!firstFrame.isNull())
     {
@@ -233,6 +296,189 @@ void Project::setValue(EntityId id, const QString& prop, double frame, double va
             e->values[prop] = value;
     }
     emit changed();
+}
+
+QJsonObject Project::toJson() const
+{
+    QJsonObject root;
+    root[QStringLiteral("format")] = QStringLiteral("pvforge");
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("name")] = name;
+    root[QStringLiteral("author")] = author;
+    root[QStringLiteral("description")] = description;
+    root[QStringLiteral("width")] = width;
+    root[QStringLiteral("height")] = height;
+    root[QStringLiteral("fps")] = fps;
+    root[QStringLiteral("background")] = background.name(QColor::HexRgb);
+
+    QJsonArray entities;
+    for (const Entity& e : m_entities)
+    {
+        QJsonObject entity;
+        entity[QStringLiteral("id")] = e.id;
+        entity[QStringLiteral("type")] = typeToString(e.type);
+        entity[QStringLiteral("name")] = e.name;
+        entity[QStringLiteral("sourcePath")] = e.sourcePath;
+
+        QJsonObject data;
+        for (auto it = e.data.constBegin(); it != e.data.constEnd(); ++it)
+        {
+            if (isColorKey(it.key()))
+                data[it.key()] = it.value().value<QColor>().name(QColor::HexArgb);
+            else
+                data[it.key()] = QJsonValue::fromVariant(it.value());
+        }
+        entity[QStringLiteral("data")] = data;
+
+        QJsonObject values;
+        for (auto it = e.values.constBegin(); it != e.values.constEnd(); ++it)
+            values[it.key()] = it.value();
+        entity[QStringLiteral("values")] = values;
+
+        QJsonObject tracks;
+        for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
+        {
+            QJsonArray keys;
+            for (const Keyframe& key : it->keys)
+            {
+                QJsonObject keyframe;
+                keyframe[QStringLiteral("f")] = key.frame;
+                keyframe[QStringLiteral("v")] = key.value;
+                keys.append(keyframe);
+            }
+            tracks[it.key()] = keys;
+        }
+        entity[QStringLiteral("tracks")] = tracks;
+
+        entities.append(entity);
+    }
+    root[QStringLiteral("entities")] = entities;
+    return root;
+}
+
+bool Project::save(const QString& path, QString* error)
+{
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+
+    const QByteArray json = QJsonDocument(toJson()).toJson(QJsonDocument::Indented);
+    file.write(json);
+    if (!file.commit())
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+
+    filePath = path;
+    return true;
+}
+
+bool Project::load(const QString& path, QString* error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+    {
+        if (error)
+            *error = parseError.errorString();
+        return false;
+    }
+
+    const QJsonObject root = document.object();
+    if (root.value(QStringLiteral("format")).toString() != QLatin1String("pvforge"))
+    {
+        if (error)
+            *error = QStringLiteral("不是 PVForge 工程文件");
+        return false;
+    }
+
+    name = root.value(QStringLiteral("name")).toString(QStringLiteral("未命名项目"));
+    author = root.value(QStringLiteral("author")).toString();
+    description = root.value(QStringLiteral("description")).toString();
+    width = std::max(1, root.value(QStringLiteral("width")).toInt(1920));
+    height = std::max(1, root.value(QStringLiteral("height")).toInt(1080));
+    fps = std::clamp(root.value(QStringLiteral("fps")).toInt(30), 1, 240);
+    background = QColor(root.value(QStringLiteral("background")).toString(QStringLiteral("#101014")));
+    if (!background.isValid())
+        background = QColor(0x10, 0x10, 0x14);
+
+    m_entities.clear();
+    m_nextId = 1;
+
+    const QJsonArray entities = root.value(QStringLiteral("entities")).toArray();
+    for (const QJsonValue& value : entities)
+    {
+        const QJsonObject object = value.toObject();
+        Entity e;
+        e.id = object.value(QStringLiteral("id")).toInt();
+        e.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        e.name = object.value(QStringLiteral("name")).toString();
+        e.sourcePath = object.value(QStringLiteral("sourcePath")).toString();
+
+        const QJsonObject data = object.value(QStringLiteral("data")).toObject();
+        for (auto it = data.constBegin(); it != data.constEnd(); ++it)
+        {
+            if (isColorKey(it.key()))
+                e.data[it.key()] = QColor(it.value().toString());
+            else
+                e.data[it.key()] = it.value().toVariant();
+        }
+
+        const QJsonObject values = object.value(QStringLiteral("values")).toObject();
+        for (auto it = values.constBegin(); it != values.constEnd(); ++it)
+            e.values[it.key()] = it.value().toDouble();
+
+        const QJsonObject tracks = object.value(QStringLiteral("tracks")).toObject();
+        for (auto it = tracks.constBegin(); it != tracks.constEnd(); ++it)
+        {
+            Track track;
+            for (const QJsonValue& keyValue : it.value().toArray())
+            {
+                const QJsonObject key = keyValue.toObject();
+                track.keys.append({key.value(QStringLiteral("f")).toDouble(),
+                                   key.value(QStringLiteral("v")).toDouble()});
+            }
+            std::sort(track.keys.begin(), track.keys.end(),
+                      [](const Keyframe& a, const Keyframe& b) { return a.frame < b.frame; });
+            e.tracks[it.key()] = track;
+        }
+
+        if (!e.sourcePath.isEmpty())
+        {
+            if (e.type == EntityType::Video)
+            {
+                double duration = e.data.value(QStringLiteral("duration"), 0.0).toDouble();
+                e.image = decodeVideoFirstFrame(e.sourcePath, nullptr, &duration);
+                if (duration > 0.0)
+                    e.data[QStringLiteral("duration")] = duration;
+            }
+            else if (e.type == EntityType::Image)
+            {
+                e.image = QImage(e.sourcePath);
+            }
+        }
+
+        m_nextId = std::max(m_nextId, e.id + 1);
+        m_entities.append(e);
+    }
+
+    filePath = path;
+    emit changed();
+    return true;
 }
 
 } // namespace pvf

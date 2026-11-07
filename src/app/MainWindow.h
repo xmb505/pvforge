@@ -21,7 +21,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(Project* project, QWidget* parent = nullptr);
 
     Project* project() const { return m_project; }
     EntityId importImageFile(const QString& path);
@@ -41,6 +41,8 @@ private:
     void onPlayTick();
     void updateStatus();
     void toggleWorkbench();
+    void saveProject();
+    void saveProjectAs();
 
     Project* m_project = nullptr;
     Viewport* m_viewport = nullptr;
@@ -54,6 +56,8 @@ private:
 
     QAction* m_playAction = nullptr;
     QAction* m_autoKeyAction = nullptr;
+    QAction* m_saveAction = nullptr;
+    QAction* m_saveAsAction = nullptr;
     QAction* m_homeAction = nullptr;
     QAction* m_endAction = nullptr;
     QAction* m_fitAction = nullptr;

@@ -9,7 +9,7 @@ extern "C" {
 
 namespace pvf {
 
-QImage decodeVideoFirstFrame(const QString& path, QString* error)
+QImage decodeVideoFirstFrame(const QString& path, QString* error, double* duration)
 {
     const QByteArray utf8 = path.toUtf8();
     AVFormatContext* format = nullptr;
@@ -40,6 +40,14 @@ QImage decodeVideoFirstFrame(const QString& path, QString* error)
 
     if (avformat_find_stream_info(format, nullptr) < 0)
         return fail(QStringLiteral("无法读取视频信息"));
+
+    if (duration)
+    {
+        if (format->duration > 0)
+            *duration = format->duration / double(AV_TIME_BASE);
+        else
+            *duration = 0.0;
+    }
 
     const int streamIndex =
         av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);

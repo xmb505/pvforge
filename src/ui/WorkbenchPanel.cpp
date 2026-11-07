@@ -336,7 +336,7 @@ void WorkbenchPanel::createCurrent()
     }
     else if (page == 1)
     {
-        if (Entity* e = m_project->addVideo(m_videoPath, m_videoFrame))
+        if (Entity* e = m_project->addVideo(m_videoPath, m_videoFrame, m_videoDuration))
             id = e->id;
     }
     else if (page == 2)
@@ -405,7 +405,8 @@ void WorkbenchPanel::pickVideo()
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
-    const QImage frame = decodeVideoFirstFrame(path, &error);
+    double duration = 0.0;
+    const QImage frame = decodeVideoFirstFrame(path, &error, &duration);
     QApplication::restoreOverrideCursor();
 
     if (frame.isNull())
@@ -416,6 +417,7 @@ void WorkbenchPanel::pickVideo()
 
     m_videoPath = path;
     m_videoFrame = frame;
+    m_videoDuration = duration;
     m_videoPreview->setPixmap(QPixmap::fromImage(frame.scaled(
         300, 205, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
     m_videoInfo->setText(QStringLiteral("%1 · %2×%3 · 首帧")

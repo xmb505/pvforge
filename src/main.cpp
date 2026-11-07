@@ -1,4 +1,6 @@
 #include "app/MainWindow.h"
+#include "app/NewProjectDialog.h"
+#include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
 #include "ui/TimelinePanel.h"
@@ -15,6 +17,7 @@
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
+#include <QSettings>
 #include <QTimer>
 #include <QToolButton>
 #include <cmath>
@@ -68,6 +71,123 @@ int selfTest()
     return 0;
 }
 
+int saveTest()
+{
+    const QString imagePath = QDir::tempPath() + QStringLiteral("/pvforge_savetest.png");
+    const QString projectPath =
+        QDir::tempPath() + QStringLiteral("/pvforge_savetest.pvproj");
+
+    QImage img(32, 32, QImage::Format_ARGB32);
+    img.fill(Qt::cyan);
+    if (!img.save(imagePath))
+        return 1;
+
+    pvf::Project before;
+    before.name = QStringLiteral("往返测试");
+    before.author = QStringLiteral("tester");
+    before.width = 1280;
+    before.height = 720;
+    before.fps = 30;
+
+    pvf::Entity* image = before.addImage(imagePath);
+    if (!image)
+        return 1;
+    const pvf::EntityId imageId = image->id;
+    before.setValue(imageId, QStringLiteral("x"), 0, 0, true);
+    before.setValue(imageId, QStringLiteral("x"), 90, 600, true);
+
+    // Timeline spans the last keyframe (90), not a fixed project duration.
+    if (before.timelineLength() != 90)
+    {
+        qCritical() << "save-test: expected length 90, got" << before.timelineLength();
+        return 1;
+    }
+
+    QString error;
+    if (!before.save(projectPath, &error))
+    {
+        qCritical() << "save-test: save failed" << error;
+        return 1;
+    }
+
+    pvf::Project after;
+    if (!after.load(projectPath, &error))
+    {
+        qCritical() << "save-test: load failed" << error;
+        return 1;
+    }
+
+    if (after.name != before.name || after.fps != 30 || after.entities().size() != 1)
+    {
+        qCritical() << "save-test: metadata mismatch";
+        return 1;
+    }
+    if (std::abs(after.value(imageId, QStringLiteral("x"), 45) - 300.0) > 1e-6)
+    {
+        qCritical() << "save-test: keyframe roundtrip mismatch";
+        return 1;
+    }
+    if (after.timelineLength() != 90)
+    {
+        qCritical() << "save-test: length after load" << after.timelineLength();
+        return 1;
+    }
+    if (after.entities().first().image.isNull())
+    {
+        qCritical() << "save-test: image not reloaded";
+        return 1;
+    }
+
+    QFile::remove(projectPath);
+    QFile::remove(imagePath);
+    qInfo() << "save-test OK: roundtrip length" << after.timelineLength();
+    return 0;
+}
+
+int welcomeTest(QApplication& app)
+{
+    const QString projectPath =
+        QDir::tempPath() + QStringLiteral("/pvforge_welcome_test.pvproj");
+
+    pvf::Project project;
+    project.name = QStringLiteral("欢迎页测试");
+    project.width = 1280;
+    project.height = 720;
+    project.fps = 30;
+    QString error;
+    if (!project.save(projectPath, &error))
+        return 1;
+
+    QSettings settings;
+    const QVariant oldRecent = settings.value(QStringLiteral("recentProjects"));
+    settings.setValue(QStringLiteral("recentProjects"), QStringList{projectPath});
+
+    pvf::WelcomeWindow welcome;
+    welcome.show();
+
+    QTimer::singleShot(400, &welcome, [&app, &welcome, projectPath, oldRecent] {
+        welcome.grab().toImage().save(QStringLiteral("/tmp/pvforge_welcome.png"));
+
+        auto* dialog = new pvf::NewProjectDialog(&welcome);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+
+        QTimer::singleShot(300, dialog, [&app, dialog, projectPath, oldRecent] {
+            dialog->grab().toImage().save(QStringLiteral("/tmp/pvforge_newproject.png"));
+            qInfo() << "welcome-test OK";
+
+            QSettings settings;
+            if (oldRecent.isValid())
+                settings.setValue(QStringLiteral("recentProjects"), oldRecent);
+            else
+                settings.remove(QStringLiteral("recentProjects"));
+            QFile::remove(projectPath);
+            app.exit(0);
+        });
+    });
+    return app.exec();
+}
+
 } // namespace
 
 namespace {
@@ -101,7 +221,8 @@ int renderDemo(QApplication& app)
         return 1;
     }
 
-    pvf::MainWindow window;
+    auto* testProject = new pvf::Project;
+    pvf::MainWindow window(testProject);
     window.resize(1440, 900);
     window.show();
 
@@ -165,7 +286,8 @@ int playTest(QApplication& app)
     if (!img.save(path))
         return 1;
 
-    pvf::MainWindow window;
+    auto* testProject = new pvf::Project;
+    pvf::MainWindow window(testProject);
     window.resize(1200, 800);
     window.show();
 
@@ -188,7 +310,8 @@ int playTest(QApplication& app)
 
 int layoutTest(QApplication& app)
 {
-    pvf::MainWindow window;
+    auto* testProject = new pvf::Project;
+    pvf::MainWindow window(testProject);
     window.resize(480, 1060);
     window.show();
 
@@ -218,7 +341,8 @@ int workbenchTest(QApplication& app)
     }
     qInfo() << "workbench-test: video first frame" << videoFrame.size();
 
-    pvf::MainWindow window;
+    auto* testProject = new pvf::Project;
+    pvf::MainWindow window(testProject);
     window.resize(1440, 900);
     window.show();
 
@@ -303,6 +427,10 @@ int main(int argc, char* argv[])
 
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();
+    if (app.arguments().contains(QStringLiteral("--save-test")))
+        return saveTest();
+    if (app.arguments().contains(QStringLiteral("--welcome-test")))
+        return welcomeTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))
@@ -312,7 +440,7 @@ int main(int argc, char* argv[])
     if (app.arguments().contains(QStringLiteral("--layout-test")))
         return layoutTest(app);
 
-    pvf::MainWindow window;
-    window.show();
+    pvf::WelcomeWindow welcome;
+    welcome.show();
     return app.exec();
 }

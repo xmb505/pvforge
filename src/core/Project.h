@@ -8,6 +8,8 @@
 #include <QVariantMap>
 #include <QVector>
 
+class QJsonObject;
+
 namespace pvf {
 
 using EntityId = int;
@@ -66,18 +68,24 @@ class Project : public QObject
 public:
     explicit Project(QObject* parent = nullptr);
 
+    QString name = QStringLiteral("未命名项目");
+    QString author;
+    QString description;
+    QString filePath;
     int width = 1920;
     int height = 1080;
     int fps = 30;
-    int duration = 300;                 // frames
     bool loop = true;
     QColor background{0x10, 0x10, 0x14};
     bool autoKey = true;
 
+    // Length follows content: last keyframe + one second of tail, minimum 2s.
+    int timelineLength() const;
+
     static double defaultValue(const QString& prop);
 
     Entity* addImage(const QString& path);
-    Entity* addVideo(const QString& path, const QImage& firstFrame);
+    Entity* addVideo(const QString& path, const QImage& firstFrame, double duration = 0.0);
     Entity* addText(const QString& text, const QString& family, int pixelSize,
                     const QColor& color, int align);
     Entity* addVector(int shape, double width, double height, const QColor& fill,
@@ -91,6 +99,9 @@ public:
     double value(EntityId id, const QString& prop, double frame) const;
     void setValue(EntityId id, const QString& prop, double frame, double value, bool keyframe);
 
+    bool save(const QString& path, QString* error = nullptr);
+    bool load(const QString& path, QString* error = nullptr);
+
     void notifyChanged() { emit changed(); }
 
 signals:
@@ -99,6 +110,7 @@ signals:
 private:
     Entity makeBase(EntityType type, const QString& name) const;
     Entity* append(Entity e);
+    QJsonObject toJson() const;
 
     QVector<Entity> m_entities;
     EntityId m_nextId = 1;

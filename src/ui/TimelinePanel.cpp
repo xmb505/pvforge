@@ -35,7 +35,7 @@ int TimelinePanel::xFromFrame(double frame) const
 {
     const int left = kNameWidth;
     const int right = std::max(left + 1, width() - kRightPad);
-    const double t = std::clamp(frame / std::max(1, m_project->duration), 0.0, 1.0);
+    const double t = std::clamp(frame / std::max(1, m_project->timelineLength()), 0.0, 1.0);
     return left + int(std::lround(t * (right - left)));
 }
 
@@ -44,7 +44,7 @@ int TimelinePanel::frameFromX(double x) const
     const int left = kNameWidth;
     const int right = std::max(left + 1, width() - kRightPad);
     const double t = std::clamp((x - left) / double(right - left), 0.0, 1.0);
-    return int(std::lround(t * m_project->duration));
+    return int(std::lround(t * m_project->timelineLength()));
 }
 
 int TimelinePanel::rowAt(int y) const
@@ -81,16 +81,16 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     // Ruler.
     const int fps = std::max(1, m_project->fps);
-    const double ppf = timeWidth / double(std::max(1, m_project->duration));
+    const double ppf = timeWidth / double(std::max(1, m_project->timelineLength()));
     int step = fps;
-    while (step * ppf < 60.0 && step < m_project->duration)
+    while (step * ppf < 60.0 && step < m_project->timelineLength())
         step *= 2;
 
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
 
-    for (int f = 0; f <= m_project->duration; f += step)
+    for (int f = 0; f <= m_project->timelineLength(); f += step)
     {
         const int x = xFromFrame(f);
         p.setPen(QColor(70, 70, 78));

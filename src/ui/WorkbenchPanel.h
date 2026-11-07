@@ -62,6 +62,7 @@ private:
 
     QString m_videoPath;
     QImage m_videoFrame;
+    double m_videoDuration = 0.0;
     QLabel* m_videoPreview = nullptr;
     QLabel* m_videoInfo = nullptr;
 

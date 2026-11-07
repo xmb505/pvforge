@@ -6,6 +6,7 @@
 #include "ui/WorkbenchPanel.h"
 
 #include <QAction>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenuBar>
@@ -21,14 +22,15 @@
 
 namespace pvf {
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(Project* project, QWidget* parent)
     : QMainWindow(parent)
+    , m_project(project)
 {
-    setWindowTitle(QStringLiteral("PVForge — 未命名工程"));
+    m_project->setParent(this);
+    setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
     resize(1440, 900);
     setMinimumSize(1000, 620);
 
-    m_project = new Project(this);
     m_viewport = new Viewport(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
@@ -102,7 +104,7 @@ void MainWindow::createActions()
 
     auto* endAction = new QAction(QStringLiteral("跳到结尾"), this);
     endAction->setShortcut(QKeySequence(Qt::Key_End));
-    connect(endAction, &QAction::triggered, this, [this] { setFrame(m_project->duration); });
+    connect(endAction, &QAction::triggered, this, [this] { setFrame(m_project->timelineLength()); });
     addAction(endAction);
     m_endAction = endAction;
 
@@ -123,11 +125,24 @@ void MainWindow::createActions()
     m_quitAction->setShortcut(QKeySequence::Quit);
     connect(m_quitAction, &QAction::triggered, this, &QWidget::close);
     addAction(m_quitAction);
+
+    m_saveAction = new QAction(QStringLiteral("保存"), this);
+    m_saveAction->setShortcut(QKeySequence::Save);
+    connect(m_saveAction, &QAction::triggered, this, &MainWindow::saveProject);
+    addAction(m_saveAction);
+
+    m_saveAsAction = new QAction(QStringLiteral("另存为…"), this);
+    m_saveAsAction->setShortcut(QKeySequence::SaveAs);
+    connect(m_saveAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
+    addAction(m_saveAsAction);
 }
 
 void MainWindow::createMenus()
 {
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("文件"));
+    fileMenu->addAction(m_saveAction);
+    fileMenu->addAction(m_saveAsAction);
+    fileMenu->addSeparator();
     fileMenu->addAction(m_quitAction);
 
     auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
@@ -172,6 +187,42 @@ void MainWindow::toggleWorkbench()
     m_workbench->showAt(anchor);
 }
 
+void MainWindow::saveProject()
+{
+    if (m_project->filePath.isEmpty())
+    {
+        saveProjectAs();
+        return;
+    }
+
+    QString error;
+    if (!m_project->save(m_project->filePath, &error))
+    {
+        QMessageBox::warning(this, QStringLiteral("保存失败"), error);
+        return;
+    }
+    statusBar()->showMessage(QStringLiteral("已保存"), 2000);
+}
+
+void MainWindow::saveProjectAs()
+{
+    QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("保存项目"), m_project->filePath,
+        QStringLiteral("PVForge 工程 (*.pvproj)"));
+    if (path.isEmpty())
+        return;
+    if (!path.endsWith(QStringLiteral(".pvproj"), Qt::CaseInsensitive))
+        path += QStringLiteral(".pvproj");
+
+    QString error;
+    if (!m_project->save(path, &error))
+    {
+        QMessageBox::warning(this, QStringLiteral("保存失败"), error);
+        return;
+    }
+    statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
+}
+
 EntityId MainWindow::importImageFile(const QString& path)
 {
     Entity* e = m_project->addImage(path);
@@ -185,7 +236,7 @@ EntityId MainWindow::importImageFile(const QString& path)
 
 void MainWindow::setFrame(int frame)
 {
-    m_frame = std::clamp(frame, 0, m_project->duration);
+    m_frame = std::clamp(frame, 0, m_project->timelineLength());
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
@@ -231,7 +282,7 @@ void MainWindow::togglePlayback()
         return;
     }
 
-    if (m_frame >= m_project->duration)
+    if (m_frame >= m_project->timelineLength())
         setFrame(0);
 
     m_playStart = m_frame;
@@ -246,7 +297,7 @@ void MainWindow::onPlayTick()
     const double seconds = m_playClock.elapsed() / 1000.0;
     int f = m_playStart + int(seconds * m_project->fps);
 
-    if (f > m_project->duration)
+    if (f > m_project->timelineLength())
     {
         if (m_project->loop)
         {
@@ -256,7 +307,7 @@ void MainWindow::onPlayTick()
         }
         else
         {
-            setFrame(m_project->duration);
+            setFrame(m_project->timelineLength());
             togglePlayback();
             return;
         }
@@ -268,7 +319,7 @@ void MainWindow::updateStatus()
 {
     m_status->setText(QStringLiteral("帧 %1 / %2 · %3 fps · %4×%5")
                           .arg(m_frame)
-                          .arg(m_project->duration)
+                          .arg(m_project->timelineLength())
                           .arg(m_project->fps)
                           .arg(m_project->width)
                           .arg(m_project->height));
