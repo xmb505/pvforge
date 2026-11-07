@@ -5,6 +5,7 @@
 #include <QColor>
 #include <QWidget>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
@@ -46,6 +47,7 @@ private:
     void buildTextSection(QVBoxLayout* layout);
     void buildVectorSection(QVBoxLayout* layout);
     void buildMediaSection(QVBoxLayout* layout);
+    void buildPivotSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
@@ -62,6 +64,10 @@ private:
     CollapsibleSection* m_textSection = nullptr;
     CollapsibleSection* m_vectorSection = nullptr;
     CollapsibleSection* m_mediaSection = nullptr;
+    CollapsibleSection* m_pivotSection = nullptr;
+    QCheckBox* m_usePivot = nullptr;
+    QDoubleSpinBox* m_pivotX = nullptr;
+    QDoubleSpinBox* m_pivotY = nullptr;
 
     QLineEdit* m_textContent = nullptr;
     QFontComboBox* m_textFont = nullptr;

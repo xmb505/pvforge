@@ -3,6 +3,7 @@
 #include "core/Project.h"
 
 #include <QPointF>
+#include <QTransform>
 #include <QWidget>
 
 class QPainter;
@@ -27,6 +28,7 @@ public:
     double currentScale() const { return viewScale(); }
 
     void setSnapPixels(int pixels) { m_snapPixels = pixels; }
+    QTransform entityTransformForTest(EntityId id) const;
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
     QSize minimumSizeHint() const override { return {480, 270}; }
@@ -65,6 +67,9 @@ private:
     const Entity* hitTest(const QPointF& pos) const;
     void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
     QPointF entityScreenCenter(const Entity& e) const;
+    QPointF entityPivotScreen(const Entity& e) const;
+    QTransform entityTransform(const Entity& e) const;
+    QTransform entityRotationTransform(const Entity& e) const;
     bool gizmoHitTest(const QPointF& pos, GizmoMode* mode) const;
     void drawGizmo(QPainter& painter, const Entity& e);
     QPointF handleScreenPos(const Entity& e, Handle handle) const;

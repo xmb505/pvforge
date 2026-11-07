@@ -2,6 +2,7 @@
 
 #include "CollapsibleSection.h"
 
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -81,6 +82,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildTextSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
+    buildPivotSection(layout);
     layout->addStretch(1);
 
     connect(m_keyButton, &QPushButton::clicked, this, [this] {
@@ -253,6 +255,54 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     layout->addWidget(m_mediaSection);
 }
 
+void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    m_usePivot = new QCheckBox(QStringLiteral("启用自定义轴心"), content);
+    form->addRow(m_usePivot);
+
+    m_pivotX = new QDoubleSpinBox(content);
+    m_pivotX->setRange(-10000, 10000);
+    m_pivotX->setDecimals(1);
+    m_pivotX->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("轴心 X"), m_pivotX);
+
+    m_pivotY = new QDoubleSpinBox(content);
+    m_pivotY->setRange(-10000, 10000);
+    m_pivotY->setDecimals(1);
+    m_pivotY->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("轴心 Y"), m_pivotY);
+
+    auto* hint = new QLabel(QStringLiteral("轴心相对实体中心，旋转围绕轴心。"), content);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+
+    connect(m_usePivot, &QCheckBox::toggled, this, [this](bool on) {
+        Entity* e = m_project->entity(m_entity);
+        if (!e)
+            return;
+        e->data[QStringLiteral("rotPointCustom")] = on;
+        m_project->notifyChanged();
+        refresh();
+    });
+    connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (m_entity != kInvalidEntity)
+            emit valueEdited(m_entity, QStringLiteral("rotPointX"), value);
+    });
+    connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (m_entity != kInvalidEntity)
+            emit valueEdited(m_entity, QStringLiteral("rotPointY"), value);
+    });
+
+    m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
+    m_pivotSection->setExpanded(false);
+    layout->addWidget(m_pivotSection);
+}
+
 void PropertiesPanel::applyData(const QString& key, const QVariant& value)
 {
     Entity* e = m_project->entity(m_entity);
@@ -300,8 +350,10 @@ void PropertiesPanel::refresh()
     m_mediaSection->setVisible(valid
                                && (e->type == EntityType::Image
                                    || e->type == EntityType::Video));
+    m_pivotSection->setVisible(valid);
 
     const bool editable = valid && !e->locked;
+    m_pivotSection->setEnabled(editable);
     m_transformSection->setEnabled(editable);
     m_keySection->setEnabled(editable);
     m_textSection->setEnabled(editable);
@@ -322,6 +374,22 @@ void PropertiesPanel::refresh()
     }
 
     m_title->setText(e->name + QStringLiteral(" · ") + typeName(e->type));
+
+    {
+        const QSignalBlocker blocker(m_usePivot);
+        m_usePivot->setChecked(e->rotPointCustom());
+    }
+    {
+        const QSignalBlocker blocker(m_pivotX);
+        m_pivotX->setValue(m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame));
+    }
+    {
+        const QSignalBlocker blocker(m_pivotY);
+        m_pivotY->setValue(m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
+    }
+    const bool pivotEnabled = e->rotPointCustom();
+    m_pivotX->setEnabled(editable && pivotEnabled);
+    m_pivotY->setEnabled(editable && pivotEnabled);
 
     for (Row& r : m_rows)
     {

@@ -53,6 +53,10 @@ struct Entity
     double staticValue(const QString& prop) const;
 
     QString textContent() const { return data.value(QStringLiteral("text")).toString(); }
+    bool rotPointCustom() const
+    {
+        return data.value(QStringLiteral("rotPointCustom"), false).toBool();
+    }
     QString fontFamily() const;
     int fontSize() const { return data.value(QStringLiteral("size"), 96).toInt(); }
     QColor textColor() const;

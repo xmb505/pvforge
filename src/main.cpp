@@ -720,6 +720,74 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int pivotTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "pivot-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 200, 120, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const double s = viewport->currentScale();
+        const QPointF center(viewport->rect().center());
+
+        // Default pivot: rotating around the centre keeps it in place.
+        project->setValue(id, QStringLiteral("rotation"), 0, 90.0, false);
+        QPointF mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
+        if (std::abs(mapped.x() - center.x()) > 2.0
+            || std::abs(mapped.y() - center.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: default pivot moved the centre" << mapped;
+            ++failures;
+        }
+
+        // Custom pivot at (100, 0): the centre orbits it.
+        project->entity(id)->data[QStringLiteral("rotPointCustom")] = true;
+        project->setValue(id, QStringLiteral("rotPointX"), 0, 100.0, false);
+        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
+        for (auto* section : window.findChildren<pvf::CollapsibleSection*>())
+            if (section->title() == QStringLiteral("轴心"))
+                section->setExpanded(true);
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_pivot.png"));
+
+        mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
+        const QPointF expected(center.x() + 100.0 * s, center.y() - 100.0 * s);
+        if (std::abs(mapped.x() - expected.x()) > 2.0
+            || std::abs(mapped.y() - expected.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: custom pivot orbit" << mapped << expected;
+            ++failures;
+        }
+
+        // Disabling the custom pivot returns to the centre.
+        project->entity(id)->data[QStringLiteral("rotPointCustom")] = false;
+        mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
+        if (std::abs(mapped.x() - center.x()) > 2.0
+            || std::abs(mapped.y() - center.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: disabling pivot failed" << mapped;
+            ++failures;
+        }
+
+        qInfo() << "pivot-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int gizmoTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1682,6 +1750,8 @@ int main(int argc, char* argv[])
         return lockTest(app);
     if (app.arguments().contains(QStringLiteral("--gizmo-test")))
         return gizmoTest(app);
+    if (app.arguments().contains(QStringLiteral("--pivot-test")))
+        return pivotTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

@@ -151,8 +151,6 @@ QRectF Viewport::entityLocalBounds(const Entity& e) const
 
 const Entity* Viewport::hitTest(const QPointF& pos) const
 {
-    const QRectF canvas = canvasRect();
-    const double s = viewScale();
     const auto& entities = m_project->entities();
 
     // Topmost first.
@@ -163,58 +161,35 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
         if (bounds.isEmpty())
             continue;
 
-        const double x = m_project->value(e.id, "x", m_frame);
-        const double y = m_project->value(e.id, "y", m_frame);
-        const double rot = m_project->value(e.id, "rotation", m_frame);
-        const double sx = m_project->value(e.id, "scaleX", m_frame);
-        const double sy = m_project->value(e.id, "scaleY", m_frame);
-        if (std::abs(sx) < 1e-9 || std::abs(sy) < 1e-9)
-            continue;
-
-        QTransform t;
-        t.translate(canvas.center().x() + x * s, canvas.center().y() + y * s);
-        t.rotate(rot);
-        t.scale(sx * s, sy * s);
-
         bool ok = false;
-        const QTransform inv = t.inverted(&ok);
+        const QTransform inverse = entityTransform(e).inverted(&ok);
         if (!ok)
             continue;
 
-        const QPointF local = inv.map(pos);
-        if (bounds.contains(local))
+        if (bounds.contains(inverse.map(pos)))
             return &e;
     }
     return nullptr;
 }
 
-void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, double s)
+void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
 {
     if (e.hidden)
         return;
 
-    const double x = m_project->value(e.id, "x", m_frame);
-    const double y = m_project->value(e.id, "y", m_frame);
-    const double rot = m_project->value(e.id, "rotation", m_frame);
-    const double sx = m_project->value(e.id, "scaleX", m_frame);
-    const double sy = m_project->value(e.id, "scaleY", m_frame);
     const double opacity = std::clamp(m_project->value(e.id, "opacity", m_frame), 0.0, 1.0);
-    if (opacity <= 0.0 || std::abs(sx) < 1e-9 || std::abs(sy) < 1e-9)
+    if (opacity <= 0.0)
         return;
 
     const QRectF bounds = entityLocalBounds(e);
     if (bounds.isEmpty())
         return;
 
-    const QPointF center = canvas.center() + QPointF(x * s, y * s);
-    const QRectF dest(bounds.x() * s, bounds.y() * s, bounds.width() * s,
-                      bounds.height() * s);
+    const QTransform transform = entityTransform(e);
 
     p.save();
     p.setOpacity(opacity);
-    p.translate(center);
-    p.rotate(rot);
-    p.scale(sx, sy);
+    p.setTransform(transform);
 
     switch (e.type)
     {
@@ -225,25 +200,25 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, do
             if (e.pixmap.isNull())
                 e.pixmap = QPixmap::fromImage(e.image);
             p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            p.drawPixmap(dest, e.pixmap, QRectF(e.pixmap.rect()));
+            p.drawPixmap(bounds, e.pixmap, QRectF(e.pixmap.rect()));
         }
         break;
 
     case EntityType::Text:
     {
         QFont font(e.fontFamily());
-        font.setPixelSize(std::max(1, int(std::lround(e.fontSize() * s))));
+        font.setPixelSize(std::max(1, e.fontSize()));
         p.setFont(font);
         p.setPen(e.textColor());
-        p.drawText(dest, e.textAlign() | Qt::TextWordWrap, e.textContent());
+        p.drawText(bounds, e.textAlign() | Qt::TextWordWrap, e.textContent());
         break;
     }
 
     case EntityType::Vector:
     {
-        const double w = e.vectorWidth() * s;
-        const double h = e.vectorHeight() * s;
-        const double stroke = e.strokeWidth() * s;
+        const double w = e.vectorWidth();
+        const double h = e.vectorHeight();
+        const double stroke = e.strokeWidth();
 
         QBrush brush(e.fillColor());
         if (e.fillColor().alpha() == 0)
@@ -285,15 +260,13 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, do
     if (e.id == m_selected)
     {
         p.save();
-        p.translate(center);
-        p.rotate(rot);
-        p.scale(sx, sy);
+        p.setTransform(transform);
         QPen pen(QColor(77, 163, 255));
         pen.setCosmetic(true);
         pen.setWidthF(1.5);
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
-        p.drawRect(dest);
+        p.drawRect(bounds);
         p.restore();
     }
 }
@@ -307,6 +280,72 @@ QPointF Viewport::entityScreenCenter(const Entity& e) const
     return canvas.center() + QPointF(x * s, y * s);
 }
 
+QTransform Viewport::entityTransformForTest(EntityId id) const
+{
+    const Entity* entity = m_project->entity(id);
+    return entity ? entityTransform(*entity) : QTransform();
+}
+
+QPointF Viewport::entityPivotScreen(const Entity& e) const
+{
+    QPointF point = entityScreenCenter(e);
+    if (e.rotPointCustom())
+    {
+        const double s = viewScale();
+        point += QPointF(m_project->value(e.id, "rotPointX", m_frame) * s,
+                         m_project->value(e.id, "rotPointY", m_frame) * s);
+    }
+    return point;
+}
+
+QTransform Viewport::entityTransform(const Entity& e) const
+{
+    const double s = viewScale();
+    const QPointF origin = entityScreenCenter(e);
+    const double rotation = m_project->value(e.id, "rotation", m_frame);
+
+    QTransform transform;
+    transform.translate(origin.x(), origin.y());
+    if (e.rotPointCustom())
+    {
+        const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
+        const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
+        transform.translate(ax, ay);
+        transform.rotate(rotation);
+        transform.translate(-ax, -ay);
+    }
+    else
+    {
+        transform.rotate(rotation);
+    }
+    transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
+                    m_project->value(e.id, "scaleY", m_frame) * s);
+    return transform;
+}
+
+QTransform Viewport::entityRotationTransform(const Entity& e) const
+{
+    const double s = viewScale();
+    const QPointF origin = entityScreenCenter(e);
+    const double rotation = m_project->value(e.id, "rotation", m_frame);
+
+    QTransform transform;
+    transform.translate(origin.x(), origin.y());
+    if (e.rotPointCustom())
+    {
+        const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
+        const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
+        transform.translate(ax, ay);
+        transform.rotate(rotation);
+        transform.translate(-ax, -ay);
+    }
+    else
+    {
+        transform.rotate(rotation);
+    }
+    return transform;
+}
+
 bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
 {
     if (m_selected == kInvalidEntity)
@@ -315,7 +354,7 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     if (!entity)
         return false;
 
-    const QPointF delta = pos - entityScreenCenter(*entity);
+    const QPointF delta = pos - entityPivotScreen(*entity);
     const double distance = std::hypot(delta.x(), delta.y());
 
     // The rotation ring sits on top of the axes.
@@ -344,7 +383,7 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
 
 void Viewport::drawGizmo(QPainter& p, const Entity& e)
 {
-    const QPointF center = entityScreenCenter(e);
+    const QPointF center = entityPivotScreen(e);
     const double len = kGizmoAxisLength;
     const double ring = kGizmoRingRadius;
 
@@ -420,14 +459,7 @@ QPointF Viewport::handleScreenPos(const Entity& e, Handle handle) const
         return QPointF();
     }
 
-    const double s = viewScale();
-    const QPointF center = entityScreenCenter(e);
-    QTransform transform;
-    transform.translate(center.x(), center.y());
-    transform.rotate(m_project->value(e.id, "rotation", m_frame));
-    transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
-                    m_project->value(e.id, "scaleY", m_frame) * s);
-    return transform.map(local);
+    return entityTransform(e).map(local);
 }
 
 Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
@@ -475,11 +507,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
     const QRectF bounds = entityLocalBounds(*entity);
     const double s = viewScale();
-    const QPointF center = entityScreenCenter(*entity);
 
-    QTransform base;
-    base.translate(center.x(), center.y());
-    base.rotate(m_project->value(m_dragEntity, "rotation", m_frame));
+    const QTransform base = entityRotationTransform(*entity);
     bool ok = false;
     const QPointF local = base.inverted(&ok).map(mousePos);
     if (!ok)
@@ -669,7 +698,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         m_gizmoMode = gizmoMode;
         m_dragging = true;
         m_dragEntity = m_selected;
-        m_gizmoCenter = entityScreenCenter(*entity);
+        m_gizmoCenter = entityPivotScreen(*entity);
         m_gizmoStartMouse = event->position();
         m_gizmoStartAngle = std::atan2(event->position().y() - m_gizmoCenter.y(),
                                       event->position().x() - m_gizmoCenter.x())
