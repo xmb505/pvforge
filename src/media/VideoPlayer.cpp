@@ -1,5 +1,6 @@
 #include "VideoPlayer.h"
 
+#include "VideoProxy.h"
 #include "core/Project.h"
 
 #include <QSet>
@@ -19,6 +20,7 @@ namespace pvf {
 struct VideoPlayer::Stream
 {
     QString path;
+    QString sourcePath;
     AVFormatContext* format = nullptr;
     AVCodecContext* codec = nullptr;
     AVPacket* packet = nullptr;
@@ -306,15 +308,18 @@ void VideoPlayer::update(Project& project, int frame)
             stream = new Stream;
             m_streams.insert(entity.id, stream);
         }
-        if (stream->path != entity.sourcePath)
+        if (stream->sourcePath != entity.sourcePath)
         {
-            if (!openStream(*stream, entity.sourcePath))
+            const QString decodePath = videoDecodePath(entity.sourcePath);
+            if (!openStream(*stream, decodePath))
             {
                 // Remember the failed path so every play tick does not retry
                 // opening a missing or unsupported file.
-                stream->path = entity.sourcePath;
+                stream->sourcePath = entity.sourcePath;
+                stream->path = decodePath;
                 continue;
             }
+            stream->sourcePath = entity.sourcePath;
         }
         if (entity.hidden)
             continue;

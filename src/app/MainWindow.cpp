@@ -5,6 +5,7 @@
 #include "core/Lang.h"
 #include "audio/AudioEngine.h"
 #include "media/MediaImporter.h"
+#include "media/VideoProxy.h"
 #include "core/Settings.h"
 #include "SettingsDialog.h"
 #include "media/VideoPlayer.h"
@@ -239,6 +240,35 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_lastScrubFrame = 0;   // don't preview audio just from opening a project
     setFrame(0);
     updateWindowTitle();
+
+    m_proxyGenerator = new VideoProxyGenerator(this);
+    connect(m_proxyGenerator, &VideoProxyGenerator::started, this,
+            [this](const QString& path) {
+                statusBar()->showMessage(
+                    QStringLiteral("正在后台生成视频预览：%1")
+                        .arg(QFileInfo(path).fileName()));
+            });
+    connect(m_proxyGenerator, &VideoProxyGenerator::finished, this,
+            [this](const QString& path, bool success) {
+                if (success)
+                {
+                    // Drop decoders still attached to the original file and
+                    // show the current frame from the proxy immediately.
+                    m_videoPlayer.clear();
+                    setFrame(m_frame);
+                    m_viewport->update();
+                    statusBar()->showMessage(
+                        QStringLiteral("视频预览已就绪：%1")
+                            .arg(QFileInfo(path).fileName()),
+                        3000);
+                }
+                else
+                {
+                    statusBar()->showMessage(
+                        QStringLiteral("视频预览生成失败，继续使用原视频"), 3000);
+                }
+            });
+    ensureProxies();
 }
 
 void MainWindow::createActions()
@@ -1052,6 +1082,7 @@ void MainWindow::refreshAll()
     if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
         setSelectedEntity(kInvalidEntity);
     m_videoPlayer.update(*m_project, m_frame);
+    ensureProxies();
     m_viewport->update();
     m_timeline->update();
     m_props->refresh();
@@ -1059,6 +1090,22 @@ void MainWindow::refreshAll()
         m_monitor->setProjectChanged();
     updateStatus();
     updateWindowTitle();
+}
+
+void MainWindow::ensureProxies()
+{
+    if (!m_proxyGenerator)
+        return;
+    for (const Template& tmpl : m_project->templates())
+    {
+        if (tmpl.type == EntityType::Video && !tmpl.path.isEmpty())
+            m_proxyGenerator->ensure(tmpl.path);
+    }
+    for (const Entity& entity : m_project->entities())
+    {
+        if (entity.type == EntityType::Video && !entity.sourcePath.isEmpty())
+            m_proxyGenerator->ensure(entity.sourcePath);
+    }
 }
 
 void MainWindow::togglePlayback()

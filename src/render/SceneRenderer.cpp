@@ -41,11 +41,25 @@ QRectF entityLocalBounds(const Entity& entity)
     switch (entity.type)
     {
     case EntityType::Image:
-    case EntityType::Video:
         if (!entity.image.isNull())
             return QRectF(-entity.image.width() / 2.0, -entity.image.height() / 2.0,
                           entity.image.width(), entity.image.height());
         return QRectF(-40, -40, 80, 80);
+
+    case EntityType::Video:
+    {
+        // The runtime image may be a low-resolution proxy; layout must keep
+        // the original video dimensions or the entity would shrink.
+        const int width =
+            entity.data.value(QStringLiteral("sourceWidth"), entity.image.width())
+                .toInt();
+        const int height =
+            entity.data.value(QStringLiteral("sourceHeight"), entity.image.height())
+                .toInt();
+        if (width > 0 && height > 0)
+            return QRectF(-width / 2.0, -height / 2.0, width, height);
+        return QRectF(-40, -40, 80, 80);
+    }
 
     case EntityType::Text:
     {

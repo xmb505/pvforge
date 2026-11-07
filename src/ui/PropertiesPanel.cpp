@@ -856,8 +856,17 @@ void PropertiesPanel::refresh()
     else
     {
         QString info = typeName(e->type);
-        if (!e->image.isNull())
-            info += QStringLiteral(" · %1×%2").arg(e->image.width()).arg(e->image.height());
+        int mediaWidth = e->image.width();
+        int mediaHeight = e->image.height();
+        if (e->type == EntityType::Video)
+        {
+            mediaWidth =
+                e->data.value(QStringLiteral("sourceWidth"), mediaWidth).toInt();
+            mediaHeight =
+                e->data.value(QStringLiteral("sourceHeight"), mediaHeight).toInt();
+        }
+        if (mediaWidth > 0 && mediaHeight > 0)
+            info += QStringLiteral(" · %1×%2").arg(mediaWidth).arg(mediaHeight);
         if (e->type == EntityType::Audio)
         {
             const double duration =

@@ -25,6 +25,7 @@ add_executable(pvforge
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/media/VideoPlayer.cpp
+    src/media/VideoProxy.cpp
     src/media/AudioDecoder.cpp
     src/media/DecoderInfo.cpp
     src/media/MediaImporter.cpp

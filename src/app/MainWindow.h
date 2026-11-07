@@ -27,6 +27,7 @@ class EnvironmentPanel;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
 class TimelinePanel;
+class VideoProxyGenerator;
 class Viewport;
 class WorkbenchPanel;
 
@@ -70,6 +71,7 @@ private:
     void applyPivot(EntityId id, double ax, double ay);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
+    void ensureProxies();
     void onPlayTick();
     void updateStatus();
     void toggleWorkbench();
@@ -105,6 +107,7 @@ private:
     CameraMonitor* m_monitor = nullptr;
     AudioEngine* m_audioEngine = nullptr;
     VideoPlayer m_videoPlayer;
+    VideoProxyGenerator* m_proxyGenerator = nullptr;
 
     QTimer* m_playTimer = nullptr;
     QTimer* m_scrubTimer = nullptr;

@@ -7,7 +7,9 @@
 #include "media/MediaImporter.h"
 #include "media/AudioDecoder.h"
 #include "media/VideoPlayer.h"
+#include "media/VideoProxy.h"
 #include "media/DecoderInfo.h"
+#include "render/SceneRenderer.h"
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
@@ -53,6 +55,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
@@ -1591,6 +1594,71 @@ int videoTest(QApplication& app)
         ++failures;
     }
 
+    // Background proxy: a short-GOP low-resolution copy makes timeline seeks
+    // cheap. The source here is 320x240, so the 960-wide proxy is upscaled.
+    const QString proxyPath = pvf::videoProxyCachePath(path);
+    if (!QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty())
+    {
+        QFile::remove(proxyPath);
+        pvf::VideoProxyGenerator generator;
+        bool proxyDone = false;
+        bool proxyOk = false;
+        QEventLoop proxyLoop;
+        QObject::connect(&generator, &pvf::VideoProxyGenerator::finished, &proxyLoop,
+                         [&](const QString& source, bool success) {
+                             if (source != path)
+                                 return;
+                             proxyDone = true;
+                             proxyOk = success;
+                             proxyLoop.quit();
+                         });
+        generator.ensure(path);
+        if (!proxyDone)
+        {
+            QTimer::singleShot(30000, &proxyLoop, &QEventLoop::quit);
+            proxyLoop.exec();
+        }
+        if (!proxyOk || !pvf::videoProxyReady(path)
+            || pvf::videoDecodePath(path) == path)
+        {
+            qCritical() << "video-test: proxy generation failed" << proxyOk
+                        << pvf::videoProxyCachePath(path);
+            ++failures;
+        }
+        else
+        {
+            double proxyDuration = 0.0;
+            const QImage proxyFirst =
+                pvf::decodeVideoFirstFrame(pvf::videoDecodePath(path), nullptr,
+                                           &proxyDuration);
+            if (proxyFirst.isNull() || proxyFirst.width() != 960)
+            {
+                qCritical() << "video-test: proxy frame" << proxyFirst.size();
+                ++failures;
+            }
+            else
+            {
+                // Force the player to reopen on the proxy path.
+                player.clear();
+                player.update(project, 2);
+                color = centerColor(video->image);
+                const QRectF bounds = pvf::SceneRenderer::entityLocalBounds(*video);
+                if (video->image.width() != 960 || !isRed(color)
+                    || std::abs(bounds.width() - 320.0) > 1e-6
+                    || std::abs(bounds.height() - 240.0) > 1e-6)
+                {
+                    qCritical() << "video-test: player did not use the proxy"
+                                << video->image.size() << color << bounds;
+                    ++failures;
+                }
+            }
+        }
+    }
+    else
+    {
+        qInfo() << "video-test: ffmpeg CLI missing, proxy test skipped";
+    }
+
     const pvf::MediaImportResult imported =
         pvf::processMediaFile(path, QString());
     if (imported.type != pvf::EntityType::Video || !imported.audio
@@ -1819,6 +1887,9 @@ int videoTest(QApplication& app)
             pairWindow.grab().save(QStringLiteral("/tmp/pvf_video_pair.png"));
         }
     }
+
+    if (!proxyPath.isEmpty())
+        QFile::remove(proxyPath);
 
     Q_UNUSED(app);
     qInfo() << "video-test failures" << failures;

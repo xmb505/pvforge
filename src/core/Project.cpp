@@ -314,9 +314,10 @@ Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double 
     e.sourcePath = path;
     e.image = firstFrame;
     e.data["duration"] = duration;
-
     if (!firstFrame.isNull())
     {
+        e.data["sourceWidth"] = firstFrame.width();
+        e.data["sourceHeight"] = firstFrame.height();
         const double maxEdge = std::max(firstFrame.width(), firstFrame.height());
         const double target = std::min(width, height) * 0.6;
         const double fit = maxEdge > target ? target / maxEdge : 1.0;
@@ -1059,6 +1060,11 @@ bool Project::load(const QString& path, QString* error)
                 e.image = decodeVideoFirstFrame(e.sourcePath, nullptr, &duration);
                 if (duration > 0.0)
                     e.data[QStringLiteral("duration")] = duration;
+                if (!e.image.isNull())
+                {
+                    e.data[QStringLiteral("sourceWidth")] = e.image.width();
+                    e.data[QStringLiteral("sourceHeight")] = e.image.height();
+                }
             }
             else if (e.type == EntityType::Image)
             {

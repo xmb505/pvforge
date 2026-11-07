@@ -118,6 +118,9 @@
 - 解码结果写入 `Entity::image` 并清空缩略图/Pixmap 缓存，主视口和监视器共用
 - 视频当前帧和音频均为 FFmpeg 软件解码；Qt Multimedia 硬件视频解码尚未接入
 - 1080p H.264 顺序播放的软件解码开销在本机约 2–3ms/帧，实时播放有余量
+- **预览代理**：原视频关键帧间隔约 8 秒，随机 seek 平均约 160ms；后台用 ffmpeg 转成 960 宽、15 帧 GOP、CRF 27、无音轨的代理，随机 seek 约 3ms；140 秒 1080p 视频约 5 秒生成、约 37MB，缓存在 `~/.cache/PVForge/proxies`
+- 代理生成在后台排队（一次一个 ffmpeg 进程，4 线程）；完成后自动切换解码路径并刷新当前帧；ffmpeg 缺失或生成失败时回退原视频
+- `sourceWidth`/`sourceHeight` 保存原始视频尺寸，代理只替换像素数据，不改变实体在画布上的大小
 - 导入带音轨的视频时，后台同时解码默认音轨：素材库得到视频和「· 音频」两个素材
 - 从视频素材创建实体时自动创建配对的音频实体（`pairedVideo` 记录关系）；保存/加载后仍保留配对信息
 
@@ -161,7 +164,7 @@ src/
 ├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
-├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
+├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、VideoProxy（后台预览代理）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
 ├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
