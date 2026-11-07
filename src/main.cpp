@@ -21,6 +21,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
+#include <QWheelEvent>
 #include <cmath>
 
 namespace {
@@ -206,8 +207,44 @@ int welcomeTest(QApplication& app)
     return app.exec();
 }
 
-int openTimelineTest(QApplication& app)
+int timelineZoomTest(QApplication& app)
 {
+    auto* project = new pvf::Project;
+    project->fps = 24;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    auto* timeline = window.findChild<pvf::TimelinePanel*>();
+    if (!timeline)
+    {
+        qCritical() << "timeline-zoom-test: timeline not found";
+        return 1;
+    }
+
+    QTimer::singleShot(400, &window, [&app, &window, timeline] {
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_zoom_before.png"));
+        const double before = timeline->pixelsPerFrame();
+
+        const QPointF pos(500, 120);
+        for (int i = 0; i < 3; ++i)
+        {
+            QWheelEvent event(pos, timeline->mapToGlobal(pos), QPoint(), QPoint(0, 120),
+                              Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(timeline, &event);
+        }
+
+        const double after = timeline->pixelsPerFrame();
+        QTimer::singleShot(200, &window, [&app, &window, before, after] {
+            window.grab().toImage().save(QStringLiteral("/tmp/pvforge_zoom_after.png"));
+            qInfo() << "timeline-zoom-test:" << before << "->" << after;
+            app.exit(after > before * 4.0 ? 0 : 1);
+        });
+    });
+    return app.exec();
+}
+
+int openTimelineTest(QApplication& app){
     auto* project = new pvf::Project;
     project->fps = 60;
     pvf::MainWindow window(project);
@@ -545,6 +582,8 @@ int main(int argc, char* argv[])
         return libraryTest(app);
     if (app.arguments().contains(QStringLiteral("--open-timeline-test")))
         return openTimelineTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-zoom-test")))
+        return timelineZoomTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))

@@ -6,6 +6,8 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QToolButton>
+#include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
 
@@ -22,6 +24,19 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         m_scrollX = value;
         update();
     });
+
+    m_zoomOut = new QToolButton(this);
+    m_zoomOut->setText(QStringLiteral("−"));
+    m_zoomOut->setToolTip(QStringLiteral("缩小时间轴（Ctrl+滚轮）"));
+    connect(m_zoomOut, &QToolButton::clicked, this,
+            [this] { zoomAt(0.5, kNameWidth + visibleWidth() / 2); });
+
+    m_zoomIn = new QToolButton(this);
+    m_zoomIn->setText(QStringLiteral("+"));
+    m_zoomIn->setToolTip(QStringLiteral("放大时间轴（Ctrl+滚轮）"));
+    connect(m_zoomIn, &QToolButton::clicked, this,
+            [this] { zoomAt(2.0, kNameWidth + visibleWidth() / 2); });
+
     updateScrollBar();
 }
 
@@ -32,7 +47,7 @@ void TimelinePanel::setCurrentFrame(int frame)
     m_frame = frame;
 
     // Keep the playhead visible as the open timeline grows.
-    const int playhead = int(m_frame * kPixelsPerFrame);
+    const int playhead = int(m_frame * m_pixelsPerFrame);
     const int left = m_scrollX;
     const int right = m_scrollX + visibleWidth() - 80;
     if (playhead > right)
@@ -58,7 +73,7 @@ int TimelinePanel::contentWidth() const
     // The view width term keeps a full screen of ruler visible on an empty
     // project instead of stopping at the last keyframe.
     const int endFrame = std::max(m_project->timelineLength(), m_frame);
-    return int(endFrame * kPixelsPerFrame) + visibleWidth();
+    return int(endFrame * m_pixelsPerFrame) + visibleWidth();
 }
 
 int TimelinePanel::visibleWidth() const
@@ -68,12 +83,12 @@ int TimelinePanel::visibleWidth() const
 
 int TimelinePanel::xFromFrame(int frame) const
 {
-    return kNameWidth + int(std::lround(frame * kPixelsPerFrame)) - m_scrollX;
+    return kNameWidth + int(std::lround(frame * m_pixelsPerFrame)) - m_scrollX;
 }
 
 int TimelinePanel::frameFromX(int x) const
 {
-    return int(std::lround((x - kNameWidth + m_scrollX) / kPixelsPerFrame));
+    return int(std::lround((x - kNameWidth + m_scrollX) / m_pixelsPerFrame));
 }
 
 void TimelinePanel::updateScrollBar()
@@ -99,9 +114,49 @@ int TimelinePanel::rowAt(int y) const
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
-                           kScrollBarHeight);
+    const int barY = height() - kScrollBarHeight;
+    m_zoomOut->setGeometry(kNameWidth, barY, kZoomButtonWidth, kScrollBarHeight);
+    m_zoomIn->setGeometry(width() - kRightPad - kZoomButtonWidth, barY,
+                          kZoomButtonWidth, kScrollBarHeight);
+    m_hScroll->setGeometry(kNameWidth + kZoomButtonWidth, barY,
+                           visibleWidth() - 2 * kZoomButtonWidth, kScrollBarHeight);
     updateScrollBar();
+}
+
+void TimelinePanel::zoomAt(double factor, int anchorX)
+{
+    const double oldZoom = m_pixelsPerFrame;
+    double nextZoom = std::clamp(oldZoom * factor, 0.25, 32.0);
+    if (nextZoom > 1.0)
+        nextZoom = std::round(nextZoom);
+    if (std::abs(nextZoom - oldZoom) < 1e-6)
+        return;
+
+    // Keep the frame under the anchor at the same screen position.
+    const double anchorFrame = (anchorX - kNameWidth + m_scrollX) / oldZoom;
+    m_pixelsPerFrame = nextZoom;
+    m_scrollX = int(std::lround(anchorFrame * nextZoom - (anchorX - kNameWidth)));
+    updateScrollBar();
+    update();
+}
+
+void TimelinePanel::wheelEvent(QWheelEvent* event)
+{
+    const double steps = event->angleDelta().y() / 120.0;
+    if (steps == 0.0)
+        return;
+
+    if (event->modifiers() & Qt::ControlModifier)
+    {
+        zoomAt(std::pow(2.0, steps), int(event->position().x()));
+        event->accept();
+        return;
+    }
+
+    m_scrollX -= int(std::lround(steps * 80));
+    updateScrollBar();
+    update();
+    event->accept();
 }
 
 void TimelinePanel::paintEvent(QPaintEvent*)
@@ -131,7 +186,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     // Ruler.
     const int fps = std::max(1, m_project->fps);
-    const double ppf = kPixelsPerFrame;
+    const double ppf = m_pixelsPerFrame;
     int step = fps;
     while (step * ppf < 60.0)
         step *= 2;
