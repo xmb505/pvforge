@@ -9,7 +9,6 @@ class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
 class QFormLayout;
-class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -17,6 +16,8 @@ class QSpinBox;
 class QVBoxLayout;
 
 namespace pvf {
+
+class CollapsibleSection;
 
 class PropertiesPanel : public QWidget
 {
@@ -40,11 +41,11 @@ private:
         double factor = 1.0;   // display value * factor = stored value
     };
 
-    void addRow(QFormLayout* form, const QString& label, const QString& prop,
-                double lo, double hi, int decimals, double step, double factor = 1.0);
-    void buildTextGroup(QVBoxLayout* layout);
-    void buildVectorGroup(QVBoxLayout* layout);
-    void buildMediaGroup(QVBoxLayout* layout);
+    void addRow(QFormLayout* form, const QString& label, const QString& prop, double lo,
+                double hi, int decimals, double step, double factor = 1.0);
+    void buildTextSection(QVBoxLayout* layout);
+    void buildVectorSection(QVBoxLayout* layout);
+    void buildMediaSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
@@ -56,7 +57,12 @@ private:
     QPushButton* m_keyButton = nullptr;
     QVector<Row> m_rows;
 
-    QGroupBox* m_textGroup = nullptr;
+    CollapsibleSection* m_transformSection = nullptr;
+    CollapsibleSection* m_keySection = nullptr;
+    CollapsibleSection* m_textSection = nullptr;
+    CollapsibleSection* m_vectorSection = nullptr;
+    CollapsibleSection* m_mediaSection = nullptr;
+
     QLineEdit* m_textContent = nullptr;
     QFontComboBox* m_textFont = nullptr;
     QSpinBox* m_textSize = nullptr;
@@ -64,7 +70,6 @@ private:
     QComboBox* m_textAlign = nullptr;
     QColor m_textColorValue{Qt::white};
 
-    QGroupBox* m_vectorGroup = nullptr;
     QComboBox* m_vectorShape = nullptr;
     QDoubleSpinBox* m_vectorWidth = nullptr;
     QDoubleSpinBox* m_vectorHeight = nullptr;
@@ -74,7 +79,6 @@ private:
     QColor m_fillValue{90, 170, 255};
     QColor m_strokeValue{Qt::white};
 
-    QGroupBox* m_mediaGroup = nullptr;
     QLabel* m_mediaInfo = nullptr;
 };
 

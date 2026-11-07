@@ -22,6 +22,8 @@ add_executable(pvforge
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/AssetLibraryPanel.cpp
+    src/ui/CollapsibleSection.cpp
+    src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp

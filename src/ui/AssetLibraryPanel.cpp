@@ -2,6 +2,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
 #include <QPixmap>
@@ -133,10 +134,16 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_preview->setFrameShape(QFrame::StyledPanel);
     layout->addWidget(m_preview);
 
+    m_search = new QLineEdit(this);
+    m_search->setPlaceholderText(QStringLiteral("搜索素材…"));
+    m_search->setClearButtonEnabled(true);
+    layout->addWidget(m_search);
+
     m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("assetList"));
     m_list->setIconSize(QSize(40, 40));
     m_list->setAlternatingRowColors(true);
+    m_list->setMinimumHeight(140);
     layout->addWidget(m_list, 1);
 
     auto* buttons = new QHBoxLayout();
@@ -153,6 +160,9 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_info->setWordWrap(true);
     layout->addWidget(m_info);
 
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
+        rebuild();
+    });
     connect(m_list, &QListWidget::currentRowChanged, this,
             [this](int) { updatePreview(); });
     connect(m_list, &QListWidget::itemDoubleClicked, this,
@@ -186,22 +196,32 @@ void AssetLibraryPanel::rebuild()
     const QSignalBlocker blocker(m_list);
     m_list->clear();
 
-    for (const Template& tmpl : m_project->templates())
+    const QString filter = m_search->text().trimmed();
+    const auto& templates = m_project->templates();
+    for (int i = 0; i < templates.size(); ++i)
     {
+        const Template& tmpl = templates[i];
+        if (!filter.isEmpty() && !tmpl.name.contains(filter, Qt::CaseInsensitive))
+            continue;
         auto* item = new QListWidgetItem(tmpl.name, m_list);
+        item->setData(Qt::UserRole, i);
         item->setIcon(listIcon(tmpl));
         item->setToolTip(QStringLiteral("%1 · %2").arg(templateTypeName(tmpl.type), tmpl.path));
     }
 
-    if (m_list->count() > 0)
-        m_list->setCurrentRow(std::clamp(previous, 0, m_list->count() - 1));
+    int restore = m_list->count() > 0 ? 0 : -1;
+    for (int row = 0; row < m_list->count(); ++row)
+        if (m_list->item(row)->data(Qt::UserRole).toInt() == previous)
+            restore = row;
+    m_list->setCurrentRow(restore);
 
     updatePreview();
 }
 
 int AssetLibraryPanel::selectedIndex() const
 {
-    return m_list->currentRow();
+    const QListWidgetItem* item = m_list->currentItem();
+    return item ? item->data(Qt::UserRole).toInt() : -1;
 }
 
 void AssetLibraryPanel::updatePreview()

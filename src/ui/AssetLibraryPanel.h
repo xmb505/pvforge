@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 class QListWidget;
 class QPushButton;
 
@@ -30,6 +31,7 @@ private:
     void removeSelected();
 
     Project* m_project = nullptr;
+    QLineEdit* m_search = nullptr;
     QListWidget* m_list = nullptr;
     QLabel* m_preview = nullptr;
     QLabel* m_info = nullptr;

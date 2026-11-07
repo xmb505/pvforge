@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 
 #include "ui/AssetLibraryPanel.h"
+#include "ui/CollapsibleSection.h"
+#include "ui/EnvironmentPanel.h"
 #include "ui/ProjectPropertiesPanel.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
@@ -15,7 +17,7 @@
 #include <QMessageBox>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QTabWidget>
+#include <QScrollArea>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -38,24 +40,61 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_props = new PropertiesPanel(m_project, this);
     m_library = new AssetLibraryPanel(m_project, this);
     m_projectProps = new ProjectPropertiesPanel(m_project, this);
+    m_environment = new EnvironmentPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
 
-    auto* tabs = new QTabWidget(this);
-    tabs->setObjectName(QStringLiteral("rightTabs"));
-    tabs->addTab(m_props, QStringLiteral("属性"));
-    tabs->addTab(m_library, QStringLiteral("素材库"));
-    tabs->addTab(m_projectProps, QStringLiteral("项目"));
-    tabs->setMinimumWidth(280);
-    tabs->setMaximumWidth(420);
+    // "Project properties" tab: collapsible categories, one scroll column.
+    m_projectTab = new QWidget(this);
+    auto* projectScroll = new QScrollArea(m_projectTab);
+    projectScroll->setWidgetResizable(true);
+    projectScroll->setFrameShape(QFrame::NoFrame);
+    projectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* projectContent = new QWidget(projectScroll);
+    auto* projectLayout = new QVBoxLayout(projectContent);
+    projectLayout->setContentsMargins(0, 0, 0, 0);
+    projectLayout->setSpacing(0);
+
+    auto* settingsSection =
+        new CollapsibleSection(QStringLiteral("项目设置"), m_projectProps, projectContent);
+    auto* environmentSection =
+        new CollapsibleSection(QStringLiteral("环境设置"), m_environment, projectContent);
+    auto* librarySection =
+        new CollapsibleSection(QStringLiteral("素材库"), m_library, projectContent);
+    settingsSection->setExpanded(true);
+    environmentSection->setExpanded(false);
+    librarySection->setExpanded(true);
+
+    projectLayout->addWidget(settingsSection);
+    projectLayout->addWidget(environmentSection);
+    projectLayout->addWidget(librarySection);
+    projectLayout->addStretch(1);
+    projectScroll->setWidget(projectContent);
+
+    auto* projectTabLayout = new QVBoxLayout(m_projectTab);
+    projectTabLayout->setContentsMargins(0, 0, 0, 0);
+    projectTabLayout->addWidget(projectScroll);
+
+    // Entity properties tab, added on demand when something is selected.
+    m_objectTab = new QScrollArea(this);
+    m_objectTab->setWidgetResizable(true);
+    m_objectTab->setFrameShape(QFrame::NoFrame);
+    m_objectTab->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_objectTab->setWidget(m_props);
+
+    m_rightTabs = new QTabWidget(this);
+    m_rightTabs->setObjectName(QStringLiteral("rightTabs"));
+    m_rightTabs->setMinimumWidth(300);
+    m_rightTabs->setMaximumWidth(440);
+    m_rightTabs->addTab(m_projectTab, QStringLiteral("项目属性"));
 
     m_viewport->setMinimumWidth(480);
 
     auto* top = new QSplitter(Qt::Horizontal, this);
     top->addWidget(m_viewport);
-    top->addWidget(tabs);
+    top->addWidget(m_rightTabs);
     top->setChildrenCollapsible(false);
     top->setStretchFactor(0, 1);
     top->setStretchFactor(1, 0);
@@ -267,6 +306,29 @@ void MainWindow::setSelectedEntity(EntityId id)
     m_viewport->setSelectedEntity(id);
     m_props->setEntity(id);
     m_timeline->setSelectedEntity(id);
+
+    // Mine-imator opens an entity property tab when something is selected
+    // and closes it when the selection is cleared.
+    if (id != kInvalidEntity)
+    {
+        const Entity* entity = m_project->entity(id);
+        const QString tabName = entity ? entity->name : QStringLiteral("属性");
+        const int index = m_rightTabs->indexOf(m_objectTab);
+        if (index < 0)
+            m_rightTabs->addTab(m_objectTab, tabName);
+        else
+            m_rightTabs->setTabText(index, tabName);
+        m_rightTabs->setCurrentWidget(m_objectTab);
+    }
+    else
+    {
+        const int index = m_rightTabs->indexOf(m_objectTab);
+        if (index >= 0)
+        {
+            m_rightTabs->removeTab(index);
+            m_rightTabs->setCurrentWidget(m_projectTab);
+        }
+    }
 }
 
 void MainWindow::applyValue(EntityId id, const QString& prop, double value)

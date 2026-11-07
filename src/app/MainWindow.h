@@ -7,11 +7,14 @@
 
 class QAction;
 class QLabel;
+class QScrollArea;
+class QTabWidget;
 class QTimer;
 
 namespace pvf {
 
 class AssetLibraryPanel;
+class EnvironmentPanel;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
 class TimelinePanel;
@@ -51,6 +54,10 @@ private:
     PropertiesPanel* m_props = nullptr;
     AssetLibraryPanel* m_library = nullptr;
     ProjectPropertiesPanel* m_projectProps = nullptr;
+    EnvironmentPanel* m_environment = nullptr;
+    QTabWidget* m_rightTabs = nullptr;
+    QWidget* m_projectTab = nullptr;
+    QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
 

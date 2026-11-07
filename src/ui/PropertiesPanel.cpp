@@ -1,11 +1,12 @@
 #include "PropertiesPanel.h"
 
+#include "CollapsibleSection.h"
+
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -41,42 +42,45 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     , m_project(project)
 {
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
-
-    auto* header = new QLabel(QStringLiteral("属性"), this);
-    QFont headerFont = header->font();
-    headerFont.setBold(true);
-    header->setFont(headerFont);
-    layout->addWidget(header);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
 
     m_title = new QLabel(QStringLiteral("未选择对象"), this);
+    m_title->setContentsMargins(10, 8, 10, 8);
     QFont titleFont = m_title->font();
     titleFont.setItalic(true);
     m_title->setFont(titleFont);
     layout->addWidget(m_title);
 
-    m_keyButton = new QPushButton(QStringLiteral("在当前帧打关键帧"), this);
+    auto* transformContent = new QWidget(this);
+    auto* transformForm = new QFormLayout(transformContent);
+    transformForm->setContentsMargins(10, 8, 10, 8);
+    transformForm->setVerticalSpacing(6);
+    addRow(transformForm, QStringLiteral("X"), QStringLiteral("x"), -10000, 10000, 1, 1);
+    addRow(transformForm, QStringLiteral("Y"), QStringLiteral("y"), -10000, 10000, 1, 1);
+    addRow(transformForm, QStringLiteral("旋转"), QStringLiteral("rotation"), -3600, 3600, 1, 1);
+    addRow(transformForm, QStringLiteral("缩放 X"), QStringLiteral("scaleX"), -100, 100, 3, 0.01);
+    addRow(transformForm, QStringLiteral("缩放 Y"), QStringLiteral("scaleY"), -100, 100, 3, 0.01);
+    addRow(transformForm, QStringLiteral("透明度"), QStringLiteral("opacity"), 0, 100, 0, 1,
+           0.01);
+    m_transformSection =
+        new CollapsibleSection(QStringLiteral("变换"), transformContent, this);
+    m_transformSection->setExpanded(true);
+    layout->addWidget(m_transformSection);
+
+    auto* keyContent = new QWidget(this);
+    auto* keyLayout = new QVBoxLayout(keyContent);
+    keyLayout->setContentsMargins(10, 8, 10, 8);
+    m_keyButton = new QPushButton(QStringLiteral("在当前帧打关键帧"), keyContent);
     m_keyButton->setEnabled(false);
-    layout->addWidget(m_keyButton);
+    keyLayout->addWidget(m_keyButton);
+    m_keySection = new CollapsibleSection(QStringLiteral("关键帧"), keyContent, this);
+    m_keySection->setExpanded(true);
+    layout->addWidget(m_keySection);
 
-    auto* form = new QFormLayout();
-    form->setLabelAlignment(Qt::AlignLeft);
-    form->setHorizontalSpacing(10);
-    form->setVerticalSpacing(6);
-    layout->addLayout(form);
-
-    addRow(form, QStringLiteral("X"), QStringLiteral("x"), -10000, 10000, 1, 1);
-    addRow(form, QStringLiteral("Y"), QStringLiteral("y"), -10000, 10000, 1, 1);
-    addRow(form, QStringLiteral("旋转"), QStringLiteral("rotation"), -3600, 3600, 1, 1);
-    addRow(form, QStringLiteral("缩放 X"), QStringLiteral("scaleX"), -100, 100, 3, 0.01);
-    addRow(form, QStringLiteral("缩放 Y"), QStringLiteral("scaleY"), -100, 100, 3, 0.01);
-    addRow(form, QStringLiteral("透明度"), QStringLiteral("opacity"), 0, 100, 0, 1, 0.01);
-
-    buildTextGroup(layout);
-    buildVectorGroup(layout);
-    buildMediaGroup(layout);
-
+    buildTextSection(layout);
+    buildVectorSection(layout);
+    buildMediaSection(layout);
     layout->addStretch(1);
 
     connect(m_keyButton, &QPushButton::clicked, this, [this] {
@@ -94,7 +98,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
 void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QString& prop,
                              double lo, double hi, int decimals, double step, double factor)
 {
-    auto* spin = new QDoubleSpinBox(this);
+    auto* spin = new QDoubleSpinBox(form->parentWidget());
     spin->setRange(lo, hi);
     spin->setDecimals(decimals);
     spin->setSingleStep(step);
@@ -114,25 +118,25 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
     });
 }
 
-void PropertiesPanel::buildTextGroup(QVBoxLayout* layout)
+void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
 {
-    m_textGroup = new QGroupBox(QStringLiteral("文字"), this);
-    auto* form = new QFormLayout(m_textGroup);
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
     form->setVerticalSpacing(6);
 
-    m_textContent = new QLineEdit(m_textGroup);
+    m_textContent = new QLineEdit(content);
     connect(m_textContent, &QLineEdit::textEdited, this,
             [this](const QString& text) { applyData(QStringLiteral("text"), text); });
     form->addRow(QStringLiteral("内容"), m_textContent);
 
-    m_textFont = new QFontComboBox(m_textGroup);
-    connect(m_textFont, &QFontComboBox::currentFontChanged, this,
-            [this](const QFont& font) {
-                applyData(QStringLiteral("font"), font.family());
-            });
+    m_textFont = new QFontComboBox(content);
+    connect(m_textFont, &QFontComboBox::currentFontChanged, this, [this](const QFont& font) {
+        applyData(QStringLiteral("font"), font.family());
+    });
     form->addRow(QStringLiteral("字体"), m_textFont);
 
-    m_textSize = new QSpinBox(m_textGroup);
+    m_textSize = new QSpinBox(content);
     m_textSize->setRange(8, 512);
     m_textSize->setValue(96);
     m_textSize->setSuffix(QStringLiteral(" px"));
@@ -140,7 +144,7 @@ void PropertiesPanel::buildTextGroup(QVBoxLayout* layout)
             [this](int size) { applyData(QStringLiteral("size"), size); });
     form->addRow(QStringLiteral("字号"), m_textSize);
 
-    m_textColorButton = new QPushButton(m_textGroup);
+    m_textColorButton = new QPushButton(content);
     setColorButton(m_textColorButton, m_textColorValue);
     connect(m_textColorButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_textColorValue, QStringLiteral("文字颜色"));
@@ -152,7 +156,7 @@ void PropertiesPanel::buildTextGroup(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("颜色"), m_textColorButton);
 
-    m_textAlign = new QComboBox(m_textGroup);
+    m_textAlign = new QComboBox(content);
     m_textAlign->addItem(QStringLiteral("居中"), int(Qt::AlignCenter));
     m_textAlign->addItem(QStringLiteral("左对齐"), int(Qt::AlignLeft | Qt::AlignVCenter));
     m_textAlign->addItem(QStringLiteral("右对齐"), int(Qt::AlignRight | Qt::AlignVCenter));
@@ -161,16 +165,19 @@ void PropertiesPanel::buildTextGroup(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
-    layout->addWidget(m_textGroup);
+    m_textSection = new CollapsibleSection(QStringLiteral("文字"), content, this);
+    m_textSection->setExpanded(true);
+    layout->addWidget(m_textSection);
 }
 
-void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
+void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 {
-    m_vectorGroup = new QGroupBox(QStringLiteral("矢量"), this);
-    auto* form = new QFormLayout(m_vectorGroup);
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
     form->setVerticalSpacing(6);
 
-    m_vectorShape = new QComboBox(m_vectorGroup);
+    m_vectorShape = new QComboBox(content);
     m_vectorShape->addItem(QStringLiteral("矩形"), 0);
     m_vectorShape->addItem(QStringLiteral("圆形"), 1);
     m_vectorShape->addItem(QStringLiteral("直线"), 2);
@@ -179,7 +186,7 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("形状"), m_vectorShape);
 
-    m_vectorWidth = new QDoubleSpinBox(m_vectorGroup);
+    m_vectorWidth = new QDoubleSpinBox(content);
     m_vectorWidth->setRange(1, 20000);
     m_vectorWidth->setDecimals(1);
     m_vectorWidth->setSuffix(QStringLiteral(" px"));
@@ -187,7 +194,7 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
             [this](double value) { applyData(QStringLiteral("width"), value); });
     form->addRow(QStringLiteral("宽度"), m_vectorWidth);
 
-    m_vectorHeight = new QDoubleSpinBox(m_vectorGroup);
+    m_vectorHeight = new QDoubleSpinBox(content);
     m_vectorHeight->setRange(1, 20000);
     m_vectorHeight->setDecimals(1);
     m_vectorHeight->setSuffix(QStringLiteral(" px"));
@@ -195,7 +202,7 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
             [this](double value) { applyData(QStringLiteral("height"), value); });
     form->addRow(QStringLiteral("高度"), m_vectorHeight);
 
-    m_fillButton = new QPushButton(m_vectorGroup);
+    m_fillButton = new QPushButton(content);
     setColorButton(m_fillButton, m_fillValue);
     connect(m_fillButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_fillValue, QStringLiteral("填充颜色"));
@@ -207,7 +214,7 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("填充"), m_fillButton);
 
-    m_strokeButton = new QPushButton(m_vectorGroup);
+    m_strokeButton = new QPushButton(content);
     setColorButton(m_strokeButton, m_strokeValue);
     connect(m_strokeButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_strokeValue, QStringLiteral("描边颜色"));
@@ -219,7 +226,7 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("描边"), m_strokeButton);
 
-    m_strokeWidth = new QDoubleSpinBox(m_vectorGroup);
+    m_strokeWidth = new QDoubleSpinBox(content);
     m_strokeWidth->setRange(0, 200);
     m_strokeWidth->setDecimals(1);
     m_strokeWidth->setSuffix(QStringLiteral(" px"));
@@ -227,19 +234,23 @@ void PropertiesPanel::buildVectorGroup(QVBoxLayout* layout)
             [this](double value) { applyData(QStringLiteral("strokeWidth"), value); });
     form->addRow(QStringLiteral("描边宽度"), m_strokeWidth);
 
-    layout->addWidget(m_vectorGroup);
+    m_vectorSection = new CollapsibleSection(QStringLiteral("矢量"), content, this);
+    m_vectorSection->setExpanded(true);
+    layout->addWidget(m_vectorSection);
 }
 
-void PropertiesPanel::buildMediaGroup(QVBoxLayout* layout)
+void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
 {
-    m_mediaGroup = new QGroupBox(QStringLiteral("素材"), this);
-    auto* mediaLayout = new QVBoxLayout(m_mediaGroup);
-    mediaLayout->setContentsMargins(8, 8, 8, 8);
-    m_mediaInfo = new QLabel(m_mediaGroup);
+    auto* content = new QWidget(this);
+    auto* mediaLayout = new QVBoxLayout(content);
+    mediaLayout->setContentsMargins(10, 8, 10, 8);
+    m_mediaInfo = new QLabel(content);
     m_mediaInfo->setWordWrap(true);
     m_mediaInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
     mediaLayout->addWidget(m_mediaInfo);
-    layout->addWidget(m_mediaGroup);
+    m_mediaSection = new CollapsibleSection(QStringLiteral("素材"), content, this);
+    m_mediaSection->setExpanded(true);
+    layout->addWidget(m_mediaSection);
 }
 
 void PropertiesPanel::applyData(const QString& key, const QVariant& value)
@@ -282,15 +293,17 @@ void PropertiesPanel::refresh()
     const Entity* e = m_project->entity(m_entity);
     const bool valid = e != nullptr;
 
+    m_transformSection->setVisible(valid);
+    m_keySection->setVisible(valid);
+    m_textSection->setVisible(valid && e->type == EntityType::Text);
+    m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
+    m_mediaSection->setVisible(valid
+                               && (e->type == EntityType::Image
+                                   || e->type == EntityType::Video));
+
     m_keyButton->setEnabled(valid);
     for (Row& r : m_rows)
         r.spin->setEnabled(valid);
-
-    m_textGroup->setVisible(valid && e->type == EntityType::Text);
-    m_vectorGroup->setVisible(valid && e->type == EntityType::Vector);
-    m_mediaGroup->setVisible(valid
-                             && (e->type == EntityType::Image
-                                 || e->type == EntityType::Video));
 
     if (!valid)
     {

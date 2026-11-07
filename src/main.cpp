@@ -3,6 +3,7 @@
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
+#include "ui/CollapsibleSection.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
@@ -292,17 +293,13 @@ int libraryTest(QApplication& app)
                      int(Qt::AlignCenter));
     project->addVector(1, 220, 220, QColor(255, 120, 160), QColor(255, 255, 255), 6);
 
-    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
-    if (!tabs)
-    {
-        qCritical() << "library-test: tabs not found";
-        return 1;
-    }
-    tabs->setCurrentIndex(1);
+    for (auto* section : window.findChildren<pvf::CollapsibleSection*>())
+        if (section->title() == QStringLiteral("素材库"))
+            section->setExpanded(true);
     qInfo() << "library-test: templates" << project->templates().size()
             << "entities" << project->entities().size();
 
-    QTimer::singleShot(400, &window, [&app, &window, project, tabs, assetPath] {
+    QTimer::singleShot(400, &window, [&app, &window, project, assetPath] {
         if (auto* list = window.findChild<QListWidget*>(QStringLiteral("assetList")))
             qInfo() << "library-test: list items" << list->count();
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_library.png"));
@@ -318,11 +315,13 @@ int libraryTest(QApplication& app)
         const int before = project->entities().size();
         create->click();
 
-        QTimer::singleShot(300, &window, [&app, &window, project, tabs, before, assetPath] {
+        QTimer::singleShot(300, &window, [&app, &window, project, before, assetPath] {
             const int after = project->entities().size();
             qInfo() << "library-test: entities" << before << "->" << after;
+            window.grab().toImage().save(QStringLiteral("/tmp/pvforge_entity_tab.png"));
 
-            tabs->setCurrentIndex(2);
+            if (auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs")))
+                tabs->setCurrentIndex(0);
             QTimer::singleShot(250, &window, [&app, &window, after, before, assetPath] {
                 window.grab().toImage().save(
                     QStringLiteral("/tmp/pvforge_projectprops.png"));

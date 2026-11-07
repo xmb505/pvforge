@@ -1,5 +1,6 @@
 #include "TimelinePanel.h"
 
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -17,6 +18,13 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     , m_project(project)
 {
     setMinimumHeight(140);
+
+    m_search = new QLineEdit(this);
+    m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
+    m_search->setClearButtonEnabled(true);
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
+        update();
+    });
 
     m_hScroll = new QScrollBar(Qt::Horizontal, this);
     connect(m_hScroll, &QScrollBar::valueChanged, this, [this](int value) {
@@ -68,6 +76,17 @@ int TimelinePanel::visibleWidth() const
     return std::max(1, width() - kNameWidth - kRightPad);
 }
 
+QVector<int> TimelinePanel::visibleEntities() const
+{
+    QVector<int> result;
+    const QString filter = m_search ? m_search->text().trimmed() : QString();
+    const auto& entities = m_project->entities();
+    for (int i = 0; i < entities.size(); ++i)
+        if (filter.isEmpty() || entities[i].name.contains(filter, Qt::CaseInsensitive))
+            result.append(i);
+    return result;
+}
+
 int TimelinePanel::xFromFrame(int frame) const
 {
     return kNameWidth + int(std::lround(frame * m_pixelsPerFrame)) - m_scrollX;
@@ -101,6 +120,7 @@ int TimelinePanel::rowAt(int y) const
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    m_search->setGeometry(8, 2, kNameWidth - 16, kHeaderHeight - 6);
     m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
                            kScrollBarHeight);
     updateScrollBar();
@@ -158,15 +178,6 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
-    {
-        QFont titleFont = p.font();
-        titleFont.setBold(true);
-        p.setFont(titleFont);
-        p.setPen(QColor(215, 215, 225));
-        p.drawText(QRect(10, 0, kNameWidth - 20, kHeaderHeight),
-                   Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("时间轴"));
-    }
-
     // Ruler.
     const int fps = std::max(1, m_project->fps);
     const double ppf = m_pixelsPerFrame;
@@ -195,17 +206,18 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     // Entity rows.
     const auto& entities = m_project->entities();
-    for (int i = 0; i < entities.size(); ++i)
+    const QVector<int> visible = visibleEntities();
+    for (int row = 0; row < visible.size(); ++row)
     {
-        const Entity& e = entities[i];
-        const int top = kHeaderHeight + i * kRowHeight;
+        const Entity& e = entities[visible[row]];
+        const int top = kHeaderHeight + row * kRowHeight;
         if (top > bodyBottom)
             break;
 
         const QRect rowRect(0, top, width(), kRowHeight);
         if (e.id == m_selected)
             p.fillRect(rowRect, QColor(45, 58, 76));
-        else if (i % 2)
+        else if (row % 2)
             p.fillRect(rowRect, QColor(31, 31, 36));
 
         p.setPen(QColor(210, 210, 218));
@@ -239,6 +251,12 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
                    Qt::AlignCenter,
                    QStringLiteral("点击左上角工作台创建实体"));
+    }
+    else if (visible.isEmpty())
+    {
+        p.setPen(QColor(140, 140, 150));
+        p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
+                   Qt::AlignCenter, QStringLiteral("没有匹配的对象"));
     }
 
     // Playhead.
@@ -284,8 +302,9 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         const int row = rowAt(int(event->position().y()));
         const auto& entities = m_project->entities();
-        if (row >= 0 && row < entities.size())
-            emit entitySelected(entities[row].id);
+        const QVector<int> visible = visibleEntities();
+        if (row >= 0 && row < visible.size())
+            emit entitySelected(entities[visible[row]].id);
         return;
     }
 

@@ -4,6 +4,7 @@
 
 #include <QWidget>
 
+class QLineEdit;
 class QScrollBar;
 class QWheelEvent;
 
@@ -41,6 +42,7 @@ private:
     int rowAt(int y) const;
     int contentWidth() const;
     int visibleWidth() const;
+    QVector<int> visibleEntities() const;
     void updateScrollBar();
     void zoomAt(double factor, int anchorX);
 
@@ -48,6 +50,7 @@ private:
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
     bool m_scrubbing = false;
+    QLineEdit* m_search = nullptr;
     QScrollBar* m_hScroll = nullptr;
     int m_scrollX = 0;
     double m_pixelsPerFrame = 6.0;
