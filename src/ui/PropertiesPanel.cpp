@@ -9,14 +9,17 @@
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace pvf {
 
@@ -367,12 +370,35 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     form->setContentsMargins(10, 8, 10, 8);
     form->setVerticalSpacing(6);
 
+    auto addCaptureRow = [this, content, form](const QString& label, QWidget* field,
+                                               const QString& objectName,
+                                               std::function<void()> capture) {
+        auto* row = new QWidget(content);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(4);
+        field->setParent(row);
+        field->setMinimumWidth(0);
+        field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        rowLayout->addWidget(field, 1);
+        auto* button = new QPushButton(row);
+        button->setObjectName(objectName);
+        button->setText(QStringLiteral("取"));
+        button->setToolTip(QStringLiteral("取播放头所在位置"));
+        button->setFixedWidth(30);
+        connect(button, &QPushButton::clicked, this, capture);
+        rowLayout->addWidget(button);
+        form->addRow(label, row);
+    };
+
     m_audioStart = new QSpinBox(content);
     m_audioStart->setObjectName(QStringLiteral("audioStartFrame"));
     m_audioStart->setRange(0, 1000000);
     m_audioStart->setSuffix(QStringLiteral(" 帧"));
     m_audioStart->setKeyboardTracking(false);
-    form->addRow(QStringLiteral("开始帧"), m_audioStart);
+    addCaptureRow(QStringLiteral("开始帧"), m_audioStart,
+                  QStringLiteral("audioStartFromPlayhead"),
+                  [this] { applyData(QStringLiteral("startFrame"), double(m_frame)); });
 
     m_audioTrimStart = new QDoubleSpinBox(content);
     m_audioTrimStart->setObjectName(QStringLiteral("audioTrimStart"));
@@ -380,7 +406,24 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimStart->setDecimals(3);
     m_audioTrimStart->setSuffix(QStringLiteral(" s"));
     m_audioTrimStart->setKeyboardTracking(false);
-    form->addRow(QStringLiteral("裁剪开始"), m_audioTrimStart);
+    addCaptureRow(
+        QStringLiteral("裁剪开始"), m_audioTrimStart,
+        QStringLiteral("audioTrimStartFromPlayhead"), [this] {
+            const Entity* entity = m_project->entity(m_entity);
+            if (!entity)
+                return;
+            const double fps = std::max(1, m_project->fps);
+            const double startFrame =
+                entity->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+            const double duration =
+                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
+            const double trimEnd =
+                entity->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+            const double relative = (m_frame - startFrame) / fps;
+            const double value =
+                std::clamp(relative, 0.0, std::max(0.0, duration - trimEnd));
+            applyData(QStringLiteral("trimStart"), value);
+        });
 
     m_audioTrimEnd = new QDoubleSpinBox(content);
     m_audioTrimEnd->setObjectName(QStringLiteral("audioTrimEnd"));
@@ -388,7 +431,24 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimEnd->setDecimals(3);
     m_audioTrimEnd->setSuffix(QStringLiteral(" s"));
     m_audioTrimEnd->setKeyboardTracking(false);
-    form->addRow(QStringLiteral("裁剪结尾"), m_audioTrimEnd);
+    addCaptureRow(
+        QStringLiteral("裁剪结尾"), m_audioTrimEnd,
+        QStringLiteral("audioTrimEndFromPlayhead"), [this] {
+            const Entity* entity = m_project->entity(m_entity);
+            if (!entity)
+                return;
+            const double fps = std::max(1, m_project->fps);
+            const double startFrame =
+                entity->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+            const double duration =
+                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
+            const double trimStart =
+                entity->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+            const double relative = (m_frame - startFrame) / fps;
+            const double value = std::clamp(
+                duration - relative, 0.0, std::max(0.0, duration - trimStart));
+            applyData(QStringLiteral("trimEnd"), value);
+        });
 
     m_audioVolume = new QSpinBox(content);
     m_audioVolume->setObjectName(QStringLiteral("audioVolume"));

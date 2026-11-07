@@ -1596,6 +1596,41 @@ int audioTest(QApplication& app)
     QApplication::processEvents();
     window.grab().save(QStringLiteral("/tmp/pvf_audio_properties.png"));
 
+    auto* startButton = window.findChild<QPushButton*>(
+        QStringLiteral("audioStartFromPlayhead"));
+    auto* trimStartButton = window.findChild<QPushButton*>(
+        QStringLiteral("audioTrimStartFromPlayhead"));
+    auto* trimEndButton = window.findChild<QPushButton*>(
+        QStringLiteral("audioTrimEndFromPlayhead"));
+    if (!startButton || !trimStartButton || !trimEndButton)
+    {
+        qCritical() << "audio-test: playhead capture buttons missing";
+        ++failures;
+    }
+    else
+    {
+        window.goToFrame(10);
+        startButton->click();
+        window.goToFrame(20);
+        trimStartButton->click();
+        window.goToFrame(25);
+        trimEndButton->click();
+        const double startFrame =
+            uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+        const double trimStart =
+            uiAudio->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+        const double trimEnd =
+            uiAudio->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+        if (std::abs(startFrame - 10.0) > 1e-6
+            || std::abs(trimStart - 1.0 / 3.0) > 1e-3
+            || std::abs(trimEnd - 0.5) > 1e-3)
+        {
+            qCritical() << "audio-test: playhead capture" << startFrame << trimStart
+                        << trimEnd;
+            ++failures;
+        }
+    }
+
     qInfo() << "audio-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
