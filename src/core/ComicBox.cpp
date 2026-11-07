@@ -19,8 +19,59 @@ double hash1(double n)
     return value - std::floor(value);
 }
 
-// The spike always points at the tip position, the way a callout shape
-// does: the user moves the tip and the balloon grows a spike towards it.
+// Superellipse outline, the shape the hand drawn cloud balloon uses.
+QVector<QPointF> superEllipse(const QSizeF& size, int points, double exponent)
+{
+    QVector<QPointF> result;
+    const double a = size.width() / 2.0;
+    const double b = size.height() / 2.0;
+    const double e = 2.0 / exponent;
+    for (int index = 0; index < points; ++index)
+    {
+        const double t = -kPi / 2.0 + index * 2.0 * kPi / points;
+        const double c = std::cos(t);
+        const double s = std::sin(t);
+        result.append(QPointF(a * std::copysign(std::pow(std::fabs(c), e), c),
+                               b * std::copysign(std::pow(std::fabs(s), e), s)));
+    }
+    return result;
+}
+
+// Catmull-Rom style smoothing, so the cloud looks drawn instead of cut.
+QPainterPath smoothPath(const QVector<QPointF>& points)
+{
+    QPainterPath path;
+    const int count = points.size();
+    if (count == 0)
+        return path;
+    path.moveTo(points.first());
+    for (int index = 0; index < count; ++index)
+    {
+        const QPointF p1 = points[index];
+        const QPointF p2 = points[(index + 1) % count];
+        const QPointF p0 = points[(index - 1 + count) % count];
+        const QPointF p3 = points[(index + 2) % count];
+        path.cubicTo(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath cloudPath(const QSizeF& size, int seed)
+{
+    QVector<QPointF> points = superEllipse(size, 56, 2.62);
+    const double jitter = std::max(0.8, size.height() / 400.0);
+    for (int index = 0; index < points.size(); ++index)
+    {
+        points[index] += QPointF(
+            (hash1(index + seed * 1000.0) - 0.5) * 1.2 * jitter,
+            (hash1(index + 100 + seed * 1000.0) - 0.5) * 1.2 * jitter);
+    }
+    return smoothPath(points);
+}
+
+// A spike that points at the tip: its base sits on the body edge in the
+// tip direction, so the balloon keeps pointing wherever the handle goes.
 QPainterPath spikePath(const QPainterPath& body, const QRectF& rect, bool ellipse,
                         const QPointF& tip, double base)
 {
@@ -89,6 +140,7 @@ BubbleStyle BubbleStyle::fromData(const QVariantMap& data)
 {
     BubbleStyle style;
     style.shape = data.value(QStringLiteral("bubbleShape"), 0).toInt();
+    style.tail = data.value(QStringLiteral("bubbleTail"), true).toBool();
     const QColor fill = data.value(QStringLiteral("fill")).value<QColor>();
     if (fill.isValid())
         style.fill = fill;
@@ -106,6 +158,7 @@ BubbleStyle BubbleStyle::fromData(const QVariantMap& data)
 void BubbleStyle::writeTo(QVariantMap& data) const
 {
     data[QStringLiteral("bubbleShape")] = shape;
+    data[QStringLiteral("bubbleTail")] = tail;
     data[QStringLiteral("fill")] = fill;
     data[QStringLiteral("stroke")] = stroke;
     data[QStringLiteral("strokeWidth")] = strokeWidth;
@@ -135,6 +188,9 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
         path.addRoundedRect(rect, bubble.radius, bubble.radius);
         break;
     case 2:
+        path = cloudPath(rect.size(), bubble.seed);
+        break;
+    case 3:
         path = burstPath(QRectF(-inner.width() / 2.0, -inner.height() / 2.0,
                                 inner.width(), inner.height()),
                          bubble);
@@ -151,8 +207,9 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
                       bubble.tipY * rect.height() / 2.0);
     box.m_tip = tip;
     const bool inside = std::fabs(bubble.tipX) < 0.55 && std::fabs(bubble.tipY) < 0.55;
-    // The explosion balloon has no spike; the others point at the tip.
-    if (bubble.shape != 2 && !inside)
+    // The spike is optional; the manga rectangle and the explosion keep it
+    // off by default.
+    if (bubble.tail && bubble.shape != 3 && !inside)
     {
         const double base = std::min(rect.width(), rect.height()) * 0.34;
         path = spikePath(path, rect, bubble.shape != 1, tip, base);

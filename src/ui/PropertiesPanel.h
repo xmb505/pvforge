@@ -104,6 +104,7 @@ private:
     QVector<DataRow> m_dataRows;
     QHash<QString, QColor> m_dataColors;
     QComboBox* m_comicShape = nullptr;
+    QCheckBox* m_comicTail = nullptr;
     QStackedWidget* m_linesStack = nullptr;
     QCheckBox* m_usePivot = nullptr;
     QDoubleSpinBox* m_pivotX = nullptr;

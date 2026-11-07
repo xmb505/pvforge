@@ -39,13 +39,16 @@ protected:
 private:
     QWidget* buildMediaPage();
     QWidget* buildTextPage();
+    QWidget* buildTextBoxPage();
     QWidget* buildVectorPage();
     QWidget* buildCameraPage();
     QWidget* buildSpecialPage();
 
     void createCurrent();
     EntityId createSpecial();
+    EntityId createTextBox();
     void updateSpecialPreview();
+    void updateTextBoxPreview();
     TextStyle currentTextStyle() const;
     void pickMedia();
     void refreshMediaLibrary();
@@ -76,6 +79,10 @@ private:
     TextStyle m_textStyle;
 
     QLineEdit* m_cameraName = nullptr;
+
+    QListWidget* m_textBoxTypes = nullptr;
+    QComboBox* m_textBoxShape = nullptr;
+    QLabel* m_textBoxPreview = nullptr;
 
     QListWidget* m_specialTypes = nullptr;
     QStackedWidget* m_specialForms = nullptr;

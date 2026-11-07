@@ -894,7 +894,8 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
 
     // The comic balloon spike has its own handle, drawn on the tip.
     if (entity->type == EntityType::ComicText
-        && entity->data.value(QStringLiteral("bubbleShape"), 0).toInt() != 2)
+        && entity->data.value(QStringLiteral("bubbleShape"), 0).toInt() != 3
+        && entity->data.value(QStringLiteral("bubbleTail"), true).toBool())
     {
         const QPointF tip = comicTipScreenPos(*entity);
         if (std::hypot(tip.x() - pos.x(), tip.y() - pos.y()) <= 8.0)
@@ -930,7 +931,8 @@ void Viewport::drawHandles(QPainter& p, const Entity& e)
     }
 
     if (e.type == EntityType::ComicText
-        && e.data.value(QStringLiteral("bubbleShape"), 0).toInt() != 2)
+        && e.data.value(QStringLiteral("bubbleShape"), 0).toInt() != 3
+        && e.data.value(QStringLiteral("bubbleTail"), true).toBool())
     {
         const QPointF tip = comicTipScreenPos(e);
         p.drawEllipse(QPointF(tip), 5.0, 5.0);

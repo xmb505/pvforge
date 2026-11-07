@@ -372,13 +372,21 @@ void PropertiesPanel::buildComicSection(QVBoxLayout* layout)
     form->setVerticalSpacing(6);
 
     m_comicShape = new QComboBox(content);
-    m_comicShape->addItem(QStringLiteral("圆球 + 尖尾"), 0);
+    m_comicShape->addItem(QStringLiteral("椭圆"), 0);
     m_comicShape->addItem(QStringLiteral("矩形"), 1);
-    m_comicShape->addItem(QStringLiteral("爆炸式"), 2);
+    m_comicShape->addItem(QStringLiteral("云朵"), 2);
+    m_comicShape->addItem(QStringLiteral("爆炸"), 3);
     connect(m_comicShape, &QComboBox::currentIndexChanged, this, [this](int) {
         emitDataEdit(QStringLiteral("bubbleShape"), m_comicShape->currentData());
     });
     form->addRow(QStringLiteral("形状"), m_comicShape);
+
+    m_comicTail = new QCheckBox(QStringLiteral("尖角"), content);
+    m_comicTail->setToolTip(QStringLiteral("拖动画面上的小圆点可以移动尖角"));
+    connect(m_comicTail, &QCheckBox::toggled, this, [this](bool on) {
+        emitDataEdit(QStringLiteral("bubbleTail"), on);
+    });
+    form->addRow(m_comicTail);
 
     addDataRow(form, QStringLiteral("圆角"), QStringLiteral("bubbleRadius"), 0, 400, 0, 1);
     addDataRow(form, QStringLiteral("尖角 X"), QStringLiteral("bubbleTipX"), -3, 3, 2, 0.05);
@@ -1061,6 +1069,21 @@ void PropertiesPanel::refresh()
             }
         };
         select(m_comicShape, e->data.value(QStringLiteral("bubbleShape"), 0).toInt());
+        {
+            const QSignalBlocker blocker(m_comicTail);
+            m_comicTail->setChecked(
+                e->data.value(QStringLiteral("bubbleTail"), true).toBool());
+        }
+        const int shape = e->data.value(QStringLiteral("bubbleShape"), 0).toInt();
+        const bool tailOn = e->data.value(QStringLiteral("bubbleTail"), true).toBool()
+                            && shape != 3;
+        for (const DataRow& row : m_dataRows)
+        {
+            if ((row.key == QStringLiteral("bubbleTipX")
+                 || row.key == QStringLiteral("bubbleTipY"))
+                && row.spin)
+                row.spin->setEnabled(editable && tailOn);
+        }
     }
     else if (e->type == EntityType::Vector)
     {

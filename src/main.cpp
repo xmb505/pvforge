@@ -354,8 +354,8 @@ int specialTest(QApplication& app)
         return count;
     };
 
-    // Comic balloons in all three shapes, each rendered on its own.
-    for (int shape = 0; shape < 3; ++shape)
+    // Comic balloons in all four shapes, each rendered on its own.
+    for (int shape = 0; shape < 4; ++shape)
     {
         pvf::TextStyle style;
         style.text = QStringLiteral("台词\n第二行");
@@ -366,6 +366,7 @@ int specialTest(QApplication& app)
         style.writeTo(data);
         pvf::BubbleStyle bubble;
         bubble.shape = shape;
+        bubble.tail = shape == 0 || shape == 2;
         bubble.writeTo(data);
 
         pvf::Entity* comic = project->addEntity(pvf::EntityType::ComicText,
@@ -506,7 +507,7 @@ int specialTest(QApplication& app)
                     else if (entity.type == pvf::EntityType::FlowLines)
                         ++flow;
                 }
-                if (comic != 3 || radial != 1 || flow != 1)
+                if (comic != 4 || radial != 1 || flow != 1)
                 {
                     qCritical() << "special-test: types lost on reload" << comic
                                 << radial << flow;
@@ -543,6 +544,29 @@ int specialTest(QApplication& app)
         }
         else
         {
+            auto* textBoxes =
+                workbench->findChild<QListWidget*>(QStringLiteral("textBoxTypes"));
+            types->setCurrentRow(2);   // the "text box" page
+            QApplication::processEvents();
+            for (int row = 0; textBoxes && row < textBoxes->count(); ++row)
+            {
+                textBoxes->setCurrentRow(row);
+                QApplication::processEvents();
+                const int before = uiProject->entities().size();
+                create->click();
+                QApplication::processEvents();
+                if (uiProject->entities().size() != before + 1)
+                {
+                    qCritical() << "special-test: text box row did not create" << row;
+                    ++local;
+                }
+            }
+            if (textBoxes)
+                textBoxes->setCurrentRow(1);
+            QApplication::processEvents();
+            workbench->grab().toImage().save(
+                QStringLiteral("/tmp/pvforge_special_workbench.png"));
+
             types->setCurrentRow(4);   // the "special" page
             QApplication::processEvents();
             for (int row = 0; row < special->count(); ++row)
@@ -558,10 +582,6 @@ int specialTest(QApplication& app)
                     ++local;
                 }
             }
-            special->setCurrentRow(1);   // rectangle comic, for the shot
-            QApplication::processEvents();
-            workbench->grab().toImage().save(
-                QStringLiteral("/tmp/pvforge_special_workbench.png"));
         }
 
         // The comic spike can be dragged to a new tip position.
@@ -3450,7 +3470,7 @@ int cameraTest(QApplication& app)
             }
             else
             {
-                types->setCurrentRow(3);
+                types->setCurrentRow(5);   // the camera page
                 nameEdit->setText(QStringLiteral("UI Camera"));
                 create->click();
                 QApplication::processEvents();
@@ -5485,6 +5505,111 @@ int libraryTest(QApplication& app)
 
 namespace {
 
+int specialDemo(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("特殊工具演示");
+    project->width = 1920;
+    project->height = 1080;
+    project->background = QColor(16, 16, 22);
+
+    const auto place = [](pvf::Entity* entity, double x, double y) {
+        if (!entity)
+            return;
+        entity->values[QStringLiteral("x")] = x;
+        entity->values[QStringLiteral("y")] = y;
+    };
+
+    // Background motion streaks.
+    pvf::FlowParams flow;
+    flow.count = 34;
+    flow.length = 620;
+    flow.spacing = 72;
+    flow.thickness = 9;
+    flow.area = 2400;
+    flow.speed = 620;
+    flow.color = QColor(120, 140, 180, 190);
+    QVariantMap flowData;
+    flow.writeTo(flowData);
+    place(project->addEntity(pvf::EntityType::FlowLines,
+                             QStringLiteral("快速流过"), flowData),
+          0, 0);
+
+    // Focus rays behind the balloons.
+    pvf::RadialParams radial;
+    radial.count = 56;
+    radial.radius = 560;
+    radial.width = 22;
+    radial.color = QColor(255, 208, 96);
+    radial.spin = 4.0;
+    QVariantMap radialData;
+    radial.writeTo(radialData);
+    place(project->addEntity(pvf::EntityType::RadialLines,
+                             QStringLiteral("放射状线条"), radialData),
+          0, 0);
+
+    // Comic balloons.
+    const auto balloon = [&](double x, double y, const QString& text, int size,
+                             int shape, double tipX, double tipY,
+                             const QColor& fill) {
+        pvf::TextStyle style;
+        style.text = text;
+        style.pixelSize = size;
+        style.color = fill.lightness() > 140 ? QColor(28, 28, 34) : QColor(255, 255, 250);
+        style.padding = 24.0;
+        style.align = int(Qt::AlignCenter);
+        style.lineHeight = 1.1;
+        pvf::BubbleStyle bubble;
+        bubble.shape = shape;
+        bubble.tail = shape == 0 || shape == 2;
+        bubble.fill = fill;
+        bubble.stroke = QColor(24, 22, 28);
+        bubble.strokeWidth = 6;
+        bubble.tipX = tipX;
+        bubble.tipY = tipY;
+        QVariantMap data;
+        style.writeTo(data);
+        bubble.writeTo(data);
+        place(project->addEntity(pvf::EntityType::ComicText,
+                                 QStringLiteral("漫画文本框"), data),
+              x, y);
+    };
+
+    balloon(-560, -190, QStringLiteral("欢迎来到\nPVForge"), 66, 0, 0.25, 1.5,
+            QColor(255, 255, 255));
+    balloon(-560, 290, QStringLiteral("云朵气泡"), 58, 2, -0.2, 1.4,
+            QColor(255, 255, 255));
+    balloon(520, -200, QStringLiteral("日式硬直角\n没有尖角"), 58, 1, 0, 1.3,
+            QColor(255, 255, 255));
+    balloon(0, 300, QStringLiteral("爆炸式！"), 66, 3, 0, 1.3,
+            QColor(255, 246, 210));
+
+    pvf::TextStyle title;
+    title.text = QStringLiteral("特殊工具");
+    title.pixelSize = 104;
+    title.color = QColor(255, 220, 120);
+    title.padding = 8;
+    QVariantMap titleData;
+    title.writeTo(titleData);
+    place(project->addEntity(pvf::EntityType::Text,
+                             QStringLiteral("文字"), titleData),
+          0, -430);
+
+    auto* window = new pvf::MainWindow(project);
+    window->resize(1440, 900);
+    window->show();
+    if (auto* viewport = window->findChild<pvf::Viewport*>())
+    {
+        viewport->resetView();
+        qInfo() << "special-demo: viewport" << viewport << "size" << viewport->size();
+    }
+    QTimer::singleShot(900, window, [window] {
+        window->grab().toImage().save(
+            QStringLiteral("/tmp/pvforge_special_demo.png"));
+    });
+    return app.exec();
+}
+
 int renderDemo(QApplication& app)
 {
     const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_demo_asset.png");
@@ -5687,7 +5812,7 @@ int workbenchTest(QApplication& app)
             button->click();
             auto* typeList =
                 workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
-            typeList->setCurrentRow(2);   // vector page
+            typeList->setCurrentRow(3);   // vector page
 
             QTimer::singleShot(300, &window, [&app, &window, workbench, count,
                                               typeList] {
@@ -5754,6 +5879,8 @@ int main(int argc, char* argv[])
         return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--special-test")))
         return specialTest(app);
+    if (app.arguments().contains(QStringLiteral("--special-demo")))
+        return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))
         return welcomeTest(app);
     if (app.arguments().contains(QStringLiteral("--library-test")))

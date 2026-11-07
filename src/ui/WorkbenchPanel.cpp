@@ -69,9 +69,10 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     const QStringList typeNames = {
         Lang::t(QStringLiteral("workbench.media"), QStringLiteral("媒体")),
         Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
+        QStringLiteral("文本框"),
         Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
-        Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
         Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
+        Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
     };
     for (const QString& name : typeNames)
     {
@@ -86,9 +87,10 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     m_pages->setObjectName(QStringLiteral("typePages"));
     m_pages->addWidget(buildMediaPage());
     m_pages->addWidget(buildTextPage());
+    m_pages->addWidget(buildTextBoxPage());
     m_pages->addWidget(buildVectorPage());
-    m_pages->addWidget(buildCameraPage());
     m_pages->addWidget(buildSpecialPage());
+    m_pages->addWidget(buildCameraPage());
     right->addWidget(m_pages, 1);
 
     m_create = new QPushButton(
@@ -248,52 +250,59 @@ QWidget* WorkbenchPanel::buildCameraPage()
     return page;
 }
 
-QWidget* WorkbenchPanel::buildSpecialPage()
+QWidget* WorkbenchPanel::buildTextBoxPage()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     m_comicStyle.padding = 18.0;
     m_comicStyle.pixelSize = 72;
     m_comicStyle.color = m_comicColorValue;
-    m_specialTypes = new QListWidget(page);
-    m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
+
+    m_textBoxTypes = new QListWidget(page);
+    m_textBoxTypes->setObjectName(QStringLiteral("textBoxTypes"));
     const QStringList names = {
-        QStringLiteral("漫画文本框 · 圆球尖尾"),
-        QStringLiteral("漫画文本框 · 矩形"),
-        QStringLiteral("漫画文本框 · 爆炸"),
-        QStringLiteral("放射状线条"),
-        QStringLiteral("快速流过"),
+        QStringLiteral("普通文本框"),
+        QStringLiteral("日式超绝硬直角"),
+        QStringLiteral("爆炸文本框"),
     };
     for (const QString& name : names)
-        m_specialTypes->addItem(name);
-    m_specialTypes->setMaximumHeight(140);
-    layout->addWidget(m_specialTypes);
+        m_textBoxTypes->addItem(name);
+    m_textBoxTypes->setMaximumHeight(96);
+    layout->addWidget(m_textBoxTypes);
 
-    m_specialPreview = new QLabel(page);
-    m_specialPreview->setObjectName(QStringLiteral("specialPreview"));
-    m_specialPreview->setAlignment(Qt::AlignCenter);
-    m_specialPreview->setMinimumHeight(150);
-    m_specialPreview->setFrameShape(QFrame::StyledPanel);
-    layout->addWidget(m_specialPreview);
+    m_textBoxPreview = new QLabel(page);
+    m_textBoxPreview->setObjectName(QStringLiteral("textBoxPreview"));
+    m_textBoxPreview->setAlignment(Qt::AlignCenter);
+    m_textBoxPreview->setMinimumHeight(120);
+    m_textBoxPreview->setFrameShape(QFrame::StyledPanel);
+    layout->addWidget(m_textBoxPreview);
 
-    m_specialForms = new QStackedWidget(page);
+    auto* form = new QFormLayout;
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setVerticalSpacing(8);
 
-    auto* comic = new QWidget(m_specialForms);
-    auto* comicForm = new QFormLayout(comic);
-    comicForm->setContentsMargins(0, 0, 0, 0);
-    comicForm->setVerticalSpacing(8);
-    m_comicContent = new QLineEdit(QStringLiteral("台词"), comic);
+    m_textBoxShape = new QComboBox(page);
+    m_textBoxShape->setObjectName(QStringLiteral("textBoxShape"));
+    m_textBoxShape->addItem(QStringLiteral("云朵"), 2);
+    m_textBoxShape->addItem(QStringLiteral("矩形"), 1);
+    m_textBoxShape->addItem(QStringLiteral("椭圆"), 0);
+    m_textBoxShape->setCurrentIndex(2);
+    form->addRow(QStringLiteral("外形"), m_textBoxShape);
+
+    m_comicContent = new QLineEdit(QStringLiteral("台词"), page);
     m_comicContent->setObjectName(QStringLiteral("comicContent"));
-    comicForm->addRow(QStringLiteral("内容"), m_comicContent);
-    m_comicSize = new QSpinBox(comic);
+    form->addRow(QStringLiteral("内容"), m_comicContent);
+
+    m_comicSize = new QSpinBox(page);
     m_comicSize->setRange(12, 400);
     m_comicSize->setValue(72);
     m_comicSize->setSuffix(QStringLiteral(" px"));
-    comicForm->addRow(QStringLiteral("字号"), m_comicSize);
-    m_comicColor = new QPushButton(comic);
+    form->addRow(QStringLiteral("字号"), m_comicSize);
+
+    m_comicColor = new QPushButton(page);
     setColorButton(m_comicColor, m_comicColorValue);
     connect(m_comicColor, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_comicColorValue, QStringLiteral("文字颜色"));
@@ -301,14 +310,15 @@ QWidget* WorkbenchPanel::buildSpecialPage()
         {
             m_comicColorValue = color;
             setColorButton(m_comicColor, color);
-            updateSpecialPreview();
+            updateTextBoxPreview();
         }
     });
-    comicForm->addRow(QStringLiteral("文字颜色"), m_comicColor);
-    auto* comicLayout = new QPushButton(QStringLiteral("排版…"), comic);
-    comicLayout->setObjectName(QStringLiteral("comicLayoutButton"));
-    comicLayout->setToolTip(QStringLiteral("换行宽度、行距、内边距"));
-    connect(comicLayout, &QPushButton::clicked, this, [this] {
+    form->addRow(QStringLiteral("文字颜色"), m_comicColor);
+
+    auto* layoutButton = new QPushButton(QStringLiteral("排版…"), page);
+    layoutButton->setObjectName(QStringLiteral("comicLayoutButton"));
+    layoutButton->setToolTip(QStringLiteral("换行宽度、行距、内边距"));
+    connect(layoutButton, &QPushButton::clicked, this, [this] {
         TextStyle seed = m_comicStyle;
         seed.text = m_comicContent->text();
         seed.pixelSize = m_comicSize->value();
@@ -323,10 +333,58 @@ QWidget* WorkbenchPanel::buildSpecialPage()
         m_comicSize->setValue(m_comicStyle.pixelSize);
         m_comicColorValue = m_comicStyle.color;
         setColorButton(m_comicColor, m_comicColorValue);
-        updateSpecialPreview();
+        updateTextBoxPreview();
     });
-    comicForm->addRow(comicLayout);
-    m_specialForms->addWidget(comic);
+    form->addRow(layoutButton);
+
+    layout->addLayout(form, 1);
+
+    connect(m_textBoxTypes, &QListWidget::currentRowChanged, this, [this, form](int row) {
+        if (m_textBoxShape)
+        {
+            m_textBoxShape->setVisible(row == 0);
+            if (auto* label = qobject_cast<QLabel*>(form->labelForField(m_textBoxShape)))
+                label->setVisible(row == 0);
+        }
+        updateTextBoxPreview();
+    });
+    connect(m_textBoxShape, &QComboBox::currentIndexChanged, this,
+            [this](int) { updateTextBoxPreview(); });
+    connect(m_comicContent, &QLineEdit::textChanged, this,
+            [this](const QString&) { updateTextBoxPreview(); });
+    connect(m_comicSize, &QSpinBox::valueChanged, this,
+            [this](int) { updateTextBoxPreview(); });
+
+    m_textBoxTypes->setCurrentRow(0);
+    return page;
+}
+
+QWidget* WorkbenchPanel::buildSpecialPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    m_specialTypes = new QListWidget(page);
+    m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
+    const QStringList names = {
+        QStringLiteral("放射状线条"),
+        QStringLiteral("快速流过"),
+    };
+    for (const QString& name : names)
+        m_specialTypes->addItem(name);
+    m_specialTypes->setMaximumHeight(80);
+    layout->addWidget(m_specialTypes);
+
+    m_specialPreview = new QLabel(page);
+    m_specialPreview->setObjectName(QStringLiteral("specialPreview"));
+    m_specialPreview->setAlignment(Qt::AlignCenter);
+    m_specialPreview->setMinimumHeight(150);
+    m_specialPreview->setFrameShape(QFrame::StyledPanel);
+    layout->addWidget(m_specialPreview);
+
+    m_specialForms = new QStackedWidget(page);
 
     auto* radial = new QWidget(m_specialForms);
     auto* radialForm = new QFormLayout(radial);
@@ -388,18 +446,11 @@ QWidget* WorkbenchPanel::buildSpecialPage()
 
     layout->addWidget(m_specialForms, 1);
 
-    connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int) {
+    connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_specialForms)
-        {
-            const int row = m_specialTypes->currentRow();
-            m_specialForms->setCurrentIndex(row <= 2 ? 0 : (row == 3 ? 1 : 2));
-        }
+            m_specialForms->setCurrentIndex(row == 0 ? 0 : 1);
         updateSpecialPreview();
     });
-    connect(m_comicContent, &QLineEdit::textChanged, this,
-            [this](const QString&) { updateSpecialPreview(); });
-    connect(m_comicSize, &QSpinBox::valueChanged, this,
-            [this](int) { updateSpecialPreview(); });
 
     m_specialTypes->setCurrentRow(0);
     return page;
@@ -738,25 +789,7 @@ void WorkbenchPanel::updateSpecialPreview()
                          (image.height() - 16.0) / std::max(1.0, bounds.height()));
     };
 
-    if (row <= 2)
-    {
-        TextStyle style = m_comicStyle;
-        style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
-                                                       : m_comicContent->text();
-        style.fontFamily = QFont().family();
-        style.pixelSize = m_comicSize->value();
-        style.color = m_comicColorValue;
-        style.align = int(Qt::AlignCenter);
-        BubbleStyle bubble;
-        bubble.shape = row;
-        const ComicBox box = ComicBox::build(style, bubble);
-        painter.save();
-        painter.translate(centre);
-        painter.scale(fit(box.bounds()), fit(box.bounds()));
-        box.paint(painter);
-        painter.restore();
-    }
-    else if (row == 3)
+    if (row == 0)
     {
         RadialParams params;
         params.count = m_radialCount->value();
@@ -786,29 +819,50 @@ void WorkbenchPanel::updateSpecialPreview()
     m_specialPreview->setPixmap(QPixmap::fromImage(image));
 }
 
+void WorkbenchPanel::updateTextBoxPreview()
+{
+    if (!m_textBoxPreview)
+        return;
+
+    const int row = m_textBoxTypes ? m_textBoxTypes->currentRow() : 0;
+    int shape = m_textBoxShape ? m_textBoxShape->currentData().toInt() : 0;
+    if (row == 1)
+        shape = 1;   // Japanese hard rectangle
+    else if (row == 2)
+        shape = 3;   // explosion
+
+    TextStyle style = m_comicStyle;
+    style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
+                                                   : m_comicContent->text();
+    style.fontFamily = QFont().family();
+    style.pixelSize = m_comicSize->value();
+    style.color = m_comicColorValue;
+    style.align = int(Qt::AlignCenter);
+    BubbleStyle bubble;
+    bubble.shape = shape;
+    bubble.tail = row == 0;
+    const ComicBox box = ComicBox::build(style, bubble);
+    const QRectF bounds = box.bounds();
+
+    QImage image(280, 150, QImage::Format_ARGB32);
+    image.fill(QColor(30, 30, 36));
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const double scale =
+        std::min((image.width() - 16.0) / std::max(1.0, bounds.width()),
+                 (image.height() - 16.0) / std::max(1.0, bounds.height()));
+    painter.translate(image.width() / 2.0, image.height() / 2.0);
+    painter.scale(scale, scale);
+    box.paint(painter);
+    m_textBoxPreview->setPixmap(QPixmap::fromImage(image));
+}
+
 EntityId WorkbenchPanel::createSpecial()
 {
     const int row = m_specialTypes ? m_specialTypes->currentRow() : 0;
     Entity* entity = nullptr;
 
-    if (row <= 2)
-    {
-        TextStyle style = m_comicStyle;
-        style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
-                                                       : m_comicContent->text();
-        style.fontFamily = QFont().family();
-        style.pixelSize = m_comicSize->value();
-        style.color = m_comicColorValue;
-        style.align = int(Qt::AlignCenter);
-        BubbleStyle bubble;
-        bubble.shape = row;
-        QVariantMap data;
-        style.writeTo(data);
-        bubble.writeTo(data);
-        entity = m_project->addEntity(EntityType::ComicText,
-                                      QStringLiteral("漫画文本框"), data);
-    }
-    else if (row == 3)
+    if (row == 0)
     {
         RadialParams params;
         params.count = m_radialCount->value();
@@ -834,6 +888,36 @@ EntityId WorkbenchPanel::createSpecial()
     return entity ? entity->id : kInvalidEntity;
 }
 
+EntityId WorkbenchPanel::createTextBox()
+{
+    const int row = m_textBoxTypes ? m_textBoxTypes->currentRow() : 0;
+    int shape = m_textBoxShape ? m_textBoxShape->currentData().toInt() : 0;
+    if (row == 1)
+        shape = 1;
+    else if (row == 2)
+        shape = 3;
+
+    TextStyle style = m_comicStyle;
+    style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
+                                                   : m_comicContent->text();
+    style.fontFamily = QFont().family();
+    style.pixelSize = m_comicSize->value();
+    style.color = m_comicColorValue;
+    style.align = int(Qt::AlignCenter);
+
+    BubbleStyle bubble;
+    bubble.shape = shape;
+    bubble.tail = row == 0;
+
+    QVariantMap data;
+    style.writeTo(data);
+    bubble.writeTo(data);
+    if (Entity* entity = m_project->addEntity(EntityType::ComicText,
+                                              QStringLiteral("文本框"), data))
+        return entity->id;
+    return kInvalidEntity;
+}
+
 void WorkbenchPanel::createCurrent()
 {
     const int page = m_pages->currentIndex();
@@ -857,6 +941,10 @@ void WorkbenchPanel::createCurrent()
     }
     else if (page == 2)
     {
+        id = createTextBox();
+    }
+    else if (page == 3)
+    {
         const int shape = m_vectorShapes->currentItem()
                               ? m_vectorShapes->currentItem()->data(Qt::UserRole).toInt()
                               : 0;
@@ -872,7 +960,7 @@ void WorkbenchPanel::createCurrent()
             id = e->id;
         }
     }
-    else if (page == 3)
+    else if (page == 5)
     {
         QString name = m_cameraName ? m_cameraName->text().trimmed() : QString();
         if (name.isEmpty())

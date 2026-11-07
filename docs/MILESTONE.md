@@ -78,8 +78,12 @@
 - 自动保存：默认每 5 分钟保存一次已有路径的工程，设置 → 常规可关闭或改间隔（1–120 分钟）；保存使用 QSaveFile 原子写入，未命名工程不生成恢复副本
 - 文字排版模块（`core/TextStyle` + `core/TextBlock`）：字体、字号、颜色、对齐、行距、内边距、换行宽度统一描述；场景渲染、素材库缩略图、排版对话框预览共用同一套测量与绘制，行高用 QTextDocument 的块格式实现
 - 排版对话框（`ui/TextLayoutDialog`）：只编辑一份 `TextStyle` 副本，右侧 `TextPreview` 用同一个 `TextBlock` 实时预览；创建走 `Project::addText(TextStyle)`，编辑走 `SetEntityDataMapCommand`（一条撤销）
+- 文本框（工作台「文本框」分类，`EntityType::ComicText` + `core/ComicBox`）：
+  - 普通文本框：外形可切云朵 / 矩形 / 椭圆，三者都带尖角；尖角位置存成相对坐标（`bubbleTipX/bubbleTipY`），画布上直接拖动小圆点指向任意点，撤销一步回退
+  - 日式超绝硬直角：直角矩形、无尖角
+  - 爆炸文本框：爆炸外形、无尖角
+  - 尖角开关与形状都存在 `Entity::data`（`bubbleShape/bubbleTail`），旧工程不兼容也无妨（尚未发布）
 - 特殊工具（工作台「特殊」分类）：
-  - 漫画文本框（`EntityType::ComicText` + `core/ComicBox`）：圆球 / 矩形 / 爆炸式三种外形；尖角位置存成相对坐标（`bubbleTipX/bubbleTipY`），画布上直接拖动小圆点改尖角，撤销一步回退
   - 放射状线条（`EntityType::RadialLines` + `core/LineDeco`）：楔形集中线，中心收尖外缘宽，角度与长度带随机抖动，每 0.1 秒约 60% 的线条加粗 1.4 倍，整体可慢速旋转
   - 快速流过（`EntityType::FlowLines`）：成组平行线按帧流动，方向、速度、间距、长度可调，用作背景运动感
 - 特殊工具的数据都存在 `Entity::data` 里，颜色键沿用 `color/fill/stroke`（判定改为按后缀匹配，新颜色键不用再登记）

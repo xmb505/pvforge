@@ -14,8 +14,9 @@ namespace pvf {
 // Shape and colours of a comic balloon.
 struct BubbleStyle
 {
-    int shape = 0;         // 0 = round balloon with a sharp tail,
-                           // 1 = rounded rectangle, 2 = burst
+    int shape = 0;         // 0 = ellipse, 1 = rectangle, 2 = cloud,
+                           // 3 = burst
+    bool tail = true;      // the movable spike (never drawn on the burst)
     QColor fill = QColor(255, 255, 255);
     QColor stroke = QColor(24, 24, 28);
     double strokeWidth = 6.0;
