@@ -96,7 +96,7 @@ BubbleStyle BubbleStyle::fromData(const QVariantMap& data)
     if (stroke.isValid())
         style.stroke = stroke;
     style.strokeWidth = data.value(QStringLiteral("strokeWidth"), 6.0).toDouble();
-    style.radius = data.value(QStringLiteral("bubbleRadius"), 36.0).toDouble();
+    style.radius = data.value(QStringLiteral("bubbleRadius"), 0.0).toDouble();
     style.tipX = data.value(QStringLiteral("bubbleTipX"), 0.0).toDouble();
     style.tipY = data.value(QStringLiteral("bubbleTipY"), 1.35).toDouble();
     style.seed = data.value(QStringLiteral("bubbleSeed"), 1).toInt();
@@ -151,7 +151,8 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
                       bubble.tipY * rect.height() / 2.0);
     box.m_tip = tip;
     const bool inside = std::fabs(bubble.tipX) < 0.55 && std::fabs(bubble.tipY) < 0.55;
-    if (!inside)
+    // The explosion balloon has no spike; the others point at the tip.
+    if (bubble.shape != 2 && !inside)
     {
         const double base = std::min(rect.width(), rect.height()) * 0.34;
         path = spikePath(path, rect, bubble.shape != 1, tip, base);

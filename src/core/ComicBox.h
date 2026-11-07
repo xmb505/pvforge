@@ -19,7 +19,7 @@ struct BubbleStyle
     QColor fill = QColor(255, 255, 255);
     QColor stroke = QColor(24, 24, 28);
     double strokeWidth = 6.0;
-    double radius = 36.0;
+    double radius = 0.0;   // 0 = sharp manga style corners
     // The spike tip, as a share of the balloon half size: 0 is the centre,
     // 1 is the edge. The spike always points at it, like a callout shape.
     double tipX = 0.0;
