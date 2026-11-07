@@ -2,6 +2,7 @@
 
 #include "app/AppIcon.h"
 
+#include <QApplication>
 #include <QFontMetricsF>
 #include <QIcon>
 #include <QMouseEvent>
@@ -278,7 +279,7 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, do
 void Viewport::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor(24, 24, 28));
+    p.fillRect(rect(), QApplication::palette().color(QPalette::Window));
 
     const QRectF canvas = canvasRect();
     const double s = viewScale();

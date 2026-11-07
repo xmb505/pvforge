@@ -2,6 +2,7 @@
 
 #include "app/AppIcon.h"
 
+#include <QApplication>
 #include <QLineEdit>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -278,11 +279,20 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     const int bodyBottom = height() - kScrollBarHeight;
     const int right = width() - kRightPad;
 
-    p.fillRect(rect(), QColor(28, 28, 32));
-    p.fillRect(QRect(0, 0, kNameWidth, height()), QColor(34, 34, 39));
-    p.fillRect(QRect(0, 0, width(), kHeaderHeight), QColor(38, 38, 44));
+    const QPalette pal = QApplication::palette();
+    const QColor windowColor = pal.color(QPalette::Window);
+    const QColor baseColor = pal.color(QPalette::Base);
+    const QColor altColor = pal.color(QPalette::AlternateBase);
+    const QColor midColor = pal.color(QPalette::Mid);
+    const QColor textColor = pal.color(QPalette::Text);
+    const QColor dimColor = pal.color(QPalette::PlaceholderText);
+    const QColor accentColor = pal.color(QPalette::Highlight);
 
-    p.setPen(QColor(60, 60, 68));
+    p.fillRect(rect(), windowColor);
+    p.fillRect(QRect(0, 0, kNameWidth, height()), baseColor);
+    p.fillRect(QRect(0, 0, width(), kHeaderHeight), altColor);
+
+    p.setPen(midColor);
     p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
@@ -303,9 +313,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             break;
         if (x < kNameWidth - 10)
             continue;
-        p.setPen(QColor(70, 70, 78));
+        p.setPen(midColor);
         p.drawLine(x, kHeaderHeight - 6, x, kHeaderHeight);
-        p.setPen(QColor(150, 150, 160));
+        p.setPen(textColor);
         const double seconds = f / double(fps);
         p.drawText(QRect(x + 4, 2, 80, kHeaderHeight - 4), Qt::AlignVCenter | Qt::AlignLeft,
                    QString::number(seconds, 'g', 4) + QStringLiteral("s"));
@@ -323,15 +333,16 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
         const QRect rowRect(0, top, width(), kRowHeight);
         if (e.id == m_selected)
-            p.fillRect(rowRect, QColor(45, 58, 76));
+            p.fillRect(rowRect, QColor(accentColor.red(), accentColor.green(),
+                                        accentColor.blue(), 70));
         else if (row % 2)
-            p.fillRect(rowRect, QColor(31, 31, 36));
+            p.fillRect(rowRect, QColor(altColor.red(), altColor.green(), altColor.blue(), 120));
 
         if (e.id != m_renameEntity)
         {
-            const QColor nameColor = e.hidden ? QColor(120, 120, 130)
-                                   : e.locked ? QColor(150, 150, 160)
-                                              : QColor(210, 210, 218);
+            const QColor nameColor = e.hidden ? dimColor
+                                   : e.locked ? dimColor
+                                              : textColor;
             p.setPen(nameColor);
             p.drawText(QRect(10, top, kNameWidth - 10 - 3 * (kButtonSize + 2), kRowHeight),
                        Qt::AlignVCenter | Qt::AlignLeft, e.name);
@@ -355,13 +366,15 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
             p.setPen(Qt::NoPen);
             if (isSelected)
-                p.setBrush(QColor(255, 255, 255));
+                p.setBrush(pal.color(QPalette::HighlightedText));
             else if (e.locked)
-                p.setBrush(QColor(120, 105, 70));
+                p.setBrush(QColor(accentColor.red(), accentColor.green(),
+                                  accentColor.blue(), 90));
             else if (e.id == m_selected)
-                p.setBrush(QColor(255, 200, 90));
+                p.setBrush(accentColor);
             else
-                p.setBrush(QColor(200, 160, 80));
+                p.setBrush(QColor(accentColor.red(), accentColor.green(),
+                                  accentColor.blue(), 190));
             p.drawPolygon(diamond);
         }
 
@@ -376,14 +389,14 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     if (entities.isEmpty())
     {
-        p.setPen(QColor(140, 140, 150));
+        p.setPen(dimColor);
         p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
                    Qt::AlignCenter,
                    QStringLiteral("点击左上角工作台创建实体"));
     }
     else if (visible.isEmpty())
     {
-        p.setPen(QColor(140, 140, 150));
+        p.setPen(dimColor);
         p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
                    Qt::AlignCenter, QStringLiteral("没有匹配的对象"));
     }
@@ -392,9 +405,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     const int px = xFromFrame(m_frame);
     if (px >= kNameWidth - 6 && px <= right + 6)
     {
-        p.setPen(QPen(QColor(255, 77, 90), 1.5));
+        p.setPen(QPen(accentColor, 1.5));
         p.drawLine(px, 0, px, bodyBottom);
-        p.setBrush(QColor(255, 77, 90));
+        p.setBrush(accentColor);
         p.setPen(Qt::NoPen);
         QPolygonF head;
         head << QPointF(px - 6, 0) << QPointF(px + 6, 0) << QPointF(px, 9);
@@ -408,7 +421,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const int lx = xFromFrame(length);
         if (lx >= kNameWidth && lx <= right)
         {
-            p.setPen(QPen(QColor(120, 120, 135), 1, Qt::DashLine));
+            p.setPen(QPen(midColor, 1, Qt::DashLine));
             p.drawLine(lx, kHeaderHeight, lx, bodyBottom);
         }
     }
@@ -417,13 +430,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     if (m_dragMode == DragMode::BoxSelect)
     {
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
-        p.setPen(QPen(QColor(100, 160, 255), 1, Qt::DashLine));
-        p.setBrush(QColor(100, 160, 255, 40));
+        p.setPen(QPen(accentColor, 1, Qt::DashLine));
+        p.setBrush(QColor(accentColor.red(), accentColor.green(), accentColor.blue(), 50));
         p.drawRect(box.intersected(QRectF(kNameWidth, kHeaderHeight, visibleWidth(),
                                           bodyBottom - kHeaderHeight)));
     }
 
-    p.setPen(QColor(70, 70, 78));
+    p.setPen(midColor);
     p.drawLine(0, bodyBottom - 1, width(), bodyBottom - 1);
 }
 

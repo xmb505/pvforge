@@ -263,6 +263,7 @@ int timelineRowButtonsTest(QApplication& app)
 
         // Hover the first row so the inline buttons show.
         send(QEvent::MouseMove, QPoint(400, 40), Qt::NoButton, Qt::NoButton);
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_row_buttons.png"));
 
         // Rubber-band across both rows to pick up every keyframe in range.
         send(QEvent::MouseButtonPress, QPoint(200, 32), Qt::LeftButton, Qt::LeftButton);

@@ -1,10 +1,120 @@
 #include "AppIcon.h"
 
+#include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPalette>
 #include <QPixmap>
 
+#include <functional>
+
 namespace pvf {
+
+namespace {
+
+// Icons are drawn at 4x and scaled down, so they stay sharp at any size.
+constexpr int kIconSize = 64;
+
+QColor themeTextColor()
+{
+    return QApplication::palette().color(QPalette::Text);
+}
+
+QColor themeAccentColor()
+{
+    return QApplication::palette().color(QPalette::Highlight);
+}
+
+// Looks up a themed icon by name, trying several conventions.
+QIcon themedIcon(const QStringList& names)
+{
+    for (const QString& name : names)
+    {
+        const QIcon icon = QIcon::fromTheme(name);
+        if (!icon.isNull())
+            return icon;
+    }
+    return QIcon();
+}
+
+QIcon vectorIcon(const std::function<void(QPainter&)>& draw)
+{
+    QIcon icon;
+    for (int state = 0; state < 3; ++state)
+    {
+        QPixmap pixmap(kIconSize, kIconSize);
+        pixmap.fill(Qt::transparent);
+        QPainter p(&pixmap);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        draw(p);
+        p.end();
+
+        const QIcon::Mode mode = state == 0 ? QIcon::Normal
+                                            : (state == 1 ? QIcon::Active : QIcon::Selected);
+        icon.addPixmap(pixmap, mode, QIcon::On);
+    }
+    return icon;
+}
+
+QIcon drawEye(bool hidden)
+{
+    return vectorIcon([hidden](QPainter& p) {
+        const QColor color = themeTextColor();
+        p.setPen(QPen(color, 6));
+        p.setBrush(Qt::NoBrush);
+
+        QPainterPath path;
+        path.moveTo(8, 32);
+        path.quadTo(32, 6, 56, 32);
+        path.quadTo(32, 58, 8, 32);
+        p.drawPath(path);
+
+        p.setBrush(color);
+        p.drawEllipse(QPointF(32, 32), 7, 7);
+
+        if (hidden)
+        {
+            p.setPen(QPen(color, 6));
+            p.drawLine(QPointF(12, 52), QPointF(52, 12));
+        }
+    });
+}
+
+QIcon drawLock(bool locked)
+{
+    return vectorIcon([locked](QPainter& p) {
+        const QColor color = themeTextColor();
+        p.setPen(QPen(color, 6));
+        p.setBrush(Qt::NoBrush);
+
+        if (locked)
+        {
+            p.drawArc(QRectF(18, 8, 28, 30), 0, 180 * 16);
+        }
+        else
+        {
+            p.drawArc(QRectF(26, 14, 28, 26), 0, 180 * 16);
+        }
+
+        p.setBrush(color);
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(QRectF(12, 28, 40, 28), 6, 6);
+    });
+}
+
+QIcon drawKeyframe()
+{
+    return vectorIcon([](QPainter& p) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(themeAccentColor());
+        QPolygonF diamond;
+        diamond << QPointF(32, 6) << QPointF(58, 32) << QPointF(32, 58)
+                << QPointF(6, 32);
+        p.drawPolygon(diamond);
+    });
+}
+
+} // namespace
 
 QIcon makeCubeIcon()
 {
@@ -29,66 +139,25 @@ QIcon makeCubeIcon()
 
 QIcon makeEyeIcon(bool hidden)
 {
-    QPixmap pixmap(16, 16);
-    pixmap.fill(Qt::transparent);
-    QPainter p(&pixmap);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(QPen(QColor(200, 200, 210), 1.2));
-    p.setBrush(Qt::NoBrush);
-
-    QPainterPath path;
-    path.moveTo(1.5, 8);
-    path.quadTo(8, 2.5, 14.5, 8);
-    path.quadTo(8, 13.5, 1.5, 8);
-    p.drawPath(path);
-
-    p.setBrush(QColor(200, 200, 210));
-    p.drawEllipse(QPointF(8, 8), 2.2, 2.2);
-
-    if (hidden)
-    {
-        p.setPen(QPen(QColor(230, 90, 90), 1.6));
-        p.drawLine(QPointF(2.5, 13.5), QPointF(13.5, 2.5));
-    }
-    return QIcon(pixmap);
+    const QIcon themed = themedIcon(hidden ? QStringList{"visibility-off", "view-hidden"}
+                                            : QStringList{"visibility", "view-visible", "eye"});
+    if (!themed.isNull())
+        return themed;
+    return drawEye(hidden);
 }
 
 QIcon makeLockIcon(bool locked)
 {
-    QPixmap pixmap(16, 16);
-    pixmap.fill(Qt::transparent);
-    QPainter p(&pixmap);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(QPen(QColor(200, 200, 210), 1.2));
-    p.setBrush(Qt::NoBrush);
-
-    // Shackle.
-    if (locked)
-    {
-        p.drawArc(QRectF(4.5, 2.0, 7.0, 7.0), 0, 180 * 16);
-    }
-    else
-    {
-        p.drawArc(QRectF(6.5, 2.5, 7.0, 7.0), 0, 180 * 16);
-    }
-
-    p.setBrush(QColor(200, 200, 210));
-    p.drawRoundedRect(QRectF(3.0, 7.0, 10.0, 7.0), 1.5, 1.5);
-    return QIcon(pixmap);
+    const QIcon themed = themedIcon(locked ? QStringList{"changes-prevent", "lock", "locked"}
+                                           : QStringList{"changes-allow", "unlock"});
+    if (!themed.isNull())
+        return themed;
+    return drawLock(locked);
 }
 
 QIcon makeKeyframeIcon()
 {
-    QPixmap pixmap(16, 16);
-    pixmap.fill(Qt::transparent);
-    QPainter p(&pixmap);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(220, 190, 110));
-    QPolygonF diamond;
-    diamond << QPointF(8, 1.5) << QPointF(14.5, 8) << QPointF(8, 14.5) << QPointF(1.5, 8);
-    p.drawPolygon(diamond);
-    return QIcon(pixmap);
+    return drawKeyframe();
 }
 
 } // namespace pvf
