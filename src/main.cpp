@@ -22,6 +22,7 @@
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
+#include "ui/PropertiesPanel.h"
 #include "ui/TextLayoutDialog.h"
 #include "ui/WorkbenchPanel.h"
 #include "media/VideoDecoder.h"
@@ -638,6 +639,18 @@ int specialTest(QApplication& app)
         }
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_text_layout.png"));
 
+        // A clean scene shot: only the selected comic balloon.
+        for (pvf::Entity& entity : uiProject->mutableEntities())
+            entity.hidden = entity.id != comicId;
+        uiWindow.setSelectedEntityForTest(comicId);
+        QApplication::processEvents();
+        if (auto* props = uiWindow.findChild<pvf::PropertiesPanel*>())
+            if (auto* scroll = qobject_cast<QScrollArea*>(
+                    props->parentWidget() ? props->parentWidget()->parentWidget()
+                                          : nullptr))
+                scroll->verticalScrollBar()->setValue(
+                    scroll->verticalScrollBar()->maximum());
+        QApplication::processEvents();
         uiWindow.grab().toImage().save(QStringLiteral("/tmp/pvforge_special_scene.png"));
         qInfo() << "special-test failures" << local;
         app.exit(local == 0 ? 0 : 1);
