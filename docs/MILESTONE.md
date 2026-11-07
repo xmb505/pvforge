@@ -114,6 +114,9 @@
 - 画布内显示项目背景，画布外纯黑；工作摄像机显示主视口原始内容（包括画布外）
 - OBS 式独立窗口：按钮或拖出主窗口；关闭独立窗口停靠回右下角；默认不置顶，可切换「置顶」
 - 共享 `SceneRenderer` / `CameraRenderer`，主视口、监视器、未来 MP4 导出共用
+- 摄像机可以作为父级：台标/新闻条按镜头空间定位；摄像机视图会抵消镜头父级变换，所以它们在监视器里固定位置和大小
+- 摄像机也可以作为子级挂到文件夹/实体下跟随移动；`Camera::state` 组合父级位移/旋转/缩放；挂父级后暂停画框直接拖动，改属性 X/Y/旋转/取景比例
+- 摄像机不能作为另一个摄像机的子级；父级非均匀缩放时取景框用平均缩放近似
 
 ### 文件夹与父级
 
@@ -123,7 +126,7 @@
 - 时间轴实体栏按层级缩进，文件夹行有展开/收起三角；收起只影响显示
 - 支持拖动实体行排序、拖到文件夹行中间移入文件夹、右键新建文件夹/子文件夹/同级文件夹
 - 属性面板「父级」下拉框列出工作台和所有可用实体（排除自身与后代），修改走 `SetParentCommand`
-- 父级变换沿链组合：`world = childLocal * parentLocal * ...`；子级的 X/Y/旋转/缩放是相对父级的
+- 父级变换沿链组合：`world = childLocal * parentLocal * ...`；子级的 X/Y/旋转/缩放是相对父级的；摄像机父级使用 `Camera::state`，子级在镜头空间定位于画面
 - 缩放/移动父级时子级一起变换；隐藏/锁定沿父级链生效（隐藏不渲染，锁定不可选中）
 - 移动/父级修改/新建文件夹均接入撤销栈；删除有子对象的父级会被阻止
 
@@ -207,16 +210,18 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 35 个模式，全部通过。
+共 36 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
 - 无频谱可视化对象（音频轨波形已支持）
-- 父级坐标作用于可视实体；摄像机不作为父级，音频没有空间坐标
+- 父级坐标作用于可视实体；摄像机可以作为父级，也可以挂到文件夹或实体下；音频没有空间坐标
+- 摄像机不能作为另一个摄像机的子级；挂到父级后画框拖动暂停，改属性 X/Y/旋转/取景比例
+- 父级非均匀缩放时，摄像机取景框用平均缩放近似
 - 删除有子对象的父级前需要先把子对象拖到工作台或删除
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频擦洗是短片段预览，不是变速连续擦洗

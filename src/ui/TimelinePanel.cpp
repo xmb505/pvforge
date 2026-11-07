@@ -458,9 +458,10 @@ void TimelinePanel::updateRowDropTarget(const QPointF& pos)
     const bool middle = y >= top + rowHeightPx / 4
                         && y <= top + rowHeightPx * 3 / 4;
     const Entity* dragged = m_project->entity(m_rowDragId);
-    const bool canParent =
-        dragged && !dragged->isCamera() && !dragged->isAudio();
-    if (target->isFolder() && middle && canParent
+    const bool canParent = dragged && !dragged->isAudio();
+    const bool targetCanParent =
+        target->isFolder() || (target->isCamera() && !dragged->isCamera());
+    if (targetCanParent && middle && canParent
         && !m_collapsedFolders.contains(target->id))
     {
         m_dropRow = row;

@@ -139,7 +139,8 @@ QPointF Viewport::screenToCanvas(const QPointF& pos) const
 EntityId Viewport::activeCameraEntity() const
 {
     const Entity* entity = m_project->entity(m_project->activeCamera);
-    if (!entity || !entity->isCamera() || entity->hidden)
+    if (!entity || !entity->isCamera()
+        || m_project->isEffectivelyHidden(entity->id))
         return kInvalidEntity;
     return entity->id;
 }
@@ -226,7 +227,7 @@ Viewport::CameraPart Viewport::cameraHitTest(const QPointF& pos) const
         return CameraPart::None;
 
     const bool selected = (m_selected == id);
-    if (selected && !entity->locked)
+    if (selected && !entity->locked && entity->parent == kInvalidEntity)
     {
         if (QLineF(pos, cameraRotationHandle()).length() <= 10.0)
             return CameraPart::Rotate;
@@ -272,6 +273,11 @@ bool Viewport::handleCameraPress(QMouseEvent* event)
         return true;
 
     emit entitySelected(id);
+
+    // A parented camera follows its parent; direct frame dragging would write
+    // project-space values into the parent's coordinate system.
+    if (entity->parent != kInvalidEntity)
+        return true;
 
     m_cameraPart = part;
     m_cameraStartState = cameraState(*entity);
@@ -525,7 +531,7 @@ void Viewport::drawCameraOverlay(QPainter& painter)
     painter.drawText(title.adjusted(7, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
                      entity->name);
 
-    if (selected && !locked)
+    if (selected && !locked && entity->parent == kInvalidEntity)
     {
         painter.setPen(QPen(QColor(20, 20, 26), 1.0));
         painter.setBrush(QColor(90, 210, 255));

@@ -655,12 +655,14 @@ void MainWindow::onAudioMoved(EntityId id, double startFrame)
 void MainWindow::onParentEdited(EntityId id, EntityId parent)
 {
     Entity* e = m_project->entity(id);
-    if (!e || m_project->isEffectivelyLocked(id) || e->parent == parent)
+    if (!e || e->isAudio() || m_project->isEffectivelyLocked(id)
+        || e->parent == parent)
         return;
     if (parent != kInvalidEntity)
     {
         const Entity* newParent = m_project->entity(parent);
-        if (!newParent || newParent->isCamera() || newParent->isAudio()
+        if (!newParent || newParent->isAudio()
+            || (e->isCamera() && newParent->isCamera())
             || m_project->isDescendantOf(parent, id))
         {
             return;
@@ -674,12 +676,13 @@ void MainWindow::onParentEdited(EntityId id, EntityId parent)
 void MainWindow::onEntityMoveRequested(EntityId id, EntityId parent, int index)
 {
     Entity* e = m_project->entity(id);
-    if (!e || m_project->isEffectivelyLocked(id))
+    if (!e || e->isAudio() || m_project->isEffectivelyLocked(id))
         return;
     if (parent != kInvalidEntity)
     {
         const Entity* newParent = m_project->entity(parent);
-        if (!newParent || newParent->isCamera() || newParent->isAudio()
+        if (!newParent || newParent->isAudio()
+            || (e->isCamera() && newParent->isCamera())
             || m_project->isDescendantOf(parent, id))
         {
             return;
@@ -788,7 +791,8 @@ void MainWindow::setSelectedEntity(EntityId id)
         id = kInvalidEntity;
         selected = nullptr;
     }
-    if (selected && selected->isCamera() && !selected->hidden)
+    if (selected && selected->isCamera()
+        && !m_project->isEffectivelyHidden(id))
     {
         // Selecting a camera makes it the active framing camera and asks the
         // monitor to show it.

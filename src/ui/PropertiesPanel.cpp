@@ -666,13 +666,14 @@ void PropertiesPanel::refresh()
         m_parent->clear();
         m_parent->addItem(QStringLiteral("工作台（世界坐标）"),
                           int(kInvalidEntity));
-        if (valid && !camera && !audio)
+        if (valid && !audio)
         {
             for (int index : m_project->entityOrder())
             {
                 const Entity& candidate = m_project->entities()[index];
-                if (candidate.id == e->id || candidate.isCamera()
-                    || candidate.isAudio())
+                if (candidate.id == e->id || candidate.isAudio())
+                    continue;
+                if (e->isCamera() && candidate.isCamera())
                     continue;
                 if (m_project->isDescendantOf(candidate.id, e->id))
                     continue;
@@ -693,17 +694,18 @@ void PropertiesPanel::refresh()
                 const QString prefix = QStringLiteral("  ").repeated(depth);
                 const QString typePrefix =
                     candidate.isFolder() ? QStringLiteral("[文件夹] ")
-                                         : QString();
+                    : candidate.isCamera() ? QStringLiteral("[摄像机] ")
+                                           : QString();
                 m_parent->addItem(prefix + typePrefix + candidate.name,
                                   candidate.id);
             }
             const int parentIndex = m_parent->findData(e->parent);
             m_parent->setCurrentIndex(parentIndex >= 0 ? parentIndex : 0);
         }
-        m_parentRow->setVisible(valid && !camera && !audio);
+        m_parentRow->setVisible(valid && !audio);
         if (m_parentLabel)
-            m_parentLabel->setVisible(valid && !camera && !audio);
-        m_parentRow->setEnabled(editable && !camera && !audio);
+            m_parentLabel->setVisible(valid && !audio);
+        m_parentRow->setEnabled(editable && !audio);
     }
 
     for (Row& r : m_rows)

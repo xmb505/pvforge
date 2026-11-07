@@ -3031,6 +3031,236 @@ int cameraTest(QApplication& app)
     return app.exec();
 }
 
+int cameraParentTest(QApplication& app)
+{
+    pvf::Settings::setMonitorVisible(true);
+    pvf::Settings::setShowCameraFrame(true);
+    auto* project = new pvf::Project;
+    project->width = 1920;
+    project->height = 1080;
+    project->background = QColor(18, 22, 30);
+
+    pvf::Entity* rig = project->addFolder(QStringLiteral("Camera Rig"));
+    const pvf::EntityId rigId = rig->id;
+    project->setValue(rigId, QStringLiteral("x"), 0, 200.0, false);
+    project->setValue(rigId, QStringLiteral("y"), 0, -100.0, false);
+    project->setValue(rigId, QStringLiteral("rotation"), 0, 20.0, false);
+
+    pvf::Entity* camera = project->addCamera(QStringLiteral("News Camera"));
+    const pvf::EntityId cameraId = camera->id;
+    project->setValue(cameraId, QStringLiteral("x"), 0, 120.0, false);
+    project->setValue(cameraId, QStringLiteral("y"), 0, 80.0, false);
+    project->setValue(cameraId, QStringLiteral("scaleX"), 0, 0.6, false);
+    project->setValue(cameraId, QStringLiteral("rotation"), 0, 15.0, false);
+
+    pvf::Entity* bar = project->addVector(0, 1800, 100, QColor(200, 30, 40),
+                                          QColor(255, 70, 70), 0);
+    pvf::Entity* label = project->addText(QStringLiteral("BREAKING NEWS"),
+                                          QFont().family(), 56, Qt::white,
+                                          int(Qt::AlignCenter));
+    const pvf::EntityId barId = bar->id;
+    const pvf::EntityId labelId = label->id;
+    // Appending to the project vector can reallocate; re-fetch after adding.
+    camera = project->entity(cameraId);
+    bar = project->entity(barId);
+    int failures = 0;
+    if (!project->setEntityParent(cameraId, rigId)
+        || !project->setEntityParent(barId, cameraId)
+        || !project->setEntityParent(labelId, cameraId))
+    {
+        qCritical() << "camera-parent-test: set parent";
+        ++failures;
+    }
+
+    // The camera follows the rig: its local centre/rotation/scale are mapped
+    // through the rig transform.
+    QTransform rigTransform;
+    rigTransform.translate(200.0, -100.0);
+    rigTransform.rotate(20.0);
+    const QPointF expectedCenter = rigTransform.map(QPointF(120.0, 80.0));
+    const pvf::Camera::State cameraState =
+        pvf::Camera::state(*project, cameraId, 0);
+    if ((cameraState.center - expectedCenter).manhattanLength() > 1e-6
+        || std::abs(cameraState.rotation - 35.0) > 1e-6
+        || std::abs(cameraState.scale - 0.6) > 1e-6)
+    {
+        qCritical() << "camera-parent-test: camera did not follow rig"
+                    << cameraState.center << cameraState.rotation
+                    << cameraState.scale;
+        ++failures;
+    }
+    project->setValue(barId, QStringLiteral("x"), 0, 0.0, false);
+    project->setValue(barId, QStringLiteral("y"), 0, 220.0, false);
+    project->setValue(labelId, QStringLiteral("x"), 0, 0.0, false);
+    project->setValue(labelId, QStringLiteral("y"), 0, 220.0, false);
+
+    // The camera view cancels the camera parent transform, so an overlay keeps
+    // the same screen position while the camera pans, zooms and rotates.
+    const QRectF target(0, 0, 960, 540);
+    auto screenPoint = [project, target, cameraId](const pvf::Entity& entity) {
+        const pvf::Camera::State state = pvf::Camera::state(*project, cameraId, 0);
+        const QPointF world = pvf::SceneRenderer::worldTransform(*project, entity, 0)
+                                  .map(QPointF(0, 0));
+        QTransform view;
+        view.translate(target.center().x(), target.center().y());
+        view.scale(target.width() / state.size.width(),
+                   target.height() / state.size.height());
+        view.rotate(-state.rotation);
+        view.translate(-state.center.x(), -state.center.y());
+        return view.map(world);
+    };
+    const QPointF firstScreen = screenPoint(*bar);
+    project->setValue(cameraId, QStringLiteral("x"), 0, -200.0, false);
+    project->setValue(cameraId, QStringLiteral("y"), 0, 150.0, false);
+    project->setValue(cameraId, QStringLiteral("scaleX"), 0, 0.4, false);
+    project->setValue(cameraId, QStringLiteral("rotation"), 0, -35.0, false);
+    const QPointF movedScreen = screenPoint(*bar);
+    if ((firstScreen - movedScreen).manhattanLength() > 1e-6)
+    {
+        qCritical() << "camera-parent-test: overlay moved on screen"
+                    << firstScreen << movedScreen;
+        ++failures;
+    }
+    project->setValue(cameraId, QStringLiteral("x"), 0, 120.0, false);
+    project->setValue(cameraId, QStringLiteral("y"), 0, 80.0, false);
+    project->setValue(cameraId, QStringLiteral("scaleX"), 0, 0.6, false);
+    project->setValue(cameraId, QStringLiteral("rotation"), 0, 15.0, false);
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+    window.setSelectedEntityForTest(cameraId);
+    QApplication::processEvents();
+
+    auto* timeline = window.findChild<pvf::TimelinePanel*>();
+    auto* monitor = window.findChild<pvf::CameraMonitor*>();
+    if (!timeline || !monitor)
+    {
+        qCritical() << "camera-parent-test: widgets missing";
+        app.exit(1);
+        return 1;
+    }
+    if (timeline->rowCountForTest() != 4
+        || timeline->rowEntityForTest(0) != rigId
+        || timeline->rowEntityForTest(1) != cameraId
+        || timeline->rowEntityForTest(2) != barId
+        || timeline->rowEntityForTest(3) != labelId
+        || timeline->rowDepthForTest(1) != 1
+        || timeline->rowDepthForTest(2) != 2)
+    {
+        qCritical() << "camera-parent-test: tree rows" << timeline->rowCountForTest();
+        ++failures;
+    }
+
+    window.setSelectedEntityForTest(barId);
+    QApplication::processEvents();
+    auto* parents = window.findChild<QComboBox*>(QStringLiteral("parentCombo"));
+    if (!parents || parents->findData(int(cameraId)) < 0)
+    {
+        qCritical() << "camera-parent-test: camera missing from parent combo";
+        ++failures;
+    }
+    else
+    {
+        const int worldIndex = parents->findData(int(pvf::kInvalidEntity));
+        const int cameraIndex = parents->findData(int(cameraId));
+        parents->setCurrentIndex(worldIndex);
+        QApplication::processEvents();
+        if (bar->parent != pvf::kInvalidEntity)
+        {
+            qCritical() << "camera-parent-test: parent to world";
+            ++failures;
+        }
+        parents->setCurrentIndex(cameraIndex);
+        QApplication::processEvents();
+        if (bar->parent != cameraId)
+        {
+            qCritical() << "camera-parent-test: parent to camera";
+            ++failures;
+        }
+    }
+
+    // The camera itself can use a parent: switch between world and the rig.
+    window.setSelectedEntityForTest(cameraId);
+    QApplication::processEvents();
+    auto* cameraParents =
+        window.findChild<QComboBox*>(QStringLiteral("parentCombo"));
+    if (!cameraParents || cameraParents->findData(int(rigId)) < 0)
+    {
+        qCritical() << "camera-parent-test: rig missing from camera parent combo"
+                    << "selected" << window.selectedEntityForTest()
+                    << "count" << (cameraParents ? cameraParents->count() : -1);
+        if (cameraParents)
+            for (int i = 0; i < cameraParents->count(); ++i)
+                qCritical() << "  combo" << i << cameraParents->itemText(i)
+                            << cameraParents->itemData(i);
+        ++failures;
+    }
+    else
+    {
+        const int worldIndex = cameraParents->findData(int(pvf::kInvalidEntity));
+        const int rigIndex = cameraParents->findData(int(rigId));
+        cameraParents->setCurrentIndex(worldIndex);
+        QApplication::processEvents();
+        if (camera->parent != pvf::kInvalidEntity)
+        {
+            qCritical() << "camera-parent-test: camera parent to world";
+            ++failures;
+        }
+        cameraParents->setCurrentIndex(rigIndex);
+        QApplication::processEvents();
+        if (camera->parent != rigId)
+        {
+            qCritical() << "camera-parent-test: camera parent to rig"
+                        << camera->parent;
+            ++failures;
+        }
+    }
+
+    // Locking the rig locks the camera and its overlays.
+    project->setEntityFlag(rigId, pvf::EntityFlag::Locked, true);
+    window.setSelectedEntityForTest(barId);
+    if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+    {
+        qCritical() << "camera-parent-test: rig lock did not lock overlay";
+        ++failures;
+    }
+    window.setSelectedEntityForTest(cameraId);
+    if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+    {
+        qCritical() << "camera-parent-test: rig lock did not lock camera";
+        ++failures;
+    }
+    project->setEntityFlag(rigId, pvf::EntityFlag::Locked, false);
+    window.setSelectedEntityForTest(cameraId);
+    QApplication::processEvents();
+
+    // The monitor should show the red lower-third inside the camera view.
+    const QImage shot = monitor->grab().toImage();
+    bool redFound = false;
+    for (int y = shot.height() / 2; y < shot.height() - 8 && !redFound; ++y)
+    {
+        for (int x = shot.width() / 4; x < shot.width() * 3 / 4; ++x)
+        {
+            const QColor pixel = shot.pixelColor(x, y);
+            if (pixel.red() > 150 && pixel.green() < 90 && pixel.blue() < 90)
+            {
+                redFound = true;
+                break;
+            }
+        }
+    }
+    if (!redFound)
+    {
+        qCritical() << "camera-parent-test: monitor missing overlay";
+        ++failures;
+    }
+
+    window.grab().toImage().save(QStringLiteral("/tmp/pvf_camera_parent.png"));
+    qInfo() << "camera-parent-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int guideTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -4856,6 +5086,8 @@ int main(int argc, char* argv[])
         return timelineFrameTest(app);
     if (app.arguments().contains(QStringLiteral("--camera-test")))
         return cameraTest(app);
+    if (app.arguments().contains(QStringLiteral("--camera-parent-test")))
+        return cameraParentTest(app);
     if (app.arguments().contains(QStringLiteral("--easing-test")))
         return easingTest(app);
     if (app.arguments().contains(QStringLiteral("--folder-test")))

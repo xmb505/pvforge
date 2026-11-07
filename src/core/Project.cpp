@@ -754,7 +754,7 @@ int Project::removeEntity(EntityId id)
         EntityId fallback = kInvalidEntity;
         for (const Entity& e : m_entities)
         {
-            if (e.isCamera() && !e.hidden)
+            if (e.isCamera() && !isEffectivelyHidden(e.id))
             {
                 fallback = e.id;
                 break;
@@ -807,20 +807,25 @@ void Project::setEntityFlag(EntityId id, EntityFlag flag, bool value)
     if (flag == EntityFlag::Hidden)
     {
         e->hidden = value;
-        if (value && (activeCamera == id || monitorView == id))
+        if (value)
         {
+            const auto visibleCamera = [this](EntityId cameraId) {
+                const Entity* camera = entity(cameraId);
+                return camera && camera->isCamera()
+                       && !isEffectivelyHidden(cameraId);
+            };
             EntityId fallback = kInvalidEntity;
             for (const Entity& other : m_entities)
             {
-                if (other.id != id && other.isCamera() && !other.hidden)
+                if (other.isCamera() && !isEffectivelyHidden(other.id))
                 {
                     fallback = other.id;
                     break;
                 }
             }
-            if (activeCamera == id)
+            if (activeCamera != kInvalidEntity && !visibleCamera(activeCamera))
                 activeCamera = fallback;
-            if (monitorView == id)
+            if (monitorView >= 0 && !visibleCamera(monitorView))
                 monitorView = fallback != kInvalidEntity ? fallback : kWorkCameraView;
         }
     }
@@ -1388,14 +1393,14 @@ bool Project::load(const QString& path, QString* error)
     // Drop camera references that no longer resolve (deleted or hidden).
     auto visibleCamera = [this](EntityId id) {
         const Entity* e = entity(id);
-        return e && e->isCamera() && !e->hidden;
+        return e && e->isCamera() && !isEffectivelyHidden(id);
     };
     if (!visibleCamera(activeCamera))
     {
         activeCamera = kInvalidEntity;
         for (const Entity& e : m_entities)
         {
-            if (e.isCamera() && !e.hidden)
+            if (e.isCamera() && !isEffectivelyHidden(e.id))
             {
                 activeCamera = e.id;
                 break;

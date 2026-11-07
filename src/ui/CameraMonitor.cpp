@@ -44,7 +44,8 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
         if (view >= 0)
         {
             const Entity* camera = m_project->entity(view);
-            if (camera && camera->isCamera() && !camera->hidden)
+            if (camera && camera->isCamera()
+                && !m_project->isEffectivelyHidden(view))
             {
                 m_project->activeCamera = view;
                 emit cameraActivated(view);
@@ -198,7 +199,7 @@ void CameraMonitor::rebuildCameraCombo()
     m_cameraCombo->addItem(QStringLiteral("工作摄像机"), kWorkCameraView);
     m_cameraCombo->addItem(QStringLiteral("整画布"), kWholeCanvasView);
     for (const Entity& entity : m_project->entities())
-        if (entity.isCamera() && !entity.hidden)
+        if (entity.isCamera() && !m_project->isEffectivelyHidden(entity.id))
             m_cameraCombo->addItem(entity.name, entity.id);
 
     int index = m_cameraCombo->findData(m_project->monitorView);
@@ -370,7 +371,8 @@ void CameraMonitor::renderPreview(QPainter& painter)
     if (view >= 0)
     {
         const Entity* camera = m_project->entity(view);
-        if (camera && camera->isCamera() && !camera->hidden)
+        if (camera && camera->isCamera()
+            && !m_project->isEffectivelyHidden(camera->id))
         {
             state = Camera::state(*m_project, camera->id, m_frame);
         }

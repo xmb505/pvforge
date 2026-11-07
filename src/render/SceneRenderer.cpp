@@ -1,5 +1,6 @@
 #include "SceneRenderer.h"
 
+#include "core/Camera.h"
 #include "core/VectorShape.h"
 
 #include <QFont>
@@ -56,7 +57,25 @@ QTransform parentWorldTransform(const Project& project, const Entity& entity, in
         const Entity* parentEntity = project.entity(parent);
         if (!parentEntity)
             break;
-        result = result * entityTransform(project, *parentEntity, frame);
+        QTransform parentTransform;
+        if (parentEntity->isCamera())
+        {
+            // Camera-parented overlays live in camera-frame space. The camera
+            // view cancels this transform, so a logo stays at the same screen
+            // position and size while the camera moves/zooms/rotates.
+            const Camera::State state =
+                Camera::state(project, parentEntity->id, frame);
+            parentTransform.translate(state.center.x(), state.center.y());
+            parentTransform.rotate(state.rotation);
+            parentTransform.scale(state.scale, state.scale);
+        }
+        else
+        {
+            parentTransform = entityTransform(project, *parentEntity, frame);
+        }
+        result = result * parentTransform;
+        if (parentEntity->isCamera())
+            break;   // Camera::state already includes the camera's ancestors.
         parent = parentEntity->parent;
     }
     return result;
