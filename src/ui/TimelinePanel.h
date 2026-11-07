@@ -5,7 +5,6 @@
 #include <QWidget>
 
 class QScrollBar;
-class QToolButton;
 class QWheelEvent;
 
 namespace pvf {
@@ -50,8 +49,6 @@ private:
     EntityId m_selected = kInvalidEntity;
     bool m_scrubbing = false;
     QScrollBar* m_hScroll = nullptr;
-    QToolButton* m_zoomOut = nullptr;
-    QToolButton* m_zoomIn = nullptr;
     int m_scrollX = 0;
     double m_pixelsPerFrame = 6.0;
 
@@ -60,7 +57,6 @@ private:
     static constexpr int kRowHeight = 24;
     static constexpr int kRightPad = 16;
     static constexpr int kScrollBarHeight = 14;
-    static constexpr int kZoomButtonWidth = 16;
 };
 
 } // namespace pvf

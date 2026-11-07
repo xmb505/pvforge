@@ -6,7 +6,6 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
-#include <QToolButton>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -24,18 +23,6 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         m_scrollX = value;
         update();
     });
-
-    m_zoomOut = new QToolButton(this);
-    m_zoomOut->setText(QStringLiteral("−"));
-    m_zoomOut->setToolTip(QStringLiteral("缩小时间轴（Ctrl+滚轮）"));
-    connect(m_zoomOut, &QToolButton::clicked, this,
-            [this] { zoomAt(0.5, kNameWidth + visibleWidth() / 2); });
-
-    m_zoomIn = new QToolButton(this);
-    m_zoomIn->setText(QStringLiteral("+"));
-    m_zoomIn->setToolTip(QStringLiteral("放大时间轴（Ctrl+滚轮）"));
-    connect(m_zoomIn, &QToolButton::clicked, this,
-            [this] { zoomAt(2.0, kNameWidth + visibleWidth() / 2); });
 
     updateScrollBar();
 }
@@ -114,12 +101,8 @@ int TimelinePanel::rowAt(int y) const
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    const int barY = height() - kScrollBarHeight;
-    m_zoomOut->setGeometry(kNameWidth, barY, kZoomButtonWidth, kScrollBarHeight);
-    m_zoomIn->setGeometry(width() - kRightPad - kZoomButtonWidth, barY,
-                          kZoomButtonWidth, kScrollBarHeight);
-    m_hScroll->setGeometry(kNameWidth + kZoomButtonWidth, barY,
-                           visibleWidth() - 2 * kZoomButtonWidth, kScrollBarHeight);
+    m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
+                           kScrollBarHeight);
     updateScrollBar();
 }
 
