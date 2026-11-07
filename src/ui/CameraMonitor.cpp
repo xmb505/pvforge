@@ -8,6 +8,7 @@
 #include "render/CameraRenderer.h"
 #include "ui/Viewport.h"
 
+#include <QAbstractSocket>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
@@ -16,6 +17,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHostAddress>
+#include <QNetworkInterface>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -28,6 +31,8 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardPaths>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QToolButton>
 #include <QWidgetAction>
@@ -184,6 +189,10 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     m_streamTimer = new QTimer(this);
     connect(m_streamTimer, &QTimer::timeout, this, &CameraMonitor::onStreamTick);
 
+    m_httpServer = new QTcpServer(this);
+    connect(m_httpServer, &QTcpServer::newConnection, this,
+            &CameraMonitor::onHttpNewConnection);
+
     rebuildCameraCombo();
     updateButtons();
     updateFpsLabel();
@@ -199,6 +208,14 @@ CameraMonitor::~CameraMonitor()
         m_streamProcess->kill();
         m_streamProcess->waitForFinished(500);
     }
+    if (m_httpServer)
+        m_httpServer->close();
+    for (QTcpSocket* socket : m_httpClients)
+    {
+        socket->abort();
+        socket->deleteLater();
+    }
+    m_httpClients.clear();
 }
 
 void CameraMonitor::setFrame(int frame)
@@ -650,53 +667,201 @@ void CameraMonitor::renderTraceOverlay(QPainter& painter)
 void CameraMonitor::buildStreamMenu()
 {
     m_streamMenu = new QMenu(this);
-    m_streamAction = m_streamMenu->addAction(QStringLiteral("开始 RTP 串流"));
+    m_streamAction = m_streamMenu->addAction(QStringLiteral("开始串流"));
     connect(m_streamAction, &QAction::triggered, this, [this] {
         if (m_streaming)
-            stopRtpStream();
+            stopStreaming();
         else
-            startRtpStream();
-    });
-    QAction* address = m_streamMenu->addAction(rtpUrl());
-    address->setEnabled(false);
-    m_copyStreamAction = m_streamMenu->addAction(QStringLiteral("复制串流地址"));
-    connect(m_copyStreamAction, &QAction::triggered, this, [this] {
-        QApplication::clipboard()->setText(rtpUrl());
+            startStreaming();
     });
     m_streamMenu->addSeparator();
+
+    QAction* modeHeader =
+        m_streamMenu->addAction(QStringLiteral("串流方式"));
+    modeHeader->setEnabled(false);
+    m_httpModeAction =
+        m_streamMenu->addAction(QStringLiteral("HTTP 局域网（本机 IP）"));
+    m_httpModeAction->setCheckable(true);
+    m_rtpModeAction =
+        m_streamMenu->addAction(QStringLiteral("RTP 组播（无需本机 IP）"));
+    m_rtpModeAction->setCheckable(true);
+    connect(m_httpModeAction, &QAction::triggered, this, [this] {
+        if (m_streaming)
+            return;
+        m_streamMode = StreamMode::Http;
+        updateStreamMenu();
+    });
+    connect(m_rtpModeAction, &QAction::triggered, this, [this] {
+        if (m_streaming)
+            return;
+        m_streamMode = StreamMode::Rtp;
+        updateStreamMenu();
+    });
+
+    m_streamMenu->addSeparator();
+    m_streamAddressAction = m_streamMenu->addAction(QString());
+    m_streamAddressAction->setEnabled(false);
+    m_copyStreamAction = m_streamMenu->addAction(QStringLiteral("复制串流地址"));
+    connect(m_copyStreamAction, &QAction::triggered, this, [this] {
+        QApplication::clipboard()->setText(currentStreamUrl());
+    });
+
+    m_httpIpMenu = m_streamMenu->addMenu(QStringLiteral("本机 IP 地址"));
+    connect(m_httpIpMenu, &QMenu::aboutToShow, this, [this] {
+        m_httpIpMenu->clear();
+        const QStringList addresses = localIpAddresses();
+        const int port = m_httpPort > 0 ? m_httpPort : 8080;
+        if (addresses.isEmpty())
+        {
+            QAction* none = m_httpIpMenu->addAction(QStringLiteral("没有局域网 IP"));
+            none->setEnabled(false);
+            return;
+        }
+        for (const QString& ip : addresses)
+        {
+            const QString url =
+                QStringLiteral("http://%1:%2/stream.ts").arg(ip).arg(port);
+            QAction* action = m_httpIpMenu->addAction(url);
+            connect(action, &QAction::triggered, this, [this, url] {
+                m_httpUrl = url;
+                QApplication::clipboard()->setText(url);
+                updateStreamMenu();
+            });
+        }
+    });
+
+    m_streamMenu->addSeparator();
     QAction* note =
-        m_streamMenu->addAction(QStringLiteral("手机 VLC：网络串流 → 粘贴地址"));
+        m_streamMenu->addAction(QStringLiteral("手机 VLC：网络串流 → 粘贴地址（同一 Wi-Fi）"));
     note->setEnabled(false);
+
     updateStreamMenu();
+}
+
+QStringList CameraMonitor::localIpAddresses() const
+{
+    QStringList addresses;
+    const auto all = QNetworkInterface::allAddresses();
+    for (const QHostAddress& address : all)
+    {
+        if (address.protocol() != QAbstractSocket::IPv4Protocol
+            || address.isLoopback())
+            continue;
+        const QString ip = address.toString();
+        if (ip.startsWith(QStringLiteral("169.254.")))
+            continue;
+        if (!addresses.contains(ip))
+            addresses.append(ip);
+    }
+    return addresses;
+}
+
+QString CameraMonitor::preferredLocalIp() const
+{
+    const QStringList addresses = localIpAddresses();
+    for (const QString& prefix : {QStringLiteral("192.168."), QStringLiteral("10."),
+                                  QStringLiteral("172.")})
+    {
+        for (const QString& ip : addresses)
+            if (ip.startsWith(prefix))
+                return ip;
+    }
+    return addresses.isEmpty() ? QStringLiteral("127.0.0.1") : addresses.first();
+}
+
+QString CameraMonitor::currentStreamUrl() const
+{
+    if (m_streamMode == StreamMode::Rtp)
+        return rtpUrl();
+    if (!m_httpUrl.isEmpty())
+        return m_httpUrl;
+    return QStringLiteral("http://%1:%2/stream.ts")
+        .arg(preferredLocalIp())
+        .arg(8080);
 }
 
 void CameraMonitor::updateStreamMenu()
 {
     if (!m_streamAction)
         return;
-    m_streamAction->setText(m_streaming ? QStringLiteral("停止 RTP 串流")
-                                       : QStringLiteral("开始 RTP 串流"));
-    m_streamButton->setToolTip(
-        m_streaming ? QStringLiteral("串流中：%1").arg(rtpUrl())
-                    : QStringLiteral("RTP 串流到手机 VLC"));
+    m_streamAction->setText(m_streaming ? QStringLiteral("停止串流")
+                                       : QStringLiteral("开始串流"));
+    m_httpModeAction->setChecked(m_streamMode == StreamMode::Http);
+    m_rtpModeAction->setChecked(m_streamMode == StreamMode::Rtp);
+    m_httpModeAction->setEnabled(!m_streaming);
+    m_rtpModeAction->setEnabled(!m_streaming);
+    if (m_httpIpMenu)
+        m_httpIpMenu->menuAction()->setVisible(m_streamMode == StreamMode::Http);
+    const QString url = currentStreamUrl();
+    m_streamAddressAction->setText(url);
+    m_copyStreamAction->setEnabled(!url.isEmpty());
+    if (m_streamButton)
+        m_streamButton->setToolTip(
+            m_streaming ? QStringLiteral("串流中：%1").arg(url)
+                        : QStringLiteral("手机 VLC 串流"));
+}
+
+void CameraMonitor::startStreaming()
+{
+    if (m_streaming)
+        return;
+    if (m_streamMode == StreamMode::Http)
+        startHttpStream();
+    else
+        startRtpStream();
+    updateStreamMenu();
 }
 
 void CameraMonitor::startRtpStream()
 {
-    if (m_streaming)
+    launchStreamProcess(
+        {QStringLiteral("-f"), QStringLiteral("rtp_mpegts"), QStringLiteral("-ttl"),
+         QStringLiteral("16"),
+         QStringLiteral("rtp://%1:%2").arg(QLatin1String(kRtpHost)).arg(kRtpPort)},
+        false);
+}
+
+void CameraMonitor::startHttpStream()
+{
+    if (!m_httpServer)
         return;
+    int port = 8080;
+    while (port < 8090 && !m_httpServer->listen(QHostAddress::Any, port))
+        ++port;
+    if (!m_httpServer->isListening())
+    {
+        QMessageBox::warning(this, QStringLiteral("无法串流"),
+                             QStringLiteral("HTTP 串流端口 8080–8089 都被占用。"));
+        return;
+    }
+    m_httpPort = port;
+    m_httpUrl = QStringLiteral("http://%1:%2/stream.ts")
+                    .arg(preferredLocalIp())
+                    .arg(port);
+    if (!launchStreamProcess(
+            {QStringLiteral("-f"), QStringLiteral("mpegts"), QStringLiteral("pipe:1")},
+            true))
+    {
+        m_httpServer->close();
+        m_httpPort = 0;
+        m_httpUrl.clear();
+    }
+}
+
+bool CameraMonitor::launchStreamProcess(const QStringList& outputArgs, bool http)
+{
     const QString ffmpeg =
         QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
     if (ffmpeg.isEmpty())
     {
         QMessageBox::warning(this, QStringLiteral("无法串流"),
                              QStringLiteral("找不到 ffmpeg 命令。"));
-        return;
+        return false;
     }
 
     m_streamFps = std::clamp(m_project->fps, 10, 30);
     const QSize size = streamSize(*m_project);
-    const QStringList arguments{
+    QStringList arguments{
         QStringLiteral("-hide_banner"),
         QStringLiteral("-loglevel"),
         QStringLiteral("error"),
@@ -721,24 +886,27 @@ void CameraMonitor::startRtpStream()
         QStringLiteral("-g"),
         QStringLiteral("15"),
         QStringLiteral("-b:v"),
-        QStringLiteral("2500k"),
-        QStringLiteral("-f"),
-        QStringLiteral("rtp_mpegts"),
-        QStringLiteral("-ttl"),
-        QStringLiteral("16"),
-        QStringLiteral("rtp://%1:%2").arg(QLatin1String(kRtpHost)).arg(kRtpPort)};
+        QStringLiteral("2500k")};
+    arguments += outputArgs;
 
     auto* process = new QProcess(this);
     m_streamProcess = process;
-    process->setProcessChannelMode(QProcess::MergedChannels);
-    connect(process, &QProcess::readyRead, this, [this] {
+    process->setProcessChannelMode(QProcess::SeparateChannels);
+    connect(process, &QProcess::readyReadStandardError, this, [this] {
         if (m_streamProcess)
-            m_streamProcess->readAll();
+            m_streamProcess->readAllStandardError();
+    });
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, http] {
+        if (!m_streamProcess)
+            return;
+        const QByteArray data = m_streamProcess->readAllStandardOutput();
+        if (http && m_streaming && !data.isEmpty())
+            relayHttpData(data);
     });
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this](int, QProcess::ExitStatus) {
                 if (m_streaming)
-                    stopRtpStream();
+                    stopStreaming();
             });
     process->start(ffmpeg, arguments);
     if (!process->waitForStarted(2000) || process->state() != QProcess::Running)
@@ -747,18 +915,19 @@ void CameraMonitor::startRtpStream()
         m_streamProcess = nullptr;
         QMessageBox::warning(this, QStringLiteral("无法串流"),
                              QStringLiteral("ffmpeg 未能启动。"));
-        return;
+        return false;
     }
 
     m_streaming = true;
     m_streamTimer->start(std::max(1, 1000 / m_streamFps));
     collapseForStreaming();
-    updateStreamMenu();
+    return true;
 }
 
-void CameraMonitor::stopRtpStream()
+void CameraMonitor::stopStreaming()
 {
-    if (!m_streaming && !m_streamProcess)
+    if (!m_streaming && !m_streamProcess
+        && (!m_httpServer || !m_httpServer->isListening()))
         return;
     m_streaming = false;
     if (m_streamTimer)
@@ -771,8 +940,71 @@ void CameraMonitor::stopRtpStream()
         m_streamProcess->deleteLater();
         m_streamProcess = nullptr;
     }
+    stopHttpServer();
     restoreFromStreaming();
     updateStreamMenu();
+}
+
+void CameraMonitor::stopHttpServer()
+{
+    for (QTcpSocket* socket : m_httpClients)
+    {
+        socket->abort();
+        socket->deleteLater();
+    }
+    m_httpClients.clear();
+    m_httpReady.clear();
+    if (m_httpServer)
+        m_httpServer->close();
+    m_httpPort = 0;
+    m_httpUrl.clear();
+}
+
+void CameraMonitor::onHttpNewConnection()
+{
+    if (!m_httpServer)
+        return;
+    while (QTcpSocket* socket = m_httpServer->nextPendingConnection())
+    {
+        m_httpClients.append(socket);
+        connect(socket, &QTcpSocket::readyRead, this, [this, socket] {
+            if (m_httpReady.contains(socket))
+            {
+                socket->readAll();
+                return;
+            }
+            const QByteArray request = socket->readAll();
+            if (!request.contains("\r\n\r\n"))
+                return;
+            socket->write("HTTP/1.0 200 OK\r\n"
+                          "Content-Type: video/mp2t\r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: close\r\n\r\n");
+            m_httpReady.insert(socket);
+            socket->flush();
+        });
+        connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
+            m_httpReady.remove(socket);
+            m_httpClients.removeAll(socket);
+            socket->deleteLater();
+        });
+    }
+}
+
+void CameraMonitor::relayHttpData(const QByteArray& data)
+{
+    for (QTcpSocket* socket : m_httpClients)
+    {
+        if (!m_httpReady.contains(socket)
+            || socket->state() != QAbstractSocket::ConnectedState)
+            continue;
+        if (socket->bytesToWrite() > 4 * 1024 * 1024)
+        {
+            socket->abort();
+            continue;
+        }
+        socket->write(data);
+    }
 }
 
 void CameraMonitor::onStreamTick()
@@ -793,7 +1025,7 @@ void CameraMonitor::onStreamTick()
             reinterpret_cast<const char*>(image.constScanLine(y));
         if (m_streamProcess->write(row, rowBytes) < 0)
         {
-            stopRtpStream();
+            stopStreaming();
             return;
         }
     }

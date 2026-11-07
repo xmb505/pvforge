@@ -3,14 +3,19 @@
 #include "core/Project.h"
 
 #include <QElapsedTimer>
+#include <QList>
 #include <QPoint>
 #include <QRect>
+#include <QSet>
+#include <QStringList>
 #include <QWidget>
 
 #include <memory>
 
 class QAction;
 class QProcess;
+class QTcpServer;
+class QTcpSocket;
 class QCloseEvent;
 class QComboBox;
 class QLabel;
@@ -55,9 +60,10 @@ public:
     bool loadTraceVideo(const QString& path);
     void clearTraceForTest() { clearTraceVideo(); }
     void setTraceOpacity(double opacity);
-    bool startStreamingForTest() { startRtpStream(); return m_streaming; }
-    void stopStreamingForTest() { stopRtpStream(); }
+    bool startStreamingForTest() { startStreaming(); return m_streaming; }
+    void stopStreamingForTest() { stopStreaming(); }
     bool isStreaming() const { return m_streaming; }
+    QString streamUrlForTest() const { return currentStreamUrl(); }
 
 signals:
     void cameraActivated(EntityId id);
@@ -96,10 +102,19 @@ private:
     void updateTraceMenu();
     void buildTraceMenu();
     void buildStreamMenu();
+    void startStreaming();
     void startRtpStream();
-    void stopRtpStream();
+    void startHttpStream();
+    bool launchStreamProcess(const QStringList& outputArgs, bool http);
+    void stopStreaming();
+    void stopHttpServer();
+    void onHttpNewConnection();
+    void relayHttpData(const QByteArray& data);
     void onStreamTick();
     void updateStreamMenu();
+    QStringList localIpAddresses() const;
+    QString preferredLocalIp() const;
+    QString currentStreamUrl() const;
     void collapseForStreaming();
     void restoreFromStreaming();
     QImage renderStreamImage() const;
@@ -131,12 +146,23 @@ private:
     QMenu* m_streamMenu = nullptr;
     QAction* m_streamAction = nullptr;
     QAction* m_copyStreamAction = nullptr;
+    QAction* m_streamAddressAction = nullptr;
+    QAction* m_httpModeAction = nullptr;
+    QAction* m_rtpModeAction = nullptr;
+    QMenu* m_httpIpMenu = nullptr;
     QProcess* m_streamProcess = nullptr;
     QTimer* m_streamTimer = nullptr;
+    QTcpServer* m_httpServer = nullptr;
+    QList<QTcpSocket*> m_httpClients;
+    QSet<QTcpSocket*> m_httpReady;
+    int m_httpPort = 0;
+    QString m_httpUrl;
     bool m_streaming = false;
     bool m_streamCollapsed = false;
     QRect m_streamSavedGeometry;
     int m_streamFps = 24;
+    enum class StreamMode { Http, Rtp };
+    StreamMode m_streamMode = StreamMode::Http;
 
     int m_frame = 0;
     bool m_playing = false;

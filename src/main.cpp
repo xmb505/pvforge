@@ -57,8 +57,10 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QWidgetAction>
 #include <QWheelEvent>
 #include <cmath>
@@ -3166,6 +3168,37 @@ int monitorFeatureTest(QApplication& app)
             qCritical() << "monitor-feature-test: monitor not collapsed"
                         << monitor->height();
             ++failures;
+        }
+        else
+        {
+            // Verify the default HTTP mode actually serves MPEG-TS.
+            const QUrl url(monitor->streamUrlForTest());
+            QTcpSocket socket;
+            socket.connectToHost(QStringLiteral("127.0.0.1"),
+                                 quint16(url.port(8080)));
+            if (!socket.waitForConnected(2000))
+            {
+                qCritical() << "monitor-feature-test: HTTP stream connect failed";
+                ++failures;
+            }
+            else
+            {
+                socket.write("GET /stream.ts HTTP/1.0\r\nHost: localhost\r\n\r\n");
+                QByteArray response;
+                QEventLoop loop;
+                QObject::connect(&socket, &QTcpSocket::readyRead, &loop,
+                                 [&response, &socket] { response += socket.readAll(); });
+                QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+                loop.exec();
+                const int headerEnd = response.indexOf("\r\n\r\n");
+                if (!response.contains("200 OK") || headerEnd < 0
+                    || response.indexOf('\x47', headerEnd) < 0)
+                {
+                    qCritical() << "monitor-feature-test: HTTP stream payload"
+                                << response.size();
+                    ++failures;
+                }
+            }
         }
         monitor->stopStreamingForTest();
         QApplication::processEvents();
