@@ -72,6 +72,14 @@ private:
     void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
     QPointF entityScreenCenter(const Entity& e) const;
     QPointF entityPivotScreen(const Entity& e) const;
+    struct VisualBounds
+    {
+        double left = 0.0;
+        double right = 0.0;
+        double top = 0.0;
+        double bottom = 0.0;
+    };
+    VisualBounds visualBoundsOf(const Entity& e, double posX, double posY) const;
     QTransform entityTransform(const Entity& e) const;
     QTransform entityRotationTransform(const Entity& e) const;
     bool gizmoHitTest(const QPointF& pos, GizmoMode* mode) const;
@@ -104,6 +112,10 @@ private:
     double m_scaleStartY = 1.0;
     int m_snapPixels = 6;
     bool m_edgeCenterSnap = true;
+    bool m_showGuideX = false;
+    bool m_showGuideY = false;
+    double m_guideX = 0.0;
+    double m_guideY = 0.0;
 
     bool m_panning = false;
     QPointF m_panLast;

@@ -760,6 +760,85 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int entitySnapTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "entity-snap-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* first = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId idA = first->id;
+        pvf::Entity* second = project->addVector(0, 200, 120, Qt::green, Qt::white, 0);
+        const pvf::EntityId idB = second->id;
+        project->setValue(idB, QStringLiteral("x"), 0, 500.0, false);
+        window.setSelectedEntityForTest(idA);
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->entityPivotForTest(idA).toPoint();
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+        };
+        auto reset = [&] {
+            project->setValue(idA, QStringLiteral("x"), 0, 0.0, false);
+            project->setValue(idA, QStringLiteral("y"), 0, 0.0, false);
+        };
+
+        // Edge alignment: A's right edge snaps to B's left edge (x = 250).
+        drag(center, center + QPoint(int(std::lround(245.0 * s)), 0));
+        if (std::abs(project->value(idA, QStringLiteral("x"), 0) - 250.0) > 1.5)
+        {
+            qCritical() << "entity-snap-test: edge alignment"
+                        << project->value(idA, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        // Horizontal drag locks the vertical axis.
+        reset();
+        drag(center, center + QPoint(int(std::lround(100.0 * s)),
+                                     int(std::lround(20.0 * s))));
+        if (std::abs(project->value(idA, QStringLiteral("y"), 0)) > 1e-6)
+        {
+            qCritical() << "entity-snap-test: horizontal lock failed"
+                        << project->value(idA, QStringLiteral("y"), 0);
+            ++failures;
+        }
+
+        // Vertical drag locks the horizontal axis.
+        reset();
+        drag(center, center + QPoint(int(std::lround(10.0 * s)),
+                                     int(std::lround(100.0 * s))));
+        if (std::abs(project->value(idA, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "entity-snap-test: vertical lock failed"
+                        << project->value(idA, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        qInfo() << "entity-snap-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int rotationSnapTest(QApplication& app)
 {
     const QList<int> oldAngles = pvf::Settings::snapAngles();
@@ -2356,6 +2435,8 @@ int main(int argc, char* argv[])
         return dragUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--rotation-snap-test")))
         return rotationSnapTest(app);
+    if (app.arguments().contains(QStringLiteral("--entity-snap-test")))
+        return entitySnapTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

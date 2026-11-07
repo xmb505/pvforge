@@ -309,6 +309,35 @@ QPointF Viewport::entityPivotScreen(const Entity& e) const
                                      m_project->value(e.id, "y", m_frame) * s);
 }
 
+Viewport::VisualBounds Viewport::visualBoundsOf(const Entity& e, double posX,
+                                                double posY) const
+{
+    const QRectF bounds = entityLocalBounds(e);
+    const double rotation = m_project->value(e.id, "rotation", m_frame);
+    const double radians = rotation * M_PI / 180.0;
+    const double cosA = std::abs(std::cos(radians));
+    const double sinA = std::abs(std::sin(radians));
+    const double ax = m_project->value(e.id, "rotPointX", m_frame);
+    const double ay = m_project->value(e.id, "rotPointY", m_frame);
+    const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
+    const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
+    const double halfW = bounds.width() / 2.0
+                         * std::abs(m_project->value(e.id, "scaleX", m_frame));
+    const double halfH = bounds.height() / 2.0
+                         * std::abs(m_project->value(e.id, "scaleY", m_frame));
+    const double aabbHalfW = halfW * cosA + halfH * sinA;
+    const double aabbHalfH = halfW * sinA + halfH * cosA;
+    const double centerX = posX - rotatedAx;
+    const double centerY = posY - rotatedAy;
+
+    VisualBounds result;
+    result.left = centerX - aabbHalfW;
+    result.right = centerX + aabbHalfW;
+    result.top = centerY - aabbHalfH;
+    result.bottom = centerY + aabbHalfH;
+    return result;
+}
+
 QTransform Viewport::entityTransform(const Entity& e) const
 {
     const double s = viewScale();
@@ -761,6 +790,10 @@ void Viewport::mousePressEvent(QMouseEvent* event)
             m_dragging = true;
             m_dragEntity = hit->id;
             m_dragLast = event->position();
+            m_gizmoMode = GizmoMode::Move;
+            m_gizmoStartMouse = event->position();
+            m_gizmoStartX = m_project->value(hit->id, "x", m_frame);
+            m_gizmoStartY = m_project->value(hit->id, "y", m_frame);
         }
     }
     else
@@ -973,58 +1006,162 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
-    const QPointF delta = (event->position() - m_dragLast) / s;
-    m_dragLast = event->position();
+    const double totalX = (event->position().x() - m_gizmoStartMouse.x()) / s;
+    const double totalY = (event->position().y() - m_gizmoStartMouse.y()) / s;
+    double x = m_gizmoStartX + totalX;
+    double y = m_gizmoStartY + totalY;
 
-    double x = m_project->value(m_dragEntity, QStringLiteral("x"), m_frame) + delta.x();
-    double y = m_project->value(m_dragEntity, QStringLiteral("y"), m_frame) + delta.y();
+    m_showGuideX = false;
+    m_showGuideY = false;
 
-    if (!(event->modifiers() & Qt::ControlModifier))
+    const bool free = event->modifiers() & Qt::ControlModifier;
+    bool lockX = false;
+    bool lockY = false;
+    if (!free && std::abs(totalX) > 1e-6 && std::abs(totalY) > 1e-6)
     {
-        const int snapPixels = m_snapPixels;
-        if (snapPixels > 0)
+        if (std::abs(totalX) >= std::abs(totalY) * 4.0)
         {
-            const double threshold = snapPixels / s;
-            const double canvasHalfW = m_project->width / 2.0;
-            const double canvasHalfH = m_project->height / 2.0;
+            y = m_gizmoStartY;   // horizontal drag
+            lockY = true;
+        }
+        else if (std::abs(totalY) >= std::abs(totalX) * 4.0)
+        {
+            x = m_gizmoStartX;   // vertical drag
+            lockX = true;
+        }
+    }
+
+    if (!free && m_snapPixels > 0)
+    {
+        const double threshold = m_snapPixels / s;
+        const double canvasHalfW = m_project->width / 2.0;
+        const double canvasHalfH = m_project->height / 2.0;
+        const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
+        const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+        const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
+        const double radians = rotation * M_PI / 180.0;
+        const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
+        const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
+        const Entity* entity = m_project->entity(m_dragEntity);
+        if (entity)
+        {
+            const QRectF bounds = entityLocalBounds(*entity);
             const double scaleX = m_project->value(m_dragEntity, "scaleX", m_frame);
             const double scaleY = m_project->value(m_dragEntity, "scaleY", m_frame);
-            const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
-            const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
-            const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
-            const double radians = rotation * M_PI / 180.0;
-            const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
-            const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
-            const Entity* entity = m_project->entity(m_dragEntity);
-            if (entity)
-            {
-                const QRectF bounds = entityLocalBounds(*entity);
-                const double halfW = bounds.width() / 2.0 * std::abs(scaleX);
-                const double halfH = bounds.height() / 2.0 * std::abs(scaleY);
-                const double cosA = std::abs(std::cos(radians));
-                const double sinA = std::abs(std::sin(radians));
-                const double aabbHalfW = halfW * cosA + halfH * sinA;
-                const double aabbHalfH = halfW * sinA + halfH * cosA;
+            const double halfW = bounds.width() / 2.0 * std::abs(scaleX);
+            const double halfH = bounds.height() / 2.0 * std::abs(scaleY);
+            const double cosA = std::abs(std::cos(radians));
+            const double sinA = std::abs(std::sin(radians));
+            const double aabbHalfW = halfW * cosA + halfH * sinA;
+            const double aabbHalfH = halfW * sinA + halfH * cosA;
 
-                // Snap the visible body, not the pivot position.
-                const auto snapVisual = [&](double pos, double offset, double half,
-                                            double canvasHalf) {
-                    const double visual = pos - offset;
-                    if (std::abs(visual) <= threshold)
-                        return pos - visual;
-                    if (std::abs(visual - (-canvasHalf + half)) <= threshold)
-                        return pos + (-canvasHalf + half) - visual;
-                    if (std::abs(visual - (canvasHalf - half)) <= threshold)
-                        return pos + (canvasHalf - half) - visual;
-                    if (m_edgeCenterSnap && std::abs(visual - half) <= threshold)
-                        return pos + half - visual;
-                    if (m_edgeCenterSnap && std::abs(visual + half) <= threshold)
-                        return pos - half - visual;
-                    return pos;
-                };
+            const auto snapVisual = [&](double pos, double offset, double half,
+                                        double canvasHalf) {
+                const double visual = pos - offset;
+                if (std::abs(visual) <= threshold)
+                    return pos - visual;
+                if (std::abs(visual - (-canvasHalf + half)) <= threshold)
+                    return pos + (-canvasHalf + half) - visual;
+                if (std::abs(visual - (canvasHalf - half)) <= threshold)
+                    return pos + (canvasHalf - half) - visual;
+                if (m_edgeCenterSnap && std::abs(visual - half) <= threshold)
+                    return pos + half - visual;
+                if (m_edgeCenterSnap && std::abs(visual + half) <= threshold)
+                    return pos - half - visual;
+                return pos;
+            };
 
+            if (!lockX)
                 x = snapVisual(x, rotatedAx, aabbHalfW, canvasHalfW);
+            if (!lockY)
                 y = snapVisual(y, rotatedAy, aabbHalfH, canvasHalfH);
+
+            // Align to the edges of other axis-aligned entities.
+            VisualBounds mine = visualBoundsOf(*entity, x, y);
+            bool snappedX = false;
+            bool snappedY = false;
+            for (const Entity& other : m_project->entities())
+            {
+                if (other.id == m_dragEntity || other.hidden || snappedX && snappedY)
+                    continue;
+
+                const double otherRotation =
+                    m_project->value(other.id, "rotation", m_frame);
+                const double modulo = std::fmod(std::abs(otherRotation) + 1e-6, 90.0);
+                if (std::abs(modulo) > 1e-3 && std::abs(modulo - 90.0) > 1e-3)
+                    continue;
+
+                const VisualBounds target =
+                    visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
+                                   m_project->value(other.id, "y", m_frame));
+
+                if (!lockX && !snappedX)
+                {
+                    const double myEdges[3] = {mine.left, (mine.left + mine.right) / 2.0,
+                                               mine.right};
+                    const double targetEdges[3] = {target.left,
+                                                   (target.left + target.right) / 2.0,
+                                                   target.right};
+                    for (double myEdge : myEdges)
+                    {
+                        bool matched = false;
+                        for (double targetEdge : targetEdges)
+                        {
+                            if (std::abs(myEdge - targetEdge) <= threshold)
+                            {
+                                x += targetEdge - myEdge;
+                                m_guideX = targetEdge;
+                                m_showGuideX = true;
+                                snappedX = true;
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if (matched)
+                            break;
+                    }
+                }
+
+                if (!lockY && !snappedY)
+                {
+                    const double myEdges[3] = {mine.top, (mine.top + mine.bottom) / 2.0,
+                                               mine.bottom};
+                    const double targetEdges[3] = {target.top,
+                                                   (target.top + target.bottom) / 2.0,
+                                                   target.bottom};
+                    for (double myEdge : myEdges)
+                    {
+                        bool matched = false;
+                        for (double targetEdge : targetEdges)
+                        {
+                            if (std::abs(myEdge - targetEdge) <= threshold)
+                            {
+                                y += targetEdge - myEdge;
+                                m_guideY = targetEdge;
+                                m_showGuideY = true;
+                                snappedY = true;
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if (matched)
+                            break;
+                    }
+                }
+
+                if (snappedX || snappedY)
+                    mine = visualBoundsOf(*entity, x, y);
+            }
+
+            if (lockY)
+            {
+                m_guideY = (mine.top + mine.bottom) / 2.0;
+                m_showGuideY = true;
+            }
+            if (lockX)
+            {
+                m_guideX = (mine.left + mine.right) / 2.0;
+                m_showGuideX = true;
             }
         }
     }
@@ -1045,6 +1182,9 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
         m_dragEntity = kInvalidEntity;
         m_gizmoMode = GizmoMode::None;
         m_activeHandle = Handle::None;
+        m_showGuideX = false;
+        m_showGuideY = false;
+        update();
     }
 }
 
