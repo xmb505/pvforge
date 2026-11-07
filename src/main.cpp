@@ -39,6 +39,7 @@
 #include <QMouseEvent>
 #include <QListWidget>
 #include <QPainter>
+#include <QPalette>
 #include <QEventLoop>
 #include <QProgressBar>
 #include <QPushButton>
@@ -1313,6 +1314,36 @@ int easingTest(QApplication& app)
             ++failures;
         }
         menu.close();
+    }
+
+    // Check the palette-driven drawing in a dark theme as well.
+    {
+        QPalette dark;
+        dark.setColor(QPalette::Window, QColor(35, 38, 41));
+        dark.setColor(QPalette::WindowText, QColor(239, 240, 241));
+        dark.setColor(QPalette::Base, QColor(27, 30, 32));
+        dark.setColor(QPalette::AlternateBase, QColor(42, 46, 50));
+        dark.setColor(QPalette::Text, QColor(239, 240, 241));
+        dark.setColor(QPalette::PlaceholderText, QColor(160, 165, 170));
+        dark.setColor(QPalette::Mid, QColor(90, 95, 100));
+        dark.setColor(QPalette::Highlight, QColor(61, 174, 233));
+        dark.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+        dark.setColor(QPalette::Button, QColor(42, 46, 50));
+        dark.setColor(QPalette::ButtonText, QColor(239, 240, 241));
+        QApplication::setPalette(dark);
+
+        pvf::EasingPicker picker(custom);
+        picker.show();
+        QApplication::processEvents();
+        picker.grab().toImage().save(
+            QStringLiteral("/tmp/pvforge_easing_picker_dark.png"));
+        picker.close();
+
+        pvf::BezierEditorDialog dialog(custom);
+        dialog.show();
+        QApplication::processEvents();
+        dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_bezier_dark.png"));
+        dialog.close();
     }
 
     // Easing changes go through the command stack.
