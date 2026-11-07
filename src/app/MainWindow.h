@@ -37,6 +37,7 @@ public:
     int currentFrame() const { return m_frame; }
     void togglePlayback();
     void setSelectedEntityForTest(EntityId id) { setSelectedEntity(id); }
+    void applyPivotForTest(EntityId id, double ax, double ay) { applyPivot(id, ax, ay); }
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -49,6 +50,7 @@ private:
     void setFrame(int frame);
     void setSelectedEntity(EntityId id);
     void applyValue(EntityId id, const QString& prop, double value);
+    void applyPivot(EntityId id, double ax, double ay);
     void refreshAll();
     void onPlayTick();
     void updateStatus();

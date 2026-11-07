@@ -147,6 +147,45 @@ QString RenameEntityCommand::text() const
     return QStringLiteral("重命名");
 }
 
+SetPivotCommand::SetPivotCommand(EntityId id, double oldAx, double oldAy, double oldX,
+                                 double oldY, double newAx, double newAy, double newX,
+                                 double newY, int frame)
+    : m_id(id)
+    , m_oldAx(oldAx)
+    , m_oldAy(oldAy)
+    , m_oldX(oldX)
+    , m_oldY(oldY)
+    , m_newAx(newAx)
+    , m_newAy(newAy)
+    , m_newX(newX)
+    , m_newY(newY)
+    , m_frame(frame)
+{
+}
+
+void SetPivotCommand::apply(Project& project, double ax, double ay, double x, double y)
+{
+    project.setValue(m_id, QStringLiteral("rotPointX"), m_frame, ax, true);
+    project.setValue(m_id, QStringLiteral("rotPointY"), m_frame, ay, true);
+    project.setValue(m_id, QStringLiteral("x"), m_frame, x, true);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, y, true);
+}
+
+void SetPivotCommand::undo(Project& project)
+{
+    apply(project, m_oldAx, m_oldAy, m_oldX, m_oldY);
+}
+
+void SetPivotCommand::redo(Project& project)
+{
+    apply(project, m_newAx, m_newAy, m_newX, m_newY);
+}
+
+QString SetPivotCommand::text() const
+{
+    return QStringLiteral("调整轴心");
+}
+
 RemoveKeyframesCommand::RemoveKeyframesCommand(const QVector<KeyframeRecord>& records)
     : m_records(records)
 {

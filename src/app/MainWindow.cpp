@@ -138,8 +138,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
+    connect(m_viewport, &Viewport::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
+    connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
     connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::setSelectedEntity);
@@ -551,6 +553,31 @@ void MainWindow::applyValue(EntityId id, const QString& prop, double value)
     m_project->setValue(id, prop, m_frame, value, keyframe);
     m_history->push(std::make_unique<SetValueCommand>(id, prop, m_frame, oldValue, value,
                                                        keyframe),
+                    *m_project);
+}
+
+void MainWindow::applyPivot(EntityId id, double ax, double ay)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || e->locked)
+        return;
+
+    const double oldAx = m_project->value(id, QStringLiteral("rotPointX"), m_frame);
+    const double oldAy = m_project->value(id, QStringLiteral("rotPointY"), m_frame);
+    if (qFuzzyCompare(oldAx + 1.0, ax + 1.0) && qFuzzyCompare(oldAy + 1.0, ay + 1.0))
+        return;
+
+    const double oldX = m_project->value(id, QStringLiteral("x"), m_frame);
+    const double oldY = m_project->value(id, QStringLiteral("y"), m_frame);
+    const double rotation = m_project->value(id, QStringLiteral("rotation"), m_frame);
+    const double radians = rotation * M_PI / 180.0;
+    const double dax = ax - oldAx;
+    const double day = ay - oldAy;
+    const double dx = dax * std::cos(radians) - day * std::sin(radians);
+    const double dy = dax * std::sin(radians) + day * std::cos(radians);
+
+    m_history->push(std::make_unique<SetPivotCommand>(id, oldAx, oldAy, oldX, oldY, ax, ay,
+                                                      oldX + dx, oldY + dy, m_frame),
                     *m_project);
 }
 

@@ -92,6 +92,32 @@ private:
     QString m_newName;
 };
 
+// Changing the pivot and the compensating position in one step.
+class SetPivotCommand : public UndoCommand
+{
+public:
+    SetPivotCommand(EntityId id, double oldAx, double oldAy, double oldX, double oldY,
+                    double newAx, double newAy, double newX, double newY, int frame);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    void apply(Project& project, double ax, double ay, double x, double y);
+
+    EntityId m_id = kInvalidEntity;
+    double m_oldAx = 0.0;
+    double m_oldAy = 0.0;
+    double m_oldX = 0.0;
+    double m_oldY = 0.0;
+    double m_newAx = 0.0;
+    double m_newAy = 0.0;
+    double m_newX = 0.0;
+    double m_newY = 0.0;
+    int m_frame = 0;
+};
+
 // Deleting keyframes, keeping a copy so they can be restored.
 class RemoveKeyframesCommand : public UndoCommand
 {

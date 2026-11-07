@@ -33,6 +33,7 @@ public:
 
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);
+    void pivotEdited(EntityId id, double ax, double ay);
 
 private:
     struct Row

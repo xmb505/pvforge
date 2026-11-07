@@ -744,6 +744,11 @@ int pivotGizmoTest(QApplication& app)
 
         const double s = viewport->currentScale();
         const QPoint center = viewport->rect().center();
+        auto visualCentre = [&] {
+            return viewport->entityTransformForTest(id).map(QPointF(0, 0));
+        };
+        auto gizmoPos = [&] { return viewport->entityPivotForTest(id).toPoint(); };
+
         auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
                         Qt::MouseButtons buttons, Qt::KeyboardModifiers mods) {
             QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
@@ -756,35 +761,34 @@ int pivotGizmoTest(QApplication& app)
             send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         };
 
-        // Dragging the X axis moves the pivot, not the entity.
+        // Dragging the X axis moves the pivot; the position compensates so the
+        // entity does not move visually.
         const int edgeDx = int(std::lround(145.0 * s));
         drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
         const double pivotX = project->value(id, QStringLiteral("rotPointX"), 0);
-        if (std::abs(pivotX - 150.0) > 1.0
-            || std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        const double posX = project->value(id, QStringLiteral("x"), 0);
+        QPointF visual = visualCentre();
+        if (std::abs(pivotX - 150.0) > 1.0 || std::abs(posX - 150.0) > 1.0)
         {
-            qCritical() << "pivot-gizmo-test: axis pivot drag" << pivotX
-                        << project->value(id, QStringLiteral("x"), 0);
+            qCritical() << "pivot-gizmo-test: axis pivot drag" << pivotX << posX;
             ++failures;
         }
-
-        // The gizmo must sit on the custom pivot, not the entity centre.
-        const QPointF pivotScreen = viewport->entityPivotForTest(id);
-        const QPointF pivotExpected(center.x() + 150.0 * s, center.y());
-        if (std::abs(pivotScreen.x() - pivotExpected.x()) > 2.0
-            || std::abs(pivotScreen.y() - pivotExpected.y()) > 2.0)
+        if (std::abs(visual.x() - center.x()) > 2.0
+            || std::abs(visual.y() - center.y()) > 2.0)
         {
-            qCritical() << "pivot-gizmo-test: gizmo not on pivot" << pivotScreen
-                        << pivotExpected;
+            qCritical() << "pivot-gizmo-test: entity moved visually" << visual;
+            ++failures;
+        }
+        if (std::abs(gizmoPos().x() - (center.x() + int(std::lround(150.0 * s)))) > 3)
+        {
+            qCritical() << "pivot-gizmo-test: gizmo not on pivot" << gizmoPos();
             ++failures;
         }
 
         // Dragging the pivot dot moves both axes freely.
-        project->setValue(id, QStringLiteral("rotPointX"), 0, 0.0, false);
-        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
-        drag(center, center + QPoint(int(std::lround(60.0 * s)),
-                                     int(std::lround(30.0 * s))));
-        if (project->value(id, QStringLiteral("rotPointX"), 0) < 30.0
+        const QPoint dot = gizmoPos();
+        drag(dot, dot + QPoint(int(std::lround(60.0 * s)), int(std::lround(30.0 * s))));
+        if (project->value(id, QStringLiteral("rotPointX"), 0) < 190.0
             || project->value(id, QStringLiteral("rotPointY"), 0) < 15.0)
         {
             qCritical() << "pivot-gizmo-test: free pivot drag"
@@ -794,11 +798,9 @@ int pivotGizmoTest(QApplication& app)
         }
 
         // Pivot snapping follows the scaled visual edge.
-        entity->data[QStringLiteral("rotPointCustom")] = true;
+        window.applyPivotForTest(id, 0.0, 0.0);
         project->setValue(id, QStringLiteral("scaleX"), 0, 0.5, false);
         project->setValue(id, QStringLiteral("scaleY"), 0, 0.5, false);
-        project->setValue(id, QStringLiteral("rotPointX"), 0, 0.0, false);
-        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
         const int visualEdgeDx = int(std::lround(70.0 * s));
         drag(center + QPoint(40, 0), center + QPoint(40 + visualEdgeDx, 0));
         const double snappedPivot = project->value(id, QStringLiteral("rotPointX"), 0);
@@ -808,13 +810,26 @@ int pivotGizmoTest(QApplication& app)
             ++failures;
         }
 
-        // Disabling the custom pivot returns axis dragging to the entity.
+        // Disabling the edit mode keeps the gizmo on the pivot.
+        entity->data[QStringLiteral("rotPointCustom")] = false;
+        const QPoint gizmoAfter = gizmoPos();
+        const QPoint expectedGizmo(center.x() + int(std::lround(snappedPivot * s)),
+                                   center.y());
+        if (std::abs(gizmoAfter.x() - expectedGizmo.x()) > 3
+            || std::abs(gizmoAfter.y() - expectedGizmo.y()) > 3)
+        {
+            qCritical() << "pivot-gizmo-test: gizmo left the pivot" << gizmoAfter;
+            ++failures;
+        }
+
+        // Axis dragging now moves the entity again.
         project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
-        entity->data[QStringLiteral("rotPointCustom")] = false;
-        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
-        drag(center + QPoint(40, 0), center + QPoint(40 + int(std::lround(50.0 * s)), 0));
-        if (std::abs(project->value(id, QStringLiteral("x"), 0)) < 20.0)
+        const QPoint gizmoNow = gizmoPos();
+        drag(gizmoNow + QPoint(40, 0), gizmoNow + QPoint(40 + int(std::lround(50.0 * s)), 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)
+                     - (snappedPivot + 50.0))
+            > 2.0)
         {
             qCritical() << "pivot-gizmo-test: axis did not move entity"
                         << project->value(id, QStringLiteral("x"), 0);
@@ -826,6 +841,7 @@ int pivotGizmoTest(QApplication& app)
     });
     return app.exec();
 }
+
 
 int pivotTest(QApplication& app)
 {
@@ -850,51 +866,58 @@ int pivotTest(QApplication& app)
 
         const double s = viewport->currentScale();
         const QPointF center(viewport->rect().center());
+        auto visualCentre = [&] {
+            return viewport->entityTransformForTest(id).map(QPointF(0, 0));
+        };
 
-        // Default pivot: rotating around the centre keeps it in place.
-        project->setValue(id, QStringLiteral("rotation"), 0, 90.0, false);
-        QPointF mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
-        if (std::abs(mapped.x() - center.x()) > 2.0
-            || std::abs(mapped.y() - center.y()) > 2.0)
+        // Moving the pivot compensates the position: visuals stay put.
+        window.applyPivotForTest(id, 100.0, 0.0);
+        const double x = project->value(id, QStringLiteral("x"), 0);
+        if (std::abs(x - 100.0) > 0.5)
         {
-            qCritical() << "pivot-test: default pivot moved the centre" << mapped;
+            qCritical() << "pivot-test: position not compensated" << x;
             ++failures;
         }
-
-        // Custom pivot at (100, 0): the centre orbits it.
-        project->entity(id)->data[QStringLiteral("rotPointCustom")] = true;
-        project->setValue(id, QStringLiteral("rotPointX"), 0, 100.0, false);
-        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
-        for (auto* section : window.findChildren<pvf::CollapsibleSection*>())
-            if (section->title() == QStringLiteral("轴心"))
-                section->setExpanded(true);
-        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_pivot.png"));
-
-        mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
-        const QPointF expected(center.x() + 100.0 * s, center.y() - 100.0 * s);
-        if (std::abs(mapped.x() - expected.x()) > 2.0
-            || std::abs(mapped.y() - expected.y()) > 2.0)
+        QPointF visual = visualCentre();
+        if (std::abs(visual.x() - center.x()) > 2.0
+            || std::abs(visual.y() - center.y()) > 2.0)
         {
-            qCritical() << "pivot-test: custom pivot orbit" << mapped << expected;
+            qCritical() << "pivot-test: entity moved visually" << visual;
             ++failures;
         }
-
-        // Disabling the edit mode keeps the pivot for rotation.
-        project->entity(id)->data[QStringLiteral("rotPointCustom")] = false;
-        mapped = viewport->entityTransformForTest(id).map(QPointF(0, 0));
-        if (std::abs(mapped.x() - expected.x()) > 2.0
-            || std::abs(mapped.y() - expected.y()) > 2.0)
-        {
-            qCritical() << "pivot-test: disabling moved the rotation centre" << mapped;
-            ++failures;
-        }
-
-        // The gizmo however goes back to the entity centre.
-        const QPointF gizmo = viewport->entityPivotForTest(id);
-        if (std::abs(gizmo.x() - center.x()) > 2.0
+        QPointF gizmo = viewport->entityPivotForTest(id);
+        if (std::abs(gizmo.x() - (center.x() + 100.0 * s)) > 2.0
             || std::abs(gizmo.y() - center.y()) > 2.0)
         {
-            qCritical() << "pivot-test: gizmo did not return to the entity" << gizmo;
+            qCritical() << "pivot-test: gizmo not on pivot" << gizmo;
+            ++failures;
+        }
+
+        // Rotation orbits the pivot.
+        project->setValue(id, QStringLiteral("rotation"), 0, 90.0, false);
+        visual = visualCentre();
+        const QPointF expected(center.x() + 100.0 * s, center.y() - 100.0 * s);
+        if (std::abs(visual.x() - expected.x()) > 2.0
+            || std::abs(visual.y() - expected.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: rotation orbit" << visual << expected;
+            ++failures;
+        }
+
+        // Turning off the edit mode keeps the pivot and the gizmo there.
+        entity->data[QStringLiteral("rotPointCustom")] = false;
+        gizmo = viewport->entityPivotForTest(id);
+        if (std::abs(gizmo.x() - (center.x() + 100.0 * s)) > 2.0
+            || std::abs(gizmo.y() - center.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: gizmo left the pivot" << gizmo;
+            ++failures;
+        }
+        visual = visualCentre();
+        if (std::abs(visual.x() - expected.x()) > 2.0
+            || std::abs(visual.y() - expected.y()) > 2.0)
+        {
+            qCritical() << "pivot-test: disabling changed rotation centre" << visual;
             ++failures;
         }
 
@@ -903,6 +926,7 @@ int pivotTest(QApplication& app)
     });
     return app.exec();
 }
+
 
 int gizmoTest(QApplication& app)
 {

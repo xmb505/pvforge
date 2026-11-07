@@ -3,7 +3,6 @@
 #include "app/AppIcon.h"
 
 #include <QApplication>
-#include <QDebug>
 #include <QFontMetricsF>
 #include <QIcon>
 #include <QMouseEvent>
@@ -275,9 +274,17 @@ QPointF Viewport::entityScreenCenter(const Entity& e) const
 {
     const QRectF canvas = canvasRect();
     const double s = viewScale();
-    const double x = m_project->value(e.id, "x", m_frame);
-    const double y = m_project->value(e.id, "y", m_frame);
-    return canvas.center() + QPointF(x * s, y * s);
+    const double x = m_project->value(e.id, "x", m_frame) * s;
+    const double y = m_project->value(e.id, "y", m_frame) * s;
+    const double rotation = m_project->value(e.id, "rotation", m_frame);
+    const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
+    const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
+
+    const double rad = qDegreesToRadians(rotation);
+    const double dx = ax * std::cos(rad) - ay * std::sin(rad);
+    const double dy = ax * std::sin(rad) + ay * std::cos(rad);
+
+    return canvas.center() + QPointF(x - dx, y - dy);
 }
 
 QTransform Viewport::entityTransformForTest(EntityId id) const
@@ -294,22 +301,20 @@ QPointF Viewport::entityPivotForTest(EntityId id) const
 
 QPointF Viewport::entityPivotScreen(const Entity& e) const
 {
-    // In pivot-edit mode the gizmo sits on the pivot; otherwise it sits on
-    // the entity itself, even though rotation still uses the pivot.
-    QPointF point = entityScreenCenter(e);
-    if (e.rotPointCustom())
-    {
-        const double s = viewScale();
-        point += QPointF(m_project->value(e.id, "rotPointX", m_frame) * s,
-                         m_project->value(e.id, "rotPointY", m_frame) * s);
-    }
-    return point;
+    // The position is the pivot, so the gizmo always sits there.
+    const QRectF canvas = canvasRect();
+    const double s = viewScale();
+    return canvas.center() + QPointF(m_project->value(e.id, "x", m_frame) * s,
+                                     m_project->value(e.id, "y", m_frame) * s);
 }
 
 QTransform Viewport::entityTransform(const Entity& e) const
 {
     const double s = viewScale();
-    const QPointF origin = entityScreenCenter(e);
+    const QRectF canvas = canvasRect();
+    const QPointF origin =
+        canvas.center() + QPointF(m_project->value(e.id, "x", m_frame) * s,
+                                  m_project->value(e.id, "y", m_frame) * s);
     const double rotation = m_project->value(e.id, "rotation", m_frame);
 
     // The pivot persists even when the custom-pivot mode is off, so rotation
@@ -319,7 +324,6 @@ QTransform Viewport::entityTransform(const Entity& e) const
 
     QTransform transform;
     transform.translate(origin.x(), origin.y());
-    transform.translate(ax, ay);
     transform.rotate(rotation);
     transform.translate(-ax, -ay);
     transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
@@ -330,7 +334,10 @@ QTransform Viewport::entityTransform(const Entity& e) const
 QTransform Viewport::entityRotationTransform(const Entity& e) const
 {
     const double s = viewScale();
-    const QPointF origin = entityScreenCenter(e);
+    const QRectF canvas = canvasRect();
+    const QPointF origin =
+        canvas.center() + QPointF(m_project->value(e.id, "x", m_frame) * s,
+                                  m_project->value(e.id, "y", m_frame) * s);
     const double rotation = m_project->value(e.id, "rotation", m_frame);
 
     const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
@@ -338,7 +345,6 @@ QTransform Viewport::entityRotationTransform(const Entity& e) const
 
     QTransform transform;
     transform.translate(origin.x(), origin.y());
-    transform.translate(ax, ay);
     transform.rotate(rotation);
     transform.translate(-ax, -ay);
     return transform;
@@ -806,8 +812,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 py = snapTo(py, {0.0, -halfH, halfH}, threshold);
             }
         }
-        emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
-        emit valueEdited(m_dragEntity, QStringLiteral("rotPointY"), py);
+        emit pivotEdited(m_dragEntity, px, py);
         return;
     }
 
@@ -827,7 +832,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 px = snapTo(px, {0.0, -halfW, halfW}, threshold);
             }
         }
-        emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
+        emit pivotEdited(m_dragEntity, px,
+                         m_project->value(m_dragEntity, "rotPointY", m_frame));
         return;
     }
 
@@ -847,7 +853,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 py = snapTo(py, {0.0, -halfH, halfH}, threshold);
             }
         }
-        emit valueEdited(m_dragEntity, QStringLiteral("rotPointY"), py);
+        emit pivotEdited(m_dragEntity,
+                         m_project->value(m_dragEntity, "rotPointX", m_frame), py);
         return;
     }
 

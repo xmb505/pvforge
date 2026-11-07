@@ -37,6 +37,7 @@ public:
 signals:
     void entitySelected(EntityId id);
     void valueEdited(EntityId id, const QString& prop, double value);
+    void pivotEdited(EntityId id, double ax, double ay);
     void workbenchRequested();
 
 protected:

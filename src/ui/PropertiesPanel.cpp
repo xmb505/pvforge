@@ -291,11 +291,14 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     });
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_entity != kInvalidEntity)
-            emit valueEdited(m_entity, QStringLiteral("rotPointX"), value);
+            emit pivotEdited(m_entity, value,
+                             m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
     });
     connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_entity != kInvalidEntity)
-            emit valueEdited(m_entity, QStringLiteral("rotPointY"), value);
+            emit pivotEdited(m_entity,
+                             m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame),
+                             value);
     });
 
     m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
