@@ -162,6 +162,27 @@ QWidget* SettingsDialog::createGeneralPage()
     form->addRow(infoLabel(QStringLiteral("语言切换后需要重新启动 PVForge。"), interface));
 
     layout->addWidget(interface);
+
+    auto* saving = new QGroupBox(QStringLiteral("保存"), page);
+    auto* savingForm = new QFormLayout(saving);
+    m_autosave = new QCheckBox(QStringLiteral("定期自动保存工程"), saving);
+    m_autosave->setObjectName(QStringLiteral("autosaveEnabled"));
+    m_autosave->setChecked(Settings::autosaveEnabled());
+    savingForm->addRow(m_autosave);
+    m_autosaveMinutes = new QSpinBox(saving);
+    m_autosaveMinutes->setObjectName(QStringLiteral("autosaveMinutes"));
+    m_autosaveMinutes->setRange(1, 120);
+    m_autosaveMinutes->setSuffix(QStringLiteral(" 分钟"));
+    m_autosaveMinutes->setValue(Settings::autosaveMinutes());
+    m_autosaveMinutes->setEnabled(m_autosave->isChecked());
+    connect(m_autosave, &QCheckBox::toggled, m_autosaveMinutes,
+            &QWidget::setEnabled);
+    savingForm->addRow(QStringLiteral("间隔"), m_autosaveMinutes);
+    savingForm->addRow(infoLabel(
+        QStringLiteral("只自动保存已经保存过路径的工程；未保存的新工程请先手动保存一次。"),
+        saving));
+    layout->addWidget(saving);
+
     layout->addStretch(1);
     return page;
 }
@@ -427,6 +448,8 @@ void SettingsDialog::accept()
     Settings::setSnapAngles(angles);
     Settings::setAutoKeyDefault(m_autoKey->isChecked());
     Settings::setAudioScrub(m_audioScrub->isChecked());
+    Settings::setAutosaveEnabled(m_autosave->isChecked());
+    Settings::setAutosaveMinutes(m_autosaveMinutes->value());
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());
     Settings::setPackAssetsDefault(m_packAssets->isChecked());

@@ -2,6 +2,8 @@
 
 #include <QSettings>
 
+#include <algorithm>
+
 namespace pvf {
 namespace Settings {
 
@@ -82,6 +84,28 @@ bool autoKeyDefault()
 void setAutoKeyDefault(bool on)
 {
     store().setValue(QStringLiteral("editor/autoKeyDefault"), on);
+}
+
+bool autosaveEnabled()
+{
+    return store().value(QStringLiteral("editor/autosaveEnabled"), true).toBool();
+}
+
+void setAutosaveEnabled(bool on)
+{
+    store().setValue(QStringLiteral("editor/autosaveEnabled"), on);
+}
+
+int autosaveMinutes()
+{
+    return std::clamp(
+        store().value(QStringLiteral("editor/autosaveMinutes"), 5).toInt(), 1, 120);
+}
+
+void setAutosaveMinutes(int minutes)
+{
+    store().setValue(QStringLiteral("editor/autosaveMinutes"),
+                     std::clamp(minutes, 1, 120));
 }
 
 int defaultWidth()

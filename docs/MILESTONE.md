@@ -75,6 +75,7 @@
 - 缓动由目标关键帧控制：设置 1s 的曲线影响 0s → 1s；第一帧没有进入段
 - `Track::evaluate` 按缓动曲线插值
 - 自动关键帧（默认开）
+- 自动保存：默认每 5 分钟保存一次已有路径的工程，设置 → 常规可关闭或改间隔（1–120 分钟）；保存使用 QSaveFile 原子写入，未命名工程不生成恢复副本
 - 时间轴：固定缩放 + 横向滚动 + 自动跟随播放头
 - `Ctrl+滚轮` 缩放（0.25–32 px/帧）
 - 刻度行自适应：秒模式每秒按项目帧率均分为整数格（24 fps → 24/12/8/6/4… 格），帧模式按 1/5/10/20/50 帧分档并标帧号
@@ -183,7 +184,7 @@
 - 右侧页签：项目属性（项目设置/环境设置/素材库）、实体属性页签（按需出现）
 - 面板内容可折叠、可滚动
 - 时间轴和视口配色跟随系统主题，图标优先用桌面图标主题；缓动缩略图和贝塞尔图表用 QPalette 自绘，暗色已验证
-- 设置页：qBittorrent 式左侧分类 + 右侧内容页（常规、编辑器、新项目、时间轴、素材、解码、关于）；关于页显示系统/CPU/内存/显卡/显示器/Qt/FFmpeg 与当前解码路径，可一键复制；帮助菜单的「关于 PVForge」也打开该页
+- 设置页：qBittorrent 式左侧分类 + 右侧内容页（常规、编辑器、新项目、时间轴、素材、解码、关于）；常规页可调自动保存开关和间隔（默认开启、5 分钟）；关于页显示系统/CPU/内存/显卡/显示器/Qt/FFmpeg 与当前解码路径，可一键复制；帮助菜单的「关于 PVForge」也打开该页
 - 语言文件 `assets/lang/zh_CN.json` / `en_US.json`（核心界面）
 
 ## 架构
@@ -219,14 +220,15 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 37 个模式，全部通过。
+共 38 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
+- 自动保存只处理已有路径的工程；未命名的新工程请先手动保存一次
 - 无频谱可视化对象（音频轨波形已支持）
 - 父级坐标作用于可视实体；摄像机可以作为父级，也可以挂到文件夹或实体下；音频没有空间坐标
 - 摄像机不能作为另一个摄像机的子级；挂到父级后画框拖动暂停，改属性 X/Y/旋转/取景比例

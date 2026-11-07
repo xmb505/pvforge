@@ -27,6 +27,12 @@ void setLanguage(const QString& code);
 bool autoKeyDefault();
 void setAutoKeyDefault(bool on);
 
+bool autosaveEnabled();                 // periodically save named projects
+void setAutosaveEnabled(bool on);
+
+int autosaveMinutes();                  // default 5
+void setAutosaveMinutes(int minutes);
+
 int defaultWidth();
 int defaultHeight();
 int defaultFps();

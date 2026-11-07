@@ -170,6 +170,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         m_scrubClock.restart();
     });
 
+    m_autosaveTimer = new QTimer(this);
+    connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autoSave);
+    updateAutosaveTimer();
+
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
     connect(m_viewport, &Viewport::positionEdited, this, &MainWindow::applyPosition);
@@ -395,7 +399,8 @@ void MainWindow::createMenus()
         if (dialog.exec() == QDialog::Accepted)
         {
             m_viewport->setSnapPixels(Settings::snapPixels());
-    m_viewport->setEdgeCenterSnap(Settings::edgeCenterSnap());
+            m_viewport->setEdgeCenterSnap(Settings::edgeCenterSnap());
+            updateAutosaveTimer();
             statusBar()->showMessage(QStringLiteral("设置已保存，语言等改动重启后生效"), 3000);
         }
     });
@@ -565,6 +570,55 @@ bool MainWindow::saveProject()
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存"), 2000);
     return true;
+}
+
+void MainWindow::autoSave()
+{
+    if (!Settings::autosaveEnabled() || m_project->filePath.isEmpty()
+        || !m_project->modified)
+        return;
+
+    QString error;
+    if (!m_project->save(m_project->filePath, &error))
+    {
+        statusBar()->showMessage(
+            QStringLiteral("自动保存失败：%1").arg(error), 5000);
+        return;
+    }
+    updateWindowTitle();
+    statusBar()->showMessage(QStringLiteral("已自动保存"), 2000);
+}
+
+void MainWindow::updateAutosaveTimer()
+{
+    if (!m_autosaveTimer)
+        return;
+    if (!Settings::autosaveEnabled())
+    {
+        m_autosaveTimer->stop();
+        return;
+    }
+    m_autosaveTimer->start(Settings::autosaveMinutes() * 60 * 1000);
+}
+
+void MainWindow::autoSaveNowForTest()
+{
+    autoSave();
+}
+
+void MainWindow::reloadAutosaveSettingsForTest()
+{
+    updateAutosaveTimer();
+}
+
+bool MainWindow::autosaveActiveForTest() const
+{
+    return m_autosaveTimer && m_autosaveTimer->isActive();
+}
+
+int MainWindow::autosaveIntervalForTest() const
+{
+    return m_autosaveTimer ? m_autosaveTimer->interval() : 0;
 }
 
 bool MainWindow::saveProjectAs()

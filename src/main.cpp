@@ -33,6 +33,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QCheckBox>
 #include <QDataStream>
 #include <QFont>
 #include <QImage>
@@ -209,6 +210,113 @@ int saveTest()
     QFile::remove(imagePath);
     qInfo() << "save-test OK: roundtrip length" << after.timelineLength();
     return 0;
+}
+
+int autoSaveTest()
+{
+    const QString projectPath =
+        QDir::tempPath() + QStringLiteral("/pvforge_autosave_test.pvproj");
+    const QString imagePath =
+        QDir::tempPath() + QStringLiteral("/pvforge_autosave_test.png");
+    QImage img(64, 64, QImage::Format_ARGB32);
+    img.fill(Qt::magenta);
+    if (!img.save(imagePath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("自动保存测试");
+    project->addImage(imagePath);
+    QString error;
+    if (!project->save(projectPath, &error))
+    {
+        qCritical() << "autosave-test: initial save failed" << error;
+        return 1;
+    }
+
+    int failures = 0;
+    if (!pvf::Settings::autosaveEnabled()
+        || pvf::Settings::autosaveMinutes() != 5)
+    {
+        qCritical() << "autosave-test: defaults are not enabled / 5 minutes"
+                    << pvf::Settings::autosaveEnabled()
+                    << pvf::Settings::autosaveMinutes();
+        ++failures;
+    }
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
+
+    if (!window.autosaveActiveForTest()
+        || window.autosaveIntervalForTest() != 5 * 60 * 1000)
+    {
+        qCritical() << "autosave-test: timer not running at five minutes"
+                    << window.autosaveActiveForTest()
+                    << window.autosaveIntervalForTest();
+        ++failures;
+    }
+
+    const int before = project->entities().size();
+    project->addText(QStringLiteral("自动保存"), QFont().family(), 64, Qt::white,
+                     int(Qt::AlignCenter));
+    if (!project->modified)
+    {
+        qCritical() << "autosave-test: edit did not mark the project modified";
+        ++failures;
+    }
+    window.autoSaveNowForTest();
+    if (project->modified)
+    {
+        qCritical() << "autosave-test: autosave did not clear the modified flag";
+        ++failures;
+    }
+
+    pvf::Project loaded;
+    if (!loaded.load(projectPath, &error))
+    {
+        qCritical() << "autosave-test: reload failed" << error;
+        ++failures;
+    }
+    else if (loaded.entities().size() != before + 1)
+    {
+        qCritical() << "autosave-test: autosaved entity missing"
+                    << loaded.entities().size() << before + 1;
+        ++failures;
+    }
+
+    pvf::Settings::setAutosaveEnabled(false);
+    window.reloadAutosaveSettingsForTest();
+    if (window.autosaveActiveForTest())
+    {
+        qCritical() << "autosave-test: timer still runs when disabled";
+        ++failures;
+    }
+    project->addText(QStringLiteral("不要保存"), QFont().family(), 64,
+                     Qt::white, int(Qt::AlignCenter));
+    window.autoSaveNowForTest();
+    if (!project->modified)
+    {
+        qCritical() << "autosave-test: disabled autosave still wrote the file";
+        ++failures;
+    }
+
+    pvf::Settings::setAutosaveEnabled(true);
+    pvf::Settings::setAutosaveMinutes(2);
+    window.reloadAutosaveSettingsForTest();
+    if (!window.autosaveActiveForTest()
+        || window.autosaveIntervalForTest() != 2 * 60 * 1000)
+    {
+        qCritical() << "autosave-test: interval setting not applied"
+                    << window.autosaveActiveForTest()
+                    << window.autosaveIntervalForTest();
+        ++failures;
+    }
+
+    QFile::remove(projectPath);
+    QFile::remove(imagePath);
+    qInfo() << "autosave-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int welcomeTest(QApplication& app)
@@ -473,6 +581,18 @@ int settingsTest(QApplication& app)
         dialog.show();
         QApplication::processEvents();
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings.png"));
+
+        auto* autosave = dialog.findChild<QCheckBox*>(QStringLiteral("autosaveEnabled"));
+        auto* autosaveMinutes =
+            dialog.findChild<QSpinBox*>(QStringLiteral("autosaveMinutes"));
+        if (!autosave || !autosave->isChecked() || !autosaveMinutes
+            || autosaveMinutes->value() != 5)
+        {
+            qCritical() << "settings-test: autosave default is not on / 5 minutes"
+                        << (autosave ? autosave->isChecked() : false)
+                        << (autosaveMinutes ? autosaveMinutes->value() : -1);
+            return 1;
+        }
 
         auto* categories =
             dialog.findChild<QListWidget*>(QStringLiteral("settingsCategories"));
@@ -5287,6 +5407,8 @@ int main(int argc, char* argv[])
         return selfTest();
     if (app.arguments().contains(QStringLiteral("--save-test")))
         return saveTest();
+    if (app.arguments().contains(QStringLiteral("--autosave-test")))
+        return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--welcome-test")))
         return welcomeTest(app);
     if (app.arguments().contains(QStringLiteral("--library-test")))

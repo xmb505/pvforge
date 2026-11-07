@@ -54,6 +54,10 @@ public:
         applyCamera(id, x, y, scale, rotation);
     }
     EntityId selectedEntityForTest() const { return m_selected; }
+    void autoSaveNowForTest();
+    void reloadAutosaveSettingsForTest();
+    bool autosaveActiveForTest() const;
+    int autosaveIntervalForTest() const;
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -88,6 +92,8 @@ private:
     void hideImportBusy();
     bool saveProject();
     bool saveProjectAs();
+    void autoSave();
+    void updateAutosaveTimer();
     void onEntityRenamed(EntityId id, const QString& name);
     void onAudioMoved(EntityId id, double startFrame);
     void onParentEdited(EntityId id, EntityId parent);
@@ -114,6 +120,7 @@ private:
 
     QTimer* m_playTimer = nullptr;
     QTimer* m_scrubTimer = nullptr;
+    QTimer* m_autosaveTimer = nullptr;
     QElapsedTimer m_playClock;
     QElapsedTimer m_scrubClock;
     int m_lastScrubFrame = -1;
