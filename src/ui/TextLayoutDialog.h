@@ -58,7 +58,10 @@ private:
     QDoubleSpinBox* m_padding = nullptr;
     QDoubleSpinBox* m_boxWidth = nullptr;
     QDoubleSpinBox* m_boxHeight = nullptr;
-    QCheckBox* m_vertical = nullptr;
+    QCheckBox* m_bold = nullptr;
+    QCheckBox* m_italic = nullptr;
+    QCheckBox* m_underline = nullptr;
+    QComboBox* m_direction = nullptr;
     TextPreview* m_preview = nullptr;
 };
 

@@ -36,6 +36,9 @@ QFont fontOf(const TextStyle& style)
 {
     QFont font(style.fontFamily.isEmpty() ? QFont().family() : style.fontFamily);
     font.setPixelSize(std::max(1, style.pixelSize));
+    font.setBold(style.bold);
+    font.setItalic(style.italic);
+    font.setUnderline(style.underline);
     return font;
 }
 
@@ -139,9 +142,10 @@ void TextBlock::paint(QPainter& painter, const QPointF& centre) const
         for (int columnIndex = 0; columnIndex < count; ++columnIndex)
         {
             const QString& column = m_columns[columnIndex];
-            // The first column is the rightmost one.
-            const double x = topLeft.x() +
-                             (count - 1 - columnIndex) * m_columnStep +
+            // Japanese columns run right to left; Chinese left to right.
+            const int visual = m_style.verticalRtl ? count - 1 - columnIndex
+                                                    : columnIndex;
+            const double x = topLeft.x() + visual * m_columnStep +
                              m_columnStep / 2.0;
             for (int index = 0; index < column.size(); ++index)
             {

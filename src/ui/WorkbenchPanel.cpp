@@ -316,12 +316,75 @@ QWidget* WorkbenchPanel::buildTextBoxPage()
     });
     form->addRow(QStringLiteral("文字颜色"), m_comicColor);
 
-    m_comicVertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), page);
-    connect(m_comicVertical, &QCheckBox::toggled, this, [this](bool on) {
-        m_comicStyle.vertical = on;
+    m_comicDirection = new QComboBox(page);
+    m_comicDirection->addItem(QStringLiteral("横排"), 0);
+    m_comicDirection->addItem(QStringLiteral("竖排 · 从右到左"), 1);
+    m_comicDirection->addItem(QStringLiteral("竖排 · 从左到右"), 2);
+    connect(m_comicDirection, &QComboBox::currentIndexChanged, this, [this](int index) {
+        m_comicStyle.vertical = index > 0;
+        m_comicStyle.verticalRtl = index != 2;
         updateTextBoxPreview();
     });
-    form->addRow(m_comicVertical);
+    form->addRow(QStringLiteral("排版方向"), m_comicDirection);
+
+    auto* styleRow = new QWidget(page);
+    auto* styleLayout = new QHBoxLayout(styleRow);
+    styleLayout->setContentsMargins(0, 0, 0, 0);
+    styleLayout->setSpacing(10);
+    m_comicBold = new QCheckBox(QStringLiteral("加粗"), styleRow);
+    m_comicItalic = new QCheckBox(QStringLiteral("斜体"), styleRow);
+    m_comicUnderline = new QCheckBox(QStringLiteral("下划线"), styleRow);
+    connect(m_comicBold, &QCheckBox::toggled, this, [this](bool on) {
+        m_comicStyle.bold = on;
+        updateTextBoxPreview();
+    });
+    connect(m_comicItalic, &QCheckBox::toggled, this, [this](bool on) {
+        m_comicStyle.italic = on;
+        updateTextBoxPreview();
+    });
+    connect(m_comicUnderline, &QCheckBox::toggled, this, [this](bool on) {
+        m_comicStyle.underline = on;
+        updateTextBoxPreview();
+    });
+    styleLayout->addWidget(m_comicBold);
+    styleLayout->addWidget(m_comicItalic);
+    styleLayout->addWidget(m_comicUnderline);
+    styleLayout->addStretch(1);
+    form->addRow(QStringLiteral("字形"), styleRow);
+
+    m_comicFill = new QPushButton(page);
+    setColorButton(m_comicFill, m_comicFillValue);
+    connect(m_comicFill, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_comicFillValue, QStringLiteral("填充颜色"));
+        if (color.isValid())
+        {
+            m_comicFillValue = color;
+            setColorButton(m_comicFill, color);
+            updateTextBoxPreview();
+        }
+    });
+    form->addRow(QStringLiteral("填充颜色"), m_comicFill);
+
+    m_comicStroke = new QPushButton(page);
+    setColorButton(m_comicStroke, m_comicStrokeValue);
+    connect(m_comicStroke, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_comicStrokeValue, QStringLiteral("边框颜色"));
+        if (color.isValid())
+        {
+            m_comicStrokeValue = color;
+            setColorButton(m_comicStroke, color);
+            updateTextBoxPreview();
+        }
+    });
+    form->addRow(QStringLiteral("边框颜色"), m_comicStroke);
+
+    m_comicStrokeWidth = new QDoubleSpinBox(page);
+    m_comicStrokeWidth->setRange(0, 60);
+    m_comicStrokeWidth->setValue(6);
+    m_comicStrokeWidth->setSuffix(QStringLiteral(" px"));
+    connect(m_comicStrokeWidth, &QDoubleSpinBox::valueChanged, this,
+            [this](double) { updateTextBoxPreview(); });
+    form->addRow(QStringLiteral("边框粗细"), m_comicStrokeWidth);
 
     auto* layoutButton = new QPushButton(QStringLiteral("排版…"), page);
     layoutButton->setObjectName(QStringLiteral("comicLayoutButton"));
@@ -856,6 +919,9 @@ void WorkbenchPanel::updateTextBoxPreview()
     BubbleStyle bubble;
     bubble.shape = shape;
     bubble.tail = row == 0;
+    bubble.fill = m_comicFillValue;
+    bubble.stroke = m_comicStrokeValue;
+    bubble.strokeWidth = m_comicStrokeWidth ? m_comicStrokeWidth->value() : 6.0;
     const ComicBox box = ComicBox::build(style, bubble);
     const QRectF bounds = box.bounds();
 
@@ -924,6 +990,9 @@ EntityId WorkbenchPanel::createTextBox()
     BubbleStyle bubble;
     bubble.shape = shape;
     bubble.tail = row == 0;
+    bubble.fill = m_comicFillValue;
+    bubble.stroke = m_comicStrokeValue;
+    bubble.strokeWidth = m_comicStrokeWidth ? m_comicStrokeWidth->value() : 6.0;
 
     QVariantMap data;
     style.writeTo(data);

@@ -92,7 +92,15 @@ private:
     QSpinBox* m_comicSize = nullptr;
     QPushButton* m_comicColor = nullptr;
     QColor m_comicColorValue{30, 30, 36};
-    QCheckBox* m_comicVertical = nullptr;
+    QComboBox* m_comicDirection = nullptr;
+    QCheckBox* m_comicBold = nullptr;
+    QCheckBox* m_comicItalic = nullptr;
+    QCheckBox* m_comicUnderline = nullptr;
+    QPushButton* m_comicFill = nullptr;
+    QPushButton* m_comicStroke = nullptr;
+    QDoubleSpinBox* m_comicStrokeWidth = nullptr;
+    QColor m_comicFillValue{Qt::white};
+    QColor m_comicStrokeValue{24, 22, 28};
     QDoubleSpinBox* m_radialFlicker = nullptr;
     TextStyle m_comicStyle;
     QSpinBox* m_radialCount = nullptr;

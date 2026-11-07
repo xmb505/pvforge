@@ -170,13 +170,41 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     });
     form->addRow(QStringLiteral("排版高度"), m_boxHeight);
 
-    m_vertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), this);
-    m_vertical->setChecked(m_style.vertical);
-    connect(m_vertical, &QCheckBox::toggled, this, [this](bool on) {
-        m_style.vertical = on;
+    m_direction = new QComboBox(this);
+    m_direction->addItem(QStringLiteral("横排"), 0);
+    m_direction->addItem(QStringLiteral("竖排 · 从右到左"), 1);
+    m_direction->addItem(QStringLiteral("竖排 · 从左到右"), 2);
+    m_direction->setCurrentIndex(m_style.vertical ? (m_style.verticalRtl ? 1 : 2) : 0);
+    connect(m_direction, &QComboBox::currentIndexChanged, this, [this](int index) {
+        m_style.vertical = index > 0;
+        m_style.verticalRtl = index != 2;
         updateStyle();
     });
-    form->addRow(m_vertical);
+    form->addRow(QStringLiteral("排版方向"), m_direction);
+
+    m_bold = new QCheckBox(QStringLiteral("加粗"), this);
+    m_bold->setChecked(m_style.bold);
+    connect(m_bold, &QCheckBox::toggled, this, [this](bool on) {
+        m_style.bold = on;
+        updateStyle();
+    });
+    form->addRow(m_bold);
+
+    m_italic = new QCheckBox(QStringLiteral("斜体"), this);
+    m_italic->setChecked(m_style.italic);
+    connect(m_italic, &QCheckBox::toggled, this, [this](bool on) {
+        m_style.italic = on;
+        updateStyle();
+    });
+    form->addRow(m_italic);
+
+    m_underline = new QCheckBox(QStringLiteral("下划线"), this);
+    m_underline->setChecked(m_style.underline);
+    connect(m_underline, &QCheckBox::toggled, this, [this](bool on) {
+        m_style.underline = on;
+        updateStyle();
+    });
+    form->addRow(m_underline);
 
     body->addLayout(form, 1);
 

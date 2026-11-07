@@ -276,10 +276,38 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
-    m_textVertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), content);
-    connect(m_textVertical, &QCheckBox::toggled, this,
-            [this](bool on) { applyData(QStringLiteral("vertical"), on); });
-    form->addRow(m_textVertical);
+    m_textDirection = new QComboBox(content);
+    m_textDirection->addItem(QStringLiteral("横排"), 0);
+    m_textDirection->addItem(QStringLiteral("竖排 · 从右到左"), 1);
+    m_textDirection->addItem(QStringLiteral("竖排 · 从左到右"), 2);
+    connect(m_textDirection, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (m_entity == kInvalidEntity)
+            return;
+        QVariantMap data;
+        data.insert(QStringLiteral("vertical"), index > 0);
+        data.insert(QStringLiteral("verticalRtl"), index != 2);
+        emit dataEdited(m_entity, data);
+    });
+    form->addRow(QStringLiteral("排版方向"), m_textDirection);
+
+    auto* styleRow = new QWidget(content);
+    auto* styleLayout = new QHBoxLayout(styleRow);
+    styleLayout->setContentsMargins(0, 0, 0, 0);
+    styleLayout->setSpacing(10);
+    m_textBold = new QCheckBox(QStringLiteral("加粗"), styleRow);
+    m_textItalic = new QCheckBox(QStringLiteral("斜体"), styleRow);
+    m_textUnderline = new QCheckBox(QStringLiteral("下划线"), styleRow);
+    connect(m_textBold, &QCheckBox::toggled, this,
+            [this](bool on) { applyData(QStringLiteral("bold"), on); });
+    connect(m_textItalic, &QCheckBox::toggled, this,
+            [this](bool on) { applyData(QStringLiteral("italic"), on); });
+    connect(m_textUnderline, &QCheckBox::toggled, this,
+            [this](bool on) { applyData(QStringLiteral("underline"), on); });
+    styleLayout->addWidget(m_textBold);
+    styleLayout->addWidget(m_textItalic);
+    styleLayout->addWidget(m_textUnderline);
+    styleLayout->addStretch(1);
+    form->addRow(QStringLiteral("字形"), styleRow);
 
     auto* layoutButton = new QPushButton(QStringLiteral("排版…"), content);
     layoutButton->setObjectName(QStringLiteral("textLayoutButton"));
@@ -1047,9 +1075,24 @@ void PropertiesPanel::refresh()
         m_textColorValue = e->textColor();
         setColorButton(m_textColorButton, m_textColorValue);
         {
-            const QSignalBlocker blocker(m_textVertical);
-            m_textVertical->setChecked(
-                e->data.value(QStringLiteral("vertical"), false).toBool());
+            const QSignalBlocker blocker(m_textDirection);
+            const bool vertical = e->data.value(QStringLiteral("vertical"), false).toBool();
+            const bool rtl = e->data.value(QStringLiteral("verticalRtl"), true).toBool();
+            m_textDirection->setCurrentIndex(vertical ? (rtl ? 1 : 2) : 0);
+        }
+        {
+            const QSignalBlocker blocker(m_textBold);
+            m_textBold->setChecked(e->data.value(QStringLiteral("bold"), false).toBool());
+        }
+        {
+            const QSignalBlocker blocker(m_textItalic);
+            m_textItalic->setChecked(
+                e->data.value(QStringLiteral("italic"), false).toBool());
+        }
+        {
+            const QSignalBlocker blocker(m_textUnderline);
+            m_textUnderline->setChecked(
+                e->data.value(QStringLiteral("underline"), false).toBool());
         }
         {
             const QSignalBlocker blocker(m_textAlign);
