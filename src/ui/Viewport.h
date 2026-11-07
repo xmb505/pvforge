@@ -41,7 +41,19 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
-    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate };
+    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate, Scale };
+    enum class Handle
+    {
+        None,
+        TopLeft,
+        Top,
+        TopRight,
+        Right,
+        BottomRight,
+        Bottom,
+        BottomLeft,
+        Left
+    };
 
     QRectF canvasRect() const;
     double viewScale() const;
@@ -52,6 +64,10 @@ private:
     QPointF entityScreenCenter(const Entity& e) const;
     bool gizmoHitTest(const QPointF& pos, GizmoMode* mode) const;
     void drawGizmo(QPainter& painter, const Entity& e);
+    QPointF handleScreenPos(const Entity& e, Handle handle) const;
+    Handle hitHandle(const QPointF& pos) const;
+    void drawHandles(QPainter& painter, const Entity& e);
+    void applyHandleDrag(const QPointF& mousePos, bool uniform);
 
     Project* m_project = nullptr;
     int m_frame = 0;
@@ -70,6 +86,10 @@ private:
     double m_gizmoStartRotation = 0.0;
     double m_gizmoStartX = 0.0;
     double m_gizmoStartY = 0.0;
+
+    Handle m_activeHandle = Handle::None;
+    double m_scaleStartX = 1.0;
+    double m_scaleStartY = 1.0;
 
     bool m_panning = false;
     QPointF m_panLast;

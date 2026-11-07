@@ -401,6 +401,87 @@ int timelineInteractionTest(QApplication& app)
     return app.exec();
 }
 
+int scaleHandleTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "scale-handle-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->rect().center();
+        const int halfW = int(std::lround(150.0 * s));
+        const int halfH = int(std::lround(100.0 * s));
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_handles.png"));
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, modifiers);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to, Qt::KeyboardModifiers mods) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton, mods);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton, mods);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, mods);
+        };
+
+        // Drag the right edge handle: X only.
+        drag(center + QPoint(halfW, 0), center + QPoint(2 * halfW, 0), Qt::NoModifier);
+        const double sx1 = project->value(id, QStringLiteral("scaleX"), 0);
+        const double sy1 = project->value(id, QStringLiteral("scaleY"), 0);
+        if (std::abs(sx1 - 2.0) > 0.1 || std::abs(sy1 - 1.0) > 1e-6)
+        {
+            qCritical() << "scale-handle-test: right handle" << sx1 << sy1;
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
+        project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
+
+        // Ctrl keeps the aspect ratio.
+        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, halfH),
+             Qt::ControlModifier);
+        const double sx2 = project->value(id, QStringLiteral("scaleX"), 0);
+        const double sy2 = project->value(id, QStringLiteral("scaleY"), 0);
+        if (std::abs(sx2 - 2.0) > 0.1 || std::abs(sy2 - 2.0) > 0.1)
+        {
+            qCritical() << "scale-handle-test: ctrl uniform" << sx2 << sy2;
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
+        project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
+
+        // Dragging past the centre mirrors the entity.
+        drag(center + QPoint(halfW, 0), center - QPoint(halfW, 0), Qt::NoModifier);
+        const double sx3 = project->value(id, QStringLiteral("scaleX"), 0);
+        if (sx3 >= -0.5)
+        {
+            qCritical() << "scale-handle-test: mirror" << sx3;
+            ++failures;
+        }
+
+        qInfo() << "scale-handle-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int gizmoTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1296,6 +1377,8 @@ int main(int argc, char* argv[])
         return lockTest(app);
     if (app.arguments().contains(QStringLiteral("--gizmo-test")))
         return gizmoTest(app);
+    if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
+        return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

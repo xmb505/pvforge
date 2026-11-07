@@ -375,6 +375,177 @@ void Viewport::drawGizmo(QPainter& p, const Entity& e)
     p.drawEllipse(center, ring, ring);
 }
 
+QPointF Viewport::handleScreenPos(const Entity& e, Handle handle) const
+{
+    const QRectF bounds = entityLocalBounds(e);
+    QPointF local;
+    switch (handle)
+    {
+    case Handle::TopLeft:
+        local = bounds.topLeft();
+        break;
+    case Handle::Top:
+        local = QPointF(bounds.center().x(), bounds.top());
+        break;
+    case Handle::TopRight:
+        local = bounds.topRight();
+        break;
+    case Handle::Right:
+        local = QPointF(bounds.right(), bounds.center().y());
+        break;
+    case Handle::BottomRight:
+        local = bounds.bottomRight();
+        break;
+    case Handle::Bottom:
+        local = QPointF(bounds.center().x(), bounds.bottom());
+        break;
+    case Handle::BottomLeft:
+        local = bounds.bottomLeft();
+        break;
+    case Handle::Left:
+        local = QPointF(bounds.left(), bounds.center().y());
+        break;
+    case Handle::None:
+        return QPointF();
+    }
+
+    const double s = viewScale();
+    const QPointF center = entityScreenCenter(e);
+    QTransform transform;
+    transform.translate(center.x(), center.y());
+    transform.rotate(m_project->value(e.id, "rotation", m_frame));
+    transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
+                    m_project->value(e.id, "scaleY", m_frame) * s);
+    return transform.map(local);
+}
+
+Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
+{
+    if (m_selected == kInvalidEntity)
+        return Handle::None;
+    const Entity* entity = m_project->entity(m_selected);
+    if (!entity)
+        return Handle::None;
+
+    static const Handle handles[] = {Handle::TopLeft,    Handle::Top,
+                                     Handle::TopRight,   Handle::Right,
+                                     Handle::BottomRight, Handle::Bottom,
+                                     Handle::BottomLeft, Handle::Left};
+    for (Handle handle : handles)
+    {
+        const QPointF point = handleScreenPos(*entity, handle);
+        if (std::hypot(point.x() - pos.x(), point.y() - pos.y()) <= 6.0)
+            return handle;
+    }
+    return Handle::None;
+}
+
+void Viewport::drawHandles(QPainter& p, const Entity& e)
+{
+    static const Handle handles[] = {Handle::TopLeft,    Handle::Top,
+                                     Handle::TopRight,   Handle::Right,
+                                     Handle::BottomRight, Handle::Bottom,
+                                     Handle::BottomLeft, Handle::Left};
+    const QColor accent = QApplication::palette().color(QPalette::Highlight);
+    p.setPen(QPen(accent, 1.5));
+    p.setBrush(Qt::white);
+    for (Handle handle : handles)
+    {
+        const QPointF point = handleScreenPos(e, handle);
+        p.drawRect(QRectF(point.x() - 4, point.y() - 4, 8, 8));
+    }
+}
+
+void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform)
+{
+    const Entity* entity = m_project->entity(m_dragEntity);
+    if (!entity)
+        return;
+
+    const QRectF bounds = entityLocalBounds(*entity);
+    const double s = viewScale();
+    const QPointF center = entityScreenCenter(*entity);
+
+    QTransform base;
+    base.translate(center.x(), center.y());
+    base.rotate(m_project->value(m_dragEntity, "rotation", m_frame));
+    bool ok = false;
+    const QPointF local = base.inverted(&ok).map(mousePos);
+    if (!ok)
+        return;
+
+    const double halfW = std::max(1.0, bounds.width() / 2.0);
+    const double halfH = std::max(1.0, bounds.height() / 2.0);
+
+    double signX = 0.0;
+    double signY = 0.0;
+    switch (m_activeHandle)
+    {
+    case Handle::TopLeft:
+        signX = -1.0;
+        signY = -1.0;
+        break;
+    case Handle::Top:
+        signY = -1.0;
+        break;
+    case Handle::TopRight:
+        signX = 1.0;
+        signY = -1.0;
+        break;
+    case Handle::Right:
+        signX = 1.0;
+        break;
+    case Handle::BottomRight:
+        signX = 1.0;
+        signY = 1.0;
+        break;
+    case Handle::Bottom:
+        signY = 1.0;
+        break;
+    case Handle::BottomLeft:
+        signX = -1.0;
+        signY = 1.0;
+        break;
+    case Handle::Left:
+        signX = -1.0;
+        break;
+    case Handle::None:
+        return;
+    }
+
+    double newScaleX = m_scaleStartX;
+    double newScaleY = m_scaleStartY;
+    if (signX != 0.0)
+        newScaleX = signX * local.x() / (halfW * s);
+    if (signY != 0.0)
+        newScaleY = signY * local.y() / (halfH * s);
+
+    if (uniform)
+    {
+        const double ratio = (std::abs(m_scaleStartX) > 1e-6)
+                                 ? m_scaleStartY / m_scaleStartX
+                                 : 1.0;
+        if (signX != 0.0 && signY != 0.0)
+        {
+            if (std::abs(newScaleX) >= std::abs(newScaleY))
+                newScaleY = newScaleX * ratio;
+            else
+                newScaleX = newScaleY / ratio;
+        }
+        else if (signX != 0.0)
+        {
+            newScaleY = newScaleX * ratio;
+        }
+        else if (signY != 0.0)
+        {
+            newScaleX = newScaleY / ratio;
+        }
+    }
+
+    emit valueEdited(m_dragEntity, QStringLiteral("scaleX"), newScaleX);
+    emit valueEdited(m_dragEntity, QStringLiteral("scaleY"), newScaleY);
+}
+
 void Viewport::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -403,7 +574,10 @@ void Viewport::paintEvent(QPaintEvent*)
     if (m_selected != kInvalidEntity)
     {
         if (const Entity* entity = m_project->entity(m_selected))
+        {
+            drawHandles(p, *entity);
             drawGizmo(p, *entity);
+        }
     }
 
     // Empty state hint.
@@ -432,6 +606,20 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         return;
 
     setFocus(Qt::MouseFocusReason);
+
+    // Scaling handles take priority over the gizmo axes.
+    const Handle handle = hitHandle(event->position());
+    if (handle != Handle::None)
+    {
+        m_gizmoMode = GizmoMode::Scale;
+        m_activeHandle = handle;
+        m_dragging = true;
+        m_dragEntity = m_selected;
+        m_scaleStartX = m_project->value(m_selected, "scaleX", m_frame);
+        m_scaleStartY = m_project->value(m_selected, "scaleY", m_frame);
+        m_dragLast = event->position();
+        return;
+    }
 
     // The gizmo takes priority over the entity body.
     GizmoMode gizmoMode = GizmoMode::None;
@@ -488,6 +676,12 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
     const double s = viewScale();
 
+    if (m_gizmoMode == GizmoMode::Scale)
+    {
+        applyHandleDrag(event->position(), event->modifiers() & Qt::ControlModifier);
+        return;
+    }
+
     if (m_gizmoMode == GizmoMode::AxisX)
     {
         const double total = (event->position().x() - m_gizmoStartMouse.x()) / s;
@@ -538,6 +732,7 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
         m_dragging = false;
         m_dragEntity = kInvalidEntity;
         m_gizmoMode = GizmoMode::None;
+        m_activeHandle = Handle::None;
     }
 }
 
