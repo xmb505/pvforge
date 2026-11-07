@@ -124,6 +124,29 @@ QString SetEntityFlagCommand::text() const
                                         : QStringLiteral("锁定实体");
 }
 
+RenameEntityCommand::RenameEntityCommand(EntityId id, const QString& oldName,
+                                     const QString& newName)
+    : m_id(id)
+    , m_oldName(oldName)
+    , m_newName(newName)
+{
+}
+
+void RenameEntityCommand::undo(Project& project)
+{
+    project.setEntityName(m_id, m_oldName);
+}
+
+void RenameEntityCommand::redo(Project& project)
+{
+    project.setEntityName(m_id, m_newName);
+}
+
+QString RenameEntityCommand::text() const
+{
+    return QStringLiteral("重命名");
+}
+
 RemoveKeyframesCommand::RemoveKeyframesCommand(const QVector<KeyframeRecord>& records)
     : m_records(records)
 {

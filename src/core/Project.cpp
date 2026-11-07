@@ -179,6 +179,7 @@ Entity* Project::append(Entity e)
 {
     ++m_nextId;
     m_entities.append(std::move(e));
+    modified = true;
     emit changed();
     return &m_entities.last();
 }
@@ -314,6 +315,7 @@ void Project::removeTemplate(int index)
     if (index < 0 || index >= m_templates.size())
         return;
     m_templates.removeAt(index);
+    modified = true;
     emit changed();
 }
 
@@ -333,6 +335,7 @@ int Project::removeEntity(EntityId id)
         return -1;
     const int index = int(it - m_entities.begin());
     m_entities.erase(it);
+    modified = true;
     emit changed();
     return index;
 }
@@ -342,6 +345,17 @@ void Project::insertEntity(const Entity& entity, int index)
     const int position = std::clamp(index, 0, int(m_entities.size()));
     m_entities.insert(position, entity);
     m_nextId = std::max(m_nextId, entity.id + 1);
+    modified = true;
+    emit changed();
+}
+
+void Project::setEntityName(EntityId id, const QString& name)
+{
+    Entity* e = entity(id);
+    if (!e || e->name == name)
+        return;
+    e->name = name;
+    modified = true;
     emit changed();
 }
 
@@ -354,6 +368,7 @@ void Project::setEntityFlag(EntityId id, EntityFlag flag, bool value)
         e->hidden = value;
     else
         e->locked = value;
+    modified = true;
     emit changed();
 }
 
@@ -382,7 +397,8 @@ QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
     }
 
     if (!removed.isEmpty())
-        emit changed();
+        modified = true;
+    emit changed();
     return removed;
 }
 
@@ -392,6 +408,7 @@ void Project::addKeyframe(EntityId id, const QString& property, double frame, do
     if (!e)
         return;
     e->tracks[property].setKey(frame, value);
+    modified = true;
     emit changed();
 }
 
@@ -434,6 +451,7 @@ void Project::setValue(EntityId id, const QString& prop, double frame, double va
         else
             e->values[prop] = value;
     }
+    modified = true;
     emit changed();
 }
 
@@ -541,6 +559,7 @@ bool Project::save(const QString& path, QString* error)
     }
 
     filePath = path;
+    modified = false;
     return true;
 }
 
@@ -690,6 +709,7 @@ bool Project::load(const QString& path, QString* error)
     }
 
     filePath = path;
+    modified = false;
     emit changed();
     return true;
 }

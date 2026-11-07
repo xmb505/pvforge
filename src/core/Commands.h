@@ -76,6 +76,22 @@ private:
     bool m_newValue = false;
 };
 
+// Renaming an entity.
+class RenameEntityCommand : public UndoCommand
+{
+public:
+    RenameEntityCommand(EntityId id, const QString& oldName, const QString& newName);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    QString m_oldName;
+    QString m_newName;
+};
+
 // Deleting keyframes, keeping a copy so they can be restored.
 class RemoveKeyframesCommand : public UndoCommand
 {

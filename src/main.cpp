@@ -19,6 +19,7 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QListWidget>
 #include <QPainter>
@@ -391,6 +392,109 @@ int timelineInteractionTest(QApplication& app)
 
         qInfo() << "timeline-interaction-test: ruler" << rulerFrame << "empty" << emptyFrame
                 << "key" << beforeKey << "->" << afterKey << "failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int renameTest(QApplication& app)
+{
+    const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.png");
+    QImage img(32, 32, QImage::Format_ARGB32);
+    img.fill(Qt::red);
+    if (!img.save(assetPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project, assetPath] {
+        int failures = 0;
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        if (!timeline || !undo)
+        {
+            qCritical() << "rename-test: widgets missing";
+            app.exit(1);
+            return;
+        }
+        auto* renameEdit = timeline->findChild<QLineEdit*>(QStringLiteral("renameEdit"));
+        if (!renameEdit)
+        {
+            qCritical() << "rename-test: rename field missing";
+            app.exit(1);
+            return;
+        }
+
+        if (window.importImageFile(assetPath) == pvf::kInvalidEntity)
+        {
+            qCritical() << "rename-test: import failed";
+            app.exit(1);
+            return;
+        }
+        const pvf::EntityId id = project->entities().first().id;
+        const QString oldName = project->entities().first().name;
+
+        // Double click the name to start renaming.
+        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(20, 40),
+                                QPointF(timeline->mapToGlobal(QPoint(20, 40))), Qt::LeftButton,
+                                Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &doubleClick);
+        if (!renameEdit->isVisible())
+        {
+            qCritical() << "rename-test: rename field not shown";
+            ++failures;
+        }
+
+        renameEdit->setText(QStringLiteral("新名字"));
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(renameEdit, &enter);
+        if (project->entity(id)->name != QStringLiteral("新名字"))
+        {
+            qCritical() << "rename-test: name not applied";
+            ++failures;
+        }
+
+        // Renaming is undoable.
+        undo->trigger();
+        if (project->entity(id)->name != oldName)
+        {
+            qCritical() << "rename-test: undo rename failed";
+            ++failures;
+        }
+
+        // Saving clears the modified flag.
+        const QString projectPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.pvproj");
+        QString error;
+        if (!project->save(projectPath, &error) || project->modified)
+        {
+            qCritical() << "rename-test: modified flag not cleared";
+            ++failures;
+        }
+
+        // Closing a modified project asks before discarding.
+        project->setValue(id, QStringLiteral("x"), 0, 120, true);
+        if (!project->modified)
+        {
+            qCritical() << "rename-test: modified flag not set";
+            ++failures;
+        }
+        QTimer::singleShot(400, [] {
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                box->accept();
+        });
+        window.close();
+        if (window.isVisible())
+        {
+            qCritical() << "rename-test: close prompt did not appear";
+            ++failures;
+        }
+
+        QFile::remove(assetPath);
+        QFile::remove(projectPath);
+        qInfo() << "rename-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -908,6 +1012,8 @@ int main(int argc, char* argv[])
         return deleteTest(app);
     if (app.arguments().contains(QStringLiteral("--undo-test")))
         return undoTest(app);
+    if (app.arguments().contains(QStringLiteral("--rename-test")))
+        return renameTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

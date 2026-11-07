@@ -43,6 +43,7 @@ signals:
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
+    void entityRenamed(EntityId id, const QString& name);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -51,6 +52,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private:
@@ -66,6 +69,7 @@ private:
     QVector<int> visibleEntities() const;
     void updateScrollBar();
     void zoomAt(double factor, int anchorX);
+    void commitRename();
 
     enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
 
@@ -81,6 +85,8 @@ private:
     int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;
+    QLineEdit* m_renameEdit = nullptr;
+    EntityId m_renameEntity = kInvalidEntity;
     QScrollBar* m_hScroll = nullptr;
     int m_scrollX = 0;
     double m_pixelsPerFrame = 6.0;

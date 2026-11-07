@@ -96,6 +96,7 @@ public:
     explicit Project(QObject* parent = nullptr);
 
     QString name = QStringLiteral("未命名项目");
+    bool modified = false;               // unsaved changes
     QString author;
     QString description;
     QString filePath;
@@ -123,6 +124,7 @@ public:
     int removeEntity(EntityId id);
     void insertEntity(const Entity& entity, int index);
     void setEntityFlag(EntityId id, EntityFlag flag, bool value);
+    void setEntityName(EntityId id, const QString& name);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
     const QVector<Entity>& entities() const { return m_entities; }

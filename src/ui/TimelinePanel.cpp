@@ -31,6 +31,12 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         update();
     });
 
+    m_renameEdit = new QLineEdit(this);
+    m_renameEdit->setObjectName(QStringLiteral("renameEdit"));
+    m_renameEdit->hide();
+    m_renameEdit->installEventFilter(this);
+    connect(m_renameEdit, &QLineEdit::editingFinished, this, &TimelinePanel::commitRename);
+
     m_hScroll = new QScrollBar(Qt::Horizontal, this);
     connect(m_hScroll, &QScrollBar::valueChanged, this, [this](int value) {
         m_scrollX = value;
@@ -321,9 +327,12 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         else if (row % 2)
             p.fillRect(rowRect, QColor(31, 31, 36));
 
-        p.setPen(e.hidden ? QColor(120, 120, 130) : QColor(210, 210, 218));
-        p.drawText(QRect(10, top, kNameWidth - 20, kRowHeight),
-                   Qt::AlignVCenter | Qt::AlignLeft, e.name);
+        if (e.id != m_renameEntity)
+        {
+            p.setPen(e.hidden ? QColor(120, 120, 130) : QColor(210, 210, 218));
+            p.drawText(QRect(10, top, kNameWidth - 20, kRowHeight),
+                       Qt::AlignVCenter | Qt::AlignLeft, e.name);
+        }
 
         for (const double keyFrame : keyframeFrames(e.id))
         {
@@ -411,6 +420,60 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     p.setPen(QColor(70, 70, 78));
     p.drawLine(0, bodyBottom - 1, width(), bodyBottom - 1);
+}
+
+void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    const int x = int(event->position().x());
+    const int y = int(event->position().y());
+    if (x >= kNameWidth || y < kHeaderHeight)
+        return;
+
+    const int row = rowAt(y);
+    const EntityId id = entityAtRow(row);
+    const Entity* entity = m_project->entity(id);
+    if (id == kInvalidEntity || !entity)
+        return;
+
+    m_renameEntity = id;
+    m_renameEdit->setText(entity->name);
+    m_renameEdit->setGeometry(6, kHeaderHeight + row * kRowHeight + 2, kNameWidth - 12,
+                              kRowHeight - 4);
+    m_renameEdit->show();
+    m_renameEdit->selectAll();
+    m_renameEdit->setFocus();
+}
+
+bool TimelinePanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_renameEdit && event->type() == QEvent::KeyPress)
+    {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape)
+        {
+            m_renameEdit->hide();
+            m_renameEdit->clearFocus();
+            m_renameEntity = kInvalidEntity;
+            update();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void TimelinePanel::commitRename()
+{
+    if (m_renameEntity == kInvalidEntity)
+        return;
+
+    const EntityId id = m_renameEntity;
+    const QString name = m_renameEdit->text().trimmed();
+    m_renameEntity = kInvalidEntity;
+    m_renameEdit->hide();
+    update();
+
+    if (!name.isEmpty())
+        emit entityRenamed(id, name);
 }
 
 void TimelinePanel::mousePressEvent(QMouseEvent* event)

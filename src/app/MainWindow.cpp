@@ -11,6 +11,7 @@
 #include "ui/WorkbenchPanel.h"
 
 #include <QAction>
+#include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QKeyEvent>
@@ -145,6 +146,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onEntityFlagChanged);
     connect(m_timeline, &TimelinePanel::deleteKeyframesRequested, this,
             &MainWindow::onDeleteKeyframesRequested);
+    connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
     connect(m_history, &History::changed, this, [this] {
         m_undoAction->setEnabled(m_history->canUndo());
         m_redoAction->setEnabled(m_history->canRedo());
@@ -312,30 +314,28 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     QMainWindow::keyPressEvent(event);
 }
 
-void MainWindow::saveProject()
+bool MainWindow::saveProject()
 {
     if (m_project->filePath.isEmpty())
-    {
-        saveProjectAs();
-        return;
-    }
+        return saveProjectAs();
 
     QString error;
     if (!m_project->save(m_project->filePath, &error))
     {
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
-        return;
+        return false;
     }
     statusBar()->showMessage(QStringLiteral("已保存"), 2000);
+    return true;
 }
 
-void MainWindow::saveProjectAs()
+bool MainWindow::saveProjectAs()
 {
     QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("保存项目"), m_project->filePath,
         QStringLiteral("PVForge 工程 (*.pvproj)"));
     if (path.isEmpty())
-        return;
+        return false;
     if (!path.endsWith(QStringLiteral(".pvproj"), Qt::CaseInsensitive))
         path += QStringLiteral(".pvproj");
 
@@ -343,9 +343,41 @@ void MainWindow::saveProjectAs()
     if (!m_project->save(path, &error))
     {
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
-        return;
+        return false;
     }
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
+    return true;
+}
+
+void MainWindow::onEntityRenamed(EntityId id, const QString& name)
+{
+    const Entity* e = m_project->entity(id);
+    if (!e || e->name == name)
+        return;
+    m_history->push(std::make_unique<RenameEntityCommand>(id, e->name, name), *m_project);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (m_project->modified)
+    {
+        const auto answer = QMessageBox::question(
+            this, QStringLiteral("关闭项目"),
+            QStringLiteral("“%1”有未保存的修改，要保存吗？").arg(m_project->name),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+
+        if (answer == QMessageBox::Cancel)
+        {
+            event->ignore();
+            return;
+        }
+        if (answer == QMessageBox::Save && !saveProject())
+        {
+            event->ignore();
+            return;
+        }
+    }
+    event->accept();
 }
 
 EntityId MainWindow::importImageFile(const QString& path)

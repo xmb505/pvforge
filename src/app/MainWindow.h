@@ -7,6 +7,7 @@
 #include <QMainWindow>
 
 class QAction;
+class QCloseEvent;
 class QKeyEvent;
 class QLabel;
 class QScrollArea;
@@ -38,6 +39,7 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void createActions();
@@ -57,8 +59,9 @@ private:
     void onEntityCreated(EntityId id);
     void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void onDeleteKeyframesRequested();
-    void saveProject();
-    void saveProjectAs();
+    bool saveProject();
+    bool saveProjectAs();
+    void onEntityRenamed(EntityId id, const QString& name);
 
     Project* m_project = nullptr;
     History* m_history = nullptr;
