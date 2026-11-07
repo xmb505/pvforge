@@ -29,6 +29,7 @@ public:
 
     void setSnapPixels(int pixels) { m_snapPixels = pixels; }
     QTransform entityTransformForTest(EntityId id) const;
+    QPointF entityPivotForTest(EntityId id) const;
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
     QSize minimumSizeHint() const override { return {480, 270}; }

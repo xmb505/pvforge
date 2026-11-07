@@ -286,6 +286,12 @@ QTransform Viewport::entityTransformForTest(EntityId id) const
     return entity ? entityTransform(*entity) : QTransform();
 }
 
+QPointF Viewport::entityPivotForTest(EntityId id) const
+{
+    const Entity* entity = m_project->entity(id);
+    return entity ? entityPivotScreen(*entity) : QPointF();
+}
+
 QPointF Viewport::entityPivotScreen(const Entity& e) const
 {
     QPointF point = entityScreenCenter(e);
@@ -797,11 +803,15 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             if (entity)
             {
                 const QRectF bounds = entityLocalBounds(*entity);
+                const double scaleX =
+                    std::abs(m_project->value(m_dragEntity, "scaleX", m_frame));
+                const double scaleY =
+                    std::abs(m_project->value(m_dragEntity, "scaleY", m_frame));
                 const double threshold = m_snapPixels / s;
-                px = snapTo(px,
-                            {0.0, -bounds.width() / 2.0, bounds.width() / 2.0}, threshold);
-                py = snapTo(py,
-                            {0.0, -bounds.height() / 2.0, bounds.height() / 2.0}, threshold);
+                const double halfW = bounds.width() / 2.0 * scaleX;
+                const double halfH = bounds.height() / 2.0 * scaleY;
+                px = snapTo(px, {0.0, -halfW, halfW}, threshold);
+                py = snapTo(py, {0.0, -halfH, halfH}, threshold);
             }
         }
         emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
@@ -818,9 +828,11 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             if (entity)
             {
                 const QRectF bounds = entityLocalBounds(*entity);
+                const double scaleX =
+                    std::abs(m_project->value(m_dragEntity, "scaleX", m_frame));
                 const double threshold = m_snapPixels / s;
-                px = snapTo(px,
-                            {0.0, -bounds.width() / 2.0, bounds.width() / 2.0}, threshold);
+                const double halfW = bounds.width() / 2.0 * scaleX;
+                px = snapTo(px, {0.0, -halfW, halfW}, threshold);
             }
         }
         emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
@@ -836,9 +848,11 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             if (entity)
             {
                 const QRectF bounds = entityLocalBounds(*entity);
+                const double scaleY =
+                    std::abs(m_project->value(m_dragEntity, "scaleY", m_frame));
                 const double threshold = m_snapPixels / s;
-                py = snapTo(py,
-                            {0.0, -bounds.height() / 2.0, bounds.height() / 2.0}, threshold);
+                const double halfH = bounds.height() / 2.0 * scaleY;
+                py = snapTo(py, {0.0, -halfH, halfH}, threshold);
             }
         }
         emit valueEdited(m_dragEntity, QStringLiteral("rotPointY"), py);

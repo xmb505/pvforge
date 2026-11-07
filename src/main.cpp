@@ -768,6 +768,17 @@ int pivotGizmoTest(QApplication& app)
             ++failures;
         }
 
+        // The gizmo must sit on the custom pivot, not the entity centre.
+        const QPointF pivotScreen = viewport->entityPivotForTest(id);
+        const QPointF pivotExpected(center.x() + 150.0 * s, center.y());
+        if (std::abs(pivotScreen.x() - pivotExpected.x()) > 2.0
+            || std::abs(pivotScreen.y() - pivotExpected.y()) > 2.0)
+        {
+            qCritical() << "pivot-gizmo-test: gizmo not on pivot" << pivotScreen
+                        << pivotExpected;
+            ++failures;
+        }
+
         // Dragging the pivot dot moves both axes freely.
         project->setValue(id, QStringLiteral("rotPointX"), 0, 0.0, false);
         project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
@@ -782,7 +793,24 @@ int pivotGizmoTest(QApplication& app)
             ++failures;
         }
 
+        // Pivot snapping follows the scaled visual edge.
+        entity->data[QStringLiteral("rotPointCustom")] = true;
+        project->setValue(id, QStringLiteral("scaleX"), 0, 0.5, false);
+        project->setValue(id, QStringLiteral("scaleY"), 0, 0.5, false);
+        project->setValue(id, QStringLiteral("rotPointX"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
+        const int visualEdgeDx = int(std::lround(70.0 * s));
+        drag(center + QPoint(40, 0), center + QPoint(40 + visualEdgeDx, 0));
+        const double snappedPivot = project->value(id, QStringLiteral("rotPointX"), 0);
+        if (std::abs(snappedPivot - 75.0) > 1.5)
+        {
+            qCritical() << "pivot-gizmo-test: visual edge snap" << snappedPivot;
+            ++failures;
+        }
+
         // Disabling the custom pivot returns axis dragging to the entity.
+        project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
+        project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
         entity->data[QStringLiteral("rotPointCustom")] = false;
         project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
         drag(center + QPoint(40, 0), center + QPoint(40 + int(std::lround(50.0 * s)), 0));
