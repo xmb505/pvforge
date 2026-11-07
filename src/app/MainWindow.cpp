@@ -136,6 +136,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     setCentralWidget(central);
 
     m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("statusInfo"));
     statusBar()->addPermanentWidget(m_status);
 
     m_importProgress = new QProgressBar(this);
@@ -354,6 +355,7 @@ void MainWindow::createMenus()
     auto setDisplayFrames = [this](bool frames) {
         Settings::setTimelineDisplayFrames(frames);
         m_timeline->setDisplayFrames(frames);
+        updateStatus();
     };
     connect(secondsAction, &QAction::triggered, this,
             [setDisplayFrames] { setDisplayFrames(false); });
@@ -825,14 +827,23 @@ void MainWindow::updateStatus()
 {
     const int fps = std::max(1, m_project->fps);
     const int length = m_project->timelineLength();
-    m_status->setText(QStringLiteral("帧 %1 / %2 · %3s / %4s · %5 fps · %6×%7")
-                          .arg(m_frame)
-                          .arg(length)
-                          .arg(m_frame / double(fps), 0, 'f', 2)
-                          .arg(length / double(fps), 0, 'f', 2)
-                          .arg(fps)
-                          .arg(m_project->width)
-                          .arg(m_project->height));
+    const QString common = QStringLiteral(" · %1 fps · %2×%3")
+                               .arg(fps)
+                               .arg(m_project->width)
+                               .arg(m_project->height);
+
+    if (Settings::timelineDisplayFrames())
+    {
+        m_status->setText(QStringLiteral("帧 %1 / %2").arg(m_frame).arg(length)
+                          + common);
+    }
+    else
+    {
+        m_status->setText(QStringLiteral("%1s / %2s")
+                              .arg(m_frame / double(fps), 0, 'f', 2)
+                              .arg(length / double(fps), 0, 'f', 2)
+                          + common);
+    }
 }
 
 } // namespace pvf

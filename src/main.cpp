@@ -17,6 +17,7 @@
 #include "ui/WorkbenchPanel.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -25,6 +26,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QJsonDocument>
+#include <QLabel>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMessageBox>
@@ -1013,19 +1015,52 @@ int timelineFrameTest(QApplication& app)
             ++failures;
         }
 
-        // Both ruler label modes render.
-        timeline->setPixelsPerFrameForTest(6.0);
-        timeline->setDisplayFrames(true);
-        if (!timeline->displayFrames())
+        // Both ruler label modes render, and the status bar follows the unit
+        // instead of always mixing frames and seconds.
+        auto* status = window.findChild<QLabel*>(QStringLiteral("statusInfo"));
+        auto* framesAction = window.findChild<QAction*>(QStringLiteral("timelineFramesAction"));
+        auto* secondsAction =
+            window.findChild<QAction*>(QStringLiteral("timelineSecondsAction"));
+        if (!status || !framesAction || !secondsAction)
         {
-            qCritical() << "timeline-frame-test: frame mode not applied";
+            qCritical() << "timeline-frame-test: status label or unit actions missing";
             ++failures;
         }
-        QApplication::processEvents();
-        timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_frames.png"));
-        timeline->setDisplayFrames(false);
-        QApplication::processEvents();
-        timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_seconds.png"));
+        else
+        {
+            window.goToFrame(20);
+            if (!status->text().contains(QStringLiteral("s /"))
+                || status->text().contains(QStringLiteral("帧")))
+            {
+                qCritical() << "timeline-frame-test: seconds status is wrong"
+                            << status->text();
+                ++failures;
+            }
+
+            framesAction->trigger();
+            if (!timeline->displayFrames()
+                || !status->text().contains(QStringLiteral("帧"))
+                || status->text().contains(QStringLiteral("s /")))
+            {
+                qCritical() << "timeline-frame-test: frame mode status is wrong"
+                            << status->text();
+                ++failures;
+            }
+            timeline->setPixelsPerFrameForTest(6.0);
+            QApplication::processEvents();
+            timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_frames.png"));
+
+            secondsAction->trigger();
+            if (timeline->displayFrames()
+                || !status->text().contains(QStringLiteral("s /")))
+            {
+                qCritical() << "timeline-frame-test: seconds mode not restored"
+                            << status->text();
+                ++failures;
+            }
+            QApplication::processEvents();
+            timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_seconds.png"));
+        }
 
         pvf::Settings::setTimelineDisplayFrames(false);
         qInfo() << "timeline-frame-test failures" << failures;
