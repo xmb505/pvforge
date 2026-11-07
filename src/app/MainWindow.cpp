@@ -997,6 +997,9 @@ void MainWindow::applyEntityData(EntityId id, const QVariantMap& data)
     for (auto it = data.constBegin(); it != data.constEnd(); ++it)
         before.insert(it.key(), entity->data.value(it.key()));
 
+    // Apply first: merged history entries skip redo.
+    m_project->setEntityDataMap(id, data);
+
     m_history->push(std::make_unique<SetEntityDataMapCommand>(
                         id, before, data, QStringLiteral("修改属性")),
                     *m_project);

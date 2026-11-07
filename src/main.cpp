@@ -596,6 +596,8 @@ int specialTest(QApplication& app)
                 QApplication::sendEvent(viewport, &event);
             };
             send(QEvent::MouseButtonPress, tip);
+            send(QEvent::MouseMove, tip + QPointF(20, 0));
+            send(QEvent::MouseMove, tip + QPointF(40, 0));
             send(QEvent::MouseMove, tip + QPointF(60, 0));
             send(QEvent::MouseButtonRelease, tip + QPointF(60, 0));
             QApplication::processEvents();
