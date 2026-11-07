@@ -210,5 +210,15 @@ void setAudioScrub(bool on)
     store().setValue(QStringLiteral("editor/audioScrub"), on);
 }
 
+bool hardwareVideoDecode()
+{
+    return store().value(QStringLiteral("media/hardwareVideoDecode"), true).toBool();
+}
+
+void setHardwareVideoDecode(bool on)
+{
+    store().setValue(QStringLiteral("media/hardwareVideoDecode"), on);
+}
+
 } // namespace Settings
 } // namespace pvf

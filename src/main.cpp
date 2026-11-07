@@ -425,6 +425,7 @@ int settingsTest(QApplication& app)
 {
     const int oldSnap = pvf::Settings::snapPixels();
     const bool oldEdgeCentre = pvf::Settings::edgeCenterSnap();
+    const bool oldHardwareDecode = pvf::Settings::hardwareVideoDecode();
     const QString oldLanguage = pvf::Settings::language();
 
     pvf::Settings::setSnapPixels(12);
@@ -434,6 +435,21 @@ int settingsTest(QApplication& app)
         return 1;
     }
     pvf::Settings::setSnapPixels(oldSnap);
+    pvf::Settings::setHardwareVideoDecode(false);
+    if (pvf::Settings::hardwareVideoDecode())
+    {
+        qCritical() << "settings-test: hardware decode setting not persisted";
+        return 1;
+    }
+    pvf::Settings::setHardwareVideoDecode(oldHardwareDecode);
+
+    {
+        pvf::SettingsDialog dialog;
+        dialog.show();
+        QApplication::processEvents();
+        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings.png"));
+        dialog.close();
+    }
     pvf::Settings::setEdgeCenterSnap(true);
     if (!pvf::Settings::edgeCenterSnap())
     {
@@ -3794,6 +3810,10 @@ int workbenchTest(QApplication& app)
 
 int main(int argc, char* argv[])
 {
+    // Qt Multimedia reads this before its FFmpeg plugin initializes.
+    if (!pvf::Settings::hardwareVideoDecode())
+        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", QByteArray(","));
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("PVForge"));
     app.setApplicationDisplayName(QStringLiteral("PVForge"));

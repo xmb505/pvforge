@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -80,6 +81,24 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     editorForm->addRow(m_audioScrub);
     layout->addWidget(editor);
 
+    auto* decode = new QGroupBox(QStringLiteral("解码"), this);
+    auto* decodeForm = new QFormLayout(decode);
+    m_hardwareDecode = new QComboBox(decode);
+    m_hardwareDecode->addItem(QStringLiteral("自动（硬件优先）"), true);
+    m_hardwareDecode->addItem(QStringLiteral("软件解码（兼容性优先）"), false);
+    const int hwIndex =
+        m_hardwareDecode->findData(Settings::hardwareVideoDecode());
+    m_hardwareDecode->setCurrentIndex(hwIndex >= 0 ? hwIndex : 0);
+    decodeForm->addRow(QStringLiteral("视频硬件解码"), m_hardwareDecode);
+    auto* decodeHint = new QLabel(
+        QStringLiteral("作用于 Qt Multimedia 视频播放后端，修改后重启生效。\n"
+                       "软件解码会禁用 VAAPI/VDPAU，避免驱动兼容问题；"
+                       "音频始终使用 FFmpeg 软件解码，当前视频首帧预览也是软件解码。"),
+        decode);
+    decodeHint->setWordWrap(true);
+    decodeForm->addRow(decodeHint);
+    layout->addWidget(decode);
+
     auto* project = new QGroupBox(QStringLiteral("新项目"), this);
     auto* projectForm = new QFormLayout(project);
     m_width = new QSpinBox(project);
@@ -116,6 +135,10 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     layout->addStretch(1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    if (auto* ok = buttons->button(QDialogButtonBox::Ok))
+        ok->setText(QStringLiteral("确定"));
+    if (auto* cancel = buttons->button(QDialogButtonBox::Cancel))
+        cancel->setText(QStringLiteral("取消"));
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &SettingsDialog::reject);
     layout->addWidget(buttons);
@@ -139,6 +162,7 @@ void SettingsDialog::accept()
     Settings::setSnapAngles(angles);
     Settings::setAutoKeyDefault(m_autoKey->isChecked());
     Settings::setAudioScrub(m_audioScrub->isChecked());
+    Settings::setHardwareVideoDecode(m_hardwareDecode->currentData().toBool());
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());
     Settings::setPackAssetsDefault(m_packAssets->isChecked());

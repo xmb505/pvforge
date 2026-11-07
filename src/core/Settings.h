@@ -59,6 +59,9 @@ void setShowCameraFrame(bool on);
 bool audioScrub();
 void setAudioScrub(bool on);
 
+bool hardwareVideoDecode();
+void setHardwareVideoDecode(bool on);
+
 bool packAssetsDefault();
 void setPackAssetsDefault(bool on);
 } // namespace Settings
