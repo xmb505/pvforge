@@ -29,6 +29,7 @@ public:
 
     void setSnapPixels(int pixels) { m_snapPixels = pixels; }
     QTransform entityTransformForTest(EntityId id) const;
+    int gizmoModeForTest() const { return int(m_gizmoMode); }
     QPointF entityPivotForTest(EntityId id) const;
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
