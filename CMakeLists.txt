@@ -17,6 +17,7 @@ add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
     src/media/VideoDecoder.cpp
+    src/app/AppIcon.cpp
     src/app/MainWindow.cpp
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp

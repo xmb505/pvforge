@@ -1,3 +1,4 @@
+#include "app/AppIcon.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
 #include "app/WelcomeWindow.h"
@@ -570,6 +571,7 @@ int main(int argc, char* argv[])
     app.setApplicationName(QStringLiteral("PVForge"));
     app.setApplicationDisplayName(QStringLiteral("PVForge"));
     app.setOrganizationName(QStringLiteral("PVForge"));
+    app.setWindowIcon(pvf::makeCubeIcon());
 
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();

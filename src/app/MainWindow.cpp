@@ -211,6 +211,8 @@ void MainWindow::createMenus()
     auto* viewMenu = menuBar()->addMenu(QStringLiteral("视图"));
     viewMenu->addAction(m_fitAction);
 
+    menuBar()->setFixedHeight(menuBar()->sizeHint().height());
+
     auto* helpMenu = menuBar()->addMenu(QStringLiteral("帮助"));
     helpMenu->addAction(QStringLiteral("关于 PVForge"), this, [this] {
         QMessageBox::about(this, QStringLiteral("关于 PVForge"),
@@ -227,6 +229,7 @@ void MainWindow::createToolBar()
     bar->addAction(m_playAction);
     bar->addSeparator();
     bar->addAction(m_autoKeyAction);
+    bar->setFixedHeight(bar->sizeHint().height());
 }
 
 void MainWindow::toggleWorkbench()

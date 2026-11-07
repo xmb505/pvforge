@@ -1,5 +1,7 @@
 #include "Viewport.h"
 
+#include "app/AppIcon.h"
+
 #include <QFontMetricsF>
 #include <QIcon>
 #include <QMouseEvent>
@@ -12,30 +14,6 @@
 
 namespace pvf {
 
-namespace {
-
-QIcon makeWorkbenchIcon()
-{
-    QPixmap pixmap(64, 64);
-    pixmap.fill(Qt::transparent);
-    QPainter p(&pixmap);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-
-    const QPolygonF top{{32, 8}, {56, 21}, {32, 34}, {8, 21}};
-    const QPolygonF left{{8, 21}, {32, 34}, {32, 58}, {8, 45}};
-    const QPolygonF right{{56, 21}, {32, 34}, {32, 58}, {56, 45}};
-
-    p.setBrush(QColor(255, 205, 100));
-    p.drawPolygon(top);
-    p.setBrush(QColor(225, 165, 65));
-    p.drawPolygon(left);
-    p.setBrush(QColor(185, 125, 45));
-    p.drawPolygon(right);
-    return QIcon(pixmap);
-}
-
-} // namespace
 
 Viewport::Viewport(Project* project, QWidget* parent)
     : QWidget(parent)
@@ -47,7 +25,7 @@ Viewport::Viewport(Project* project, QWidget* parent)
 
     m_workbenchButton = new QToolButton(this);
     m_workbenchButton->setObjectName(QStringLiteral("workbenchButton"));
-    m_workbenchButton->setIcon(makeWorkbenchIcon());
+    m_workbenchButton->setIcon(makeCubeIcon());
     m_workbenchButton->setIconSize(QSize(34, 34));
     m_workbenchButton->setFixedSize(46, 46);
     m_workbenchButton->move(12, 12);
