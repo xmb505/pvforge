@@ -2,16 +2,19 @@
 
 #include "core/Project.h"
 
+#include <QElapsedTimer>
 #include <QPoint>
 #include <QRect>
 #include <QWidget>
 
 class QCloseEvent;
 class QComboBox;
+class QLabel;
 class QMouseEvent;
 class QPaintEvent;
 class QResizeEvent;
 class QShowEvent;
+class QTimer;
 class QToolButton;
 
 namespace pvf {
@@ -59,6 +62,7 @@ private:
     void layoutChildren();
     void rebuildCameraCombo();
     void updateButtons();
+    void updateFpsLabel();
     void toggleQuality();
     void detachWindow();
     void dockWindow();
@@ -71,6 +75,7 @@ private:
     Project* m_project = nullptr;
     Viewport* m_viewport = nullptr;
     QComboBox* m_cameraCombo = nullptr;
+    QLabel* m_fpsLabel = nullptr;
     QToolButton* m_qualityButton = nullptr;
     QToolButton* m_pinButton = nullptr;
     QToolButton* m_detachButton = nullptr;
@@ -79,6 +84,10 @@ private:
     int m_frame = 0;
     bool m_playing = false;
     bool m_highQuality = false;
+    int m_fpsFrames = 0;
+    int m_displayFps = 0;
+    QElapsedTimer m_fpsClock;
+    QTimer* m_fpsTimer = nullptr;
     bool m_detached = false;
     bool m_initialized = false;
     bool m_dragging = false;

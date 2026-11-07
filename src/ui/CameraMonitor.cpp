@@ -9,11 +9,13 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QGuiApplication>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScreen>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QToolButton>
 #include <algorithm>
 #include <cmath>
@@ -35,8 +37,7 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     m_cameraCombo = new QComboBox(this);
     m_cameraCombo->setObjectName(QStringLiteral("monitorCameraCombo"));
     m_cameraCombo->setFocusPolicy(Qt::NoFocus);
-    connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {
-        if (!m_cameraCombo || m_cameraCombo->currentIndex() < 0)
+    connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {        if (!m_cameraCombo || m_cameraCombo->currentIndex() < 0)
             return;
         const int view = m_cameraCombo->currentData().toInt();
         m_project->monitorView = view;
@@ -57,6 +58,28 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     m_qualityButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_qualityButton->setFocusPolicy(Qt::NoFocus);
     connect(m_qualityButton, &QToolButton::clicked, this, &CameraMonitor::toggleQuality);
+
+    m_fpsLabel = new QLabel(this);
+    m_fpsLabel->setObjectName(QStringLiteral("monitorFpsLabel"));
+    m_fpsLabel->setAlignment(Qt::AlignCenter);
+    m_fpsLabel->setToolTip(
+        QStringLiteral("项目帧率；播放时显示监视器实际刷新帧率"));
+    m_fpsLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    QFont fpsFont = m_fpsLabel->font();
+    fpsFont.setPointSizeF(std::max(7.0, fpsFont.pointSizeF() - 1.0));
+    m_fpsLabel->setFont(fpsFont);
+
+    m_fpsTimer = new QTimer(this);
+    m_fpsTimer->setInterval(1000);
+    connect(m_fpsTimer, &QTimer::timeout, this, [this] {
+        if (!m_playing)
+            return;
+        const qint64 elapsed = m_fpsClock.restart();
+        m_displayFps = elapsed > 0 ? int(std::lround(m_fpsFrames * 1000.0 / elapsed))
+                                   : 0;
+        m_fpsFrames = 0;
+        updateFpsLabel();
+    });
 
     m_pinButton = new QToolButton(this);
     m_pinButton->setObjectName(QStringLiteral("monitorPinButton"));
@@ -96,6 +119,7 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
 
     rebuildCameraCombo();
     updateButtons();
+    updateFpsLabel();
     resize(Settings::monitorDockGeometry().size());
 }
 
@@ -111,12 +135,27 @@ void CameraMonitor::setPlaying(bool playing)
     if (m_playing == playing)
         return;
     m_playing = playing;
+    if (m_playing)
+    {
+        m_fpsFrames = 0;
+        m_displayFps = 0;
+        m_fpsClock.restart();
+        m_fpsTimer->start();
+    }
+    else
+    {
+        m_fpsTimer->stop();
+        m_displayFps = 0;
+    }
+    updateFpsLabel();
     update();
 }
 
 void CameraMonitor::setProjectChanged()
 {
     rebuildCameraCombo();
+    if (!m_playing)
+        updateFpsLabel();
     update();
 }
 
@@ -187,6 +226,27 @@ void CameraMonitor::updateButtons()
     m_pinButton->setToolTip(QStringLiteral("独立窗口总在最前"));
 }
 
+void CameraMonitor::updateFpsLabel()
+{
+    if (!m_fpsLabel)
+        return;
+    const int projectFps = std::max(1, m_project->fps);
+    const int shown = m_playing && m_displayFps > 0 ? m_displayFps : projectFps;
+    m_fpsLabel->setText(QStringLiteral("%1 FPS").arg(shown));
+    QPalette pal = m_fpsLabel->palette();
+    QColor color = pal.color(QPalette::PlaceholderText);
+    if (m_playing && m_displayFps > 0 && m_displayFps + 1 < projectFps)
+        color = QColor(235, 110, 80);
+    pal.setColor(QPalette::WindowText, color);
+    m_fpsLabel->setPalette(pal);
+    m_fpsLabel->setToolTip(
+        m_playing && m_displayFps > 0
+            ? QStringLiteral("播放实际：%1 FPS\n项目帧率：%2 fps")
+                  .arg(m_displayFps)
+                  .arg(projectFps)
+            : QStringLiteral("项目帧率：%1 fps").arg(projectFps));
+}
+
 QRect CameraMonitor::titleRect() const
 {
     return QRect(0, 0, width(), kTitleHeight);
@@ -240,6 +300,8 @@ void CameraMonitor::layoutChildren()
     if (m_detached)
         place(m_pinButton, 40);
     place(m_qualityButton, 54);
+    m_fpsLabel->setGeometry(right - 42, 5, 42, 18);
+    right -= 46;
 
     const int comboWidth = std::max(60, right - comboLeft);
     m_cameraCombo->setGeometry(comboLeft, 3, comboWidth, 22);
@@ -247,6 +309,9 @@ void CameraMonitor::layoutChildren()
 
 void CameraMonitor::paintEvent(QPaintEvent*)
 {
+    if (m_playing)
+        ++m_fpsFrames;
+
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 

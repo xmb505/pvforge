@@ -1463,6 +1463,13 @@ int cameraTest(QApplication& app)
             qCritical() << "camera-test: monitor not visible";
             ++failures;
         }
+        auto* fpsLabel = monitor->findChild<QLabel*>(QStringLiteral("monitorFpsLabel"));
+        if (!fpsLabel || !fpsLabel->text().contains(QStringLiteral("FPS")))
+        {
+            qCritical() << "camera-test: monitor fps label missing"
+                        << (fpsLabel ? fpsLabel->text() : QStringLiteral("null"));
+            ++failures;
+        }
         if (viewport->cameraFrameForTest().isEmpty())
         {
             qCritical() << "camera-test: viewfinder frame not drawn";
