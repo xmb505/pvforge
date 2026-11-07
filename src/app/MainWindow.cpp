@@ -4,9 +4,9 @@
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
+#include "ui/WorkbenchPanel.h"
 
 #include <QAction>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenuBar>
@@ -15,6 +15,7 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_tree = new ObjectTreePanel(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
+    m_workbench = new WorkbenchPanel(m_project, m_viewport);
+    m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
+    m_workbench->hide();
 
     m_tree->setMinimumWidth(160);
     m_tree->setMaximumWidth(360);
@@ -70,9 +74,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_tree, &ObjectTreePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
+    connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
     connect(m_project, &Project::changed, this, &MainWindow::refreshAll);
+    connect(m_workbench, &WorkbenchPanel::created, this, [this](EntityId id) {
+        m_tree->rebuild();
+        setSelectedEntity(id);
+    });
 
     createActions();
     createMenus();
@@ -83,10 +92,6 @@ MainWindow::MainWindow(QWidget* parent)
 
 void MainWindow::createActions()
 {
-    m_importAction = new QAction(QStringLiteral("导入图片…"), this);
-    m_importAction->setShortcut(QKeySequence::fromString("Ctrl+I"));
-    connect(m_importAction, &QAction::triggered, this, &MainWindow::importImage);
-
     m_playAction = new QAction(QStringLiteral("播放"), this);
     m_playAction->setShortcut(QKeySequence(Qt::Key_Space));
     m_playAction->setShortcutContext(Qt::ApplicationShortcut);
@@ -127,8 +132,6 @@ void MainWindow::createActions()
 void MainWindow::createMenus()
 {
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("文件"));
-    fileMenu->addAction(m_importAction);
-    fileMenu->addSeparator();
     fileMenu->addAction(m_quitAction);
 
     auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
@@ -145,8 +148,9 @@ void MainWindow::createMenus()
     auto* helpMenu = menuBar()->addMenu(QStringLiteral("帮助"));
     helpMenu->addAction(QStringLiteral("关于 PVForge"), this, [this] {
         QMessageBox::about(this, QStringLiteral("关于 PVForge"),
-                           QStringLiteral("PVForge 0.1\n\n用关键帧把图片动起来的最小版本。\n"
-                                          "Ctrl+I 导入图片，拖动摆位，空格播放。"));
+                           QStringLiteral("PVForge 0.1\n\n点击视口左上角的工作台按钮创建"
+                                          "图片 / 视频 / 文字 / 矢量。\n"
+                                          "拖动摆位，空格播放。"));
     });
 }
 
@@ -154,28 +158,22 @@ void MainWindow::createToolBar()
 {
     auto* bar = addToolBar(QStringLiteral("主工具栏"));
     bar->setMovable(false);
-    bar->addAction(m_importAction);
-    bar->addSeparator();
     bar->addAction(m_playAction);
     bar->addSeparator();
     bar->addAction(m_autoKeyAction);
 }
 
-void MainWindow::importImage()
+void MainWindow::toggleWorkbench()
 {
-    const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("导入图片"), QString(),
-        QStringLiteral("图片 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)"));
-    if (path.isEmpty())
-        return;
-
-    if (importImageFile(path) == kInvalidEntity)
+    if (m_workbench->isVisible())
     {
-        QMessageBox::warning(this, QStringLiteral("导入失败"),
-                             QStringLiteral("无法读取图片：\n%1").arg(path));
+        m_workbench->hidePanel();
         return;
     }
-    statusBar()->showMessage(QStringLiteral("已导入 %1").arg(QFileInfo(path).fileName()), 3000);
+
+    const QPoint anchor =
+        m_viewport->workbenchButton()->geometry().bottomLeft() + QPoint(0, 8);
+    m_workbench->showAt(anchor);
 }
 
 EntityId MainWindow::importImageFile(const QString& path)

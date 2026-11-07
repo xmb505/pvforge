@@ -1,13 +1,20 @@
 #include "app/MainWindow.h"
 #include "core/Project.h"
+#include "media/VideoDecoder.h"
+#include "ui/WorkbenchPanel.h"
 
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFont>
 #include <QImage>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QPainter>
+#include <QPushButton>
 #include <QTimer>
+#include <QToolButton>
 #include <cmath>
 
 namespace {
@@ -177,6 +184,92 @@ int playTest(QApplication& app)
     return app.exec();
 }
 
+int workbenchTest(QApplication& app)
+{
+    QString error;
+    const QImage videoFrame =
+        pvf::decodeVideoFirstFrame(QStringLiteral("/tmp/pvf_test.mp4"), &error);
+    if (videoFrame.isNull())
+    {
+        qCritical() << "workbench-test: video decode failed:" << error;
+        return 1;
+    }
+    qInfo() << "workbench-test: video first frame" << videoFrame.size();
+
+    pvf::MainWindow window;
+    window.resize(1440, 900);
+    window.show();
+
+    auto* project = window.project();
+
+    pvf::Entity* circle = project->addVector(
+        1, 220, 220, QColor(255, 120, 160, 200), QColor(255, 255, 255), 8);
+    project->setValue(circle->id, QStringLiteral("x"), 0, 300, false);
+    project->setValue(circle->id, QStringLiteral("y"), 0, -200, false);
+
+    pvf::Entity* video = project->addVideo(QStringLiteral("/tmp/pvf_test.mp4"), videoFrame);
+    project->setValue(video->id, QStringLiteral("x"), 0, -350, false);
+    project->setValue(video->id, QStringLiteral("y"), 0, -200, false);
+    project->setValue(video->id, QStringLiteral("scaleX"), 0, 0.6, false);
+    project->setValue(video->id, QStringLiteral("scaleY"), 0, 0.6, false);
+
+    auto* button = window.findChild<QToolButton*>(QStringLiteral("workbenchButton"));
+    auto* workbench = window.findChild<pvf::WorkbenchPanel*>();
+    if (!button || !workbench)
+    {
+        qCritical() << "workbench-test: UI objects not found";
+        return 1;
+    }
+    button->click();
+
+    QTimer::singleShot(450, &window, [&app, &window, workbench, button] {
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_workbench.png"));
+
+        auto* types = workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
+        auto* content = workbench->findChild<QLineEdit*>(QStringLiteral("textContent"));
+        auto* create = workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+        if (!types || !content || !create)
+        {
+            qCritical() << "workbench-test: form widgets not found";
+            app.exit(1);
+            return;
+        }
+
+        types->setCurrentRow(2);
+        content->setText(QStringLiteral("工作台创建的文字"));
+        create->click();
+
+        QTimer::singleShot(350, &window, [&app, &window, button, workbench] {
+            window.grab().toImage().save(QStringLiteral("/tmp/pvforge_types.png"));
+            const int count = window.project()->entities().size();
+            qInfo() << "workbench-test: entities after text create =" << count;
+
+            button->click();
+            auto* typeList =
+                workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
+            typeList->setCurrentRow(3);   // vector page
+
+            QTimer::singleShot(300, &window, [&app, &window, workbench, count,
+                                              typeList] {
+                window.grab().toImage().save(
+                    QStringLiteral("/tmp/pvforge_workbench_vector.png"));
+                auto* createButton =
+                    workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+                createButton->click();
+
+                QTimer::singleShot(250, &window, [&app, &window, count] {
+                    window.grab().toImage().save(QStringLiteral("/tmp/pvforge_vector.png"));
+                    const int after = window.project()->entities().size();
+                    qInfo() << "workbench-test: entities after vector create =" << after;
+                    app.exit(after == count + 1 ? 0 : 1);
+                });
+            });
+        });
+    });
+
+    return app.exec();
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -192,6 +285,8 @@ int main(int argc, char* argv[])
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))
         return playTest(app);
+    if (app.arguments().contains(QStringLiteral("--workbench-test")))
+        return workbenchTest(app);
 
     pvf::MainWindow window;
     window.show();

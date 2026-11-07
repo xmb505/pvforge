@@ -1,12 +1,41 @@
 #include "Viewport.h"
 
+#include <QFontMetricsF>
+#include <QIcon>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+QIcon makeWorkbenchIcon()
+{
+    QPixmap pixmap(64, 64);
+    pixmap.fill(Qt::transparent);
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+
+    const QPolygonF top{{32, 8}, {56, 21}, {32, 34}, {8, 21}};
+    const QPolygonF left{{8, 21}, {32, 34}, {32, 58}, {8, 45}};
+    const QPolygonF right{{56, 21}, {32, 34}, {32, 58}, {56, 45}};
+
+    p.setBrush(QColor(255, 205, 100));
+    p.drawPolygon(top);
+    p.setBrush(QColor(225, 165, 65));
+    p.drawPolygon(left);
+    p.setBrush(QColor(185, 125, 45));
+    p.drawPolygon(right);
+    return QIcon(pixmap);
+}
+
+} // namespace
 
 Viewport::Viewport(Project* project, QWidget* parent)
     : QWidget(parent)
@@ -15,6 +44,21 @@ Viewport::Viewport(Project* project, QWidget* parent)
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
+
+    m_workbenchButton = new QToolButton(this);
+    m_workbenchButton->setObjectName(QStringLiteral("workbenchButton"));
+    m_workbenchButton->setIcon(makeWorkbenchIcon());
+    m_workbenchButton->setIconSize(QSize(34, 34));
+    m_workbenchButton->setFixedSize(46, 46);
+    m_workbenchButton->move(12, 12);
+    m_workbenchButton->setToolTip(QStringLiteral("工作台：创建图片 / 视频 / 文字 / 矢量"));
+    m_workbenchButton->setStyleSheet(QStringLiteral(
+        "QToolButton#workbenchButton { background: rgba(40, 40, 48, 210);"
+        " border: 1px solid #5a5a66; }"
+        "QToolButton#workbenchButton:hover { background: rgba(70, 70, 82, 230);"
+        " border-color: #8a8a96; }"
+        "QToolButton#workbenchButton:pressed { background: rgba(30, 30, 36, 230); }"));
+    connect(m_workbenchButton, &QToolButton::clicked, this, &Viewport::workbenchRequested);
 }
 
 void Viewport::setCurrentFrame(int frame)
@@ -65,6 +109,47 @@ QPointF Viewport::screenToCanvas(const QPointF& pos) const
     return QPointF((pos.x() - center.x()) / s, (pos.y() - center.y()) / s);
 }
 
+QRectF Viewport::entityLocalBounds(const Entity& e) const
+{
+    switch (e.type)
+    {
+    case EntityType::Image:
+    case EntityType::Video:
+        if (!e.image.isNull())
+            return QRectF(-e.image.width() / 2.0, -e.image.height() / 2.0,
+                          e.image.width(), e.image.height());
+        return QRectF(-40, -40, 80, 80);
+
+    case EntityType::Text:
+    {
+        QFont font(e.fontFamily());
+        font.setPixelSize(std::max(1, e.fontSize()));
+        const QString text = e.textContent();
+        if (text.isEmpty())
+            return QRectF(-10, -10, 20, 20);
+        const QFontMetricsF metrics(font);
+        const QRectF bounds =
+            metrics.boundingRect(QRectF(0, 0, 4000, 4000), Qt::TextWordWrap, text);
+        if (bounds.width() < 1 || bounds.height() < 1)
+            return QRectF(-10, -10, 20, 20);
+        // A little padding so glyph overhang and word-wrap rounding never clip.
+        const double pad = 6.0;
+        return QRectF(-bounds.width() / 2.0 - pad, -bounds.height() / 2.0 - pad,
+                      bounds.width() + pad * 2.0, bounds.height() + pad * 2.0);
+    }
+
+    case EntityType::Vector:
+    {
+        const double width = std::max(1.0, e.vectorWidth());
+        const double height =
+            e.vectorShape() == 2 ? std::max(4.0, e.strokeWidth())
+                                 : std::max(1.0, e.vectorHeight());
+        return QRectF(-width / 2.0, -height / 2.0, width, height);
+    }
+    }
+    return QRectF();
+}
+
 const Entity* Viewport::hitTest(const QPointF& pos) const
 {
     const QRectF canvas = canvasRect();
@@ -75,7 +160,8 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
     for (int i = entities.size() - 1; i >= 0; --i)
     {
         const Entity& e = entities[i];
-        if (e.type != EntityType::Image || e.image.isNull())
+        const QRectF bounds = entityLocalBounds(e);
+        if (bounds.isEmpty())
             continue;
 
         const double x = m_project->value(e.id, "x", m_frame);
@@ -89,7 +175,7 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
         QTransform t;
         t.translate(canvas.center().x() + x * s, canvas.center().y() + y * s);
         t.rotate(rot);
-        t.scale(sx, sy);
+        t.scale(sx * s, sy * s);
 
         bool ok = false;
         const QTransform inv = t.inverted(&ok);
@@ -97,12 +183,115 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
             continue;
 
         const QPointF local = inv.map(pos);
-        const double halfW = e.image.width() * s / 2.0;
-        const double halfH = e.image.height() * s / 2.0;
-        if (std::abs(local.x()) <= halfW && std::abs(local.y()) <= halfH)
+        if (bounds.contains(local))
             return &e;
     }
     return nullptr;
+}
+
+void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, double s)
+{
+    const double x = m_project->value(e.id, "x", m_frame);
+    const double y = m_project->value(e.id, "y", m_frame);
+    const double rot = m_project->value(e.id, "rotation", m_frame);
+    const double sx = m_project->value(e.id, "scaleX", m_frame);
+    const double sy = m_project->value(e.id, "scaleY", m_frame);
+    const double opacity = std::clamp(m_project->value(e.id, "opacity", m_frame), 0.0, 1.0);
+    if (opacity <= 0.0 || std::abs(sx) < 1e-9 || std::abs(sy) < 1e-9)
+        return;
+
+    const QRectF bounds = entityLocalBounds(e);
+    if (bounds.isEmpty())
+        return;
+
+    const QPointF center = canvas.center() + QPointF(x * s, y * s);
+    const QRectF dest(bounds.x() * s, bounds.y() * s, bounds.width() * s,
+                      bounds.height() * s);
+
+    p.save();
+    p.setOpacity(opacity);
+    p.translate(center);
+    p.rotate(rot);
+    p.scale(sx, sy);
+
+    switch (e.type)
+    {
+    case EntityType::Image:
+    case EntityType::Video:
+        if (!e.image.isNull())
+        {
+            p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            p.drawImage(dest, e.image);
+        }
+        break;
+
+    case EntityType::Text:
+    {
+        QFont font(e.fontFamily());
+        font.setPixelSize(std::max(1, int(std::lround(e.fontSize() * s))));
+        p.setFont(font);
+        p.setPen(e.textColor());
+        p.drawText(dest, e.textAlign() | Qt::TextWordWrap, e.textContent());
+        break;
+    }
+
+    case EntityType::Vector:
+    {
+        const double w = e.vectorWidth() * s;
+        const double h = e.vectorHeight() * s;
+        const double stroke = e.strokeWidth() * s;
+
+        QBrush brush(e.fillColor());
+        if (e.fillColor().alpha() == 0)
+            brush = Qt::NoBrush;
+        p.setBrush(brush);
+
+        if (e.vectorShape() == 2)
+        {
+            QPen pen(e.strokeColor().alpha() > 0 ? e.strokeColor() : e.fillColor());
+            pen.setWidthF(std::max(1.0, stroke));
+            pen.setCapStyle(Qt::RoundCap);
+            p.setPen(pen);
+            p.drawLine(QPointF(-w / 2.0, 0), QPointF(w / 2.0, 0));
+        }
+        else
+        {
+            if (stroke > 0)
+            {
+                QPen pen(e.strokeColor());
+                pen.setWidthF(stroke);
+                p.setPen(pen);
+            }
+            else
+            {
+                p.setPen(Qt::NoPen);
+            }
+            const QRectF rect(-w / 2.0, -h / 2.0, w, h);
+            if (e.vectorShape() == 1)
+                p.drawEllipse(rect);
+            else
+                p.drawRect(rect);
+        }
+        break;
+    }
+    }
+
+    p.restore();
+
+    if (e.id == m_selected)
+    {
+        p.save();
+        p.translate(center);
+        p.rotate(rot);
+        p.scale(sx, sy);
+        QPen pen(QColor(77, 163, 255));
+        pen.setCosmetic(true);
+        pen.setWidthF(1.5);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(dest);
+        p.restore();
+    }
 }
 
 void Viewport::paintEvent(QPaintEvent*)
@@ -121,51 +310,13 @@ void Viewport::paintEvent(QPaintEvent*)
 
     // Center guides.
     p.setPen(QPen(QColor(255, 255, 255, 18), 1, Qt::DashLine));
-    p.drawLine(QPointF(canvas.center().x(), canvas.top()), QPointF(canvas.center().x(), canvas.bottom()));
-    p.drawLine(QPointF(canvas.left(), canvas.center().y()), QPointF(canvas.right(), canvas.center().y()));
+    p.drawLine(QPointF(canvas.center().x(), canvas.top()),
+               QPointF(canvas.center().x(), canvas.bottom()));
+    p.drawLine(QPointF(canvas.left(), canvas.center().y()),
+               QPointF(canvas.right(), canvas.center().y()));
 
     for (const Entity& e : m_project->entities())
-    {
-        if (e.type != EntityType::Image || e.image.isNull())
-            continue;
-
-        const double x = m_project->value(e.id, "x", m_frame);
-        const double y = m_project->value(e.id, "y", m_frame);
-        const double rot = m_project->value(e.id, "rotation", m_frame);
-        const double sx = m_project->value(e.id, "scaleX", m_frame);
-        const double sy = m_project->value(e.id, "scaleY", m_frame);
-        const double opacity = std::clamp(m_project->value(e.id, "opacity", m_frame), 0.0, 1.0);
-        if (opacity <= 0.0 || std::abs(sx) < 1e-9 || std::abs(sy) < 1e-9)
-            continue;
-
-        const QPointF center = canvas.center() + QPointF(x * s, y * s);
-        const QRectF dest(-e.image.width() * s / 2.0, -e.image.height() * s / 2.0,
-                          e.image.width() * s, e.image.height() * s);
-
-        p.save();
-        p.setOpacity(opacity);
-        p.translate(center);
-        p.rotate(rot);
-        p.scale(sx, sy);
-        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        p.drawImage(dest, e.image);
-        p.restore();
-
-        if (e.id == m_selected)
-        {
-            p.save();
-            p.translate(center);
-            p.rotate(rot);
-            p.scale(sx, sy);
-            QPen pen(QColor(77, 163, 255));
-            pen.setCosmetic(true);
-            pen.setWidthF(1.5);
-            p.setPen(pen);
-            p.setBrush(Qt::NoBrush);
-            p.drawRect(dest);
-            p.restore();
-        }
-    }
+        drawEntity(p, e, canvas, s);
 
     // Empty state hint.
     if (m_project->entities().isEmpty())
@@ -175,7 +326,7 @@ void Viewport::paintEvent(QPaintEvent*)
         f.setPointSize(12);
         p.setFont(f);
         p.drawText(rect(), Qt::AlignCenter,
-                   QStringLiteral("按 Ctrl+I 导入图片\n拖动图片摆位，属性修改会自动打关键帧"));
+                   QStringLiteral("点击左上角工作台按钮\n创建图片 / 视频 / 文字 / 矢量"));
     }
 }
 

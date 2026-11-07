@@ -15,6 +15,7 @@ class ObjectTreePanel;
 class PropertiesPanel;
 class TimelinePanel;
 class Viewport;
+class WorkbenchPanel;
 
 class MainWindow : public QMainWindow
 {
@@ -34,25 +35,25 @@ private:
     void createMenus();
     void createToolBar();
 
-    void importImage();
     void setFrame(int frame);
     void setSelectedEntity(EntityId id);
     void applyValue(EntityId id, const QString& prop, double value);
     void refreshAll();
     void onPlayTick();
     void updateStatus();
+    void toggleWorkbench();
 
     Project* m_project = nullptr;
     Viewport* m_viewport = nullptr;
     ObjectTreePanel* m_tree = nullptr;
     PropertiesPanel* m_props = nullptr;
     TimelinePanel* m_timeline = nullptr;
+    WorkbenchPanel* m_workbench = nullptr;
 
     QTimer* m_playTimer = nullptr;
     QElapsedTimer m_playClock;
     QLabel* m_status = nullptr;
 
-    QAction* m_importAction = nullptr;
     QAction* m_playAction = nullptr;
     QAction* m_autoKeyAction = nullptr;
     QAction* m_homeAction = nullptr;
