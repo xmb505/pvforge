@@ -2,6 +2,7 @@
 
 #include "media/VideoDecoder.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -52,6 +53,77 @@ bool isColorKey(const QString& key)
 }
 
 } // namespace
+
+QString Project::assetDirectory() const
+{
+    if (filePath.isEmpty())
+        return QString();
+    return QDir(QFileInfo(filePath).absolutePath()).filePath(QStringLiteral("assets"));
+}
+
+QString Project::resolveAssetPath(const QString& stored) const
+{
+    if (stored.isEmpty())
+        return stored;
+    if (QFileInfo(stored).isAbsolute())
+        return stored;
+    if (filePath.isEmpty())
+        return stored;
+    return QDir(QFileInfo(filePath).absolutePath()).absoluteFilePath(stored);
+}
+
+QString Project::storeAssetPath(const QString& absolute) const
+{
+    if (absolute.isEmpty() || filePath.isEmpty())
+        return absolute;
+    const QString relative =
+        QDir(QFileInfo(filePath).absolutePath()).relativeFilePath(absolute);
+    if (relative.startsWith(QStringLiteral("..")))
+        return absolute;   // outside the project folder, keep it absolute
+    return relative;
+}
+
+QString Project::copyIntoProject(const QString& sourcePath) const
+{
+    if (sourcePath.isEmpty())
+        return sourcePath;
+
+    const QString directory = assetDirectory();
+    if (directory.isEmpty())
+        return sourcePath;
+
+    QDir().mkpath(directory);
+
+    const QFileInfo info(sourcePath);
+    QString target = QDir(directory).filePath(info.fileName());
+    int index = 1;
+    while (QFile::exists(target))
+    {
+        const QString candidate = QDir(directory).filePath(
+            QStringLiteral("%1_%2.%3").arg(info.completeBaseName()).arg(index++).arg(info.suffix()));
+        if (QFileInfo(candidate).absoluteFilePath() == info.absoluteFilePath())
+            return candidate;   // already inside the project folder
+        target = candidate;
+    }
+
+    if (!QFile::copy(sourcePath, target))
+        return sourcePath;
+    return target;
+}
+
+QString Project::importAsset(const QString& sourcePath) const
+{
+    if (!packAssets)
+        return sourcePath;
+    return copyIntoProject(sourcePath);
+}
+
+Template* Project::templateAt(int index)
+{
+    if (index < 0 || index >= int(m_templates.size()))
+        return nullptr;
+    return &m_templates[index];
+}
 
 int Project::timelineLength() const
 {
@@ -478,7 +550,7 @@ QJsonObject Project::toJson() const
         entity[QStringLiteral("hidden")] = e.hidden;
         entity[QStringLiteral("locked")] = e.locked;
         entity[QStringLiteral("name")] = e.name;
-        entity[QStringLiteral("sourcePath")] = e.sourcePath;
+        entity[QStringLiteral("sourcePath")] = storeAssetPath(e.sourcePath);
 
         QJsonObject data;
         for (auto it = e.data.constBegin(); it != e.data.constEnd(); ++it)
@@ -521,7 +593,7 @@ QJsonObject Project::toJson() const
         object[QStringLiteral("id")] = t.id;
         object[QStringLiteral("type")] = typeToString(t.type);
         object[QStringLiteral("name")] = t.name;
-        object[QStringLiteral("path")] = t.path;
+        object[QStringLiteral("path")] = storeAssetPath(t.path);
         object[QStringLiteral("duration")] = t.duration;
 
         QJsonObject data;
@@ -582,6 +654,9 @@ bool Project::load(const QString& path, QString* error)
         return false;
     }
 
+    // Set the project path first so relative asset paths can be resolved.
+    filePath = path;
+
     const QJsonObject root = document.object();
     if (root.value(QStringLiteral("format")).toString() != QLatin1String("pvforge"))
     {
@@ -614,7 +689,7 @@ bool Project::load(const QString& path, QString* error)
         e.hidden = object.value(QStringLiteral("hidden")).toBool();
         e.locked = object.value(QStringLiteral("locked")).toBool();
         e.name = object.value(QStringLiteral("name")).toString();
-        e.sourcePath = object.value(QStringLiteral("sourcePath")).toString();
+        e.sourcePath = resolveAssetPath(object.value(QStringLiteral("sourcePath")).toString());
 
         const QJsonObject data = object.value(QStringLiteral("data")).toObject();
         for (auto it = data.constBegin(); it != data.constEnd(); ++it)
@@ -674,7 +749,7 @@ bool Project::load(const QString& path, QString* error)
             tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         tmpl.type = typeFromString(object.value(QStringLiteral("type")).toString());
         tmpl.name = object.value(QStringLiteral("name")).toString();
-        tmpl.path = object.value(QStringLiteral("path")).toString();
+        tmpl.path = resolveAssetPath(object.value(QStringLiteral("path")).toString());
         tmpl.duration = object.value(QStringLiteral("duration")).toDouble();
 
         const QJsonObject data = object.value(QStringLiteral("data")).toObject();

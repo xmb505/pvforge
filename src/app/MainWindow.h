@@ -62,6 +62,7 @@ private:
     bool saveProject();
     bool saveProjectAs();
     void onEntityRenamed(EntityId id, const QString& name);
+    void packAllAssets();
 
     Project* m_project = nullptr;
     History* m_history = nullptr;
@@ -82,6 +83,7 @@ private:
 
     QAction* m_playAction = nullptr;
     QAction* m_autoKeyAction = nullptr;
+    QAction* m_packAssetsAction = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
     QAction* m_saveAction = nullptr;

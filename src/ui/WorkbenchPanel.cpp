@@ -385,11 +385,13 @@ void WorkbenchPanel::pickImage()
         return;
     }
 
-    m_imagePath = path;
+    // With packing enabled the file is copied into the project folder.
+    const QString imported = m_project->importAsset(path);
+    m_imagePath = imported;
     m_imagePreview->setPixmap(QPixmap::fromImage(image.scaled(
         300, 205, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
     m_imageInfo->setText(QStringLiteral("%1 · %2×%3")
-                             .arg(QFileInfo(path).fileName())
+                             .arg(QFileInfo(imported).fileName())
                              .arg(image.width())
                              .arg(image.height()));
     updateCreateState();
@@ -415,13 +417,14 @@ void WorkbenchPanel::pickVideo()
         return;
     }
 
-    m_videoPath = path;
+    const QString imported = m_project->importAsset(path);
+    m_videoPath = imported;
     m_videoFrame = frame;
     m_videoDuration = duration;
     m_videoPreview->setPixmap(QPixmap::fromImage(frame.scaled(
         300, 205, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
     m_videoInfo->setText(QStringLiteral("%1 · %2×%3 · 首帧")
-                             .arg(QFileInfo(path).fileName())
+                             .arg(QFileInfo(imported).fileName())
                              .arg(frame.width())
                              .arg(frame.height()));
     updateCreateState();

@@ -12,6 +12,7 @@
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QKeyEvent>
@@ -24,6 +25,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -236,6 +238,34 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(m_quitAction);
 
+    auto* assetMenu = menuBar()->addMenu(QStringLiteral("素材"));
+    m_packAssetsAction = new QAction(QStringLiteral("全部打包到项目"), this);
+    m_packAssetsAction->setCheckable(true);
+    m_packAssetsAction->setChecked(m_project->packAssets);
+    m_packAssetsAction->setToolTip(
+        QStringLiteral("开启后，新导入的图片和视频会自动复制进工程文件夹"));
+    connect(m_packAssetsAction, &QAction::toggled, this, [this](bool on) {
+        m_project->packAssets = on;
+        if (!on)
+        {
+            statusBar()->showMessage(QStringLiteral("已关闭自动打包"), 2000);
+            return;
+        }
+        statusBar()->showMessage(
+            m_project->filePath.isEmpty()
+                ? QStringLiteral("已开启：请先保存工程，素材才会复制进工程目录")
+                : QStringLiteral("已开启：新导入的素材会自动复制进工程目录"),
+            4000);
+    });
+    assetMenu->addAction(m_packAssetsAction);
+    assetMenu->addAction(QStringLiteral("立即打包所有素材"), this, &MainWindow::packAllAssets);
+    assetMenu->addAction(QStringLiteral("打开工程文件夹"), this, [this] {
+        if (m_project->filePath.isEmpty())
+            return;
+        QDesktopServices::openUrl(
+            QUrl::fromLocalFile(QFileInfo(m_project->filePath).absolutePath()));
+    });
+
     auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
     editMenu->addAction(m_undoAction);
     editMenu->addAction(m_redoAction);
@@ -347,6 +377,46 @@ bool MainWindow::saveProjectAs()
     }
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
     return true;
+}
+
+void MainWindow::packAllAssets()
+{
+    if (m_project->filePath.isEmpty())
+    {
+        QMessageBox::information(this, QStringLiteral("素材"),
+                                 QStringLiteral("请先保存工程，再打包素材。"));
+        return;
+    }
+
+    int packed = 0;
+    for (Entity& entity : m_project->mutableEntities())
+    {
+        if (entity.sourcePath.isEmpty())
+            continue;
+        const QString target = m_project->copyIntoProject(entity.sourcePath);
+        if (target != entity.sourcePath)
+        {
+            entity.sourcePath = target;
+            ++packed;
+        }
+    }
+
+    for (int i = 0; i < m_project->templateCount(); ++i)
+    {
+        Template* tmpl = m_project->templateAt(i);
+        if (!tmpl || tmpl->path.isEmpty())
+            continue;
+        const QString target = m_project->copyIntoProject(tmpl->path);
+        if (target != tmpl->path)
+        {
+            tmpl->path = target;
+            ++packed;
+        }
+    }
+
+    m_project->notifyChanged();
+    saveProject();
+    statusBar()->showMessage(QStringLiteral("已把 %1 个素材打包进工程目录").arg(packed), 3000);
 }
 
 void MainWindow::onEntityRenamed(EntityId id, const QString& name)

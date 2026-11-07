@@ -97,6 +97,7 @@ public:
 
     QString name = QStringLiteral("未命名项目");
     bool modified = false;               // unsaved changes
+    bool packAssets = false;             // copy imported media into the project folder
     QString author;
     QString description;
     QString filePath;
@@ -128,15 +129,25 @@ public:
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
     const QVector<Entity>& entities() const { return m_entities; }
+    QVector<Entity>& mutableEntities() { return m_entities; }
     EntityId nextId() const { return m_nextId; }
 
     const QVector<Template>& templates() const { return m_templates; }
+    Template* templateAt(int index);
+    int templateCount() const { return int(m_templates.size()); }
     Template* addTemplate(const Entity& entity);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);
 
     double value(EntityId id, const QString& prop, double frame) const;
     void setValue(EntityId id, const QString& prop, double frame, double value, bool keyframe);
+
+    // Asset packaging, following Blender's pack resources workflow.
+    QString assetDirectory() const;
+    QString resolveAssetPath(const QString& stored) const;
+    QString storeAssetPath(const QString& absolute) const;
+    QString copyIntoProject(const QString& sourcePath) const;
+    QString importAsset(const QString& sourcePath) const;
 
     bool save(const QString& path, QString* error = nullptr);
     bool load(const QString& path, QString* error = nullptr);

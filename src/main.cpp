@@ -19,6 +19,9 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QListWidget>
@@ -395,6 +398,97 @@ int timelineInteractionTest(QApplication& app)
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
+}
+
+int packTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    const QString external = QDir::tempPath() + QStringLiteral("/pvforge_external.png");
+    QImage img(32, 32, QImage::Format_ARGB32);
+    img.fill(Qt::green);
+    if (!img.save(external))
+        return 1;
+
+    const QString projectDir = QDir::tempPath() + QStringLiteral("/pvforge_pack_project");
+    QDir().mkpath(projectDir);
+    const QString projectPath = QDir(projectDir).filePath(QStringLiteral("test.pvproj"));
+
+    pvf::Project project;
+    QString error;
+    if (!project.save(projectPath, &error))
+        return 1;
+
+    int failures = 0;
+
+    // Packing is off by default.
+    if (project.packAssets)
+    {
+        qCritical() << "pack-test: packing should be off by default";
+        ++failures;
+    }
+
+    // With packing off the original path is kept.
+    if (project.importAsset(external) != external)
+    {
+        qCritical() << "pack-test: import copied while packing is off";
+        ++failures;
+    }
+
+    // With packing on the file is copied into the project folder.
+    project.packAssets = true;
+    const QString packed = project.importAsset(external);
+    if (packed == external || !QFile::exists(packed)
+        || !packed.startsWith(project.assetDirectory()))
+    {
+        qCritical() << "pack-test: import not packed" << packed;
+        ++failures;
+    }
+
+    // Saving stores the path relative to the project file.
+    project.addImage(packed);
+    if (!project.save(projectPath, &error))
+        return 1;
+
+    QFile file(projectPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return 1;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    const QString stored = document.object()
+                               .value(QStringLiteral("entities"))
+                               .toArray()
+                               .first()
+                               .toObject()
+                               .value(QStringLiteral("sourcePath"))
+                               .toString();
+    if (QFileInfo(stored).isAbsolute() || !stored.startsWith(QStringLiteral("assets")))
+    {
+        qCritical() << "pack-test: path not stored relative" << stored;
+        ++failures;
+    }
+
+    // Loading resolves it back to an absolute path.
+    pvf::Project loaded;
+    if (!loaded.load(projectPath, &error))
+    {
+        qCritical() << "pack-test: load failed" << error;
+        ++failures;
+    }
+    else if (loaded.entities().isEmpty()
+             || loaded.entities().first().sourcePath != packed)
+    {
+        qCritical() << "pack-test: path not resolved";
+        ++failures;
+    }
+    else if (loaded.entities().first().image.isNull())
+    {
+        qCritical() << "pack-test: packed image not reloaded";
+        ++failures;
+    }
+
+    QDir(projectDir).removeRecursively();
+    QFile::remove(external);
+    qInfo() << "pack-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int renameTest(QApplication& app)
@@ -1014,6 +1108,8 @@ int main(int argc, char* argv[])
         return undoTest(app);
     if (app.arguments().contains(QStringLiteral("--rename-test")))
         return renameTest(app);
+    if (app.arguments().contains(QStringLiteral("--pack-test")))
+        return packTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))
