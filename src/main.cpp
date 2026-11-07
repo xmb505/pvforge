@@ -362,6 +362,20 @@ int timelineInteractionTest(QApplication& app)
                         << afterKey;
             ++failures;
         }
+        if (timeline->selectedKeyframeCount() != 1)
+        {
+            qCritical() << "timeline-interaction-test: keyframe not selected";
+            ++failures;
+        }
+
+        // Clicking empty space clears the keyframe selection.
+        send(QEvent::MouseButtonPress, QPoint(300, 40), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(300, 40), Qt::LeftButton, Qt::NoButton);
+        if (timeline->selectedKeyframeCount() != 0)
+        {
+            qCritical() << "timeline-interaction-test: selection not cleared";
+            ++failures;
+        }
 
         // Dragging rubber-bands instead of scrubbing.
         send(QEvent::MouseButtonPress, QPoint(250, 40), Qt::LeftButton, Qt::LeftButton);

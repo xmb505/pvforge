@@ -3,6 +3,7 @@
 #include "app/AppIcon.h"
 
 #include <QLineEdit>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -452,12 +453,14 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         }
     }
 
-    // Name column: select the entity row.
+    // Name column: select the entity row and drop keyframe selection.
     if (x < kNameWidth)
     {
+        m_selectedKeyframes.clear();
         const EntityId id = entityAtRow(rowAt(y));
         if (id != kInvalidEntity)
             emit entitySelected(id);
+        update();
         return;
     }
 
@@ -533,6 +536,18 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
     }
 }
 
+void TimelinePanel::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Escape && !m_selectedKeyframes.isEmpty())
+    {
+        m_selectedKeyframes.clear();
+        update();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
 void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
@@ -540,6 +555,8 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 
     if (m_dragMode == DragMode::PendingSelect)
     {
+        // Mine-imator deselects everything on a plain click.
+        m_selectedKeyframes.clear();
         emit frameRequested(m_pressFrame);
         if (m_pressEntity != kInvalidEntity)
             emit entitySelected(m_pressEntity);
