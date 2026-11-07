@@ -140,7 +140,7 @@
 - 右侧页签：项目属性（项目设置/环境设置/素材库）、实体属性页签（按需出现）
 - 面板内容可折叠、可滚动
 - 时间轴和视口配色跟随系统主题，图标优先用桌面图标主题；缓动缩略图和贝塞尔图表用 QPalette 自绘，暗色已验证
-- 设置页：语言、吸附距离、边缘中点吸附、旋转吸附角、自动关键帧默认、音频擦洗、视频硬件解码（自动/软件，重启生效）、新项目默认值、时间轴缩放、素材打包默认
+- 设置页：qBittorrent 式左侧分类 + 右侧内容页（常规、编辑器、新项目、时间轴、素材、解码、关于）；关于页显示系统/CPU/内存/显卡/显示器/Qt/FFmpeg 与当前解码路径，可一键复制；帮助菜单的「关于 PVForge」也打开该页
 - 语言文件 `assets/lang/zh_CN.json` / `en_US.json`（核心界面）
 
 ## 架构
@@ -150,13 +150,13 @@ src/
 ├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
-├─ media/    VideoDecoder（FFmpeg 首帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter
+├─ media/    VideoDecoder（FFmpeg 首帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
 ├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
 │            CameraMonitor、EasingPicker、BezierEditorDialog、CollapsibleSection
-└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、AppIcon
+└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、SystemInfo、AppIcon
 ```
 
 关键设计：
@@ -168,7 +168,7 @@ src/
 - **命令历史**：复合命令 + 合并，一次拖动一条撤销
 - **缓动归属目标关键帧**：设置到达 1s 的曲线，就改 0s → 1s 这一段；和 Mine-imator 的“出发段”模型相反，目的是符合“到这个姿势”的直觉
 - **异步导入**：重活在工作线程，主线程入库
-- **解码策略**：Qt Multimedia 默认自动尝试 VAAPI/VDPAU；设置可强制软件解码（启动前设置 `QT_FFMPEG_DECODING_HW_DEVICE_TYPES` 为空），音频始终软件
+- **解码策略**：当前视频首帧和音频全部走 FFmpeg 软件解码；启动时禁用 Qt Multimedia 硬件视频后端，避免 VDPAU/VAAPI 探测；视频播放接入后再做真正的硬件解码设置
 - **音频主时钟**：有音频时播放头跟随 `QAudioSink` 实际播放位置；无音频才用计时器
 - **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
 

@@ -25,11 +25,13 @@ add_executable(pvforge
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/media/AudioDecoder.cpp
+    src/media/DecoderInfo.cpp
     src/media/MediaImporter.cpp
     src/audio/AudioEngine.cpp
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
     src/app/AppIcon.cpp
+    src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
     src/app/MainWindow.cpp
     src/app/WelcomeWindow.cpp
@@ -54,6 +56,11 @@ qt_add_resources(pvforge "lang"
     FILES
         assets/lang/zh_CN.json
         assets/lang/en_US.json
+)
+
+target_compile_definitions(pvforge PRIVATE
+    PVFORGE_VERSION="${PROJECT_VERSION}"
+    PVFORGE_BUILD_TYPE="$<CONFIG>"
 )
 
 target_include_directories(pvforge PRIVATE src)

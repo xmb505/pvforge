@@ -445,10 +445,9 @@ void MainWindow::createMenus()
 
     auto* helpMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.help"), QStringLiteral("帮助")));
     helpMenu->addAction(Lang::t(QStringLiteral("action.about"), QStringLiteral("关于 PVForge")), this, [this] {
-        QMessageBox::about(this, Lang::t(QStringLiteral("action.about"), QStringLiteral("关于 PVForge")),
-                           QStringLiteral("PVForge 0.1\n\n点击视口左上角的工作台按钮创建"
-                                          "图片 / 视频 / 文字 / 矢量。\n"
-                                          "拖动摆位，空格播放。"));
+        SettingsDialog dialog(this);
+        dialog.showAboutPage();
+        dialog.exec();
     });
 }
 

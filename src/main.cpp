@@ -6,11 +6,13 @@
 #include "core/Settings.h"
 #include "media/MediaImporter.h"
 #include "media/AudioDecoder.h"
+#include "media/DecoderInfo.h"
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
 #include "app/SettingsDialog.h"
+#include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
@@ -43,6 +45,7 @@
 #include <QListWidget>
 #include <QPainter>
 #include <QPalette>
+#include <QPlainTextEdit>
 #include <QEventLoop>
 #include <QProgressBar>
 #include <QPushButton>
@@ -425,7 +428,6 @@ int settingsTest(QApplication& app)
 {
     const int oldSnap = pvf::Settings::snapPixels();
     const bool oldEdgeCentre = pvf::Settings::edgeCenterSnap();
-    const bool oldHardwareDecode = pvf::Settings::hardwareVideoDecode();
     const QString oldLanguage = pvf::Settings::language();
 
     pvf::Settings::setSnapPixels(12);
@@ -435,19 +437,60 @@ int settingsTest(QApplication& app)
         return 1;
     }
     pvf::Settings::setSnapPixels(oldSnap);
-    pvf::Settings::setHardwareVideoDecode(false);
-    if (pvf::Settings::hardwareVideoDecode())
+
+    const pvf::DecoderInfo decoder = pvf::decoderInfo();
+    if (decoder.ffmpegVersion.isEmpty() || decoder.video.isEmpty()
+        || decoder.audioOutput.isEmpty())
     {
-        qCritical() << "settings-test: hardware decode setting not persisted";
+        qCritical() << "settings-test: decoder info incomplete";
         return 1;
     }
-    pvf::Settings::setHardwareVideoDecode(oldHardwareDecode);
+
+    const pvf::SystemInfo system = pvf::collectSystemInfo();
+    if (system.cpuModel.isEmpty() || system.cpuModel == QStringLiteral("未知处理器")
+        || system.physicalCores <= 0 || system.memoryBytes == 0
+        || system.osName.isEmpty() || system.qtVersion.isEmpty()
+        || system.gpus.isEmpty())
+    {
+        qCritical() << "settings-test: system info incomplete" << system.cpuModel
+                    << system.physicalCores << system.memoryBytes << system.osName
+                    << system.gpus;
+        return 1;
+    }
 
     {
         pvf::SettingsDialog dialog;
         dialog.show();
         QApplication::processEvents();
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings.png"));
+
+        dialog.showAboutPage();
+        QApplication::processEvents();
+        auto* about = dialog.findChild<QPlainTextEdit*>(QStringLiteral("aboutText"));
+        const QString text = about ? about->toPlainText() : QString();
+        if (!about || !text.contains(QStringLiteral("处理器"))
+            || !text.contains(QStringLiteral("FFmpeg"))
+            || !text.contains(QStringLiteral("Qt "))
+            || !text.contains(QStringLiteral("PVForge")))
+        {
+            qCritical() << "settings-test: about page incomplete";
+            return 1;
+        }
+        auto* copy = dialog.findChild<QPushButton*>(QStringLiteral("aboutCopy"));
+        if (!copy)
+        {
+            qCritical() << "settings-test: about copy button missing";
+            return 1;
+        }
+        auto* categories =
+            dialog.findChild<QListWidget*>(QStringLiteral("settingsCategories"));
+        if (!categories || !categories->currentItem()
+            || categories->currentItem()->text() != QStringLiteral("关于"))
+        {
+            qCritical() << "settings-test: about category not selected";
+            return 1;
+        }
+        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings_about.png"));
         dialog.close();
     }
     pvf::Settings::setEdgeCenterSnap(true);
@@ -3810,9 +3853,11 @@ int workbenchTest(QApplication& app)
 
 int main(int argc, char* argv[])
 {
-    // Qt Multimedia reads this before its FFmpeg plugin initializes.
-    if (!pvf::Settings::hardwareVideoDecode())
-        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", QByteArray(","));
+    // The current media pipeline decodes video first frames and audio with
+    // FFmpeg software decoders. Keep Qt Multimedia's video backends from
+    // probing VDPAU/VAAPI until real video playback is implemented; this also
+    // avoids misleading driver warnings on machines without NVIDIA support.
+    qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", QByteArray(","));
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("PVForge"));
