@@ -867,20 +867,26 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             const double threshold = m_snapPixels / s;
             const double canvasHalfW = m_project->width / 2.0;
             const double scaleX = m_project->value(m_dragEntity, "scaleX", m_frame);
+            const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
+            const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+            const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
+            const double radians = rotation * M_PI / 180.0;
+            const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
             const Entity* entity = m_project->entity(m_dragEntity);
             const double halfW =
                 entity ? entityLocalBounds(*entity).width() / 2.0 * std::abs(scaleX) : 0.0;
 
-            if (std::abs(x) <= threshold)
-                x = 0.0;
-            else if (std::abs(x - halfW + canvasHalfW) <= threshold)
-                x = -canvasHalfW + halfW;
-            else if (std::abs(x + halfW - canvasHalfW) <= threshold)
-                x = canvasHalfW - halfW;
-            else if (m_edgeCenterSnap && std::abs(x - halfW) <= threshold)
-                x = halfW;
-            else if (m_edgeCenterSnap && std::abs(x + halfW) <= threshold)
-                x = -halfW;
+            const double visual = x - rotatedAx;
+            if (std::abs(visual) <= threshold)
+                x -= visual;
+            else if (std::abs(visual - (-canvasHalfW + halfW)) <= threshold)
+                x += (-canvasHalfW + halfW) - visual;
+            else if (std::abs(visual - (canvasHalfW - halfW)) <= threshold)
+                x += (canvasHalfW - halfW) - visual;
+            else if (m_edgeCenterSnap && std::abs(visual - halfW) <= threshold)
+                x += halfW - visual;
+            else if (m_edgeCenterSnap && std::abs(visual + halfW) <= threshold)
+                x += -halfW - visual;
         }
         emit valueEdited(m_dragEntity, QStringLiteral("x"), x);
         return;
@@ -895,20 +901,26 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             const double threshold = m_snapPixels / s;
             const double canvasHalfH = m_project->height / 2.0;
             const double scaleY = m_project->value(m_dragEntity, "scaleY", m_frame);
+            const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
+            const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+            const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
+            const double radians = rotation * M_PI / 180.0;
+            const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
             const Entity* entity = m_project->entity(m_dragEntity);
             const double halfH =
                 entity ? entityLocalBounds(*entity).height() / 2.0 * std::abs(scaleY) : 0.0;
 
-            if (std::abs(y) <= threshold)
-                y = 0.0;
-            else if (std::abs(y - halfH + canvasHalfH) <= threshold)
-                y = -canvasHalfH + halfH;
-            else if (std::abs(y + halfH - canvasHalfH) <= threshold)
-                y = canvasHalfH - halfH;
-            else if (m_edgeCenterSnap && std::abs(y - halfH) <= threshold)
-                y = halfH;
-            else if (m_edgeCenterSnap && std::abs(y + halfH) <= threshold)
-                y = -halfH;
+            const double visual = y - rotatedAy;
+            if (std::abs(visual) <= threshold)
+                y -= visual;
+            else if (std::abs(visual - (-canvasHalfH + halfH)) <= threshold)
+                y += (-canvasHalfH + halfH) - visual;
+            else if (std::abs(visual - (canvasHalfH - halfH)) <= threshold)
+                y += (canvasHalfH - halfH) - visual;
+            else if (m_edgeCenterSnap && std::abs(visual - halfH) <= threshold)
+                y += halfH - visual;
+            else if (m_edgeCenterSnap && std::abs(visual + halfH) <= threshold)
+                y += -halfH - visual;
         }
         emit valueEdited(m_dragEntity, QStringLiteral("y"), y);
         return;
@@ -945,6 +957,12 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             const double canvasHalfH = m_project->height / 2.0;
             const double scaleX = m_project->value(m_dragEntity, "scaleX", m_frame);
             const double scaleY = m_project->value(m_dragEntity, "scaleY", m_frame);
+            const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
+            const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+            const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
+            const double radians = rotation * M_PI / 180.0;
+            const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
+            const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
             const Entity* entity = m_project->entity(m_dragEntity);
             if (entity)
             {
@@ -952,29 +970,25 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 const double halfW = bounds.width() / 2.0 * std::abs(scaleX);
                 const double halfH = bounds.height() / 2.0 * std::abs(scaleY);
 
-                // Centre first, then edges flush with the canvas borders,
-                // then edges on the centre lines.
-                if (std::abs(x) <= threshold)
-                    x = 0.0;
-                else if (std::abs(x - halfW + canvasHalfW) <= threshold)
-                    x = -canvasHalfW + halfW;
-                else if (std::abs(x + halfW - canvasHalfW) <= threshold)
-                    x = canvasHalfW - halfW;
-                else if (m_edgeCenterSnap && std::abs(x - halfW) <= threshold)
-                    x = halfW;
-                else if (m_edgeCenterSnap && std::abs(x + halfW) <= threshold)
-                    x = -halfW;
+                // Snap the visible body, not the pivot position.
+                const auto snapVisual = [&](double pos, double offset, double half,
+                                            double canvasHalf) {
+                    const double visual = pos - offset;
+                    if (std::abs(visual) <= threshold)
+                        return pos - visual;
+                    if (std::abs(visual - (-canvasHalf + half)) <= threshold)
+                        return pos + (-canvasHalf + half) - visual;
+                    if (std::abs(visual - (canvasHalf - half)) <= threshold)
+                        return pos + (canvasHalf - half) - visual;
+                    if (m_edgeCenterSnap && std::abs(visual - half) <= threshold)
+                        return pos + half - visual;
+                    if (m_edgeCenterSnap && std::abs(visual + half) <= threshold)
+                        return pos - half - visual;
+                    return pos;
+                };
 
-                if (std::abs(y) <= threshold)
-                    y = 0.0;
-                else if (std::abs(y - halfH + canvasHalfH) <= threshold)
-                    y = -canvasHalfH + halfH;
-                else if (std::abs(y + halfH - canvasHalfH) <= threshold)
-                    y = canvasHalfH - halfH;
-                else if (m_edgeCenterSnap && std::abs(y - halfH) <= threshold)
-                    y = halfH;
-                else if (m_edgeCenterSnap && std::abs(y + halfH) <= threshold)
-                    y = -halfH;
+                x = snapVisual(x, rotatedAx, halfW, canvasHalfW);
+                y = snapVisual(y, rotatedAy, halfH, canvasHalfH);
             }
         }
     }

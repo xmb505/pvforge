@@ -616,6 +616,24 @@ int snapTest(QApplication& app)
             ++failures;
         }
 
+        // Snapping still works with a custom pivot: the visible body snaps.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
+        window.applyPivotForTest(id, 100.0, 0.0);   // x becomes 100, body stays
+        const QPoint pivotPoint = viewport->entityPivotForTest(id).toPoint();
+        const int moveDx = int(std::lround((canvasHalfW - 150.0 - 5.0) * s));
+        drag(pivotPoint + QPoint(30, 0), pivotPoint + QPoint(30 + moveDx, 0),
+             Qt::NoModifier);
+        const double expectedPivotSnap = canvasHalfW - 150.0 + 100.0;
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - expectedPivotSnap)
+            > 2.0)
+        {
+            qCritical() << "snap-test: pivot offset snap"
+                        << project->value(id, QStringLiteral("x"), 0) << expectedPivotSnap;
+            ++failures;
+        }
+        window.applyPivotForTest(id, 0.0, 0.0);
+
         // Scaling the bottom-right corner snaps the edge to the canvas edge.
         project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
         project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
