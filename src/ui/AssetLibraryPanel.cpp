@@ -44,6 +44,14 @@ QString templateTypeName(EntityType type)
     return QString();
 }
 
+QString elidedPath(const QString& path)
+{
+    // Paths have no spaces to wrap at; show both ends and let the tooltip
+    // carry the full value. The label itself is width-ignored so a long path
+    // can never widen the whole right sidebar.
+    return QFontMetrics(QFont()).elidedText(path, Qt::ElideMiddle, 240);
+}
+
 QPixmap renderTemplate(const Template& tmpl, const QSize& size)
 {
     QPixmap pixmap(size);
@@ -146,17 +154,24 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
 {
+    setObjectName(QStringLiteral("assetPanel"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
     m_preview = new QLabel(QStringLiteral("素材库为空"), this);
+    m_preview->setObjectName(QStringLiteral("assetPreview"));
     m_preview->setAlignment(Qt::AlignCenter);
     m_preview->setMinimumHeight(150);
+    m_preview->setMinimumWidth(0);
+    m_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_preview->setFrameShape(QFrame::StyledPanel);
     layout->addWidget(m_preview);
 
     m_search = new QLineEdit(this);
+    m_search->setObjectName(QStringLiteral("assetSearch"));
+    m_search->setMinimumWidth(0);
+    m_search->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_search->setPlaceholderText(Lang::t(QStringLiteral("search.assets"), QStringLiteral("搜索素材…")));
     m_search->setClearButtonEnabled(true);
 
@@ -213,6 +228,9 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_list->setIconSize(QSize(40, 40));
     m_list->setAlternatingRowColors(true);
     m_list->setMinimumHeight(140);
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_list->setTextElideMode(Qt::ElideMiddle);
+    m_list->setWordWrap(false);
     layout->addWidget(m_list, 1);
 
     auto* buttons = new QHBoxLayout();
@@ -227,7 +245,12 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     layout->addLayout(buttons);
 
     m_info = new QLabel(this);
+    m_info->setObjectName(QStringLiteral("assetInfo"));
     m_info->setWordWrap(true);
+    m_info->setTextFormat(Qt::PlainText);
+    m_info->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_info->setMinimumWidth(0);
+    m_info->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(m_info);
 
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
@@ -308,6 +331,7 @@ void AssetLibraryPanel::updatePreview()
         m_preview->setPixmap(QPixmap());
         m_preview->setText(QStringLiteral("素材库为空"));
         m_info->clear();
+        m_info->setToolTip(QString());
         return;
     }
 
@@ -320,8 +344,9 @@ void AssetLibraryPanel::updatePreview()
         && tmpl.duration > 0.0)
         info += QStringLiteral(" · %1 秒").arg(tmpl.duration, 0, 'f', 2);
     if (!tmpl.path.isEmpty())
-        info += QStringLiteral("\n") + tmpl.path;
+        info += QStringLiteral("\n") + elidedPath(tmpl.path);
     m_info->setText(info);
+    m_info->setToolTip(tmpl.path);
 }
 
 void AssetLibraryPanel::createSelected()

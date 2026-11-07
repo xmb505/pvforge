@@ -75,6 +75,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     // "Project properties" tab: collapsible categories, one scroll column.
     m_projectTab = new QWidget(this);
     auto* projectScroll = new QScrollArea(m_projectTab);
+    projectScroll->setObjectName(QStringLiteral("projectScroll"));
     projectScroll->setWidgetResizable(true);
     projectScroll->setFrameShape(QFrame::NoFrame);
     projectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

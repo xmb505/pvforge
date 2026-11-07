@@ -56,6 +56,8 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTabWidget>
 #include <QTcpSocket>
 #include <QTimer>
@@ -2712,7 +2714,14 @@ int cameraTest(QApplication& app)
         window.applyCameraForTest(cameraId, 0, 0, 0.5, 0.0);
         window.setSelectedEntityForTest(cameraId);
         QApplication::processEvents();
+        // The floating monitor can cover the entity being sampled; hide it
+        // while grabbing the viewport so the dim check only sees the scene.
+        const bool monitorShown = monitor->isVisible();
+        monitor->setVisible(false);
+        QApplication::processEvents();
         const QImage viewportShot = viewport->grab().toImage();
+        monitor->setVisible(monitorShown);
+        QApplication::processEvents();
         viewportShot.save(QStringLiteral("/tmp/pvforge_camera_dim.png"));
         const QPoint greenPoint = viewport->entityPivotForTest(greenId).toPoint();
         const QColor dimmed = viewportShot.pixelColor(greenPoint);
@@ -4917,7 +4926,8 @@ int openTimelineTest(QApplication& app){
 int libraryTest(QApplication& app)
 {
     const QString assetPath =
-        QDir::tempPath() + QStringLiteral("/pvforge_library_asset.png");
+        QDir::tempPath() + QStringLiteral("/pvforge_library_asset_")
+        + QString(80, QLatin1Char('x')) + QStringLiteral(".png");
     QImage img(320, 200, QImage::Format_ARGB32);
     img.fill(QColor(70, 130, 200));
     {
@@ -4950,8 +4960,33 @@ int libraryTest(QApplication& app)
             << "entities" << project->entities().size();
 
     QTimer::singleShot(400, &window, [&app, &window, project, assetPath] {
+        bool layoutOk = true;
         if (auto* list = window.findChild<QListWidget*>(QStringLiteral("assetList")))
             qInfo() << "library-test: list items" << list->count();
+        if (auto* scroll = window.findChild<QScrollArea*>(QStringLiteral("projectScroll")))
+            scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
+        auto* panel = window.findChild<QWidget*>(QStringLiteral("assetPanel"));
+        auto* info = window.findChild<QLabel*>(QStringLiteral("assetInfo"));
+        if (!tabs || !panel || !info)
+        {
+            qCritical() << "library-test: asset widgets missing";
+            layoutOk = false;
+        }
+        else
+        {
+            qInfo() << "library-test: widths tabs" << tabs->width()
+                    << "panel" << panel->width() << "panel min"
+                    << panel->minimumSizeHint().width() << "info min"
+                    << info->minimumSizeHint().width();
+            layoutOk = tabs->width() <= 440 && panel->width() <= tabs->width()
+                       && info->width() <= panel->width()
+                       && info->text().contains(QChar(0x2026))
+                       && info->toolTip() == assetPath;
+            if (!layoutOk)
+                qCritical() << "library-test: long path broke the sidebar"
+                            << info->text() << info->toolTip();
+        }
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_library.png"));
 
         auto* create = window.findChild<QPushButton*>(QStringLiteral("assetCreate"));
@@ -4965,18 +5000,18 @@ int libraryTest(QApplication& app)
         const int before = project->entities().size();
         create->click();
 
-        QTimer::singleShot(300, &window, [&app, &window, project, before, assetPath] {
+        QTimer::singleShot(300, &window, [&app, &window, project, before, assetPath, layoutOk] {
             const int after = project->entities().size();
             qInfo() << "library-test: entities" << before << "->" << after;
             window.grab().toImage().save(QStringLiteral("/tmp/pvforge_entity_tab.png"));
 
             if (auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs")))
                 tabs->setCurrentIndex(0);
-            QTimer::singleShot(250, &window, [&app, &window, after, before, assetPath] {
+            QTimer::singleShot(250, &window, [&app, &window, after, before, assetPath, layoutOk] {
                 window.grab().toImage().save(
                     QStringLiteral("/tmp/pvforge_projectprops.png"));
                 QFile::remove(assetPath);
-                app.exit(after == before + 1 ? 0 : 1);
+                app.exit(after == before + 1 && layoutOk ? 0 : 1);
             });
         });
     });
@@ -5227,6 +5262,25 @@ int main(int argc, char* argv[])
     app.setApplicationDisplayName(QStringLiteral("PVForge"));
     app.setOrganizationName(QStringLiteral("PVForge"));
     app.setWindowIcon(pvf::makeCubeIcon());
+
+    // Keep self-tests independent from the user's saved layout, monitor
+    // geometry and last project list. A fresh config per test process makes
+    // pixel/geometry checks reproducible.
+    bool testMode = false;
+    for (const QString& argument : app.arguments())
+        if (argument.endsWith(QStringLiteral("-test")))
+            testMode = true;
+    if (testMode)
+    {
+        const QString configDir =
+            QDir::tempPath() + QStringLiteral("/pvforge-test-config");
+        QDir(configDir).removeRecursively();
+        QDir().mkpath(configDir);
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, configDir);
+        QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, configDir);
+    }
+
     pvf::Lang::load(pvf::Settings::language());
 
     if (app.arguments().contains(QStringLiteral("--self-test")))
