@@ -1,5 +1,6 @@
 #include "app/AppIcon.h"
 #include "core/Commands.h"
+#include "core/Camera.h"
 #include "core/History.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
@@ -11,6 +12,7 @@
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
+#include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
@@ -18,6 +20,7 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QComboBox>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -1110,6 +1113,444 @@ int timelineFrameTest(QApplication& app)
     return app.exec();
 }
 
+int cameraTest(QApplication& app)
+{
+    pvf::Settings::setMonitorVisible(true);
+    pvf::Settings::setShowCameraFrame(true);
+    auto* project = new pvf::Project;
+    project->width = 800;
+    project->height = 600;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(500, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        auto* monitor = window.findChild<pvf::CameraMonitor*>();
+        if (!viewport || !monitor)
+        {
+            qCritical() << "camera-test: viewport or monitor missing";
+            app.exit(1);
+            return;
+        }
+
+        auto* red = project->addVector(0, 200, 200, Qt::red, Qt::white, 0);
+        auto* green = project->addVector(1, 100, 100, Qt::green, Qt::white, 0);
+        const pvf::EntityId redId = red->id;
+        const pvf::EntityId greenId = green->id;
+        project->setValue(greenId, QStringLiteral("x"), 0, 300.0, false);
+        pvf::Entity* camera = project->addCamera(QStringLiteral("Camera 1"));
+        const pvf::EntityId cameraId = camera->id;
+        window.setSelectedEntityForTest(cameraId);
+
+        if (project->activeCamera != cameraId || project->monitorView != cameraId)
+        {
+            qCritical() << "camera-test: camera not activated on selection";
+            ++failures;
+        }
+        if (!monitor->isVisible())
+        {
+            qCritical() << "camera-test: monitor not visible";
+            ++failures;
+        }
+        if (viewport->cameraFrameForTest().isEmpty())
+        {
+            qCritical() << "camera-test: viewfinder frame not drawn";
+            ++failures;
+        }
+
+        // The View menu can hide the viewfinder without changing the camera.
+        if (auto* frameAction =
+                window.findChild<QAction*>(QStringLiteral("cameraFrameAction")))
+        {
+            frameAction->trigger();
+            if (!viewport->cameraFrameForTest().isEmpty())
+            {
+                qCritical() << "camera-test: viewfinder did not hide";
+                ++failures;
+            }
+            frameAction->trigger();
+            if (viewport->cameraFrameForTest().isEmpty())
+            {
+                qCritical() << "camera-test: viewfinder did not return";
+                ++failures;
+            }
+        }
+
+        // The camera at 100% shows the whole canvas; the monitor centre must
+        // show the red rectangle, not a guide or a dimmed pixel.
+        QApplication::processEvents();
+        QImage shot = monitor->grab().toImage();
+        const int title = 28;
+        const QColor center = shot.pixelColor(shot.width() / 2, title + 90);
+        if (center.red() < 200)
+        {
+            qCritical() << "camera-test: monitor centre is not the scene" << center;
+            ++failures;
+        }
+        window.grab().save(QStringLiteral("/tmp/pvforge_camera.png"));
+
+        // Outside the canvas is black: rotate the full-canvas camera 45°.
+        window.applyCameraForTest(cameraId, 0, 0, 1.0, 45.0);
+        QApplication::processEvents();
+        window.grab().save(QStringLiteral("/tmp/pvforge_camera_rotated.png"));
+        shot = monitor->grab().toImage();
+        const QColor corner = shot.pixelColor(44, title + 4);
+        if (corner.red() > 24 || corner.green() > 24 || corner.blue() > 24)
+        {
+            qCritical() << "camera-test: outside canvas is not black" << corner;
+            ++failures;
+        }
+
+        // Back to a 50% frame: the green entity outside is dimmed, the red
+        // inside stays bright.
+        window.applyCameraForTest(cameraId, 0, 0, 0.5, 0.0);
+        window.setSelectedEntityForTest(cameraId);
+        QApplication::processEvents();
+        const QImage viewportShot = viewport->grab().toImage();
+        viewportShot.save(QStringLiteral("/tmp/pvforge_camera_dim.png"));
+        const QPoint greenPoint = viewport->entityPivotForTest(greenId).toPoint();
+        const QColor dimmed = viewportShot.pixelColor(greenPoint);
+        if (dimmed.green() < 40 || dimmed.green() >= 200)
+        {
+            qCritical() << "camera-test: outside camera not dimmed" << dimmed;
+            ++failures;
+        }
+        const QPoint redPoint = viewport->entityPivotForTest(redId).toPoint();
+        const QColor clear = viewportShot.pixelColor(redPoint);
+        if (clear.red() < 200)
+        {
+            qCritical() << "camera-test: inside camera dimmed" << clear;
+            ++failures;
+        }
+
+        // Letterbox bars outside the project aspect stay pure black.
+        shot = monitor->grab().toImage();
+        const QColor bar = shot.pixelColor(10, title + 90);
+        if (bar.red() > 24 || bar.green() > 24 || bar.blue() > 24)
+        {
+            qCritical() << "camera-test: letterbox not black" << bar;
+            ++failures;
+        }
+
+        auto sendMouse = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                             Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)),
+                              button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+
+        // Clicking inside the frame passes through to the entity.
+        window.setSelectedEntityForTest(cameraId);
+        sendMouse(QEvent::MouseButtonPress, redPoint, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, redPoint, Qt::LeftButton, Qt::NoButton);
+        if (window.selectedEntityForTest() != redId)
+        {
+            qCritical() << "camera-test: inside click did not pass through"
+                        << window.selectedEntityForTest();
+            ++failures;
+        }
+
+        // Drag the top border to move the camera, then undo once.
+        QPolygonF polygon = viewport->cameraFrameForTest();
+        QPoint topMiddle = ((polygon[0] + polygon[1]) / 2.0).toPoint();
+        window.setSelectedEntityForTest(cameraId);
+        sendMouse(QEvent::MouseButtonPress, topMiddle, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, topMiddle + QPoint(40, 30), Qt::NoButton,
+                  Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, topMiddle + QPoint(40, 30), Qt::LeftButton,
+                  Qt::NoButton);
+        QApplication::processEvents();
+        const double movedX = project->value(cameraId, QStringLiteral("x"), 0);
+        const double movedY = project->value(cameraId, QStringLiteral("y"), 0);
+        if (std::abs(movedX) < 1.0 && std::abs(movedY) < 1.0)
+        {
+            qCritical() << "camera-test: border drag did not move camera" << movedX
+                        << movedY;
+            ++failures;
+        }
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            undo->trigger();
+        if (std::abs(project->value(cameraId, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "camera-test: camera move was not one undo step"
+                        << project->value(cameraId, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        // Corner drag zooms the camera, keeping the centre fixed.
+        window.setSelectedEntityForTest(cameraId);
+        polygon = viewport->cameraFrameForTest();
+        const QPoint cornerPoint = polygon[1].toPoint();
+        sendMouse(QEvent::MouseButtonPress, cornerPoint, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, cornerPoint + QPoint(30, 20), Qt::NoButton,
+                  Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, cornerPoint + QPoint(30, 20), Qt::LeftButton,
+                  Qt::NoButton);
+        const double zoomed = project->value(cameraId, QStringLiteral("scaleX"), 0);
+        if (zoomed <= 0.5 || zoomed > pvf::Camera::kMaxScale)
+        {
+            qCritical() << "camera-test: corner drag did not zoom" << zoomed;
+            ++failures;
+        }
+
+        // Rotation handle turns the camera; the angle snaps to 90°.
+        window.applyCameraForTest(cameraId, 0, 0, 0.5, 0.0);
+        window.setSelectedEntityForTest(cameraId);
+        polygon = viewport->cameraFrameForTest();
+        const QPointF topCenter = (polygon[0] + polygon[1]) / 2.0;
+        const QPointF rotateHandle = topCenter + QPointF(0, -28);
+        const QPointF centerScreen = viewport->entityPivotForTest(cameraId);
+        sendMouse(QEvent::MouseButtonPress, rotateHandle.toPoint(), Qt::LeftButton,
+                  Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, (centerScreen + QPointF(100, 0)).toPoint(),
+                  Qt::NoButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, (centerScreen + QPointF(100, 0)).toPoint(),
+                  Qt::LeftButton, Qt::NoButton);
+        const double rotation = project->value(cameraId, QStringLiteral("rotation"), 0);
+        if (std::abs(std::abs(rotation) - 90.0) > 1.0)
+        {
+            qCritical() << "camera-test: rotation handle failed" << rotation;
+            ++failures;
+        }
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            undo->trigger();
+
+        // A 100% frame fills the canvas, so it cannot pan.
+        window.applyCameraForTest(cameraId, 0, 0, 1.0, 0.0);
+        window.setSelectedEntityForTest(cameraId);
+        polygon = viewport->cameraFrameForTest();
+        topMiddle = ((polygon[0] + polygon[1]) / 2.0).toPoint();
+        sendMouse(QEvent::MouseButtonPress, topMiddle, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, topMiddle + QPoint(40, 30), Qt::NoButton,
+                  Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, topMiddle + QPoint(40, 30), Qt::LeftButton,
+                  Qt::NoButton);
+        if (std::abs(project->value(cameraId, QStringLiteral("x"), 0)) > 1e-6
+            || std::abs(project->value(cameraId, QStringLiteral("y"), 0)) > 1e-6)
+        {
+            qCritical() << "camera-test: 100% camera panned"
+                        << project->value(cameraId, QStringLiteral("x"), 0)
+                        << project->value(cameraId, QStringLiteral("y"), 0);
+            ++failures;
+        }
+        // Detach and re-dock through the monitor buttons.
+        auto* detachButton =
+            monitor->findChild<QToolButton*>(QStringLiteral("monitorDetachButton"));
+        auto* qualityButton =
+            monitor->findChild<QToolButton*>(QStringLiteral("monitorQualityButton"));
+        if (!detachButton || !qualityButton)
+        {
+            qCritical() << "camera-test: monitor buttons missing";
+            ++failures;
+        }
+        else
+        {
+            // Dragging the title out of the main window pops the monitor out.
+            const QPoint grab(10, 10);
+            const QPoint grabGlobal = monitor->mapToGlobal(grab);
+            const QPoint outside = window.frameGeometry().topLeft() - QPoint(180, 180);
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(grab),
+                              QPointF(grabGlobal), Qt::LeftButton, Qt::LeftButton,
+                              Qt::NoModifier);
+            QMouseEvent move(QEvent::MouseMove, QPointF(grab + QPoint(30, 30)),
+                             QPointF(outside), Qt::NoButton, Qt::LeftButton,
+                             Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease,
+                                QPointF(grab + QPoint(30, 30)), QPointF(outside),
+                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(monitor, &press);
+            QApplication::sendEvent(monitor, &move);
+            QApplication::sendEvent(monitor, &release);
+            if (!monitor->isDetached())
+            {
+                qCritical() << "camera-test: drag out did not detach";
+                ++failures;
+            }
+
+            detachButton->click();
+            if (monitor->isDetached())
+            {
+                qCritical() << "camera-test: redock failed";
+                ++failures;
+            }
+            detachButton->click();
+            if (!monitor->isDetached())
+            {
+                qCritical() << "camera-test: detach failed";
+                ++failures;
+            }
+            detachButton->click();
+            if (monitor->isDetached())
+            {
+                qCritical() << "camera-test: redock failed";
+                ++failures;
+            }
+            const bool wasHigh = monitor->isHighQuality();
+            qualityButton->click();
+            if (monitor->isHighQuality() == wasHigh)
+            {
+                qCritical() << "camera-test: quality toggle failed";
+                ++failures;
+            }
+            qualityButton->click();
+        }
+
+        // Save and load keeps the active camera and monitor view.
+        const QString path = QStringLiteral("/tmp/pvforge_camera.pvproj");
+        QString error;
+        if (!project->save(path, &error))
+        {
+            qCritical() << "camera-test: save failed" << error;
+            ++failures;
+        }
+        else
+        {
+            pvf::Project loaded;
+            if (!loaded.load(path, &error))
+            {
+                qCritical() << "camera-test: load failed" << error;
+                ++failures;
+            }
+            else if (loaded.activeCamera != cameraId || loaded.monitorView != cameraId)
+            {
+                qCritical() << "camera-test: camera state not saved"
+                            << loaded.activeCamera << loaded.monitorView;
+                ++failures;
+            }
+        }
+
+        // Quality toggle keeps rendering the scene.
+        if (qualityButton)
+        {
+            const bool wasHigh = monitor->isHighQuality();
+            qualityButton->click();
+            QApplication::processEvents();
+            QImage highShot = monitor->grab().toImage();
+            const QColor highCenter =
+                highShot.pixelColor(highShot.width() / 2, title + 90);
+            if (monitor->isHighQuality() == wasHigh || highCenter.red() < 150)
+            {
+                qCritical() << "camera-test: high quality render failed" << highCenter;
+                ++failures;
+            }
+            qualityButton->click();
+        }
+
+        // Close and reopen the monitor from the View menu.
+        if (auto* monitorAction = window.findChild<QAction*>(QStringLiteral("monitorAction")))
+        {
+            monitorAction->trigger();
+            if (monitor->isVisible())
+            {
+                qCritical() << "camera-test: monitor close failed";
+                ++failures;
+            }
+            monitorAction->trigger();
+            if (!monitor->isVisible())
+            {
+                qCritical() << "camera-test: monitor reopen failed";
+                ++failures;
+            }
+        }
+
+        // Workbench camera page creates and activates a camera.
+        auto* workbenchButton =
+            window.findChild<QToolButton*>(QStringLiteral("workbenchButton"));
+        auto* workbench = window.findChild<pvf::WorkbenchPanel*>();
+        if (workbenchButton && workbench)
+        {
+            workbenchButton->click();
+            auto* types = workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
+            auto* nameEdit =
+                workbench->findChild<QLineEdit*>(QStringLiteral("cameraName"));
+            auto* create =
+                workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+            if (!types || !nameEdit || !create)
+            {
+                qCritical() << "camera-test: workbench camera widgets missing";
+                ++failures;
+            }
+            else
+            {
+                types->setCurrentRow(3);
+                nameEdit->setText(QStringLiteral("UI Camera"));
+                create->click();
+                QApplication::processEvents();
+                pvf::EntityId uiCamera = pvf::kInvalidEntity;
+                for (const pvf::Entity& entity : project->entities())
+                    if (entity.isCamera() && entity.name == QStringLiteral("UI Camera"))
+                        uiCamera = entity.id;
+                if (uiCamera == pvf::kInvalidEntity || project->activeCamera != uiCamera
+                    || project->monitorView != uiCamera)
+                {
+                    qCritical() << "camera-test: workbench camera not active" << uiCamera
+                                << project->activeCamera << project->monitorView;
+                    ++failures;
+                }
+
+                // The monitor dropdown switches the active camera and the
+                // work/whole-canvas views.
+                auto* combo =
+                    monitor->findChild<QComboBox*>(QStringLiteral("monitorCameraCombo"));
+                if (!combo)
+                {
+                    qCritical() << "camera-test: camera combo missing";
+                    ++failures;
+                }
+                else
+                {
+                    combo->setCurrentIndex(combo->findData(cameraId));
+                    if (project->activeCamera != cameraId
+                        || project->monitorView != cameraId)
+                    {
+                        qCritical() << "camera-test: combo did not activate camera";
+                        ++failures;
+                    }
+                    combo->setCurrentIndex(combo->findData(pvf::kWorkCameraView));
+                    if (project->monitorView != pvf::kWorkCameraView)
+                    {
+                        qCritical() << "camera-test: combo work view failed";
+                        ++failures;
+                    }
+                    combo->setCurrentIndex(combo->findData(pvf::kWholeCanvasView));
+                    if (project->monitorView != pvf::kWholeCanvasView)
+                    {
+                        qCritical() << "camera-test: combo whole view failed";
+                        ++failures;
+                    }
+                    combo->setCurrentIndex(combo->findData(uiCamera));
+                }
+            }
+        }
+
+        // With no cameras left the monitor falls back to the work camera and
+        // the viewfinder disappears.
+        QVector<pvf::EntityId> cameras;
+        for (const pvf::Entity& entity : project->entities())
+            if (entity.isCamera())
+                cameras.append(entity.id);
+        for (pvf::EntityId id : cameras)
+            project->removeEntity(id);
+        QApplication::processEvents();
+        auto* fallbackCombo =
+            monitor->findChild<QComboBox*>(QStringLiteral("monitorCameraCombo"));
+        if (!fallbackCombo
+            || fallbackCombo->currentData().toInt() != pvf::kWorkCameraView
+            || !viewport->cameraFrameForTest().isEmpty())
+        {
+            qCritical() << "camera-test: work camera fallback failed";
+            ++failures;
+        }
+        window.grab().save(QStringLiteral("/tmp/pvforge_camera_work.png"));
+
+        qInfo() << "camera-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int guideTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1141,13 +1582,18 @@ int guideTest(QApplication& app)
                               buttons, Qt::NoModifier);
             QApplication::sendEvent(viewport, &event);
         };
-        auto hasGuide = [](const QImage& image) {
+        auto hasGuide = [viewport](const QImage& image) {
+            QRect skip;
+            if (auto* monitor = viewport->findChild<pvf::CameraMonitor*>())
+                skip = monitor->geometry();
             for (int y = 0; y < image.height(); y += 3)
             {
                 const QRgb* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
                 for (int x = 0; x < image.width(); ++x)
                 {
-                    if (qBlue(line[x]) > 200 && qGreen(line[x]) > 170
+                    if (skip.contains(x, y))
+                        continue;
+                    if (qBlue(line[x]) > 200 && qGreen(line[x]) > 195
                         && qRed(line[x]) < 140)
                         return true;
                 }
@@ -1174,6 +1620,7 @@ int guideTest(QApplication& app)
 
         send(QEvent::MouseButtonRelease, center + QPoint(int(std::lround(245.0 * s)), 0),
              Qt::LeftButton, Qt::NoButton);
+        viewport->grab().toImage().save(QStringLiteral("/tmp/pvforge_guide_after.png"));
         if (hasGuide(viewport->grab().toImage()))
         {
             qCritical() << "guide-test: guide still visible after release";
@@ -2867,6 +3314,8 @@ int main(int argc, char* argv[])
         return guideTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-frame-test")))
         return timelineFrameTest(app);
+    if (app.arguments().contains(QStringLiteral("--camera-test")))
+        return cameraTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
         return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))

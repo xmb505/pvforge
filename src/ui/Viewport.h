@@ -1,8 +1,10 @@
 #pragma once
 
+#include "core/Camera.h"
 #include "core/Project.h"
 
 #include <QPointF>
+#include <QPolygonF>
 #include <QTransform>
 #include <QWidget>
 
@@ -33,6 +35,9 @@ public:
     QPointF entityPivotForTest(EntityId id) const;
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
+    QTransform worldToScreenForTest() const { return worldToScreenTransform(); }
+    QPolygonF cameraFrameForTest() const { return cameraScreenPolygon(); }
+    void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }
 
 signals:
@@ -41,7 +46,9 @@ signals:
     void positionEdited(EntityId id, double x, double y);
     void scaleEdited(EntityId id, double sx, double sy, double x, double y);
     void pivotEdited(EntityId id, double ax, double ay);
+    void cameraEdited(EntityId id, double x, double y, double scale, double rotation);
     void workbenchRequested();
+    void viewChanged();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -49,6 +56,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     enum class GizmoMode { None, Move, AxisX, AxisY, Rotate, Scale, PivotFree, PivotX, PivotY };
@@ -65,9 +73,25 @@ private:
         Left
     };
 
+    enum class CameraPart { None, Move, Corner0, Corner1, Corner2, Corner3, Rotate };
+
     QRectF canvasRect() const;
     double viewScale() const;
+    QTransform worldToScreenTransform() const;
     QPointF screenToCanvas(const QPointF& pos) const;
+    EntityId activeCameraEntity() const;
+    Camera::State cameraState(const Entity& e) const;
+    QPolygonF cameraScreenPolygon() const;
+    QPointF cameraScreenCenter() const;
+    QPointF cameraRotationHandle() const;
+    QRectF cameraTitleRect() const;
+    CameraPart cameraHitTest(const QPointF& pos) const;
+    bool handleCameraPress(QMouseEvent* event);
+    void applyCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    QPointF snapCameraCenter(const Camera::State& start, const QPointF& center,
+                             bool* snappedX, double* guideX, bool* snappedY,
+                             double* guideY) const;
+    void drawCameraOverlay(QPainter& painter);
     QRectF entityLocalBounds(const Entity& e) const;
     const Entity* hitTest(const QPointF& pos) const;
     void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
@@ -99,6 +123,7 @@ private:
     bool m_dragging = false;
     QPointF m_dragLast;
     EntityId m_dragEntity = kInvalidEntity;
+    bool m_showCameraFrame = true;
 
     GizmoMode m_gizmoMode = GizmoMode::None;
     QPointF m_gizmoCenter;             // screen position of the gizmo
@@ -122,6 +147,11 @@ private:
 
     bool m_panning = false;
     QPointF m_panLast;
+
+    CameraPart m_cameraPart = CameraPart::None;
+    Camera::State m_cameraStartState;
+    QPointF m_cameraStartMouse;
+    double m_cameraStartAngle = 0.0;
 
     QToolButton* m_workbenchButton = nullptr;
 };

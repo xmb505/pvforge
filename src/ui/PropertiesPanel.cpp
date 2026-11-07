@@ -32,6 +32,8 @@ QString typeName(EntityType type)
         return QStringLiteral("文字");
     case EntityType::Vector:
         return QStringLiteral("矢量");
+    case EntityType::Camera:
+        return QStringLiteral("摄像机");
     }
     return QString();
 }
@@ -88,9 +90,15 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     connect(m_keyButton, &QPushButton::clicked, this, [this] {
         if (m_entity == kInvalidEntity)
             return;
+        const Entity* entity = m_project->entity(m_entity);
+        const bool camera = entity && entity->isCamera();
         for (const Row& r : m_rows)
+        {
+            if (camera && r.prop == QStringLiteral("opacity"))
+                continue;
             m_project->setValue(m_entity, r.prop, m_frame,
                                 m_project->value(m_entity, r.prop, m_frame), true);
+        }
         refresh();
     });
 
@@ -106,17 +114,30 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
     spin->setSingleStep(step);
     spin->setKeyboardTracking(false);
     spin->setEnabled(false);
-    form->addRow(label, spin);
+    auto* labelWidget = new QLabel(label, form->parentWidget());
+    form->addRow(labelWidget, spin);
 
     Row row;
     row.prop = prop;
+    row.baseLabel = label;
+    row.label = labelWidget;
     row.spin = spin;
     row.factor = factor;
     m_rows.append(row);
 
-    connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop, factor](double v) {
-        if (m_entity != kInvalidEntity)
-            emit valueEdited(m_entity, prop, v * factor);
+    connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop](double v) {
+        if (m_entity == kInvalidEntity)
+            return;
+        double rowFactor = 1.0;
+        for (const Row& row : m_rows)
+        {
+            if (row.prop == prop)
+            {
+                rowFactor = row.factor;
+                break;
+            }
+        }
+        emit valueEdited(m_entity, prop, v * rowFactor);
     });
 }
 
@@ -381,17 +402,46 @@ void PropertiesPanel::refresh()
     m_mediaSection->setVisible(valid
                                && (e->type == EntityType::Image
                                    || e->type == EntityType::Video));
-    m_pivotSection->setVisible(valid);
+    m_pivotSection->setVisible(valid && !e->isCamera());
 
     const bool editable = valid && !e->locked;
+    const bool camera = valid && e->isCamera();
     m_pivotSection->setEnabled(editable);
     m_transformSection->setEnabled(editable);
     m_keySection->setEnabled(editable);
     m_textSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);
+
     for (Row& r : m_rows)
+    {
+        const bool hiddenRow = camera
+                               && (r.prop == QStringLiteral("scaleY")
+                                   || r.prop == QStringLiteral("opacity"));
+        r.spin->setVisible(!hiddenRow);
+        r.label->setVisible(!hiddenRow);
+
+        const QSignalBlocker blocker(r.spin);
+        if (camera && r.prop == QStringLiteral("scaleX"))
+        {
+            r.label->setText(QStringLiteral("取景比例"));
+            r.spin->setRange(5.0, 100.0);
+            r.spin->setDecimals(1);
+            r.spin->setSingleStep(1.0);
+            r.spin->setSuffix(QStringLiteral("%"));
+            r.factor = 0.01;
+        }
+        else if (r.prop == QStringLiteral("scaleX"))
+        {
+            r.label->setText(r.baseLabel);
+            r.spin->setRange(-100.0, 100.0);
+            r.spin->setDecimals(3);
+            r.spin->setSingleStep(0.01);
+            r.spin->setSuffix(QString());
+            r.factor = 1.0;
+        }
         r.spin->setEnabled(editable);
+    }
 
     if (!valid)
     {

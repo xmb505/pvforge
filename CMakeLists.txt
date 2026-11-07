@@ -20,9 +20,12 @@ add_executable(pvforge
     src/core/Settings.cpp
     src/core/Lang.cpp
     src/core/VectorShape.cpp
+    src/core/Camera.cpp
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/media/MediaImporter.cpp
+    src/render/SceneRenderer.cpp
+    src/render/CameraRenderer.cpp
     src/app/AppIcon.cpp
     src/app/SettingsDialog.cpp
     src/app/MainWindow.cpp
@@ -30,6 +33,7 @@ add_executable(pvforge
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/AssetLibraryPanel.cpp
+    src/ui/CameraMonitor.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp

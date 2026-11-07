@@ -20,6 +20,7 @@ class QTimer;
 namespace pvf {
 
 class AssetLibraryPanel;
+class CameraMonitor;
 class EnvironmentPanel;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
@@ -45,6 +46,11 @@ public:
     void importMediaFiles(const QStringList& files,
                           std::function<void(const QVector<MediaImportResult>&)> done);
     void applyPivotForTest(EntityId id, double ax, double ay) { applyPivot(id, ax, ay); }
+    void applyCameraForTest(EntityId id, double x, double y, double scale, double rotation)
+    {
+        applyCamera(id, x, y, scale, rotation);
+    }
+    EntityId selectedEntityForTest() const { return m_selected; }
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -60,6 +66,7 @@ private:
     void applyPosition(EntityId id, double x, double y);
     void applyScale(EntityId id, double sx, double sy, double x, double y);
     void applyPivot(EntityId id, double ax, double ay);
+    void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
     void onPlayTick();
     void updateStatus();
@@ -90,6 +97,7 @@ private:
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
+    CameraMonitor* m_monitor = nullptr;
 
     QTimer* m_playTimer = nullptr;
     QElapsedTimer m_playClock;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QRect>
 #include <QString>
 
 namespace pvf {
@@ -37,9 +38,26 @@ void setTimelinePixelsPerFrame(double pixels);
 bool timelineDisplayFrames();           // ruler labels show frames instead of seconds
 void setTimelineDisplayFrames(bool on);
 
+bool monitorHighQuality();
+void setMonitorHighQuality(bool on);
+
+QRect monitorDockGeometry();
+void setMonitorDockGeometry(const QRect& geometry);
+
+QRect monitorWindowGeometry();
+void setMonitorWindowGeometry(const QRect& geometry);
+
+bool monitorAlwaysOnTop();
+void setMonitorAlwaysOnTop(bool on);
+
+bool monitorVisible();
+void setMonitorVisible(bool on);
+
+bool showCameraFrame();
+void setShowCameraFrame(bool on);
+
 bool packAssetsDefault();
 void setPackAssetsDefault(bool on);
-
 } // namespace Settings
 
 } // namespace pvf

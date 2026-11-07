@@ -33,6 +33,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("text");
     case EntityType::Vector:
         return QStringLiteral("vector");
+    case EntityType::Camera:
+        return QStringLiteral("camera");
     }
     return QStringLiteral("image");
 }
@@ -45,6 +47,8 @@ EntityType typeFromString(const QString& text)
         return EntityType::Text;
     if (text == QLatin1String("vector"))
         return EntityType::Vector;
+    if (text == QLatin1String("camera"))
+        return EntityType::Camera;
     return EntityType::Image;
 }
 
@@ -318,6 +322,15 @@ Entity* Project::addText(const QString& text, const QString& family, int pixelSi
     return append(std::move(e));
 }
 
+Entity* Project::addCamera(const QString& name)
+{
+    Entity e = makeBase(EntityType::Camera,
+                        name.isEmpty() ? QStringLiteral("摄像机") : name);
+    e.values["scaleX"] = 1.0;
+    e.values["scaleY"] = 1.0;
+    return append(std::move(e));
+}
+
 Entity* Project::addVector(int shape, double width, double height, const QColor& fill,
                            const QColor& stroke, double strokeWidth)
 {
@@ -442,6 +455,8 @@ Entity* Project::createFromTemplate(const Template& tmpl){
                          tmpl.data.value(QStringLiteral("fill")).value<QColor>(),
                          tmpl.data.value(QStringLiteral("stroke")).value<QColor>(),
                          tmpl.data.value(QStringLiteral("strokeWidth"), 0.0).toDouble());
+    case EntityType::Camera:
+        return nullptr;
     }
     return nullptr;
 }
@@ -471,6 +486,22 @@ int Project::removeEntity(EntityId id)
         return -1;
     const int index = int(it - m_entities.begin());
     m_entities.erase(it);
+    if (activeCamera == id || monitorView == id)
+    {
+        EntityId fallback = kInvalidEntity;
+        for (const Entity& e : m_entities)
+        {
+            if (e.isCamera() && !e.hidden)
+            {
+                fallback = e.id;
+                break;
+            }
+        }
+        if (activeCamera == id)
+            activeCamera = fallback;
+        if (monitorView == id)
+            monitorView = fallback != kInvalidEntity ? fallback : kWorkCameraView;
+    }
     modified = true;
     emit changed();
     return index;
@@ -501,9 +532,29 @@ void Project::setEntityFlag(EntityId id, EntityFlag flag, bool value)
     if (!e)
         return;
     if (flag == EntityFlag::Hidden)
+    {
         e->hidden = value;
+        if (value && (activeCamera == id || monitorView == id))
+        {
+            EntityId fallback = kInvalidEntity;
+            for (const Entity& other : m_entities)
+            {
+                if (other.id != id && other.isCamera() && !other.hidden)
+                {
+                    fallback = other.id;
+                    break;
+                }
+            }
+            if (activeCamera == id)
+                activeCamera = fallback;
+            if (monitorView == id)
+                monitorView = fallback != kInvalidEntity ? fallback : kWorkCameraView;
+        }
+    }
     else
+    {
         e->locked = value;
+    }
     modified = true;
     emit changed();
 }
@@ -603,6 +654,8 @@ QJsonObject Project::toJson() const
     root[QStringLiteral("height")] = height;
     root[QStringLiteral("fps")] = fps;
     root[QStringLiteral("background")] = background.name(QColor::HexRgb);
+    root[QStringLiteral("activeCamera")] = activeCamera;
+    root[QStringLiteral("monitorView")] = monitorView;
 
     QJsonArray entities;
     for (const Entity& e : m_entities)
@@ -738,6 +791,8 @@ bool Project::load(const QString& path, QString* error)
     background = QColor(root.value(QStringLiteral("background")).toString(QStringLiteral("#101014")));
     if (!background.isValid())
         background = QColor(0x10, 0x10, 0x14);
+    activeCamera = root.value(QStringLiteral("activeCamera")).toInt(kInvalidEntity);
+    monitorView = root.value(QStringLiteral("monitorView")).toInt(kWorkCameraView);
 
     m_entities.clear();
     m_nextId = 1;
@@ -857,6 +912,29 @@ bool Project::load(const QString& path, QString* error)
 
         m_templates.append(tmpl);
     }
+
+    // Drop camera references that no longer resolve (deleted or hidden).
+    auto visibleCamera = [this](EntityId id) {
+        const Entity* e = entity(id);
+        return e && e->isCamera() && !e->hidden;
+    };
+    if (!visibleCamera(activeCamera))
+    {
+        activeCamera = kInvalidEntity;
+        for (const Entity& e : m_entities)
+        {
+            if (e.isCamera() && !e.hidden)
+            {
+                activeCamera = e.id;
+                break;
+            }
+        }
+    }
+    if (monitorView >= 0 && !visibleCamera(monitorView))
+        monitorView = activeCamera != kInvalidEntity ? activeCamera : kWorkCameraView;
+    else if (monitorView < 0 && monitorView != kWorkCameraView
+             && monitorView != kWholeCanvasView)
+        monitorView = kWorkCameraView;
 
     filePath = path;
     modified = false;

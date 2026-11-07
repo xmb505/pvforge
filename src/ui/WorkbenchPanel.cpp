@@ -65,6 +65,7 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
         Lang::t(QStringLiteral("workbench.media"), QStringLiteral("媒体")),
         Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
         Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
+        Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
     };
     for (const QString& name : typeNames)
     {
@@ -80,6 +81,7 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     m_pages->addWidget(buildMediaPage());
     m_pages->addWidget(buildTextPage());
     m_pages->addWidget(buildVectorPage());
+    m_pages->addWidget(buildCameraPage());
     right->addWidget(m_pages, 1);
 
     m_create = new QPushButton(
@@ -187,8 +189,30 @@ QWidget* WorkbenchPanel::buildTextPage()
     return page;
 }
 
-QWidget* WorkbenchPanel::buildVectorPage()
+QWidget* WorkbenchPanel::buildCameraPage()
 {
+    auto* page = new QWidget(this);
+    auto* form = new QFormLayout(page);
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setVerticalSpacing(10);
+
+    m_cameraName = new QLineEdit(page);
+    m_cameraName->setObjectName(QStringLiteral("cameraName"));
+    m_cameraName->setPlaceholderText(QStringLiteral("留空自动命名"));
+    form->addRow(QStringLiteral("名称"), m_cameraName);
+
+    auto* hint = new QLabel(
+        QStringLiteral("创建后自动选中并设为活动摄像机。\n"
+                       "在视口里拖边框或标题条移动，拖四角缩放，顶边圆点旋转。\n"
+                       "监视器显示这台摄像机的最终画面。"),
+        page);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+
+    return page;
+}
+
+QWidget* WorkbenchPanel::buildVectorPage(){
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -540,6 +564,20 @@ void WorkbenchPanel::createCurrent()
             m_project->notifyChanged();
             id = e->id;
         }
+    }
+    else if (page == 3)
+    {
+        QString name = m_cameraName ? m_cameraName->text().trimmed() : QString();
+        if (name.isEmpty())
+        {
+            int count = 0;
+            for (const Entity& e : m_project->entities())
+                if (e.isCamera())
+                    ++count;
+            name = QStringLiteral("摄像机 %1").arg(count + 1);
+        }
+        if (Entity* e = m_project->addCamera(name))
+            id = e->id;
     }
 
     if (id == kInvalidEntity)

@@ -145,6 +145,37 @@ private:
     bool m_keyframe = true;
 };
 
+// Moving, zooming and rotating a camera as one undo step.
+class SetCameraCommand : public UndoCommand
+{
+public:
+    SetCameraCommand(EntityId id, int frame, double oldX, double oldY, double oldScale,
+                     double oldRotation, double newX, double newY, double newScale,
+                     double newRotation, bool keyframe);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    void apply(Project& project, double x, double y, double scale, double rotation);
+
+    EntityId m_id = kInvalidEntity;
+    int m_frame = 0;
+    double m_oldX = 0.0;
+    double m_oldY = 0.0;
+    double m_oldScale = 1.0;
+    double m_oldRotation = 0.0;
+    double m_newX = 0.0;
+    double m_newY = 0.0;
+    double m_newScale = 1.0;
+    double m_newRotation = 0.0;
+    bool m_keyframe = true;
+};
+
 // Changing the pivot and the compensating position in one step.
 class SetPivotCommand : public UndoCommand
 {

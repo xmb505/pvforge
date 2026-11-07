@@ -248,6 +248,67 @@ void SetScaleCommand::mergeWith(const UndoCommand* other)
     }
 }
 
+SetCameraCommand::SetCameraCommand(EntityId id, int frame, double oldX, double oldY,
+                                   double oldScale, double oldRotation, double newX,
+                                   double newY, double newScale, double newRotation,
+                                   bool keyframe)
+    : m_id(id)
+    , m_frame(frame)
+    , m_oldX(oldX)
+    , m_oldY(oldY)
+    , m_oldScale(oldScale)
+    , m_oldRotation(oldRotation)
+    , m_newX(newX)
+    , m_newY(newY)
+    , m_newScale(newScale)
+    , m_newRotation(newRotation)
+    , m_keyframe(keyframe)
+{
+}
+
+void SetCameraCommand::apply(Project& project, double x, double y, double scale,
+                             double rotation)
+{
+    project.setValue(m_id, QStringLiteral("x"), m_frame, x, m_keyframe);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, y, m_keyframe);
+    project.setValue(m_id, QStringLiteral("scaleX"), m_frame, scale, m_keyframe);
+    project.setValue(m_id, QStringLiteral("scaleY"), m_frame, scale, m_keyframe);
+    project.setValue(m_id, QStringLiteral("rotation"), m_frame, rotation, m_keyframe);
+}
+
+void SetCameraCommand::undo(Project& project)
+{
+    apply(project, m_oldX, m_oldY, m_oldScale, m_oldRotation);
+}
+
+void SetCameraCommand::redo(Project& project)
+{
+    apply(project, m_newX, m_newY, m_newScale, m_newRotation);
+}
+
+QString SetCameraCommand::text() const
+{
+    return QStringLiteral("调整摄像机");
+}
+
+bool SetCameraCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* camera = dynamic_cast<const SetCameraCommand*>(other);
+    return camera && camera->m_id == m_id && camera->m_frame == m_frame;
+}
+
+void SetCameraCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* camera = dynamic_cast<const SetCameraCommand*>(other);
+    if (camera)
+    {
+        m_newX = camera->m_newX;
+        m_newY = camera->m_newY;
+        m_newScale = camera->m_newScale;
+        m_newRotation = camera->m_newRotation;
+    }
+}
+
 SetPivotCommand::SetPivotCommand(EntityId id, double oldAx, double oldAy, double oldX,
                                  double oldY, double newAx, double newAy, double newX,
                                  double newY, int frame)

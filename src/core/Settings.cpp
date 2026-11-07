@@ -136,5 +136,69 @@ void setPackAssetsDefault(bool on)
     store().setValue(QStringLiteral("assets/packDefault"), on);
 }
 
+bool monitorHighQuality()
+{
+    return store().value(QStringLiteral("monitor/highQuality"), false).toBool();
+}
+
+void setMonitorHighQuality(bool on)
+{
+    store().setValue(QStringLiteral("monitor/highQuality"), on);
+}
+
+QRect monitorDockGeometry()
+{
+    return store()
+        .value(QStringLiteral("monitor/dockGeometry"), QRect(-1, -1, 320, 208))
+        .toRect();
+}
+
+void setMonitorDockGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("monitor/dockGeometry"), geometry);
+}
+
+QRect monitorWindowGeometry()
+{
+    return store()
+        .value(QStringLiteral("monitor/windowGeometry"), QRect(100, 100, 640, 360))
+        .toRect();
+}
+
+void setMonitorWindowGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("monitor/windowGeometry"), geometry);
+}
+
+bool monitorAlwaysOnTop()
+{
+    return store().value(QStringLiteral("monitor/alwaysOnTop"), false).toBool();
+}
+
+void setMonitorAlwaysOnTop(bool on)
+{
+    store().setValue(QStringLiteral("monitor/alwaysOnTop"), on);
+}
+
+bool monitorVisible()
+{
+    return store().value(QStringLiteral("monitor/visible"), true).toBool();
+}
+
+void setMonitorVisible(bool on)
+{
+    store().setValue(QStringLiteral("monitor/visible"), on);
+}
+
+bool showCameraFrame()
+{
+    return store().value(QStringLiteral("editor/showCameraFrame"), true).toBool();
+}
+
+void setShowCameraFrame(bool on)
+{
+    store().setValue(QStringLiteral("editor/showCameraFrame"), on);
+}
+
 } // namespace Settings
 } // namespace pvf

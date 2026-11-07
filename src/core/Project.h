@@ -15,8 +15,10 @@ namespace pvf {
 
 using EntityId = int;
 constexpr EntityId kInvalidEntity = -1;
+constexpr int kWorkCameraView = -2;
+constexpr int kWholeCanvasView = -3;
 
-enum class EntityType { Image, Video, Text, Vector };
+enum class EntityType { Image, Video, Text, Vector, Camera };
 
 struct Keyframe
 {
@@ -45,6 +47,7 @@ struct Entity
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache
+    mutable QImage thumbnail;  // downscaled cache for draft previews
     mutable QPixmap pixmap;    // painter cache, built on first draw
     QVariantMap data;          // type-specific static data (text, font, shape, ...)
     QHash<QString, Track> tracks;
@@ -52,6 +55,7 @@ struct Entity
 
     double staticValue(const QString& prop) const;
 
+    bool isCamera() const { return type == EntityType::Camera; }
     QString textContent() const { return data.value(QStringLiteral("text")).toString(); }
     bool rotPointCustom() const
     {
@@ -123,6 +127,11 @@ public:
     QColor background{0x10, 0x10, 0x14};
     bool autoKey = true;
 
+    // Camera view state. Scene cameras are normal entities; the work camera
+    // is the live main viewport and the whole-canvas view is a fixed fallback.
+    EntityId activeCamera = kInvalidEntity;
+    int monitorView = kWorkCameraView; // work camera, whole canvas, or a camera id
+
     // Length follows content: last keyframe + one second of tail, minimum 2s.
     int timelineLength() const;
 
@@ -135,6 +144,7 @@ public:
                     const QColor& color, int align);
     Entity* addVector(int shape, double width, double height, const QColor& fill,
                       const QColor& stroke, double strokeWidth);
+    Entity* addCamera(const QString& name = QString());
 
     Entity* entity(EntityId id);
     const Entity* entity(EntityId id) const;

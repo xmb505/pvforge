@@ -22,11 +22,12 @@
 
 ### 实体
 
-- 图片、视频（首帧）、文字、矢量
+- 图片、视频（首帧）、文字、矢量、摄像机
 - 文字：内容/字体/字号/颜色/对齐
 - 矢量 9 种形状：矩形、圆角矩形、椭圆、直线、三角形、心形、星形、多边形、箭头
   - 参数：宽高、圆角、边数、内径比、填充、描边
 - 每实体：位置、旋转、缩放、透明度、隐藏、锁定
+- 摄像机：时间轴对象，活动摄像机、取景比例 5%–100%、旋转、关键帧；位置限制在画布内，旋转允许越界
 - 自定义轴心（`rotPointX/Y`）：位置锚定轴心，改轴心自动补偿位置，旋转围绕轴心
 - 锁定在数据层强制：值、关键帧不可改
 
@@ -60,8 +61,19 @@
 - 拖动主轴约束（4:1）与青色对齐参考线
 - 所有吸附可被 `Ctrl` 临时关闭
 
-### 素材
+### 摄像机与监视器
 
+- 工作台「摄像机」类型，只填名称；创建即选中并设为活动摄像机；没有摄像机时监视器显示工作摄像机
+- 视口只显示活动摄像机取景框；框外 55% 深灰半透明压暗，框内点击穿透给实体；视图菜单可隐藏取景框
+- 拖动边框/标题条移动，四角中心固定缩放，顶边旋转手柄；移动吸附沿用画布/实体，旋转沿用角度吸附
+- 活动摄像机 ID 和监视器视图存进工程；监视器位置/大小/画质/独立窗几何存全局设置
+- 监视器下拉：工作摄像机 / 场景摄像机 / 整画布；无辅助线、无选中框，等比黑边
+- 草稿默认按监视器分辨率并使用缩略图；高质量按项目分辨率并使用原图；播放强制草稿，暂停恢复
+- 画布内显示项目背景，画布外纯黑；工作摄像机显示主视口原始内容（包括画布外）
+- OBS 式独立窗口：按钮或拖出主窗口；关闭独立窗口停靠回右下角；默认不置顶，可切换「置顶」
+- 共享 `SceneRenderer` / `CameraRenderer`，主视口、监视器、未来 MP4 导出共用
+
+### 素材
 - 工作台：媒体（图片/视频自动识别）、文字、矢量图标网格、内嵌素材库
 - 素材库：`+` 多文件导入、搜索、预览、创建实体、删除（可选同时删实例）
 - 异步导入：哈希/复制/解码在工作线程，状态栏进度条
@@ -71,8 +83,8 @@
 
 ### 撤销 / 重做
 
-- 覆盖：属性修改、实体创建/删除、隐藏锁定、重命名、关键帧删除、移动、缩放、轴心
-- 连续拖动合并为一条：移动、缩放、轴心、单轴、旋转
+- 覆盖：属性修改、实体创建/删除、隐藏锁定、重命名、关键帧删除、移动、缩放、轴心、摄像机移动/缩放/旋转
+- 连续拖动合并为一条：移动、缩放、轴心、单轴、旋转、摄像机
 - `Ctrl+Z` / `Ctrl+Shift+Z`
 
 ### 界面
@@ -87,33 +99,35 @@
 
 ```
 src/
-├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape
+├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera
 ├─ anim/     （预留）
-├─ render/   （预留，目前视口用 QPainter）
+├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
 ├─ media/    VideoDecoder（FFmpeg 首帧）、MediaImporter（哈希/复制/解码，可线程运行）
 ├─ audio/    （预留）
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
-│            CollapsibleSection
+│            CameraMonitor、CollapsibleSection
 └─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、AppIcon
 ```
 
 关键设计：
 
 - **位置 = 轴心**：变换 `T(pos) · R · T(-pivot) · S`，改轴心补偿位置，视觉不动
+- **摄像机 = 画布内的旋转取景框**：位置/缩放/旋转复用实体轨道；未旋转框限制在画布内，旋转可越界，画布外纯黑
+- **共享渲染器**：主视口、监视器、未来导出都走 `SceneRenderer`；辅助线和压暗只留在主视口
 - **内容寻址素材**：哈希文件名 + 原始显示名
 - **命令历史**：复合命令 + 合并，一次拖动一条撤销
 - **异步导入**：重活在工作线程，主线程入库
-- **求值/渲染未分离**：目前 Viewport 直接读 Project；导出前需要抽出快照（见下一步）
+- **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
 
 ## 测试
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 30 个模式，全部通过。
+共 31 个模式，全部通过。
 
 ## 已知限制
 
@@ -125,7 +139,7 @@ self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo
 - 旋转实体的角缩放仍围绕中心
 - 实体单选（框选只作用于关键帧）
 - 英文翻译只覆盖核心界面
-- 没有多场景、多相机
+- 摄像机不支持自定义输出分辨率/宽高比（竖屏裁切）；监视器没有无边框全屏投影
 - 3D 世界/Minecraft 资产完全移除（有意）
 
 ## 下一步：关键帧函数

@@ -40,6 +40,7 @@ private:
     QWidget* buildMediaPage();
     QWidget* buildTextPage();
     QWidget* buildVectorPage();
+    QWidget* buildCameraPage();
 
     void createCurrent();
     void pickMedia();
@@ -67,11 +68,12 @@ private:
     QListWidget* m_mediaLibrary = nullptr;
 
     QLineEdit* m_textContent = nullptr;
-    QFontComboBox* m_textFont = nullptr;
-    QSpinBox* m_textSize = nullptr;
+    QFontComboBox* m_textFont = nullptr;    QSpinBox* m_textSize = nullptr;
     QPushButton* m_textColor = nullptr;
     QComboBox* m_textAlign = nullptr;
     QColor m_textColorValue{Qt::white};
+
+    QLineEdit* m_cameraName = nullptr;
 
     QListWidget* m_vectorShapes = nullptr;
     QDoubleSpinBox* m_vectorCorner = nullptr;

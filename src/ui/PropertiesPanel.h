@@ -39,6 +39,8 @@ private:
     struct Row
     {
         QString prop;
+        QString baseLabel;
+        QLabel* label = nullptr;
         QDoubleSpinBox* spin = nullptr;
         double factor = 1.0;   // display value * factor = stored value
     };

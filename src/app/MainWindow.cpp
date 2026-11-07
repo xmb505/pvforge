@@ -1,11 +1,13 @@
 #include "MainWindow.h"
 
 #include "core/Commands.h"
+#include "core/Camera.h"
 #include "core/Lang.h"
 #include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "SettingsDialog.h"
 #include "ui/AssetLibraryPanel.h"
+#include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/EnvironmentPanel.h"
 #include "ui/ProjectPropertiesPanel.h"
@@ -62,6 +64,9 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
+    m_monitor = new CameraMonitor(m_project, m_viewport, m_viewport);
+    m_monitor->setFrame(0);
+    m_monitor->setVisible(Settings::monitorVisible());
 
     // "Project properties" tab: collapsible categories, one scroll column.
     m_projectTab = new QWidget(this);
@@ -155,7 +160,19 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_viewport, &Viewport::positionEdited, this, &MainWindow::applyPosition);
     connect(m_viewport, &Viewport::scaleEdited, this, &MainWindow::applyScale);
     connect(m_viewport, &Viewport::pivotEdited, this, &MainWindow::applyPivot);
+    connect(m_viewport, &Viewport::cameraEdited, this, &MainWindow::applyCamera);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
+    connect(m_viewport, &Viewport::viewChanged, m_monitor,
+            &CameraMonitor::updateFromViewport);
+    connect(m_monitor, &CameraMonitor::cameraActivated, this,
+            &MainWindow::setSelectedEntity);
+    connect(m_monitor, &CameraMonitor::visibilityChanged, this, [this](bool visible) {
+        if (auto* action = findChild<QAction*>(QStringLiteral("monitorAction")))
+        {
+            const QSignalBlocker blocker(action);
+            action->setChecked(visible);
+        }
+    });
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
@@ -335,6 +352,29 @@ void MainWindow::createMenus()
     playMenu->addAction(m_endAction);
 
     auto* viewMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.view"), QStringLiteral("视图")));
+    auto* cameraFrameAction = new QAction(
+        Lang::t(QStringLiteral("action.cameraFrame"), QStringLiteral("显示摄像机取景框")),
+        this);
+    cameraFrameAction->setObjectName(QStringLiteral("cameraFrameAction"));
+    cameraFrameAction->setCheckable(true);
+    cameraFrameAction->setChecked(Settings::showCameraFrame());
+    connect(cameraFrameAction, &QAction::toggled, this, [this](bool on) {
+        Settings::setShowCameraFrame(on);
+        m_viewport->setCameraFrameVisible(on);
+    });
+    viewMenu->addAction(cameraFrameAction);
+
+    auto* monitorAction =
+        new QAction(Lang::t(QStringLiteral("action.monitor"), QStringLiteral("摄像机监视器")),
+                    this);
+    monitorAction->setObjectName(QStringLiteral("monitorAction"));
+    monitorAction->setCheckable(true);
+    monitorAction->setChecked(Settings::monitorVisible());
+    connect(monitorAction, &QAction::toggled, this, [this](bool on) {
+        if (m_monitor)
+            m_monitor->setVisibleFromMenu(on);
+    });
+    viewMenu->addAction(monitorAction);
     viewMenu->addAction(m_fitAction);
     viewMenu->addSeparator();
 
@@ -564,14 +604,26 @@ void MainWindow::setFrame(int frame)
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
+    if (m_monitor)
+        m_monitor->setFrame(m_frame);
     updateStatus();
 }
 
 void MainWindow::setSelectedEntity(EntityId id)
 {
+    Entity* selected = m_project->entity(id);
+    if (selected && selected->isCamera() && !selected->hidden)
+    {
+        // Selecting a camera makes it the active framing camera and asks the
+        // monitor to show it.
+        m_project->activeCamera = id;
+        m_project->monitorView = id;
+        if (m_monitor)
+            m_monitor->syncCameraView();
+    }
+
     if (m_selected == id)
-        return;
-    m_selected = id;
+        return;    m_selected = id;
     m_viewport->setSelectedEntity(id);
     m_props->setEntity(id);
     m_timeline->setSelectedEntity(id);
@@ -605,6 +657,28 @@ void MainWindow::applyValue(EntityId id, const QString& prop, double value)
     Entity* e = m_project->entity(id);
     if (!e || e->locked)
         return;
+
+    if (e->isCamera())
+    {
+        Camera::State state = Camera::state(*m_project, id, m_frame);
+        double x = state.center.x();
+        double y = state.center.y();
+        double scale = state.scale;
+        double rotation = state.rotation;
+        if (prop == QStringLiteral("x"))
+            x = value;
+        else if (prop == QStringLiteral("y"))
+            y = value;
+        else if (prop == QStringLiteral("scaleX"))
+            scale = std::clamp(value, Camera::kMinScale, Camera::kMaxScale);
+        else if (prop == QStringLiteral("rotation"))
+            rotation = value;
+        else
+            return;
+        const QPointF center = Camera::clampCenter(*m_project, scale, QPointF(x, y));
+        applyCamera(id, center.x(), center.y(), scale, rotation);
+        return;
+    }
 
     // Auto-key on by default. With auto-key off, existing animated properties
     // still get edited at the current frame so the viewport stays truthful.
@@ -667,8 +741,7 @@ void MainWindow::applyScale(EntityId id, double sx, double sy, double x, double 
 }
 
 void MainWindow::applyPivot(EntityId id, double ax, double ay)
-{
-    Entity* e = m_project->entity(id);
+{    Entity* e = m_project->entity(id);
     if (!e || e->locked)
         return;
 
@@ -694,6 +767,42 @@ void MainWindow::applyPivot(EntityId id, double ax, double ay)
 
     m_history->push(std::make_unique<SetPivotCommand>(id, oldAx, oldAy, oldX, oldY, ax, ay,
                                                       oldX + dx, oldY + dy, m_frame),
+                    *m_project);
+}
+
+void MainWindow::applyCamera(EntityId id, double x, double y, double scale,
+                             double rotation)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || !e->isCamera() || e->locked)
+        return;
+
+    const double oldX = m_project->value(id, QStringLiteral("x"), m_frame);
+    const double oldY = m_project->value(id, QStringLiteral("y"), m_frame);
+    const double oldScale = m_project->value(id, QStringLiteral("scaleX"), m_frame);
+    const double oldRotation = m_project->value(id, QStringLiteral("rotation"), m_frame);
+    if (qFuzzyCompare(oldX + 1.0, x + 1.0) && qFuzzyCompare(oldY + 1.0, y + 1.0)
+        && qFuzzyCompare(oldScale + 1.0, scale + 1.0)
+        && qFuzzyCompare(oldRotation + 1.0, rotation + 1.0))
+        return;
+
+    const bool keyframe = m_project->autoKey
+                          || e->tracks.contains(QStringLiteral("x"))
+                          || e->tracks.contains(QStringLiteral("y"))
+                          || e->tracks.contains(QStringLiteral("scaleX"))
+                          || e->tracks.contains(QStringLiteral("scaleY"))
+                          || e->tracks.contains(QStringLiteral("rotation"));
+
+    // Apply first: merged history entries skip redo.
+    m_project->setValue(id, QStringLiteral("x"), m_frame, x, keyframe);
+    m_project->setValue(id, QStringLiteral("y"), m_frame, y, keyframe);
+    m_project->setValue(id, QStringLiteral("scaleX"), m_frame, scale, keyframe);
+    m_project->setValue(id, QStringLiteral("scaleY"), m_frame, scale, keyframe);
+    m_project->setValue(id, QStringLiteral("rotation"), m_frame, rotation, keyframe);
+
+    m_history->push(std::make_unique<SetCameraCommand>(
+                        id, m_frame, oldX, oldY, oldScale, oldRotation, x, y, scale,
+                        rotation, keyframe),
                     *m_project);
 }
 
@@ -743,6 +852,11 @@ void MainWindow::onRedo()
 void MainWindow::onEntityCreated(EntityId id)
 {
     setSelectedEntity(id);
+    if (const Entity* created = m_project->entity(id))
+    {
+        if (created->isCamera())
+            m_monitor->setVisibleFromMenu(true);
+    }
 
     const auto& entities = m_project->entities();
     for (int i = 0; i < int(entities.size()); ++i)
@@ -784,6 +898,8 @@ void MainWindow::refreshAll()
     m_viewport->update();
     m_timeline->update();
     m_props->refresh();
+    if (m_monitor)
+        m_monitor->setProjectChanged();
     updateStatus();
     updateWindowTitle();
 }
@@ -794,6 +910,8 @@ void MainWindow::togglePlayback()
     {
         m_playTimer->stop();
         m_playing = false;
+        if (m_monitor)
+            m_monitor->setPlaying(false);
         m_playAction->setText(Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")));
         return;
     }
@@ -805,6 +923,8 @@ void MainWindow::togglePlayback()
     m_playClock.restart();
     m_playTimer->start(std::max(1, 1000 / std::max(1, m_project->fps)));
     m_playing = true;
+    if (m_monitor)
+        m_monitor->setPlaying(true);
     m_playAction->setText(Lang::t(QStringLiteral("action.pause"), QStringLiteral("暂停")));
 }
 

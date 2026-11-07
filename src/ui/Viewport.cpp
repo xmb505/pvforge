@@ -2,14 +2,17 @@
 
 #include "app/AppIcon.h"
 #include "core/Settings.h"
-#include "core/VectorShape.h"
+#include "render/SceneRenderer.h"
 
 #include <QApplication>
+#include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QIcon>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QResizeEvent>
 #include <QToolButton>
 #include <QWheelEvent>
 #include <algorithm>
@@ -34,6 +37,20 @@ double snapTo(double value, std::initializer_list<double> candidates, double thr
     return value;
 }
 
+double distanceToSegment(const QPointF& point, const QPointF& a, const QPointF& b)
+{
+    const QPointF ab = b - a;
+    const double lengthSquared = ab.x() * ab.x() + ab.y() * ab.y();
+    if (lengthSquared < 1e-9)
+        return std::hypot(point.x() - a.x(), point.y() - a.y());
+    const double t = std::clamp(((point.x() - a.x()) * ab.x()
+                                 + (point.y() - a.y()) * ab.y())
+                                    / lengthSquared,
+                                0.0, 1.0);
+    const QPointF closest = a + ab * t;
+    return std::hypot(point.x() - closest.x(), point.y() - closest.y());
+}
+
 } // namespace
 
 
@@ -44,6 +61,7 @@ Viewport::Viewport(Project* project, QWidget* parent)
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    m_showCameraFrame = Settings::showCameraFrame();
 
     m_workbenchButton = new QToolButton(this);
     m_workbenchButton->setObjectName(QStringLiteral("workbenchButton"));
@@ -77,10 +95,19 @@ void Viewport::setSelectedEntity(EntityId id)
     update();
 }
 
+void Viewport::setCameraFrameVisible(bool on)
+{
+    if (m_showCameraFrame == on)
+        return;
+    m_showCameraFrame = on;
+    update();
+}
+
 void Viewport::resetView()
 {
     m_zoom = 1.0;
     m_pan = QPointF();
+    emit viewChanged();
     update();
 }
 
@@ -109,45 +136,420 @@ QPointF Viewport::screenToCanvas(const QPointF& pos) const
     return QPointF((pos.x() - center.x()) / s, (pos.y() - center.y()) / s);
 }
 
+EntityId Viewport::activeCameraEntity() const
+{
+    const Entity* entity = m_project->entity(m_project->activeCamera);
+    if (!entity || !entity->isCamera() || entity->hidden)
+        return kInvalidEntity;
+    return entity->id;
+}
+
+Camera::State Viewport::cameraState(const Entity& e) const
+{
+    return Camera::state(*m_project, e.id, m_frame);
+}
+
+QPolygonF Viewport::cameraScreenPolygon() const
+{
+    if (!m_showCameraFrame)
+        return QPolygonF();
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return QPolygonF();
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return QPolygonF();
+    return worldToScreenTransform().map(Camera::polygon(cameraState(*entity)));
+}
+
+QPointF Viewport::cameraScreenCenter() const
+{
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return QPointF();
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return QPointF();
+    return worldToScreenTransform().map(cameraState(*entity).center);
+}
+
+QPointF Viewport::cameraRotationHandle() const
+{
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return QPointF();
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return QPointF();
+
+    const Camera::State state = cameraState(*entity);
+    const QPointF topLocal(0.0, -state.size.height() / 2.0);
+    const QPointF topProject = Camera::frameToProject(state).map(topLocal);
+    const QPointF topScreen = worldToScreenTransform().map(topProject);
+
+    QTransform direction;
+    direction.rotate(state.rotation);
+    const QPointF up = direction.map(QPointF(0.0, -1.0));
+    return topScreen + up * 28.0;
+}
+
+QRectF Viewport::cameraTitleRect() const
+{
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return QRectF();
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return QRectF();
+
+    const QPolygonF polygon = cameraScreenPolygon();
+    if (polygon.isEmpty())
+        return QRectF();
+    const QRectF box = polygon.boundingRect();
+    const QFontMetrics metrics(font());
+    const int textWidth = metrics.horizontalAdvance(entity->name);
+    const QRectF title(box.left(), box.top() - 24.0, textWidth + 16.0, 20.0);
+    if (title.top() < 2.0)
+        return QRectF(box.left(), box.top() + 4.0, textWidth + 16.0, 20.0);
+    return title;
+}
+
+Viewport::CameraPart Viewport::cameraHitTest(const QPointF& pos) const
+{
+    if (!m_showCameraFrame)
+        return CameraPart::None;
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return CameraPart::None;
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return CameraPart::None;
+
+    const bool selected = (m_selected == id);
+    if (selected && !entity->locked)
+    {
+        if (QLineF(pos, cameraRotationHandle()).length() <= 10.0)
+            return CameraPart::Rotate;
+
+        const QPolygonF polygon = cameraScreenPolygon();
+        for (int i = 0; i < polygon.size(); ++i)
+        {
+            if (QLineF(pos, polygon[i]).length() <= 8.0)
+                return CameraPart(i == 0 ? CameraPart::Corner0
+                                  : i == 1 ? CameraPart::Corner1
+                                  : i == 2 ? CameraPart::Corner2
+                                           : CameraPart::Corner3);
+        }
+    }
+
+    if (cameraTitleRect().contains(pos))
+        return CameraPart::Move;
+
+    const QPolygonF polygon = cameraScreenPolygon();
+    for (int i = 0; i < polygon.size(); ++i)
+    {
+        if (distanceToSegment(pos, polygon[i], polygon[(i + 1) % polygon.size()]) <= 6.0)
+            return CameraPart::Move;
+    }
+    return CameraPart::None;
+}
+
+bool Viewport::handleCameraPress(QMouseEvent* event)
+{
+    if (event->button() != Qt::LeftButton)
+        return false;
+
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return false;
+
+    const CameraPart part = cameraHitTest(event->position());
+    if (part == CameraPart::None)
+        return false;
+
+    emit entitySelected(id);
+
+    Entity* entity = m_project->entity(id);
+    if (!entity || entity->locked)
+        return true;
+
+    m_cameraPart = part;
+    m_cameraStartState = cameraState(*entity);
+    m_cameraStartMouse = event->position();
+    const QPointF center = cameraScreenCenter();
+    m_cameraStartAngle =
+        std::atan2(event->position().y() - center.y(), event->position().x() - center.x())
+            * 180.0 / M_PI
+        + 90.0;
+    m_dragging = false;
+    m_gizmoMode = GizmoMode::None;
+    m_activeHandle = Handle::None;
+    m_dragEntity = kInvalidEntity;
+    setCursor(part == CameraPart::Move ? Qt::SizeAllCursor
+                                       : part == CameraPart::Rotate ? Qt::CrossCursor
+                                                                    : Qt::SizeFDiagCursor);
+    update();
+    return true;
+}
+
+QPointF Viewport::snapCameraCenter(const Camera::State& start, const QPointF& center,
+                                   bool* snappedX, double* guideX, bool* snappedY,
+                                   double* guideY) const
+{
+    *snappedX = false;
+    *snappedY = false;
+    if (m_snapPixels <= 0)
+        return center;
+
+    const double threshold = m_snapPixels / viewScale();
+    Camera::State candidate = start;
+    candidate.center = center;
+    const QRectF box = Camera::polygon(candidate).boundingRect();
+
+    QVector<double> targetsX = {-m_project->width / 2.0, 0.0, m_project->width / 2.0};
+    QVector<double> targetsY = {-m_project->height / 2.0, 0.0, m_project->height / 2.0};
+    const EntityId cameraId = activeCameraEntity();
+    for (const Entity& other : m_project->entities())
+    {
+        if (other.id == cameraId || other.hidden || other.isCamera())
+            continue;
+        const VisualBounds bounds =
+            visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
+                           m_project->value(other.id, "y", m_frame));
+        targetsX << bounds.left << bounds.right;
+        targetsY << bounds.top << bounds.bottom;
+        if (Settings::edgeMidpointSnap())
+        {
+            targetsX << (bounds.left + bounds.right) / 2.0;
+            targetsY << (bounds.top + bounds.bottom) / 2.0;
+        }
+    }
+
+    QPointF result = center;
+    double bestX = threshold + 1.0;
+    double bestTargetX = 0.0;
+    for (double target : targetsX)
+    {
+        const double features[] = {box.left(), box.center().x(), box.right()};
+        for (double feature : features)
+        {
+            const double distance = std::abs(feature - target);
+            if (distance < bestX)
+            {
+                bestX = distance;
+                bestTargetX = target;
+            }
+        }
+    }
+    if (bestX <= threshold)
+    {
+        result.setX(center.x() + (bestTargetX - box.center().x()));
+        // Pick the frame feature that was closest to the winning target.
+        double bestFeatureDistance = 1e9;
+        double adjustment = 0.0;
+        for (double feature : {box.left(), box.center().x(), box.right()})
+        {
+            const double distance = std::abs(feature - bestTargetX);
+            if (distance < bestFeatureDistance)
+            {
+                bestFeatureDistance = distance;
+                adjustment = bestTargetX - feature;
+            }
+        }
+        result.setX(center.x() + adjustment);
+        *snappedX = true;
+        *guideX = bestTargetX;
+    }
+
+    double bestY = threshold + 1.0;
+    double bestTargetY = 0.0;
+    for (double target : targetsY)
+    {
+        for (double feature : {box.top(), box.center().y(), box.bottom()})
+        {
+            const double distance = std::abs(feature - target);
+            if (distance < bestY)
+            {
+                bestY = distance;
+                bestTargetY = target;
+            }
+        }
+    }
+    if (bestY <= threshold)
+    {
+        double bestFeatureDistance = 1e9;
+        double adjustment = 0.0;
+        for (double feature : {box.top(), box.center().y(), box.bottom()})
+        {
+            const double distance = std::abs(feature - bestTargetY);
+            if (distance < bestFeatureDistance)
+            {
+                bestFeatureDistance = distance;
+                adjustment = bestTargetY - feature;
+            }
+        }
+        result.setY(center.y() + adjustment);
+        *snappedY = true;
+        *guideY = bestTargetY;
+    }
+
+    return result;
+}
+
+void Viewport::applyCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers)
+{
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity || m_cameraPart == CameraPart::None)
+        return;
+    Entity* entity = m_project->entity(id);
+    if (!entity || entity->locked)
+        return;
+
+    const Camera::State start = m_cameraStartState;
+    m_showGuideX = false;
+    m_showGuideY = false;
+
+    if (m_cameraPart == CameraPart::Move)
+    {
+        const double s = viewScale();
+        QPointF center = start.center
+                         + QPointF((pos.x() - m_cameraStartMouse.x()) / s,
+                                   (pos.y() - m_cameraStartMouse.y()) / s);
+        bool snappedX = false;
+        bool snappedY = false;
+        double guideX = 0.0;
+        double guideY = 0.0;
+        if (!(modifiers & Qt::ControlModifier))
+            center = snapCameraCenter(start, center, &snappedX, &guideX, &snappedY,
+                                      &guideY);
+        center = Camera::clampCenter(*m_project, start.scale, center);
+        m_showGuideX = snappedX;
+        m_showGuideY = snappedY;
+        m_guideX = guideX;
+        m_guideY = guideY;
+        emit cameraEdited(id, center.x(), center.y(), start.scale, start.rotation);
+        update();
+        return;
+    }
+
+    if (m_cameraPart == CameraPart::Rotate)
+    {
+        const QPointF center = worldToScreenTransform().map(start.center);
+        double angle =
+            std::atan2(pos.y() - center.y(), pos.x() - center.x()) * 180.0 / M_PI + 90.0;
+        double delta = angle - m_cameraStartAngle;
+        while (delta > 180.0)
+            delta -= 360.0;
+        while (delta < -180.0)
+            delta += 360.0;
+
+        double rotation = start.rotation + delta;
+        if (!(modifiers & Qt::ControlModifier))
+        {
+            constexpr double tolerance = 3.0;
+            for (int snapAngle : Settings::snapAngles())
+            {
+                const double diff = std::remainder(rotation - double(snapAngle), 360.0);
+                if (std::abs(diff) <= tolerance)
+                {
+                    rotation = snapAngle;
+                    break;
+                }
+            }
+        }
+        emit cameraEdited(id, start.center.x(), start.center.y(), start.scale, rotation);
+        update();
+        return;
+    }
+
+    // Corner scaling keeps the camera centre fixed; the frame aspect follows
+    // the project automatically.
+    const QPointF mouse = screenToCanvas(pos);
+    const QPointF delta = mouse - start.center;
+    const double radians = -start.rotation * M_PI / 180.0;
+    const double localX = delta.x() * std::cos(radians) - delta.y() * std::sin(radians);
+    const double localY = delta.x() * std::sin(radians) + delta.y() * std::cos(radians);
+    double scale = std::max(std::abs(localX) * 2.0 / std::max(1, m_project->width),
+                            std::abs(localY) * 2.0 / std::max(1, m_project->height));
+    scale = std::clamp(scale, Camera::kMinScale, Camera::kMaxScale);
+    const QPointF center = Camera::clampCenter(*m_project, scale, start.center);
+    emit cameraEdited(id, center.x(), center.y(), scale, start.rotation);
+    update();
+}
+
+void Viewport::drawCameraOverlay(QPainter& painter)
+{
+    if (!m_showCameraFrame)
+        return;
+    const EntityId id = activeCameraEntity();
+    if (id == kInvalidEntity)
+        return;
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return;
+
+    const Camera::State state = cameraState(*entity);
+    const QPolygonF polygon = cameraScreenPolygon();
+    if (polygon.isEmpty())
+        return;
+
+    const bool selected = (m_selected == id);
+    const bool locked = entity->locked;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QPainterPath outer;
+    outer.addRect(QRectF(rect()));
+    QPainterPath inner;
+    inner.addPolygon(polygon);
+    inner.closeSubpath();
+    painter.fillPath(outer.subtracted(inner), QColor(10, 10, 14, 140));
+
+    QPen framePen(QColor(90, 210, 255, selected ? 255 : 200),
+                  selected ? 2.0 : 1.2, Qt::DashLine);
+    if (locked)
+        framePen.setColor(QColor(150, 150, 160, 200));
+    painter.setPen(framePen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPolygon(polygon);
+
+    const QRectF title = cameraTitleRect();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(18, 20, 26, 225));
+    painter.drawRect(title);
+    painter.setPen(QColor(90, 210, 255, 220));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(title);
+    painter.setPen(locked ? QColor(170, 170, 180) : QColor(235, 245, 255));
+    painter.drawText(title.adjusted(7, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                     entity->name);
+
+    if (selected && !locked)
+    {
+        painter.setPen(QPen(QColor(20, 20, 26), 1.0));
+        painter.setBrush(QColor(90, 210, 255));
+        for (const QPointF& corner : polygon)
+            painter.drawRect(QRectF(corner.x() - 4.0, corner.y() - 4.0, 8.0, 8.0));
+
+        const QPointF handle = cameraRotationHandle();
+        QPolygonF frame = polygon;
+        QPointF topCenter = (frame[0] + frame[1]) / 2.0;
+        if (frame.size() >= 2)
+            topCenter = (frame[0] + frame[1]) / 2.0;
+        painter.setPen(QPen(QColor(90, 210, 255), 1.5));
+        painter.drawLine(topCenter, handle);
+        painter.setBrush(QColor(20, 24, 30));
+        painter.drawEllipse(handle, 5.0, 5.0);
+    }
+
+    painter.restore();
+}
+
+
 QRectF Viewport::entityLocalBounds(const Entity& e) const
 {
-    switch (e.type)
-    {
-    case EntityType::Image:
-    case EntityType::Video:
-        if (!e.image.isNull())
-            return QRectF(-e.image.width() / 2.0, -e.image.height() / 2.0,
-                          e.image.width(), e.image.height());
-        return QRectF(-40, -40, 80, 80);
-
-    case EntityType::Text:
-    {
-        QFont font(e.fontFamily());
-        font.setPixelSize(std::max(1, e.fontSize()));
-        const QString text = e.textContent();
-        if (text.isEmpty())
-            return QRectF(-10, -10, 20, 20);
-        const QFontMetricsF metrics(font);
-        const QRectF bounds =
-            metrics.boundingRect(QRectF(0, 0, 4000, 4000), Qt::TextWordWrap, text);
-        if (bounds.width() < 1 || bounds.height() < 1)
-            return QRectF(-10, -10, 20, 20);
-        // A little padding so glyph overhang and word-wrap rounding never clip.
-        const double pad = 6.0;
-        return QRectF(-bounds.width() / 2.0 - pad, -bounds.height() / 2.0 - pad,
-                      bounds.width() + pad * 2.0, bounds.height() + pad * 2.0);
-    }
-
-    case EntityType::Vector:
-    {
-        const double width = std::max(1.0, e.vectorWidth());
-        const double height =
-            e.vectorShape() == 2 ? std::max(4.0, e.strokeWidth())
-                                 : std::max(1.0, e.vectorHeight());
-        return QRectF(-width / 2.0, -height / 2.0, width, height);
-    }
-    }
-    return QRectF();
+    return SceneRenderer::entityLocalBounds(e);
 }
 
 const Entity* Viewport::hitTest(const QPointF& pos) const
@@ -175,10 +577,11 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
 
 void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
 {
-    if (e.hidden)
+    if (e.hidden || e.isCamera())
         return;
 
-    const double opacity = std::clamp(m_project->value(e.id, "opacity", m_frame), 0.0, 1.0);
+    const double opacity =
+        std::clamp(m_project->value(e.id, QStringLiteral("opacity"), m_frame), 0.0, 1.0);
     if (opacity <= 0.0)
         return;
 
@@ -186,81 +589,12 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
     if (bounds.isEmpty())
         return;
 
-    const QTransform transform = entityTransform(e);
-
-    p.save();
-    p.setOpacity(opacity);
-    p.setTransform(transform);
-
-    switch (e.type)
-    {
-    case EntityType::Image:
-    case EntityType::Video:
-        if (!e.image.isNull())
-        {
-            if (e.pixmap.isNull())
-                e.pixmap = QPixmap::fromImage(e.image);
-            p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            p.drawPixmap(bounds, e.pixmap, QRectF(e.pixmap.rect()));
-        }
-        break;
-
-    case EntityType::Text:
-    {
-        QFont font(e.fontFamily());
-        font.setPixelSize(std::max(1, e.fontSize()));
-        p.setFont(font);
-        p.setPen(e.textColor());
-        p.drawText(bounds, e.textAlign() | Qt::TextWordWrap, e.textContent());
-        break;
-    }
-
-    case EntityType::Vector:
-    {
-        const double w = e.vectorWidth();
-        const double h = e.vectorHeight();
-        const double stroke = e.strokeWidth();
-        const QRectF rect(-w / 2.0, -h / 2.0, w, h);
-        const QPainterPath path = VectorShape::path(
-            e.vectorShape(), rect, e.cornerRadius(), e.vectorSides(),
-            e.vectorInnerRatio());
-
-        if (e.vectorShape() == 2)
-        {
-            QPen pen(e.strokeColor().alpha() > 0 ? e.strokeColor() : e.fillColor());
-            pen.setWidthF(std::max(1.0, stroke));
-            pen.setCapStyle(Qt::RoundCap);
-            p.setPen(pen);
-            p.setBrush(Qt::NoBrush);
-        }
-        else
-        {
-            QBrush brush(e.fillColor());
-            if (e.fillColor().alpha() == 0)
-                brush = Qt::NoBrush;
-            p.setBrush(brush);
-            if (stroke > 0)
-            {
-                QPen pen(e.strokeColor());
-                pen.setWidthF(stroke);
-                p.setPen(pen);
-            }
-            else
-            {
-                p.setPen(Qt::NoPen);
-            }
-        }
-        p.drawPath(path);
-        break;
-    }
-    }
-
-    p.restore();
+    SceneRenderer::drawEntity(p, *m_project, e, m_frame, worldToScreenTransform(), false);
 
     if (e.id == m_selected)
     {
         p.save();
-        p.setTransform(transform);
+        p.setTransform(entityTransform(e));
         QPen pen(QColor(77, 163, 255));
         pen.setCosmetic(true);
         pen.setWidthF(1.5);
@@ -340,24 +674,17 @@ Viewport::VisualBounds Viewport::visualBoundsOf(const Entity& e, double posX,
 
 QTransform Viewport::entityTransform(const Entity& e) const
 {
-    const double s = viewScale();
+    return SceneRenderer::entityTransform(*m_project, e, m_frame)
+           * worldToScreenTransform();
+}
+
+QTransform Viewport::worldToScreenTransform() const
+{
     const QRectF canvas = canvasRect();
-    const QPointF origin =
-        canvas.center() + QPointF(m_project->value(e.id, "x", m_frame) * s,
-                                  m_project->value(e.id, "y", m_frame) * s);
-    const double rotation = m_project->value(e.id, "rotation", m_frame);
-
-    // The pivot persists even when the custom-pivot mode is off, so rotation
-    // always uses it. A zero pivot means the entity centre.
-    const double ax = m_project->value(e.id, "rotPointX", m_frame) * s;
-    const double ay = m_project->value(e.id, "rotPointY", m_frame) * s;
-
+    const double s = viewScale();
     QTransform transform;
-    transform.translate(origin.x(), origin.y());
-    transform.rotate(rotation);
-    transform.translate(-ax, -ay);
-    transform.scale(m_project->value(e.id, "scaleX", m_frame) * s,
-                    m_project->value(e.id, "scaleY", m_frame) * s);
+    transform.translate(canvas.center().x(), canvas.center().y());
+    transform.scale(s, s);
     return transform;
 }
 
@@ -385,7 +712,7 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     if (m_selected == kInvalidEntity)
         return false;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity)
+    if (!entity || entity->isCamera())
         return false;
 
     const QPointF delta = pos - entityPivotScreen(*entity);
@@ -519,7 +846,7 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
     if (m_selected == kInvalidEntity)
         return Handle::None;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity)
+    if (!entity || entity->isCamera())
         return Handle::None;
 
     // Only corner handles: edge midpoints sit exactly on the gizmo axes and
@@ -756,6 +1083,9 @@ void Viewport::paintEvent(QPaintEvent*)
     for (const Entity& e : m_project->entities())
         drawEntity(p, e, canvas, s);
 
+    // Camera viewfinder and the veil outside it.
+    drawCameraOverlay(p);
+
     // CAD-style alignment guides while dragging.
     if (m_showGuideX)
     {
@@ -770,13 +1100,17 @@ void Viewport::paintEvent(QPaintEvent*)
         p.drawLine(int(canvas.left()), gy, int(canvas.right()), gy);
     }
 
-    // Gizmo on top of the selected entity.
+    // Gizmo on top of the selected entity. Cameras have their own frame
+    // handles and must not get the generic entity gizmo.
     if (m_selected != kInvalidEntity)
     {
         if (const Entity* entity = m_project->entity(m_selected))
         {
-            drawHandles(p, *entity);
-            drawGizmo(p, *entity);
+            if (!entity->isCamera())
+            {
+                drawHandles(p, *entity);
+                drawGizmo(p, *entity);
+            }
         }
     }
 
@@ -806,6 +1140,11 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         return;
 
     setFocus(Qt::MouseFocusReason);
+
+    // The camera frame is selected through its border/title; clicks inside
+    // pass through to the scene so entities remain editable.
+    if (handleCameraPress(event))
+        return;
 
     // Scaling handles take priority over the gizmo axes.
     const Handle handle = hitHandle(event->position());
@@ -887,10 +1226,17 @@ void Viewport::mousePressEvent(QMouseEvent* event)
 
 void Viewport::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_cameraPart != CameraPart::None)
+    {
+        applyCameraDrag(event->position(), event->modifiers());
+        return;
+    }
+
     if (m_panning)
     {
         m_pan += event->position() - m_panLast;
         m_panLast = event->position();
+        emit viewChanged();
         update();
         return;
     }
@@ -1264,8 +1610,10 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
         m_dragEntity = kInvalidEntity;
         m_gizmoMode = GizmoMode::None;
         m_activeHandle = Handle::None;
+        m_cameraPart = CameraPart::None;
         m_showGuideX = false;
         m_showGuideY = false;
+        unsetCursor();
         update();
     }
 }
@@ -1281,7 +1629,14 @@ void Viewport::wheelEvent(QWheelEvent* event)
     m_zoom = std::clamp(m_zoom * std::pow(1.15, steps), 0.1, 8.0);
     const double s1 = viewScale();
     m_pan += before * (s0 - s1);
+    emit viewChanged();
     update();
+}
+
+void Viewport::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    emit viewChanged();
 }
 
 } // namespace pvf
