@@ -760,6 +760,88 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int scaleUndoTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "scale-undo-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->entityPivotForTest(id).toPoint();
+        const QPoint corner(center.x() + int(std::lround(150.0 * s)),
+                            center.y() + int(std::lround(100.0 * s)));
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+
+        send(QEvent::MouseButtonPress, corner, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 8; ++i)
+            send(QEvent::MouseMove,
+                 corner + QPoint(int(std::lround(15.0 * s * i)),
+                                 int(std::lround(10.0 * s * i))),
+                 Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease,
+             corner + QPoint(int(std::lround(120.0 * s)), int(std::lround(80.0 * s))),
+             Qt::LeftButton, Qt::NoButton);
+
+        const double endSx = project->value(id, QStringLiteral("scaleX"), 0);
+        const double endSy = project->value(id, QStringLiteral("scaleY"), 0);
+        if (endSx <= 1.5 || endSy <= 1.3)
+        {
+            qCritical() << "scale-undo-test: scaling did nothing" << endSx << endSy;
+            ++failures;
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            undo->trigger();
+        if (std::abs(project->value(id, QStringLiteral("scaleX"), 0) - 1.0) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("scaleY"), 0) - 1.0) > 1e-6)
+        {
+            qCritical() << "scale-undo-test: one undo did not restore scale"
+                        << project->value(id, QStringLiteral("scaleX"), 0)
+                        << project->value(id, QStringLiteral("scaleY"), 0);
+            ++failures;
+        }
+
+        // Pivot drags merge into one undo step too.
+        window.applyPivotForTest(id, 50.0, 0.0);
+        window.applyPivotForTest(id, 100.0, 0.0);
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            undo->trigger();
+        if (std::abs(project->value(id, QStringLiteral("rotPointX"), 0)) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "scale-undo-test: pivot undo failed"
+                        << project->value(id, QStringLiteral("rotPointX"), 0)
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        qInfo() << "scale-undo-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int guideTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -2515,6 +2597,8 @@ int main(int argc, char* argv[])
         return entitySnapTest(app);
     if (app.arguments().contains(QStringLiteral("--guide-test")))
         return guideTest(app);
+    if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
+        return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

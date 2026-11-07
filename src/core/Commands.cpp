@@ -192,6 +192,51 @@ void SetPositionCommand::mergeWith(const UndoCommand* other)
     }
 }
 
+SetScaleCommand::SetScaleCommand(EntityId id, int frame, double oldSx, double oldSy,
+                                 double newSx, double newSy, bool keyframe)
+    : m_id(id)
+    , m_frame(frame)
+    , m_oldSx(oldSx)
+    , m_oldSy(oldSy)
+    , m_newSx(newSx)
+    , m_newSy(newSy)
+    , m_keyframe(keyframe)
+{
+}
+
+void SetScaleCommand::undo(Project& project)
+{
+    project.setValue(m_id, QStringLiteral("scaleX"), m_frame, m_oldSx, m_keyframe);
+    project.setValue(m_id, QStringLiteral("scaleY"), m_frame, m_oldSy, m_keyframe);
+}
+
+void SetScaleCommand::redo(Project& project)
+{
+    project.setValue(m_id, QStringLiteral("scaleX"), m_frame, m_newSx, m_keyframe);
+    project.setValue(m_id, QStringLiteral("scaleY"), m_frame, m_newSy, m_keyframe);
+}
+
+QString SetScaleCommand::text() const
+{
+    return QStringLiteral("缩放实体");
+}
+
+bool SetScaleCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* scale = dynamic_cast<const SetScaleCommand*>(other);
+    return scale && scale->m_id == m_id && scale->m_frame == m_frame;
+}
+
+void SetScaleCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* scale = dynamic_cast<const SetScaleCommand*>(other);
+    if (scale)
+    {
+        m_newSx = scale->m_newSx;
+        m_newSy = scale->m_newSy;
+    }
+}
+
 SetPivotCommand::SetPivotCommand(EntityId id, double oldAx, double oldAy, double oldX,
                                  double oldY, double newAx, double newAy, double newX,
                                  double newY, int frame)
@@ -229,6 +274,24 @@ void SetPivotCommand::redo(Project& project)
 QString SetPivotCommand::text() const
 {
     return QStringLiteral("调整轴心");
+}
+
+bool SetPivotCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* pivot = dynamic_cast<const SetPivotCommand*>(other);
+    return pivot && pivot->m_id == m_id && pivot->m_frame == m_frame;
+}
+
+void SetPivotCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* pivot = dynamic_cast<const SetPivotCommand*>(other);
+    if (pivot)
+    {
+        m_newAx = pivot->m_newAx;
+        m_newAy = pivot->m_newAy;
+        m_newX = pivot->m_newX;
+        m_newY = pivot->m_newY;
+    }
 }
 
 RemoveKeyframesCommand::RemoveKeyframesCommand(const QVector<KeyframeRecord>& records)

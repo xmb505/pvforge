@@ -58,6 +58,7 @@ private:
     void setSelectedEntity(EntityId id);
     void applyValue(EntityId id, const QString& prop, double value);
     void applyPosition(EntityId id, double x, double y);
+    void applyScale(EntityId id, double sx, double sy);
     void applyPivot(EntityId id, double ax, double ay);
     void refreshAll();
     void onPlayTick();

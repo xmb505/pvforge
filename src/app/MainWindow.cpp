@@ -151,6 +151,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
     connect(m_viewport, &Viewport::positionEdited, this, &MainWindow::applyPosition);
+    connect(m_viewport, &Viewport::scaleEdited, this, &MainWindow::applyScale);
     connect(m_viewport, &Viewport::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
@@ -586,6 +587,27 @@ void MainWindow::applyPosition(EntityId id, double x, double y)
     m_project->setValue(id, QStringLiteral("y"), m_frame, y, keyframe);
     m_history->push(std::make_unique<SetPositionCommand>(id, m_frame, oldX, oldY, x, y,
                                                          keyframe),
+                    *m_project);
+}
+
+void MainWindow::applyScale(EntityId id, double sx, double sy)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || e->locked)
+        return;
+
+    const double oldSx = m_project->value(id, QStringLiteral("scaleX"), m_frame);
+    const double oldSy = m_project->value(id, QStringLiteral("scaleY"), m_frame);
+    if (qFuzzyCompare(oldSx + 1.0, sx + 1.0) && qFuzzyCompare(oldSy + 1.0, sy + 1.0))
+        return;
+
+    const bool keyframe = m_project->autoKey
+                          || e->tracks.contains(QStringLiteral("scaleX"))
+                          || e->tracks.contains(QStringLiteral("scaleY"));
+    m_project->setValue(id, QStringLiteral("scaleX"), m_frame, sx, keyframe);
+    m_project->setValue(id, QStringLiteral("scaleY"), m_frame, sy, keyframe);
+    m_history->push(std::make_unique<SetScaleCommand>(id, m_frame, oldSx, oldSy, sx, sy,
+                                                       keyframe),
                     *m_project);
 }
 

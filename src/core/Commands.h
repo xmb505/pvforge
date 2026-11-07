@@ -116,6 +116,30 @@ private:
     bool m_keyframe = true;
 };
 
+// Scaling an entity on both axes as one undo step.
+class SetScaleCommand : public UndoCommand
+{
+public:
+    SetScaleCommand(EntityId id, int frame, double oldSx, double oldSy, double newSx,
+                    double newSy, bool keyframe);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    int m_frame = 0;
+    double m_oldSx = 1.0;
+    double m_oldSy = 1.0;
+    double m_newSx = 1.0;
+    double m_newSy = 1.0;
+    bool m_keyframe = true;
+};
+
 // Changing the pivot and the compensating position in one step.
 class SetPivotCommand : public UndoCommand
 {
@@ -126,6 +150,9 @@ public:
     void undo(Project& project) override;
     void redo(Project& project) override;
     QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
 
 private:
     void apply(Project& project, double ax, double ay, double x, double y);

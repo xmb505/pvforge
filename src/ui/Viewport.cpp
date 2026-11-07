@@ -663,8 +663,7 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
         }
     }
 
-    emit valueEdited(m_dragEntity, QStringLiteral("scaleX"), newScaleX);
-    emit valueEdited(m_dragEntity, QStringLiteral("scaleY"), newScaleY);
+    emit scaleEdited(m_dragEntity, newScaleX, newScaleY);
 }
 
 void Viewport::paintEvent(QPaintEvent*)
