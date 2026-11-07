@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFont>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
@@ -207,6 +208,38 @@ int welcomeTest(QApplication& app)
         });
     });
     return app.exec();
+}
+
+int deleteTest(QApplication& app)
+{
+    const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_delete.png");
+    QImage img(32, 32, QImage::Format_ARGB32);
+    img.fill(Qt::red);
+    if (!img.save(assetPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.show();
+
+    if (window.importImageFile(assetPath) == pvf::kInvalidEntity)
+        return 1;
+    if (project->entities().size() != 1)
+        return 1;
+
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(&window, &event);
+
+    const bool removed = project->entities().isEmpty();
+    int tabCount = 0;
+    if (auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs")))
+        tabCount = tabs->count();
+
+    QFile::remove(assetPath);
+    qInfo() << "delete-test: entities after delete" << project->entities().size()
+            << "tabs" << tabCount;
+    app.exit(removed && tabCount == 1 ? 0 : 1);
+    return 0;
 }
 
 int timelineZoomTest(QApplication& app)
@@ -585,6 +618,8 @@ int main(int argc, char* argv[])
         return openTimelineTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-zoom-test")))
         return timelineZoomTest(app);
+    if (app.arguments().contains(QStringLiteral("--delete-test")))
+        return deleteTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))

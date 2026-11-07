@@ -18,6 +18,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     , m_project(project)
 {
     setMinimumHeight(140);
+    setFocusPolicy(Qt::ClickFocus);
 
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
@@ -302,6 +303,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         const int row = rowAt(int(event->position().y()));
         const auto& entities = m_project->entities();
+        setFocus(Qt::MouseFocusReason);
         const QVector<int> visible = visibleEntities();
         if (row >= 0 && row < visible.size())
             emit entitySelected(entities[visible[row]].id);

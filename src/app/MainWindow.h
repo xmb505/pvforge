@@ -6,6 +6,7 @@
 #include <QMainWindow>
 
 class QAction;
+class QKeyEvent;
 class QLabel;
 class QScrollArea;
 class QTabWidget;
@@ -34,6 +35,9 @@ public:
     int currentFrame() const { return m_frame; }
     void togglePlayback();
 
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
+
 private:
     void createActions();
     void createMenus();
@@ -46,6 +50,7 @@ private:
     void onPlayTick();
     void updateStatus();
     void toggleWorkbench();
+    void deleteSelectedEntity();
     void saveProject();
     void saveProjectAs();
 

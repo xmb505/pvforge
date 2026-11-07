@@ -152,6 +152,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_create->setEnabled(false);
     buttons->addWidget(m_create, 1);
     m_remove = new QPushButton(QStringLiteral("删除"), this);
+    m_remove->setToolTip(QStringLiteral("只删除素材模板，不影响场景中已创建的实体"));
     m_remove->setEnabled(false);
     buttons->addWidget(m_remove);
     layout->addLayout(buttons);

@@ -104,6 +104,7 @@ public:
 
     Entity* entity(EntityId id);
     const Entity* entity(EntityId id) const;
+    void removeEntity(EntityId id);
     const QVector<Entity>& entities() const { return m_entities; }
     EntityId nextId() const { return m_nextId; }
 

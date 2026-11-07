@@ -12,6 +12,7 @@
 #include <QAction>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -205,6 +206,10 @@ void MainWindow::createMenus()
 
     auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
     editMenu->addAction(m_autoKeyAction);
+    editMenu->addSeparator();
+    auto* deleteAction = new QAction(QStringLiteral("删除实体"), this);
+    connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteSelectedEntity);
+    editMenu->addAction(deleteAction);
 
     auto* playMenu = menuBar()->addMenu(QStringLiteral("播放"));
     playMenu->addAction(m_playAction);
@@ -246,6 +251,26 @@ void MainWindow::toggleWorkbench()
     const QPoint anchor =
         m_viewport->workbenchButton()->geometry().bottomLeft() + QPoint(0, 8);
     m_workbench->showAt(anchor);
+}
+
+void MainWindow::deleteSelectedEntity()
+{
+    if (m_selected == kInvalidEntity)
+        return;
+    m_project->removeEntity(m_selected);
+    setSelectedEntity(kInvalidEntity);
+    statusBar()->showMessage(QStringLiteral("已删除实体"), 2000);
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Delete && m_selected != kInvalidEntity)
+    {
+        deleteSelectedEntity();
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
 }
 
 void MainWindow::saveProject()
@@ -354,6 +379,7 @@ void MainWindow::refreshAll()
     m_viewport->update();
     m_timeline->update();
     m_props->refresh();
+    updateStatus();
 }
 
 void MainWindow::togglePlayback()

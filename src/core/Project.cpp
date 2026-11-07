@@ -319,6 +319,16 @@ Entity* Project::entity(EntityId id)
     return nullptr;
 }
 
+void Project::removeEntity(EntityId id)
+{
+    const auto it = std::find_if(m_entities.begin(), m_entities.end(),
+                                 [id](const Entity& e) { return e.id == id; });
+    if (it == m_entities.end())
+        return;
+    m_entities.erase(it);
+    emit changed();
+}
+
 const Entity* Project::entity(EntityId id) const
 {
     for (const Entity& e : m_entities)

@@ -321,6 +321,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
     if (event->button() != Qt::LeftButton)
         return;
 
+    setFocus(Qt::MouseFocusReason);
     const Entity* hit = hitTest(event->position());
     if (hit)
     {
