@@ -19,6 +19,7 @@ add_executable(pvforge
     src/core/History.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
+    src/core/VectorShape.cpp
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/app/AppIcon.cpp

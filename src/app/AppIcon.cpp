@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
+
+#include <cmath>
 #include <QPalette>
 #include <QPixmap>
 
@@ -158,6 +160,138 @@ QIcon makeLockIcon(bool locked)
 QIcon makeKeyframeIcon()
 {
     return drawKeyframe();
+}
+
+namespace {
+
+QPainterPath heartPath(const QRectF& r)
+{
+    const double w = r.width();
+    const double h = r.height();
+    const double cx = r.center().x();
+    const double cy = r.center().y();
+    QPainterPath path;
+    path.moveTo(cx, cy + h * 0.35);
+    path.cubicTo(cx - w * 0.5, cy + h * 0.05, cx - w * 0.45, cy - h * 0.42, cx,
+                 cy - h * 0.18);
+    path.cubicTo(cx + w * 0.45, cy - h * 0.42, cx + w * 0.5, cy + h * 0.05, cx,
+                 cy + h * 0.35);
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath starPath(const QRectF& r, int points, double innerRatio)
+{
+    QPainterPath path;
+    const double rx = r.width() / 2.0;
+    const double ry = r.height() / 2.0;
+    const QPointF center = r.center();
+    for (int i = 0; i < points * 2; ++i)
+    {
+        const double angle = -M_PI / 2.0 + i * M_PI / points;
+        const double radius = (i % 2 == 0) ? 1.0 : innerRatio;
+        const QPointF p(center.x() + std::cos(angle) * rx * radius,
+                        center.y() + std::sin(angle) * ry * radius);
+        if (i == 0)
+            path.moveTo(p);
+        else
+            path.lineTo(p);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath polygonPath(const QRectF& r, int sides)
+{
+    QPainterPath path;
+    const double rx = r.width() / 2.0;
+    const double ry = r.height() / 2.0;
+    const QPointF center = r.center();
+    for (int i = 0; i < sides; ++i)
+    {
+        const double angle = -M_PI / 2.0 + i * 2.0 * M_PI / sides;
+        const QPointF p(center.x() + std::cos(angle) * rx,
+                        center.y() + std::sin(angle) * ry);
+        if (i == 0)
+            path.moveTo(p);
+        else
+            path.lineTo(p);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath arrowPath(const QRectF& r)
+{
+    const double w = r.width();
+    const double h = r.height();
+    const double cx = r.center().x();
+    const double cy = r.center().y();
+    const double shaft = h * 0.36;
+    QPainterPath path;
+    path.moveTo(cx - w * 0.5, cy - shaft / 2);
+    path.lineTo(cx + w * 0.1, cy - shaft / 2);
+    path.lineTo(cx + w * 0.1, cy - h * 0.5);
+    path.lineTo(cx + w * 0.5, cy);
+    path.lineTo(cx + w * 0.1, cy + h * 0.5);
+    path.lineTo(cx + w * 0.1, cy + shaft / 2);
+    path.lineTo(cx - w * 0.5, cy + shaft / 2);
+    path.closeSubpath();
+    return path;
+}
+
+} // namespace
+
+QIcon makeShapeIcon(int shape)
+{
+    QPixmap pixmap(48, 48);
+    pixmap.fill(Qt::transparent);
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor color = themeTextColor();
+    p.setPen(QPen(color, 2.2));
+    p.setBrush(QColor(color.red(), color.green(), color.blue(), 40));
+
+    const QRectF rect(6, 6, 36, 36);
+    switch (shape)
+    {
+    case 0:
+        p.drawRect(rect);
+        break;
+    case 1:
+        p.drawEllipse(rect);
+        break;
+    case 2:
+        p.drawLine(QPointF(6, 24), QPointF(42, 24));
+        break;
+    case 3:
+        p.drawRoundedRect(rect, 9, 9);
+        break;
+    case 4:
+    {
+        QPolygonF triangle;
+        triangle << QPointF(24, 6) << QPointF(42, 42) << QPointF(6, 42);
+        p.drawPolygon(triangle);
+        break;
+    }
+    case 5:
+        p.drawPath(heartPath(rect));
+        break;
+    case 6:
+        p.drawPath(starPath(rect, 5, 0.45));
+        break;
+    case 7:
+        p.drawPath(polygonPath(rect, 6));
+        break;
+    case 8:
+        p.drawPath(arrowPath(rect));
+        break;
+    default:
+        p.drawRect(rect);
+        break;
+    }
+    return QIcon(pixmap);
 }
 
 } // namespace pvf

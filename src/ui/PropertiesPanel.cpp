@@ -181,12 +181,40 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 
     m_vectorShape = new QComboBox(content);
     m_vectorShape->addItem(QStringLiteral("矩形"), 0);
-    m_vectorShape->addItem(QStringLiteral("圆形"), 1);
+    m_vectorShape->addItem(QStringLiteral("圆角矩形"), 3);
+    m_vectorShape->addItem(QStringLiteral("椭圆"), 1);
     m_vectorShape->addItem(QStringLiteral("直线"), 2);
+    m_vectorShape->addItem(QStringLiteral("三角形"), 4);
+    m_vectorShape->addItem(QStringLiteral("心形"), 5);
+    m_vectorShape->addItem(QStringLiteral("星形"), 6);
+    m_vectorShape->addItem(QStringLiteral("多边形"), 7);
+    m_vectorShape->addItem(QStringLiteral("箭头"), 8);
     connect(m_vectorShape, &QComboBox::currentIndexChanged, this, [this](int) {
         applyData(QStringLiteral("shape"), m_vectorShape->currentData());
     });
     form->addRow(QStringLiteral("形状"), m_vectorShape);
+
+    m_vectorCorner = new QDoubleSpinBox(content);
+    m_vectorCorner->setRange(0, 2000);
+    m_vectorCorner->setDecimals(1);
+    m_vectorCorner->setSuffix(QStringLiteral(" px"));
+    connect(m_vectorCorner, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("cornerRadius"), value); });
+    form->addRow(QStringLiteral("圆角"), m_vectorCorner);
+
+    m_vectorSides = new QSpinBox(content);
+    m_vectorSides->setRange(3, 64);
+    connect(m_vectorSides, &QSpinBox::valueChanged, this,
+            [this](int value) { applyData(QStringLiteral("sides"), value); });
+    form->addRow(QStringLiteral("边数"), m_vectorSides);
+
+    m_vectorInner = new QDoubleSpinBox(content);
+    m_vectorInner->setRange(0.05, 1.0);
+    m_vectorInner->setSingleStep(0.05);
+    m_vectorInner->setDecimals(2);
+    connect(m_vectorInner, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("innerRatio"), value); });
+    form->addRow(QStringLiteral("内径比"), m_vectorInner);
 
     m_vectorWidth = new QDoubleSpinBox(content);
     m_vectorWidth->setRange(1, 20000);
@@ -445,6 +473,22 @@ void PropertiesPanel::refresh()
                 }
             }
         }
+        {
+            const QSignalBlocker blocker(m_vectorCorner);
+            m_vectorCorner->setValue(e->cornerRadius());
+        }
+        {
+            const QSignalBlocker blocker(m_vectorSides);
+            m_vectorSides->setValue(e->vectorSides());
+        }
+        {
+            const QSignalBlocker blocker(m_vectorInner);
+            m_vectorInner->setValue(e->vectorInnerRatio());
+        }
+        const int shape = e->vectorShape();
+        m_vectorCorner->setEnabled(editable && shape == 3);
+        m_vectorSides->setEnabled(editable && (shape == 6 || shape == 7));
+        m_vectorInner->setEnabled(editable && shape == 6);
         {
             const QSignalBlocker blocker(m_vectorWidth);
             m_vectorWidth->setValue(e->vectorWidth());

@@ -31,6 +31,8 @@
   "workbench.video": "Video",
   "workbench.text": "Text",
   "workbench.vector": "Vector",
+    "workbench.media": "Media",
+  "workbench.chooseMedia": "Choose Media…",
   "workbench.create": "Create",
   "workbench.selectImage": "Choose Image…",
   "workbench.selectVideo": "Choose Video…",

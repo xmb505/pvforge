@@ -165,7 +165,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
         for (const QString& file : files)
         {
             QString error;
-            if (m_project->importMediaFile(file, &error))
+            if (!m_project->importMediaFile(file, &error).isEmpty())
             {
                 ++imported;
             }

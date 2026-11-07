@@ -325,6 +325,9 @@ Entity* Project::addVector(int shape, double width, double height, const QColor&
     e.data["fill"] = fill;
     e.data["stroke"] = stroke;
     e.data["strokeWidth"] = strokeWidth;
+    e.data["cornerRadius"] = std::min(width, height) * 0.15;
+    e.data["sides"] = 5;
+    e.data["innerRatio"] = 0.45;
     if (Template* tmpl = addTemplate(e))
         e.templateId = tmpl->id;
     return append(std::move(e));
@@ -391,7 +394,7 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
     return &m_templates.last();
 }
 
-bool Project::importMediaFile(const QString& path, QString* error)
+QString Project::importMediaFile(const QString& path, QString* error)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QStringList imageExtensions = {QStringLiteral("png"), QStringLiteral("jpg"),
@@ -408,10 +411,11 @@ bool Project::importMediaFile(const QString& path, QString* error)
         {
             if (error)
                 *error = QStringLiteral("无法读取图片");
-            return false;
+            return QString();
         }
-        addMediaTemplate(importAsset(path), EntityType::Image, image);
-        return true;
+        const QString imported = importAsset(path);
+        addMediaTemplate(imported, EntityType::Image, image);
+        return imported;
     }
 
     if (videoExtensions.contains(suffix))
@@ -423,15 +427,16 @@ bool Project::importMediaFile(const QString& path, QString* error)
         {
             if (error)
                 *error = parseError;
-            return false;
+            return QString();
         }
-        addMediaTemplate(importAsset(path), EntityType::Video, frame, duration);
-        return true;
+        const QString imported = importAsset(path);
+        addMediaTemplate(imported, EntityType::Video, frame, duration);
+        return imported;
     }
 
     if (error)
         *error = QStringLiteral("不支持的文件类型");
-    return false;
+    return QString();
 }
 
 Entity* Project::createFromTemplate(const Template& tmpl){
@@ -440,7 +445,12 @@ Entity* Project::createFromTemplate(const Template& tmpl){
     case EntityType::Image:
         return addImage(tmpl.path);
     case EntityType::Video:
-        return addVideo(tmpl.path, tmpl.thumbnail, tmpl.duration);
+    {
+        double duration = tmpl.duration;
+        QString error;
+        const QImage frame = decodeVideoFirstFrame(tmpl.path, &error, &duration);
+        return addVideo(tmpl.path, frame.isNull() ? tmpl.thumbnail : frame, duration);
+    }
     case EntityType::Text:
         return addText(tmpl.data.value(QStringLiteral("text")).toString(),
                        tmpl.data.value(QStringLiteral("font")).toString(),

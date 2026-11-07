@@ -13,4 +13,7 @@ QIcon makeEyeIcon(bool hidden);
 QIcon makeLockIcon(bool locked);
 QIcon makeKeyframeIcon();
 
+// Vector shape thumbnails for the workbench and properties panel.
+QIcon makeShapeIcon(int shape);
+
 } // namespace pvf

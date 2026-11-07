@@ -31,6 +31,8 @@
   "workbench.video": "视频",
   "workbench.text": "文字",
   "workbench.vector": "矢量",
+    "workbench.media": "媒体",
+  "workbench.chooseMedia": "选择媒体文件…",
   "workbench.create": "创建",
   "workbench.selectImage": "选择图片…",
   "workbench.selectVideo": "选择视频…",

@@ -1,6 +1,7 @@
 #include "Viewport.h"
 
 #include "app/AppIcon.h"
+#include "core/VectorShape.h"
 
 #include <QApplication>
 #include <QFontMetricsF>
@@ -218,11 +219,10 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
         const double w = e.vectorWidth();
         const double h = e.vectorHeight();
         const double stroke = e.strokeWidth();
-
-        QBrush brush(e.fillColor());
-        if (e.fillColor().alpha() == 0)
-            brush = Qt::NoBrush;
-        p.setBrush(brush);
+        const QRectF rect(-w / 2.0, -h / 2.0, w, h);
+        const QPainterPath path = VectorShape::path(
+            e.vectorShape(), rect, e.cornerRadius(), e.vectorSides(),
+            e.vectorInnerRatio());
 
         if (e.vectorShape() == 2)
         {
@@ -230,10 +230,14 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
             pen.setWidthF(std::max(1.0, stroke));
             pen.setCapStyle(Qt::RoundCap);
             p.setPen(pen);
-            p.drawLine(QPointF(-w / 2.0, 0), QPointF(w / 2.0, 0));
+            p.setBrush(Qt::NoBrush);
         }
         else
         {
+            QBrush brush(e.fillColor());
+            if (e.fillColor().alpha() == 0)
+                brush = Qt::NoBrush;
+            p.setBrush(brush);
             if (stroke > 0)
             {
                 QPen pen(e.strokeColor());
@@ -244,12 +248,8 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
             {
                 p.setPen(Qt::NoPen);
             }
-            const QRectF rect(-w / 2.0, -h / 2.0, w, h);
-            if (e.vectorShape() == 1)
-                p.drawEllipse(rect);
-            else
-                p.drawRect(rect);
         }
+        p.drawPath(path);
         break;
     }
     }

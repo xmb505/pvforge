@@ -78,6 +78,9 @@ private:
     QColor m_textColorValue{Qt::white};
 
     QComboBox* m_vectorShape = nullptr;
+    QDoubleSpinBox* m_vectorCorner = nullptr;
+    QSpinBox* m_vectorSides = nullptr;
+    QDoubleSpinBox* m_vectorInner = nullptr;
     QDoubleSpinBox* m_vectorWidth = nullptr;
     QDoubleSpinBox* m_vectorHeight = nullptr;
     QPushButton* m_fillButton = nullptr;

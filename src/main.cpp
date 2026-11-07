@@ -720,6 +720,59 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int shapeTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        const int shapes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+        for (int i = 0; i < 9; ++i)
+        {
+            pvf::Entity* e =
+                project->addVector(shapes[i], 120, 90, Qt::red, Qt::white, 3);
+            if (!e)
+            {
+                qCritical() << "shape-test: create failed" << shapes[i];
+                ++failures;
+                continue;
+            }
+            project->setValue(e->id, QStringLiteral("x"), 0, -520.0 + (i % 3) * 520.0,
+                              false);
+            project->setValue(e->id, QStringLiteral("y"), 0, -260.0 + (i / 3) * 260.0,
+                              false);
+        }
+        if (project->entities().size() != 9)
+        {
+            qCritical() << "shape-test: entity count" << project->entities().size();
+            ++failures;
+        }
+
+        // Custom parameters survive on the entity.
+        const pvf::Entity& starEntity = project->entities()[6];
+        if (starEntity.vectorSides() != 5 || starEntity.vectorInnerRatio() < 0.44)
+        {
+            qCritical() << "shape-test: star defaults" << starEntity.vectorSides()
+                        << starEntity.vectorInnerRatio();
+            ++failures;
+        }
+        const pvf::Entity& roundedEntity = project->entities()[3];
+        if (roundedEntity.cornerRadius() <= 0.0)
+        {
+            qCritical() << "shape-test: corner radius default";
+            ++failures;
+        }
+
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_shapes.png"));
+        qInfo() << "shape-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int pivotGizmoTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1208,20 +1261,21 @@ int packTest(QApplication& app)
         file.write("not a media file");
     }
 
-    if (!importProject.importMediaFile(importImage)
+    if (importProject.importMediaFile(importImage).isEmpty()
         || importProject.templateCount() != 1
         || importProject.templates().first().type != pvf::EntityType::Image)
     {
         qCritical() << "pack-test: image import failed";
         ++failures;
     }
-    if (!importProject.importMediaFile(importImage) || importProject.templateCount() != 1)
+    if (importProject.importMediaFile(importImage).isEmpty()
+        || importProject.templateCount() != 1)
     {
         qCritical() << "pack-test: duplicate import not deduplicated";
         ++failures;
     }
     QString importError;
-    if (importProject.importMediaFile(importText, &importError)
+    if (!importProject.importMediaFile(importText, &importError).isEmpty()
         || importProject.templateCount() != 1)
     {
         qCritical() << "pack-test: unsupported file accepted";
@@ -1820,7 +1874,7 @@ int workbenchTest(QApplication& app)
             return;
         }
 
-        types->setCurrentRow(2);
+        types->setCurrentRow(1);
         content->setText(QStringLiteral("工作台创建的文字"));
         create->click();
 
@@ -1832,7 +1886,7 @@ int workbenchTest(QApplication& app)
             button->click();
             auto* typeList =
                 workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
-            typeList->setCurrentRow(3);   // vector page
+            typeList->setCurrentRow(2);   // vector page
 
             QTimer::singleShot(300, &window, [&app, &window, workbench, count,
                                               typeList] {
@@ -1894,6 +1948,8 @@ int main(int argc, char* argv[])
         return pivotTest(app);
     if (app.arguments().contains(QStringLiteral("--pivot-gizmo-test")))
         return pivotGizmoTest(app);
+    if (app.arguments().contains(QStringLiteral("--shape-test")))
+        return shapeTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

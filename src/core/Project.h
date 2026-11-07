@@ -63,6 +63,15 @@ struct Entity
     int textAlign() const { return data.value(QStringLiteral("align"), int(Qt::AlignCenter)).toInt(); }
 
     int vectorShape() const { return data.value(QStringLiteral("shape"), 0).toInt(); }
+    double cornerRadius() const
+    {
+        return data.value(QStringLiteral("cornerRadius"), 40.0).toDouble();
+    }
+    int vectorSides() const { return data.value(QStringLiteral("sides"), 5).toInt(); }
+    double vectorInnerRatio() const
+    {
+        return data.value(QStringLiteral("innerRatio"), 0.45).toDouble();
+    }
     double vectorWidth() const { return data.value(QStringLiteral("width"), 400.0).toDouble(); }
     double vectorHeight() const { return data.value(QStringLiteral("height"), 300.0).toDouble(); }
     QColor fillColor() const;
@@ -144,7 +153,7 @@ public:
     Template* addTemplate(const Entity& entity);
     Template* addMediaTemplate(const QString& path, EntityType type, const QImage& thumbnail,
                                double duration = 0.0);
-    bool importMediaFile(const QString& path, QString* error = nullptr);
+    QString importMediaFile(const QString& path, QString* error = nullptr);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);
 
