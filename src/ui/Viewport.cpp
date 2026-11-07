@@ -357,6 +357,13 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     const QPointF delta = pos - entityPivotScreen(*entity);
     const double distance = std::hypot(delta.x(), delta.y());
 
+    // Dragging the pivot dot moves the custom pivot freely.
+    if (entity->rotPointCustom() && distance <= 10.0)
+    {
+        *mode = GizmoMode::PivotFree;
+        return true;
+    }
+
     // The rotation ring sits on top of the axes.
     if (std::abs(distance - kGizmoRingRadius) <= kGizmoHitWidth)
     {
@@ -416,6 +423,14 @@ void Viewport::drawGizmo(QPainter& p, const Entity& e)
     p.drawLine(center - QPointF(0, len), center + QPointF(0, len));
     arrow(center + QPointF(0, len), center, yColor);
     arrow(center - QPointF(0, len), center, yColor);
+
+    // Pivot dot: drag to move the custom pivot.
+    if (e.rotPointCustom())
+    {
+        p.setBrush(QColor(255, 255, 255, 230));
+        p.setPen(QPen(QColor(120, 170, 255), 1.5));
+        p.drawEllipse(center, 5, 5);
+    }
 
     // Rotation ring.
     const bool hotRotate = m_gizmoMode == GizmoMode::Rotate;
@@ -695,6 +710,14 @@ void Viewport::mousePressEvent(QMouseEvent* event)
     if (gizmoHitTest(event->position(), &gizmoMode))
     {
         const Entity* entity = m_project->entity(m_selected);
+        if (entity && entity->rotPointCustom())
+        {
+            if (gizmoMode == GizmoMode::AxisX)
+                gizmoMode = GizmoMode::PivotX;
+            else if (gizmoMode == GizmoMode::AxisY)
+                gizmoMode = GizmoMode::PivotY;
+        }
+
         m_gizmoMode = gizmoMode;
         m_dragging = true;
         m_dragEntity = m_selected;
@@ -704,8 +727,17 @@ void Viewport::mousePressEvent(QMouseEvent* event)
                                       event->position().x() - m_gizmoCenter.x())
                             * 180.0 / M_PI;
         m_gizmoStartRotation = m_project->value(m_selected, "rotation", m_frame);
-        m_gizmoStartX = m_project->value(m_selected, "x", m_frame);
-        m_gizmoStartY = m_project->value(m_selected, "y", m_frame);
+        if (gizmoMode == GizmoMode::PivotFree || gizmoMode == GizmoMode::PivotX
+            || gizmoMode == GizmoMode::PivotY)
+        {
+            m_gizmoStartX = m_project->value(m_selected, "rotPointX", m_frame);
+            m_gizmoStartY = m_project->value(m_selected, "rotPointY", m_frame);
+        }
+        else
+        {
+            m_gizmoStartX = m_project->value(m_selected, "x", m_frame);
+            m_gizmoStartY = m_project->value(m_selected, "y", m_frame);
+        }
         m_dragLast = event->position();
         return;
     }
@@ -749,6 +781,64 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
     {
         applyHandleDrag(event->position(), event->modifiers() & Qt::ControlModifier,
                         !(event->modifiers() & Qt::ControlModifier));
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::PivotFree)
+    {
+        double px = m_gizmoStartX + (event->position().x() - m_gizmoStartMouse.x()) / s;
+        double py = m_gizmoStartY + (event->position().y() - m_gizmoStartMouse.y()) / s;
+        if (!(event->modifiers() & Qt::ControlModifier) && m_snapPixels > 0)
+        {
+            const Entity* entity = m_project->entity(m_dragEntity);
+            if (entity)
+            {
+                const QRectF bounds = entityLocalBounds(*entity);
+                const double threshold = m_snapPixels / s;
+                px = snapTo(px,
+                            {0.0, -bounds.width() / 2.0, bounds.width() / 2.0}, threshold);
+                py = snapTo(py,
+                            {0.0, -bounds.height() / 2.0, bounds.height() / 2.0}, threshold);
+            }
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
+        emit valueEdited(m_dragEntity, QStringLiteral("rotPointY"), py);
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::PivotX)
+    {
+        double px = m_gizmoStartX + (event->position().x() - m_gizmoStartMouse.x()) / s;
+        if (!(event->modifiers() & Qt::ControlModifier) && m_snapPixels > 0)
+        {
+            const Entity* entity = m_project->entity(m_dragEntity);
+            if (entity)
+            {
+                const QRectF bounds = entityLocalBounds(*entity);
+                const double threshold = m_snapPixels / s;
+                px = snapTo(px,
+                            {0.0, -bounds.width() / 2.0, bounds.width() / 2.0}, threshold);
+            }
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("rotPointX"), px);
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::PivotY)
+    {
+        double py = m_gizmoStartY + (event->position().y() - m_gizmoStartMouse.y()) / s;
+        if (!(event->modifiers() & Qt::ControlModifier) && m_snapPixels > 0)
+        {
+            const Entity* entity = m_project->entity(m_dragEntity);
+            if (entity)
+            {
+                const QRectF bounds = entityLocalBounds(*entity);
+                const double threshold = m_snapPixels / s;
+                py = snapTo(py,
+                            {0.0, -bounds.height() / 2.0, bounds.height() / 2.0}, threshold);
+            }
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("rotPointY"), py);
         return;
     }
 

@@ -720,6 +720,85 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int pivotGizmoTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "pivot-gizmo-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+        entity->data[QStringLiteral("rotPointCustom")] = true;
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->rect().center();
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons, Qt::KeyboardModifiers mods) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, mods);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        };
+
+        // Dragging the X axis moves the pivot, not the entity.
+        const int edgeDx = int(std::lround(145.0 * s));
+        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
+        const double pivotX = project->value(id, QStringLiteral("rotPointX"), 0);
+        if (std::abs(pivotX - 150.0) > 1.0
+            || std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "pivot-gizmo-test: axis pivot drag" << pivotX
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        // Dragging the pivot dot moves both axes freely.
+        project->setValue(id, QStringLiteral("rotPointX"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("rotPointY"), 0, 0.0, false);
+        drag(center, center + QPoint(int(std::lround(60.0 * s)),
+                                     int(std::lround(30.0 * s))));
+        if (project->value(id, QStringLiteral("rotPointX"), 0) < 30.0
+            || project->value(id, QStringLiteral("rotPointY"), 0) < 15.0)
+        {
+            qCritical() << "pivot-gizmo-test: free pivot drag"
+                        << project->value(id, QStringLiteral("rotPointX"), 0)
+                        << project->value(id, QStringLiteral("rotPointY"), 0);
+            ++failures;
+        }
+
+        // Disabling the custom pivot returns axis dragging to the entity.
+        entity->data[QStringLiteral("rotPointCustom")] = false;
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        drag(center + QPoint(40, 0), center + QPoint(40 + int(std::lround(50.0 * s)), 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) < 20.0)
+        {
+            qCritical() << "pivot-gizmo-test: axis did not move entity"
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        qInfo() << "pivot-gizmo-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int pivotTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1752,6 +1831,8 @@ int main(int argc, char* argv[])
         return gizmoTest(app);
     if (app.arguments().contains(QStringLiteral("--pivot-test")))
         return pivotTest(app);
+    if (app.arguments().contains(QStringLiteral("--pivot-gizmo-test")))
+        return pivotGizmoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

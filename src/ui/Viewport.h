@@ -46,7 +46,7 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
-    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate, Scale };
+    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate, Scale, PivotFree, PivotX, PivotY };
     enum class Handle
     {
         None,
