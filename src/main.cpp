@@ -74,6 +74,13 @@ int selfTest()
 
 int saveTest()
 {
+    pvf::Project empty;
+    if (empty.timelineLength() != 0)
+    {
+        qCritical() << "save-test: empty project length should be 0, got"
+                    << empty.timelineLength();
+        return 1;
+    }
     const QString imagePath = QDir::tempPath() + QStringLiteral("/pvforge_savetest.png");
     const QString projectPath =
         QDir::tempPath() + QStringLiteral("/pvforge_savetest.pvproj");
@@ -195,6 +202,26 @@ int welcomeTest(QApplication& app)
             QFile::remove(projectPath);
             app.exit(0);
         });
+    });
+    return app.exec();
+}
+
+int openTimelineTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 60;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    window.goToFrame(0);
+    window.togglePlayback();
+
+    QTimer::singleShot(2500, &window, [&app, &window] {
+        const int frame = window.currentFrame();
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_open_timeline.png"));
+        qInfo() << "open-timeline-test: frame after 2.5s =" << frame;
+        app.exit(frame > 130 ? 0 : 1);
     });
     return app.exec();
 }
@@ -515,6 +542,8 @@ int main(int argc, char* argv[])
         return welcomeTest(app);
     if (app.arguments().contains(QStringLiteral("--library-test")))
         return libraryTest(app);
+    if (app.arguments().contains(QStringLiteral("--open-timeline-test")))
+        return openTimelineTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))

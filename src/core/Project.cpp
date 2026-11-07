@@ -54,9 +54,9 @@ bool isColorKey(const QString& key)
 
 int Project::timelineLength() const
 {
-    // No fixed project duration: the timeline spans the longest media clip
-    // and the last keyframe, with a two second floor for an empty project.
-    double last = fps * 2.0;
+    // No fixed project duration, matching Mine-imator: length is the longest
+    // media clip and the last keyframe. Zero means the timeline is open-ended.
+    double last = 0.0;
     for (const Entity& e : m_entities)
     {
         const double media = e.data.value(QStringLiteral("duration"), 0.0).toDouble();
@@ -66,7 +66,7 @@ int Project::timelineLength() const
             if (!it->keys.isEmpty())
                 last = std::max(last, it->keys.last().frame);
     }
-    return std::max(1, int(std::ceil(last)));
+    return std::max(0, int(std::ceil(last)));
 }
 
 double Track::evaluate(double frame, double fallback) const

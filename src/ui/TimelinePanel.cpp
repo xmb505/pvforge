@@ -2,7 +2,10 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QResizeEvent>
+#include <QScrollBar>
 #include <QSet>
+#include <QSignalBlocker>
 #include <algorithm>
 #include <cmath>
 
@@ -13,6 +16,13 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     , m_project(project)
 {
     setMinimumHeight(140);
+
+    m_hScroll = new QScrollBar(Qt::Horizontal, this);
+    connect(m_hScroll, &QScrollBar::valueChanged, this, [this](int value) {
+        m_scrollX = value;
+        update();
+    });
+    updateScrollBar();
 }
 
 void TimelinePanel::setCurrentFrame(int frame)
@@ -20,6 +30,17 @@ void TimelinePanel::setCurrentFrame(int frame)
     if (m_frame == frame)
         return;
     m_frame = frame;
+
+    // Keep the playhead visible as the open timeline grows.
+    const int playhead = int(m_frame * kPixelsPerFrame);
+    const int left = m_scrollX;
+    const int right = m_scrollX + visibleWidth() - 80;
+    if (playhead > right)
+        m_scrollX = playhead - visibleWidth() + 80;
+    else if (playhead < left)
+        m_scrollX = playhead;
+
+    updateScrollBar();
     update();
 }
 
@@ -31,20 +52,45 @@ void TimelinePanel::setSelectedEntity(EntityId id)
     update();
 }
 
-int TimelinePanel::xFromFrame(double frame) const
+int TimelinePanel::contentEndFrame() const
 {
-    const int left = kNameWidth;
-    const int right = std::max(left + 1, width() - kRightPad);
-    const double t = std::clamp(frame / std::max(1, m_project->timelineLength()), 0.0, 1.0);
-    return left + int(std::lround(t * (right - left)));
+    // Mine-imator's timeline has no fixed end: it extends with content and
+    // with the playhead. Two seconds is only the minimum visible ruler span.
+    return std::max({m_project->timelineLength(), m_frame + m_project->fps,
+                     m_project->fps * 2});
 }
 
-int TimelinePanel::frameFromX(double x) const
+int TimelinePanel::contentWidth() const
 {
-    const int left = kNameWidth;
-    const int right = std::max(left + 1, width() - kRightPad);
-    const double t = std::clamp((x - left) / double(right - left), 0.0, 1.0);
-    return int(std::lround(t * m_project->timelineLength()));
+    return int(contentEndFrame() * kPixelsPerFrame) + 200;
+}
+
+int TimelinePanel::visibleWidth() const
+{
+    return std::max(1, width() - kNameWidth - kRightPad);
+}
+
+int TimelinePanel::xFromFrame(int frame) const
+{
+    return kNameWidth + int(std::lround(frame * kPixelsPerFrame)) - m_scrollX;
+}
+
+int TimelinePanel::frameFromX(int x) const
+{
+    return int(std::lround((x - kNameWidth + m_scrollX) / kPixelsPerFrame));
+}
+
+void TimelinePanel::updateScrollBar()
+{
+    if (!m_hScroll)
+        return;
+    const int maximum = std::max(0, contentWidth() - visibleWidth());
+    m_scrollX = std::clamp(m_scrollX, 0, maximum);
+    const QSignalBlocker blocker(m_hScroll);
+    m_hScroll->setRange(0, maximum);
+    m_hScroll->setPageStep(visibleWidth());
+    m_hScroll->setSingleStep(60);
+    m_hScroll->setValue(m_scrollX);
 }
 
 int TimelinePanel::rowAt(int y) const
@@ -54,20 +100,28 @@ int TimelinePanel::rowAt(int y) const
     return (y - kHeaderHeight) / kRowHeight;
 }
 
+void TimelinePanel::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
+                           kScrollBarHeight);
+    updateScrollBar();
+}
+
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const int right = std::max(kNameWidth + 1, width() - kRightPad);
-    const int timeWidth = right - kNameWidth;
+    const int bodyBottom = height() - kScrollBarHeight;
+    const int right = width() - kRightPad;
 
     p.fillRect(rect(), QColor(28, 28, 32));
     p.fillRect(QRect(0, 0, kNameWidth, height()), QColor(34, 34, 39));
     p.fillRect(QRect(0, 0, width(), kHeaderHeight), QColor(38, 38, 44));
 
     p.setPen(QColor(60, 60, 68));
-    p.drawLine(kNameWidth, 0, kNameWidth, height());
+    p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
     {
@@ -81,18 +135,20 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     // Ruler.
     const int fps = std::max(1, m_project->fps);
-    const double ppf = timeWidth / double(std::max(1, m_project->timelineLength()));
+    const double ppf = kPixelsPerFrame;
     int step = fps;
-    while (step * ppf < 60.0 && step < m_project->timelineLength())
+    while (step * ppf < 60.0)
         step *= 2;
 
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
 
-    for (int f = 0; f <= m_project->timelineLength(); f += step)
+    for (int f = 0; f <= contentEndFrame(); f += step)
     {
         const int x = xFromFrame(f);
+        if (x < kNameWidth - 10 || x > right)
+            continue;
         p.setPen(QColor(70, 70, 78));
         p.drawLine(x, kHeaderHeight - 6, x, kHeaderHeight);
         p.setPen(QColor(150, 150, 160));
@@ -107,7 +163,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     {
         const Entity& e = entities[i];
         const int top = kHeaderHeight + i * kRowHeight;
-        if (top > height())
+        if (top > bodyBottom)
             break;
 
         const QRect rowRect(0, top, width(), kRowHeight);
@@ -120,7 +176,6 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         p.drawText(QRect(10, top, kNameWidth - 20, kRowHeight),
                    Qt::AlignVCenter | Qt::AlignLeft, e.name);
 
-        // Merged keyframe positions across all tracks.
         QSet<int> frames;
         for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
             for (const Keyframe& k : it->keys)
@@ -130,6 +185,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         for (int f : frames)
         {
             const int x = xFromFrame(f);
+            if (x < kNameWidth || x > right)
+                continue;
             const int cy = top + kRowHeight / 2;
             const double r = 4.5;
             QPolygonF diamond;
@@ -143,28 +200,47 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     if (entities.isEmpty())
     {
         p.setPen(QColor(140, 140, 150));
-        p.drawText(QRect(kNameWidth, kHeaderHeight, timeWidth, height() - kHeaderHeight),
+        p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
                    Qt::AlignCenter,
-                   QStringLiteral("导入图片后，修改属性会自动在当前帧打关键帧"));
+                   QStringLiteral("点击左上角工作台创建实体"));
     }
 
     // Playhead.
     const int px = xFromFrame(m_frame);
-    p.setPen(QPen(QColor(255, 77, 90), 1.5));
-    p.drawLine(px, 0, px, height());
-    p.setBrush(QColor(255, 77, 90));
-    p.setPen(Qt::NoPen);
-    QPolygonF head;
-    head << QPointF(px - 6, 0) << QPointF(px + 6, 0) << QPointF(px, 9);
-    p.drawPolygon(head);
+    if (px >= kNameWidth - 6 && px <= right + 6)
+    {
+        p.setPen(QPen(QColor(255, 77, 90), 1.5));
+        p.drawLine(px, 0, px, bodyBottom);
+        p.setBrush(QColor(255, 77, 90));
+        p.setPen(Qt::NoPen);
+        QPolygonF head;
+        head << QPointF(px - 6, 0) << QPointF(px + 6, 0) << QPointF(px, 9);
+        p.drawPolygon(head);
+    }
+
+    // End-of-content marker, only when the project actually has content.
+    const int length = m_project->timelineLength();
+    if (length > 0)
+    {
+        const int lx = xFromFrame(length);
+        if (lx >= kNameWidth && lx <= right)
+        {
+            p.setPen(QPen(QColor(120, 120, 135), 1, Qt::DashLine));
+            p.drawLine(lx, kHeaderHeight, lx, bodyBottom);
+        }
+    }
 
     p.setPen(QColor(70, 70, 78));
-    p.drawLine(0, height() - 1, width(), height() - 1);
+    p.drawLine(0, bodyBottom - 1, width(), bodyBottom - 1);
 }
 
 void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
+        return;
+
+    const int bodyBottom = height() - kScrollBarHeight;
+    if (event->position().y() >= bodyBottom)
         return;
 
     // Name column selects the entity row.
@@ -178,14 +254,14 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     m_scrubbing = true;
-    emit frameRequested(frameFromX(event->position().x()));
+    emit frameRequested(std::max(0, frameFromX(event->position().x())));
 }
 
 void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
     if (!m_scrubbing)
         return;
-    emit frameRequested(frameFromX(event->position().x()));
+    emit frameRequested(std::max(0, frameFromX(event->position().x())));
 }
 
 void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)

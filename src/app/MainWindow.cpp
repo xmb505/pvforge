@@ -252,7 +252,7 @@ EntityId MainWindow::importImageFile(const QString& path)
 
 void MainWindow::setFrame(int frame)
 {
-    m_frame = std::clamp(frame, 0, m_project->timelineLength());
+    m_frame = std::max(0, frame);
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
@@ -313,7 +313,8 @@ void MainWindow::onPlayTick()
     const double seconds = m_playClock.elapsed() / 1000.0;
     int f = m_playStart + int(seconds * m_project->fps);
 
-    if (f > m_project->timelineLength())
+    const int length = m_project->timelineLength();
+    if (length > 0 && f > length)
     {
         if (m_project->loop)
         {
@@ -323,7 +324,7 @@ void MainWindow::onPlayTick()
         }
         else
         {
-            setFrame(m_project->timelineLength());
+            setFrame(length);
             togglePlayback();
             return;
         }
