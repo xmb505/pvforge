@@ -14,6 +14,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QStackedWidget;
 class QVBoxLayout;
 
 namespace pvf {
@@ -36,6 +37,9 @@ signals:
     void pivotEdited(EntityId id, double ax, double ay);
     void parentEdited(EntityId id, EntityId parent);
     void keyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
+    // Data fields that are not part of the animated tracks; written as one
+    // undo step by the main window.
+    void dataEdited(EntityId id, const QVariantMap& data);
 
 private:
     struct Row
@@ -49,7 +53,24 @@ private:
 
     void addRow(QFormLayout* form, const QString& label, const QString& prop, double lo,
                 double hi, int decimals, double step, double factor = 1.0);
+    struct DataRow
+    {
+        QString key;
+        QDoubleSpinBox* spin = nullptr;
+        QSpinBox* count = nullptr;
+        QPushButton* color = nullptr;
+    };
+
     void buildTextSection(QVBoxLayout* layout);
+    void buildComicSection(QVBoxLayout* layout);
+    void buildLinesSection(QVBoxLayout* layout);
+    void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
+                    double hi, int decimals, double step);
+    void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
+                      int hi);
+    void addDataColor(QFormLayout* form, const QString& label, const QString& key,
+                      const QColor& initial);
+    void emitDataEdit(const QString& key, const QVariant& value);
     void buildVectorSection(QVBoxLayout* layout);
     void buildMediaSection(QVBoxLayout* layout);
     void buildAudioSection(QVBoxLayout* layout);
@@ -78,6 +99,12 @@ private:
     CollapsibleSection* m_mediaSection = nullptr;
     CollapsibleSection* m_audioSection = nullptr;
     CollapsibleSection* m_pivotSection = nullptr;
+    CollapsibleSection* m_comicSection = nullptr;
+    CollapsibleSection* m_linesSection = nullptr;
+    QVector<DataRow> m_dataRows;
+    QHash<QString, QColor> m_dataColors;
+    QComboBox* m_comicShape = nullptr;
+    QStackedWidget* m_linesStack = nullptr;
     QCheckBox* m_usePivot = nullptr;
     QDoubleSpinBox* m_pivotX = nullptr;
     QDoubleSpinBox* m_pivotY = nullptr;

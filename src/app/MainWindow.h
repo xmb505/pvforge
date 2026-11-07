@@ -73,6 +73,8 @@ private:
     void applyPosition(EntityId id, double x, double y);
     void applyScale(EntityId id, double sx, double sy, double x, double y);
     void applyPivot(EntityId id, double ax, double ay);
+    void applyEntityData(EntityId id, const QVariantMap& data);
+    void applyComicTip(EntityId id, double tipX, double tipY);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
     void ensureProxies();

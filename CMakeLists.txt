@@ -19,6 +19,10 @@ add_executable(pvforge
     src/core/History.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
+    src/core/TextStyle.cpp
+    src/core/TextBlock.cpp
+    src/core/ComicBox.cpp
+    src/core/LineDeco.cpp
     src/core/VectorShape.cpp
     src/core/Camera.cpp
     src/core/Easing.cpp
@@ -44,6 +48,7 @@ add_executable(pvforge
     src/ui/CameraMonitor.cpp
     src/ui/EasingChooser.cpp
     src/ui/EasingPicker.cpp
+    src/ui/TextLayoutDialog.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp

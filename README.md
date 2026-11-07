@@ -27,6 +27,8 @@
 - **关于页**：设置→关于显示系统、CPU、内存、显卡、显示器和 Qt/FFmpeg 版本，可一键复制；帮助菜单的「关于 PVForge」也打开此页
 - **素材库**：异步导入、内容寻址去重、搜索、预览、复用；长文件名/长路径中间省略，悬停看完整内容
 - **自动保存**：默认每 5 分钟自动保存一次已有路径的工程；设置 → 常规可关闭或修改间隔
+- **文字排版**：文字和漫画文本框共用一套排版模块（换行宽度、行距、内边距、对齐、多行内容）；工作台和属性面板都有「排版…」对话框，右侧实时预览与画布完全一致
+- **特殊工具**：工作台新增「特殊」分类——漫画文本框（圆球+尖角 / 矩形 / 爆炸式，尖角可在画布上直接拖动，改一处三处通用）、放射状线条（楔形集中线，角度抖动 + 每 0.1 秒约 60% 的线条加粗，手绘感）、快速流过（一组平行线按帧流动，做背景运动感）
 - **音轨**：音频对象、时间轴 56px 波形行、时间轴内直接拖动音频块（整帧、可撤销）、裁剪/音量/开始帧、FFmpeg 解码、Qt Multimedia 播放与音频主时钟、拖动/逐帧音频擦洗
 - **视频音轨**：导入带音轨的视频时，素材库同时生成视频和「· 音频」两个素材；从视频素材创建实体时同时生成配对的音频对象
 - **视频预览代理**：导入后在后台生成 960 宽、0.5 秒 GOP 的预览文件，缓存到 `~/.cache/PVForge/proxies`；时间轴随机 seek 从约 160ms 降到约 3ms
@@ -83,6 +85,8 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 查看解码器 | 设置 → 解码；可复制当前 FFmpeg / Qt Multimedia 路径 |
 | 查看硬件信息 | 设置 → 关于；显示 CPU、内存、显卡、系统版本，可复制全部信息 |
 | 自动保存 | 设置 → 常规 → 保存；默认开启，每 5 分钟一次，只保存已有路径的工程 |
+| 改文字排版 | 工作台文字页或属性面板「文字」区点「排版…」：换行宽度、行距、内边距、对齐 |
+| 加漫画气泡 | 工作台 → 特殊 → 漫画文本框；选中后拖动画面上的小圆点改尖角位置 |
 | 跳转播放头 | 点击轨道空白处 |
 | 选关键帧 | 点击关键帧菱形（不移动播放头） |
 | 改关键帧缓动 | 右键关键帧，或选中实体后在属性面板「关键帧」里点「缓动：…」；选「自定义」拖贝塞尔手柄 |
@@ -134,11 +138,12 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-38 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+39 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --autosave-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test

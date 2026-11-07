@@ -76,6 +76,13 @@
 - `Track::evaluate` 按缓动曲线插值
 - 自动关键帧（默认开）
 - 自动保存：默认每 5 分钟保存一次已有路径的工程，设置 → 常规可关闭或改间隔（1–120 分钟）；保存使用 QSaveFile 原子写入，未命名工程不生成恢复副本
+- 文字排版模块（`core/TextStyle` + `core/TextBlock`）：字体、字号、颜色、对齐、行距、内边距、换行宽度统一描述；场景渲染、素材库缩略图、排版对话框预览共用同一套测量与绘制，行高用 QTextDocument 的块格式实现
+- 排版对话框（`ui/TextLayoutDialog`）：只编辑一份 `TextStyle` 副本，右侧 `TextPreview` 用同一个 `TextBlock` 实时预览；创建走 `Project::addText(TextStyle)`，编辑走 `SetEntityDataMapCommand`（一条撤销）
+- 特殊工具（工作台「特殊」分类）：
+  - 漫画文本框（`EntityType::ComicText` + `core/ComicBox`）：圆球 / 矩形 / 爆炸式三种外形；尖角位置存成相对坐标（`bubbleTipX/bubbleTipY`），画布上直接拖动小圆点改尖角，撤销一步回退
+  - 放射状线条（`EntityType::RadialLines` + `core/LineDeco`）：楔形集中线，中心收尖外缘宽，角度与长度带随机抖动，每 0.1 秒约 60% 的线条加粗 1.4 倍，整体可慢速旋转
+  - 快速流过（`EntityType::FlowLines`）：成组平行线按帧流动，方向、速度、间距、长度可调，用作背景运动感
+- 特殊工具的数据都存在 `Entity::data` 里，颜色键沿用 `color/fill/stroke`（判定改为按后缀匹配，新颜色键不用再登记）
 - 时间轴：固定缩放 + 横向滚动 + 自动跟随播放头
 - `Ctrl+滚轮` 缩放（0.25–32 px/帧）
 - 刻度行自适应：秒模式每秒按项目帧率均分为整数格（24 fps → 24/12/8/6/4… 格），帧模式按 1/5/10/20/50 帧分档并标帧号
@@ -220,13 +227,14 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 38 个模式，全部通过。
+共 39 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
+- 漫画文本框的尖角是整体相对坐标，缩放实体时尖角跟着缩放；暂时不能在画布上新增第二个尖角
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
 - 自动保存只处理已有路径的工程；未命名的新工程请先手动保存一次
 - 无频谱可视化对象（音频轨波形已支持）

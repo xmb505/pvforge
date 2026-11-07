@@ -1,6 +1,10 @@
 #include "SceneRenderer.h"
 
 #include "core/Camera.h"
+#include "core/ComicBox.h"
+#include "core/LineDeco.h"
+#include "core/TextBlock.h"
+#include "core/TextStyle.h"
 #include "core/VectorShape.h"
 
 #include <QFont>
@@ -108,19 +112,12 @@ QRectF entityLocalBounds(const Entity& entity)
 
     case EntityType::Text:
     {
-        QFont font(entity.fontFamily());
-        font.setPixelSize(std::max(1, entity.fontSize()));
-        const QString text = entity.textContent();
-        if (text.isEmpty())
+        const TextBlock block = TextBlock::measure(TextStyle::fromData(entity.data));
+        const QSizeF size = block.size();
+        if (size.width() < 1 || size.height() < 1)
             return QRectF(-10, -10, 20, 20);
-        const QFontMetricsF metrics(font);
-        const QRectF bounds =
-            metrics.boundingRect(QRectF(0, 0, 4000, 4000), Qt::TextWordWrap, text);
-        if (bounds.width() < 1 || bounds.height() < 1)
-            return QRectF(-10, -10, 20, 20);
-        const double pad = 6.0;
-        return QRectF(-bounds.width() / 2.0 - pad, -bounds.height() / 2.0 - pad,
-                      bounds.width() + pad * 2.0, bounds.height() + pad * 2.0);
+        return QRectF(-size.width() / 2.0, -size.height() / 2.0, size.width(),
+                      size.height());
     }
 
     case EntityType::Vector:
@@ -131,6 +128,17 @@ QRectF entityLocalBounds(const Entity& entity)
                                       : std::max(1.0, entity.vectorHeight());
         return QRectF(-width / 2.0, -height / 2.0, width, height);
     }
+
+    case EntityType::ComicText:
+        return ComicBox::build(TextStyle::fromData(entity.data),
+                               BubbleStyle::fromData(entity.data))
+            .bounds();
+
+    case EntityType::RadialLines:
+        return LineDeco::radialBounds(RadialParams::fromData(entity.data));
+
+    case EntityType::FlowLines:
+        return LineDeco::flowBounds(FlowParams::fromData(entity.data));
 
     case EntityType::Camera:
         return QRectF();
@@ -211,12 +219,7 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
 
     case EntityType::Text:
     {
-        QFont font(entity.fontFamily());
-        font.setPixelSize(std::max(1, entity.fontSize()));
-        painter.setFont(font);
-        painter.setPen(entity.textColor());
-        painter.drawText(bounds, entity.textAlign() | Qt::TextWordWrap,
-                         entity.textContent());
+        TextBlock::measure(TextStyle::fromData(entity.data)).paint(painter, QPointF());
         break;
     }
 
@@ -259,6 +262,22 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         painter.drawPath(path);
         break;
     }
+
+    case EntityType::ComicText:
+        ComicBox::build(TextStyle::fromData(entity.data),
+                        BubbleStyle::fromData(entity.data))
+            .paint(painter);
+        break;
+
+    case EntityType::RadialLines:
+        LineDeco::paintRadial(painter, RadialParams::fromData(entity.data),
+                              frame / double(std::max(1, project.fps)));
+        break;
+
+    case EntityType::FlowLines:
+        LineDeco::paintFlow(painter, FlowParams::fromData(entity.data),
+                            frame / double(std::max(1, project.fps)));
+        break;
 
     case EntityType::Camera:
         break;

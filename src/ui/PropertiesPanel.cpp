@@ -2,6 +2,7 @@
 
 #include "CollapsibleSection.h"
 #include "ui/EasingChooser.h"
+#include "ui/TextLayoutDialog.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -16,6 +17,7 @@
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -44,6 +46,12 @@ QString typeName(EntityType type)
         return QStringLiteral("音频");
     case EntityType::Folder:
         return QStringLiteral("文件夹");
+    case EntityType::ComicText:
+        return QStringLiteral("漫画文本框");
+    case EntityType::RadialLines:
+        return QStringLiteral("放射状线条");
+    case EntityType::FlowLines:
+        return QStringLiteral("快速流过");
     }
     return QString();
 }
@@ -118,6 +126,8 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     layout->addWidget(m_keySection);
 
     buildTextSection(layout);
+    buildComicSection(layout);
+    buildLinesSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
     buildAudioSection(layout);
@@ -266,9 +276,160 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
+    auto* layoutButton = new QPushButton(QStringLiteral("排版…"), content);
+    layoutButton->setObjectName(QStringLiteral("textLayoutButton"));
+    layoutButton->setToolTip(
+        QStringLiteral("打开文字排版编辑器：换行宽度、行距、内边距"));
+    connect(layoutButton, &QPushButton::clicked, this, [this] {
+        if (m_entity == kInvalidEntity)
+            return;
+        const Entity* entity = m_project->entity(m_entity);
+        if (!entity)
+            return;
+        TextLayoutDialog dialog(TextStyle::fromData(entity->data), this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        QVariantMap data;
+        dialog.style().writeTo(data);
+        emit dataEdited(m_entity, data);
+    });
+    form->addRow(layoutButton);
+
     m_textSection = new CollapsibleSection(QStringLiteral("文字"), content, this);
     m_textSection->setExpanded(true);
     layout->addWidget(m_textSection);
+}
+
+void PropertiesPanel::addDataRow(QFormLayout* form, const QString& label,
+                                 const QString& key, double lo, double hi, int decimals,
+                                 double step)
+{
+    auto* spin = new QDoubleSpinBox(form->parentWidget());
+    spin->setObjectName(QStringLiteral("data_") + key);
+    spin->setRange(lo, hi);
+    spin->setDecimals(decimals);
+    spin->setSingleStep(step);
+    connect(spin, &QDoubleSpinBox::valueChanged, this,
+            [this, key](double value) { emitDataEdit(key, value); });
+    DataRow row;
+    row.key = key;
+    row.spin = spin;
+    m_dataRows.append(row);
+    form->addRow(label, spin);
+}
+
+void PropertiesPanel::addDataCount(QFormLayout* form, const QString& label,
+                                   const QString& key, int lo, int hi)
+{
+    auto* spin = new QSpinBox(form->parentWidget());
+    spin->setObjectName(QStringLiteral("data_") + key);
+    spin->setRange(lo, hi);
+    connect(spin, &QSpinBox::valueChanged, this,
+            [this, key](int value) { emitDataEdit(key, value); });
+    DataRow row;
+    row.key = key;
+    row.count = spin;
+    m_dataRows.append(row);
+    form->addRow(label, spin);
+}
+
+void PropertiesPanel::addDataColor(QFormLayout* form, const QString& label,
+                                   const QString& key, const QColor& initial)
+{
+    auto* button = new QPushButton(form->parentWidget());
+    button->setObjectName(QStringLiteral("data_") + key);
+    m_dataColors.insert(key, initial);
+    setColorButton(button, initial);
+    connect(button, &QPushButton::clicked, this, [this, key, button] {
+        const QColor color = pickColor(m_dataColors.value(key), QStringLiteral("颜色"));
+        if (!color.isValid())
+            return;
+        m_dataColors.insert(key, color);
+        setColorButton(button, color);
+        emitDataEdit(key, color);
+    });
+    DataRow row;
+    row.key = key;
+    row.color = button;
+    m_dataRows.append(row);
+    form->addRow(label, button);
+}
+
+void PropertiesPanel::emitDataEdit(const QString& key, const QVariant& value)
+{
+    if (m_entity == kInvalidEntity)
+        return;
+    QVariantMap data;
+    data.insert(key, value);
+    emit dataEdited(m_entity, data);
+}
+
+void PropertiesPanel::buildComicSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    m_comicShape = new QComboBox(content);
+    m_comicShape->addItem(QStringLiteral("圆球 + 尖尾"), 0);
+    m_comicShape->addItem(QStringLiteral("矩形"), 1);
+    m_comicShape->addItem(QStringLiteral("爆炸式"), 2);
+    connect(m_comicShape, &QComboBox::currentIndexChanged, this, [this](int) {
+        emitDataEdit(QStringLiteral("bubbleShape"), m_comicShape->currentData());
+    });
+    form->addRow(QStringLiteral("形状"), m_comicShape);
+
+    addDataRow(form, QStringLiteral("圆角"), QStringLiteral("bubbleRadius"), 0, 400, 0, 1);
+    addDataRow(form, QStringLiteral("尖角 X"), QStringLiteral("bubbleTipX"), -3, 3, 2, 0.05);
+    addDataRow(form, QStringLiteral("尖角 Y"), QStringLiteral("bubbleTipY"), -3, 3, 2, 0.05);
+    addDataRow(form, QStringLiteral("描边宽度"), QStringLiteral("strokeWidth"), 0, 60, 1, 1);
+    addDataColor(form, QStringLiteral("底色"), QStringLiteral("fill"), QColor(Qt::white));
+    addDataColor(form, QStringLiteral("描边色"), QStringLiteral("stroke"),
+                 QColor(24, 24, 28));
+
+    m_comicSection = new CollapsibleSection(QStringLiteral("漫画框"), content, this);
+    m_comicSection->setExpanded(true);
+    layout->addWidget(m_comicSection);
+}
+
+void PropertiesPanel::buildLinesSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* box = new QVBoxLayout(content);
+    box->setContentsMargins(10, 8, 10, 8);
+    box->setSpacing(6);
+    m_linesStack = new QStackedWidget(content);
+
+    auto* radial = new QWidget(m_linesStack);
+    auto* radialForm = new QFormLayout(radial);
+    radialForm->setContentsMargins(0, 0, 0, 0);
+    addDataCount(radialForm, QStringLiteral("线条数"), QStringLiteral("count"), 1, 400);
+    addDataRow(radialForm, QStringLiteral("半径"), QStringLiteral("radius"), 10, 4000, 0, 10);
+    addDataRow(radialForm, QStringLiteral("线宽"), QStringLiteral("width"), 1, 120, 1, 1);
+    addDataRow(radialForm, QStringLiteral("旋转 °/s"), QStringLiteral("spin"), -180, 180, 1,
+               1);
+    addDataRow(radialForm, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
+    addDataColor(radialForm, QStringLiteral("颜色"), QStringLiteral("color"), QColor(Qt::white));
+    m_linesStack->addWidget(radial);
+
+    auto* flow = new QWidget(m_linesStack);
+    auto* flowForm = new QFormLayout(flow);
+    flowForm->setContentsMargins(0, 0, 0, 0);
+    addDataCount(flowForm, QStringLiteral("线条数"), QStringLiteral("count"), 1, 400);
+    addDataRow(flowForm, QStringLiteral("长度"), QStringLiteral("length"), 20, 4000, 0, 10);
+    addDataRow(flowForm, QStringLiteral("间距"), QStringLiteral("spacing"), 5, 600, 0, 5);
+    addDataRow(flowForm, QStringLiteral("粗细"), QStringLiteral("thickness"), 1, 80, 1, 1);
+    addDataRow(flowForm, QStringLiteral("速度 px/s"), QStringLiteral("speed"), 0, 6000, 0, 50);
+    addDataRow(flowForm, QStringLiteral("角度"), QStringLiteral("angle"), -180, 180, 0, 5);
+    addDataRow(flowForm, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
+    addDataColor(flowForm, QStringLiteral("颜色"), QStringLiteral("color"), QColor(Qt::white));
+    m_linesStack->addWidget(flow);
+
+    box->addWidget(m_linesStack);
+    m_linesSection = new CollapsibleSection(QStringLiteral("装饰线条"), content, this);
+    m_linesSection->setExpanded(true);
+    layout->addWidget(m_linesSection);
 }
 
 void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
@@ -642,7 +803,14 @@ void PropertiesPanel::refresh()
 
     m_transformSection->setVisible(valid && !audio);
     m_keySection->setVisible(valid && !audio);
-    m_textSection->setVisible(valid && e->type == EntityType::Text);
+    const bool comic = valid && e->type == EntityType::ComicText;
+    const bool radial = valid && e->type == EntityType::RadialLines;
+    const bool flow = valid && e->type == EntityType::FlowLines;
+    m_textSection->setVisible(valid && (e->type == EntityType::Text || comic));
+    m_comicSection->setVisible(comic);
+    m_linesSection->setVisible(radial || flow);
+    if (m_linesStack)
+        m_linesStack->setCurrentIndex(flow ? 1 : 0);
     m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
     m_mediaSection->setVisible(valid
                                && (e->type == EntityType::Image
@@ -657,6 +825,8 @@ void PropertiesPanel::refresh()
     m_transformSection->setEnabled(editable);
     m_keySection->setEnabled(editable);
     m_textSection->setEnabled(editable);
+    m_comicSection->setEnabled(editable);
+    m_linesSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);
@@ -843,7 +1013,7 @@ void PropertiesPanel::refresh()
         r.spin->setValue(m_project->value(m_entity, r.prop, m_frame) / r.factor);
     }
 
-    if (e->type == EntityType::Text)
+    if (e->type == EntityType::Text || e->type == EntityType::ComicText)
     {
         if (!m_textContent->hasFocus())
         {
@@ -874,6 +1044,23 @@ void PropertiesPanel::refresh()
             }
             m_textAlign->setCurrentIndex(index);
         }
+    }
+    else if (comic)
+    {
+        const auto select = [](QComboBox* combo, int value) {
+            if (!combo)
+                return;
+            const QSignalBlocker blocker(combo);
+            for (int index = 0; index < combo->count(); ++index)
+            {
+                if (combo->itemData(index).toInt() == value)
+                {
+                    combo->setCurrentIndex(index);
+                    return;
+                }
+            }
+        };
+        select(m_comicShape, e->data.value(QStringLiteral("bubbleShape"), 0).toInt());
     }
     else if (e->type == EntityType::Vector)
     {
@@ -959,6 +1146,34 @@ void PropertiesPanel::refresh()
             m_mediaInfo->setToolTip(QString());
         }
         m_mediaInfo->setText(info);
+    }
+
+    // Tool specific data fields.
+    if (valid)
+    {
+        for (const DataRow& row : m_dataRows)
+        {
+            const QVariant value = e->data.value(row.key);
+            if (row.spin)
+            {
+                const QSignalBlocker blocker(row.spin);
+                row.spin->setValue(value.toDouble());
+            }
+            else if (row.count)
+            {
+                const QSignalBlocker blocker(row.count);
+                row.count->setValue(value.toInt());
+            }
+            else if (row.color)
+            {
+                const QColor color = value.value<QColor>();
+                if (color.isValid())
+                {
+                    m_dataColors.insert(row.key, color);
+                    setColorButton(row.color, color);
+                }
+            }
+        }
     }
 }
 

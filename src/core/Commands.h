@@ -166,6 +166,28 @@ private:
     QString m_text;
 };
 
+// Writing several data fields of an entity as one undo step, used by the
+// layout dialogs and the special tool panels.
+class SetEntityDataMapCommand : public UndoCommand
+{
+public:
+    SetEntityDataMapCommand(EntityId id, const QVariantMap& before,
+                            const QVariantMap& after, const QString& text);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    QVariantMap m_before;
+    QVariantMap m_after;
+    QString m_text;
+};
+
 // Moving an entity on both axes as one undo step.
 class SetPositionCommand : public UndoCommand
 {

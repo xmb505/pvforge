@@ -33,6 +33,7 @@ public:
     QTransform entityTransformForTest(EntityId id) const;
     int gizmoModeForTest() const { return int(m_gizmoMode); }
     QPointF entityPivotForTest(EntityId id) const;
+    QPointF comicTipForTest(EntityId id) const;
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
     QTransform worldToScreenForTest() const { return worldToScreenTransform(); }
@@ -47,6 +48,8 @@ signals:
     void scaleEdited(EntityId id, double sx, double sy, double x, double y);
     void pivotEdited(EntityId id, double ax, double ay);
     void cameraEdited(EntityId id, double x, double y, double scale, double rotation);
+    // The comic balloon spike was dragged to a new tip position.
+    void comicTipEdited(EntityId id, double tipX, double tipY);
     void workbenchRequested();
     void viewChanged();
 
@@ -59,7 +62,19 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
-    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate, Scale, PivotFree, PivotX, PivotY };
+    enum class GizmoMode
+    {
+        None,
+        Move,
+        AxisX,
+        AxisY,
+        Rotate,
+        Scale,
+        PivotFree,
+        PivotX,
+        PivotY,
+        ComicTip
+    };
     enum class Handle
     {
         None,
@@ -70,7 +85,8 @@ private:
         BottomRight,
         Bottom,
         BottomLeft,
-        Left
+        Left,
+        ComicTip
     };
 
     enum class CameraPart { None, Move, Corner0, Corner1, Corner2, Corner3, Rotate };
@@ -97,6 +113,8 @@ private:
     void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
     QPointF entityScreenCenter(const Entity& e) const;
     QPointF entityPivotScreen(const Entity& e) const;
+    QPointF comicTipScreenPos(const Entity& e) const;
+    QPointF screenToEntityLocal(const Entity& e, const QPointF& screenPos) const;
     struct VisualBounds
     {
         double left = 0.0;

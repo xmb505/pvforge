@@ -1,7 +1,11 @@
 #include "AssetLibraryPanel.h"
 
 #include "app/MainWindow.h"
+#include "core/ComicBox.h"
 #include "core/Lang.h"
+#include "core/LineDeco.h"
+#include "core/TextBlock.h"
+#include "core/TextStyle.h"
 #include "media/MediaImporter.h"
 
 #include <QHBoxLayout>
@@ -40,6 +44,12 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("音频");
     case EntityType::Folder:
         return QStringLiteral("文件夹");
+    case EntityType::ComicText:
+        return QStringLiteral("漫画文本框");
+    case EntityType::RadialLines:
+        return QStringLiteral("放射状线条");
+    case EntityType::FlowLines:
+        return QStringLiteral("快速流过");
     }
     return QString();
 }
@@ -70,13 +80,60 @@ QPixmap renderTemplate(const Template& tmpl, const QSize& size)
 
     if (tmpl.type == EntityType::Text)
     {
-        QFont font(tmpl.data.value(QStringLiteral("font")).toString());
-        font.setPixelSize(std::max(10, size.height() / 4));
-        p.setFont(font);
-        p.setPen(tmpl.data.value(QStringLiteral("color")).value<QColor>());
-        p.drawText(pixmap.rect().adjusted(8, 8, -8, -8),
-                   Qt::AlignCenter | Qt::TextWordWrap,
-                   tmpl.data.value(QStringLiteral("text")).toString());
+        const TextBlock block = TextBlock::measure(TextStyle::fromData(tmpl.data));
+        const QSizeF textSize = block.size();
+        if (textSize.width() > 1 && textSize.height() > 1)
+        {
+            const double scale =
+                std::min((size.width() - 16.0) / textSize.width(),
+                         (size.height() - 16.0) / textSize.height());
+            p.save();
+            p.translate(size.width() / 2.0, size.height() / 2.0);
+            p.scale(scale, scale);
+            block.paint(p, QPointF());
+            p.restore();
+        }
+    }
+    else if (tmpl.type == EntityType::ComicText)
+    {
+        const ComicBox box =
+            ComicBox::build(TextStyle::fromData(tmpl.data),
+                            BubbleStyle::fromData(tmpl.data));
+        const QRectF bounds = box.bounds();
+        const double scale =
+            std::min(size.width() / std::max(1.0, bounds.width()),
+                     size.height() / std::max(1.0, bounds.height())) * 0.9;
+        p.save();
+        p.translate(size.width() / 2.0, size.height() / 2.0);
+        p.scale(scale, scale);
+        box.paint(p);
+        p.restore();
+    }
+    else if (tmpl.type == EntityType::RadialLines)
+    {
+        const RadialParams params = RadialParams::fromData(tmpl.data);
+        const QRectF bounds = LineDeco::radialBounds(params);
+        const double scale =
+            std::min(size.width() / std::max(1.0, bounds.width()),
+                     size.height() / std::max(1.0, bounds.height())) * 0.9;
+        p.save();
+        p.translate(size.width() / 2.0, size.height() / 2.0);
+        p.scale(scale, scale);
+        LineDeco::paintRadial(p, params, 0.0);
+        p.restore();
+    }
+    else if (tmpl.type == EntityType::FlowLines)
+    {
+        const FlowParams params = FlowParams::fromData(tmpl.data);
+        const QRectF bounds = LineDeco::flowBounds(params);
+        const double scale =
+            std::min(size.width() / std::max(1.0, bounds.width()),
+                     size.height() / std::max(1.0, bounds.height())) * 0.9;
+        p.save();
+        p.translate(size.width() / 2.0, size.height() / 2.0);
+        p.scale(scale, scale);
+        LineDeco::paintFlow(p, params, 0.0);
+        p.restore();
     }
     else if (tmpl.type == EntityType::Vector)
     {
@@ -144,6 +201,34 @@ QIcon listIcon(const Template& tmpl)
         font.setPixelSize(22);
         p.setFont(font);
         p.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+    }
+    else if (tmpl.type == EntityType::ComicText)
+    {
+        p.setPen(QPen(QColor(240, 240, 245), 2));
+        p.setBrush(QColor(255, 255, 255));
+        p.drawRoundedRect(6, 10, 28, 18, 6, 6);
+        QPolygonF spike;
+        spike << QPointF(10, 26) << QPointF(16, 36) << QPointF(20, 26);
+        p.drawPolygon(spike);
+    }
+    else if (tmpl.type == EntityType::RadialLines)
+    {
+        p.setPen(QPen(QColor(240, 240, 245), 2, Qt::SolidLine, Qt::RoundCap));
+        for (int index = 0; index < 8; ++index)
+        {
+            const double angle = index * M_PI / 4.0;
+            p.drawLine(QPointF(20 + 6 * std::cos(angle), 20 + 6 * std::sin(angle)),
+                       QPointF(20 + 16 * std::cos(angle), 20 + 16 * std::sin(angle)));
+        }
+    }
+    else if (tmpl.type == EntityType::FlowLines)
+    {
+        p.setPen(QPen(QColor(240, 240, 245), 2, Qt::SolidLine, Qt::RoundCap));
+        for (int index = 0; index < 4; ++index)
+        {
+            const double offset = 8 + index * 8;
+            p.drawLine(QPointF(4, offset + 12), QPointF(36, offset - 4));
+        }
     }
     return QIcon(pixmap);
 }

@@ -1,3 +1,5 @@
+#include "core/ComicBox.h"
+#include "core/TextStyle.h"
 #include "Viewport.h"
 
 #include "app/AppIcon.h"
@@ -646,6 +648,12 @@ QPointF Viewport::entityPivotForTest(EntityId id) const
     return entity ? entityPivotScreen(*entity) : QPointF();
 }
 
+QPointF Viewport::comicTipForTest(EntityId id) const
+{
+    const Entity* entity = m_project->entity(id);
+    return entity ? comicTipScreenPos(*entity) : QPointF();
+}
+
 QPointF Viewport::entityPivotScreen(const Entity& e) const
 {
     // X/Y are the pivot position in parent space. Applying the parent chain
@@ -826,6 +834,8 @@ QPointF Viewport::handleScreenPos(const Entity& e, Handle handle) const
     QPointF local;
     switch (handle)
     {
+    case Handle::ComicTip:
+        return comicTipScreenPos(e);
     case Handle::TopLeft:
         local = bounds.topLeft();
         break;
@@ -857,6 +867,22 @@ QPointF Viewport::handleScreenPos(const Entity& e, Handle handle) const
     return entityTransform(e).map(local);
 }
 
+QPointF Viewport::comicTipScreenPos(const Entity& e) const
+{
+    const ComicBox box =
+        ComicBox::build(TextStyle::fromData(e.data), BubbleStyle::fromData(e.data));
+    return entityTransform(e).map(box.tip());
+}
+
+QPointF Viewport::screenToEntityLocal(const Entity& e, const QPointF& screenPos) const
+{
+    bool ok = false;
+    const QTransform inverse = entityTransform(e).inverted(&ok);
+    if (!ok)
+        return QPointF();
+    return inverse.map(screenPos);
+}
+
 Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
 {
     if (m_selected == kInvalidEntity)
@@ -865,6 +891,14 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
     if (!entity || entity->isCamera() || entity->isFolder()
         || m_project->isEffectivelyLocked(entity->id))
         return Handle::None;
+
+    // The comic balloon spike has its own handle, drawn on the tip.
+    if (entity->type == EntityType::ComicText)
+    {
+        const QPointF tip = comicTipScreenPos(*entity);
+        if (std::hypot(tip.x() - pos.x(), tip.y() - pos.y()) <= 8.0)
+            return Handle::ComicTip;
+    }
 
     // Only corner handles: edge midpoints sit exactly on the gizmo axes and
     // would steal axis drags.
@@ -892,6 +926,12 @@ void Viewport::drawHandles(QPainter& p, const Entity& e)
     {
         const QPointF point = handleScreenPos(e, handle);
         p.drawRect(QRectF(point.x() - 4, point.y() - 4, 8, 8));
+    }
+
+    if (e.type == EntityType::ComicText)
+    {
+        const QPointF tip = comicTipScreenPos(e);
+        p.drawEllipse(QPointF(tip), 5.0, 5.0);
     }
 }
 
@@ -932,6 +972,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     double signY = 0.0;
     switch (m_activeHandle)
     {
+    case Handle::ComicTip:
+        return;
     case Handle::TopLeft:
         signX = -1.0;
         signY = -1.0;
@@ -1285,7 +1327,8 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         const Handle handle = hitHandle(event->position());
         if (handle != Handle::None)
         {
-            m_gizmoMode = GizmoMode::Scale;
+            m_gizmoMode = handle == Handle::ComicTip ? GizmoMode::ComicTip
+                                                      : GizmoMode::Scale;
             m_activeHandle = handle;
             m_dragging = true;
             m_dragEntity = m_selected;
@@ -1386,6 +1429,22 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
     {
         applyHandleDrag(event->position(), event->modifiers() & Qt::ShiftModifier,
                         !(event->modifiers() & Qt::ControlModifier));
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::ComicTip)
+    {
+        const Entity* entity = m_project->entity(m_dragEntity);
+        if (!entity)
+            return;
+        const QPointF local = screenToEntityLocal(*entity, event->position());
+        const ComicBox box = ComicBox::build(TextStyle::fromData(entity->data),
+                                              BubbleStyle::fromData(entity->data));
+        const QSizeF body = box.bodySize();
+        if (body.width() < 1 || body.height() < 1)
+            return;
+        emit comicTipEdited(m_dragEntity, local.x() / (body.width() / 2.0),
+                             local.y() / (body.height() / 2.0));
         return;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Project.h"
+#include "core/TextStyle.h"
 
 #include <QColor>
 #include <QFrame>
@@ -40,8 +41,12 @@ private:
     QWidget* buildTextPage();
     QWidget* buildVectorPage();
     QWidget* buildCameraPage();
+    QWidget* buildSpecialPage();
 
     void createCurrent();
+    EntityId createSpecial();
+    void updateSpecialPreview();
+    TextStyle currentTextStyle() const;
     void pickMedia();
     void refreshMediaLibrary();
     void updateVectorFields();
@@ -68,8 +73,26 @@ private:
     QPushButton* m_textColor = nullptr;
     QComboBox* m_textAlign = nullptr;
     QColor m_textColorValue{Qt::white};
+    TextStyle m_textStyle;
 
     QLineEdit* m_cameraName = nullptr;
+
+    QListWidget* m_specialTypes = nullptr;
+    QStackedWidget* m_specialForms = nullptr;
+    QLabel* m_specialPreview = nullptr;
+    QLineEdit* m_comicContent = nullptr;
+    QSpinBox* m_comicSize = nullptr;
+    QPushButton* m_comicColor = nullptr;
+    QColor m_comicColorValue{30, 30, 36};
+    QSpinBox* m_radialCount = nullptr;
+    QDoubleSpinBox* m_radialThickness = nullptr;
+    QPushButton* m_radialColor = nullptr;
+    QColor m_radialColorValue{Qt::white};
+    QSpinBox* m_flowCount = nullptr;
+    QDoubleSpinBox* m_flowSpeed = nullptr;
+    QDoubleSpinBox* m_flowAngle = nullptr;
+    QPushButton* m_flowColor = nullptr;
+    QColor m_flowColorValue{Qt::white};
 
     QListWidget* m_vectorShapes = nullptr;
     QDoubleSpinBox* m_vectorCorner = nullptr;

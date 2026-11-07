@@ -251,6 +251,48 @@ QString SetEntityDataCommand::text() const
     return m_text;
 }
 
+SetEntityDataMapCommand::SetEntityDataMapCommand(EntityId id, const QVariantMap& before,
+                                                 const QVariantMap& after,
+                                                 const QString& text)
+    : m_id(id)
+    , m_before(before)
+    , m_after(after)
+    , m_text(text)
+{
+}
+
+void SetEntityDataMapCommand::undo(Project& project)
+{
+    project.setEntityDataMap(m_id, m_before);
+}
+
+void SetEntityDataMapCommand::redo(Project& project)
+{
+    project.setEntityDataMap(m_id, m_after);
+}
+
+QString SetEntityDataMapCommand::text() const
+{
+    return m_text;
+}
+
+bool SetEntityDataMapCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* command = dynamic_cast<const SetEntityDataMapCommand*>(other);
+    return command && command->m_id == m_id;
+}
+
+void SetEntityDataMapCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetEntityDataMapCommand*>(other);
+    if (!command)
+        return;
+    // Keep the oldest "before" values and take the newest "after" values.
+    for (auto it = command->m_after.constBegin(); it != command->m_after.constEnd();
+         ++it)
+        m_after.insert(it.key(), it.value());
+}
+
 SetPositionCommand::SetPositionCommand(EntityId id, int frame, double oldX, double oldY,
                                        double newX, double newY, bool keyframe)
     : m_id(id)

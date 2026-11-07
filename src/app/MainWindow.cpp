@@ -180,6 +180,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_viewport, &Viewport::scaleEdited, this, &MainWindow::applyScale);
     connect(m_viewport, &Viewport::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_viewport, &Viewport::cameraEdited, this, &MainWindow::applyCamera);
+    connect(m_viewport, &Viewport::comicTipEdited, this, &MainWindow::applyComicTip);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_viewport, &Viewport::viewChanged, m_monitor,
             &CameraMonitor::updateFromViewport);
@@ -194,6 +195,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     });
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
+    connect(m_props, &PropertiesPanel::dataEdited, this, &MainWindow::applyEntityData);
     connect(m_props, &PropertiesPanel::parentEdited, this, &MainWindow::onParentEdited);
     connect(m_props, &PropertiesPanel::keyframeEasingEdited, this,
             &MainWindow::onKeyframeEasingEdited);
@@ -974,6 +976,29 @@ void MainWindow::applyScale(EntityId id, double sx, double sy, double x, double 
     m_project->setValue(id, QStringLiteral("y"), m_frame, y, keyframe);
     m_history->push(std::make_unique<SetScaleCommand>(id, m_frame, oldSx, oldSy, oldX,
                                                        oldY, sx, sy, x, y, keyframe),
+                    *m_project);
+}
+
+void MainWindow::applyComicTip(EntityId id, double tipX, double tipY)
+{
+    QVariantMap data;
+    data.insert(QStringLiteral("bubbleTipX"), tipX);
+    data.insert(QStringLiteral("bubbleTipY"), tipY);
+    applyEntityData(id, data);
+}
+
+void MainWindow::applyEntityData(EntityId id, const QVariantMap& data)
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity || data.isEmpty())
+        return;
+
+    QVariantMap before;
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it)
+        before.insert(it.key(), entity->data.value(it.key()));
+
+    m_history->push(std::make_unique<SetEntityDataMapCommand>(
+                        id, before, data, QStringLiteral("修改属性")),
                     *m_project);
 }
 

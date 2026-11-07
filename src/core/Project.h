@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Easing.h"
+#include "core/TextStyle.h"
 #include "media/AudioClip.h"
 
 #include <QColor>
@@ -23,7 +24,19 @@ constexpr EntityId kInvalidEntity = -1;
 constexpr int kWorkCameraView = -2;
 constexpr int kWholeCanvasView = -3;
 
-enum class EntityType { Image, Video, Text, Vector, Camera, Audio, Folder };
+enum class EntityType
+{
+    Image,
+    Video,
+    Text,
+    Vector,
+    Camera,
+    Audio,
+    Folder,
+    ComicText,     // comic balloon with a shaped border and a tail
+    RadialLines,   // hand drawn rays bursting from a point
+    FlowLines      // parallel streaks flowing across the scene
+};
 
 struct Keyframe
 {
@@ -154,6 +167,10 @@ public:
     Entity* addImage(const QString& path, const QString& displayName = QString());
     Entity* addVideo(const QString& path, const QImage& firstFrame, double duration = 0.0,
                      const QString& displayName = QString());
+    Entity* addEntity(EntityType type, const QString& name,
+                       const QVariantMap& data);
+    Entity* addText(const TextStyle& style,
+                     const QString& name = QStringLiteral("文字"));
     Entity* addText(const QString& text, const QString& family, int pixelSize,
                     const QColor& color, int align);
     Entity* addVector(int shape, double width, double height, const QColor& fill,
@@ -180,6 +197,7 @@ public:
     void setEntityFlag(EntityId id, EntityFlag flag, bool value);
     void setEntityName(EntityId id, const QString& name);
     void setEntityData(EntityId id, const QString& key, const QVariant& value);
+    void setEntityDataMap(EntityId id, const QVariantMap& data);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
     void addKeyframe(EntityId id, const QString& property, const Keyframe& key);

@@ -42,6 +42,12 @@ QString typeToString(EntityType type)
         return QStringLiteral("audio");
     case EntityType::Folder:
         return QStringLiteral("folder");
+    case EntityType::ComicText:
+        return QStringLiteral("comicText");
+    case EntityType::RadialLines:
+        return QStringLiteral("radialLines");
+    case EntityType::FlowLines:
+        return QStringLiteral("flowLines");
     }
     return QStringLiteral("image");
 }
@@ -60,6 +66,12 @@ EntityType typeFromString(const QString& text)
         return EntityType::Audio;
     if (text == QLatin1String("folder"))
         return EntityType::Folder;
+    if (text == QLatin1String("comicText"))
+        return EntityType::ComicText;
+    if (text == QLatin1String("radialLines"))
+        return EntityType::RadialLines;
+    if (text == QLatin1String("flowLines"))
+        return EntityType::FlowLines;
     return EntityType::Image;
 }
 
@@ -85,10 +97,14 @@ bool filesIdentical(const QString& a, const QString& b)
     return chunkA.isEmpty() && chunkB.isEmpty();
 }
 
+// Colour fields are recognised by their name so a new one does not have to
+// be registered here: "color", "fill", "stroke" and anything ending with
+// them, such as "bubbleFill".
 bool isColorKey(const QString& key)
 {
-    return key == QLatin1String("color") || key == QLatin1String("fill")
-           || key == QLatin1String("stroke");
+    const QString lower = key.toLower();
+    return lower.endsWith(QLatin1String("color")) || lower.endsWith(QLatin1String("fill"))
+           || lower.endsWith(QLatin1String("stroke"));
 }
 
 } // namespace
@@ -335,18 +351,34 @@ Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double 
     return append(std::move(e));
 }
 
-Entity* Project::addText(const QString& text, const QString& family, int pixelSize,
-                         const QColor& color, int align)
+Entity* Project::addEntity(EntityType type, const QString& name,
+                            const QVariantMap& data)
 {
-    Entity e = makeBase(EntityType::Text, QStringLiteral("文字"));
-    e.data["text"] = text;
-    e.data["font"] = family;
-    e.data["size"] = pixelSize;
-    e.data["color"] = color;
-    e.data["align"] = align;
+    Entity e = makeBase(type, name);
+    e.data = data;
     if (Template* tmpl = addTemplate(e))
         e.templateId = tmpl->id;
     return append(std::move(e));
+}
+
+Entity* Project::addText(const TextStyle& style, const QString& name)
+{
+    QVariantMap data;
+    style.writeTo(data);
+    return addEntity(EntityType::Text,
+                     name.isEmpty() ? QStringLiteral("文字") : name, data);
+}
+
+Entity* Project::addText(const QString& text, const QString& family, int pixelSize,
+                         const QColor& color, int align)
+{
+    TextStyle style;
+    style.text = text;
+    style.fontFamily = family;
+    style.pixelSize = pixelSize;
+    style.color = color;
+    style.align = align;
+    return addText(style);
 }
 
 Entity* Project::addCamera(const QString& name)
@@ -572,7 +604,9 @@ Template* Project::addTemplate(const Entity& entity)
         tmpl.thumbnail = renderAudioThumbnail(*entity.audio, QSize(320, 80));
         tmpl.audio = entity.audio;
     }
-    if (entity.type == EntityType::Text || entity.type == EntityType::Vector)
+    // Media templates are identified by their file; everything else keeps
+    // the parameters it was created with.
+    if (entity.sourcePath.isEmpty())
         tmpl.data = entity.data;
 
     for (Template& existing : m_templates)
@@ -692,18 +726,12 @@ Entity* Project::createFromTemplate(const Template& tmpl){
         return entity(videoId);
     }
     case EntityType::Text:
-        return addText(tmpl.data.value(QStringLiteral("text")).toString(),
-                       tmpl.data.value(QStringLiteral("font")).toString(),
-                       tmpl.data.value(QStringLiteral("size"), 96).toInt(),
-                       tmpl.data.value(QStringLiteral("color")).value<QColor>(),
-                       tmpl.data.value(QStringLiteral("align"), int(Qt::AlignCenter)).toInt());
+    case EntityType::ComicText:
+    case EntityType::RadialLines:
+    case EntityType::FlowLines:
     case EntityType::Vector:
-        return addVector(tmpl.data.value(QStringLiteral("shape"), 0).toInt(),
-                         tmpl.data.value(QStringLiteral("width"), 400.0).toDouble(),
-                         tmpl.data.value(QStringLiteral("height"), 300.0).toDouble(),
-                         tmpl.data.value(QStringLiteral("fill")).value<QColor>(),
-                         tmpl.data.value(QStringLiteral("stroke")).value<QColor>(),
-                         tmpl.data.value(QStringLiteral("strokeWidth"), 0.0).toDouble());
+        // Templates keep every parameter they were created with.
+        return addEntity(tmpl.type, tmpl.name, tmpl.data);
     case EntityType::Camera:
         return nullptr;
     case EntityType::Folder:
@@ -795,6 +823,25 @@ void Project::setEntityData(EntityId id, const QString& key, const QVariant& val
     if (!e || e->data.value(key) == value)
         return;
     e->data[key] = value;
+    modified = true;
+    emit changed();
+}
+
+void Project::setEntityDataMap(EntityId id, const QVariantMap& data)
+{
+    Entity* e = entity(id);
+    if (!e)
+        return;
+    bool updated = false;
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it)
+    {
+        if (e->data.value(it.key()) == it.value())
+            continue;
+        e->data[it.key()] = it.value();
+        updated = true;
+    }
+    if (!updated)
+        return;
     modified = true;
     emit changed();
 }

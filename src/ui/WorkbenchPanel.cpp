@@ -2,7 +2,12 @@
 
 #include "app/AppIcon.h"
 #include "app/MainWindow.h"
+#include "core/ComicBox.h"
 #include "core/Lang.h"
+#include "core/LineDeco.h"
+#include "core/TextBlock.h"
+#include "core/TextStyle.h"
+#include "ui/TextLayoutDialog.h"
 #include "media/MediaImporter.h"
 
 #include <QApplication>
@@ -23,6 +28,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPropertyAnimation>
+#include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -65,6 +71,7 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
         Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
         Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
         Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
+        Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
     };
     for (const QString& name : typeNames)
     {
@@ -81,6 +88,7 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     m_pages->addWidget(buildTextPage());
     m_pages->addWidget(buildVectorPage());
     m_pages->addWidget(buildCameraPage());
+    m_pages->addWidget(buildSpecialPage());
     right->addWidget(m_pages, 1);
 
     m_create = new QPushButton(
@@ -185,6 +193,35 @@ QWidget* WorkbenchPanel::buildTextPage()
     m_textAlign->addItem(QStringLiteral("右对齐"), int(Qt::AlignRight | Qt::AlignVCenter));
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
+    auto* layoutButton = new QPushButton(QStringLiteral("排版…"), page);
+    layoutButton->setObjectName(QStringLiteral("textLayoutButton"));
+    layoutButton->setToolTip(QStringLiteral("打开文字排版编辑器：换行宽度、行距、内边距"));
+    connect(layoutButton, &QPushButton::clicked, this, [this] {
+        TextLayoutDialog dialog(currentTextStyle(), this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        m_textStyle = dialog.style();
+        const QSignalBlocker contentBlocker(m_textContent);
+        m_textContent->setText(m_textStyle.text);
+        const QSignalBlocker fontBlocker(m_textFont);
+        m_textFont->setCurrentFont(QFont(m_textStyle.fontFamily));
+        const QSignalBlocker sizeBlocker(m_textSize);
+        m_textSize->setValue(m_textStyle.pixelSize);
+        m_textColorValue = m_textStyle.color;
+        setColorButton(m_textColor, m_textColorValue);
+        const QSignalBlocker alignBlocker(m_textAlign);
+        for (int index = 0; index < m_textAlign->count(); ++index)
+        {
+            if ((m_textAlign->itemData(index).toInt() & Qt::AlignHorizontal_Mask) ==
+                (m_textStyle.align & Qt::AlignHorizontal_Mask))
+            {
+                m_textAlign->setCurrentIndex(index);
+                break;
+            }
+        }
+    });
+    form->addRow(layoutButton);
+
     return page;
 }
 
@@ -208,6 +245,139 @@ QWidget* WorkbenchPanel::buildCameraPage()
     hint->setWordWrap(true);
     form->addRow(hint);
 
+    return page;
+}
+
+QWidget* WorkbenchPanel::buildSpecialPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    m_specialTypes = new QListWidget(page);
+    m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
+    const QStringList names = {
+        QStringLiteral("漫画文本框 · 圆球尖尾"),
+        QStringLiteral("漫画文本框 · 矩形"),
+        QStringLiteral("漫画文本框 · 爆炸"),
+        QStringLiteral("放射状线条"),
+        QStringLiteral("快速流过"),
+    };
+    for (const QString& name : names)
+        m_specialTypes->addItem(name);
+    m_specialTypes->setMaximumHeight(140);
+    layout->addWidget(m_specialTypes);
+
+    m_specialPreview = new QLabel(page);
+    m_specialPreview->setObjectName(QStringLiteral("specialPreview"));
+    m_specialPreview->setAlignment(Qt::AlignCenter);
+    m_specialPreview->setMinimumHeight(150);
+    m_specialPreview->setFrameShape(QFrame::StyledPanel);
+    layout->addWidget(m_specialPreview);
+
+    m_specialForms = new QStackedWidget(page);
+
+    auto* comic = new QWidget(m_specialForms);
+    auto* comicForm = new QFormLayout(comic);
+    comicForm->setContentsMargins(0, 0, 0, 0);
+    comicForm->setVerticalSpacing(8);
+    m_comicContent = new QLineEdit(QStringLiteral("台词"), comic);
+    m_comicContent->setObjectName(QStringLiteral("comicContent"));
+    comicForm->addRow(QStringLiteral("内容"), m_comicContent);
+    m_comicSize = new QSpinBox(comic);
+    m_comicSize->setRange(12, 400);
+    m_comicSize->setValue(72);
+    m_comicSize->setSuffix(QStringLiteral(" px"));
+    comicForm->addRow(QStringLiteral("字号"), m_comicSize);
+    m_comicColor = new QPushButton(comic);
+    setColorButton(m_comicColor, m_comicColorValue);
+    connect(m_comicColor, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_comicColorValue, QStringLiteral("文字颜色"));
+        if (color.isValid())
+        {
+            m_comicColorValue = color;
+            setColorButton(m_comicColor, color);
+            updateSpecialPreview();
+        }
+    });
+    comicForm->addRow(QStringLiteral("文字颜色"), m_comicColor);
+    m_specialForms->addWidget(comic);
+
+    auto* radial = new QWidget(m_specialForms);
+    auto* radialForm = new QFormLayout(radial);
+    radialForm->setContentsMargins(0, 0, 0, 0);
+    radialForm->setVerticalSpacing(8);
+    m_radialCount = new QSpinBox(radial);
+    m_radialCount->setRange(4, 200);
+    m_radialCount->setValue(48);
+    radialForm->addRow(QStringLiteral("线条数"), m_radialCount);
+    m_radialThickness = new QDoubleSpinBox(radial);
+    m_radialThickness->setRange(1, 120);
+    m_radialThickness->setValue(18);
+    radialForm->addRow(QStringLiteral("线宽"), m_radialThickness);
+    m_radialColor = new QPushButton(radial);
+    setColorButton(m_radialColor, m_radialColorValue);
+    connect(m_radialColor, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_radialColorValue, QStringLiteral("线条颜色"));
+        if (color.isValid())
+        {
+            m_radialColorValue = color;
+            setColorButton(m_radialColor, color);
+            updateSpecialPreview();
+        }
+    });
+    radialForm->addRow(QStringLiteral("颜色"), m_radialColor);
+    m_specialForms->addWidget(radial);
+
+    auto* flow = new QWidget(m_specialForms);
+    auto* flowForm = new QFormLayout(flow);
+    flowForm->setContentsMargins(0, 0, 0, 0);
+    flowForm->setVerticalSpacing(8);
+    m_flowCount = new QSpinBox(flow);
+    m_flowCount->setRange(2, 200);
+    m_flowCount->setValue(18);
+    flowForm->addRow(QStringLiteral("线条数"), m_flowCount);
+    m_flowSpeed = new QDoubleSpinBox(flow);
+    m_flowSpeed->setRange(0, 6000);
+    m_flowSpeed->setValue(900);
+    m_flowSpeed->setSuffix(QStringLiteral(" px/s"));
+    flowForm->addRow(QStringLiteral("速度"), m_flowSpeed);
+    m_flowAngle = new QDoubleSpinBox(flow);
+    m_flowAngle->setRange(-180, 180);
+    m_flowAngle->setValue(0);
+    m_flowAngle->setSuffix(QStringLiteral("°"));
+    flowForm->addRow(QStringLiteral("角度"), m_flowAngle);
+    m_flowColor = new QPushButton(flow);
+    setColorButton(m_flowColor, m_flowColorValue);
+    connect(m_flowColor, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_flowColorValue, QStringLiteral("线条颜色"));
+        if (color.isValid())
+        {
+            m_flowColorValue = color;
+            setColorButton(m_flowColor, color);
+            updateSpecialPreview();
+        }
+    });
+    flowForm->addRow(QStringLiteral("颜色"), m_flowColor);
+    m_specialForms->addWidget(flow);
+
+    layout->addWidget(m_specialForms, 1);
+
+    connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int) {
+        if (m_specialForms)
+        {
+            const int row = m_specialTypes->currentRow();
+            m_specialForms->setCurrentIndex(row <= 2 ? 0 : (row == 3 ? 1 : 2));
+        }
+        updateSpecialPreview();
+    });
+    connect(m_comicContent, &QLineEdit::textChanged, this,
+            [this](const QString&) { updateSpecialPreview(); });
+    connect(m_comicSize, &QSpinBox::valueChanged, this,
+            [this](int) { updateSpecialPreview(); });
+
+    m_specialTypes->setCurrentRow(0);
     return page;
 }
 
@@ -516,6 +686,132 @@ void WorkbenchPanel::pickMedia()
         });
 }
 
+TextStyle WorkbenchPanel::currentTextStyle() const
+{
+    TextStyle style = m_textStyle;
+    style.text = m_textContent->text().isEmpty() ? QStringLiteral("Text")
+                                                  : m_textContent->text();
+    style.fontFamily = m_textFont->currentFont().family();
+    style.pixelSize = m_textSize->value();
+    style.color = m_textColorValue;
+    style.align = m_textAlign->currentData().toInt();
+    return style;
+}
+
+void WorkbenchPanel::updateSpecialPreview()
+{
+    if (!m_specialPreview)
+        return;
+
+    const int row = m_specialTypes ? m_specialTypes->currentRow() : 0;
+    QImage image(240, 150, QImage::Format_ARGB32);
+    image.fill(QColor(30, 30, 36));
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QPointF centre(image.width() / 2.0, image.height() / 2.0);
+    const auto fit = [&](const QRectF& bounds) {
+        return std::min((image.width() - 16.0) / std::max(1.0, bounds.width()),
+                         (image.height() - 16.0) / std::max(1.0, bounds.height()));
+    };
+
+    if (row <= 2)
+    {
+        TextStyle style;
+        style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
+                                                       : m_comicContent->text();
+        style.fontFamily = QFont().family();
+        style.pixelSize = m_comicSize->value();
+        style.color = m_comicColorValue;
+        style.align = int(Qt::AlignCenter);
+        style.padding = 16.0;
+        BubbleStyle bubble;
+        bubble.shape = row;
+        const ComicBox box = ComicBox::build(style, bubble);
+        painter.save();
+        painter.translate(centre);
+        painter.scale(fit(box.bounds()), fit(box.bounds()));
+        box.paint(painter);
+        painter.restore();
+    }
+    else if (row == 3)
+    {
+        RadialParams params;
+        params.count = m_radialCount->value();
+        params.width = m_radialThickness->value();
+        params.color = m_radialColorValue;
+        painter.save();
+        painter.translate(centre);
+        painter.scale(fit(LineDeco::radialBounds(params)),
+                      fit(LineDeco::radialBounds(params)));
+        LineDeco::paintRadial(painter, params, 0.0);
+        painter.restore();
+    }
+    else
+    {
+        FlowParams params;
+        params.count = m_flowCount->value();
+        params.speed = m_flowSpeed->value();
+        params.angle = m_flowAngle->value();
+        params.color = m_flowColorValue;
+        painter.save();
+        painter.translate(centre);
+        painter.scale(fit(LineDeco::flowBounds(params)),
+                      fit(LineDeco::flowBounds(params)));
+        LineDeco::paintFlow(painter, params, 0.0);
+        painter.restore();
+    }
+    m_specialPreview->setPixmap(QPixmap::fromImage(image));
+}
+
+EntityId WorkbenchPanel::createSpecial()
+{
+    const int row = m_specialTypes ? m_specialTypes->currentRow() : 0;
+    Entity* entity = nullptr;
+
+    if (row <= 2)
+    {
+        TextStyle style;
+        style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
+                                                       : m_comicContent->text();
+        style.fontFamily = QFont().family();
+        style.pixelSize = m_comicSize->value();
+        style.color = m_comicColorValue;
+        style.align = int(Qt::AlignCenter);
+        style.padding = 18.0;
+        BubbleStyle bubble;
+        bubble.shape = row;
+        QVariantMap data;
+        style.writeTo(data);
+        bubble.writeTo(data);
+        entity = m_project->addEntity(EntityType::ComicText,
+                                      QStringLiteral("漫画文本框"), data);
+    }
+    else if (row == 3)
+    {
+        RadialParams params;
+        params.count = m_radialCount->value();
+        params.width = m_radialThickness->value();
+        params.color = m_radialColorValue;
+        QVariantMap data;
+        params.writeTo(data);
+        entity = m_project->addEntity(EntityType::RadialLines,
+                                      QStringLiteral("放射状线条"), data);
+    }
+    else
+    {
+        FlowParams params;
+        params.count = m_flowCount->value();
+        params.speed = m_flowSpeed->value();
+        params.angle = m_flowAngle->value();
+        params.color = m_flowColorValue;
+        QVariantMap data;
+        params.writeTo(data);
+        entity = m_project->addEntity(EntityType::FlowLines,
+                                      QStringLiteral("快速流过"), data);
+    }
+    return entity ? entity->id : kInvalidEntity;
+}
+
 void WorkbenchPanel::createCurrent()
 {
     const int page = m_pages->currentIndex();
@@ -534,11 +830,7 @@ void WorkbenchPanel::createCurrent()
     }
     else if (page == 1)
     {
-        Entity* e = m_project->addText(
-            m_textContent->text().isEmpty() ? QStringLiteral("Text") : m_textContent->text(),
-            m_textFont->currentFont().family(), m_textSize->value(), m_textColorValue,
-            m_textAlign->currentData().toInt());
-        if (e)
+        if (Entity* e = m_project->addText(currentTextStyle()))
             id = e->id;
     }
     else if (page == 2)
@@ -571,6 +863,10 @@ void WorkbenchPanel::createCurrent()
         }
         if (Entity* e = m_project->addCamera(name))
             id = e->id;
+    }
+    else if (page == 4)
+    {
+        id = createSpecial();
     }
 
     if (id == kInvalidEntity)
