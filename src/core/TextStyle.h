@@ -19,6 +19,8 @@ struct TextStyle
     double lineHeight = 1.0;   // multiplier of the font line height
     double padding = 6.0;      // space between the text and its box
     double boxWidth = 0.0;     // 0 = the text keeps its natural width
+    double boxHeight = 0.0;    // 0 = the text keeps its natural height
+    bool vertical = false;     // Japanese tategaki: columns run right to left
 
     static TextStyle fromData(const QVariantMap& data);
     void writeTo(QVariantMap& data) const;

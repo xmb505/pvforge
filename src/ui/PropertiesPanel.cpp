@@ -276,6 +276,11 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
+    m_textVertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), content);
+    connect(m_textVertical, &QCheckBox::toggled, this,
+            [this](bool on) { applyData(QStringLiteral("vertical"), on); });
+    form->addRow(m_textVertical);
+
     auto* layoutButton = new QPushButton(QStringLiteral("排版…"), content);
     layoutButton->setObjectName(QStringLiteral("textLayoutButton"));
     layoutButton->setToolTip(
@@ -416,6 +421,8 @@ void PropertiesPanel::buildLinesSection(QVBoxLayout* layout)
     addDataRow(radialForm, QStringLiteral("半径"), QStringLiteral("radius"), 10, 4000, 0, 10);
     addDataRow(radialForm, QStringLiteral("线宽"), QStringLiteral("width"), 1, 120, 1, 1);
     addDataRow(radialForm, QStringLiteral("旋转 °/s"), QStringLiteral("spin"), -180, 180, 1,
+               1);
+    addDataRow(radialForm, QStringLiteral("随机速度 Hz"), QStringLiteral("flicker"), 0, 60, 1,
                1);
     addDataRow(radialForm, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
     addDataColor(radialForm, QStringLiteral("颜色"), QStringLiteral("color"), QColor(Qt::white));
@@ -1039,6 +1046,11 @@ void PropertiesPanel::refresh()
         }
         m_textColorValue = e->textColor();
         setColorButton(m_textColorButton, m_textColorValue);
+        {
+            const QSignalBlocker blocker(m_textVertical);
+            m_textVertical->setChecked(
+                e->data.value(QStringLiteral("vertical"), false).toBool());
+        }
         {
             const QSignalBlocker blocker(m_textAlign);
             int index = 0;

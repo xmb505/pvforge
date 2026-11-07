@@ -11,6 +11,7 @@
 #include "media/MediaImporter.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -315,6 +316,13 @@ QWidget* WorkbenchPanel::buildTextBoxPage()
     });
     form->addRow(QStringLiteral("文字颜色"), m_comicColor);
 
+    m_comicVertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), page);
+    connect(m_comicVertical, &QCheckBox::toggled, this, [this](bool on) {
+        m_comicStyle.vertical = on;
+        updateTextBoxPreview();
+    });
+    form->addRow(m_comicVertical);
+
     auto* layoutButton = new QPushButton(QStringLiteral("排版…"), page);
     layoutButton->setObjectName(QStringLiteral("comicLayoutButton"));
     layoutButton->setToolTip(QStringLiteral("换行宽度、行距、内边距"));
@@ -398,6 +406,12 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     m_radialThickness->setRange(1, 120);
     m_radialThickness->setValue(18);
     radialForm->addRow(QStringLiteral("线宽"), m_radialThickness);
+    m_radialFlicker = new QDoubleSpinBox(radial);
+    m_radialFlicker->setRange(0, 60);
+    m_radialFlicker->setValue(10);
+    m_radialFlicker->setSuffix(QStringLiteral(" Hz"));
+    m_radialFlicker->setToolTip(QStringLiteral("随机加粗每秒重掷几次"));
+    radialForm->addRow(QStringLiteral("随机速度"), m_radialFlicker);
     m_radialColor = new QPushButton(radial);
     setColorButton(m_radialColor, m_radialColorValue);
     connect(m_radialColor, &QPushButton::clicked, this, [this] {
@@ -794,6 +808,7 @@ void WorkbenchPanel::updateSpecialPreview()
         RadialParams params;
         params.count = m_radialCount->value();
         params.width = m_radialThickness->value();
+        params.flicker = m_radialFlicker->value();
         params.color = m_radialColorValue;
         painter.save();
         painter.translate(centre);
@@ -867,6 +882,7 @@ EntityId WorkbenchPanel::createSpecial()
         RadialParams params;
         params.count = m_radialCount->value();
         params.width = m_radialThickness->value();
+        params.flicker = m_radialFlicker->value();
         params.color = m_radialColorValue;
         QVariantMap data;
         params.writeTo(data);

@@ -19,6 +19,7 @@ struct RadialParams
     double innerRatio = 0.05;   // where a ray starts, as a share of the radius
     double width = 18.0;        // ray width in pixels at the outer edge
     double spin = 0.0;          // whole pattern rotation, degrees per second
+    double flicker = 10.0;      // random thickening speed, times per second
     QColor color = Qt::white;
     int seed = 1;
 

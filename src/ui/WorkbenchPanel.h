@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QFrame>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
@@ -91,6 +92,8 @@ private:
     QSpinBox* m_comicSize = nullptr;
     QPushButton* m_comicColor = nullptr;
     QColor m_comicColorValue{30, 30, 36};
+    QCheckBox* m_comicVertical = nullptr;
+    QDoubleSpinBox* m_radialFlicker = nullptr;
     TextStyle m_comicStyle;
     QSpinBox* m_radialCount = nullptr;
     QDoubleSpinBox* m_radialThickness = nullptr;

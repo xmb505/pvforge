@@ -3,6 +3,8 @@
 #include "TextStyle.h"
 
 #include <QSizeF>
+#include <QStringList>
+#include <QVector>
 
 #include <memory>
 
@@ -30,6 +32,11 @@ private:
     std::shared_ptr<QTextDocument> m_document;
     QSizeF m_content;
     QSizeF m_size;
+    // Vertical (tategaki) layout: one string per column, first column on
+    // the right.
+    QVector<QString> m_columns;
+    double m_charStep = 0.0;
+    double m_columnStep = 0.0;
 };
 
 } // namespace pvf

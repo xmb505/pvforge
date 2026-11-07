@@ -4,6 +4,7 @@
 
 #include <QDialog>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
@@ -56,6 +57,8 @@ private:
     QDoubleSpinBox* m_lineHeight = nullptr;
     QDoubleSpinBox* m_padding = nullptr;
     QDoubleSpinBox* m_boxWidth = nullptr;
+    QDoubleSpinBox* m_boxHeight = nullptr;
+    QCheckBox* m_vertical = nullptr;
     TextPreview* m_preview = nullptr;
 };
 

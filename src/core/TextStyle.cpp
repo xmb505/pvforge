@@ -14,6 +14,8 @@ TextStyle TextStyle::fromData(const QVariantMap& data)
     style.lineHeight = data.value(QStringLiteral("lineHeight"), 1.0).toDouble();
     style.padding = data.value(QStringLiteral("padding"), 6.0).toDouble();
     style.boxWidth = data.value(QStringLiteral("boxWidth"), 0.0).toDouble();
+    style.boxHeight = data.value(QStringLiteral("boxHeight"), 0.0).toDouble();
+    style.vertical = data.value(QStringLiteral("vertical"), false).toBool();
     return style;
 }
 
@@ -27,11 +29,13 @@ void TextStyle::writeTo(QVariantMap& data) const
     data[QStringLiteral("lineHeight")] = lineHeight;
     data[QStringLiteral("padding")] = padding;
     data[QStringLiteral("boxWidth")] = boxWidth;
+    data[QStringLiteral("boxHeight")] = boxHeight;
+    data[QStringLiteral("vertical")] = vertical;
 }
 
 QString TextStyle::cacheKey() const
 {
-    return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8")
+    return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10")
         .arg(text)
         .arg(fontFamily)
         .arg(pixelSize)
@@ -39,7 +43,9 @@ QString TextStyle::cacheKey() const
         .arg(align)
         .arg(lineHeight)
         .arg(padding)
-        .arg(boxWidth);
+        .arg(boxWidth)
+        .arg(boxHeight)
+        .arg(vertical ? 1 : 0);
 }
 
 } // namespace pvf

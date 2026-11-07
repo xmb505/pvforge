@@ -2,6 +2,7 @@
 
 #include "core/TextBlock.h"
 
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -157,6 +158,25 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
         updateStyle();
     });
     form->addRow(QStringLiteral("排版宽度"), m_boxWidth);
+
+    m_boxHeight = new QDoubleSpinBox(this);
+    m_boxHeight->setRange(0, 4000);
+    m_boxHeight->setSpecialValueText(QStringLiteral("自动"));
+    m_boxHeight->setToolTip(QStringLiteral("竖排时一列的最大高度，0 表示不换列"));
+    m_boxHeight->setValue(m_style.boxHeight);
+    connect(m_boxHeight, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        m_style.boxHeight = value;
+        updateStyle();
+    });
+    form->addRow(QStringLiteral("排版高度"), m_boxHeight);
+
+    m_vertical = new QCheckBox(QStringLiteral("竖排（从右到左）"), this);
+    m_vertical->setChecked(m_style.vertical);
+    connect(m_vertical, &QCheckBox::toggled, this, [this](bool on) {
+        m_style.vertical = on;
+        updateStyle();
+    });
+    form->addRow(m_vertical);
 
     body->addLayout(form, 1);
 

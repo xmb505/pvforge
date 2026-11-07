@@ -435,6 +435,11 @@ int specialTest(QApplication& app)
                 qCritical() << "special-test: radial lines are not deterministic";
                 ++failures;
             }
+            if (first == render(8))
+            {
+                qCritical() << "special-test: radial flicker does not animate";
+                ++failures;
+            }
         }
     }
 
@@ -470,6 +475,22 @@ int specialTest(QApplication& app)
                 qCritical() << "special-test: flow lines do not animate";
                 ++failures;
             }
+        }
+    }
+
+    // Japanese vertical text: columns run right to left.
+    {
+        pvf::TextStyle style;
+        style.text = QStringLiteral("日式竖排\n从右到左");
+        style.pixelSize = 48;
+        style.vertical = true;
+        const pvf::TextBlock block = pvf::TextBlock::measure(style);
+        if (block.contentSize().width() <= 0
+            || block.contentSize().height() <= block.contentSize().width())
+        {
+            qCritical() << "special-test: vertical text is not column shaped"
+                        << block.contentSize();
+            ++failures;
         }
     }
 
@@ -5555,6 +5576,7 @@ int specialDemo(QApplication& app)
         pvf::TextStyle style;
         style.text = text;
         style.pixelSize = size;
+        style.vertical = shape == 1;
         style.color = fill.lightness() > 140 ? QColor(28, 28, 34) : QColor(255, 255, 250);
         style.padding = 24.0;
         style.align = int(Qt::AlignCenter);
@@ -5579,7 +5601,7 @@ int specialDemo(QApplication& app)
             QColor(255, 255, 255));
     balloon(-560, 290, QStringLiteral("云朵气泡"), 58, 2, -0.2, 1.4,
             QColor(255, 255, 255));
-    balloon(520, -200, QStringLiteral("日式硬直角\n没有尖角"), 58, 1, 0, 1.3,
+    balloon(620, -200, QStringLiteral("日式竖排\n从右到左"), 58, 1, 0, 1.3,
             QColor(255, 255, 255));
     balloon(0, 300, QStringLiteral("爆炸式！"), 66, 3, 0, 1.3,
             QColor(255, 246, 210));

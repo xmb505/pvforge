@@ -115,6 +115,7 @@ private:
     QSpinBox* m_textSize = nullptr;
     QPushButton* m_textColorButton = nullptr;
     QComboBox* m_textAlign = nullptr;
+    QCheckBox* m_textVertical = nullptr;
     QColor m_textColorValue{Qt::white};
 
     QComboBox* m_vectorShape = nullptr;

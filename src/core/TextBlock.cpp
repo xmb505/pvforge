@@ -10,6 +10,7 @@
 #include <QTextDocument>
 #include <QTextLayout>
 #include <algorithm>
+#include <limits>
 
 namespace pvf {
 
@@ -53,6 +54,39 @@ TextBlock TextBlock::measure(const TextStyle& style)
 
     const QFont font = fontOf(style);
 
+    if (style.vertical)
+    {
+        // Tategaki: characters run downwards, columns run right to left.
+        const QFontMetricsF metrics(font);
+        block->m_charStep = metrics.lineSpacing() * std::max(0.5, style.lineHeight);
+        block->m_columnStep = block->m_charStep;
+        const int perColumn = style.boxHeight > 0
+                                  ? std::max(1, int(style.boxHeight / block->m_charStep))
+                                  : std::numeric_limits<int>::max();
+        const QStringList paragraphs = style.text.split(QLatin1Char('\n'));
+        for (const QString& paragraph : paragraphs)
+        {
+            int start = 0;
+            while (start < paragraph.size())
+            {
+                const int count = std::min(perColumn, int(paragraph.size()) - start);
+                block->m_columns.append(paragraph.mid(start, count));
+                start += count;
+            }
+        }
+        int longest = 0;
+        for (const QString& column : block->m_columns)
+            longest = std::max(longest, int(column.size()));
+        block->m_content = QSizeF(block->m_columns.size() * block->m_columnStep,
+                                  longest * block->m_charStep);
+        block->m_size = block->m_content +
+                        QSizeF(style.padding * 2.0, style.padding * 2.0);
+        if (blocks.size() > 256)
+            blocks.clear();
+        blocks.insert(key, block);
+        return *block;
+    }
+
     auto document = std::make_shared<QTextDocument>();
     document->setDocumentMargin(0);
     document->setDefaultFont(font);
@@ -91,13 +125,41 @@ TextBlock TextBlock::measure(const TextStyle& style)
 
 void TextBlock::paint(QPainter& painter, const QPointF& centre) const
 {
-    if (!m_document || m_document->isEmpty())
-        return;
-
     const QFont font = fontOf(m_style);
     painter.save();
     painter.setFont(font);
     painter.setPen(m_style.color);
+
+    if (m_style.vertical)
+    {
+        const QPointF topLeft = centre -
+                                QPointF(m_size.width() / 2.0, m_size.height() / 2.0) +
+                                QPointF(m_style.padding, m_style.padding);
+        const int count = m_columns.size();
+        for (int columnIndex = 0; columnIndex < count; ++columnIndex)
+        {
+            const QString& column = m_columns[columnIndex];
+            // The first column is the rightmost one.
+            const double x = topLeft.x() +
+                             (count - 1 - columnIndex) * m_columnStep +
+                             m_columnStep / 2.0;
+            for (int index = 0; index < column.size(); ++index)
+            {
+                const QRectF cell(x - m_columnStep / 2.0,
+                                  topLeft.y() + index * m_charStep,
+                                  m_columnStep, m_charStep);
+                painter.drawText(cell, Qt::AlignCenter, QString(column.at(index)));
+            }
+        }
+        painter.restore();
+        return;
+    }
+
+    if (!m_document || m_document->isEmpty())
+    {
+        painter.restore();
+        return;
+    }
 
     const QPointF topLeft = centre -
                             QPointF(m_size.width() / 2.0, m_size.height() / 2.0) +

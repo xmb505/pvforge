@@ -19,6 +19,7 @@ RadialParams RadialParams::fromData(const QVariantMap& data)
     params.innerRatio = data.value(QStringLiteral("innerRatio"), 0.05).toDouble();
     params.width = data.value(QStringLiteral("width"), 18.0).toDouble();
     params.spin = data.value(QStringLiteral("spin"), 0.0).toDouble();
+    params.flicker = data.value(QStringLiteral("flicker"), 10.0).toDouble();
     const QColor color = data.value(QStringLiteral("color")).value<QColor>();
     if (color.isValid())
         params.color = color;
@@ -33,6 +34,7 @@ void RadialParams::writeTo(QVariantMap& data) const
     data[QStringLiteral("innerRatio")] = innerRatio;
     data[QStringLiteral("width")] = width;
     data[QStringLiteral("spin")] = spin;
+    data[QStringLiteral("flicker")] = flicker;
     data[QStringLiteral("color")] = color;
     data[QStringLiteral("seed")] = seed;
 }
@@ -90,7 +92,7 @@ void paintRadial(QPainter& painter, const RadialParams& params, double seconds)
     const double inner = outer * std::clamp(params.innerRatio, 0.0, 0.9);
     // The thickness flickers ten times a second, like a hand drawn line that
     // is redrawn over and over.
-    const double step = std::floor(seconds * 10.0);
+    const double step = std::floor(seconds * std::max(0.0, params.flicker));
 
     QPolygonF wedge;
     for (int index = 0; index < params.count; ++index)
