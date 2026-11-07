@@ -15,9 +15,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QResizeEvent>
 #include <QScrollArea>
-#include <QShowEvent>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -36,7 +34,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_project->setParent(this);
     setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
     resize(1440, 900);
-    setMinimumSize(640, 400);
+    setMinimumSize(1000, 620);
 
     m_viewport = new Viewport(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
@@ -85,6 +83,9 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_objectTab->setFrameShape(QFrame::NoFrame);
     m_objectTab->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_objectTab->setWidget(m_props);
+    // Not in any layout until it is added as a tab; without this it sits
+    // visible at (0, 0) on top of the menu bar and toolbar.
+    m_objectTab->hide();
 
     m_rightTabs = new QTabWidget(this);
     m_rightTabs->setObjectName(QStringLiteral("rightTabs"));
@@ -407,29 +408,6 @@ void MainWindow::updateStatus()
                           .arg(m_project->fps)
                           .arg(m_project->width)
                           .arg(m_project->height));
-}
-
-void MainWindow::resizeEvent(QResizeEvent* event)
-{
-    QMainWindow::resizeEvent(event);
-
-    // Squeezed windows collapse the side panel and timeline instead of
-    // letting their children overlap the toolbar.
-    const bool showSide = width() >= 900;
-    const bool showTimeline = height() >= 480;
-    if (m_rightTabs)
-        m_rightTabs->setVisible(showSide);
-    if (m_timeline)
-        m_timeline->setVisible(showTimeline);
-    if (m_viewport)
-        m_viewport->setMinimumWidth(showSide ? 480 : 0);
-}
-
-void MainWindow::showEvent(QShowEvent* event)
-{
-    QMainWindow::showEvent(event);
-    if (width() < minimumWidth() || height() < minimumHeight())
-        resize(std::max(width(), minimumWidth()), std::max(height(), minimumHeight()));
 }
 
 } // namespace pvf

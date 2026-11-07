@@ -39,9 +39,6 @@ private:
     void createMenus();
     void createToolBar();
 
-    void resizeEvent(QResizeEvent* event) override;
-    void showEvent(QShowEvent* event) override;
-
     void setFrame(int frame);
     void setSelectedEntity(EntityId id);
     void applyValue(EntityId id, const QString& prop, double value);
