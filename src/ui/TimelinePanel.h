@@ -40,6 +40,8 @@ private:
     int xFromFrame(int frame) const;
     int frameFromX(int x) const;
     int rowAt(int y) const;
+    EntityId entityAtRow(int row) const;
+    bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
     int contentWidth() const;
     int visibleWidth() const;
     QVector<int> visibleEntities() const;
@@ -49,7 +51,15 @@ private:
     Project* m_project = nullptr;
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
-    bool m_scrubbing = false;
+    enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
+    DragMode m_dragMode = DragMode::None;
+    QPointF m_pressPos;
+    QPointF m_boxStart;
+    QPointF m_boxEnd;
+    int m_pressFrame = 0;
+    EntityId m_pressEntity = kInvalidEntity;
+    EntityId m_selectedKeyframeEntity = kInvalidEntity;
+    double m_selectedKeyframeFrame = -1.0;
     QLineEdit* m_search = nullptr;
     QScrollBar* m_hScroll = nullptr;
     int m_scrollX = 0;

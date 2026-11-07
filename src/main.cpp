@@ -17,6 +17,7 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
@@ -211,6 +212,86 @@ int welcomeTest(QApplication& app)
             QFile::remove(projectPath);
             app.exit(0);
         });
+    });
+    return app.exec();
+}
+
+int timelineInteractionTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 24;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    pvf::Entity* first = project->addVector(0, 120, 80, Qt::red, Qt::white, 0);
+    project->setValue(first->id, QStringLiteral("x"), 0, 0, true);
+    project->setValue(first->id, QStringLiteral("x"), 60, 300, true);
+    project->addVector(1, 120, 80, Qt::green, Qt::white, 0);
+    project->addVector(2, 120, 80, Qt::blue, Qt::white, 0);
+
+    auto* timeline = window.findChild<pvf::TimelinePanel*>();
+    if (!timeline)
+    {
+        qCritical() << "timeline-interaction-test: timeline not found";
+        return 1;
+    }
+
+    QTimer::singleShot(400, &window, [&app, &window, timeline] {
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(timeline->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        int failures = 0;
+
+        // Ruler press moves the playhead.
+        send(QEvent::MouseButtonPress, QPoint(500, 10), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(500, 10), Qt::LeftButton, Qt::NoButton);
+        const int rulerFrame = window.currentFrame();
+        if (std::abs(rulerFrame - 53) > 2)
+        {
+            qCritical() << "timeline-interaction-test: ruler frame" << rulerFrame;
+            ++failures;
+        }
+
+        // Empty track click jumps on release.
+        send(QEvent::MouseButtonPress, QPoint(300, 40), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(300, 40), Qt::LeftButton, Qt::NoButton);
+        const int emptyFrame = window.currentFrame();
+        if (std::abs(emptyFrame - 20) > 2)
+        {
+            qCritical() << "timeline-interaction-test: empty frame" << emptyFrame;
+            ++failures;
+        }
+
+        // Keyframe click selects without moving the playhead.
+        const int beforeKey = window.currentFrame();
+        send(QEvent::MouseButtonPress, QPoint(540, 40), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(540, 40), Qt::LeftButton, Qt::NoButton);
+        const int afterKey = window.currentFrame();
+        if (afterKey != beforeKey)
+        {
+            qCritical() << "timeline-interaction-test: keyframe moved playhead" << beforeKey
+                        << afterKey;
+            ++failures;
+        }
+
+        // Dragging rubber-bands instead of scrubbing.
+        send(QEvent::MouseButtonPress, QPoint(250, 40), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, QPoint(320, 68), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(320, 68), Qt::LeftButton, Qt::NoButton);
+        if (window.currentFrame() != afterKey)
+        {
+            qCritical() << "timeline-interaction-test: drag moved playhead";
+            ++failures;
+        }
+
+        qInfo() << "timeline-interaction-test: ruler" << rulerFrame << "empty" << emptyFrame
+                << "key" << beforeKey << "->" << afterKey << "failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
 }
@@ -625,6 +706,8 @@ int main(int argc, char* argv[])
         return timelineZoomTest(app);
     if (app.arguments().contains(QStringLiteral("--delete-test")))
         return deleteTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
+        return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))

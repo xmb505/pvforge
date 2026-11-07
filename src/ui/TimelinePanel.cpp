@@ -118,6 +118,51 @@ int TimelinePanel::rowAt(int y) const
     return (y - kHeaderHeight) / kRowHeight;
 }
 
+EntityId TimelinePanel::entityAtRow(int row) const
+{
+    const QVector<int> visible = visibleEntities();
+    if (row < 0 || row >= visible.size())
+        return kInvalidEntity;
+    return m_project->entities()[visible[row]].id;
+}
+
+bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const
+{
+    const QVector<int> visible = visibleEntities();
+    if (row < 0 || row >= visible.size())
+        return false;
+
+    const Entity& e = m_project->entities()[visible[row]];
+    const double frame = frameFromX(x);
+    const double tolerance = std::max(1.0, 6.0 / m_pixelsPerFrame);
+
+    bool found = false;
+    double best = 0.0;
+    double bestDistance = tolerance;
+    for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            const double distance = std::abs(key.frame - frame);
+            if (distance <= bestDistance)
+            {
+                bestDistance = distance;
+                best = key.frame;
+                found = true;
+            }
+        }
+    }
+
+    if (found)
+    {
+        if (outId)
+            *outId = e.id;
+        if (outFrame)
+            *outFrame = best;
+    }
+    return found;
+}
+
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
@@ -241,7 +286,14 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             QPolygonF diamond;
             diamond << QPointF(x, cy - r) << QPointF(x + r, cy) << QPointF(x, cy + r)
                     << QPointF(x - r, cy);
-            p.setBrush(e.id == m_selected ? QColor(255, 200, 90) : QColor(200, 160, 80));
+            const bool selectedKey =
+                e.id == m_selectedKeyframeEntity
+                && f == int(std::lround(m_selectedKeyframeFrame));
+            if (selectedKey)
+                p.setBrush(QColor(255, 255, 255));
+            else
+                p.setBrush(e.id == m_selected ? QColor(255, 200, 90)
+                                              : QColor(200, 160, 80));
             p.drawPolygon(diamond);
         }
     }
@@ -285,6 +337,16 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
+    // Rubber-band selection drawn on top.
+    if (m_dragMode == DragMode::BoxSelect)
+    {
+        const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
+        p.setPen(QPen(QColor(100, 160, 255), 1, Qt::DashLine));
+        p.setBrush(QColor(100, 160, 255, 40));
+        p.drawRect(box.intersected(QRectF(kNameWidth, kHeaderHeight, visibleWidth(),
+                                          bodyBottom - kHeaderHeight)));
+    }
+
     p.setPen(QColor(70, 70, 78));
     p.drawLine(0, bodyBottom - 1, width(), bodyBottom - 1);
 }
@@ -298,33 +360,103 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     if (event->position().y() >= bodyBottom)
         return;
 
-    // Name column selects the entity row.
-    if (event->position().x() < kNameWidth)
+    const int x = int(event->position().x());
+    const int y = int(event->position().y());
+
+    // Ruler row: drag the playhead.
+    if (y < kHeaderHeight)
     {
-        const int row = rowAt(int(event->position().y()));
-        const auto& entities = m_project->entities();
-        setFocus(Qt::MouseFocusReason);
-        const QVector<int> visible = visibleEntities();
-        if (row >= 0 && row < visible.size())
-            emit entitySelected(entities[visible[row]].id);
+        if (x >= kNameWidth)
+        {
+            m_dragMode = DragMode::Scrub;
+            emit frameRequested(std::max(0, frameFromX(x)));
+        }
         return;
     }
 
-    m_scrubbing = true;
-    emit frameRequested(std::max(0, frameFromX(event->position().x())));
+    // Name column: select the entity row.
+    if (x < kNameWidth)
+    {
+        setFocus(Qt::MouseFocusReason);
+        const EntityId id = entityAtRow(rowAt(y));
+        if (id != kInvalidEntity)
+            emit entitySelected(id);
+        return;
+    }
+
+    setFocus(Qt::MouseFocusReason);
+
+    // Keyframe dot: select the keyframe without moving the playhead.
+    EntityId keyEntity = kInvalidEntity;
+    double keyFrame = 0.0;
+    if (hitKeyframe(rowAt(y), x, &keyEntity, &keyFrame))
+    {
+        m_selectedKeyframeEntity = keyEntity;
+        m_selectedKeyframeFrame = keyFrame;
+        emit entitySelected(keyEntity);
+        update();
+        return;
+    }
+
+    // Empty timeline area: remember the click; release jumps the playhead
+    // unless the mouse turns this into a rubber-band selection.
+    m_dragMode = DragMode::PendingSelect;
+    m_pressPos = event->position();
+    m_boxStart = event->position();
+    m_boxEnd = event->position();
+    m_pressFrame = std::max(0, frameFromX(x));
+    m_pressEntity = entityAtRow(rowAt(y));
 }
 
 void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
-    if (!m_scrubbing)
+    if (m_dragMode == DragMode::Scrub)
+    {
+        emit frameRequested(std::max(0, frameFromX(int(event->position().x()))));
         return;
-    emit frameRequested(std::max(0, frameFromX(event->position().x())));
+    }
+
+    if (m_dragMode == DragMode::PendingSelect)
+    {
+        if ((event->position() - m_pressPos).manhattanLength() <= 5.0)
+            return;
+        m_dragMode = DragMode::BoxSelect;
+        m_boxStart = m_pressPos;
+    }
+
+    if (m_dragMode == DragMode::BoxSelect)
+    {
+        m_boxEnd = event->position();
+        update();
+    }
 }
 
 void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton)
-        m_scrubbing = false;
+    if (event->button() != Qt::LeftButton)
+        return;
+
+    if (m_dragMode == DragMode::PendingSelect)
+    {
+        emit frameRequested(m_pressFrame);
+        if (m_pressEntity != kInvalidEntity)
+            emit entitySelected(m_pressEntity);
+    }
+    else if (m_dragMode == DragMode::BoxSelect)
+    {
+        const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
+        const int first = rowAt(int(box.top()));
+        const int last = rowAt(int(box.bottom()));
+        const QVector<int> visible = visibleEntities();
+        if (first >= 0 && first < int(visible.size()))
+        {
+            const int row = std::min(last, int(visible.size()) - 1);
+            emit entitySelected(m_project->entities()[visible[row]].id);
+        }
+    }
+
+    m_dragMode = DragMode::None;
+    update();
 }
 
 } // namespace pvf
