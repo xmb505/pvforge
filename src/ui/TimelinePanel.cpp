@@ -51,17 +51,48 @@ void rulerSteps(double pixelsPerFrame, int* tickStep, int* labelStep)
     }
 }
 
-// Seconds-mode label interval: at least one second, doubling until labels
-// are readable when zoomed out, and halving for sub-second labels when
-// zoomed in.
-int secondsLabelFrames(int fps, double pixelsPerFrame)
+// Seconds-mode ruler grid. Both intervals are measured in frames:
+// `cellFrames` is the small tick spacing and `labelFrames` the spacing of
+// numbered ticks. Cells always subdivide whole seconds evenly, so at 24 fps
+// a second is 24, 12, 8, 6, 4, 3, 2 or 1 cells depending on the zoom.
+struct SecondsGrid
 {
-    int frames = std::max(1, fps);
-    while (frames * pixelsPerFrame < 64.0)
-        frames *= 2;
-    while (frames > 1 && frames % 2 == 0 && frames * pixelsPerFrame > 240.0)
-        frames /= 2;
-    return frames;
+    int labelFrames = 1;
+    int cellFrames = 1;
+};
+
+SecondsGrid secondsGrid(int fps, double pixelsPerFrame)
+{
+    const int safeFps = std::max(1, fps);
+    SecondsGrid grid;
+
+    // Labels at least one second apart, coarser when zoomed out and finer
+    // (half/quarter second) when zoomed in.
+    int labelFrames = safeFps;
+    while (labelFrames * pixelsPerFrame < 48.0)
+        labelFrames *= 2;
+    while (labelFrames > 1 && labelFrames % 2 == 0
+           && labelFrames * pixelsPerFrame > 240.0)
+        labelFrames /= 2;
+    grid.labelFrames = labelFrames;
+
+    // Pick the smallest whole-second subdivision that is still readable.
+    grid.cellFrames = labelFrames;
+    for (int step = 1; step <= labelFrames; ++step)
+    {
+        if (labelFrames % step != 0)
+            continue;
+        // A cell is either a slice of one second or a whole number of
+        // seconds, never an arbitrary frame count.
+        if (safeFps % step != 0 && step % safeFps != 0)
+            continue;
+        if (step * pixelsPerFrame >= 5.0)
+        {
+            grid.cellFrames = step;
+            break;
+        }
+    }
+    return grid;
 }
 
 } // namespace
@@ -136,6 +167,16 @@ int TimelinePanel::rulerLabelStepForTest() const
     int labelStep = 0;
     rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
     return labelStep;
+}
+
+int TimelinePanel::secondsCellStepForTest() const
+{
+    return secondsGrid(std::max(1, m_project->fps), m_pixelsPerFrame).cellFrames;
+}
+
+int TimelinePanel::secondsLabelStepForTest() const
+{
+    return secondsGrid(std::max(1, m_project->fps), m_pixelsPerFrame).labelFrames;
 }
 
 void TimelinePanel::setCurrentFrame(int frame)
@@ -388,13 +429,10 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
-    // Ruler: Mine-imator-style adaptive ticks. Ticks are always spaced in
-    // frames; zooming out coarsens the interval, and the labels switch
-    // between frame numbers and elapsed seconds.
+    // Ruler. Frame mode follows Mine-imator's density table; seconds mode
+    // subdivides every second into whole cells derived from the project
+    // frame rate: at 24 fps a second is 24, 12, 8, 6, 4, 3, 2 or 1 cells.
     const int fps = std::max(1, m_project->fps);
-    int tickStep = 0;
-    int labelStep = 0;
-    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
 
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
@@ -417,19 +455,22 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     };
 
     const int leftFrame = std::max(0, frameFromX(kNameWidth));
-    const int lastFrame = frameFromX(right) + tickStep;
-    const int firstTick = (leftFrame / tickStep) * tickStep;
-
-    // Minor frame ticks. Mine-imator highlights every Nth frame with a
-    // longer notch, which is what makes frame-level spacing readable.
-    for (int f = firstTick; f <= lastFrame; f += tickStep)
-    {
-        const bool major = (f % labelStep == 0);
-        drawTick(f, major ? 7 : 3, major ? textColor : midColor);
-    }
 
     if (m_displayFrames)
     {
+        int tickStep = 0;
+        int labelStep = 0;
+        rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+
+        const int lastFrame = frameFromX(right) + tickStep;
+        const int firstTick = (leftFrame / tickStep) * tickStep;
+
+        // Mine-imator highlights every Nth frame with a longer notch.
+        for (int f = firstTick; f <= lastFrame; f += tickStep)
+        {
+            const bool major = (f % labelStep == 0);
+            drawTick(f, major ? 7 : 3, major ? textColor : midColor);
+        }
         for (int f = firstTick; f <= lastFrame; f += tickStep)
         {
             if (f % labelStep == 0)
@@ -438,11 +479,26 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     }
     else
     {
-        // Whole-second ticks and labels; the density adapts to the zoom so
-        // the frame ticks stay visible underneath.
-        const int labelFrames = secondsLabelFrames(fps, m_pixelsPerFrame);
-        const int firstLabel = (leftFrame / labelFrames) * labelFrames;
-        for (int f = firstLabel; f <= lastFrame; f += labelFrames)
+        const SecondsGrid grid = secondsGrid(fps, m_pixelsPerFrame);
+        const int lastFrame = frameFromX(right) + grid.cellFrames;
+        const int firstCell = (leftFrame / grid.cellFrames) * grid.cellFrames;
+
+        for (int f = firstCell; f <= lastFrame; f += grid.cellFrames)
+            drawTick(f, 3, midColor);
+
+        // Whole seconds get a taller notch when the cell grid is finer.
+        if (fps * m_pixelsPerFrame >= 8.0)
+        {
+            const int firstSecond = (leftFrame / fps) * fps;
+            for (int f = firstSecond; f <= lastFrame; f += fps)
+            {
+                if (f % grid.labelFrames != 0)
+                    drawTick(f, 6, midColor);
+            }
+        }
+
+        const int firstLabel = (leftFrame / grid.labelFrames) * grid.labelFrames;
+        for (int f = firstLabel; f <= lastFrame; f += grid.labelFrames)
         {
             drawTick(f, 9, textColor);
             const double seconds = f / double(fps);

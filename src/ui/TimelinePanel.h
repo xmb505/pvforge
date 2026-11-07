@@ -44,6 +44,8 @@ public:
     void setPixelsPerFrameForTest(double pixels);
     int rulerTickStepForTest() const;
     int rulerLabelStepForTest() const;
+    int secondsCellStepForTest() const;
+    int secondsLabelStepForTest() const;
 signals:
     void frameRequested(int frame);
     void scrubStarted();   // the user takes manual control of the playhead

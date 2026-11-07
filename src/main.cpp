@@ -853,6 +853,7 @@ int timelineFrameTest(QApplication& app)
     pvf::Settings::setTimelineDisplayFrames(false);
 
     auto* project = new pvf::Project;
+    project->fps = 24;
     pvf::MainWindow window(project);
     window.resize(1200, 800);
     window.show();
@@ -871,13 +872,13 @@ int timelineFrameTest(QApplication& app)
         pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
         project->addKeyframe(entity->id, QStringLiteral("x"), 100.0, 300.0);
 
-        // Mine-imator's tick density table.
+        // Mine-imator's frame-tick density table (frame label mode).
         auto checkSteps = [&](double pixels, int tick, int label) {
             timeline->setPixelsPerFrameForTest(pixels);
             if (timeline->rulerTickStepForTest() != tick
                 || timeline->rulerLabelStepForTest() != label)
             {
-                qCritical() << "timeline-frame-test: wrong steps at" << pixels
+                qCritical() << "timeline-frame-test: wrong frame steps at" << pixels
                             << timeline->rulerTickStepForTest()
                             << timeline->rulerLabelStepForTest();
                 ++failures;
@@ -889,6 +890,42 @@ int timelineFrameTest(QApplication& app)
         checkSteps(2.0, 10, 50);
         checkSteps(0.8, 20, 100);
         checkSteps(0.4, 50, 200);
+
+        // Seconds mode must subdivide one second evenly for the project fps.
+        auto checkSeconds = [&](int fps, double pixels, int cell, int label) {
+            project->fps = fps;
+            timeline->setPixelsPerFrameForTest(pixels);
+            const int actualCell = timeline->secondsCellStepForTest();
+            const int actualLabel = timeline->secondsLabelStepForTest();
+            if (actualCell != cell || actualLabel != label)
+            {
+                qCritical() << "timeline-frame-test: wrong second grid at" << fps
+                            << "fps" << pixels << "px: cells" << actualCell
+                            << "label" << actualLabel;
+                ++failures;
+            }
+            if (actualLabel % actualCell != 0
+                || (fps % actualCell != 0 && actualCell % fps != 0))
+            {
+                qCritical() << "timeline-frame-test: grid does not divide seconds"
+                            << fps << actualCell << actualLabel;
+                ++failures;
+            }
+        };
+        // 24 fps: 24, 12, 8, 6, 4, 2 cells per second as the zoom shrinks.
+        checkSeconds(24, 6.0, 1, 24);
+        checkSeconds(24, 4.0, 2, 24);
+        checkSeconds(24, 2.0, 3, 24);
+        checkSeconds(24, 1.0, 6, 48);
+        checkSeconds(24, 0.5, 12, 96);
+        checkSeconds(24, 0.25, 24, 192);
+        checkSeconds(24, 32.0, 1, 6);   // 4 cells per quarter second
+        // Other rates use their own divisors, not a hard-coded 5 frames.
+        checkSeconds(30, 6.0, 1, 30);
+        checkSeconds(30, 1.0, 5, 60);
+        checkSeconds(60, 6.0, 1, 30);
+        checkSeconds(25, 6.0, 1, 25);
+        project->fps = 24;   // keep the screenshots at the regression case
 
         // Clicking the ruler focuses the timeline so arrow keys work.
         const QPoint rulerPoint(230, 10);
@@ -977,7 +1014,7 @@ int timelineFrameTest(QApplication& app)
         }
 
         // Both ruler label modes render.
-        timeline->setPixelsPerFrameForTest(8.0);
+        timeline->setPixelsPerFrameForTest(6.0);
         timeline->setDisplayFrames(true);
         if (!timeline->displayFrames())
         {
