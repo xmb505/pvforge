@@ -40,9 +40,9 @@ void RadialParams::writeTo(QVariantMap& data) const
 FlowParams FlowParams::fromData(const QVariantMap& data)
 {
     FlowParams params;
-    params.count = data.value(QStringLiteral("count"), 18).toInt();
+    params.count = data.value(QStringLiteral("count"), 26).toInt();
     params.length = data.value(QStringLiteral("length"), 420.0).toDouble();
-    params.spacing = data.value(QStringLiteral("spacing"), 90.0).toDouble();
+    params.spacing = data.value(QStringLiteral("spacing"), 64.0).toDouble();
     params.thickness = data.value(QStringLiteral("thickness"), 10.0).toDouble();
     params.area = data.value(QStringLiteral("area"), 1600.0).toDouble();
     params.speed = data.value(QStringLiteral("speed"), 900.0).toDouble();

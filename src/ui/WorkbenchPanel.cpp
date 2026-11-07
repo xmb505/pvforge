@@ -336,7 +336,7 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     flowForm->setVerticalSpacing(8);
     m_flowCount = new QSpinBox(flow);
     m_flowCount->setRange(2, 200);
-    m_flowCount->setValue(18);
+    m_flowCount->setValue(26);
     flowForm->addRow(QStringLiteral("线条数"), m_flowCount);
     m_flowSpeed = new QDoubleSpinBox(flow);
     m_flowSpeed->setRange(0, 6000);

@@ -29,9 +29,9 @@ struct RadialParams
 // Parallel streaks flowing across the scene, used as a motion background.
 struct FlowParams
 {
-    int count = 18;
+    int count = 26;
     double length = 420.0;
-    double spacing = 90.0;
+    double spacing = 64.0;
     double thickness = 10.0;
     double area = 1600.0;       // size of the covered square
     double speed = 900.0;       // pixels per second
