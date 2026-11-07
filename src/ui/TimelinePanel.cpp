@@ -345,6 +345,9 @@ bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFram
     const EntityId id = entityAtRow(row);
     if (id == kInvalidEntity)
         return false;
+    const Entity* entity = m_project->entity(id);
+    if (!entity || entity->locked)
+        return false;
 
     const double frame = frameFromX(x);
     const double tolerance = std::max(1.0, 6.0 / m_pixelsPerFrame);
@@ -395,10 +398,22 @@ void TimelinePanel::handleRowButton(int row, int index)
         emit entityFlagChanged(id, EntityFlag::Hidden, !entity->hidden);
         break;
     case 1:   // Lock / unlock
+        if (!entity->locked)
+        {
+            m_selectedKeyframes.erase(
+                std::remove_if(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                               [id](const KeyframeSelection& selection) {
+                                   return selection.entity == id;
+                               }),
+                m_selectedKeyframes.end());
+            update();
+        }
         emit entityFlagChanged(id, EntityFlag::Locked, !entity->locked);
         break;
     case 2:   // Select every keyframe of the entity
     {
+        if (entity->locked)
+            break;
         m_selectedKeyframes.clear();
         for (const double frame : keyframeFrames(id))
             m_selectedKeyframes.append({id, frame});
@@ -511,8 +526,11 @@ void TimelinePanel::updateHoverCursor(const QPointF& pos)
     }
     const int x = int(pos.x());
     const int y = int(pos.y());
-    if (y >= kHeaderHeight && y < height() - kScrollBarHeight
-        && audioClipAt(x, y) != kInvalidEntity)
+    const Entity* clip =
+        (y >= kHeaderHeight && y < height() - kScrollBarHeight)
+            ? m_project->entity(audioClipAt(x, y))
+            : nullptr;
+    if (clip && !clip->locked)
     {
         setCursor(Qt::OpenHandCursor);
     }
@@ -857,7 +875,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     const int row = rowAt(y);
     const EntityId id = entityAtRow(row);
     const Entity* entity = m_project->entity(id);
-    if (id == kInvalidEntity || !entity)
+    if (id == kInvalidEntity || !entity || entity->locked)
         return;
 
     m_renameEntity = id;
@@ -946,7 +964,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         m_selectedKeyframes.clear();
         const EntityId id = entityAtRow(rowAt(y));
-        if (id != kInvalidEntity)
+        const Entity* entity = m_project->entity(id);
+        if (entity && !entity->locked)
             emit entitySelected(id);
         update();
         return;
@@ -983,10 +1002,10 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     if (audio)
     {
         m_selectedKeyframes.clear();
-        emit entitySelected(audioId);
         m_pressFrame = std::max(0, frameFromX(x));
         if (!audio->locked)
         {
+            emit entitySelected(audioId);
             m_dragMode = DragMode::MoveAudio;
             m_audioDragId = audioId;
             m_audioDragStart =
@@ -1249,7 +1268,8 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         m_selectedKeyframes.clear();
         emit scrubStarted();
         emit frameRequested(m_pressFrame);
-        if (m_pressEntity != kInvalidEntity)
+        const Entity* pressed = m_project->entity(m_pressEntity);
+        if (pressed && !pressed->locked)
             emit entitySelected(m_pressEntity);
     }
     else if (m_dragMode == DragMode::BoxSelect)
@@ -1268,12 +1288,14 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         for (int row = std::max(0, firstRow);
              row <= std::min(lastRow, int(visible.size()) - 1); ++row)
         {
-            const EntityId id = m_project->entities()[visible[row]].id;
-            for (const double frame : keyframeFrames(id))
+            const Entity& entity = m_project->entities()[visible[row]];
+            if (entity.locked)
+                continue;
+            for (const double frame : keyframeFrames(entity.id))
             {
                 if (frame < firstFrame || frame > lastFrame)
                     continue;
-                const KeyframeSelection selection{id, frame};
+                const KeyframeSelection selection{entity.id, frame};
                 if (std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection)
                     == m_selectedKeyframes.end())
                     m_selectedKeyframes.append(selection);
@@ -1282,7 +1304,11 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 
         // Keep the entity selection in sync with the last touched row.
         if (lastRow >= 0 && lastRow < int(visible.size()))
-            emit entitySelected(m_project->entities()[visible[lastRow]].id);
+        {
+            const Entity& last = m_project->entities()[visible[lastRow]];
+            if (!last.locked)
+                emit entitySelected(last.id);
+        }
         update();
     }
     else if (m_dragMode == DragMode::MoveAudio)

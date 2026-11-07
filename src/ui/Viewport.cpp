@@ -267,11 +267,11 @@ bool Viewport::handleCameraPress(QMouseEvent* event)
     if (part == CameraPart::None)
         return false;
 
-    emit entitySelected(id);
-
     Entity* entity = m_project->entity(id);
     if (!entity || entity->locked)
         return true;
+
+    emit entitySelected(id);
 
     m_cameraPart = part;
     m_cameraStartState = cameraState(*entity);
@@ -560,6 +560,8 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
     for (int i = entities.size() - 1; i >= 0; --i)
     {
         const Entity& e = entities[i];
+        if (e.hidden || e.locked)
+            continue;
         const QRectF bounds = entityLocalBounds(e);
         if (bounds.isEmpty())
             continue;
@@ -591,7 +593,7 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
 
     SceneRenderer::drawEntity(p, *m_project, e, m_frame, worldToScreenTransform(), false);
 
-    if (e.id == m_selected)
+    if (e.id == m_selected && !e.locked)
     {
         p.save();
         p.setTransform(entityTransform(e));
@@ -1207,7 +1209,7 @@ void Viewport::paintEvent(QPaintEvent*)
     {
         if (const Entity* entity = m_project->entity(m_selected))
         {
-            if (!entity->isCamera())
+            if (!entity->isCamera() && !entity->locked)
             {
                 drawHandles(p, *entity);
                 drawGizmo(p, *entity);
@@ -1247,57 +1249,61 @@ void Viewport::mousePressEvent(QMouseEvent* event)
     if (handleCameraPress(event))
         return;
 
-    // Scaling handles take priority over the gizmo axes.
-    const Handle handle = hitHandle(event->position());
-    if (handle != Handle::None)
+    const Entity* selectedEntity = m_project->entity(m_selected);
+    if (!selectedEntity || !selectedEntity->locked)
     {
-        m_gizmoMode = GizmoMode::Scale;
-        m_activeHandle = handle;
-        m_dragging = true;
-        m_dragEntity = m_selected;
-        m_scaleStartX = m_project->value(m_selected, "scaleX", m_frame);
-        m_scaleStartY = m_project->value(m_selected, "scaleY", m_frame);
-        m_scaleStartPosX = m_project->value(m_selected, "x", m_frame);
-        m_scaleStartPosY = m_project->value(m_selected, "y", m_frame);
-        m_dragLast = event->position();
-        return;
-    }
-
-    // The gizmo takes priority over the entity body.
-    GizmoMode gizmoMode = GizmoMode::None;
-    if (gizmoHitTest(event->position(), &gizmoMode))
-    {
-        const Entity* entity = m_project->entity(m_selected);
-        if (entity && entity->rotPointCustom())
+        // Scaling handles take priority over the gizmo axes.
+        const Handle handle = hitHandle(event->position());
+        if (handle != Handle::None)
         {
-            if (gizmoMode == GizmoMode::AxisX)
-                gizmoMode = GizmoMode::PivotX;
-            else if (gizmoMode == GizmoMode::AxisY)
-                gizmoMode = GizmoMode::PivotY;
+            m_gizmoMode = GizmoMode::Scale;
+            m_activeHandle = handle;
+            m_dragging = true;
+            m_dragEntity = m_selected;
+            m_scaleStartX = m_project->value(m_selected, "scaleX", m_frame);
+            m_scaleStartY = m_project->value(m_selected, "scaleY", m_frame);
+            m_scaleStartPosX = m_project->value(m_selected, "x", m_frame);
+            m_scaleStartPosY = m_project->value(m_selected, "y", m_frame);
+            m_dragLast = event->position();
+            return;
         }
 
-        m_gizmoMode = gizmoMode;
-        m_dragging = true;
-        m_dragEntity = m_selected;
-        m_gizmoCenter = entityPivotScreen(*entity);
-        m_gizmoStartMouse = event->position();
-        m_gizmoStartAngle = std::atan2(event->position().y() - m_gizmoCenter.y(),
-                                      event->position().x() - m_gizmoCenter.x())
-                            * 180.0 / M_PI;
-        m_gizmoStartRotation = m_project->value(m_selected, "rotation", m_frame);
-        if (gizmoMode == GizmoMode::PivotFree || gizmoMode == GizmoMode::PivotX
-            || gizmoMode == GizmoMode::PivotY)
+        // The gizmo takes priority over the entity body.
+        GizmoMode gizmoMode = GizmoMode::None;
+        if (gizmoHitTest(event->position(), &gizmoMode))
         {
-            m_gizmoStartX = m_project->value(m_selected, "rotPointX", m_frame);
-            m_gizmoStartY = m_project->value(m_selected, "rotPointY", m_frame);
+            const Entity* entity = m_project->entity(m_selected);
+            if (entity && entity->rotPointCustom())
+            {
+                if (gizmoMode == GizmoMode::AxisX)
+                    gizmoMode = GizmoMode::PivotX;
+                else if (gizmoMode == GizmoMode::AxisY)
+                    gizmoMode = GizmoMode::PivotY;
+            }
+
+            m_gizmoMode = gizmoMode;
+            m_dragging = true;
+            m_dragEntity = m_selected;
+            m_gizmoCenter = entityPivotScreen(*entity);
+            m_gizmoStartMouse = event->position();
+            m_gizmoStartAngle = std::atan2(event->position().y() - m_gizmoCenter.y(),
+                                          event->position().x() - m_gizmoCenter.x())
+                                * 180.0 / M_PI;
+            m_gizmoStartRotation = m_project->value(m_selected, "rotation", m_frame);
+            if (gizmoMode == GizmoMode::PivotFree || gizmoMode == GizmoMode::PivotX
+                || gizmoMode == GizmoMode::PivotY)
+            {
+                m_gizmoStartX = m_project->value(m_selected, "rotPointX", m_frame);
+                m_gizmoStartY = m_project->value(m_selected, "rotPointY", m_frame);
+            }
+            else
+            {
+                m_gizmoStartX = m_project->value(m_selected, "x", m_frame);
+                m_gizmoStartY = m_project->value(m_selected, "y", m_frame);
+            }
+            m_dragLast = event->position();
+            return;
         }
-        else
-        {
-            m_gizmoStartX = m_project->value(m_selected, "x", m_frame);
-            m_gizmoStartY = m_project->value(m_selected, "y", m_frame);
-        }
-        m_dragLast = event->position();
-        return;
     }
 
     const Entity* hit = hitTest(event->position());

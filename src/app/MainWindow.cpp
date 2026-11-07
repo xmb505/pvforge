@@ -519,7 +519,7 @@ void MainWindow::deleteSelectedEntity()
     if (m_selected == kInvalidEntity)
         return;
     const Entity* e = m_project->entity(m_selected);
-    if (!e)
+    if (!e || e->locked)
         return;
 
     const Entity copy = *e;
@@ -707,6 +707,11 @@ void MainWindow::setFrame(int frame)
 void MainWindow::setSelectedEntity(EntityId id)
 {
     Entity* selected = m_project->entity(id);
+    if (selected && selected->locked)
+    {
+        id = kInvalidEntity;
+        selected = nullptr;
+    }
     if (selected && selected->isCamera() && !selected->hidden)
     {
         // Selecting a camera makes it the active framing camera and asks the
@@ -718,7 +723,9 @@ void MainWindow::setSelectedEntity(EntityId id)
     }
 
     if (m_selected == id)
-        return;    m_selected = id;
+        return;
+
+    m_selected = id;
     m_viewport->setSelectedEntity(id);
     m_props->setEntity(id);
     m_timeline->setSelectedEntity(id);
@@ -1001,7 +1008,12 @@ void MainWindow::onDeleteKeyframesRequested()
 {
     QVector<KeyframeRecord> records;
     for (const KeyframeSelection& selection : m_timeline->selectedKeyframes())
+    {
+        const Entity* entity = m_project->entity(selection.entity);
+        if (!entity || entity->locked)
+            continue;
         records += m_project->removeKeyframesAt(selection.entity, selection.frame);
+    }
     if (records.isEmpty())
         return;
     m_history->push(std::make_unique<RemoveKeyframesCommand>(records), *m_project);
@@ -1079,8 +1091,12 @@ void MainWindow::onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec
 
 void MainWindow::refreshAll()
 {
-    if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
-        setSelectedEntity(kInvalidEntity);
+    if (m_selected != kInvalidEntity)
+    {
+        const Entity* selected = m_project->entity(m_selected);
+        if (!selected || selected->locked)
+            setSelectedEntity(kInvalidEntity);
+    }
     m_videoPlayer.update(*m_project, m_frame);
     ensureProxies();
     m_viewport->update();

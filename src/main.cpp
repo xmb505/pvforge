@@ -3523,7 +3523,20 @@ int lockTest(QApplication& app)
         project->setValue(id, QStringLiteral("x"), 0, 0, true);
         project->setValue(id, QStringLiteral("x"), 30, 400, true);
 
+        // A selected entity is deselected when it becomes locked.
+        window.setSelectedEntityForTest(id);
+        if (window.selectedEntityForTest() != id)
+        {
+            qCritical() << "lock-test: entity not selected before locking";
+            ++failures;
+        }
         project->setEntityFlag(id, pvf::EntityFlag::Locked, true);
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "lock-test: locked entity stayed selected"
+                        << window.selectedEntityForTest();
+            ++failures;
+        }
 
         // Values are frozen.
         project->setValue(id, QStringLiteral("x"), 15, 999, true);
@@ -3540,7 +3553,7 @@ int lockTest(QApplication& app)
             ++failures;
         }
 
-        // Dragging the entity in the viewport is blocked.
+        // Clicking a locked entity in the viewport must not select it.
         const QPoint center = viewport->rect().center();
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(center),
                           QPointF(viewport->mapToGlobal(center)), Qt::LeftButton,
@@ -3550,9 +3563,44 @@ int lockTest(QApplication& app)
                          QPointF(viewport->mapToGlobal(center + QPoint(120, 0))), Qt::NoButton,
                          Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(viewport, &move);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(center + QPoint(120, 0)),
+                            QPointF(viewport->mapToGlobal(center + QPoint(120, 0))),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &release);
         if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
         {
             qCritical() << "lock-test: locked entity moved";
+            ++failures;
+        }
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "lock-test: locked entity selected in viewport"
+                        << window.selectedEntityForTest();
+            ++failures;
+        }
+
+        // Selecting it programmatically is rejected too.
+        window.setSelectedEntityForTest(id);
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "lock-test: locked entity selectable programmatically";
+            ++failures;
+        }
+
+        // Clicking the locked row name must not select it either.
+        const QPoint rowName(10, timeline->rowButtonRect(0, 0).center().y());
+        QMouseEvent rowPress(QEvent::MouseButtonPress, QPointF(rowName),
+                             QPointF(timeline->mapToGlobal(rowName)), Qt::LeftButton,
+                             Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &rowPress);
+        QMouseEvent rowRelease(QEvent::MouseButtonRelease, QPointF(rowName),
+                               QPointF(timeline->mapToGlobal(rowName)), Qt::LeftButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &rowRelease);
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "lock-test: locked row selected in timeline"
+                        << window.selectedEntityForTest();
             ++failures;
         }
 
@@ -3564,8 +3612,14 @@ int lockTest(QApplication& app)
             ++failures;
         }
 
-        // Unlocking restores editing.
+        // Unlocking restores selection and editing.
         project->setEntityFlag(id, pvf::EntityFlag::Locked, false);
+        window.setSelectedEntityForTest(id);
+        if (window.selectedEntityForTest() != id)
+        {
+            qCritical() << "lock-test: unlocked entity not selectable";
+            ++failures;
+        }
         project->setValue(id, QStringLiteral("x"), 15, 999, true);
         if (std::abs(project->value(id, QStringLiteral("x"), 15) - 999.0) > 1e-6)
         {
