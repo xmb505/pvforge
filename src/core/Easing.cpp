@@ -75,6 +75,33 @@ Easing easingFromName(const QString& name)
     return Easing::Linear;
 }
 
+QString easingDisplayName(Easing easing)
+{
+    switch (easing)
+    {
+    case Easing::Linear:
+        return QStringLiteral("线性");
+    case Easing::Instant:
+        return QStringLiteral("瞬间（保持）");
+    case Easing::Bezier:
+        return QStringLiteral("自定义贝塞尔");
+    default:
+        break;
+    }
+
+    const int index = int(easing) - int(Easing::EaseInQuad);
+    if (index < 0 || index >= 30)
+        return QStringLiteral("线性");
+
+    static const char* const functions[] = {
+        "平滑", "标准", "强", "很强", "柔和",
+        "指数", "圆弧", "弹性", "回弹", "反弹",
+    };
+    static const char* const directions[] = {"缓入", "缓出", "缓入缓出"};
+    return QString::fromUtf8(directions[index % 3]) + QStringLiteral(" · ")
+           + QString::fromUtf8(functions[index / 3]);
+}
+
 double bezierValue(double inX, double inY, double outX, double outY, double t)
 {
     t = std::clamp(t, 0.0, 1.0);

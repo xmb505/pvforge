@@ -1,6 +1,7 @@
 #include "PropertiesPanel.h"
 
 #include "CollapsibleSection.h"
+#include "ui/EasingChooser.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -15,6 +16,7 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 
 namespace pvf {
 
@@ -77,6 +79,14 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     m_keyButton = new QPushButton(QStringLiteral("在当前帧打关键帧"), keyContent);
     m_keyButton->setEnabled(false);
     keyLayout->addWidget(m_keyButton);
+
+    m_easeButton = new QPushButton(QStringLiteral("缓动：线性"), keyContent);
+    m_easeButton->setObjectName(QStringLiteral("keyframeEasingButton"));
+    m_easeButton->setEnabled(false);
+    m_easeButton->setToolTip(
+        QStringLiteral("修改当前帧关键帧的曲线；右键时间轴关键帧也可以设置"));
+    keyLayout->addWidget(m_easeButton);
+
     m_keySection = new CollapsibleSection(QStringLiteral("关键帧"), keyContent, this);
     m_keySection->setExpanded(true);
     layout->addWidget(m_keySection);
@@ -100,6 +110,39 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
                                 m_project->value(m_entity, r.prop, m_frame), true);
         }
         refresh();
+    });
+
+    connect(m_easeButton, &QPushButton::clicked, this, [this] {
+        if (m_entity == kInvalidEntity)
+            return;
+        const Entity* entity = m_project->entity(m_entity);
+        if (!entity || entity->locked)
+            return;
+
+        EasingSpec current;
+        bool found = false;
+        for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+        {
+            for (const Keyframe& key : it->keys)
+            {
+                if (std::abs(key.frame - m_frame) < 1e-6)
+                {
+                    current = key.ease;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+                break;
+        }
+        if (!found)
+            return;
+
+        EasingSpec chosen;
+        const QPoint anchor =
+            m_easeButton->mapToGlobal(QPoint(0, m_easeButton->height()));
+        if (EasingChooser::choose(this, current, anchor, &chosen))
+            emit keyframeEasingEdited(m_entity, m_frame, chosen);
     });
 
     refresh();
@@ -442,6 +485,31 @@ void PropertiesPanel::refresh()
         }
         r.spin->setEnabled(editable);
     }
+
+    EasingSpec currentEase;
+    bool hasKeyframe = false;
+    if (valid)
+    {
+        for (auto it = e->tracks.constBegin(); it != e->tracks.constEnd(); ++it)
+        {
+            for (const Keyframe& key : it->keys)
+            {
+                if (std::abs(key.frame - m_frame) < 1e-6)
+                {
+                    currentEase = key.ease;
+                    hasKeyframe = true;
+                    break;
+                }
+            }
+            if (hasKeyframe)
+                break;
+        }
+    }
+    m_easeButton->setEnabled(editable && hasKeyframe);
+    m_easeButton->setText(hasKeyframe
+                              ? QStringLiteral("缓动：")
+                                    + easingDisplayName(currentEase.easing)
+                              : QStringLiteral("缓动（当前帧无关键帧）"));
 
     if (!valid)
     {

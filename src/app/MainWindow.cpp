@@ -175,6 +175,8 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     });
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
+    connect(m_props, &PropertiesPanel::keyframeEasingEdited, this,
+            &MainWindow::onKeyframeEasingEdited);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
     connect(m_timeline, &TimelinePanel::scrubStarted, this, [this] {
         if (m_playing)
@@ -921,6 +923,39 @@ void MainWindow::onKeyframeEasingRequested(const EasingSpec& spec)
         return;
 
     // Apply first: merged history entries skip redo.
+    for (const KeyframeEasingRecord& record : records)
+        m_project->setKeyframeEasing(record.entity, record.property, record.frame,
+                                     record.newEase);
+    m_history->push(std::make_unique<SetKeyframeEasingCommand>(records), *m_project);
+    m_timeline->update();
+    statusBar()->showMessage(QStringLiteral("已更新关键帧缓动"), 2000);
+}
+
+void MainWindow::onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec)
+{
+    Entity* entity = m_project->entity(id);
+    if (!entity || entity->locked)
+        return;
+
+    QVector<KeyframeEasingRecord> records;
+    for (auto it = entity->tracks.begin(); it != entity->tracks.end(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (std::abs(key.frame - frame) > 1e-6 || key.ease == spec)
+                continue;
+            KeyframeEasingRecord record;
+            record.entity = id;
+            record.property = it.key();
+            record.frame = key.frame;
+            record.oldEase = key.ease;
+            record.newEase = spec;
+            records.append(record);
+        }
+    }
+    if (records.isEmpty())
+        return;
+
     for (const KeyframeEasingRecord& record : records)
         m_project->setKeyframeEasing(record.entity, record.property, record.frame,
                                      record.newEase);

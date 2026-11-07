@@ -67,6 +67,9 @@ struct EasingSpec
 QString easingName(Easing easing);
 Easing easingFromName(const QString& name);
 
+// Friendly label for menus/buttons, e.g. "缓入 · 柔和".
+QString easingDisplayName(Easing easing);
+
 // Evaluates the eased progress for t in [0,1]. Bezier uses the four handles.
 double applyEasing(const EasingSpec& spec, double t);
 

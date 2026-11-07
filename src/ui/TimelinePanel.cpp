@@ -3,17 +3,13 @@
 #include "app/AppIcon.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
-#include "ui/BezierEditorDialog.h"
-#include "ui/EasingPicker.h"
+#include "ui/EasingChooser.h"
 
-#include <QAction>
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QLineEdit>
 #include <QKeyEvent>
-#include <QMenu>
-#include <QWidgetAction>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -916,46 +912,9 @@ void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
     const EasingSpec current = keyframeEasingAt(
         m_selectedKeyframes.first().entity, m_selectedKeyframes.first().frame);
 
-    QMenu menu(this);
-    auto* picker = new EasingPicker(current, &menu);
-    auto* action = new QWidgetAction(&menu);
-    action->setDefaultWidget(picker);
-    menu.addAction(action);
-
-    EasingSpec selected;
-    bool picked = false;
-    bool custom = false;
-    connect(picker, &EasingPicker::picked, this,
-            [&menu, &selected, &picked](const EasingSpec& spec) {
-                selected = spec;
-                picked = true;
-                menu.close();
-            });
-    connect(picker, &EasingPicker::customRequested, this, [&menu, &custom] {
-        custom = true;
-        menu.close();
-    });
-    menu.exec(globalPos);
-
-    if (custom)
-    {
-        EasingSpec spec = current;
-        if (spec.easing != Easing::Bezier)
-        {
-            spec.easing = Easing::Bezier;
-            spec.inX = 0.42;
-            spec.inY = 0.0;
-            spec.outX = 0.58;
-            spec.outY = 1.0;
-        }
-        BezierEditorDialog dialog(spec, this);
-        if (dialog.exec() == QDialog::Accepted)
-            emit keyframeEasingRequested(dialog.easing());
-    }
-    else if (picked)
-    {
-        emit keyframeEasingRequested(selected);
-    }
+    EasingSpec chosen;
+    if (EasingChooser::choose(this, current, globalPos, &chosen))
+        emit keyframeEasingRequested(chosen);
 }
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)

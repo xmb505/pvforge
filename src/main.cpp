@@ -1376,6 +1376,24 @@ int easingTest(QApplication& app)
         ++failures;
     }
 
+    // The entity properties panel exposes the curve for the current frame.
+    {
+        auto* windowProject = new pvf::Project;
+        pvf::MainWindow window(windowProject);
+        pvf::Entity* entity = windowProject->addVector(0, 200, 200, Qt::red, Qt::white, 0);
+        windowProject->setValue(entity->id, QStringLiteral("x"), 0, 0.0, true);
+        window.setSelectedEntityForTest(entity->id);
+        auto* button =
+            window.findChild<QPushButton*>(QStringLiteral("keyframeEasingButton"));
+        if (!button || !button->isEnabled()
+            || !button->text().contains(QStringLiteral("缓动：")))
+        {
+            qCritical() << "easing-test: properties easing button"
+                        << (button ? button->text() : QStringLiteral("missing"));
+            ++failures;
+        }
+    }
+
     qInfo() << "easing-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }

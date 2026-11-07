@@ -34,6 +34,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("文字");
     case EntityType::Vector:
         return QStringLiteral("矢量");
+    case EntityType::Camera:
+        return QStringLiteral("摄像机");
     }
     return QString();
 }

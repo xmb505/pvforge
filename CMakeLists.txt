@@ -36,6 +36,7 @@ add_executable(pvforge
     src/ui/AssetLibraryPanel.cpp
     src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp
+    src/ui/EasingChooser.cpp
     src/ui/EasingPicker.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp

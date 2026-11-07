@@ -34,6 +34,7 @@ public:
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);
     void pivotEdited(EntityId id, double ax, double ay);
+    void keyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
 
 private:
     struct Row
@@ -60,6 +61,7 @@ private:
     int m_frame = 0;
     QLabel* m_title = nullptr;
     QPushButton* m_keyButton = nullptr;
+    QPushButton* m_easeButton = nullptr;
     QVector<Row> m_rows;
 
     CollapsibleSection* m_transformSection = nullptr;

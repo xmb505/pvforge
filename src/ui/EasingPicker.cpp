@@ -40,71 +40,6 @@ const Easing kEaseInOut[] = {
     Easing::EaseInOutBounce,
 };
 
-QString friendlyName(Easing easing)
-{
-    switch (easing)
-    {
-    case Easing::EaseInQuad:
-    case Easing::EaseOutQuad:
-    case Easing::EaseInOutQuad:
-        return QStringLiteral("平滑");
-    case Easing::EaseInCubic:
-    case Easing::EaseOutCubic:
-    case Easing::EaseInOutCubic:
-        return QStringLiteral("标准");
-    case Easing::EaseInQuart:
-    case Easing::EaseOutQuart:
-    case Easing::EaseInOutQuart:
-        return QStringLiteral("强");
-    case Easing::EaseInQuint:
-    case Easing::EaseOutQuint:
-    case Easing::EaseInOutQuint:
-        return QStringLiteral("很强");
-    case Easing::EaseInSine:
-    case Easing::EaseOutSine:
-    case Easing::EaseInOutSine:
-        return QStringLiteral("柔和");
-    case Easing::EaseInExpo:
-    case Easing::EaseOutExpo:
-    case Easing::EaseInOutExpo:
-        return QStringLiteral("指数");
-    case Easing::EaseInCirc:
-    case Easing::EaseOutCirc:
-    case Easing::EaseInOutCirc:
-        return QStringLiteral("圆弧");
-    case Easing::EaseInElastic:
-    case Easing::EaseOutElastic:
-    case Easing::EaseInOutElastic:
-        return QStringLiteral("弹性");
-    case Easing::EaseInBack:
-    case Easing::EaseOutBack:
-    case Easing::EaseInOutBack:
-        return QStringLiteral("回弹");
-    case Easing::EaseInBounce:
-    case Easing::EaseOutBounce:
-    case Easing::EaseInOutBounce:
-        return QStringLiteral("反弹");
-    case Easing::Linear:
-        return QStringLiteral("线性");
-    case Easing::Instant:
-        return QStringLiteral("瞬间");
-    case Easing::Bezier:
-        return QStringLiteral("自定义贝塞尔");
-    }
-    return QString();
-}
-
-QString sectionPrefix(const QString& section)
-{
-    if (section == QStringLiteral("缓入"))
-        return QStringLiteral("缓入 · ");
-    if (section == QStringLiteral("缓出"))
-        return QStringLiteral("缓出 · ");
-    if (section == QStringLiteral("缓入缓出"))
-        return QStringLiteral("缓入缓出 · ");
-    return QString();
-}
-
 } // namespace
 
 EasingPicker::EasingPicker(const EasingSpec& current, QWidget* parent)
@@ -152,11 +87,11 @@ void EasingPicker::buildLayout()
         EasingSpec linear;
         linear.easing = Easing::Linear;
         m_items.append({QRect(kMargin, y, kTile, kTile), linear,
-                        QStringLiteral("线性"), false});
+                        easingDisplayName(Easing::Linear), false});
         EasingSpec instant;
         instant.easing = Easing::Instant;
         m_items.append({QRect(kMargin + kTile + kGap, y, kTile, kTile), instant,
-                        QStringLiteral("瞬间（保持到下一帧）"), false});
+                        easingDisplayName(Easing::Instant), false});
         EasingSpec bezier;
         bezier.easing = Easing::Bezier;
         m_items.append({QRect(kMargin + 2 * (kTile + kGap), y, kTile, kTile), bezier,
@@ -177,8 +112,7 @@ void EasingPicker::buildLayout()
                              y + row * (kTile + kGap), kTile, kTile);
             EasingSpec spec;
             spec.easing = group.values[i];
-            m_items.append({rect, spec,
-                            sectionPrefix(title) + friendlyName(group.values[i]), false});
+            m_items.append({rect, spec, easingDisplayName(group.values[i]), false});
         }
         const int rows = (group.count + kColumns - 1) / kColumns;
         y += rows * (kTile + kGap) + kSectionGap;

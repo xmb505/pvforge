@@ -78,6 +78,7 @@ private:
     void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void onDeleteKeyframesRequested();
     void onKeyframeEasingRequested(const EasingSpec& spec);
+    void onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
     void updateWindowTitle();
     void showImportBusy(int count);
     void hideImportBusy();
