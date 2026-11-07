@@ -742,6 +742,10 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 x = -canvasHalfW + halfW;
             else if (std::abs(x + halfW - canvasHalfW) <= threshold)
                 x = canvasHalfW - halfW;
+            else if (m_edgeCenterSnap && std::abs(x - halfW) <= threshold)
+                x = halfW;
+            else if (m_edgeCenterSnap && std::abs(x + halfW) <= threshold)
+                x = -halfW;
         }
         emit valueEdited(m_dragEntity, QStringLiteral("x"), x);
         return;
@@ -766,6 +770,10 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                 y = -canvasHalfH + halfH;
             else if (std::abs(y + halfH - canvasHalfH) <= threshold)
                 y = canvasHalfH - halfH;
+            else if (m_edgeCenterSnap && std::abs(y - halfH) <= threshold)
+                y = halfH;
+            else if (m_edgeCenterSnap && std::abs(y + halfH) <= threshold)
+                y = -halfH;
         }
         emit valueEdited(m_dragEntity, QStringLiteral("y"), y);
         return;
@@ -817,9 +825,9 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                     x = -canvasHalfW + halfW;
                 else if (std::abs(x + halfW - canvasHalfW) <= threshold)
                     x = canvasHalfW - halfW;
-                else if (std::abs(x - halfW) <= threshold)
+                else if (m_edgeCenterSnap && std::abs(x - halfW) <= threshold)
                     x = halfW;
-                else if (std::abs(x + halfW) <= threshold)
+                else if (m_edgeCenterSnap && std::abs(x + halfW) <= threshold)
                     x = -halfW;
 
                 if (std::abs(y) <= threshold)
@@ -828,9 +836,9 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
                     y = -canvasHalfH + halfH;
                 else if (std::abs(y + halfH - canvasHalfH) <= threshold)
                     y = canvasHalfH - halfH;
-                else if (std::abs(y - halfH) <= threshold)
+                else if (m_edgeCenterSnap && std::abs(y - halfH) <= threshold)
                     y = halfH;
-                else if (std::abs(y + halfH) <= threshold)
+                else if (m_edgeCenterSnap && std::abs(y + halfH) <= threshold)
                     y = -halfH;
             }
         }

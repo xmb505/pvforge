@@ -407,6 +407,7 @@ int timelineInteractionTest(QApplication& app)
 int settingsTest(QApplication& app)
 {
     const int oldSnap = pvf::Settings::snapPixels();
+    const bool oldEdgeCentre = pvf::Settings::edgeCenterSnap();
     const QString oldLanguage = pvf::Settings::language();
 
     pvf::Settings::setSnapPixels(12);
@@ -416,6 +417,13 @@ int settingsTest(QApplication& app)
         return 1;
     }
     pvf::Settings::setSnapPixels(oldSnap);
+    pvf::Settings::setEdgeCenterSnap(true);
+    if (!pvf::Settings::edgeCenterSnap())
+    {
+        qCritical() << "settings-test: edge snap setting not persisted";
+        return 1;
+    }
+    pvf::Settings::setEdgeCenterSnap(oldEdgeCentre);
 
     pvf::Lang::load(QStringLiteral("en_US"));
     if (pvf::Lang::t(QStringLiteral("menu.file")) != QStringLiteral("File"))
@@ -435,7 +443,7 @@ int settingsTest(QApplication& app)
     window.resize(1200, 800);
     window.show();
 
-    QTimer::singleShot(400, &window, [&app, &window, project, oldSnap] {
+    QTimer::singleShot(400, &window, [&app, &window, project, oldSnap, oldEdgeCentre] {
         int failures = 0;
         auto* viewport = window.findChild<pvf::Viewport*>();
         if (!viewport)
@@ -481,6 +489,30 @@ int settingsTest(QApplication& app)
             ++failures;
         }
 
+        // Edge-to-centre snapping obeys the preference.
+        const double scale = viewport->currentScale();
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        viewport->setSnapPixels(20);
+        viewport->setEdgeCenterSnap(true);
+        const int edgeDx = int(std::lround(145.0 * scale));
+        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - 150.0) > 1e-6)
+        {
+            qCritical() << "settings-test: edge-centre snap on failed"
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        viewport->setEdgeCenterSnap(false);
+        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - 145.0) > 1.0)
+        {
+            qCritical() << "settings-test: edge-centre snap off failed"
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+        viewport->setEdgeCenterSnap(oldEdgeCentre);
         viewport->setSnapPixels(oldSnap);
 
         // The settings dialog builds and can be shown.

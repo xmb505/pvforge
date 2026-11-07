@@ -43,6 +43,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     m_snapPixels->setValue(Settings::snapPixels());
     m_snapPixels->setToolTip(QStringLiteral("0 表示关闭吸附"));
     editorForm->addRow(QStringLiteral("吸附距离"), m_snapPixels);
+    m_edgeCenterSnap = new QCheckBox(QStringLiteral("实体边缘吸附到画面中心线"), editor);
+    m_edgeCenterSnap->setChecked(Settings::edgeCenterSnap());
+    editorForm->addRow(m_edgeCenterSnap);
     m_autoKey = new QCheckBox(QStringLiteral("新项目默认开启自动关键帧"), editor);
     m_autoKey->setChecked(Settings::autoKeyDefault());
     editorForm->addRow(m_autoKey);
@@ -93,6 +96,7 @@ void SettingsDialog::accept()
 {
     Settings::setLanguage(m_language->currentData().toString());
     Settings::setSnapPixels(m_snapPixels->value());
+    Settings::setEdgeCenterSnap(m_edgeCenterSnap->isChecked());
     Settings::setAutoKeyDefault(m_autoKey->isChecked());
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());

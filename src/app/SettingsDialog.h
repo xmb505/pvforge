@@ -22,6 +22,7 @@ protected:
 private:
     QComboBox* m_language = nullptr;
     QSpinBox* m_snapPixels = nullptr;
+    QCheckBox* m_edgeCenterSnap = nullptr;
     QCheckBox* m_autoKey = nullptr;
     QSpinBox* m_width = nullptr;
     QSpinBox* m_height = nullptr;

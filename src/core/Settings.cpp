@@ -22,6 +22,16 @@ void setSnapPixels(int pixels)
     store().setValue(QStringLiteral("editor/snapPixels"), pixels);
 }
 
+bool edgeCenterSnap()
+{
+    return store().value(QStringLiteral("editor/edgeCenterSnap"), true).toBool();
+}
+
+void setEdgeCenterSnap(bool on)
+{
+    store().setValue(QStringLiteral("editor/edgeCenterSnap"), on);
+}
+
 QString language()
 {
     return store().value(QStringLiteral("ui/language"), QStringLiteral("zh_CN")).toString();

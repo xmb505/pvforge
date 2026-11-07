@@ -49,6 +49,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_project->packAssets = Settings::packAssetsDefault();
     m_viewport = new Viewport(m_project, this);
     m_viewport->setSnapPixels(Settings::snapPixels());
+    m_viewport->setEdgeCenterSnap(Settings::edgeCenterSnap());
     m_props = new PropertiesPanel(m_project, this);
     m_library = new AssetLibraryPanel(m_project, this);
     m_projectProps = new ProjectPropertiesPanel(m_project, this);
@@ -290,6 +291,7 @@ void MainWindow::createMenus()
         if (dialog.exec() == QDialog::Accepted)
         {
             m_viewport->setSnapPixels(Settings::snapPixels());
+    m_viewport->setEdgeCenterSnap(Settings::edgeCenterSnap());
             statusBar()->showMessage(QStringLiteral("设置已保存，语言等改动重启后生效"), 3000);
         }
     });

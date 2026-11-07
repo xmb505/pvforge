@@ -10,6 +10,9 @@ namespace Settings {
 int snapPixels();                       // 0 disables snapping
 void setSnapPixels(int pixels);
 
+bool edgeCenterSnap();                  // entity edges snap to canvas centre lines
+void setEdgeCenterSnap(bool on);
+
 QString language();                     // e.g. "zh_CN"
 void setLanguage(const QString& code);
 

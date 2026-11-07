@@ -27,6 +27,7 @@ public:
     double currentScale() const { return viewScale(); }
 
     void setSnapPixels(int pixels) { m_snapPixels = pixels; }
+    void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
     QSize minimumSizeHint() const override { return {480, 270}; }
 
@@ -93,6 +94,7 @@ private:
     double m_scaleStartX = 1.0;
     double m_scaleStartY = 1.0;
     int m_snapPixels = 6;
+    bool m_edgeCenterSnap = true;
 
     bool m_panning = false;
     QPointF m_panLast;
