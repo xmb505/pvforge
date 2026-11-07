@@ -5587,13 +5587,13 @@ int specialDemo(QApplication& app)
     pvf::TextStyle title;
     title.text = QStringLiteral("特殊工具");
     title.pixelSize = 104;
-    title.color = QColor(255, 220, 120);
+    title.color = QColor(255, 255, 255);
     title.padding = 8;
     QVariantMap titleData;
     title.writeTo(titleData);
     place(project->addEntity(pvf::EntityType::Text,
                              QStringLiteral("文字"), titleData),
-          0, -430);
+          -650, -450);
 
     auto* window = new pvf::MainWindow(project);
     window->resize(1440, 900);

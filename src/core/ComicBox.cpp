@@ -70,42 +70,63 @@ QPainterPath cloudPath(const QSizeF& size, int seed)
     return smoothPath(points);
 }
 
-// A spike that points at the tip: its base sits on the body edge in the
-// tip direction, so the balloon keeps pointing wherever the handle goes.
+// A spike that points at the tip. Its base lies on the balloon outline:
+// on the ellipse curve, or along the rectangle edge, so the union has no
+// notch where the spike meets the body.
 QPainterPath spikePath(const QPainterPath& body, const QRectF& rect, bool ellipse,
                         const QPointF& tip, double base)
 {
     const QPointF centre = rect.center();
-    QPointF direction = tip - centre;
-    const double length = std::hypot(direction.x(), direction.y());
-    if (length < 1e-6)
+    const double halfW = rect.width() / 2.0;
+    const double halfH = rect.height() / 2.0;
+    if (halfW < 1e-6 || halfH < 1e-6)
         return body;
-    direction /= length;
 
-    QPointF edge;
+    QPointF base1;
+    QPointF base2;
     if (ellipse)
     {
-        const double a = rect.width() / 2.0;
-        const double b = rect.height() / 2.0;
-        const double t = 1.0 / std::sqrt((direction.x() / a) * (direction.x() / a) +
-                                         (direction.y() / b) * (direction.y() / b));
-        edge = centre + direction * t;
+        const double angle = std::atan2(tip.y() / halfH, tip.x() / halfW);
+        const double spread = 0.26;   // about 15 degrees
+        base1 = QPointF(halfW * std::cos(angle + spread),
+                        halfH * std::sin(angle + spread));
+        base2 = QPointF(halfW * std::cos(angle - spread),
+                        halfH * std::sin(angle - spread));
     }
     else
     {
-        double distance = 1e9;
-        if (std::fabs(direction.x()) > 1e-6)
-            distance = std::min(distance, std::fabs((rect.width() / 2.0) / direction.x()));
-        if (std::fabs(direction.y()) > 1e-6)
-            distance = std::min(distance, std::fabs((rect.height() / 2.0) / direction.y()));
-        edge = centre + direction * distance;
+        QPointF direction = tip - centre;
+        const double length = std::hypot(direction.x(), direction.y());
+        if (length < 1e-6)
+            return body;
+        direction /= length;
+
+        const double tx = std::fabs(direction.x()) > 1e-6
+                              ? halfW / std::fabs(direction.x())
+                              : 1e9;
+        const double ty = std::fabs(direction.y()) > 1e-6
+                              ? halfH / std::fabs(direction.y())
+                              : 1e9;
+        if (ty < tx)
+        {
+            const double y = direction.y() < 0.0 ? -halfH : halfH;
+            const double x = direction.x() * ty;
+            base1 = QPointF(x - base / 2.0, y);
+            base2 = QPointF(x + base / 2.0, y);
+        }
+        else
+        {
+            const double x = direction.x() < 0.0 ? -halfW : halfW;
+            const double y = direction.y() * tx;
+            base1 = QPointF(x, y - base / 2.0);
+            base2 = QPointF(x, y + base / 2.0);
+        }
     }
 
-    const QPointF tangent(-direction.y(), direction.x());
     QPainterPath spike;
-    spike.moveTo(edge + tangent * (base / 2.0));
+    spike.moveTo(base1);
     spike.lineTo(tip);
-    spike.lineTo(edge - tangent * (base / 2.0));
+    spike.lineTo(base2);
     spike.closeSubpath();
     return body.united(spike);
 }
