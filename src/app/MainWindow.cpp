@@ -631,6 +631,12 @@ void MainWindow::applyPivot(EntityId id, double ax, double ay)
     const double dx = dax * std::cos(radians) - day * std::sin(radians);
     const double dy = dax * std::sin(radians) + day * std::cos(radians);
 
+    // Apply first: merged history entries skip redo.
+    m_project->setValue(id, QStringLiteral("rotPointX"), m_frame, ax, true);
+    m_project->setValue(id, QStringLiteral("rotPointY"), m_frame, ay, true);
+    m_project->setValue(id, QStringLiteral("x"), m_frame, oldX + dx, true);
+    m_project->setValue(id, QStringLiteral("y"), m_frame, oldY + dy, true);
+
     m_history->push(std::make_unique<SetPivotCommand>(id, oldAx, oldAy, oldX, oldY, ax, ay,
                                                       oldX + dx, oldY + dy, m_frame),
                     *m_project);
