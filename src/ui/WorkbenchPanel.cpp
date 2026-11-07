@@ -416,6 +416,7 @@ void WorkbenchPanel::selectMedia(int templateIndex)
 
     m_mediaType = tmpl->type;
     m_mediaPath = tmpl->path;
+    m_mediaName = tmpl->name;
     m_mediaFrame = tmpl->thumbnail;
     m_mediaDuration = tmpl->duration;
 
@@ -491,12 +492,12 @@ void WorkbenchPanel::createCurrent()
             const QImage frame = decodeVideoFirstFrame(m_mediaPath, &error, &duration);
             if (Entity* e = m_project->addVideo(m_mediaPath,
                                                 frame.isNull() ? m_mediaFrame : frame,
-                                                duration))
+                                                duration, m_mediaName))
                 id = e->id;
         }
         else
         {
-            if (Entity* e = m_project->addImage(m_mediaPath))
+            if (Entity* e = m_project->addImage(m_mediaPath, m_mediaName))
                 id = e->id;
         }
     }

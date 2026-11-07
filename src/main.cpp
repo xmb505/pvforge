@@ -1335,6 +1335,40 @@ int packTest(QApplication& app)
         qCritical() << "pack-test: already packed file copied again";
         ++failures;
     }
+
+    // Stored names are content hashes.
+    if (QFileInfo(packedFirst).completeBaseName().size() != 64)
+    {
+        qCritical() << "pack-test: asset is not content addressed" << packedFirst;
+        ++failures;
+    }
+
+    // Identical content with a different file name maps to the same asset.
+    const QString contentCopy = QDir(sourceDirB).filePath(QStringLiteral("copy.png"));
+    if (!QFile::copy(sameNameA, contentCopy))
+        return 1;
+    if (dedupeProject.importAsset(contentCopy) != packedFirst)
+    {
+        qCritical() << "pack-test: identical content not deduplicated";
+        ++failures;
+    }
+    QFile::remove(contentCopy);
+
+    // The library keeps the original display name despite the hash path.
+    QString mediaError;
+    const QString mediaPath = dedupeProject.importMediaFile(sameNameA, &mediaError);
+    bool displayNameOk = false;
+    for (int i = 0; i < dedupeProject.templateCount(); ++i)
+    {
+        const pvf::Template* tmpl = dedupeProject.templateAt(i);
+        if (tmpl && tmpl->path == mediaPath && tmpl->name == QStringLiteral("same"))
+            displayNameOk = true;
+    }
+    if (!displayNameOk)
+    {
+        qCritical() << "pack-test: display name lost";
+        ++failures;
+    }
     QDir(sourceDirA).removeRecursively();
     QDir(sourceDirB).removeRecursively();
     QDir(dedupeDir).removeRecursively();

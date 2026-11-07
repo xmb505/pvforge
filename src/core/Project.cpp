@@ -2,6 +2,7 @@
 
 #include "media/VideoDecoder.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -124,30 +125,22 @@ QString Project::copyIntoProject(const QString& sourcePath) const
 
     QDir().mkpath(directory);
 
-    const auto candidateName = [&info](int index) {
-        if (index == 0)
-            return info.fileName();
-        return QStringLiteral("%1_%2.%3").arg(info.completeBaseName()).arg(index).arg(info.suffix());
-    };
-
-    QString target;
-    for (int index = 0; index < 10000; ++index)
-    {
-        const QString candidate = QDir(directory).filePath(candidateName(index));
-        if (!QFile::exists(candidate))
-        {
-            target = candidate;
-            break;
-        }
-        // The same file was already packed: reuse it instead of piling up
-        // numbered duplicates on every re-import.
-        if (filesIdentical(sourcePath, candidate))
-            return candidate;
-    }
-
-    if (target.isEmpty())
+    // Content-addressed storage: identical bytes always map to one file.
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    QFile file(sourcePath);
+    if (!file.open(QIODevice::ReadOnly))
         return sourcePath;
+    constexpr qint64 chunkSize = 1 << 20;
+    while (!file.atEnd())
+        hasher.addData(file.read(chunkSize));
+    const QString hash = QString::fromLatin1(hasher.result().toHex());
 
+    const QString suffix = info.suffix();
+    const QString target = QDir(directory).filePath(
+        suffix.isEmpty() ? hash : hash + QLatin1Char('.') + suffix);
+
+    if (QFile::exists(target))
+        return target;
     if (!QFile::copy(sourcePath, target))
         return sourcePath;
     return target;
@@ -298,13 +291,15 @@ Entity* Project::append(Entity e)
     return &m_entities.last();
 }
 
-Entity* Project::addImage(const QString& path)
+Entity* Project::addImage(const QString& path, const QString& displayName)
 {
     QImage img(path);
     if (img.isNull())
         return nullptr;
 
-    Entity e = makeBase(EntityType::Image, QFileInfo(path).completeBaseName());
+    Entity e = makeBase(EntityType::Image,
+                        displayName.isEmpty() ? QFileInfo(path).completeBaseName()
+                                              : displayName);
     e.sourcePath = path;
     e.image = img;
 
@@ -320,9 +315,12 @@ Entity* Project::addImage(const QString& path)
     return append(std::move(e));
 }
 
-Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double duration)
+Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double duration,
+                          const QString& displayName)
 {
-    Entity e = makeBase(EntityType::Video, QFileInfo(path).completeBaseName());
+    Entity e = makeBase(EntityType::Video,
+                        displayName.isEmpty() ? QFileInfo(path).completeBaseName()
+                                              : displayName);
     e.sourcePath = path;
     e.image = firstFrame;
     e.data["duration"] = duration;
@@ -407,7 +405,8 @@ Template* Project::addTemplate(const Entity& entity)
 }
 
 Template* Project::addMediaTemplate(const QString& path, EntityType type,
-                                    const QImage& thumbnail, double duration)
+                                    const QImage& thumbnail, double duration,
+                                    const QString& displayName)
 {
     for (Template& existing : m_templates)
     {
@@ -423,7 +422,7 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
     Template tmpl;
     tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     tmpl.type = type;
-    tmpl.name = QFileInfo(path).completeBaseName();
+    tmpl.name = displayName.isEmpty() ? QFileInfo(path).completeBaseName() : displayName;
     tmpl.path = path;
     tmpl.duration = duration;
     if (!thumbnail.isNull())
@@ -456,7 +455,8 @@ QString Project::importMediaFile(const QString& path, QString* error)
             return QString();
         }
         const QString imported = importAsset(path);
-        addMediaTemplate(imported, EntityType::Image, image);
+        addMediaTemplate(imported, EntityType::Image, image, 0.0,
+                         QFileInfo(path).completeBaseName());
         return imported;
     }
 
@@ -472,7 +472,8 @@ QString Project::importMediaFile(const QString& path, QString* error)
             return QString();
         }
         const QString imported = importAsset(path);
-        addMediaTemplate(imported, EntityType::Video, frame, duration);
+        addMediaTemplate(imported, EntityType::Video, frame, duration,
+                         QFileInfo(path).completeBaseName());
         return imported;
     }
 
@@ -485,13 +486,14 @@ Entity* Project::createFromTemplate(const Template& tmpl){
     switch (tmpl.type)
     {
     case EntityType::Image:
-        return addImage(tmpl.path);
+        return addImage(tmpl.path, tmpl.name);
     case EntityType::Video:
     {
         double duration = tmpl.duration;
         QString error;
         const QImage frame = decodeVideoFirstFrame(tmpl.path, &error, &duration);
-        return addVideo(tmpl.path, frame.isNull() ? tmpl.thumbnail : frame, duration);
+        return addVideo(tmpl.path, frame.isNull() ? tmpl.thumbnail : frame, duration,
+                        tmpl.name);
     }
     case EntityType::Text:
         return addText(tmpl.data.value(QStringLiteral("text")).toString(),

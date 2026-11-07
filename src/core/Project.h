@@ -128,8 +128,9 @@ public:
 
     static double defaultValue(const QString& prop);
 
-    Entity* addImage(const QString& path);
-    Entity* addVideo(const QString& path, const QImage& firstFrame, double duration = 0.0);
+    Entity* addImage(const QString& path, const QString& displayName = QString());
+    Entity* addVideo(const QString& path, const QImage& firstFrame, double duration = 0.0,
+                     const QString& displayName = QString());
     Entity* addText(const QString& text, const QString& family, int pixelSize,
                     const QColor& color, int align);
     Entity* addVector(int shape, double width, double height, const QColor& fill,
@@ -152,7 +153,8 @@ public:
     int templateCount() const { return int(m_templates.size()); }
     Template* addTemplate(const Entity& entity);
     Template* addMediaTemplate(const QString& path, EntityType type, const QImage& thumbnail,
-                               double duration = 0.0);
+                               double duration = 0.0,
+                               const QString& displayName = QString());
     QString importMediaFile(const QString& path, QString* error = nullptr);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);

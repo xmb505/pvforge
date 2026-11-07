@@ -59,6 +59,7 @@ private:
     // Selected media (image or video).
     EntityType m_mediaType = EntityType::Image;
     QString m_mediaPath;
+    QString m_mediaName;
     QImage m_mediaFrame;
     double m_mediaDuration = 0.0;
     QLabel* m_mediaPreview = nullptr;
