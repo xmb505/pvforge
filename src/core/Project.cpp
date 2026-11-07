@@ -587,6 +587,16 @@ void Project::setEntityName(EntityId id, const QString& name)
     emit changed();
 }
 
+void Project::setEntityData(EntityId id, const QString& key, const QVariant& value)
+{
+    Entity* e = entity(id);
+    if (!e || e->data.value(key) == value)
+        return;
+    e->data[key] = value;
+    modified = true;
+    emit changed();
+}
+
 void Project::setEntityFlag(EntityId id, EntityFlag flag, bool value)
 {
     Entity* e = entity(id);

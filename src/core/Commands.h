@@ -92,6 +92,25 @@ private:
     QString m_newName;
 };
 
+// Changing one entry of an entity's static data map (audio start frame, ...).
+class SetEntityDataCommand : public UndoCommand
+{
+public:
+    SetEntityDataCommand(EntityId id, const QString& key, const QVariant& oldValue,
+                         const QVariant& newValue, const QString& text);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    QString m_key;
+    QVariant m_oldValue;
+    QVariant m_newValue;
+    QString m_text;
+};
+
 // Moving an entity on both axes as one undo step.
 class SetPositionCommand : public UndoCommand
 {

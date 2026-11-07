@@ -458,12 +458,36 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     updateScrollBar();
 }
 
+bool TimelinePanel::audioClipRange(const Entity& entity, double* left, double* right) const
+{
+    if (!entity.isAudio())
+        return false;
+    const double fps = std::max(1, m_project->fps);
+    const double startFrame =
+        entity.data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    const double trimStart =
+        entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+    const double trimEnd = entity.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+    const double duration =
+        entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
+    const double clipFrames =
+        std::max(0.0, (duration - trimStart - trimEnd) * fps);
+    if (clipFrames <= 0.0)
+        return false;
+    const double x0 = kNameWidth + startFrame * m_pixelsPerFrame - m_scrollX;
+    *left = x0;
+    *right = x0 + clipFrames * m_pixelsPerFrame;
+    return true;
+}
+
 void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
                                        const QRect& row, int right)
 {
     const double fps = std::max(1, m_project->fps);
-    const double startFrame =
+    double startFrame =
         entity.data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    if (m_dragMode == DragMode::MoveAudio && entity.id == m_audioDragId)
+        startFrame = std::max(0.0, m_audioDragStart + m_audioDragOffset);
     const double trimStart =
         entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
     const double trimEnd = entity.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
@@ -902,6 +926,31 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    // Audio clip body: drag the clip to a new start frame.
+    const int row = rowAt(y);
+    const EntityId audioId = entityAtRow(row);
+    Entity* audio = m_project->entity(audioId);
+    double clipLeft = 0.0;
+    double clipRight = 0.0;
+    if (audio && audioClipRange(*audio, &clipLeft, &clipRight) && x >= clipLeft
+        && x <= clipRight)
+    {
+        m_selectedKeyframes.clear();
+        emit entitySelected(audioId);
+        if (!audio->locked)
+        {
+            m_dragMode = DragMode::MoveAudio;
+            m_audioDragId = audioId;
+            m_audioDragStart =
+                audio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+            m_audioDragOffset = 0.0;
+            m_pressPos = event->position();
+            setCursor(Qt::ClosedHandCursor);
+        }
+        update();
+        return;
+    }
+
     // Empty timeline area: remember the click; release jumps the playhead
     // unless the mouse turns this into a rubber-band selection.
     m_dragMode = DragMode::PendingSelect;
@@ -931,6 +980,17 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
     if (m_dragMode == DragMode::Scrub)
     {
         emit frameRequested(std::max(0, frameFromX(x)));
+        return;
+    }
+
+    if (m_dragMode == DragMode::MoveAudio)
+    {
+        const double deltaFrames =
+            (event->position().x() - m_pressPos.x()) / m_pixelsPerFrame;
+        const double start =
+            std::max(0.0, m_audioDragStart + std::round(deltaFrames));
+        m_audioDragOffset = start - m_audioDragStart;
+        update();
         return;
     }
 
@@ -1170,6 +1230,19 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         if (lastRow >= 0 && lastRow < int(visible.size()))
             emit entitySelected(m_project->entities()[visible[lastRow]].id);
         update();
+    }
+    else if (m_dragMode == DragMode::MoveAudio)
+    {
+        unsetCursor();
+        const EntityId id = m_audioDragId;
+        const double newStart =
+            std::max(0.0, m_audioDragStart + m_audioDragOffset);
+        const bool changed = std::abs(newStart - m_audioDragStart) > 1e-9;
+        m_dragMode = DragMode::None;
+        m_audioDragId = kInvalidEntity;
+        m_audioDragOffset = 0.0;
+        if (changed)
+            emit audioMoved(id, newStart);
     }
 
     m_dragMode = DragMode::None;

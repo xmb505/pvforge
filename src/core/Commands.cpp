@@ -147,6 +147,32 @@ QString RenameEntityCommand::text() const
     return QStringLiteral("重命名");
 }
 
+SetEntityDataCommand::SetEntityDataCommand(EntityId id, const QString& key,
+                                           const QVariant& oldValue,
+                                           const QVariant& newValue, const QString& text)
+    : m_id(id)
+    , m_key(key)
+    , m_oldValue(oldValue)
+    , m_newValue(newValue)
+    , m_text(text)
+{
+}
+
+void SetEntityDataCommand::undo(Project& project)
+{
+    project.setEntityData(m_id, m_key, m_oldValue);
+}
+
+void SetEntityDataCommand::redo(Project& project)
+{
+    project.setEntityData(m_id, m_key, m_newValue);
+}
+
+QString SetEntityDataCommand::text() const
+{
+    return m_text;
+}
+
 SetPositionCommand::SetPositionCommand(EntityId id, int frame, double oldX, double oldY,
                                        double newX, double newY, bool keyframe)
     : m_id(id)

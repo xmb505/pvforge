@@ -56,6 +56,7 @@ signals:
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
     void entityRenamed(EntityId id, const QString& name);
+    void audioMoved(EntityId id, double startFrame);
     void keyframeEasingRequested(const EasingSpec& spec);
 
 protected:
@@ -80,6 +81,7 @@ private:
     int rowHeight(int row) const;
     EntityId entityAtRow(int row) const;
     bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
+    bool audioClipRange(const Entity& entity, double* left, double* right) const;
     QVector<double> keyframeFrames(EntityId id) const;
     void handleRowButton(int row, int index);
     int contentWidth() const;
@@ -95,7 +97,7 @@ private:
     void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
                            int right);
 
-    enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
+    enum class DragMode { None, Scrub, PendingSelect, BoxSelect, MoveAudio };
 
     Project* m_project = nullptr;
     int m_frame = 0;
@@ -106,6 +108,9 @@ private:
     QPointF m_boxEnd;
     int m_pressFrame = 0;
     EntityId m_pressEntity = kInvalidEntity;
+    EntityId m_audioDragId = kInvalidEntity;
+    double m_audioDragStart = 0.0;
+    double m_audioDragOffset = 0.0;
     int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;

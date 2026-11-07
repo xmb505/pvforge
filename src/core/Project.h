@@ -164,6 +164,7 @@ public:
     void insertEntity(const Entity& entity, int index);
     void setEntityFlag(EntityId id, EntityFlag flag, bool value);
     void setEntityName(EntityId id, const QString& name);
+    void setEntityData(EntityId id, const QString& key, const QVariant& value);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
     void addKeyframe(EntityId id, const QString& property, const Keyframe& key);

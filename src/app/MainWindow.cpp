@@ -219,6 +219,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_timeline, &TimelinePanel::keyframeEasingRequested, this,
             &MainWindow::onKeyframeEasingRequested);
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
+    connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
     connect(m_history, &History::changed, this, [this] {
         m_undoAction->setEnabled(m_history->canUndo());
         m_redoAction->setEnabled(m_history->canRedo());
@@ -591,6 +592,23 @@ void MainWindow::onEntityRenamed(EntityId id, const QString& name)
     if (!e || e->name == name)
         return;
     m_history->push(std::make_unique<RenameEntityCommand>(id, e->name, name), *m_project);
+}
+
+void MainWindow::onAudioMoved(EntityId id, double startFrame)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || !e->isAudio() || e->locked)
+        return;
+    const double oldStart =
+        e->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    if (std::abs(oldStart - startFrame) < 1e-9)
+        return;
+    m_history->push(std::make_unique<SetEntityDataCommand>(
+                        id, QStringLiteral("startFrame"), oldStart, startFrame,
+                        QStringLiteral("移动音频")),
+                    *m_project);
+    statusBar()->showMessage(
+        QStringLiteral("音频已移动到第 %1 帧").arg(std::lround(startFrame)), 2000);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)

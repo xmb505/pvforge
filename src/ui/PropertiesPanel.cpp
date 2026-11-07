@@ -372,6 +372,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
 
     auto addCaptureRow = [this, content, form](const QString& label, QWidget* field,
                                                const QString& objectName,
+                                               const QString& tooltip,
                                                std::function<void()> capture) {
         auto* row = new QWidget(content);
         auto* rowLayout = new QHBoxLayout(row);
@@ -384,7 +385,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
         auto* button = new QPushButton(row);
         button->setObjectName(objectName);
         button->setText(QStringLiteral("取"));
-        button->setToolTip(QStringLiteral("取播放头所在位置"));
+        button->setToolTip(tooltip);
         button->setFixedWidth(30);
         connect(button, &QPushButton::clicked, this, capture);
         rowLayout->addWidget(button);
@@ -396,8 +397,10 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioStart->setRange(0, 1000000);
     m_audioStart->setSuffix(QStringLiteral(" 帧"));
     m_audioStart->setKeyboardTracking(false);
-    addCaptureRow(QStringLiteral("开始帧"), m_audioStart,
+    m_audioStart->setToolTip(QStringLiteral("音频在时间轴上的起始帧；也可以拖动时间轴上的音频块"));
+    addCaptureRow(QStringLiteral("时间轴开始"), m_audioStart,
                   QStringLiteral("audioStartFromPlayhead"),
+                  QStringLiteral("把音频在时间轴上的开始位置设为播放头位置"),
                   [this] { applyData(QStringLiteral("startFrame"), double(m_frame)); });
 
     m_audioTrimStart = new QDoubleSpinBox(content);
@@ -406,9 +409,13 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimStart->setDecimals(3);
     m_audioTrimStart->setSuffix(QStringLiteral(" s"));
     m_audioTrimStart->setKeyboardTracking(false);
+    m_audioTrimStart->setToolTip(
+        QStringLiteral("裁掉音频开头的秒数；不改变音频在时间轴上的位置"));
     addCaptureRow(
-        QStringLiteral("裁剪开始"), m_audioTrimStart,
-        QStringLiteral("audioTrimStartFromPlayhead"), [this] {
+        QStringLiteral("裁掉开头"), m_audioTrimStart,
+        QStringLiteral("audioTrimStartFromPlayhead"),
+        QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；不会移动音频块"),
+        [this] {
             const Entity* entity = m_project->entity(m_entity);
             if (!entity)
                 return;
@@ -431,9 +438,13 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimEnd->setDecimals(3);
     m_audioTrimEnd->setSuffix(QStringLiteral(" s"));
     m_audioTrimEnd->setKeyboardTracking(false);
+    m_audioTrimEnd->setToolTip(
+        QStringLiteral("裁掉音频结尾的秒数；不改变音频在时间轴上的位置"));
     addCaptureRow(
-        QStringLiteral("裁剪结尾"), m_audioTrimEnd,
-        QStringLiteral("audioTrimEndFromPlayhead"), [this] {
+        QStringLiteral("裁掉结尾"), m_audioTrimEnd,
+        QStringLiteral("audioTrimEndFromPlayhead"),
+        QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；不会移动音频块"),
+        [this] {
             const Entity* entity = m_project->entity(m_entity);
             if (!entity)
                 return;
@@ -458,7 +469,9 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("音量"), m_audioVolume);
 
     auto* hint =
-        new QLabel(QStringLiteral("时间轴上的波形按裁剪后的范围绘制。"), content);
+        new QLabel(QStringLiteral("直接拖动时间轴上的音频块可以整体移动；「时间轴开始」决定位置，"
+                                  "「裁掉开头/结尾」只改变音频内部范围。「取」把播放头位置填入字段。"),
+                   content);
     hint->setWordWrap(true);
     form->addRow(hint);
 

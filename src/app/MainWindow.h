@@ -86,6 +86,7 @@ private:
     bool saveProject();
     bool saveProjectAs();
     void onEntityRenamed(EntityId id, const QString& name);
+    void onAudioMoved(EntityId id, double startFrame);
     void packAllAssets();
 
     Project* m_project = nullptr;
