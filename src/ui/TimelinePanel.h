@@ -10,6 +10,18 @@ class QWheelEvent;
 
 namespace pvf {
 
+// A keyframe position, identified by its entity and frame.
+struct KeyframeSelection
+{
+    EntityId entity = kInvalidEntity;
+    double frame = 0.0;
+
+    bool operator==(const KeyframeSelection& other) const
+    {
+        return entity == other.entity && qFuzzyCompare(frame + 1.0, other.frame + 1.0);
+    }
+};
+
 class TimelinePanel : public QWidget
 {
     Q_OBJECT
@@ -21,8 +33,8 @@ public:
     void setSelectedEntity(EntityId id);
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
-
-    QSize sizeHint() const override { return {800, 220}; }
+    int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
+    QRect rowButtonRect(int row, int index) const;
 
 signals:
     void frameRequested(int frame);
@@ -42,24 +54,27 @@ private:
     int rowAt(int y) const;
     EntityId entityAtRow(int row) const;
     bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
+    QVector<double> keyframeFrames(EntityId id) const;
+    void handleRowButton(int row, int index);
     int contentWidth() const;
     int visibleWidth() const;
     QVector<int> visibleEntities() const;
     void updateScrollBar();
     void zoomAt(double factor, int anchorX);
 
+    enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
+
     Project* m_project = nullptr;
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
-    enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
     DragMode m_dragMode = DragMode::None;
     QPointF m_pressPos;
     QPointF m_boxStart;
     QPointF m_boxEnd;
     int m_pressFrame = 0;
     EntityId m_pressEntity = kInvalidEntity;
-    EntityId m_selectedKeyframeEntity = kInvalidEntity;
-    double m_selectedKeyframeFrame = -1.0;
+    int m_hoverRow = -1;
+    QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;
     QScrollBar* m_hScroll = nullptr;
     int m_scrollX = 0;
@@ -70,6 +85,7 @@ private:
     static constexpr int kRowHeight = 24;
     static constexpr int kRightPad = 16;
     static constexpr int kScrollBarHeight = 14;
+    static constexpr int kButtonSize = 16;
 };
 
 } // namespace pvf

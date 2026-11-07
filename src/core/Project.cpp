@@ -397,6 +397,8 @@ QJsonObject Project::toJson() const
         entity[QStringLiteral("id")] = e.id;
         entity[QStringLiteral("type")] = typeToString(e.type);
         entity[QStringLiteral("templateId")] = e.templateId;
+        entity[QStringLiteral("hidden")] = e.hidden;
+        entity[QStringLiteral("locked")] = e.locked;
         entity[QStringLiteral("name")] = e.name;
         entity[QStringLiteral("sourcePath")] = e.sourcePath;
 
@@ -530,6 +532,8 @@ bool Project::load(const QString& path, QString* error)
         e.id = object.value(QStringLiteral("id")).toInt();
         e.type = typeFromString(object.value(QStringLiteral("type")).toString());
         e.templateId = object.value(QStringLiteral("templateId")).toString();
+        e.hidden = object.value(QStringLiteral("hidden")).toBool();
+        e.locked = object.value(QStringLiteral("locked")).toBool();
         e.name = object.value(QStringLiteral("name")).toString();
         e.sourcePath = object.value(QStringLiteral("sourcePath")).toString();
 

@@ -301,9 +301,13 @@ void PropertiesPanel::refresh()
                                && (e->type == EntityType::Image
                                    || e->type == EntityType::Video));
 
-    m_keyButton->setEnabled(valid);
+    const bool editable = valid && !e->locked;
+    m_transformSection->setEnabled(editable);
+    m_textSection->setEnabled(editable);
+    m_vectorSection->setEnabled(editable);
+    m_keyButton->setEnabled(editable);
     for (Row& r : m_rows)
-        r.spin->setEnabled(valid);
+        r.spin->setEnabled(editable);
 
     if (!valid)
     {

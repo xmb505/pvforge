@@ -1,5 +1,7 @@
 #include "TimelinePanel.h"
 
+#include "app/AppIcon.h"
+
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
@@ -19,6 +21,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
 {
     setMinimumHeight(140);
     setFocusPolicy(Qt::ClickFocus);
+    setMouseTracking(true);   // hover row buttons need motion without a press
 
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
@@ -32,7 +35,6 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         m_scrollX = value;
         update();
     });
-
     updateScrollBar();
 }
 
@@ -66,8 +68,6 @@ void TimelinePanel::setSelectedEntity(EntityId id)
 int TimelinePanel::contentWidth() const
 {
     // Mine-imator: content width = max(content, playhead) * zoom + view width.
-    // The view width term keeps a full screen of ruler visible on an empty
-    // project instead of stopping at the last keyframe.
     const int endFrame = std::max(m_project->timelineLength(), m_frame);
     return int(endFrame * m_pixelsPerFrame) + visibleWidth();
 }
@@ -88,16 +88,6 @@ QVector<int> TimelinePanel::visibleEntities() const
     return result;
 }
 
-int TimelinePanel::xFromFrame(int frame) const
-{
-    return kNameWidth + int(std::lround(frame * m_pixelsPerFrame)) - m_scrollX;
-}
-
-int TimelinePanel::frameFromX(int x) const
-{
-    return int(std::lround((x - kNameWidth + m_scrollX) / m_pixelsPerFrame));
-}
-
 void TimelinePanel::updateScrollBar()
 {
     if (!m_hScroll)
@@ -111,6 +101,16 @@ void TimelinePanel::updateScrollBar()
     m_hScroll->setValue(m_scrollX);
 }
 
+int TimelinePanel::xFromFrame(int frame) const
+{
+    return kNameWidth + int(std::lround(frame * m_pixelsPerFrame)) - m_scrollX;
+}
+
+int TimelinePanel::frameFromX(int x) const
+{
+    return int(std::lround((x - kNameWidth + m_scrollX) / m_pixelsPerFrame));
+}
+
 int TimelinePanel::rowAt(int y) const
 {
     if (y < kHeaderHeight)
@@ -121,55 +121,103 @@ int TimelinePanel::rowAt(int y) const
 EntityId TimelinePanel::entityAtRow(int row) const
 {
     const QVector<int> visible = visibleEntities();
-    if (row < 0 || row >= visible.size())
+    if (row < 0 || row >= int(visible.size()))
         return kInvalidEntity;
     return m_project->entities()[visible[row]].id;
 }
 
+QVector<double> TimelinePanel::keyframeFrames(EntityId id) const
+{
+    const Entity* entity = m_project->entity(id);
+    QVector<double> frames;
+    if (!entity)
+        return frames;
+
+    QSet<int> seen;
+    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            const int rounded = int(std::lround(key.frame));
+            if (seen.contains(rounded))
+                continue;
+            seen.insert(rounded);
+            frames.append(key.frame);
+        }
+    }
+    std::sort(frames.begin(), frames.end());
+    return frames;
+}
+
 bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const
 {
-    const QVector<int> visible = visibleEntities();
-    if (row < 0 || row >= visible.size())
+    const EntityId id = entityAtRow(row);
+    if (id == kInvalidEntity)
         return false;
 
-    const Entity& e = m_project->entities()[visible[row]];
     const double frame = frameFromX(x);
     const double tolerance = std::max(1.0, 6.0 / m_pixelsPerFrame);
 
     bool found = false;
     double best = 0.0;
     double bestDistance = tolerance;
-    for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
+    for (const double keyFrame : keyframeFrames(id))
     {
-        for (const Keyframe& key : it->keys)
+        const double distance = std::abs(keyFrame - frame);
+        if (distance <= bestDistance)
         {
-            const double distance = std::abs(key.frame - frame);
-            if (distance <= bestDistance)
-            {
-                bestDistance = distance;
-                best = key.frame;
-                found = true;
-            }
+            bestDistance = distance;
+            best = keyFrame;
+            found = true;
         }
     }
 
     if (found)
     {
         if (outId)
-            *outId = e.id;
+            *outId = id;
         if (outFrame)
             *outFrame = best;
     }
     return found;
 }
 
-void TimelinePanel::resizeEvent(QResizeEvent* event)
+QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
-    QWidget::resizeEvent(event);
-    m_search->setGeometry(8, 2, kNameWidth - 16, kHeaderHeight - 6);
-    m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
-                           kScrollBarHeight);
-    updateScrollBar();
+    const int top = kHeaderHeight + row * kRowHeight;
+    const int right = width() - kRightPad;
+    const int x = right - (index + 1) * (kButtonSize + 2);
+    return QRect(x, top + (kRowHeight - kButtonSize) / 2, kButtonSize, kButtonSize);
+}
+
+void TimelinePanel::handleRowButton(int row, int index)
+{
+    const EntityId id = entityAtRow(row);
+    Entity* entity = m_project->entity(id);
+    if (!entity)
+        return;
+
+    switch (index)
+    {
+    case 0:   // Hide / show
+        entity->hidden = !entity->hidden;
+        m_project->notifyChanged();
+        break;
+    case 1:   // Lock / unlock
+        entity->locked = !entity->locked;
+        m_project->notifyChanged();
+        break;
+    case 2:   // Select every keyframe of the entity
+    {
+        m_selectedKeyframes.clear();
+        for (const double frame : keyframeFrames(id))
+            m_selectedKeyframes.append({id, frame});
+        update();
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 void TimelinePanel::zoomAt(double factor, int anchorX)
@@ -208,6 +256,15 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
     event->accept();
 }
 
+void TimelinePanel::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    m_search->setGeometry(8, 2, kNameWidth - 16, kHeaderHeight - 6);
+    m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
+                           kScrollBarHeight);
+    updateScrollBar();
+}
+
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -226,9 +283,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     // Ruler.
     const int fps = std::max(1, m_project->fps);
-    const double ppf = m_pixelsPerFrame;
     int step = fps;
-    while (step * ppf < 60.0)
+    while (step * m_pixelsPerFrame < 60.0)
         step *= 2;
 
     QFont small = p.font();
@@ -266,19 +322,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         else if (row % 2)
             p.fillRect(rowRect, QColor(31, 31, 36));
 
-        p.setPen(QColor(210, 210, 218));
+        p.setPen(e.hidden ? QColor(120, 120, 130) : QColor(210, 210, 218));
         p.drawText(QRect(10, top, kNameWidth - 20, kRowHeight),
                    Qt::AlignVCenter | Qt::AlignLeft, e.name);
 
-        QSet<int> frames;
-        for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
-            for (const Keyframe& k : it->keys)
-                frames.insert(int(std::lround(k.frame)));
-
-        p.setPen(Qt::NoPen);
-        for (int f : frames)
+        for (const double keyFrame : keyframeFrames(e.id))
         {
-            const int x = xFromFrame(f);
+            const int x = xFromFrame(int(std::lround(keyFrame)));
             if (x < kNameWidth || x > right)
                 continue;
             const int cy = top + kRowHeight / 2;
@@ -286,15 +336,28 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             QPolygonF diamond;
             diamond << QPointF(x, cy - r) << QPointF(x + r, cy) << QPointF(x, cy + r)
                     << QPointF(x - r, cy);
-            const bool selectedKey =
-                e.id == m_selectedKeyframeEntity
-                && f == int(std::lround(m_selectedKeyframeFrame));
-            if (selectedKey)
+
+            const bool isSelected =
+                std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                          KeyframeSelection{e.id, keyFrame})
+                != m_selectedKeyframes.end();
+
+            p.setPen(Qt::NoPen);
+            if (isSelected)
                 p.setBrush(QColor(255, 255, 255));
+            else if (e.id == m_selected)
+                p.setBrush(QColor(255, 200, 90));
             else
-                p.setBrush(e.id == m_selected ? QColor(255, 200, 90)
-                                              : QColor(200, 160, 80));
+                p.setBrush(QColor(200, 160, 80));
             p.drawPolygon(diamond);
+        }
+
+        // Row buttons appear on hover, like Mine-imator's timeline list.
+        if (row == m_hoverRow)
+        {
+            makeEyeIcon(e.hidden).paint(&p, rowButtonRect(row, 0));
+            makeLockIcon(e.locked).paint(&p, rowButtonRect(row, 1));
+            makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
         }
     }
 
@@ -374,25 +437,50 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    setFocus(Qt::MouseFocusReason);
+
+    // Hover buttons take priority.
+    if (m_hoverRow >= 0)
+    {
+        for (int index = 0; index < 3; ++index)
+        {
+            if (rowButtonRect(m_hoverRow, index).contains(x, y))
+            {
+                handleRowButton(m_hoverRow, index);
+                return;
+            }
+        }
+    }
+
     // Name column: select the entity row.
     if (x < kNameWidth)
     {
-        setFocus(Qt::MouseFocusReason);
         const EntityId id = entityAtRow(rowAt(y));
         if (id != kInvalidEntity)
             emit entitySelected(id);
         return;
     }
 
-    setFocus(Qt::MouseFocusReason);
-
-    // Keyframe dot: select the keyframe without moving the playhead.
+    // Keyframe dot: toggle the selection without moving the playhead.
     EntityId keyEntity = kInvalidEntity;
     double keyFrame = 0.0;
     if (hitKeyframe(rowAt(y), x, &keyEntity, &keyFrame))
     {
-        m_selectedKeyframeEntity = keyEntity;
-        m_selectedKeyframeFrame = keyFrame;
+        const KeyframeSelection selection{keyEntity, keyFrame};
+        const auto existing =
+            std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection);
+        if (event->modifiers() & Qt::ShiftModifier)
+        {
+            if (existing != m_selectedKeyframes.end())
+                m_selectedKeyframes.erase(existing);
+            else
+                m_selectedKeyframes.append(selection);
+        }
+        else
+        {
+            m_selectedKeyframes.clear();
+            m_selectedKeyframes.append(selection);
+        }
         emit entitySelected(keyEntity);
         update();
         return;
@@ -410,9 +498,23 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
+    const int x = int(event->position().x());
+    const int y = int(event->position().y());
+
+    // Track the hovered row for the inline buttons.
+    if (m_dragMode == DragMode::None)
+    {
+        const int row = (y >= kHeaderHeight) ? rowAt(y) : -1;
+        if (row != m_hoverRow)
+        {
+            m_hoverRow = row;
+            update();
+        }
+    }
+
     if (m_dragMode == DragMode::Scrub)
     {
-        emit frameRequested(std::max(0, frameFromX(int(event->position().x()))));
+        emit frameRequested(std::max(0, frameFromX(x)));
         return;
     }
 
@@ -445,14 +547,35 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
     else if (m_dragMode == DragMode::BoxSelect)
     {
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
-        const int first = rowAt(int(box.top()));
-        const int last = rowAt(int(box.bottom()));
+        const int firstRow = rowAt(int(box.top()));
+        const int lastRow = rowAt(int(box.bottom()));
+        const int firstFrame = std::max(0, frameFromX(int(box.left())));
+        const int lastFrame = std::max(0, frameFromX(int(box.right())));
+
+        const bool additive = event->modifiers() & Qt::ShiftModifier;
+        if (!additive)
+            m_selectedKeyframes.clear();
+
         const QVector<int> visible = visibleEntities();
-        if (first >= 0 && first < int(visible.size()))
+        for (int row = std::max(0, firstRow);
+             row <= std::min(lastRow, int(visible.size()) - 1); ++row)
         {
-            const int row = std::min(last, int(visible.size()) - 1);
-            emit entitySelected(m_project->entities()[visible[row]].id);
+            const EntityId id = m_project->entities()[visible[row]].id;
+            for (const double frame : keyframeFrames(id))
+            {
+                if (frame < firstFrame || frame > lastFrame)
+                    continue;
+                const KeyframeSelection selection{id, frame};
+                if (std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection)
+                    == m_selectedKeyframes.end())
+                    m_selectedKeyframes.append(selection);
+            }
         }
+
+        // Keep the entity selection in sync with the last touched row.
+        if (lastRow >= 0 && lastRow < int(visible.size()))
+            emit entitySelected(m_project->entities()[visible[lastRow]].id);
+        update();
     }
 
     m_dragMode = DragMode::None;

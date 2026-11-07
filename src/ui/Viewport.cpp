@@ -169,6 +169,9 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
 
 void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, double s)
 {
+    if (e.hidden)
+        return;
+
     const double x = m_project->value(e.id, "x", m_frame);
     const double y = m_project->value(e.id, "y", m_frame);
     const double rot = m_project->value(e.id, "rotation", m_frame);
@@ -327,9 +330,12 @@ void Viewport::mousePressEvent(QMouseEvent* event)
     {
         m_selected = hit->id;
         emit entitySelected(hit->id);
-        m_dragging = true;
-        m_dragEntity = hit->id;
-        m_dragLast = event->position();
+        if (!hit->locked)
+        {
+            m_dragging = true;
+            m_dragEntity = hit->id;
+            m_dragLast = event->position();
+        }
     }
     else
     {

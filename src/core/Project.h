@@ -39,6 +39,8 @@ struct Entity
     EntityId id = kInvalidEntity;
     EntityType type = EntityType::Image;
     QString templateId;        // template this instance was created from
+    bool hidden = false;
+    bool locked = false;
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache

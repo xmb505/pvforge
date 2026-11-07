@@ -216,6 +216,90 @@ int welcomeTest(QApplication& app)
     return app.exec();
 }
 
+int timelineRowButtonsTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 24;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    pvf::EntityId firstId = pvf::kInvalidEntity;
+    {
+        pvf::Entity* first = project->addVector(0, 120, 80, Qt::red, Qt::white, 0);
+        firstId = first->id;
+        project->setValue(firstId, QStringLiteral("x"), 0, 0, true);
+        project->setValue(firstId, QStringLiteral("x"), 60, 300, true);
+    }
+    {
+        pvf::Entity* second = project->addVector(1, 120, 80, Qt::green, Qt::white, 0);
+        project->setValue(second->id, QStringLiteral("x"), 30, 100, true);
+    }
+    qInfo() << "entities" << project->entities().size();
+
+    auto* timeline = window.findChild<pvf::TimelinePanel*>();
+    if (!timeline)
+        return 1;
+
+    QTimer::singleShot(400, &window, [&app, &window, timeline, project, firstId] {
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(timeline->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(timeline, &event);
+        };
+        auto click = [&](const QPoint& pos) {
+            send(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, pos, Qt::LeftButton, Qt::NoButton);
+        };
+
+        int failures = 0;
+
+        // Hover the first row so the inline buttons show.
+        send(QEvent::MouseMove, QPoint(400, 40), Qt::NoButton, Qt::NoButton);
+
+        // Rubber-band across both rows to pick up every keyframe in range.
+        send(QEvent::MouseButtonPress, QPoint(200, 32), Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, QPoint(560, 56), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, QPoint(560, 56), Qt::LeftButton, Qt::NoButton);
+        const int boxed = timeline->selectedKeyframeCount();
+        qInfo() << "boxed" << boxed << "entities" << project->entities().size();
+        if (boxed != 2)
+        {
+            qCritical() << "timeline-rowbuttons-test: boxed keyframes" << boxed;
+            ++failures;
+        }
+
+        // Inline buttons: select all keyframes, hide, lock.
+        click(timeline->rowButtonRect(0, 2).center());
+        const int all = timeline->selectedKeyframeCount();
+        if (all != 2)
+        {
+            qCritical() << "timeline-rowbuttons-test: select all keyframes" << all;
+            ++failures;
+        }
+
+        click(timeline->rowButtonRect(0, 0).center());
+        if (!project->entity(firstId)->hidden)
+        {
+            qCritical() << "timeline-rowbuttons-test: hide failed";
+            ++failures;
+        }
+
+        click(timeline->rowButtonRect(0, 1).center());
+        if (!project->entity(firstId)->locked)
+        {
+            qCritical() << "timeline-rowbuttons-test: lock failed";
+            ++failures;
+        }
+
+        qInfo() << "timeline-rowbuttons-test: boxed" << boxed << "all" << all << "failures"
+                << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int timelineInteractionTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -708,6 +792,8 @@ int main(int argc, char* argv[])
         return deleteTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))
+        return timelineRowButtonsTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))
