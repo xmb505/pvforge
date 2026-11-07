@@ -1,5 +1,7 @@
 #include "NewProjectDialog.h"
 
+#include "core/Settings.h"
+
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
@@ -73,13 +75,18 @@ NewProjectDialog::NewProjectDialog(QWidget* parent)
     m_resolution->addItem(QStringLiteral("1280 × 720 (HD)"), QSize(1280, 720));
     m_resolution->addItem(QStringLiteral("3840 × 2160 (4K)"), QSize(3840, 2160));
     m_resolution->addItem(QStringLiteral("1080 × 1920 (竖屏)"), QSize(1080, 1920));
+    const int defaultIndex =
+        m_resolution->findData(QSize(Settings::defaultWidth(), Settings::defaultHeight()));
+    if (defaultIndex >= 0)
+        m_resolution->setCurrentIndex(defaultIndex);
     form->addRow(QStringLiteral("分辨率"), m_resolution);
 
     m_fps = new QComboBox(this);
     m_fps->addItem(QStringLiteral("24 fps"), 24);
     m_fps->addItem(QStringLiteral("30 fps"), 30);
     m_fps->addItem(QStringLiteral("60 fps"), 60);
-    m_fps->setCurrentIndex(1);
+    const int fpsIndex = m_fps->findData(Settings::defaultFps());
+    m_fps->setCurrentIndex(fpsIndex >= 0 ? fpsIndex : 1);
     form->addRow(QStringLiteral("帧率"), m_fps);
 
     m_author = new QLineEdit(this);

@@ -1,8 +1,11 @@
 #include "app/AppIcon.h"
 #include "core/Commands.h"
 #include "core/History.h"
+#include "core/Lang.h"
+#include "core/Settings.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
+#include "app/SettingsDialog.h"
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
@@ -401,6 +404,97 @@ int timelineInteractionTest(QApplication& app)
     return app.exec();
 }
 
+int settingsTest(QApplication& app)
+{
+    const int oldSnap = pvf::Settings::snapPixels();
+    const QString oldLanguage = pvf::Settings::language();
+
+    pvf::Settings::setSnapPixels(12);
+    if (pvf::Settings::snapPixels() != 12)
+    {
+        qCritical() << "settings-test: snap setting not persisted";
+        return 1;
+    }
+    pvf::Settings::setSnapPixels(oldSnap);
+
+    pvf::Lang::load(QStringLiteral("en_US"));
+    if (pvf::Lang::t(QStringLiteral("menu.file")) != QStringLiteral("File"))
+    {
+        qCritical() << "settings-test: english strings not loaded";
+        return 1;
+    }
+    pvf::Lang::load(QStringLiteral("zh_CN"));
+    if (pvf::Lang::t(QStringLiteral("menu.file")) != QStringLiteral("文件"))
+    {
+        qCritical() << "settings-test: chinese strings not loaded";
+        return 1;
+    }
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project, oldSnap] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "settings-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const QPoint center = viewport->rect().center();
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+        };
+
+        // A larger snap distance grabs a 10px drag.
+        viewport->setSnapPixels(20);
+        drag(center + QPoint(40, 0), center + QPoint(50, 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "settings-test: large snap did not stick";
+            ++failures;
+        }
+
+        // A small snap distance ignores it.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        viewport->setSnapPixels(2);
+        drag(center + QPoint(40, 0), center + QPoint(50, 0));
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) < 1.0)
+        {
+            qCritical() << "settings-test: small snap still stuck";
+            ++failures;
+        }
+
+        viewport->setSnapPixels(oldSnap);
+
+        // The settings dialog builds and can be shown.
+        pvf::SettingsDialog dialog(&window);
+        dialog.show();
+        QApplication::processEvents();
+        dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_settings.png"));
+
+        qInfo() << "settings-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int snapTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -448,11 +542,13 @@ int snapTest(QApplication& app)
             ++failures;
         }
 
-        // X axis snaps to the canvas edge.
+        // X axis snaps the entity edge flush with the canvas edge.
         project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
-        const int edgeDx = int(std::lround((canvasHalfW - 5.0) * s));
+        const double targetX = canvasHalfW - 150.0 - 5.0;   // right edge 5px short
+        const int edgeDx = int(std::lround(targetX * s));
         drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0), Qt::NoModifier);
-        if (std::abs(project->value(id, QStringLiteral("x"), 0) - canvasHalfW) > 1e-6)
+        const double expectedEdgeX = canvasHalfW - 150.0;   // entity half width
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - expectedEdgeX) > 1e-6)
         {
             qCritical() << "snap-test: edge snap"
                         << project->value(id, QStringLiteral("x"), 0);
@@ -472,11 +568,12 @@ int snapTest(QApplication& app)
         // Free drag snaps to the bottom-right canvas corner.
         project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
         project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
-        const int cornerDx = int(std::lround((canvasHalfW - 5.0) * s));
-        const int cornerDy = int(std::lround((canvasHalfH - 5.0) * s));
+        const int cornerDx = int(std::lround((canvasHalfW - 150.0 - 5.0) * s));
+        const int cornerDy = int(std::lround((canvasHalfH - 100.0 - 5.0) * s));
         drag(center, center + QPoint(cornerDx, cornerDy), Qt::NoModifier);
-        if (std::abs(project->value(id, QStringLiteral("x"), 0) - canvasHalfW) > 1e-6
-            || std::abs(project->value(id, QStringLiteral("y"), 0) - canvasHalfH) > 1e-6)
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - (canvasHalfW - 150.0)) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("y"), 0) - (canvasHalfH - 100.0))
+                   > 1e-6)
         {
             qCritical() << "snap-test: corner snap"
                         << project->value(id, QStringLiteral("x"), 0)
@@ -1477,6 +1574,7 @@ int main(int argc, char* argv[])
     app.setApplicationDisplayName(QStringLiteral("PVForge"));
     app.setOrganizationName(QStringLiteral("PVForge"));
     app.setWindowIcon(pvf::makeCubeIcon());
+    pvf::Lang::load(pvf::Settings::language());
 
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();
@@ -1506,6 +1604,8 @@ int main(int argc, char* argv[])
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))
         return snapTest(app);
+    if (app.arguments().contains(QStringLiteral("--settings-test")))
+        return settingsTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

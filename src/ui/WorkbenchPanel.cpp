@@ -1,5 +1,7 @@
 #include "WorkbenchPanel.h"
 
+#include "core/Lang.h"
+
 #include "media/VideoDecoder.h"
 
 #include <QApplication>
@@ -55,13 +57,15 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     typeFont.setPointSizeF(typeFont.pointSizeF() + 1.5);
     m_types->setFont(typeFont);
 
-    const struct
+    const QStringList typeNames = {
+        Lang::t(QStringLiteral("workbench.image"), QStringLiteral("图片")),
+        Lang::t(QStringLiteral("workbench.video"), QStringLiteral("视频")),
+        Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
+        Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
+    };
+    for (const QString& name : typeNames)
     {
-        const char* label;
-    } typeNames[] = {{"图片"}, {"视频"}, {"文字"}, {"矢量"}};
-    for (const auto& t : typeNames)
-    {
-        auto* item = new QListWidgetItem(QString::fromUtf8(t.label), m_types);
+        auto* item = new QListWidgetItem(name, m_types);
         item->setSizeHint(QSize(0, 42));
     }
     root->addWidget(m_types);
@@ -76,7 +80,7 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     m_pages->addWidget(buildVectorPage());
     right->addWidget(m_pages, 1);
 
-    m_create = new QPushButton(QStringLiteral("创建"), this);
+    m_create = new QPushButton(Lang::t(QStringLiteral("workbench.create"), QStringLiteral("创建")), this);
     m_create->setObjectName(QStringLiteral("createButton"));
     m_create->setMinimumHeight(38);
     right->addWidget(m_create);
@@ -107,7 +111,7 @@ QWidget* WorkbenchPanel::buildImagePage()
     m_imagePreview->setFrameShape(QFrame::StyledPanel);
     layout->addWidget(m_imagePreview);
 
-    auto* pick = new QPushButton(QStringLiteral("选择图片…"), page);
+    auto* pick = new QPushButton(Lang::t(QStringLiteral("workbench.selectImage"), QStringLiteral("选择图片…")), page);
     connect(pick, &QPushButton::clicked, this, &WorkbenchPanel::pickImage);
     layout->addWidget(pick);
 
@@ -130,7 +134,7 @@ QWidget* WorkbenchPanel::buildVideoPage()
     m_videoPreview->setFrameShape(QFrame::StyledPanel);
     layout->addWidget(m_videoPreview);
 
-    auto* pick = new QPushButton(QStringLiteral("选择视频…"), page);
+    auto* pick = new QPushButton(Lang::t(QStringLiteral("workbench.selectVideo"), QStringLiteral("选择视频…")), page);
     connect(pick, &QPushButton::clicked, this, &WorkbenchPanel::pickVideo);
     layout->addWidget(pick);
 

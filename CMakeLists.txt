@@ -17,9 +17,12 @@ add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
     src/core/History.cpp
+    src/core/Settings.cpp
+    src/core/Lang.cpp
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/app/AppIcon.cpp
+    src/app/SettingsDialog.cpp
     src/app/MainWindow.cpp
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
@@ -31,6 +34,14 @@ add_executable(pvforge
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp
     src/ui/WorkbenchPanel.cpp
+)
+
+qt_add_resources(pvforge "lang"
+    PREFIX "/"
+    BASE "assets"
+    FILES
+        assets/lang/zh_CN.json
+        assets/lang/en_US.json
 )
 
 target_include_directories(pvforge PRIVATE src)

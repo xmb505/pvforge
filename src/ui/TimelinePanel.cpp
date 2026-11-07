@@ -1,6 +1,7 @@
 #include "TimelinePanel.h"
 
 #include "app/AppIcon.h"
+#include "core/Lang.h"
 
 #include <QApplication>
 #include <QLineEdit>
@@ -26,7 +27,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     setMouseTracking(true);   // hover row buttons need motion without a press
 
     m_search = new QLineEdit(this);
-    m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
+    m_search->setPlaceholderText(Lang::t(QStringLiteral("search.objects"), QStringLiteral("搜索对象…")));
     m_search->setClearButtonEnabled(true);
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
         update();

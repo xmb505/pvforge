@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 
 #include "core/Commands.h"
+#include "core/Lang.h"
+#include "core/Settings.h"
+#include "SettingsDialog.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/EnvironmentPanel.h"
@@ -42,7 +45,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     setMinimumSize(1000, 620);
 
     m_history = new History(this);
+    m_project->autoKey = Settings::autoKeyDefault();
+    m_project->packAssets = Settings::packAssetsDefault();
     m_viewport = new Viewport(m_project, this);
+    m_viewport->setSnapPixels(Settings::snapPixels());
     m_props = new PropertiesPanel(m_project, this);
     m_library = new AssetLibraryPanel(m_project, this);
     m_projectProps = new ProjectPropertiesPanel(m_project, this);
@@ -64,11 +70,11 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     projectLayout->setSpacing(0);
 
     auto* settingsSection =
-        new CollapsibleSection(QStringLiteral("项目设置"), m_projectProps, projectContent);
+        new CollapsibleSection(Lang::t(QStringLiteral("section.projectSettings"), QStringLiteral("项目设置")), m_projectProps, projectContent);
     auto* environmentSection =
-        new CollapsibleSection(QStringLiteral("环境设置"), m_environment, projectContent);
+        new CollapsibleSection(Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")), m_environment, projectContent);
     auto* librarySection =
-        new CollapsibleSection(QStringLiteral("素材库"), m_library, projectContent);
+        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")), m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
     librarySection->setExpanded(true);
@@ -97,7 +103,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_rightTabs->setObjectName(QStringLiteral("rightTabs"));
     m_rightTabs->setMinimumWidth(300);
     m_rightTabs->setMaximumWidth(440);
-    m_rightTabs->addTab(m_projectTab, QStringLiteral("项目属性"));
+    m_rightTabs->addTab(m_projectTab, Lang::t(QStringLiteral("panel.projectTab"), QStringLiteral("项目属性")));
 
     m_viewport->setMinimumWidth(480);
 
@@ -154,10 +160,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         m_redoAction->setEnabled(m_history->canRedo());
         m_undoAction->setText(m_history->canUndo()
                                   ? QStringLiteral("撤销 ") + m_history->undoText()
-                                  : QStringLiteral("撤销"));
+                                  : Lang::t(QStringLiteral("action.undo"), QStringLiteral("撤销")));
         m_redoAction->setText(m_history->canRedo()
                                   ? QStringLiteral("重做 ") + m_history->redoText()
-                                  : QStringLiteral("重做"));
+                                  : Lang::t(QStringLiteral("action.redo"), QStringLiteral("重做")));
     });
 
     createActions();
@@ -169,62 +175,62 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
 void MainWindow::createActions()
 {
-    m_undoAction = new QAction(QStringLiteral("撤销"), this);
+    m_undoAction = new QAction(Lang::t(QStringLiteral("action.undo"), QStringLiteral("撤销")), this);
     m_undoAction->setObjectName(QStringLiteral("undoAction"));
     m_undoAction->setShortcut(QKeySequence::Undo);
     m_undoAction->setEnabled(false);
     connect(m_undoAction, &QAction::triggered, this, &MainWindow::onUndo);
     addAction(m_undoAction);
 
-    m_redoAction = new QAction(QStringLiteral("重做"), this);
+    m_redoAction = new QAction(Lang::t(QStringLiteral("action.redo"), QStringLiteral("重做")), this);
     m_redoAction->setObjectName(QStringLiteral("redoAction"));
     m_redoAction->setShortcut(QKeySequence::Redo);
     m_redoAction->setEnabled(false);
     connect(m_redoAction, &QAction::triggered, this, &MainWindow::onRedo);
     addAction(m_redoAction);
 
-    m_playAction = new QAction(QStringLiteral("播放"), this);
+    m_playAction = new QAction(Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")), this);
     m_playAction->setShortcut(QKeySequence(Qt::Key_Space));
     m_playAction->setShortcutContext(Qt::ApplicationShortcut);
     connect(m_playAction, &QAction::triggered, this, &MainWindow::togglePlayback);
     addAction(m_playAction);
 
-    auto* homeAction = new QAction(QStringLiteral("回到开头"), this);
+    auto* homeAction = new QAction(Lang::t(QStringLiteral("action.home"), QStringLiteral("回到开头")), this);
     homeAction->setShortcut(QKeySequence(Qt::Key_Home));
     connect(homeAction, &QAction::triggered, this, [this] { setFrame(0); });
     addAction(homeAction);
     m_homeAction = homeAction;
 
-    auto* endAction = new QAction(QStringLiteral("跳到结尾"), this);
+    auto* endAction = new QAction(Lang::t(QStringLiteral("action.end"), QStringLiteral("跳到结尾")), this);
     endAction->setShortcut(QKeySequence(Qt::Key_End));
     connect(endAction, &QAction::triggered, this, [this] { setFrame(m_project->timelineLength()); });
     addAction(endAction);
     m_endAction = endAction;
 
-    auto* fitAction = new QAction(QStringLiteral("适配窗口"), this);
+    auto* fitAction = new QAction(Lang::t(QStringLiteral("action.fitWindow"), QStringLiteral("适配窗口")), this);
     fitAction->setShortcut(QKeySequence(Qt::Key_F));
     connect(fitAction, &QAction::triggered, this, [this] { m_viewport->resetView(); });
     addAction(fitAction);
     m_fitAction = fitAction;
 
-    m_autoKeyAction = new QAction(QStringLiteral("自动关键帧"), this);
+    m_autoKeyAction = new QAction(Lang::t(QStringLiteral("action.autoKey"), QStringLiteral("自动关键帧")), this);
     m_autoKeyAction->setCheckable(true);
     m_autoKeyAction->setChecked(m_project->autoKey);
     connect(m_autoKeyAction, &QAction::toggled, this, [this](bool on) {
         m_project->autoKey = on;
     });
 
-    m_quitAction = new QAction(QStringLiteral("退出"), this);
+    m_quitAction = new QAction(Lang::t(QStringLiteral("action.quit"), QStringLiteral("退出")), this);
     m_quitAction->setShortcut(QKeySequence::Quit);
     connect(m_quitAction, &QAction::triggered, this, &QWidget::close);
     addAction(m_quitAction);
 
-    m_saveAction = new QAction(QStringLiteral("保存"), this);
+    m_saveAction = new QAction(Lang::t(QStringLiteral("action.save"), QStringLiteral("保存")), this);
     m_saveAction->setShortcut(QKeySequence::Save);
     connect(m_saveAction, &QAction::triggered, this, &MainWindow::saveProject);
     addAction(m_saveAction);
 
-    m_saveAsAction = new QAction(QStringLiteral("另存为…"), this);
+    m_saveAsAction = new QAction(Lang::t(QStringLiteral("action.saveAs"), QStringLiteral("另存为…")), this);
     m_saveAsAction->setShortcut(QKeySequence::SaveAs);
     connect(m_saveAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
     addAction(m_saveAsAction);
@@ -232,14 +238,14 @@ void MainWindow::createActions()
 
 void MainWindow::createMenus()
 {
-    auto* fileMenu = menuBar()->addMenu(QStringLiteral("文件"));
+    auto* fileMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.file"), QStringLiteral("文件")));
     fileMenu->addAction(m_saveAction);
     fileMenu->addAction(m_saveAsAction);
     fileMenu->addSeparator();
     fileMenu->addAction(m_quitAction);
 
-    auto* assetMenu = menuBar()->addMenu(QStringLiteral("素材"));
-    m_packAssetsAction = new QAction(QStringLiteral("全部打包到项目"), this);
+    auto* assetMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.assets"), QStringLiteral("素材")));
+    m_packAssetsAction = new QAction(Lang::t(QStringLiteral("action.packAssets"), QStringLiteral("全部打包到项目")), this);
     m_packAssetsAction->setCheckable(true);
     m_packAssetsAction->setChecked(m_project->packAssets);
     m_packAssetsAction->setToolTip(
@@ -258,37 +264,50 @@ void MainWindow::createMenus()
             4000);
     });
     assetMenu->addAction(m_packAssetsAction);
-    assetMenu->addAction(QStringLiteral("立即打包所有素材"), this, &MainWindow::packAllAssets);
-    assetMenu->addAction(QStringLiteral("打开工程文件夹"), this, [this] {
+    assetMenu->addAction(Lang::t(QStringLiteral("action.packAll"), QStringLiteral("立即打包所有素材")), this, &MainWindow::packAllAssets);
+    assetMenu->addAction(Lang::t(QStringLiteral("action.openFolder"), QStringLiteral("打开工程文件夹")), this, [this] {
         if (m_project->filePath.isEmpty())
             return;
         QDesktopServices::openUrl(
             QUrl::fromLocalFile(QFileInfo(m_project->filePath).absolutePath()));
     });
 
-    auto* editMenu = menuBar()->addMenu(QStringLiteral("编辑"));
+    auto* editMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.edit"), QStringLiteral("编辑")));
     editMenu->addAction(m_undoAction);
     editMenu->addAction(m_redoAction);
     editMenu->addSeparator();
     editMenu->addAction(m_autoKeyAction);
     editMenu->addSeparator();
-    auto* deleteAction = new QAction(QStringLiteral("删除实体"), this);
+    auto* deleteAction = new QAction(Lang::t(QStringLiteral("action.deleteEntity"), QStringLiteral("删除实体")), this);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteSelectedEntity);
     editMenu->addAction(deleteAction);
+    editMenu->addSeparator();
+    auto* settingsAction =
+        new QAction(Lang::t(QStringLiteral("action.settings"), QStringLiteral("设置…")), this);
+    settingsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+,")));
+    connect(settingsAction, &QAction::triggered, this, [this] {
+        SettingsDialog dialog(this);
+        if (dialog.exec() == QDialog::Accepted)
+        {
+            m_viewport->setSnapPixels(Settings::snapPixels());
+            statusBar()->showMessage(QStringLiteral("设置已保存，语言等改动重启后生效"), 3000);
+        }
+    });
+    editMenu->addAction(settingsAction);
 
-    auto* playMenu = menuBar()->addMenu(QStringLiteral("播放"));
+    auto* playMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.play"), Lang::t(QStringLiteral("action.play"), QStringLiteral("播放"))));
     playMenu->addAction(m_playAction);
     playMenu->addAction(m_homeAction);
     playMenu->addAction(m_endAction);
 
-    auto* viewMenu = menuBar()->addMenu(QStringLiteral("视图"));
+    auto* viewMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.view"), QStringLiteral("视图")));
     viewMenu->addAction(m_fitAction);
 
     menuBar()->setFixedHeight(menuBar()->sizeHint().height());
 
-    auto* helpMenu = menuBar()->addMenu(QStringLiteral("帮助"));
-    helpMenu->addAction(QStringLiteral("关于 PVForge"), this, [this] {
-        QMessageBox::about(this, QStringLiteral("关于 PVForge"),
+    auto* helpMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.help"), QStringLiteral("帮助")));
+    helpMenu->addAction(Lang::t(QStringLiteral("action.about"), QStringLiteral("关于 PVForge")), this, [this] {
+        QMessageBox::about(this, Lang::t(QStringLiteral("action.about"), QStringLiteral("关于 PVForge")),
                            QStringLiteral("PVForge 0.1\n\n点击视口左上角的工作台按钮创建"
                                           "图片 / 视频 / 文字 / 矢量。\n"
                                           "拖动摆位，空格播放。"));
@@ -585,7 +604,7 @@ void MainWindow::togglePlayback()
     {
         m_playTimer->stop();
         m_playing = false;
-        m_playAction->setText(QStringLiteral("播放"));
+        m_playAction->setText(Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")));
         return;
     }
 
@@ -596,7 +615,7 @@ void MainWindow::togglePlayback()
     m_playClock.restart();
     m_playTimer->start(std::max(1, 1000 / std::max(1, m_project->fps)));
     m_playing = true;
-    m_playAction->setText(QStringLiteral("暂停"));
+    m_playAction->setText(Lang::t(QStringLiteral("action.pause"), QStringLiteral("暂停")));
 }
 
 void MainWindow::onPlayTick()

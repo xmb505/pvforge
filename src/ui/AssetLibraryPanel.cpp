@@ -1,5 +1,7 @@
 #include "AssetLibraryPanel.h"
 
+#include "core/Lang.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -136,7 +138,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     layout->addWidget(m_preview);
 
     m_search = new QLineEdit(this);
-    m_search->setPlaceholderText(QStringLiteral("搜索素材…"));
+    m_search->setPlaceholderText(Lang::t(QStringLiteral("search.assets"), QStringLiteral("搜索素材…")));
     m_search->setClearButtonEnabled(true);
     layout->addWidget(m_search);
 
