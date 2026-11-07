@@ -324,6 +324,21 @@ void VideoPlayer::update(Project& project, int frame)
         if (entity.hidden || project.isEffectivelyHidden(entity.id))
             continue;
 
+        const double duration =
+            entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
+        if (duration > 0.0 && seconds >= duration)
+        {
+            // Past the end of the clip: show nothing. The asset stays in the
+            // project and is restored when the playhead comes back in range.
+            if (!entity.image.isNull())
+            {
+                entity.image = QImage();
+                entity.thumbnail = QImage();
+                entity.pixmap = QPixmap();
+            }
+            continue;
+        }
+
         bool changed = false;
         const QImage image = frameAt(*stream, seconds, &changed);
         if (!image.isNull() && (changed || entity.image.isNull()))

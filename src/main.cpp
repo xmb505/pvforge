@@ -1861,6 +1861,28 @@ int videoTest(QApplication& app)
         ++failures;
     }
 
+    // Past the clip duration the video must be gone, not hold its last frame.
+    window.goToFrame(21);
+    QApplication::processEvents();
+    if (!uiVideo->image.isNull())
+    {
+        qCritical() << "video-test: last frame held past the clip";
+        ++failures;
+    }
+    if (std::abs(pvf::SceneRenderer::entityLocalBounds(*uiVideo).width() - 320.0)
+        > 1e-6)
+    {
+        qCritical() << "video-test: bounds lost after the clip";
+        ++failures;
+    }
+    window.goToFrame(19);
+    QApplication::processEvents();
+    if (uiVideo->image.isNull())
+    {
+        qCritical() << "video-test: clip did not return in range";
+        ++failures;
+    }
+
     // Library flow: creating the video asset must also create the extracted
     // audio entity, and undo/redo must treat both as one step.
     auto* pairProject = new pvf::Project;
