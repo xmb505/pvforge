@@ -754,6 +754,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
     {
         m_selected = hit->id;
         emit entitySelected(hit->id);
+        update();   // show the gizmo immediately, even without dragging
         if (!hit->locked)
         {
             m_dragging = true;
@@ -993,8 +994,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
         }
     }
 
-    emit valueEdited(m_dragEntity, QStringLiteral("x"), x);
-    emit valueEdited(m_dragEntity, QStringLiteral("y"), y);
+    emit positionEdited(m_dragEntity, x, y);
 }
 
 void Viewport::mouseReleaseEvent(QMouseEvent* event)

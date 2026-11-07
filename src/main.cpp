@@ -741,6 +741,95 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int dragUndoTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "drag-undo-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 200, 120, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        const QPoint center = viewport->entityPivotForTest(id).toPoint();
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto hasRedAxis = [&](const QImage& image) {
+            for (int y = center.y() - 2; y <= center.y() + 2; ++y)
+            {
+                for (int x = center.x() + 20; x <= center.x() + 60; ++x)
+                {
+                    const QRgb pixel = image.pixel(x, y);
+                    // The gizmo axis is (226,86,86); the entity body is pure red.
+                    if (qRed(pixel) > 200 && qGreen(pixel) > 60 && qGreen(pixel) < 120
+                        && qBlue(pixel) < 120)
+                        return true;
+                }
+            }
+            return false;
+        };
+
+        // Clicking the entity shows the gizmo immediately.
+        if (hasRedAxis(viewport->grab().toImage()))
+        {
+            qCritical() << "drag-undo-test: gizmo visible before selection";
+            ++failures;
+        }
+        send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, center, Qt::LeftButton, Qt::NoButton);
+        if (!hasRedAxis(viewport->grab().toImage()))
+        {
+            qCritical() << "drag-undo-test: gizmo not drawn after click";
+            ++failures;
+        }
+
+        // Dragging with many moves is a single undo step.
+        send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 10; ++i)
+            send(QEvent::MouseMove, center + QPoint(i * 15, i * 8), Qt::NoButton,
+                 Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, center + QPoint(150, 80), Qt::LeftButton,
+             Qt::NoButton);
+
+        const double endX = project->value(id, QStringLiteral("x"), 0);
+        const double endY = project->value(id, QStringLiteral("y"), 0);
+        if (std::abs(endX) < 1.0 || std::abs(endY) < 1.0)
+        {
+            qCritical() << "drag-undo-test: drag did nothing" << endX << endY;
+            ++failures;
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            undo->trigger();
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("y"), 0)) > 1e-6)
+        {
+            qCritical() << "drag-undo-test: one undo did not restore"
+                        << project->value(id, QStringLiteral("x"), 0)
+                        << project->value(id, QStringLiteral("y"), 0);
+            ++failures;
+        }
+
+        qInfo() << "drag-undo-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int importAsyncTest(QApplication& app)
 {
     const QString dir = QDir::tempPath() + QStringLiteral("/pvforge_async");
@@ -2154,6 +2243,8 @@ int main(int argc, char* argv[])
         return shapeTest(app);
     if (app.arguments().contains(QStringLiteral("--import-async-test")))
         return importAsyncTest(app);
+    if (app.arguments().contains(QStringLiteral("--drag-undo-test")))
+        return dragUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

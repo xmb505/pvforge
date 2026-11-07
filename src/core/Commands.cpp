@@ -147,6 +147,51 @@ QString RenameEntityCommand::text() const
     return QStringLiteral("重命名");
 }
 
+SetPositionCommand::SetPositionCommand(EntityId id, int frame, double oldX, double oldY,
+                                       double newX, double newY, bool keyframe)
+    : m_id(id)
+    , m_frame(frame)
+    , m_oldX(oldX)
+    , m_oldY(oldY)
+    , m_newX(newX)
+    , m_newY(newY)
+    , m_keyframe(keyframe)
+{
+}
+
+void SetPositionCommand::undo(Project& project)
+{
+    project.setValue(m_id, QStringLiteral("x"), m_frame, m_oldX, m_keyframe);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, m_oldY, m_keyframe);
+}
+
+void SetPositionCommand::redo(Project& project)
+{
+    project.setValue(m_id, QStringLiteral("x"), m_frame, m_newX, m_keyframe);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, m_newY, m_keyframe);
+}
+
+QString SetPositionCommand::text() const
+{
+    return QStringLiteral("移动实体");
+}
+
+bool SetPositionCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* move = dynamic_cast<const SetPositionCommand*>(other);
+    return move && move->m_id == m_id && move->m_frame == m_frame;
+}
+
+void SetPositionCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* move = dynamic_cast<const SetPositionCommand*>(other);
+    if (move)
+    {
+        m_newX = move->m_newX;
+        m_newY = move->m_newY;
+    }
+}
+
 SetPivotCommand::SetPivotCommand(EntityId id, double oldAx, double oldAy, double oldX,
                                  double oldY, double newAx, double newAy, double newX,
                                  double newY, int frame)

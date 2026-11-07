@@ -92,6 +92,30 @@ private:
     QString m_newName;
 };
 
+// Moving an entity on both axes as one undo step.
+class SetPositionCommand : public UndoCommand
+{
+public:
+    SetPositionCommand(EntityId id, int frame, double oldX, double oldY, double newX,
+                       double newY, bool keyframe);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    int m_frame = 0;
+    double m_oldX = 0.0;
+    double m_oldY = 0.0;
+    double m_newX = 0.0;
+    double m_newY = 0.0;
+    bool m_keyframe = true;
+};
+
 // Changing the pivot and the compensating position in one step.
 class SetPivotCommand : public UndoCommand
 {

@@ -150,6 +150,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
+    connect(m_viewport, &Viewport::positionEdited, this, &MainWindow::applyPosition);
     connect(m_viewport, &Viewport::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
@@ -565,6 +566,26 @@ void MainWindow::applyValue(EntityId id, const QString& prop, double value)
     m_project->setValue(id, prop, m_frame, value, keyframe);
     m_history->push(std::make_unique<SetValueCommand>(id, prop, m_frame, oldValue, value,
                                                        keyframe),
+                    *m_project);
+}
+
+void MainWindow::applyPosition(EntityId id, double x, double y)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || e->locked)
+        return;
+
+    const double oldX = m_project->value(id, QStringLiteral("x"), m_frame);
+    const double oldY = m_project->value(id, QStringLiteral("y"), m_frame);
+    if (qFuzzyCompare(oldX + 1.0, x + 1.0) && qFuzzyCompare(oldY + 1.0, y + 1.0))
+        return;
+
+    const bool keyframe = m_project->autoKey || e->tracks.contains(QStringLiteral("x"))
+                          || e->tracks.contains(QStringLiteral("y"));
+    m_project->setValue(id, QStringLiteral("x"), m_frame, x, keyframe);
+    m_project->setValue(id, QStringLiteral("y"), m_frame, y, keyframe);
+    m_history->push(std::make_unique<SetPositionCommand>(id, m_frame, oldX, oldY, x, y,
+                                                         keyframe),
                     *m_project);
 }
 
