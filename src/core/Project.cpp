@@ -166,7 +166,7 @@ double Track::evaluate(double frame, double fallback) const
             if (span <= 0.0)
                 return b.value;
             const double t = (frame - a.frame) / span;
-            const double eased = applyEasing(a.ease, t);
+            const double eased = applyEasing(b.ease, t);
             return a.value + (b.value - a.value) * eased;
         }
     }
@@ -664,6 +664,23 @@ const Keyframe* Project::keyframe(EntityId id, const QString& property, double f
     return nullptr;
 }
 
+double Project::previousKeyframeFrame(EntityId id, double frame) const
+{
+    const Entity* e = entity(id);
+    if (!e)
+        return -1.0;
+    double previous = -1.0;
+    for (auto it = e->tracks.constBegin(); it != e->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (key.frame < frame - 1e-6 && key.frame > previous)
+                previous = key.frame;
+        }
+    }
+    return previous;
+}
+
 const Entity* Project::entity(EntityId id) const
 {
     for (const Entity& e : m_entities)
@@ -711,7 +728,7 @@ QJsonObject Project::toJson() const
 {
     QJsonObject root;
     root[QStringLiteral("format")] = QStringLiteral("pvforge");
-    root[QStringLiteral("version")] = 2;
+    root[QStringLiteral("version")] = 3;
     root[QStringLiteral("name")] = name;
     root[QStringLiteral("author")] = author;
     root[QStringLiteral("description")] = description;

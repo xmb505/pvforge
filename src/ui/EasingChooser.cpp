@@ -4,6 +4,8 @@
 #include "EasingPicker.h"
 
 #include <QMenu>
+#include <QLabel>
+#include <QVBoxLayout>
 #include <QWidgetAction>
 
 namespace pvf {
@@ -15,12 +17,29 @@ QString displayName(const EasingSpec& spec)
 }
 
 bool choose(QWidget* parent, const EasingSpec& current, const QPoint& globalPos,
-            EasingSpec* result)
+            EasingSpec* result, const QString& title)
 {
     QMenu menu(parent);
     auto* picker = new EasingPicker(current, &menu);
     auto* action = new QWidgetAction(&menu);
-    action->setDefaultWidget(picker);
+    if (title.isEmpty())
+    {
+        action->setDefaultWidget(picker);
+    }
+    else
+    {
+        auto* container = new QWidget(&menu);
+        auto* layout = new QVBoxLayout(container);
+        layout->setContentsMargins(8, 8, 8, 4);
+        layout->setSpacing(4);
+        auto* label = new QLabel(title, container);
+        QFont font = label->font();
+        font.setBold(true);
+        label->setFont(font);
+        layout->addWidget(label);
+        layout->addWidget(picker);
+        action->setDefaultWidget(container);
+    }
     menu.addAction(action);
 
     EasingSpec selected;

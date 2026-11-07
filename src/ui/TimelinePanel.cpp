@@ -10,6 +10,7 @@
 #include <QFocusEvent>
 #include <QLineEdit>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -909,11 +910,38 @@ void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
     if (m_selectedKeyframes.isEmpty())
         return;
 
-    const EasingSpec current = keyframeEasingAt(
-        m_selectedKeyframes.first().entity, m_selectedKeyframes.first().frame);
+    double previous = -1.0;
+    KeyframeSelection base;
+    for (const KeyframeSelection& selection : m_selectedKeyframes)
+    {
+        const double candidate =
+            m_project->previousKeyframeFrame(selection.entity, selection.frame);
+        if (candidate >= 0.0)
+        {
+            previous = candidate;
+            base = selection;
+            break;
+        }
+    }
+
+    if (previous < 0.0)
+    {
+        QMenu menu(this);
+        QAction* action =
+            menu.addAction(QStringLiteral("首帧没有进入段，请在第二个关键帧上设置"));
+        action->setEnabled(false);
+        menu.exec(globalPos);
+        return;
+    }
+
+    const EasingSpec current = keyframeEasingAt(base.entity, base.frame);
+    const int fps = std::max(1, m_project->fps);
+    const QString title = QStringLiteral("进入本帧：%1s → %2s")
+                              .arg(previous / double(fps), 0, 'f', 2)
+                              .arg(base.frame / double(fps), 0, 'f', 2);
 
     EasingSpec chosen;
-    if (EasingChooser::choose(this, current, globalPos, &chosen))
+    if (EasingChooser::choose(this, current, globalPos, &chosen, title))
         emit keyframeEasingRequested(chosen);
 }
 

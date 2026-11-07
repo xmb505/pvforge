@@ -162,6 +162,7 @@ public:
     bool setKeyframeEasing(EntityId id, const QString& property, double frame,
                            const EasingSpec& ease);
     const Keyframe* keyframe(EntityId id, const QString& property, double frame) const;
+    double previousKeyframeFrame(EntityId id, double frame) const;
     const QVector<Entity>& entities() const { return m_entities; }
     QVector<Entity>& mutableEntities() { return m_entities; }
     EntityId nextId() const { return m_nextId; }

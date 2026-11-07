@@ -138,10 +138,18 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
         if (!found)
             return;
 
+        const double previous = m_project->previousKeyframeFrame(m_entity, m_frame);
+        if (previous < 0.0)
+            return;
+        const int fps = std::max(1, m_project->fps);
+        const QString title = QStringLiteral("进入本帧：%1s → %2s")
+                                  .arg(previous / double(fps), 0, 'f', 2)
+                                  .arg(m_frame / double(fps), 0, 'f', 2);
+
         EasingSpec chosen;
         const QPoint anchor =
             m_easeButton->mapToGlobal(QPoint(0, m_easeButton->height()));
-        if (EasingChooser::choose(this, current, anchor, &chosen))
+        if (EasingChooser::choose(this, current, anchor, &chosen, title))
             emit keyframeEasingEdited(m_entity, m_frame, chosen);
     });
 
@@ -510,6 +518,25 @@ void PropertiesPanel::refresh()
                               ? QStringLiteral("缓动：")
                                     + easingDisplayName(currentEase.easing)
                               : QStringLiteral("缓动（当前帧无关键帧）"));
+    if (hasKeyframe)
+    {
+        const double previous = m_project->previousKeyframeFrame(m_entity, m_frame);
+        if (previous >= 0.0)
+        {
+            const int fps = std::max(1, m_project->fps);
+            m_easeButton->setEnabled(editable);
+            m_easeButton->setText(
+                QStringLiteral("缓动 %1s → %2s：%3")
+                    .arg(previous / double(fps), 0, 'f', 2)
+                    .arg(m_frame / double(fps), 0, 'f', 2)
+                    .arg(easingDisplayName(currentEase.easing)));
+        }
+        else
+        {
+            m_easeButton->setEnabled(false);
+            m_easeButton->setText(QStringLiteral("缓动（首帧无进入段）"));
+        }
+    }
 
     if (!valid)
     {

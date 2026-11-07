@@ -1183,8 +1183,22 @@ int easingTest(QApplication& app)
         qCritical() << "easing-test: linear track";
         ++failures;
     }
+    if (!near(project->previousKeyframeFrame(id, 10), 0.0)
+        || project->previousKeyframeFrame(id, 0) >= 0.0)
+    {
+        qCritical() << "easing-test: previous keyframe lookup";
+        ++failures;
+    }
 
-    project->setKeyframeEasing(id, QStringLiteral("x"), 0, inQuad);
+    // The first keyframe has no incoming segment, so its ease is ignored.
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, back);
+    if (!near(project->value(id, QStringLiteral("x"), 5), 50.0))
+    {
+        qCritical() << "easing-test: first key easing leaked into the segment";
+        ++failures;
+    }
+
+    project->setKeyframeEasing(id, QStringLiteral("x"), 10, inQuad);
     if (!near(project->value(id, QStringLiteral("x"), 5), 25.0))
     {
         qCritical() << "easing-test: eased track"
@@ -1192,7 +1206,7 @@ int easingTest(QApplication& app)
         ++failures;
     }
 
-    project->setKeyframeEasing(id, QStringLiteral("x"), 0, instant);
+    project->setKeyframeEasing(id, QStringLiteral("x"), 10, instant);
     if (!near(project->value(id, QStringLiteral("x"), 5), 0.0)
         || !near(project->value(id, QStringLiteral("x"), 10), 100.0))
     {
@@ -1200,7 +1214,7 @@ int easingTest(QApplication& app)
         ++failures;
     }
 
-    project->setKeyframeEasing(id, QStringLiteral("x"), 0, back);
+    project->setKeyframeEasing(id, QStringLiteral("x"), 10, back);
     if (project->value(id, QStringLiteral("x"), 8) <= 100.0)
     {
         qCritical() << "easing-test: track clamped overshoot"
@@ -1214,11 +1228,11 @@ int easingTest(QApplication& app)
     custom.inY = 0.0;
     custom.outX = 0.75;
     custom.outY = 1.0;
-    project->setKeyframeEasing(id, QStringLiteral("x"), 0, custom);
+    project->setKeyframeEasing(id, QStringLiteral("x"), 10, custom);
 
     // setKey updates the value without dropping the easing.
     project->setValue(id, QStringLiteral("x"), 10, 200.0, true);
-    const pvf::Keyframe* key = project->keyframe(id, QStringLiteral("x"), 0);
+    const pvf::Keyframe* key = project->keyframe(id, QStringLiteral("x"), 10);
     if (!key || key->ease != custom)
     {
         qCritical() << "easing-test: setKey dropped easing";
@@ -1242,7 +1256,7 @@ int easingTest(QApplication& app)
         }
         else
         {
-            const pvf::Keyframe* loadedKey = loaded.keyframe(id, QStringLiteral("x"), 0);
+            const pvf::Keyframe* loadedKey = loaded.keyframe(id, QStringLiteral("x"), 10);
             if (!loadedKey || loadedKey->ease != custom)
             {
                 qCritical() << "easing-test: easing not serialized";
@@ -1353,23 +1367,23 @@ int easingTest(QApplication& app)
     pvf::KeyframeEasingRecord record;
     record.entity = id;
     record.property = QStringLiteral("x");
-    record.frame = 0.0;
+    record.frame = 10.0;
     record.oldEase = oldEase;
     record.newEase = newEase;
     QVector<pvf::KeyframeEasingRecord> records;
     records.append(record);
-    project->setKeyframeEasing(id, QStringLiteral("x"), 0, newEase);
+    project->setKeyframeEasing(id, QStringLiteral("x"), 10, newEase);
     pvf::History history;
     history.push(std::make_unique<pvf::SetKeyframeEasingCommand>(records), *project);
     history.undo(*project);
-    const pvf::Keyframe* undone = project->keyframe(id, QStringLiteral("x"), 0);
+    const pvf::Keyframe* undone = project->keyframe(id, QStringLiteral("x"), 10);
     if (!undone || undone->ease != oldEase)
     {
         qCritical() << "easing-test: undo";
         ++failures;
     }
     history.redo(*project);
-    const pvf::Keyframe* redone = project->keyframe(id, QStringLiteral("x"), 0);
+    const pvf::Keyframe* redone = project->keyframe(id, QStringLiteral("x"), 10);
     if (!redone || redone->ease != newEase)
     {
         qCritical() << "easing-test: redo";
@@ -1382,11 +1396,13 @@ int easingTest(QApplication& app)
         pvf::MainWindow window(windowProject);
         pvf::Entity* entity = windowProject->addVector(0, 200, 200, Qt::red, Qt::white, 0);
         windowProject->setValue(entity->id, QStringLiteral("x"), 0, 0.0, true);
+        windowProject->setValue(entity->id, QStringLiteral("x"), 10, 100.0, true);
+        window.goToFrame(10);
         window.setSelectedEntityForTest(entity->id);
         auto* button =
             window.findChild<QPushButton*>(QStringLiteral("keyframeEasingButton"));
         if (!button || !button->isEnabled()
-            || !button->text().contains(QStringLiteral("缓动：")))
+            || !button->text().contains(QStringLiteral("→")))
         {
             qCritical() << "easing-test: properties easing button"
                         << (button ? button->text() : QStringLiteral("missing"));
