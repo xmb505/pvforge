@@ -375,12 +375,15 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     if (distance <= kGizmoCenterDeadzone)
         return false;
 
-    if (std::abs(delta.y()) <= kGizmoHitWidth && std::abs(delta.x()) <= kGizmoAxisLength)
+    // X points right, Y points up: a right angle like Mine-imator.
+    if (delta.x() > kGizmoCenterDeadzone && delta.x() <= kGizmoAxisLength
+        && std::abs(delta.y()) <= kGizmoHitWidth)
     {
         *mode = GizmoMode::AxisX;
         return true;
     }
-    if (std::abs(delta.x()) <= kGizmoHitWidth && std::abs(delta.y()) <= kGizmoAxisLength)
+    if (delta.y() < -kGizmoCenterDeadzone && delta.y() >= -kGizmoAxisLength
+        && std::abs(delta.x()) <= kGizmoHitWidth)
     {
         *mode = GizmoMode::AxisY;
         return true;
@@ -408,20 +411,20 @@ void Viewport::drawGizmo(QPainter& p, const Entity& e)
         p.drawPolygon(triangle);
     };
 
-    // X axis.
-    const bool hotX = m_gizmoMode == GizmoMode::AxisX;
+    // X axis: right only.
+    const bool hotX = m_gizmoMode == GizmoMode::AxisX
+                      || m_gizmoMode == GizmoMode::PivotX;
     const QColor xColor = hotX ? QColor(255, 150, 150) : QColor(226, 86, 86);
     p.setPen(QPen(xColor, hotX ? 4.0 : 3.0));
-    p.drawLine(center - QPointF(len, 0), center + QPointF(len, 0));
+    p.drawLine(center, center + QPointF(len, 0));
     arrow(center + QPointF(len, 0), center, xColor);
-    arrow(center - QPointF(len, 0), center, xColor);
 
-    // Y axis.
-    const bool hotY = m_gizmoMode == GizmoMode::AxisY;
+    // Y axis: up only.
+    const bool hotY = m_gizmoMode == GizmoMode::AxisY
+                      || m_gizmoMode == GizmoMode::PivotY;
     const QColor yColor = hotY ? QColor(150, 235, 150) : QColor(96, 200, 96);
     p.setPen(QPen(yColor, hotY ? 4.0 : 3.0));
-    p.drawLine(center - QPointF(0, len), center + QPointF(0, len));
-    arrow(center + QPointF(0, len), center, yColor);
+    p.drawLine(center, center - QPointF(0, len));
     arrow(center - QPointF(0, len), center, yColor);
 
     // Pivot dot: drag to move the custom pivot.

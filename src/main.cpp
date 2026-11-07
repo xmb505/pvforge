@@ -923,10 +923,10 @@ int gizmoTest(QApplication& app)
         project->setValue(id, QStringLiteral("x"), 0, 0, false);
         project->setValue(id, QStringLiteral("y"), 0, 0, false);
 
-        // Drag the Y axis: vertical only.
-        drag(center + QPoint(0, 40), center + QPoint(0, 140));
+        // Drag the Y axis (points up): vertical only.
+        drag(center + QPoint(0, -40), center + QPoint(0, -140));
         const double yAfterAxis = project->value(id, QStringLiteral("y"), 0);
-        if (yAfterAxis <= 0.0
+        if (yAfterAxis >= 0.0
             || std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
         {
             qCritical() << "gizmo-test: y axis drag" << yAfterAxis;
