@@ -105,6 +105,10 @@ private:
     void startStreaming();
     void startRtpStream();
     void startHttpStream();
+    QStringList codecArguments() const;
+    int streamLongEdge() const;
+    int streamBitrate() const;
+    bool vaapiAvailable() const;
     bool launchStreamProcess(const QStringList& outputArgs, bool http);
     void stopStreaming();
     void stopHttpServer();
@@ -150,6 +154,15 @@ private:
     QAction* m_httpModeAction = nullptr;
     QAction* m_rtpModeAction = nullptr;
     QMenu* m_httpIpMenu = nullptr;
+    QMenu* m_qualityMenu = nullptr;
+    QMenu* m_codecMenu = nullptr;
+    QAction* m_qualitySmoothAction = nullptr;
+    QAction* m_qualityStandardAction = nullptr;
+    QAction* m_qualityHighAction = nullptr;
+    QAction* m_h264SoftwareAction = nullptr;
+    QAction* m_h265SoftwareAction = nullptr;
+    QAction* m_h264VaapiAction = nullptr;
+    QAction* m_h265VaapiAction = nullptr;
     QProcess* m_streamProcess = nullptr;
     QTimer* m_streamTimer = nullptr;
     QTcpServer* m_httpServer = nullptr;
@@ -162,7 +175,11 @@ private:
     QRect m_streamSavedGeometry;
     int m_streamFps = 24;
     enum class StreamMode { Http, Rtp };
+    enum class StreamQuality { Smooth, Standard, High };
+    enum class StreamCodec { H264Software, H265Software, H264Vaapi, H265Vaapi };
     StreamMode m_streamMode = StreamMode::Http;
+    StreamQuality m_streamQuality = StreamQuality::Standard;
+    StreamCodec m_streamCodec = StreamCodec::H264Software;
 
     int m_frame = 0;
     bool m_playing = false;

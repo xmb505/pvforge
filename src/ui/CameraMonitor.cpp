@@ -44,21 +44,22 @@ namespace pvf {
 namespace {
 constexpr const char* kRtpHost = "239.255.42.99";
 constexpr int kRtpPort = 5004;
-constexpr int kStreamLongEdge = 640;
+constexpr int kDefaultStreamLongEdge = 960;
+constexpr int kDefaultStreamBitrate = 5000000;
 
 QString rtpUrl()
 {
     return QStringLiteral("rtp://@%1:%2").arg(QLatin1String(kRtpHost)).arg(kRtpPort);
 }
 
-QSize streamSize(const Project& project)
+QSize streamSize(const Project& project, int longEdge)
 {
-    int width = kStreamLongEdge;
+    int width = longEdge;
     int height = int(std::lround(width * project.height
                                  / double(std::max(1, project.width))));
     if (project.height > project.width)
     {
-        height = kStreamLongEdge;
+        height = longEdge;
         width = int(std::lround(height * project.width
                                 / double(std::max(1, project.height))));
     }
@@ -699,6 +700,54 @@ void CameraMonitor::buildStreamMenu()
     });
 
     m_streamMenu->addSeparator();
+    m_qualityMenu = m_streamMenu->addMenu(QStringLiteral("画质"));
+    auto addQuality = [this](const QString& text, StreamQuality quality,
+                             QAction** out) {
+        QAction* action = m_qualityMenu->addAction(text);
+        action->setCheckable(true);
+        *out = action;
+        connect(action, &QAction::triggered, this, [this, quality] {
+            if (m_streaming)
+                return;
+            m_streamQuality = quality;
+            updateStreamMenu();
+        });
+    };
+    addQuality(QStringLiteral("流畅 640 · 2.5 Mbps"), StreamQuality::Smooth,
+               &m_qualitySmoothAction);
+    addQuality(QStringLiteral("标准 960 · 5 Mbps"), StreamQuality::Standard,
+               &m_qualityStandardAction);
+    addQuality(QStringLiteral("高清 1280 · 8 Mbps"), StreamQuality::High,
+               &m_qualityHighAction);
+
+    m_codecMenu = m_streamMenu->addMenu(QStringLiteral("编码"));
+    auto addCodec = [this](const QString& text, StreamCodec codec,
+                           QAction** out) {
+        QAction* action = m_codecMenu->addAction(text);
+        action->setCheckable(true);
+        *out = action;
+        connect(action, &QAction::triggered, this, [this, codec] {
+            if (m_streaming)
+                return;
+            m_streamCodec = codec;
+            updateStreamMenu();
+        });
+    };
+    addCodec(QStringLiteral("H.264 软件（兼容）"), StreamCodec::H264Software,
+             &m_h264SoftwareAction);
+    addCodec(QStringLiteral("H.265 软件（更清晰）"), StreamCodec::H265Software,
+             &m_h265SoftwareAction);
+    m_h265SoftwareAction->setToolTip(QStringLiteral("手机 VLC 需要支持 HEVC"));
+    if (vaapiAvailable())
+    {
+        addCodec(QStringLiteral("H.264 硬件（VAAPI）"), StreamCodec::H264Vaapi,
+                 &m_h264VaapiAction);
+        addCodec(QStringLiteral("H.265 硬件（VAAPI）"), StreamCodec::H265Vaapi,
+                 &m_h265VaapiAction);
+        m_h265VaapiAction->setToolTip(QStringLiteral("手机 VLC 需要支持 HEVC"));
+    }
+
+    m_streamMenu->addSeparator();
     m_streamAddressAction = m_streamMenu->addAction(QString());
     m_streamAddressAction->setEnabled(false);
     m_copyStreamAction = m_streamMenu->addAction(QStringLiteral("复制串流地址"));
@@ -792,6 +841,25 @@ void CameraMonitor::updateStreamMenu()
     m_rtpModeAction->setEnabled(!m_streaming);
     if (m_httpIpMenu)
         m_httpIpMenu->menuAction()->setVisible(m_streamMode == StreamMode::Http);
+
+    const bool idle = !m_streaming;
+    auto setChoice = [idle](QAction* action, bool checked) {
+        if (!action)
+            return;
+        action->setChecked(checked);
+        action->setEnabled(idle);
+    };
+    setChoice(m_qualitySmoothAction, m_streamQuality == StreamQuality::Smooth);
+    setChoice(m_qualityStandardAction, m_streamQuality == StreamQuality::Standard);
+    setChoice(m_qualityHighAction, m_streamQuality == StreamQuality::High);
+    setChoice(m_h264SoftwareAction, m_streamCodec == StreamCodec::H264Software);
+    setChoice(m_h265SoftwareAction, m_streamCodec == StreamCodec::H265Software);
+    setChoice(m_h264VaapiAction, m_streamCodec == StreamCodec::H264Vaapi);
+    setChoice(m_h265VaapiAction, m_streamCodec == StreamCodec::H265Vaapi);
+    if (m_qualityMenu)
+        m_qualityMenu->menuAction()->setEnabled(idle);
+    if (m_codecMenu)
+        m_codecMenu->menuAction()->setEnabled(idle);
     const QString url = currentStreamUrl();
     m_streamAddressAction->setText(url);
     m_copyStreamAction->setEnabled(!url.isEmpty());
@@ -799,6 +867,91 @@ void CameraMonitor::updateStreamMenu()
         m_streamButton->setToolTip(
             m_streaming ? QStringLiteral("串流中：%1").arg(url)
                         : QStringLiteral("手机 VLC 串流"));
+}
+
+int CameraMonitor::streamLongEdge() const
+{
+    switch (m_streamQuality)
+    {
+    case StreamQuality::Smooth:
+        return 640;
+    case StreamQuality::High:
+        return 1280;
+    case StreamQuality::Standard:
+    default:
+        return kDefaultStreamLongEdge;
+    }
+}
+
+int CameraMonitor::streamBitrate() const
+{
+    switch (m_streamQuality)
+    {
+    case StreamQuality::Smooth:
+        return 2500000;
+    case StreamQuality::High:
+        return 8000000;
+    case StreamQuality::Standard:
+    default:
+        return kDefaultStreamBitrate;
+    }
+}
+
+bool CameraMonitor::vaapiAvailable() const
+{
+    return QFileInfo(QStringLiteral("/dev/dri/renderD128")).isReadable();
+}
+
+QStringList CameraMonitor::codecArguments() const
+{
+    const QString bitrate = QString::number(streamBitrate());
+    const QString maxrate = QString::number(streamBitrate() * 6 / 5);
+    const QString bufsize = QString::number(streamBitrate() * 2);
+
+    switch (m_streamCodec)
+    {
+    case StreamCodec::H265Software:
+        return {QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                QStringLiteral("-c:v"), QStringLiteral("libx265"),
+                QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+                QStringLiteral("-tune"), QStringLiteral("zerolatency"),
+                QStringLiteral("-b:v"), bitrate,
+                QStringLiteral("-maxrate"), maxrate,
+                QStringLiteral("-bufsize"), bufsize,
+                QStringLiteral("-g"), QStringLiteral("15"),
+                QStringLiteral("-x265-params"),
+                QStringLiteral("keyint=15:min-keyint=15:scenecut=0:bframes=0")};
+    case StreamCodec::H264Vaapi:
+        return {QStringLiteral("-vaapi_device"),
+                QStringLiteral("/dev/dri/renderD128"),
+                QStringLiteral("-vf"), QStringLiteral("format=nv12,hwupload"),
+                QStringLiteral("-c:v"), QStringLiteral("h264_vaapi"),
+                QStringLiteral("-b:v"), bitrate,
+                QStringLiteral("-maxrate"), maxrate,
+                QStringLiteral("-bufsize"), bufsize,
+                QStringLiteral("-bf"), QStringLiteral("0"),
+                QStringLiteral("-g"), QStringLiteral("15")};
+    case StreamCodec::H265Vaapi:
+        return {QStringLiteral("-vaapi_device"),
+                QStringLiteral("/dev/dri/renderD128"),
+                QStringLiteral("-vf"), QStringLiteral("format=nv12,hwupload"),
+                QStringLiteral("-c:v"), QStringLiteral("hevc_vaapi"),
+                QStringLiteral("-b:v"), bitrate,
+                QStringLiteral("-maxrate"), maxrate,
+                QStringLiteral("-bufsize"), bufsize,
+                QStringLiteral("-bf"), QStringLiteral("0"),
+                QStringLiteral("-g"), QStringLiteral("15")};
+    case StreamCodec::H264Software:
+    default:
+        return {QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                QStringLiteral("-preset"), QStringLiteral("veryfast"),
+                QStringLiteral("-tune"), QStringLiteral("zerolatency"),
+                QStringLiteral("-b:v"), bitrate,
+                QStringLiteral("-maxrate"), maxrate,
+                QStringLiteral("-bufsize"), bufsize,
+                QStringLiteral("-g"), QStringLiteral("15")};
+    }
 }
 
 void CameraMonitor::startStreaming()
@@ -860,7 +1013,7 @@ bool CameraMonitor::launchStreamProcess(const QStringList& outputArgs, bool http
     }
 
     m_streamFps = std::clamp(m_project->fps, 10, 30);
-    const QSize size = streamSize(*m_project);
+    const QSize size = streamSize(*m_project, streamLongEdge());
     QStringList arguments{
         QStringLiteral("-hide_banner"),
         QStringLiteral("-loglevel"),
@@ -874,19 +1027,8 @@ bool CameraMonitor::launchStreamProcess(const QStringList& outputArgs, bool http
         QStringLiteral("-framerate"),
         QString::number(m_streamFps),
         QStringLiteral("-i"),
-        QStringLiteral("-"),
-        QStringLiteral("-pix_fmt"),
-        QStringLiteral("yuv420p"),
-        QStringLiteral("-c:v"),
-        QStringLiteral("libx264"),
-        QStringLiteral("-preset"),
-        QStringLiteral("ultrafast"),
-        QStringLiteral("-tune"),
-        QStringLiteral("zerolatency"),
-        QStringLiteral("-g"),
-        QStringLiteral("15"),
-        QStringLiteral("-b:v"),
-        QStringLiteral("2500k")};
+        QStringLiteral("-")};
+    arguments += codecArguments();
     arguments += outputArgs;
 
     auto* process = new QProcess(this);
@@ -1019,11 +1161,28 @@ void CameraMonitor::onStreamTick()
     if (image.isNull())
         return;
     const int rowBytes = image.width() * 4;
-    for (int y = 0; y < image.height(); ++y)
+    const qint64 frameBytes = qint64(rowBytes) * image.height();
+    if (image.bytesPerLine() == rowBytes)
     {
-        const char* row =
-            reinterpret_cast<const char*>(image.constScanLine(y));
-        if (m_streamProcess->write(row, rowBytes) < 0)
+        const qint64 written = m_streamProcess->write(
+            reinterpret_cast<const char*>(image.constBits()), frameBytes);
+        if (written != frameBytes)
+        {
+            // Never leave a partially written raw frame in the pipe; ffmpeg
+            // would decode the remainder as corrupted macroblocks.
+            stopStreaming();
+            return;
+        }
+    }
+    else
+    {
+        QByteArray frame;
+        frame.reserve(int(frameBytes));
+        for (int y = 0; y < image.height(); ++y)
+            frame.append(reinterpret_cast<const char*>(image.constScanLine(y)),
+                         rowBytes);
+        const qint64 written = m_streamProcess->write(frame);
+        if (written != frame.size())
         {
             stopStreaming();
             return;
@@ -1055,7 +1214,7 @@ void CameraMonitor::restoreFromStreaming()
 
 QImage CameraMonitor::renderStreamImage() const
 {
-    const QSize size = streamSize(*m_project);
+    const QSize size = streamSize(*m_project, streamLongEdge());
     const int view = m_project->monitorView;
     if (view == kWorkCameraView && m_viewport)
     {
