@@ -1,6 +1,8 @@
 #include "AssetLibraryPanel.h"
 
+#include "app/MainWindow.h"
 #include "core/Lang.h"
+#include "media/MediaImporter.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -160,28 +162,38 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
         if (files.isEmpty())
             return;
 
-        int imported = 0;
-        QStringList failed;
-        for (const QString& file : files)
-        {
-            QString error;
-            if (!m_project->importMediaFile(file, &error).isEmpty())
-            {
-                ++imported;
-            }
-            else
-            {
-                failed << QStringLiteral("%1（%2）").arg(QFileInfo(file).fileName(), error);
-            }
-        }
+        auto* mainWindow = qobject_cast<MainWindow*>(window());
+        if (!mainWindow)
+            return;
 
-        if (!failed.isEmpty())
-        {
-            QMessageBox::warning(this, QStringLiteral("部分文件未导入"),
-                                 QStringLiteral("已导入 %1 个素材。\n\n以下文件被跳过：\n%2")
-                                     .arg(imported)
-                                     .arg(failed.join(QStringLiteral("\n"))));
-        }
+        mainWindow->importMediaFiles(
+            files, [this](const QVector<MediaImportResult>& results) {
+                int imported = 0;
+                QStringList failed;
+                for (const MediaImportResult& result : results)
+                {
+                    if (!result.error.isEmpty() || result.importedPath.isEmpty())
+                    {
+                        failed << QStringLiteral("%1（%2）")
+                                      .arg(QFileInfo(result.sourcePath).fileName(),
+                                           result.error);
+                        continue;
+                    }
+                    if (m_project->addMediaTemplate(result.importedPath, result.type,
+                                                    result.thumbnail, result.duration,
+                                                    result.displayName))
+                        ++imported;
+                }
+
+                if (!failed.isEmpty())
+                {
+                    QMessageBox::warning(
+                        this, QStringLiteral("部分文件未导入"),
+                        QStringLiteral("已导入 %1 个素材。\n\n以下文件被跳过：\n%2")
+                            .arg(imported)
+                            .arg(failed.join(QStringLiteral("\n"))));
+                }
+            });
     });
 
     m_list = new QListWidget(this);

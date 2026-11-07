@@ -1,5 +1,6 @@
 #include "Project.h"
 
+#include "media/MediaImporter.h"
 #include "media/VideoDecoder.h"
 
 #include <QCryptographicHash>
@@ -108,42 +109,7 @@ QString Project::storeAssetPath(const QString& absolute) const
 
 QString Project::copyIntoProject(const QString& sourcePath) const
 {
-    if (sourcePath.isEmpty())
-        return sourcePath;
-
-    const QString directory = assetDirectory();
-    if (directory.isEmpty())
-        return sourcePath;
-
-    const QFileInfo info(sourcePath);
-    const QString absoluteSource = info.absoluteFilePath();
-    const QString absoluteDirectory = QFileInfo(directory).absoluteFilePath();
-
-    // Already inside the project folder: reuse as-is.
-    if (absoluteSource.startsWith(absoluteDirectory + QLatin1Char('/')))
-        return sourcePath;
-
-    QDir().mkpath(directory);
-
-    // Content-addressed storage: identical bytes always map to one file.
-    QCryptographicHash hasher(QCryptographicHash::Sha256);
-    QFile file(sourcePath);
-    if (!file.open(QIODevice::ReadOnly))
-        return sourcePath;
-    constexpr qint64 chunkSize = 1 << 20;
-    while (!file.atEnd())
-        hasher.addData(file.read(chunkSize));
-    const QString hash = QString::fromLatin1(hasher.result().toHex());
-
-    const QString suffix = info.suffix();
-    const QString target = QDir(directory).filePath(
-        suffix.isEmpty() ? hash : hash + QLatin1Char('.') + suffix);
-
-    if (QFile::exists(target))
-        return target;
-    if (!QFile::copy(sourcePath, target))
-        return sourcePath;
-    return target;
+    return copyIntoAssetDirectory(sourcePath, assetDirectory());
 }
 
 QString Project::importAsset(const QString& sourcePath) const
@@ -437,49 +403,17 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
 
 QString Project::importMediaFile(const QString& path, QString* error)
 {
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QStringList imageExtensions = {QStringLiteral("png"), QStringLiteral("jpg"),
-                                                QStringLiteral("jpeg"), QStringLiteral("webp"),
-                                                QStringLiteral("bmp")};
-    static const QStringList videoExtensions = {QStringLiteral("mp4"), QStringLiteral("webm"),
-                                                QStringLiteral("mov"), QStringLiteral("mkv"),
-                                                QStringLiteral("avi"), QStringLiteral("m4v")};
-
-    if (imageExtensions.contains(suffix))
+    const MediaImportResult result = processMediaFile(path, assetDirectory());
+    if (!result.error.isEmpty() || result.importedPath.isEmpty())
     {
-        const QImage image(path);
-        if (image.isNull())
-        {
-            if (error)
-                *error = QStringLiteral("无法读取图片");
-            return QString();
-        }
-        const QString imported = importAsset(path);
-        addMediaTemplate(imported, EntityType::Image, image, 0.0,
-                         QFileInfo(path).completeBaseName());
-        return imported;
+        if (error)
+            *error = result.error;
+        return QString();
     }
 
-    if (videoExtensions.contains(suffix))
-    {
-        QString parseError;
-        double duration = 0.0;
-        const QImage frame = decodeVideoFirstFrame(path, &parseError, &duration);
-        if (frame.isNull())
-        {
-            if (error)
-                *error = parseError;
-            return QString();
-        }
-        const QString imported = importAsset(path);
-        addMediaTemplate(imported, EntityType::Video, frame, duration,
-                         QFileInfo(path).completeBaseName());
-        return imported;
-    }
-
-    if (error)
-        *error = QStringLiteral("不支持的文件类型");
-    return QString();
+    addMediaTemplate(result.importedPath, result.type, result.thumbnail, result.duration,
+                     result.displayName);
+    return result.importedPath;
 }
 
 Entity* Project::createFromTemplate(const Template& tmpl){

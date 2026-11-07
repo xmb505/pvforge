@@ -2,6 +2,7 @@
 
 #include "core/Commands.h"
 #include "core/Lang.h"
+#include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "SettingsDialog.h"
 #include "ui/AssetLibraryPanel.h"
@@ -18,9 +19,11 @@
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenuBar>
+#include <QProgressBar>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QSplitter>
@@ -29,6 +32,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
+#include <QtConcurrent>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -132,6 +136,14 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     m_status = new QLabel(this);
     statusBar()->addPermanentWidget(m_status);
+
+    m_importProgress = new QProgressBar(this);
+    m_importProgress->setObjectName(QStringLiteral("importProgress"));
+    m_importProgress->setRange(0, 0);
+    m_importProgress->setFixedWidth(120);
+    m_importProgress->setTextVisible(false);
+    m_importProgress->hide();
+    statusBar()->addPermanentWidget(m_importProgress);
 
     m_playTimer = new QTimer(this);
     connect(m_playTimer, &QTimer::timeout, this, &MainWindow::onPlayTick);
@@ -579,6 +591,39 @@ void MainWindow::applyPivot(EntityId id, double ax, double ay)
     m_history->push(std::make_unique<SetPivotCommand>(id, oldAx, oldAy, oldX, oldY, ax, ay,
                                                       oldX + dx, oldY + dy, m_frame),
                     *m_project);
+}
+
+void MainWindow::showImportBusy(int count)
+{
+    statusBar()->showMessage(QStringLiteral("正在导入 %1 个素材…").arg(count));
+    m_importProgress->show();
+}
+
+void MainWindow::hideImportBusy()
+{
+    m_importProgress->hide();
+    statusBar()->showMessage(QStringLiteral("导入完成"), 2500);
+}
+
+void MainWindow::importMediaFiles(
+    const QStringList& files, std::function<void(const QVector<MediaImportResult>&)> done)
+{
+    if (files.isEmpty())
+        return;
+
+    const QString directory = m_project->assetDirectory();
+    auto* watcher = new QFutureWatcher<QVector<MediaImportResult>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, done] {
+        const QVector<MediaImportResult> results = watcher->result();
+        watcher->deleteLater();
+        hideImportBusy();
+        if (done)
+            done(results);
+    });
+
+    showImportBusy(int(files.size()));
+    watcher->setFuture(QtConcurrent::run(
+        [files, directory] { return processMediaFiles(files, directory); }));
 }
 
 void MainWindow::onUndo()

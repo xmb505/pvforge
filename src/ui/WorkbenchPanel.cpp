@@ -1,7 +1,9 @@
 #include "WorkbenchPanel.h"
 
 #include "app/AppIcon.h"
+#include "app/MainWindow.h"
 #include "core/Lang.h"
+#include "media/MediaImporter.h"
 #include "media/VideoDecoder.h"
 
 #include <QApplication>
@@ -447,32 +449,44 @@ void WorkbenchPanel::pickMedia()
     if (path.isEmpty())
         return;
 
-    QString error;
-    const QString imported = m_project->importMediaFile(path, &error);
-    if (imported.isEmpty())
-    {
-        QMessageBox::warning(this, QStringLiteral("无法导入"), error);
+    auto* mainWindow = qobject_cast<MainWindow*>(window());
+    if (!mainWindow)
         return;
-    }
 
-    refreshMediaLibrary();
-
-    for (int i = 0; i < m_project->templateCount(); ++i)
-    {
-        const Template* tmpl = m_project->templateAt(i);
-        if (!tmpl || tmpl->path != imported)
-            continue;
-        for (int row = 0; row < m_mediaLibrary->count(); ++row)
-        {
-            if (m_mediaLibrary->item(row)->data(Qt::UserRole).toInt() == i)
+    mainWindow->importMediaFiles(
+        {path}, [this](const QVector<MediaImportResult>& results) {
+            if (results.isEmpty())
+                return;
+            const MediaImportResult& result = results.first();
+            if (!result.error.isEmpty() || result.importedPath.isEmpty())
             {
-                m_mediaLibrary->setCurrentRow(row);
+                QMessageBox::warning(this, QStringLiteral("无法导入"), result.error);
+                return;
+            }
+
+            if (!m_project->addMediaTemplate(result.importedPath, result.type,
+                                             result.thumbnail, result.duration,
+                                             result.displayName))
+                return;
+
+            refreshMediaLibrary();
+            for (int i = 0; i < m_project->templateCount(); ++i)
+            {
+                const Template* tmpl = m_project->templateAt(i);
+                if (!tmpl || tmpl->path != result.importedPath)
+                    continue;
+                for (int row = 0; row < m_mediaLibrary->count(); ++row)
+                {
+                    if (m_mediaLibrary->item(row)->data(Qt::UserRole).toInt() == i)
+                    {
+                        m_mediaLibrary->setCurrentRow(row);
+                        break;
+                    }
+                }
+                selectMedia(i);
                 break;
             }
-        }
-        selectMedia(i);
-        break;
-    }
+        });
 }
 
 void WorkbenchPanel::createCurrent()

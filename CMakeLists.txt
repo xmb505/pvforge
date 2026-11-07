@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
     libavformat libavcodec libavutil libswscale)
@@ -22,6 +22,7 @@ add_executable(pvforge
     src/core/VectorShape.cpp
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
+    src/media/MediaImporter.cpp
     src/app/AppIcon.cpp
     src/app/SettingsDialog.cpp
     src/app/MainWindow.cpp
@@ -47,7 +48,7 @@ qt_add_resources(pvforge "lang"
 
 target_include_directories(pvforge PRIVATE src)
 target_link_libraries(pvforge PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent
     PkgConfig::FFMPEG
 )
 

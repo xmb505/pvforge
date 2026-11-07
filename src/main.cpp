@@ -2,6 +2,7 @@
 #include "core/Commands.h"
 #include "core/History.h"
 #include "core/Lang.h"
+#include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
@@ -29,6 +30,8 @@
 #include <QMouseEvent>
 #include <QListWidget>
 #include <QPainter>
+#include <QEventLoop>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QTabWidget>
@@ -715,6 +718,96 @@ int scaleHandleTest(QApplication& app)
         }
 
         qInfo() << "scale-handle-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int importAsyncTest(QApplication& app)
+{
+    const QString dir = QDir::tempPath() + QStringLiteral("/pvforge_async");
+    QDir().mkpath(dir);
+    const QString imageA = QDir(dir).filePath(QStringLiteral("alpha.png"));
+    const QString imageB = QDir(dir).filePath(QStringLiteral("beta.png"));
+    QImage bitmapA(64, 64, QImage::Format_ARGB32);
+    bitmapA.fill(Qt::red);
+    QImage bitmapB(64, 64, QImage::Format_ARGB32);
+    bitmapB.fill(Qt::green);
+    if (!bitmapA.save(imageA) || !bitmapB.save(imageB))
+        return 1;
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+    if (!project->save(QDir(dir).filePath(QStringLiteral("test.pvproj"))))
+        return 1;
+
+    QTimer::singleShot(400, &window, [&app, &window, project, imageA, imageB, dir] {
+        int failures = 0;
+        bool finished = false;
+        QEventLoop loop;
+
+        window.importMediaFiles(
+            {imageA, imageB}, [&](const QVector<pvf::MediaImportResult>& results) {
+                if (results.size() != 2)
+                {
+                    qCritical() << "import-async-test: result count" << results.size();
+                    ++failures;
+                }
+                for (const pvf::MediaImportResult& result : results)
+                {
+                    if (!result.error.isEmpty() || result.importedPath.isEmpty())
+                    {
+                        qCritical() << "import-async-test: import error" << result.error;
+                        ++failures;
+                        continue;
+                    }
+                    project->addMediaTemplate(result.importedPath, result.type,
+                                              result.thumbnail, result.duration,
+                                              result.displayName);
+                }
+                finished = true;
+                loop.quit();
+            });
+
+        QTimer::singleShot(8000, &loop, &QEventLoop::quit);
+        loop.exec();
+
+        if (!finished)
+        {
+            qCritical() << "import-async-test: timeout";
+            ++failures;
+        }
+        if (project->templateCount() != 2)
+        {
+            qCritical() << "import-async-test: templates" << project->templateCount();
+            ++failures;
+        }
+        if (auto* bar = window.findChild<QProgressBar*>(QStringLiteral("importProgress")))
+        {
+            if (bar->isVisible())
+            {
+                qCritical() << "import-async-test: progress bar still visible";
+                ++failures;
+            }
+        }
+        bool namesOk = false;
+        for (int i = 0; i < project->templateCount(); ++i)
+        {
+            const pvf::Template* tmpl = project->templateAt(i);
+            if (tmpl && (tmpl->name == QStringLiteral("alpha")
+                         || tmpl->name == QStringLiteral("beta")))
+                namesOk = true;
+        }
+        if (!namesOk)
+        {
+            qCritical() << "import-async-test: display names lost";
+            ++failures;
+        }
+
+        QDir(dir).removeRecursively();
+        qInfo() << "import-async-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -2039,6 +2132,8 @@ int main(int argc, char* argv[])
         return pivotGizmoTest(app);
     if (app.arguments().contains(QStringLiteral("--shape-test")))
         return shapeTest(app);
+    if (app.arguments().contains(QStringLiteral("--import-async-test")))
+        return importAsyncTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

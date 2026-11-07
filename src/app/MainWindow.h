@@ -6,9 +6,12 @@
 #include <QElapsedTimer>
 #include <QMainWindow>
 
+#include <functional>
+
 class QAction;
 class QCloseEvent;
 class QKeyEvent;
+class QProgressBar;
 class QLabel;
 class QScrollArea;
 class QTabWidget;
@@ -24,6 +27,8 @@ class TimelinePanel;
 class Viewport;
 class WorkbenchPanel;
 
+struct MediaImportResult;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -37,6 +42,8 @@ public:
     int currentFrame() const { return m_frame; }
     void togglePlayback();
     void setSelectedEntityForTest(EntityId id) { setSelectedEntity(id); }
+    void importMediaFiles(const QStringList& files,
+                          std::function<void(const QVector<MediaImportResult>&)> done);
     void applyPivotForTest(EntityId id, double ax, double ay) { applyPivot(id, ax, ay); }
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -62,6 +69,8 @@ private:
     void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void onDeleteKeyframesRequested();
     void updateWindowTitle();
+    void showImportBusy(int count);
+    void hideImportBusy();
     bool saveProject();
     bool saveProjectAs();
     void onEntityRenamed(EntityId id, const QString& name);
@@ -83,6 +92,7 @@ private:
     QTimer* m_playTimer = nullptr;
     QElapsedTimer m_playClock;
     QLabel* m_status = nullptr;
+    QProgressBar* m_importProgress = nullptr;
 
     QAction* m_playAction = nullptr;
     QAction* m_autoKeyAction = nullptr;
