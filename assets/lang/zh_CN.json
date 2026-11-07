@@ -18,6 +18,7 @@
   "action.end": "跳到结尾",
   "action.fitWindow": "适配窗口",
   "action.cameraFrame": "显示摄像机取景框",
+  "action.audioScrub": "音频擦洗",
   "action.monitor": "摄像机监视器",
   "action.timelineSeconds": "时间轴显示秒",
   "action.timelineFrames": "时间轴显示帧",

@@ -200,5 +200,15 @@ void setShowCameraFrame(bool on)
     store().setValue(QStringLiteral("editor/showCameraFrame"), on);
 }
 
+bool audioScrub()
+{
+    return store().value(QStringLiteral("editor/audioScrub"), true).toBool();
+}
+
+void setAudioScrub(bool on)
+{
+    store().setValue(QStringLiteral("editor/audioScrub"), on);
+}
+
 } // namespace Settings
 } // namespace pvf

@@ -101,7 +101,6 @@ bool AudioEngine::play(int startFrame)
     stop();
     if (!m_project)
         return false;
-
     const double fps = std::max(1, m_project->fps);
     m_startSeconds = std::max(0, startFrame) / fps;
     m_endSeconds = m_project->timelineLength() / fps;
@@ -150,11 +149,57 @@ bool AudioEngine::play(int startFrame)
     return true;
 }
 
+void AudioEngine::scrub(double seconds)
+{
+    if (m_running || !m_project)
+        return;
+
+    constexpr double previewSeconds = 0.15;
+    const double start = std::max(0.0, seconds - 0.02);
+    QByteArray pcm = mixRange(*m_project, start, start + previewSeconds);
+    if (pcm.isEmpty())
+        return;
+
+    // Short fades avoid clicks when the preview is cut off by the next step.
+    auto* samples = reinterpret_cast<qint16*>(pcm.data());
+    const int frames = pcm.size() / (kChannels * 2);
+    const int fadeFrames = std::min(frames / 2, 240);   // 5 ms
+    for (int i = 0; i < fadeFrames; ++i)
+    {
+        const double gain = i / double(std::max(1, fadeFrames));
+        samples[i * kChannels] = qint16(samples[i * kChannels] * gain);
+        samples[i * kChannels + 1] = qint16(samples[i * kChannels + 1] * gain);
+        const int tail = frames - 1 - i;
+        samples[tail * kChannels] = qint16(samples[tail * kChannels] * gain);
+        samples[tail * kChannels + 1] = qint16(samples[tail * kChannels + 1] * gain);
+    }
+
+    QAudioFormat format;
+    format.setSampleRate(kSampleRate);
+    format.setChannelCount(kChannels);
+    format.setSampleFormat(QAudioFormat::Int16);
+    const QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (device.isNull() || !device.isFormatSupported(format))
+        return;
+
+    if (!m_scrubSink)
+        m_scrubSink = new QAudioSink(device, format, this);
+    m_scrubSink->stop();
+    m_scrubPcm = pcm;
+    m_scrubBuffer.close();
+    m_scrubBuffer.setData(m_scrubPcm);
+    m_scrubBuffer.open(QIODevice::ReadOnly);
+    m_scrubSink->start(&m_scrubBuffer);
+}
+
 void AudioEngine::stop()
 {
     if (m_sink)
         m_sink->stop();
+    if (m_scrubSink)
+        m_scrubSink->stop();
     m_buffer.close();
+    m_scrubBuffer.close();
     m_running = false;
 }
 

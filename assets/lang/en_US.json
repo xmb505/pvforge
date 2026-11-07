@@ -18,6 +18,7 @@
   "action.end": "Go to End",
   "action.fitWindow": "Fit Window",
   "action.cameraFrame": "Show Camera Frame",
+  "action.audioScrub": "Audio Scrubbing",
   "action.monitor": "Camera Monitor",
   "action.timelineSeconds": "Timeline: Seconds",
   "action.timelineFrames": "Timeline: Frames",

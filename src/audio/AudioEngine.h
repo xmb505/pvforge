@@ -24,6 +24,10 @@ public:
     // audible audio or no output device; callers then use the timer clock.
     bool play(int startFrame);
 
+    // Plays a short preview around a timeline position for scrubbing/step.
+    // Does nothing while full playback is running.
+    void scrub(double seconds);
+
     void stop();
 
     bool isRunning() const { return m_running; }
@@ -38,6 +42,9 @@ private:
     QAudioSink* m_sink = nullptr;
     QBuffer m_buffer;
     QByteArray m_pcm;
+    QAudioSink* m_scrubSink = nullptr;
+    QBuffer m_scrubBuffer;
+    QByteArray m_scrubPcm;
     bool m_running = false;
     double m_startSeconds = 0.0;
     double m_endSeconds = 0.0;

@@ -56,6 +56,9 @@ void setMonitorVisible(bool on);
 bool showCameraFrame();
 void setShowCameraFrame(bool on);
 
+bool audioScrub();
+void setAudioScrub(bool on);
+
 bool packAssetsDefault();
 void setPackAssetsDefault(bool on);
 } // namespace Settings

@@ -29,6 +29,7 @@ private:
     QCheckBox* m_angle180 = nullptr;
     QCheckBox* m_angle270 = nullptr;
     QCheckBox* m_autoKey = nullptr;
+    QCheckBox* m_audioScrub = nullptr;
     QSpinBox* m_width = nullptr;
     QSpinBox* m_height = nullptr;
     QSpinBox* m_fps = nullptr;

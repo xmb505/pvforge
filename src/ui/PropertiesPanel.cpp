@@ -352,6 +352,8 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     m_mediaInfo = new QLabel(content);
     m_mediaInfo->setWordWrap(true);
     m_mediaInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_mediaInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_mediaInfo->setMinimumWidth(0);
     mediaLayout->addWidget(m_mediaInfo);
     m_mediaSection = new CollapsibleSection(QStringLiteral("素材"), content, this);
     m_mediaSection->setExpanded(true);
@@ -505,17 +507,18 @@ void PropertiesPanel::refresh()
 {
     const Entity* e = m_project->entity(m_entity);
     const bool valid = e != nullptr;
+    const bool audio = valid && e->isAudio();
 
-    m_transformSection->setVisible(valid);
-    m_keySection->setVisible(valid);
+    m_transformSection->setVisible(valid && !audio);
+    m_keySection->setVisible(valid && !audio);
     m_textSection->setVisible(valid && e->type == EntityType::Text);
     m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
     m_mediaSection->setVisible(valid
                                && (e->type == EntityType::Image
                                    || e->type == EntityType::Video
                                    || e->type == EntityType::Audio));
-    m_audioSection->setVisible(valid && e->type == EntityType::Audio);
-    m_pivotSection->setVisible(valid && !e->isCamera());
+    m_audioSection->setVisible(audio);
+    m_pivotSection->setVisible(valid && !e->isCamera() && !audio);
 
     const bool editable = valid && !e->locked;
     const bool camera = valid && e->isCamera();
@@ -756,7 +759,18 @@ void PropertiesPanel::refresh()
                 info += QStringLiteral(" · 解码失败或未解码");
         }
         if (!e->sourcePath.isEmpty())
-            info += QStringLiteral("\n") + e->sourcePath;
+        {
+            QString shown = e->sourcePath;
+            constexpr int maxChars = 54;
+            if (shown.size() > maxChars)
+                shown = shown.left(8) + QStringLiteral("…") + shown.right(maxChars - 9);
+            info += QStringLiteral("\n") + shown;
+            m_mediaInfo->setToolTip(e->sourcePath);
+        }
+        else
+        {
+            m_mediaInfo->setToolTip(QString());
+        }
         m_mediaInfo->setText(info);
     }
 }

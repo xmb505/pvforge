@@ -104,7 +104,10 @@ private:
     AudioEngine* m_audioEngine = nullptr;
 
     QTimer* m_playTimer = nullptr;
+    QTimer* m_scrubTimer = nullptr;
     QElapsedTimer m_playClock;
+    QElapsedTimer m_scrubClock;
+    int m_lastScrubFrame = -1;
     QLabel* m_status = nullptr;
     QProgressBar* m_importProgress = nullptr;
 

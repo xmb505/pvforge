@@ -157,6 +157,16 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_playTimer = new QTimer(this);
     connect(m_playTimer, &QTimer::timeout, this, &MainWindow::onPlayTick);
 
+    m_scrubTimer = new QTimer(this);
+    m_scrubTimer->setSingleShot(true);
+    m_scrubTimer->setInterval(60);
+    connect(m_scrubTimer, &QTimer::timeout, this, [this] {
+        if (m_playing || !Settings::audioScrub())
+            return;
+        m_audioEngine->scrub(m_frame / double(std::max(1, m_project->fps)));
+        m_scrubClock.restart();
+    });
+
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
     connect(m_viewport, &Viewport::positionEdited, this, &MainWindow::applyPosition);
@@ -224,6 +234,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     createMenus();
     createToolBar();
 
+    m_lastScrubFrame = 0;   // don't preview audio just from opening a project
     setFrame(0);
     updateWindowTitle();
 }
@@ -369,6 +380,19 @@ void MainWindow::createMenus()
         m_viewport->setCameraFrameVisible(on);
     });
     viewMenu->addAction(cameraFrameAction);
+
+    auto* audioScrubAction = new QAction(
+        Lang::t(QStringLiteral("action.audioScrub"), QStringLiteral("音频擦洗")), this);
+    audioScrubAction->setObjectName(QStringLiteral("audioScrubAction"));
+    audioScrubAction->setCheckable(true);
+    audioScrubAction->setChecked(Settings::audioScrub());
+    audioScrubAction->setToolTip(QStringLiteral("拖动播放头或逐帧时播放短音频"));
+    connect(audioScrubAction, &QAction::toggled, this, [this](bool on) {
+        Settings::setAudioScrub(on);
+        if (!on)
+            m_scrubTimer->stop();
+    });
+    viewMenu->addAction(audioScrubAction);
 
     auto* monitorAction =
         new QAction(Lang::t(QStringLiteral("action.monitor"), QStringLiteral("摄像机监视器")),
@@ -613,6 +637,22 @@ void MainWindow::setFrame(int frame)
     if (m_monitor)
         m_monitor->setFrame(m_frame);
     updateStatus();
+
+    if (!m_playing && Settings::audioScrub() && m_frame != m_lastScrubFrame)
+    {
+        m_lastScrubFrame = m_frame;
+        const qint64 elapsed =
+            m_scrubClock.isValid() ? m_scrubClock.elapsed() : 1000;
+        if (elapsed >= 60)
+        {
+            m_audioEngine->scrub(m_frame / double(std::max(1, m_project->fps)));
+            m_scrubClock.restart();
+        }
+        else
+        {
+            m_scrubTimer->start(int(60 - elapsed));
+        }
+    }
 }
 
 void MainWindow::setSelectedEntity(EntityId id)
@@ -984,8 +1024,10 @@ void MainWindow::togglePlayback()
     if (m_playing)
     {
         m_playTimer->stop();
+        m_scrubTimer->stop();
         m_audioEngine->stop();
         m_playing = false;
+        m_lastScrubFrame = m_frame;
         if (m_monitor)
             m_monitor->setPlaying(false);
         m_playAction->setText(Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")));
@@ -995,10 +1037,10 @@ void MainWindow::togglePlayback()
     if (m_frame >= m_project->timelineLength())
         setFrame(0);
 
+    m_scrubTimer->stop();
     m_playStart = m_frame;
     m_playing = true;
-    const bool audioClock = m_audioEngine->play(m_frame);
-    Q_UNUSED(audioClock);
+    m_audioEngine->play(m_frame);
     m_playClock.restart();
     m_playTimer->start(std::max(1, 1000 / std::max(1, m_project->fps)));
     if (m_monitor)

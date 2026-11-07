@@ -75,6 +75,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     m_autoKey = new QCheckBox(QStringLiteral("新项目默认开启自动关键帧"), editor);
     m_autoKey->setChecked(Settings::autoKeyDefault());
     editorForm->addRow(m_autoKey);
+    m_audioScrub = new QCheckBox(QStringLiteral("拖动/逐帧时播放音频（音频擦洗）"), editor);
+    m_audioScrub->setChecked(Settings::audioScrub());
+    editorForm->addRow(m_audioScrub);
     layout->addWidget(editor);
 
     auto* project = new QGroupBox(QStringLiteral("新项目"), this);
@@ -135,6 +138,7 @@ void SettingsDialog::accept()
         angles.append(270);
     Settings::setSnapAngles(angles);
     Settings::setAutoKeyDefault(m_autoKey->isChecked());
+    Settings::setAudioScrub(m_audioScrub->isChecked());
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());
     Settings::setPackAssetsDefault(m_packAssets->isChecked());

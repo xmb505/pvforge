@@ -1585,6 +1585,17 @@ int audioTest(QApplication& app)
         ++failures;
     }
 
+    // Narrow properties panel with a long unbroken asset path.
+    uiAudio->name = QStringLiteral("永遠にゲームで対戦したいキリタン");
+    uiAudio->sourcePath = QStringLiteral(
+        "/home/xmb505/视频/PVForge/assets/"
+        "71a0fbde5227bfd7658893e46cabc6ee0660945f71a0fbde5227bfd7658893e46cabc6ee.wav");
+    uiProject->notifyChanged();
+    window.setSelectedEntityForTest(uiAudio->id);
+    window.resize(1100, 800);
+    QApplication::processEvents();
+    window.grab().save(QStringLiteral("/tmp/pvf_audio_properties.png"));
+
     qInfo() << "audio-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
