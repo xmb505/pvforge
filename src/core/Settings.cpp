@@ -32,6 +32,16 @@ void setEdgeCenterSnap(bool on)
     store().setValue(QStringLiteral("editor/edgeCenterSnap"), on);
 }
 
+bool edgeMidpointSnap()
+{
+    return store().value(QStringLiteral("editor/edgeMidpointSnap"), false).toBool();
+}
+
+void setEdgeMidpointSnap(bool on)
+{
+    store().setValue(QStringLiteral("editor/edgeMidpointSnap"), on);
+}
+
 QList<int> snapAngles()
 {
     const QString raw =

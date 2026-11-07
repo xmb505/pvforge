@@ -39,7 +39,7 @@ signals:
     void entitySelected(EntityId id);
     void valueEdited(EntityId id, const QString& prop, double value);
     void positionEdited(EntityId id, double x, double y);
-    void scaleEdited(EntityId id, double sx, double sy);
+    void scaleEdited(EntityId id, double sx, double sy, double x, double y);
     void pivotEdited(EntityId id, double ax, double ay);
     void workbenchRequested();
 
@@ -111,6 +111,8 @@ private:
     Handle m_activeHandle = Handle::None;
     double m_scaleStartX = 1.0;
     double m_scaleStartY = 1.0;
+    double m_scaleStartPosX = 0.0;
+    double m_scaleStartPosY = 0.0;
     int m_snapPixels = 6;
     bool m_edgeCenterSnap = true;
     bool m_showGuideX = false;

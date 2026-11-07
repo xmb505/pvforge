@@ -193,13 +193,18 @@ void SetPositionCommand::mergeWith(const UndoCommand* other)
 }
 
 SetScaleCommand::SetScaleCommand(EntityId id, int frame, double oldSx, double oldSy,
-                                 double newSx, double newSy, bool keyframe)
+                                 double oldX, double oldY, double newSx, double newSy,
+                                 double newX, double newY, bool keyframe)
     : m_id(id)
     , m_frame(frame)
     , m_oldSx(oldSx)
     , m_oldSy(oldSy)
     , m_newSx(newSx)
     , m_newSy(newSy)
+    , m_oldX(oldX)
+    , m_oldY(oldY)
+    , m_newX(newX)
+    , m_newY(newY)
     , m_keyframe(keyframe)
 {
 }
@@ -208,12 +213,16 @@ void SetScaleCommand::undo(Project& project)
 {
     project.setValue(m_id, QStringLiteral("scaleX"), m_frame, m_oldSx, m_keyframe);
     project.setValue(m_id, QStringLiteral("scaleY"), m_frame, m_oldSy, m_keyframe);
+    project.setValue(m_id, QStringLiteral("x"), m_frame, m_oldX, m_keyframe);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, m_oldY, m_keyframe);
 }
 
 void SetScaleCommand::redo(Project& project)
 {
     project.setValue(m_id, QStringLiteral("scaleX"), m_frame, m_newSx, m_keyframe);
     project.setValue(m_id, QStringLiteral("scaleY"), m_frame, m_newSy, m_keyframe);
+    project.setValue(m_id, QStringLiteral("x"), m_frame, m_newX, m_keyframe);
+    project.setValue(m_id, QStringLiteral("y"), m_frame, m_newY, m_keyframe);
 }
 
 QString SetScaleCommand::text() const
@@ -234,6 +243,8 @@ void SetScaleCommand::mergeWith(const UndoCommand* other)
     {
         m_newSx = scale->m_newSx;
         m_newSy = scale->m_newSy;
+        m_newX = scale->m_newX;
+        m_newY = scale->m_newY;
     }
 }
 

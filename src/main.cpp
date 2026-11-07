@@ -716,9 +716,13 @@ int scaleHandleTest(QApplication& app)
             send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, mods);
         };
 
+        auto cornerNow = [&] {
+            return viewport->entityPivotForTest(id).toPoint()
+                   + QPoint(int(std::lround(150.0 * s)), int(std::lround(100.0 * s)));
+        };
+
         // Corner handle scales both axes independently.
-        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, 3 * halfH / 2),
-             Qt::NoModifier);
+        drag(cornerNow(), center + QPoint(2 * halfW, 3 * halfH / 2), Qt::NoModifier);
         const double sx1 = project->value(id, QStringLiteral("scaleX"), 0);
         const double sy1 = project->value(id, QStringLiteral("scaleY"), 0);
         if (std::abs(sx1 - 2.0) > 0.1 || std::abs(sy1 - 1.5) > 0.1)
@@ -730,8 +734,11 @@ int scaleHandleTest(QApplication& app)
         project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
 
-        // Ctrl keeps the aspect ratio.
-        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, 3 * halfH / 2),
+        // Ctrl keeps the aspect ratio. Use the current corner as the target
+        // base so the drag distance matches the new centre.
+        const QPoint ctrlCorner = cornerNow();
+        drag(ctrlCorner, ctrlCorner + QPoint(int(std::lround(150.0 * s)),
+                                             int(std::lround(50.0 * s))),
              Qt::ControlModifier);
         const double sx2 = project->value(id, QStringLiteral("scaleX"), 0);
         const double sy2 = project->value(id, QStringLiteral("scaleY"), 0);
@@ -745,8 +752,7 @@ int scaleHandleTest(QApplication& app)
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
 
         // Dragging past the centre mirrors the entity.
-        drag(center + QPoint(halfW, halfH), center - QPoint(halfW, halfH),
-             Qt::NoModifier);
+        drag(cornerNow(), center - QPoint(halfW, halfH), Qt::NoModifier);
         const double sx3 = project->value(id, QStringLiteral("scaleX"), 0);
         if (sx3 >= -0.5)
         {

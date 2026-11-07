@@ -590,7 +590,7 @@ void MainWindow::applyPosition(EntityId id, double x, double y)
                     *m_project);
 }
 
-void MainWindow::applyScale(EntityId id, double sx, double sy)
+void MainWindow::applyScale(EntityId id, double sx, double sy, double x, double y)
 {
     Entity* e = m_project->entity(id);
     if (!e || e->locked)
@@ -598,16 +598,22 @@ void MainWindow::applyScale(EntityId id, double sx, double sy)
 
     const double oldSx = m_project->value(id, QStringLiteral("scaleX"), m_frame);
     const double oldSy = m_project->value(id, QStringLiteral("scaleY"), m_frame);
-    if (qFuzzyCompare(oldSx + 1.0, sx + 1.0) && qFuzzyCompare(oldSy + 1.0, sy + 1.0))
+    const double oldX = m_project->value(id, QStringLiteral("x"), m_frame);
+    const double oldY = m_project->value(id, QStringLiteral("y"), m_frame);
+    if (qFuzzyCompare(oldSx + 1.0, sx + 1.0) && qFuzzyCompare(oldSy + 1.0, sy + 1.0)
+        && qFuzzyCompare(oldX + 1.0, x + 1.0) && qFuzzyCompare(oldY + 1.0, y + 1.0))
         return;
 
     const bool keyframe = m_project->autoKey
                           || e->tracks.contains(QStringLiteral("scaleX"))
                           || e->tracks.contains(QStringLiteral("scaleY"));
+    // Apply first: merged history entries skip redo.
     m_project->setValue(id, QStringLiteral("scaleX"), m_frame, sx, keyframe);
     m_project->setValue(id, QStringLiteral("scaleY"), m_frame, sy, keyframe);
-    m_history->push(std::make_unique<SetScaleCommand>(id, m_frame, oldSx, oldSy, sx, sy,
-                                                       keyframe),
+    m_project->setValue(id, QStringLiteral("x"), m_frame, x, keyframe);
+    m_project->setValue(id, QStringLiteral("y"), m_frame, y, keyframe);
+    m_history->push(std::make_unique<SetScaleCommand>(id, m_frame, oldSx, oldSy, oldX,
+                                                       oldY, sx, sy, x, y, keyframe),
                     *m_project);
 }
 

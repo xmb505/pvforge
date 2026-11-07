@@ -48,6 +48,11 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     m_edgeCenterSnap->setChecked(Settings::edgeCenterSnap());
     editorForm->addRow(m_edgeCenterSnap);
 
+    m_edgeMidpointSnap =
+        new QCheckBox(QStringLiteral("吸附其他实体的边缘中点"), editor);
+    m_edgeMidpointSnap->setChecked(Settings::edgeMidpointSnap());
+    editorForm->addRow(m_edgeMidpointSnap);
+
     auto* angleRow = new QWidget(editor);
     auto* angleLayout = new QHBoxLayout(angleRow);
     angleLayout->setContentsMargins(0, 0, 0, 0);
@@ -118,6 +123,7 @@ void SettingsDialog::accept()
     Settings::setLanguage(m_language->currentData().toString());
     Settings::setSnapPixels(m_snapPixels->value());
     Settings::setEdgeCenterSnap(m_edgeCenterSnap->isChecked());
+    Settings::setEdgeMidpointSnap(m_edgeMidpointSnap->isChecked());
     QList<int> angles;
     if (m_angle0->isChecked())
         angles.append(0);

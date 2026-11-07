@@ -559,8 +559,18 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
     const QRectF bounds = entityLocalBounds(*entity);
     const double s = viewScale();
+    const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
+    const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
+    const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
 
-    const QTransform base = entityRotationTransform(*entity);
+    // Measure against the drag-start centre: the fixed opposite corner moves
+    // the entity while dragging, so the current centre would drift.
+    const QRectF canvas = canvasRect();
+    QTransform base;
+    base.translate(canvas.center().x() + m_scaleStartPosX * s,
+                   canvas.center().y() + m_scaleStartPosY * s);
+    base.rotate(rotation);
+    base.translate(-ax * s, -ay * s);
     bool ok = false;
     const QPointF local = base.inverted(&ok).map(mousePos);
     if (!ok)
@@ -634,36 +644,92 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
         }
     }
 
-    // Corner snapping: the dragged corner sticks to the canvas centre lines
-    // and edges. Rotation makes the edge positions non-linear, so skip it.
-    const double rotation = m_project->value(m_dragEntity, QStringLiteral("rotation"), m_frame);
-    if (snap && std::abs(rotation) < 1e-6 && m_snapPixels > 0)
-    {
-        const double threshold = m_snapPixels / s;
-        const double x = m_project->value(m_dragEntity, QStringLiteral("x"), m_frame);
-        const double y = m_project->value(m_dragEntity, QStringLiteral("y"), m_frame);
-        const double canvasHalfW = m_project->width / 2.0;
-        const double canvasHalfH = m_project->height / 2.0;
+    const double currentX = m_project->value(m_dragEntity, "x", m_frame);
+    const double currentY = m_project->value(m_dragEntity, "y", m_frame);
 
-        if (signX != 0.0)
+    // PPT-style corner scaling: the opposite corner stays fixed.
+    if (std::abs(rotation) < 1e-6 && signX != 0.0 && signY != 0.0)
+    {
+        const double startCenterX = m_scaleStartPosX - ax;
+        const double startCenterY = m_scaleStartPosY - ay;
+        const double fixedX = startCenterX - signX * halfW * m_scaleStartX;
+        const double fixedY = startCenterY - signY * halfH * m_scaleStartY;
+
+        double handleX = fixedX + 2.0 * signX * halfW * newScaleX;
+        double handleY = fixedY + 2.0 * signY * halfH * newScaleY;
+
+        if (snap && m_snapPixels > 0)
         {
-            const double handleX = x + signX * newScaleX * halfW;
-            const double snapped =
-                snapTo(handleX, {0.0, -canvasHalfW, canvasHalfW}, threshold);
-            if (snapped != handleX)
-                newScaleX = (snapped - x) / (signX * halfW);
+            const double threshold = m_snapPixels / s;
+            const double canvasHalfW = m_project->width / 2.0;
+            const double canvasHalfH = m_project->height / 2.0;
+
+            QVector<double> targetsX = {-canvasHalfW, 0.0, canvasHalfW};
+            QVector<double> targetsY = {-canvasHalfH, 0.0, canvasHalfH};
+
+            for (const Entity& other : m_project->entities())
+            {
+                if (other.id == m_dragEntity || other.hidden)
+                    continue;
+                const double otherRotation =
+                    m_project->value(other.id, "rotation", m_frame);
+                const double modulo = std::fmod(std::abs(otherRotation) + 1e-6, 90.0);
+                if (std::abs(modulo) > 1e-3 && std::abs(modulo - 90.0) > 1e-3)
+                    continue;
+
+                const VisualBounds otherBounds =
+                    visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
+                                   m_project->value(other.id, "y", m_frame));
+                targetsX << otherBounds.left << otherBounds.right;
+                targetsY << otherBounds.top << otherBounds.bottom;
+                if (Settings::edgeMidpointSnap())
+                {
+                    targetsX << (otherBounds.left + otherBounds.right) / 2.0;
+                    targetsY << (otherBounds.top + otherBounds.bottom) / 2.0;
+                }
+            }
+
+            double bestX = threshold + 1.0;
+            double snapX = handleX;
+            for (double target : targetsX)
+            {
+                const double distance = std::abs(handleX - target);
+                if (distance < bestX)
+                {
+                    bestX = distance;
+                    snapX = target;
+                }
+            }
+            if (bestX <= threshold)
+            {
+                newScaleX = signX * (snapX - fixedX) / (2.0 * halfW);
+                handleX = snapX;
+            }
+
+            double bestY = threshold + 1.0;
+            double snapY = handleY;
+            for (double target : targetsY)
+            {
+                const double distance = std::abs(handleY - target);
+                if (distance < bestY)
+                {
+                    bestY = distance;
+                    snapY = target;
+                }
+            }
+            if (bestY <= threshold)
+                newScaleY = signY * (snapY - fixedY) / (2.0 * halfH);
         }
-        if (signY != 0.0)
-        {
-            const double handleY = y + signY * newScaleY * halfH;
-            const double snapped =
-                snapTo(handleY, {0.0, -canvasHalfH, canvasHalfH}, threshold);
-            if (snapped != handleY)
-                newScaleY = (snapped - y) / (signY * halfH);
-        }
+
+        const double newCenterX = fixedX + signX * halfW * newScaleX;
+        const double newCenterY = fixedY + signY * halfH * newScaleY;
+        emit scaleEdited(m_dragEntity, newScaleX, newScaleY, newCenterX + ax,
+                         newCenterY + ay);
+        return;
     }
 
-    emit scaleEdited(m_dragEntity, newScaleX, newScaleY);
+    // Rotated entities still scale around their centre.
+    emit scaleEdited(m_dragEntity, newScaleX, newScaleY, currentX, currentY);
 }
 
 void Viewport::paintEvent(QPaintEvent*)
@@ -751,6 +817,8 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         m_dragEntity = m_selected;
         m_scaleStartX = m_project->value(m_selected, "scaleX", m_frame);
         m_scaleStartY = m_project->value(m_selected, "scaleY", m_frame);
+        m_scaleStartPosX = m_project->value(m_selected, "x", m_frame);
+        m_scaleStartPosY = m_project->value(m_selected, "y", m_frame);
         m_dragLast = event->position();
         return;
     }

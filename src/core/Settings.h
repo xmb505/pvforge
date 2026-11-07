@@ -14,6 +14,9 @@ void setSnapPixels(int pixels);
 bool edgeCenterSnap();                  // entity edges snap to canvas centre lines
 void setEdgeCenterSnap(bool on);
 
+bool edgeMidpointSnap();                // snap to edge midpoints of other entities
+void setEdgeMidpointSnap(bool on);
+
 QList<int> snapAngles();                // rotation snapping targets in degrees
 void setSnapAngles(const QList<int>& angles);
 

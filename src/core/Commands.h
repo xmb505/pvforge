@@ -120,8 +120,9 @@ private:
 class SetScaleCommand : public UndoCommand
 {
 public:
-    SetScaleCommand(EntityId id, int frame, double oldSx, double oldSy, double newSx,
-                    double newSy, bool keyframe);
+    SetScaleCommand(EntityId id, int frame, double oldSx, double oldSy, double oldX,
+                    double oldY, double newSx, double newSy, double newX, double newY,
+                    bool keyframe);
 
     void undo(Project& project) override;
     void redo(Project& project) override;
@@ -137,6 +138,10 @@ private:
     double m_oldSy = 1.0;
     double m_newSx = 1.0;
     double m_newSy = 1.0;
+    double m_oldX = 0.0;
+    double m_oldY = 0.0;
+    double m_newX = 0.0;
+    double m_newY = 0.0;
     bool m_keyframe = true;
 };
 

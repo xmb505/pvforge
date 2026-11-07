@@ -23,6 +23,7 @@ private:
     QComboBox* m_language = nullptr;
     QSpinBox* m_snapPixels = nullptr;
     QCheckBox* m_edgeCenterSnap = nullptr;
+    QCheckBox* m_edgeMidpointSnap = nullptr;
     QCheckBox* m_angle0 = nullptr;
     QCheckBox* m_angle90 = nullptr;
     QCheckBox* m_angle180 = nullptr;
