@@ -55,6 +55,7 @@ signals:
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
     void entityRenamed(EntityId id, const QString& name);
+    void keyframeEasingRequested(const EasingSpec& spec);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -65,6 +66,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -85,6 +87,8 @@ private:
     void commitRename();
     void stepFrame(int delta);
     void stopHold();
+    EasingSpec keyframeEasingAt(EntityId id, double frame) const;
+    void showKeyframeMenu(const QPoint& globalPos);
 
     enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
 

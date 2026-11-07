@@ -366,6 +366,56 @@ void SetPivotCommand::mergeWith(const UndoCommand* other)
     }
 }
 
+SetKeyframeEasingCommand::SetKeyframeEasingCommand(
+    const QVector<KeyframeEasingRecord>& records)
+    : m_records(records)
+{
+}
+
+void SetKeyframeEasingCommand::undo(Project& project)
+{
+    for (const KeyframeEasingRecord& record : m_records)
+        project.setKeyframeEasing(record.entity, record.property, record.frame,
+                                  record.oldEase);
+}
+
+void SetKeyframeEasingCommand::redo(Project& project)
+{
+    for (const KeyframeEasingRecord& record : m_records)
+        project.setKeyframeEasing(record.entity, record.property, record.frame,
+                                  record.newEase);
+}
+
+QString SetKeyframeEasingCommand::text() const
+{
+    return QStringLiteral("调整关键帧缓动");
+}
+
+bool SetKeyframeEasingCommand::canMergeWith(const UndoCommand* other) const
+{
+    const auto* command = dynamic_cast<const SetKeyframeEasingCommand*>(other);
+    if (!command || command->m_records.size() != m_records.size())
+        return false;
+    for (int i = 0; i < m_records.size(); ++i)
+    {
+        if (command->m_records[i].entity != m_records[i].entity
+            || command->m_records[i].property != m_records[i].property
+            || !qFuzzyCompare(command->m_records[i].frame + 1.0,
+                              m_records[i].frame + 1.0))
+            return false;
+    }
+    return true;
+}
+
+void SetKeyframeEasingCommand::mergeWith(const UndoCommand* other)
+{
+    const auto* command = dynamic_cast<const SetKeyframeEasingCommand*>(other);
+    if (!command)
+        return;
+    for (int i = 0; i < m_records.size(); ++i)
+        m_records[i].newEase = command->m_records[i].newEase;
+}
+
 RemoveKeyframesCommand::RemoveKeyframesCommand(const QVector<KeyframeRecord>& records)
     : m_records(records)
 {
@@ -374,7 +424,13 @@ RemoveKeyframesCommand::RemoveKeyframesCommand(const QVector<KeyframeRecord>& re
 void RemoveKeyframesCommand::undo(Project& project)
 {
     for (const KeyframeRecord& record : m_records)
-        project.addKeyframe(record.entity, record.property, record.frame, record.value);
+    {
+        Keyframe key;
+        key.frame = record.frame;
+        key.value = record.value;
+        key.ease = record.ease;
+        project.addKeyframe(record.entity, record.property, key);
+    }
 }
 
 void RemoveKeyframesCommand::redo(Project& project)

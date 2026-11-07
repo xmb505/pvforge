@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Easing.h"
+
 #include <QColor>
 #include <QHash>
 #include <QImage>
@@ -24,6 +26,7 @@ struct Keyframe
 {
     double frame = 0.0;
     double value = 0.0;
+    EasingSpec ease;
 };
 
 // One animated property of an entity. Values are scalars in v1.
@@ -103,6 +106,7 @@ struct KeyframeRecord
     QString property;
     double frame = 0.0;
     double value = 0.0;
+    EasingSpec ease;
 };
 
 enum class EntityFlag { Hidden, Locked };
@@ -154,6 +158,10 @@ public:
     void setEntityName(EntityId id, const QString& name);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
+    void addKeyframe(EntityId id, const QString& property, const Keyframe& key);
+    bool setKeyframeEasing(EntityId id, const QString& property, double frame,
+                           const EasingSpec& ease);
+    const Keyframe* keyframe(EntityId id, const QString& property, double frame) const;
     const QVector<Entity>& entities() const { return m_entities; }
     QVector<Entity>& mutableEntities() { return m_entities; }
     EntityId nextId() const { return m_nextId; }

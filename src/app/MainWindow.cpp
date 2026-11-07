@@ -202,6 +202,8 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onEntityFlagChanged);
     connect(m_timeline, &TimelinePanel::deleteKeyframesRequested, this,
             &MainWindow::onDeleteKeyframesRequested);
+    connect(m_timeline, &TimelinePanel::keyframeEasingRequested, this,
+            &MainWindow::onKeyframeEasingRequested);
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
     connect(m_history, &History::changed, this, [this] {
         m_undoAction->setEnabled(m_history->canUndo());
@@ -889,6 +891,42 @@ void MainWindow::onDeleteKeyframesRequested()
         return;
     m_history->push(std::make_unique<RemoveKeyframesCommand>(records), *m_project);
     statusBar()->showMessage(QStringLiteral("已删除关键帧"), 2000);
+}
+
+void MainWindow::onKeyframeEasingRequested(const EasingSpec& spec)
+{
+    QVector<KeyframeEasingRecord> records;
+    for (const KeyframeSelection& selection : m_timeline->selectedKeyframes())
+    {
+        Entity* entity = m_project->entity(selection.entity);
+        if (!entity || entity->locked)
+            continue;
+        for (auto it = entity->tracks.begin(); it != entity->tracks.end(); ++it)
+        {
+            for (const Keyframe& key : it->keys)
+            {
+                if (std::abs(key.frame - selection.frame) > 1e-6 || key.ease == spec)
+                    continue;
+                KeyframeEasingRecord record;
+                record.entity = selection.entity;
+                record.property = it.key();
+                record.frame = key.frame;
+                record.oldEase = key.ease;
+                record.newEase = spec;
+                records.append(record);
+            }
+        }
+    }
+    if (records.isEmpty())
+        return;
+
+    // Apply first: merged history entries skip redo.
+    for (const KeyframeEasingRecord& record : records)
+        m_project->setKeyframeEasing(record.entity, record.property, record.frame,
+                                     record.newEase);
+    m_history->push(std::make_unique<SetKeyframeEasingCommand>(records), *m_project);
+    m_timeline->update();
+    statusBar()->showMessage(QStringLiteral("已更新关键帧缓动"), 2000);
 }
 
 void MainWindow::refreshAll()

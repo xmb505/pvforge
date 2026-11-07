@@ -205,6 +205,32 @@ private:
     int m_frame = 0;
 };
 
+// Changing the easing of one or more keyframes at once.
+struct KeyframeEasingRecord
+{
+    EntityId entity = kInvalidEntity;
+    QString property;
+    double frame = 0.0;
+    EasingSpec oldEase;
+    EasingSpec newEase;
+};
+
+class SetKeyframeEasingCommand : public UndoCommand
+{
+public:
+    explicit SetKeyframeEasingCommand(const QVector<KeyframeEasingRecord>& records);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+    bool canMergeWith(const UndoCommand* other) const override;
+    void mergeWith(const UndoCommand* other) override;
+
+private:
+    QVector<KeyframeEasingRecord> m_records;
+};
+
 // Deleting keyframes, keeping a copy so they can be restored.
 class RemoveKeyframesCommand : public UndoCommand
 {

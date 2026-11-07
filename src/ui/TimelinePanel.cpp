@@ -3,11 +3,17 @@
 #include "app/AppIcon.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
+#include "ui/BezierEditorDialog.h"
+#include "ui/EasingPicker.h"
 
+#include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QLineEdit>
 #include <QKeyEvent>
+#include <QMenu>
+#include <QWidgetAction>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -61,6 +67,7 @@ struct SecondsGrid
     int labelFrames = 1;
     int cellFrames = 1;
 };
+
 
 SecondsGrid secondsGrid(int fps, double pixelsPerFrame)
 {
@@ -592,6 +599,18 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                 p.setBrush(QColor(accentColor.red(), accentColor.green(),
                                   accentColor.blue(), 190));
             p.drawPolygon(diamond);
+
+            const EasingSpec ease = keyframeEasingAt(e.id, keyFrame);
+            if (ease.easing != Easing::Linear)
+            {
+                const QColor marker = ease.easing == Easing::Instant
+                                          ? QColor(255, 150, 90, 210)
+                                          : QColor(accentColor.red(), accentColor.green(),
+                                                   accentColor.blue(), 200);
+                p.setPen(QPen(marker, 1.5));
+                p.drawLine(QPointF(x - 2.5, cy - r - 3.5),
+                           QPointF(x + 2.5, cy - r - 3.5));
+            }
         }
 
         // Row buttons appear on hover, like Mine-imator's timeline list.
@@ -873,8 +892,99 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
-void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
+EasingSpec TimelinePanel::keyframeEasingAt(EntityId id, double frame) const
 {
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return EasingSpec();
+    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (std::abs(key.frame - frame) < 1e-6)
+                return key.ease;
+        }
+    }
+    return EasingSpec();
+}
+
+void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
+{
+    if (m_selectedKeyframes.isEmpty())
+        return;
+
+    const EasingSpec current = keyframeEasingAt(
+        m_selectedKeyframes.first().entity, m_selectedKeyframes.first().frame);
+
+    QMenu menu(this);
+    auto* picker = new EasingPicker(current, &menu);
+    auto* action = new QWidgetAction(&menu);
+    action->setDefaultWidget(picker);
+    menu.addAction(action);
+
+    EasingSpec selected;
+    bool picked = false;
+    bool custom = false;
+    connect(picker, &EasingPicker::picked, this,
+            [&menu, &selected, &picked](const EasingSpec& spec) {
+                selected = spec;
+                picked = true;
+                menu.close();
+            });
+    connect(picker, &EasingPicker::customRequested, this, [&menu, &custom] {
+        custom = true;
+        menu.close();
+    });
+    menu.exec(globalPos);
+
+    if (custom)
+    {
+        EasingSpec spec = current;
+        if (spec.easing != Easing::Bezier)
+        {
+            spec.easing = Easing::Bezier;
+            spec.inX = 0.42;
+            spec.inY = 0.0;
+            spec.outX = 0.58;
+            spec.outY = 1.0;
+        }
+        BezierEditorDialog dialog(spec, this);
+        if (dialog.exec() == QDialog::Accepted)
+            emit keyframeEasingRequested(dialog.easing());
+    }
+    else if (picked)
+    {
+        emit keyframeEasingRequested(selected);
+    }
+}
+
+void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
+{
+    const QPoint pos = event->pos();
+    if (pos.y() < kHeaderHeight || pos.x() < kNameWidth)
+        return;
+
+    EntityId entity = kInvalidEntity;
+    double frame = 0.0;
+    if (!hitKeyframe(rowAt(pos.y()), pos.x(), &entity, &frame))
+        return;
+
+    const KeyframeSelection selection{entity, frame};
+    const auto existing =
+        std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection);
+    if (existing == m_selectedKeyframes.end())
+    {
+        m_selectedKeyframes.clear();
+        m_selectedKeyframes.append(selection);
+        emit entitySelected(entity);
+        update();
+    }
+
+    showKeyframeMenu(event->globalPos());
+    event->accept();
+}
+
+void TimelinePanel::keyReleaseEvent(QKeyEvent* event){
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
         && !event->isAutoRepeat())
     {

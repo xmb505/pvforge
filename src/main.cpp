@@ -12,7 +12,9 @@
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
+#include "ui/BezierEditorDialog.h"
 #include "ui/CameraMonitor.h"
+#include "ui/EasingPicker.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
@@ -33,6 +35,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMessageBox>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QListWidget>
 #include <QPainter>
@@ -43,6 +46,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
+#include <QWidgetAction>
 #include <QWheelEvent>
 #include <cmath>
 
@@ -1111,6 +1115,238 @@ int timelineFrameTest(QApplication& app)
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
+}
+
+int easingTest(QApplication& app)
+{
+    int failures = 0;
+    auto near = [](double a, double b) { return std::abs(a - b) < 1e-6; };
+
+    pvf::EasingSpec linear;
+    if (!near(pvf::applyEasing(linear, 0.25), 0.25))
+    {
+        qCritical() << "easing-test: linear";
+        ++failures;
+    }
+
+    pvf::EasingSpec instant;
+    instant.easing = pvf::Easing::Instant;
+    if (!near(pvf::applyEasing(instant, 0.5), 0.0)
+        || !near(pvf::applyEasing(instant, 0.999), 0.0)
+        || !near(pvf::applyEasing(instant, 1.0), 1.0))
+    {
+        qCritical() << "easing-test: instant";
+        ++failures;
+    }
+
+    pvf::EasingSpec inQuad;
+    inQuad.easing = pvf::Easing::EaseInQuad;
+    pvf::EasingSpec outQuad;
+    outQuad.easing = pvf::Easing::EaseOutQuad;
+    if (!near(pvf::applyEasing(inQuad, 0.5), 0.25)
+        || !near(pvf::applyEasing(outQuad, 0.5), 0.75))
+    {
+        qCritical() << "easing-test: quad";
+        ++failures;
+    }
+
+    pvf::EasingSpec bezier;
+    bezier.easing = pvf::Easing::Bezier;
+    bezier.inX = 0.0;
+    bezier.inY = 0.0;
+    bezier.outX = 1.0;
+    bezier.outY = 1.0;
+    if (!near(pvf::applyEasing(bezier, 0.5), 0.5))
+    {
+        qCritical() << "easing-test: bezier linear handles";
+        ++failures;
+    }
+
+    pvf::EasingSpec back;
+    back.easing = pvf::Easing::EaseOutBack;
+    pvf::EasingSpec backIn;
+    backIn.easing = pvf::Easing::EaseInBack;
+    if (pvf::applyEasing(back, 0.8) <= 1.0 || pvf::applyEasing(backIn, 0.2) >= 0.0)
+    {
+        qCritical() << "easing-test: overshoot functions are clamped";
+        ++failures;
+    }
+
+    auto* project = new pvf::Project;
+    pvf::Entity* entity = project->addVector(0, 200, 200, Qt::red, Qt::white, 0);
+    const pvf::EntityId id = entity->id;
+    project->setValue(id, QStringLiteral("x"), 0, 0.0, true);
+    project->setValue(id, QStringLiteral("x"), 10, 100.0, true);
+    if (!near(project->value(id, QStringLiteral("x"), 5), 50.0))
+    {
+        qCritical() << "easing-test: linear track";
+        ++failures;
+    }
+
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, inQuad);
+    if (!near(project->value(id, QStringLiteral("x"), 5), 25.0))
+    {
+        qCritical() << "easing-test: eased track"
+                    << project->value(id, QStringLiteral("x"), 5);
+        ++failures;
+    }
+
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, instant);
+    if (!near(project->value(id, QStringLiteral("x"), 5), 0.0)
+        || !near(project->value(id, QStringLiteral("x"), 10), 100.0))
+    {
+        qCritical() << "easing-test: instant track";
+        ++failures;
+    }
+
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, back);
+    if (project->value(id, QStringLiteral("x"), 8) <= 100.0)
+    {
+        qCritical() << "easing-test: track clamped overshoot"
+                    << project->value(id, QStringLiteral("x"), 8);
+        ++failures;
+    }
+
+    pvf::EasingSpec custom;
+    custom.easing = pvf::Easing::Bezier;
+    custom.inX = 0.25;
+    custom.inY = 0.0;
+    custom.outX = 0.75;
+    custom.outY = 1.0;
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, custom);
+
+    // setKey updates the value without dropping the easing.
+    project->setValue(id, QStringLiteral("x"), 10, 200.0, true);
+    const pvf::Keyframe* key = project->keyframe(id, QStringLiteral("x"), 0);
+    if (!key || key->ease != custom)
+    {
+        qCritical() << "easing-test: setKey dropped easing";
+        ++failures;
+    }
+
+    const QString path = QStringLiteral("/tmp/pvforge_easing.pvproj");
+    QString error;
+    if (!project->save(path, &error))
+    {
+        qCritical() << "easing-test: save failed" << error;
+        ++failures;
+    }
+    else
+    {
+        pvf::Project loaded;
+        if (!loaded.load(path, &error))
+        {
+            qCritical() << "easing-test: load failed" << error;
+            ++failures;
+        }
+        else
+        {
+            const pvf::Keyframe* loadedKey = loaded.keyframe(id, QStringLiteral("x"), 0);
+            if (!loadedKey || loadedKey->ease != custom)
+            {
+                qCritical() << "easing-test: easing not serialized";
+                ++failures;
+            }
+        }
+    }
+
+    // The custom bezier dialog must build and paint without a project.
+    {
+        pvf::BezierEditorDialog dialog(custom);
+        dialog.show();
+        QApplication::processEvents();
+        const QImage dialogShot = dialog.grab().toImage();
+        dialogShot.save(QStringLiteral("/tmp/pvforge_bezier.png"));
+        if (dialogShot.isNull() || dialogShot.width() < 400)
+        {
+            qCritical() << "easing-test: bezier dialog failed";
+            ++failures;
+        }
+        dialog.close();
+    }
+
+    // The visual template picker must build and paint.
+    {
+        pvf::EasingPicker picker(custom);
+        picker.show();
+        QApplication::processEvents();
+        const QImage pickerShot = picker.grab().toImage();
+        pickerShot.save(QStringLiteral("/tmp/pvforge_easing_picker.png"));
+        if (pickerShot.isNull() || pickerShot.width() < 200)
+        {
+            qCritical() << "easing-test: easing picker failed";
+            ++failures;
+        }
+        picker.close();
+    }
+
+    // Embedding the picker in a menu (the timeline popup) must keep clicks.
+    {
+        QMenu menu;
+        auto* picker = new pvf::EasingPicker(custom);
+        auto* action = new QWidgetAction(&menu);
+        action->setDefaultWidget(picker);
+        menu.addAction(action);
+        menu.popup(QPoint(100, 100));
+        QApplication::processEvents();
+        menu.grab().toImage().save(QStringLiteral("/tmp/pvforge_easing_menu.png"));
+
+        bool picked = false;
+        pvf::EasingSpec chosen;
+        QObject::connect(picker, &pvf::EasingPicker::picked, &menu,
+                         [&picked, &chosen](const pvf::EasingSpec& spec) {
+                             picked = true;
+                             chosen = spec;
+                         });
+        const QPoint tile(28, 46);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(tile),
+                          QPointF(picker->mapToGlobal(tile)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(tile),
+                            QPointF(picker->mapToGlobal(tile)), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(picker, &press);
+        QApplication::sendEvent(picker, &release);
+        if (!picked || chosen.easing != pvf::Easing::Linear)
+        {
+            qCritical() << "easing-test: menu picker click failed";
+            ++failures;
+        }
+        menu.close();
+    }
+
+    // Easing changes go through the command stack.
+    pvf::EasingSpec oldEase = custom;
+    pvf::EasingSpec newEase;
+    newEase.easing = pvf::Easing::EaseOutBack;
+    pvf::KeyframeEasingRecord record;
+    record.entity = id;
+    record.property = QStringLiteral("x");
+    record.frame = 0.0;
+    record.oldEase = oldEase;
+    record.newEase = newEase;
+    QVector<pvf::KeyframeEasingRecord> records;
+    records.append(record);
+    project->setKeyframeEasing(id, QStringLiteral("x"), 0, newEase);
+    pvf::History history;
+    history.push(std::make_unique<pvf::SetKeyframeEasingCommand>(records), *project);
+    history.undo(*project);
+    const pvf::Keyframe* undone = project->keyframe(id, QStringLiteral("x"), 0);
+    if (!undone || undone->ease != oldEase)
+    {
+        qCritical() << "easing-test: undo";
+        ++failures;
+    }
+    history.redo(*project);
+    const pvf::Keyframe* redone = project->keyframe(id, QStringLiteral("x"), 0);
+    if (!redone || redone->ease != newEase)
+    {
+        qCritical() << "easing-test: redo";
+        ++failures;
+    }
+
+    qInfo() << "easing-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int cameraTest(QApplication& app)
@@ -3316,6 +3552,8 @@ int main(int argc, char* argv[])
         return timelineFrameTest(app);
     if (app.arguments().contains(QStringLiteral("--camera-test")))
         return cameraTest(app);
+    if (app.arguments().contains(QStringLiteral("--easing-test")))
+        return easingTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
         return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))

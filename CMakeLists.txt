@@ -21,6 +21,7 @@ add_executable(pvforge
     src/core/Lang.cpp
     src/core/VectorShape.cpp
     src/core/Camera.cpp
+    src/core/Easing.cpp
     src/core/Commands.cpp
     src/media/VideoDecoder.cpp
     src/media/MediaImporter.cpp
@@ -33,7 +34,9 @@ add_executable(pvforge
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/AssetLibraryPanel.cpp
+    src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp
+    src/ui/EasingPicker.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp

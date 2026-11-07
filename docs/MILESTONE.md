@@ -33,7 +33,9 @@
 
 ### 动画与时间轴
 
-- 逐属性关键帧轨道，线性插值
+- 逐属性关键帧轨道，支持线性、瞬间、30 种缓入/缓出/缓入缓出预设和自定义三次贝塞尔
+- 右键关键帧打开 Mine-imator 式视觉曲线模板网格；默认按形状选，自定义贝塞尔可拖手柄
+- `Track::evaluate` 按缓动曲线插值
 - 自动关键帧（默认开）
 - 时间轴：固定缩放 + 横向滚动 + 自动跟随播放头
 - `Ctrl+滚轮` 缩放（0.25–32 px/帧）
@@ -99,7 +101,7 @@
 
 ```
 src/
-├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera
+├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
 ├─ media/    VideoDecoder（FFmpeg 首帧）、MediaImporter（哈希/复制/解码，可线程运行）
@@ -107,7 +109,7 @@ src/
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
-│            CameraMonitor、CollapsibleSection
+│            CameraMonitor、EasingPicker、BezierEditorDialog、CollapsibleSection
 └─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、AppIcon
 ```
 
@@ -118,6 +120,7 @@ src/
 - **共享渲染器**：主视口、监视器、未来导出都走 `SceneRenderer`；辅助线和压暗只留在主视口
 - **内容寻址素材**：哈希文件名 + 原始显示名
 - **命令历史**：复合命令 + 合并，一次拖动一条撤销
+- **缓动归属左侧关键帧**：一段动画由起始关键帧的 transition 控制，和 Mine-imator 一致；自定义贝塞尔存 4 个控制点
 - **异步导入**：重活在工作线程，主线程入库
 - **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
 
@@ -125,16 +128,16 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 31 个模式，全部通过。
+共 32 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
 - 视频只显示首帧，无逐帧播放
 - 无音频、波形、频谱对象
-- 关键帧只能线性插值，无缓动曲线
+- 关键帧缓动目前是单段模板/贝塞尔，没有整轨曲线图
 - 关键帧不能拖动改时间、复制、粘贴
 - 旋转实体的角缩放仍围绕中心
 - 实体单选（框选只作用于关键帧）
@@ -142,25 +145,22 @@ self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo
 - 摄像机不支持自定义输出分辨率/宽高比（竖屏裁切）；监视器没有无边框全屏投影
 - 3D 世界/Minecraft 资产完全移除（有意）
 
-## 下一步：关键帧函数
+## 下一步：关键帧曲线与编辑
 
-优先级从高到低：
+缓动基础已经实现（预设 + 自定义贝塞尔），下一步按优先级：
 
-1. **缓动函数（easing）**
-   - 关键帧增加 `easing` 字段：预设（线性/缓入/缓出/缓入缓出）+ 三次贝塞尔
-   - `Track::evaluate` 用缓动插值替换线性
-   - 关键帧右键菜单切换缓动；时间轴关键帧形状区分缓动类型
-2. **曲线编辑器**
+1. **整轨曲线编辑器**
    - 下方可切换「图表编辑器」页，显示当前属性曲线
-   - 拖控制点调整贝塞尔手柄
-3. **关键帧编辑**
+   - 直接在图表上拖贝塞尔控制点和关键帧
+   - 时间轴关键帧右键仍保留快速切换预设
+2. **关键帧编辑**
    - 拖动关键帧改时间（吸附帧）
    - 复制/粘贴/剪切、框选移动
-   - 多选关键帧的属性面板显示
-4. **关键帧函数（更远）**
+   - 多选关键帧共享缓动编辑
+3. **关键帧函数（更远）**
    - 类似表达式：位置/旋转可绑定到时间、音频振幅、另一实体属性
    - 需要先抽出求值器（Project → FrameSnapshot），避免 UI 与渲染直接耦合
-5. **导出 MP4**
+4. **导出 MP4**
    - 逐帧渲染到 FBO/QImage → FFmpeg 编码 → 音频混流
    - 复用同一求值路径，保证所见即所得
 

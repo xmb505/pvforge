@@ -166,7 +166,8 @@ double Track::evaluate(double frame, double fallback) const
             if (span <= 0.0)
                 return b.value;
             const double t = (frame - a.frame) / span;
-            return a.value + (b.value - a.value) * t;
+            const double eased = applyEasing(a.ease, t);
+            return a.value + (b.value - a.value) * eased;
         }
     }
     return keys.last().value;
@@ -573,7 +574,8 @@ QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
         {
             if (std::abs(track.keys[i].frame - frame) < 1e-6)
             {
-                removed.append({id, it.key(), track.keys[i].frame, track.keys[i].value});
+                removed.append({id, it.key(), track.keys[i].frame, track.keys[i].value,
+                                track.keys[i].ease});
                 track.keys.removeAt(i);
             }
         }
@@ -591,12 +593,75 @@ QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
 
 void Project::addKeyframe(EntityId id, const QString& property, double frame, double value)
 {
+    Keyframe key;
+    key.frame = frame;
+    key.value = value;
+    addKeyframe(id, property, key);
+}
+
+void Project::addKeyframe(EntityId id, const QString& property, const Keyframe& key)
+{
     Entity* e = entity(id);
     if (!e)
         return;
-    e->tracks[property].setKey(frame, value);
+
+    Track& track = e->tracks[property];
+    for (Keyframe& existing : track.keys)
+    {
+        if (std::abs(existing.frame - key.frame) < 1e-6)
+        {
+            existing.value = key.value;
+            existing.ease = key.ease;
+            modified = true;
+            emit changed();
+            return;
+        }
+    }
+    track.keys.append(key);
+    std::sort(track.keys.begin(), track.keys.end(),
+              [](const Keyframe& a, const Keyframe& b) { return a.frame < b.frame; });
     modified = true;
     emit changed();
+}
+
+bool Project::setKeyframeEasing(EntityId id, const QString& property, double frame,
+                                const EasingSpec& ease)
+{
+    Entity* e = entity(id);
+    if (!e || e->locked)
+        return false;
+
+    auto it = e->tracks.find(property);
+    if (it == e->tracks.end())
+        return false;
+
+    for (Keyframe& key : it->keys)
+    {
+        if (std::abs(key.frame - frame) < 1e-6)
+        {
+            if (key.ease == ease)
+                return true;
+            key.ease = ease;
+            modified = true;
+            emit changed();
+            return true;
+        }
+    }
+    return false;
+}
+
+const Keyframe* Project::keyframe(EntityId id, const QString& property, double frame) const
+{
+    const Entity* e = entity(id);
+    if (!e)
+        return nullptr;
+    auto it = e->tracks.constFind(property);
+    if (it == e->tracks.constEnd())
+        return nullptr;
+    for (const Keyframe& key : it->keys)
+        if (std::abs(key.frame - frame) < 1e-6)
+            return &key;
+    return nullptr;
 }
 
 const Entity* Project::entity(EntityId id) const
@@ -646,7 +711,7 @@ QJsonObject Project::toJson() const
 {
     QJsonObject root;
     root[QStringLiteral("format")] = QStringLiteral("pvforge");
-    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("version")] = 2;
     root[QStringLiteral("name")] = name;
     root[QStringLiteral("author")] = author;
     root[QStringLiteral("description")] = description;
@@ -693,6 +758,17 @@ QJsonObject Project::toJson() const
                 QJsonObject keyframe;
                 keyframe[QStringLiteral("f")] = key.frame;
                 keyframe[QStringLiteral("v")] = key.value;
+                if (key.ease.easing != Easing::Linear)
+                    keyframe[QStringLiteral("ease")] = easingName(key.ease.easing);
+                if (key.ease.easing == Easing::Bezier)
+                {
+                    QJsonArray handles;
+                    handles.append(key.ease.inX);
+                    handles.append(key.ease.inY);
+                    handles.append(key.ease.outX);
+                    handles.append(key.ease.outY);
+                    keyframe[QStringLiteral("e")] = handles;
+                }
                 keys.append(keyframe);
             }
             tracks[it.key()] = keys;
@@ -830,8 +906,20 @@ bool Project::load(const QString& path, QString* error)
             for (const QJsonValue& keyValue : it.value().toArray())
             {
                 const QJsonObject key = keyValue.toObject();
-                track.keys.append({key.value(QStringLiteral("f")).toDouble(),
-                                   key.value(QStringLiteral("v")).toDouble()});
+                Keyframe frame;
+                frame.frame = key.value(QStringLiteral("f")).toDouble();
+                frame.value = key.value(QStringLiteral("v")).toDouble();
+                frame.ease.easing = easingFromName(
+                    key.value(QStringLiteral("ease")).toString(QStringLiteral("linear")));
+                const QJsonArray handles = key.value(QStringLiteral("e")).toArray();
+                if (handles.size() == 4)
+                {
+                    frame.ease.inX = handles.at(0).toDouble(1.0);
+                    frame.ease.inY = handles.at(1).toDouble(0.0);
+                    frame.ease.outX = handles.at(2).toDouble(0.0);
+                    frame.ease.outY = handles.at(3).toDouble(1.0);
+                }
+                track.keys.append(frame);
             }
             std::sort(track.keys.begin(), track.keys.end(),
                       [](const Keyframe& a, const Keyframe& b) { return a.frame < b.frame; });
