@@ -303,6 +303,7 @@ void PropertiesPanel::refresh()
 
     const bool editable = valid && !e->locked;
     m_transformSection->setEnabled(editable);
+    m_keySection->setEnabled(editable);
     m_textSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);

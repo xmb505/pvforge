@@ -191,9 +191,9 @@ bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFram
 
 QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
+    // Mine-imator keeps these buttons at the end of the name column.
     const int top = kHeaderHeight + row * kRowHeight;
-    const int right = width() - kRightPad;
-    const int x = right - (index + 1) * (kButtonSize + 2);
+    const int x = kNameWidth - 8 - (index + 1) * (kButtonSize + 2);
     return QRect(x, top + (kRowHeight - kButtonSize) / 2, kButtonSize, kButtonSize);
 }
 
@@ -329,8 +329,11 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
         if (e.id != m_renameEntity)
         {
-            p.setPen(e.hidden ? QColor(120, 120, 130) : QColor(210, 210, 218));
-            p.drawText(QRect(10, top, kNameWidth - 20, kRowHeight),
+            const QColor nameColor = e.hidden ? QColor(120, 120, 130)
+                                   : e.locked ? QColor(150, 150, 160)
+                                              : QColor(210, 210, 218);
+            p.setPen(nameColor);
+            p.drawText(QRect(10, top, kNameWidth - 10 - 3 * (kButtonSize + 2), kRowHeight),
                        Qt::AlignVCenter | Qt::AlignLeft, e.name);
         }
 
@@ -353,6 +356,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.setPen(Qt::NoPen);
             if (isSelected)
                 p.setBrush(QColor(255, 255, 255));
+            else if (e.locked)
+                p.setBrush(QColor(120, 105, 70));
             else if (e.id == m_selected)
                 p.setBrush(QColor(255, 200, 90));
             else

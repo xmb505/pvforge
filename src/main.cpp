@@ -400,6 +400,85 @@ int timelineInteractionTest(QApplication& app)
     return app.exec();
 }
 
+int lockTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!timeline || !viewport)
+        {
+            qCritical() << "lock-test: widgets missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 200, 120, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        project->setValue(id, QStringLiteral("x"), 0, 0, true);
+        project->setValue(id, QStringLiteral("x"), 30, 400, true);
+
+        project->setEntityFlag(id, pvf::EntityFlag::Locked, true);
+
+        // Values are frozen.
+        project->setValue(id, QStringLiteral("x"), 15, 999, true);
+        if (std::abs(project->value(id, QStringLiteral("x"), 15) - 200.0) > 1e-6)
+        {
+            qCritical() << "lock-test: value changed while locked";
+            ++failures;
+        }
+
+        // Keyframes cannot be deleted.
+        if (!project->removeKeyframesAt(id, 30).isEmpty())
+        {
+            qCritical() << "lock-test: keyframe removed while locked";
+            ++failures;
+        }
+
+        // Dragging the entity in the viewport is blocked.
+        const QPoint center = viewport->rect().center();
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(center),
+                          QPointF(viewport->mapToGlobal(center)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &press);
+        QMouseEvent move(QEvent::MouseMove, QPointF(center + QPoint(120, 0)),
+                         QPointF(viewport->mapToGlobal(center + QPoint(120, 0))), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &move);
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "lock-test: locked entity moved";
+            ++failures;
+        }
+
+        // Row buttons stay inside the name column.
+        if (timeline->rowButtonRect(0, 0).right() > 180
+            || timeline->rowButtonRect(0, 2).left() < 0)
+        {
+            qCritical() << "lock-test: row buttons outside the name column";
+            ++failures;
+        }
+
+        // Unlocking restores editing.
+        project->setEntityFlag(id, pvf::EntityFlag::Locked, false);
+        project->setValue(id, QStringLiteral("x"), 15, 999, true);
+        if (std::abs(project->value(id, QStringLiteral("x"), 15) - 999.0) > 1e-6)
+        {
+            qCritical() << "lock-test: unlock did not restore editing";
+            ++failures;
+        }
+
+        qInfo() << "lock-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int packTest(QApplication& app)
 {
     Q_UNUSED(app);
@@ -1110,6 +1189,8 @@ int main(int argc, char* argv[])
         return renameTest(app);
     if (app.arguments().contains(QStringLiteral("--pack-test")))
         return packTest(app);
+    if (app.arguments().contains(QStringLiteral("--lock-test")))
+        return lockTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

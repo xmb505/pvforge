@@ -448,8 +448,8 @@ QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
 {
     QVector<KeyframeRecord> removed;
     Entity* e = entity(id);
-    if (!e)
-        return removed;
+    if (!e || e->locked)
+        return removed;   // locked entities keep their keyframes
 
     for (auto it = e->tracks.begin(); it != e->tracks.end();)
     {
@@ -508,8 +508,8 @@ void Project::setValue(EntityId id, const QString& prop, double frame, double va
                        bool keyframe)
 {
     Entity* e = entity(id);
-    if (!e)
-        return;
+    if (!e || e->locked)
+        return;   // locked entities are frozen
 
     if (keyframe)
     {

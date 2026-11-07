@@ -506,7 +506,7 @@ void MainWindow::setSelectedEntity(EntityId id)
 void MainWindow::applyValue(EntityId id, const QString& prop, double value)
 {
     Entity* e = m_project->entity(id);
-    if (!e)
+    if (!e || e->locked)
         return;
 
     // Auto-key on by default. With auto-key off, existing animated properties
