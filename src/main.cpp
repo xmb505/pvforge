@@ -986,6 +986,42 @@ int packTest(QApplication& app)
         ++failures;
     }
 
+    // Asset import recognises images and rejects unsupported files.
+    pvf::Project importProject;
+    const QString importImage = QDir::tempPath() + QStringLiteral("/pvforge_import.png");
+    QImage importBitmap(320, 200, QImage::Format_ARGB32);
+    importBitmap.fill(Qt::magenta);
+    if (!importBitmap.save(importImage))
+        return 1;
+    const QString importText = QDir::tempPath() + QStringLiteral("/pvforge_import.txt");
+    {
+        QFile file(importText);
+        file.open(QIODevice::WriteOnly);
+        file.write("not a media file");
+    }
+
+    if (!importProject.importMediaFile(importImage)
+        || importProject.templateCount() != 1
+        || importProject.templates().first().type != pvf::EntityType::Image)
+    {
+        qCritical() << "pack-test: image import failed";
+        ++failures;
+    }
+    if (!importProject.importMediaFile(importImage) || importProject.templateCount() != 1)
+    {
+        qCritical() << "pack-test: duplicate import not deduplicated";
+        ++failures;
+    }
+    QString importError;
+    if (importProject.importMediaFile(importText, &importError)
+        || importProject.templateCount() != 1)
+    {
+        qCritical() << "pack-test: unsupported file accepted";
+        ++failures;
+    }
+    QFile::remove(importImage);
+    QFile::remove(importText);
+
     // Library templates keep a small thumbnail, never the full-size bitmap.
     const QString bigPath = QDir::tempPath() + QStringLiteral("/pvforge_big.png");
     QImage big(1600, 1200, QImage::Format_ARGB32);

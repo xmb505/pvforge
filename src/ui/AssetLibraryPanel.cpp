@@ -4,12 +4,15 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -140,7 +143,46 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText(Lang::t(QStringLiteral("search.assets"), QStringLiteral("搜索素材…")));
     m_search->setClearButtonEnabled(true);
-    layout->addWidget(m_search);
+
+    auto* searchRow = new QHBoxLayout();
+    searchRow->addWidget(m_search, 1);
+    auto* importButton = new QToolButton(this);
+    importButton->setObjectName(QStringLiteral("assetImport"));
+    importButton->setText(QStringLiteral("+"));
+    importButton->setToolTip(QStringLiteral("导入素材文件（图片 / 视频）"));
+    importButton->setFixedSize(26, 26);
+    searchRow->addWidget(importButton);
+    layout->addLayout(searchRow);
+
+    connect(importButton, &QToolButton::clicked, this, [this] {
+        const QStringList files = QFileDialog::getOpenFileNames(
+            this, QStringLiteral("导入素材"), QString(), QStringLiteral("所有文件 (*)"));
+        if (files.isEmpty())
+            return;
+
+        int imported = 0;
+        QStringList failed;
+        for (const QString& file : files)
+        {
+            QString error;
+            if (m_project->importMediaFile(file, &error))
+            {
+                ++imported;
+            }
+            else
+            {
+                failed << QStringLiteral("%1（%2）").arg(QFileInfo(file).fileName(), error);
+            }
+        }
+
+        if (!failed.isEmpty())
+        {
+            QMessageBox::warning(this, QStringLiteral("部分文件未导入"),
+                                 QStringLiteral("已导入 %1 个素材。\n\n以下文件被跳过：\n%2")
+                                     .arg(imported)
+                                     .arg(failed.join(QStringLiteral("\n"))));
+        }
+    });
 
     m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("assetList"));

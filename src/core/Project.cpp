@@ -361,8 +361,80 @@ Template* Project::addTemplate(const Entity& entity)
     return &m_templates.last();
 }
 
-Entity* Project::createFromTemplate(const Template& tmpl)
+Template* Project::addMediaTemplate(const QString& path, EntityType type,
+                                    const QImage& thumbnail, double duration)
 {
+    for (Template& existing : m_templates)
+    {
+        if (existing.type == type && existing.path == path)
+        {
+            if (existing.thumbnail.isNull() && !thumbnail.isNull())
+                existing.thumbnail = thumbnail.scaled(320, 240, Qt::KeepAspectRatio,
+                                                      Qt::SmoothTransformation);
+            return &existing;
+        }
+    }
+
+    Template tmpl;
+    tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    tmpl.type = type;
+    tmpl.name = QFileInfo(path).completeBaseName();
+    tmpl.path = path;
+    tmpl.duration = duration;
+    if (!thumbnail.isNull())
+        tmpl.thumbnail = thumbnail.scaled(320, 240, Qt::KeepAspectRatio,
+                                          Qt::SmoothTransformation);
+
+    m_templates.append(tmpl);
+    modified = true;
+    emit changed();
+    return &m_templates.last();
+}
+
+bool Project::importMediaFile(const QString& path, QString* error)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QStringList imageExtensions = {QStringLiteral("png"), QStringLiteral("jpg"),
+                                                QStringLiteral("jpeg"), QStringLiteral("webp"),
+                                                QStringLiteral("bmp")};
+    static const QStringList videoExtensions = {QStringLiteral("mp4"), QStringLiteral("webm"),
+                                                QStringLiteral("mov"), QStringLiteral("mkv"),
+                                                QStringLiteral("avi"), QStringLiteral("m4v")};
+
+    if (imageExtensions.contains(suffix))
+    {
+        const QImage image(path);
+        if (image.isNull())
+        {
+            if (error)
+                *error = QStringLiteral("无法读取图片");
+            return false;
+        }
+        addMediaTemplate(importAsset(path), EntityType::Image, image);
+        return true;
+    }
+
+    if (videoExtensions.contains(suffix))
+    {
+        QString parseError;
+        double duration = 0.0;
+        const QImage frame = decodeVideoFirstFrame(path, &parseError, &duration);
+        if (frame.isNull())
+        {
+            if (error)
+                *error = parseError;
+            return false;
+        }
+        addMediaTemplate(importAsset(path), EntityType::Video, frame, duration);
+        return true;
+    }
+
+    if (error)
+        *error = QStringLiteral("不支持的文件类型");
+    return false;
+}
+
+Entity* Project::createFromTemplate(const Template& tmpl){
     switch (tmpl.type)
     {
     case EntityType::Image:

@@ -138,6 +138,9 @@ public:
     Template* templateAt(int index);
     int templateCount() const { return int(m_templates.size()); }
     Template* addTemplate(const Entity& entity);
+    Template* addMediaTemplate(const QString& path, EntityType type, const QImage& thumbnail,
+                               double duration = 0.0);
+    bool importMediaFile(const QString& path, QString* error = nullptr);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);
 
