@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QImage>
 #include <QObject>
+#include <QPixmap>
 #include <QString>
 #include <QVariantMap>
 #include <QVector>
@@ -44,6 +45,7 @@ struct Entity
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache
+    mutable QPixmap pixmap;    // painter cache, built on first draw
     QVariantMap data;          // type-specific static data (text, font, shape, ...)
     QHash<QString, Track> tracks;
     QHash<QString, double> values;

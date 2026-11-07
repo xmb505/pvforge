@@ -213,8 +213,10 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, do
     case EntityType::Video:
         if (!e.image.isNull())
         {
+            if (e.pixmap.isNull())
+                e.pixmap = QPixmap::fromImage(e.image);
             p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            p.drawImage(dest, e.image);
+            p.drawPixmap(dest, e.pixmap, QRectF(e.pixmap.rect()));
         }
         break;
 

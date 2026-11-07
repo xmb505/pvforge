@@ -337,7 +337,11 @@ Template* Project::addTemplate(const Entity& entity)
     tmpl.name = entity.name;
     tmpl.path = entity.sourcePath;
     tmpl.duration = entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
-    tmpl.thumbnail = entity.image;
+    // Library previews only ever need a small image; keeping the full-size
+    // bitmap here made every repaint rescale a multi-megapixel image.
+    if (!entity.image.isNull())
+        tmpl.thumbnail = entity.image.scaled(320, 240, Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation);
     if (entity.type == EntityType::Text || entity.type == EntityType::Vector)
         tmpl.data = entity.data;
 
@@ -767,16 +771,27 @@ bool Project::load(const QString& path, QString* error)
             {
                 if (e.sourcePath == tmpl.path && !e.image.isNull())
                 {
-                    tmpl.thumbnail = e.image;
+                    tmpl.thumbnail = e.image.scaled(320, 240, Qt::KeepAspectRatio,
+                                                    Qt::SmoothTransformation);
                     break;
                 }
             }
             if (tmpl.thumbnail.isNull())
             {
                 if (tmpl.type == EntityType::Video)
-                    tmpl.thumbnail = decodeVideoFirstFrame(tmpl.path, nullptr, nullptr);
+                {
+                    const QImage frame = decodeVideoFirstFrame(tmpl.path, nullptr, nullptr);
+                    if (!frame.isNull())
+                        tmpl.thumbnail = frame.scaled(320, 240, Qt::KeepAspectRatio,
+                                                      Qt::SmoothTransformation);
+                }
                 else if (tmpl.type == EntityType::Image)
-                    tmpl.thumbnail = QImage(tmpl.path);
+                {
+                    const QImage image(tmpl.path);
+                    if (!image.isNull())
+                        tmpl.thumbnail = image.scaled(320, 240, Qt::KeepAspectRatio,
+                                                      Qt::SmoothTransformation);
+                }
             }
         }
 

@@ -750,6 +750,22 @@ int packTest(QApplication& app)
         ++failures;
     }
 
+    // Library templates keep a small thumbnail, never the full-size bitmap.
+    const QString bigPath = QDir::tempPath() + QStringLiteral("/pvforge_big.png");
+    QImage big(1600, 1200, QImage::Format_ARGB32);
+    big.fill(Qt::blue);
+    if (!big.save(bigPath))
+        return 1;
+    pvf::Project bigProject;
+    bigProject.addImage(bigPath);
+    const QImage thumb = bigProject.templates().first().thumbnail;
+    if (thumb.width() > 320 || thumb.height() > 240)
+    {
+        qCritical() << "pack-test: thumbnail not downscaled" << thumb.size();
+        ++failures;
+    }
+    QFile::remove(bigPath);
+
     QDir(projectDir).removeRecursively();
     QFile::remove(external);
     qInfo() << "pack-test failures" << failures;
