@@ -15,9 +15,11 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QResizeEvent>
+#include <QScrollArea>
+#include <QShowEvent>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QScrollArea>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -34,7 +36,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_project->setParent(this);
     setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
     resize(1440, 900);
-    setMinimumSize(1000, 620);
+    setMinimumSize(640, 400);
 
     m_viewport = new Viewport(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
@@ -405,6 +407,29 @@ void MainWindow::updateStatus()
                           .arg(m_project->fps)
                           .arg(m_project->width)
                           .arg(m_project->height));
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+
+    // Squeezed windows collapse the side panel and timeline instead of
+    // letting their children overlap the toolbar.
+    const bool showSide = width() >= 900;
+    const bool showTimeline = height() >= 480;
+    if (m_rightTabs)
+        m_rightTabs->setVisible(showSide);
+    if (m_timeline)
+        m_timeline->setVisible(showTimeline);
+    if (m_viewport)
+        m_viewport->setMinimumWidth(showSide ? 480 : 0);
+}
+
+void MainWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+    if (width() < minimumWidth() || height() < minimumHeight())
+        resize(std::max(width(), minimumWidth()), std::max(height(), minimumHeight()));
 }
 
 } // namespace pvf
