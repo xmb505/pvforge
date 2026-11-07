@@ -52,17 +52,13 @@ void TimelinePanel::setSelectedEntity(EntityId id)
     update();
 }
 
-int TimelinePanel::contentEndFrame() const
-{
-    // Mine-imator's timeline has no fixed end: it extends with content and
-    // with the playhead. Two seconds is only the minimum visible ruler span.
-    return std::max({m_project->timelineLength(), m_frame + m_project->fps,
-                     m_project->fps * 2});
-}
-
 int TimelinePanel::contentWidth() const
 {
-    return int(contentEndFrame() * kPixelsPerFrame) + 200;
+    // Mine-imator: content width = max(content, playhead) * zoom + view width.
+    // The view width term keeps a full screen of ruler visible on an empty
+    // project instead of stopping at the last keyframe.
+    const int endFrame = std::max(m_project->timelineLength(), m_frame);
+    return int(endFrame * kPixelsPerFrame) + visibleWidth();
 }
 
 int TimelinePanel::visibleWidth() const
@@ -144,10 +140,12 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
 
-    for (int f = 0; f <= contentEndFrame(); f += step)
+    for (int f = 0; f <= frameFromX(right) + step; f += step)
     {
         const int x = xFromFrame(f);
-        if (x < kNameWidth - 10 || x > right)
+        if (x > right)
+            break;
+        if (x < kNameWidth - 10)
             continue;
         p.setPen(QColor(70, 70, 78));
         p.drawLine(x, kHeaderHeight - 6, x, kHeaderHeight);

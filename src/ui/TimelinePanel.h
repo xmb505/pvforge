@@ -35,7 +35,6 @@ private:
     int xFromFrame(int frame) const;
     int frameFromX(int x) const;
     int rowAt(int y) const;
-    int contentEndFrame() const;
     int contentWidth() const;
     int visibleWidth() const;
     void updateScrollBar();

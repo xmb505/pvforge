@@ -420,6 +420,7 @@ int playTest(QApplication& app)
 int layoutTest(QApplication& app)
 {
     auto* testProject = new pvf::Project;
+    testProject->fps = 24;
     pvf::MainWindow window(testProject);
     window.resize(480, 1060);
     window.show();
