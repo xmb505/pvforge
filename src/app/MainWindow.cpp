@@ -7,6 +7,7 @@
 #include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "SettingsDialog.h"
+#include "media/VideoPlayer.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
@@ -648,6 +649,7 @@ EntityId MainWindow::importImageFile(const QString& path)
 void MainWindow::setFrame(int frame)
 {
     m_frame = std::max(0, frame);
+    m_videoPlayer.update(*m_project, m_frame);
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
@@ -1027,6 +1029,7 @@ void MainWindow::refreshAll()
 {
     if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
         setSelectedEntity(kInvalidEntity);
+    m_videoPlayer.update(*m_project, m_frame);
     m_viewport->update();
     m_timeline->update();
     m_props->refresh();

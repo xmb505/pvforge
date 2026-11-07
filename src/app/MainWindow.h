@@ -2,6 +2,7 @@
 
 #include "core/History.h"
 #include "core/Project.h"
+#include "media/VideoPlayer.h"
 
 #include <QElapsedTimer>
 #include <QMainWindow>
@@ -103,6 +104,7 @@ private:
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
     AudioEngine* m_audioEngine = nullptr;
+    VideoPlayer m_videoPlayer;
 
     QTimer* m_playTimer = nullptr;
     QTimer* m_scrubTimer = nullptr;

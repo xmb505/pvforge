@@ -6,6 +6,7 @@
 #include "core/Settings.h"
 #include "media/MediaImporter.h"
 #include "media/AudioDecoder.h"
+#include "media/VideoPlayer.h"
 #include "media/DecoderInfo.h"
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
@@ -46,6 +47,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QEventLoop>
 #include <QProgressBar>
 #include <QPushButton>
@@ -1500,6 +1502,136 @@ int easingTest(QApplication& app)
     }
 
     qInfo() << "easing-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
+int videoTest(QApplication& app)
+{
+    int failures = 0;
+    const QString path = QStringLiteral("/tmp/pvf_video.mp4");
+
+    QFile::remove(path);
+    QProcess ffmpeg;
+    ffmpeg.start(QStringLiteral("ffmpeg"),
+                 {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("color=c=red:s=320x240:d=1:r=30"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("color=c=blue:s=320x240:d=1:r=30"),
+                  QStringLiteral("-filter_complex"),
+                  QStringLiteral("[0:v][1:v]concat=n=2:v=1:a=0"),
+                  QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                  QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                  QStringLiteral("-preset"), QStringLiteral("ultrafast"), path});
+    if (!ffmpeg.waitForFinished(30000) || ffmpeg.exitCode() != 0)
+    {
+        qCritical() << "video-test: cannot generate test video"
+                    << ffmpeg.readAllStandardError();
+        return 1;
+    }
+
+    QString error;
+    double duration = 0.0;
+    const QImage first = pvf::decodeVideoFirstFrame(path, &error, &duration);
+    if (first.isNull() || duration < 1.8 || duration > 2.2)
+    {
+        qCritical() << "video-test: first frame" << error << duration;
+        return 1;
+    }
+
+    auto centerColor = [](const QImage& image) {
+        if (image.isNull())
+            return QColor();
+        return image.pixelColor(image.width() / 2, image.height() / 2);
+    };
+    auto isRed = [](const QColor& color) {
+        return color.red() > 180 && color.green() < 90 && color.blue() < 90;
+    };
+    auto isBlue = [](const QColor& color) {
+        return color.blue() > 180 && color.red() < 90 && color.green() < 90;
+    };
+
+    pvf::Project project;
+    project.fps = 10;
+    pvf::Entity* video = project.addVideo(path, first, duration, QStringLiteral("Video"));
+    pvf::VideoPlayer player;
+
+    player.update(project, 2);
+    QColor color = centerColor(video->image);
+    if (!isRed(color))
+    {
+        qCritical() << "video-test: frame 2 is not red" << color;
+        ++failures;
+    }
+    player.update(project, 15);
+    color = centerColor(video->image);
+    if (!isBlue(color))
+    {
+        qCritical() << "video-test: frame 15 is not blue" << color;
+        ++failures;
+    }
+    player.update(project, 3);
+    color = centerColor(video->image);
+    if (!isRed(color))
+    {
+        qCritical() << "video-test: backward seek is not red" << color;
+        ++failures;
+    }
+    player.update(project, 10);
+    color = centerColor(video->image);
+    if (!isBlue(color))
+    {
+        qCritical() << "video-test: frame 10 is not blue" << color;
+        ++failures;
+    }
+
+    auto* windowProject = new pvf::Project;
+    windowProject->fps = 10;
+    pvf::Entity* uiVideo =
+        windowProject->addVideo(path, first, duration, QStringLiteral("Video"));
+    pvf::MainWindow window(windowProject);
+    window.resize(900, 700);
+    window.show();
+    QApplication::processEvents();
+
+    window.goToFrame(15);
+    QApplication::processEvents();
+    color = centerColor(uiVideo->image);
+    if (!isBlue(color))
+    {
+        qCritical() << "video-test: main window frame 15 is not blue" << color;
+        ++failures;
+    }
+    window.grab().save(QStringLiteral("/tmp/pvf_video_frame.png"));
+
+    window.goToFrame(2);
+    QApplication::processEvents();
+    color = centerColor(uiVideo->image);
+    if (!isRed(color))
+    {
+        qCritical() << "video-test: main window frame 2 is not red" << color;
+        ++failures;
+    }
+
+    // The play timer must advance both the playhead and the video frame.
+    window.goToFrame(0);
+    window.togglePlayback();
+    {
+        QEventLoop loop;
+        QTimer::singleShot(1300, &loop, &QEventLoop::quit);
+        loop.exec();
+    }
+    window.togglePlayback();
+    color = centerColor(uiVideo->image);
+    if (window.currentFrame() < 10 || !isBlue(color))
+    {
+        qCritical() << "video-test: playback did not reach the blue frame"
+                    << window.currentFrame() << color;
+        ++failures;
+    }
+
+    Q_UNUSED(app);
+    qInfo() << "video-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
 
@@ -4044,6 +4176,8 @@ int main(int argc, char* argv[])
         return easingTest(app);
     if (app.arguments().contains(QStringLiteral("--audio-test")))
         return audioTest(app);
+    if (app.arguments().contains(QStringLiteral("--video-test")))
+        return videoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
         return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))

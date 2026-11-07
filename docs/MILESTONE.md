@@ -55,7 +55,7 @@
 
 ### 实体
 
-- 图片、视频（首帧）、文字、矢量、摄像机
+- 图片、视频、文字、矢量、摄像机
 - 文字：内容/字体/字号/颜色/对齐
 - 矢量 9 种形状：矩形、圆角矩形、椭圆、直线、三角形、心形、星形、多边形、箭头
   - 参数：宽高、圆角、边数、内径比、填充、描边
@@ -110,6 +110,15 @@
 - OBS 式独立窗口：按钮或拖出主窗口；关闭独立窗口停靠回右下角；默认不置顶，可切换「置顶」
 - 共享 `SceneRenderer` / `CameraRenderer`，主视口、监视器、未来 MP4 导出共用
 
+### 视频播放
+
+- 每个视频实体维护一个 FFmpeg 解码器（`VideoPlayer`）；播放头移动和播放时按项目帧取帧
+- 顺序播放连续解码前进；后退或跳转超过 1 秒时 seek 到前一个关键帧再解码到目标
+- 项目帧率高于视频帧率时保持当前帧到显示区间结束，避免每 tick 回退 seek
+- 解码结果写入 `Entity::image` 并清空缩略图/Pixmap 缓存，主视口和监视器共用
+- 视频当前帧和音频均为 FFmpeg 软件解码；Qt Multimedia 硬件视频解码尚未接入
+- 1080p H.264 顺序播放的软件解码开销在本机约 2–3ms/帧，实时播放有余量
+
 ### 音频与波形
 
 - 音频是时间轴对象：时间轴开始、裁掉开头/结尾、音量、淡入淡出；字段右侧「取」按钮直接取播放头位置；在时间轴上按住波形块可直接拖动音频（整帧、可撤销）；裁掉开头/结尾时保留的波形保持原位，不会跳到第 0 帧
@@ -150,7 +159,7 @@ src/
 ├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
-├─ media/    VideoDecoder（FFmpeg 首帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
+├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
 ├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
@@ -168,7 +177,7 @@ src/
 - **命令历史**：复合命令 + 合并，一次拖动一条撤销
 - **缓动归属目标关键帧**：设置到达 1s 的曲线，就改 0s → 1s 这一段；和 Mine-imator 的“出发段”模型相反，目的是符合“到这个姿势”的直觉
 - **异步导入**：重活在工作线程，主线程入库
-- **解码策略**：当前视频首帧和音频全部走 FFmpeg 软件解码；启动时禁用 Qt Multimedia 硬件视频后端，避免 VDPAU/VAAPI 探测；视频播放接入后再做真正的硬件解码设置
+- **解码策略**：视频当前帧和音频全部走 FFmpeg 软件解码；启动时禁用 Qt Multimedia 硬件视频后端，避免 VDPAU/VAAPI 探测；硬件解码后续再评估
 - **音频主时钟**：有音频时播放头跟随 `QAudioSink` 实际播放位置；无音频才用计时器
 - **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
 
@@ -178,12 +187,12 @@ src/
 
 self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / audio / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 33 个模式，全部通过。
+共 34 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
-- 视频只显示首帧，无逐帧播放
+- 视频只播放画面，内嵌音轨尚未提取；需要声音时单独导入音频
 - 无频谱可视化对象（音频轨波形已支持）
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频擦洗是短片段预览，不是变速连续擦洗
