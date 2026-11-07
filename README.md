@@ -13,6 +13,7 @@
 - **单帧步进**：点刻度行后轻按 `←` / `→` 走一帧，按住约 0.4 秒连续播放/倒退
 - **关键帧缓动**：曲线属于**到达的关键帧**（例如设置 1s 的曲线 = 0→1s 这一段），右键关键帧或属性面板「缓动」按钮打开视觉模板网格；自定义三次贝塞尔可拖手柄
 - **实体**：图片、视频（逐帧播放，内嵌音轨自动拆成音频）、文字、矢量（9 种形状）
+- **文件夹与父级**：时间轴实体栏是图层树，可新建文件夹、拖拽排序/拖进文件夹、点箭头收起；属性面板「父级」可选工作台或任意实体，子级坐标跟随父级
 - **锁定**：锁定实体不能在视口或时间轴上选中；锁定当前对象会立即取消选择，用时间轴行的锁按钮解锁
 - **视口交互**：选中框、四角缩放、X/Y gizmo、旋转环、自定义轴心、PPT 式角缩放
 - **吸附**：画布边缘/中心、其他实体、边缘中点（可选）、旋转角度吸附，青色参考线；`Shift` 等比缩放时按旋转后的可视包围盒吸附
@@ -83,6 +84,10 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 改关键帧缓动 | 右键关键帧，或选中实体后在属性面板「关键帧」里点「缓动：…」；选「自定义」拖贝塞尔手柄 |
 | 框选关键帧 | 在轨道区拖动出选框 |
 | 悬停对象行 | 行尾出现隐藏 / 锁定 / 全选关键帧按钮 |
+| 新建文件夹 | 右键时间轴实体行：新建文件夹 / 在此文件夹内新建文件夹 |
+| 图层排序 | 拖动实体名上下移动；拖到文件夹行中间放入文件夹 |
+| 收起文件夹 | 点文件夹名前的三角；再点展开 |
+| 父级坐标系 | 属性面板「父级」选工作台或任意实体；X/Y/旋转/缩放相对父级 |
 | 锁定 / 解锁 | 点时间轴行的锁按钮；锁定后自动取消选择，画布和时间轴都不能再选中 |
 | 播放/暂停 | `空格` |
 | 视口缩放/平移 | 滚轮 / 中键拖动 |
@@ -121,7 +126,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-34 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+35 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
@@ -129,6 +134,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --easing-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --audio-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --video-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --folder-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --timeline-frame-test
 ```
 
@@ -145,6 +151,8 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --timeline-frame-test
 - 无频谱可视化对象
 - 视频帧和音频均为 FFmpeg 软件解码；Qt Multimedia 硬件视频解码尚未接入
 - 预览使用 960 宽的代理文件，原始分辨率留给后续导出；代理未生成完时直接使用原视频，长 GOP 视频拖动仍可能卡
+- 父级坐标作用于可视实体；摄像机不作为父级，音频没有空间坐标
+- 删除有子对象的父级前需要先把子对象拖到工作台或删除
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频波形只有时间轴行，没有独立的大波形页
 - 工程加载时同步解码音频，长音频可能卡一下

@@ -321,7 +321,7 @@ void VideoPlayer::update(Project& project, int frame)
             }
             stream->sourcePath = entity.sourcePath;
         }
-        if (entity.hidden)
+        if (entity.hidden || project.isEffectivelyHidden(entity.id))
             continue;
 
         bool changed = false;

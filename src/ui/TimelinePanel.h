@@ -2,6 +2,7 @@
 
 #include "core/Project.h"
 
+#include <QSet>
 #include <QWidget>
 
 class QKeyEvent;
@@ -48,6 +49,14 @@ public:
     int rulerLabelStepForTest() const;
     int secondsCellStepForTest() const;
     int secondsLabelStepForTest() const;
+    int rowCountForTest() const { return int(visibleEntities().size()); }
+    EntityId rowEntityForTest(int row) const { return entityAtRow(row); }
+    int rowDepthForTest(int row) const { return depthOf(entityAtRow(row)); }
+    bool rowCollapsedForTest(EntityId id) const
+    {
+        return m_collapsedFolders.contains(id);
+    }
+    QRect folderArrowRectForTest(int row) const { return folderArrowRect(row); }
 signals:
     void frameRequested(int frame);
     void scrubStarted();   // the user takes manual control of the playhead
@@ -57,6 +66,8 @@ signals:
     void deleteKeyframesRequested();
     void entityRenamed(EntityId id, const QString& name);
     void audioMoved(EntityId id, double startFrame);
+    void entityMoveRequested(EntityId id, EntityId parent, int index);
+    void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
 
 protected:
@@ -85,6 +96,9 @@ private:
     bool audioClipRange(const Entity& entity, double* left, double* right) const;
     EntityId audioClipAt(int x, int y) const;
     void updateHoverCursor(const QPointF& pos);
+    int depthOf(EntityId id) const;
+    QRect folderArrowRect(int row) const;
+    void updateRowDropTarget(const QPointF& pos);
     QVector<double> keyframeFrames(EntityId id) const;
     void handleRowButton(int row, int index);
     int contentWidth() const;
@@ -100,7 +114,8 @@ private:
     void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
                            int right);
 
-    enum class DragMode { None, Scrub, PendingSelect, BoxSelect, MoveAudio };
+    enum class DragMode { None, Scrub, PendingSelect, BoxSelect, MoveAudio, PendingRowDrag, MoveRow };
+    enum class DropMode { None, Above, Below, Into };
 
     Project* m_project = nullptr;
     int m_frame = 0;
@@ -114,6 +129,10 @@ private:
     EntityId m_audioDragId = kInvalidEntity;
     double m_audioDragStart = 0.0;
     double m_audioDragOffset = 0.0;
+    EntityId m_rowDragId = kInvalidEntity;
+    int m_dropRow = -1;
+    DropMode m_dropMode = DropMode::None;
+    QSet<EntityId> m_collapsedFolders;
     int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;

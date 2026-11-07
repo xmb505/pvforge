@@ -23,7 +23,7 @@ constexpr EntityId kInvalidEntity = -1;
 constexpr int kWorkCameraView = -2;
 constexpr int kWholeCanvasView = -3;
 
-enum class EntityType { Image, Video, Text, Vector, Camera, Audio };
+enum class EntityType { Image, Video, Text, Vector, Camera, Audio, Folder };
 
 struct Keyframe
 {
@@ -47,6 +47,7 @@ struct Entity
 {
     EntityId id = kInvalidEntity;
     EntityType type = EntityType::Image;
+    EntityId parent = kInvalidEntity;   // coordinate system / layer parent
     QString templateId;        // template this instance was created from
     bool hidden = false;
     bool locked = false;
@@ -64,6 +65,7 @@ struct Entity
 
     bool isCamera() const { return type == EntityType::Camera; }
     bool isAudio() const { return type == EntityType::Audio; }
+    bool isFolder() const { return type == EntityType::Folder; }
     QString textContent() const { return data.value(QStringLiteral("text")).toString(); }
     bool rotPointCustom() const
     {
@@ -159,6 +161,17 @@ public:
     Entity* addCamera(const QString& name = QString());
     Entity* addAudio(const QString& path, const std::shared_ptr<AudioClip>& audio,
                      const QString& displayName = QString());
+    Entity* addFolder(const QString& name = QString(),
+                      EntityId parent = kInvalidEntity);
+
+    bool setEntityParent(EntityId id, EntityId parent);
+    bool moveEntity(EntityId id, EntityId parent, int index);
+    bool isDescendantOf(EntityId id, EntityId ancestor) const;
+    bool hasChildren(EntityId id) const;
+    bool isEffectivelyHidden(EntityId id) const;
+    bool isEffectivelyLocked(EntityId id) const;
+    // Pre-order layer order: roots in vector order, children after their parent.
+    QVector<int> entityOrder() const;
 
     Entity* entity(EntityId id);
     const Entity* entity(EntityId id) const;

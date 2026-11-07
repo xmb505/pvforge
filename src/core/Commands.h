@@ -112,6 +112,41 @@ private:
     QString m_newName;
 };
 
+// Changing the parent (coordinate system) of an entity.
+class SetParentCommand : public UndoCommand
+{
+public:
+    SetParentCommand(EntityId id, EntityId oldParent, EntityId newParent);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    EntityId m_oldParent = kInvalidEntity;
+    EntityId m_newParent = kInvalidEntity;
+};
+
+// Reordering an entity in the layer list, optionally into another parent.
+class MoveEntityCommand : public UndoCommand
+{
+public:
+    MoveEntityCommand(EntityId id, EntityId oldParent, EntityId newParent,
+                      int oldIndex, int newIndex);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    EntityId m_id = kInvalidEntity;
+    EntityId m_oldParent = kInvalidEntity;
+    EntityId m_newParent = kInvalidEntity;
+    int m_oldIndex = 0;
+    int m_newIndex = 0;
+};
+
 // Changing one entry of an entity's static data map (audio start frame, ...).
 class SetEntityDataCommand : public UndoCommand
 {

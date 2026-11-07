@@ -13,6 +13,11 @@ namespace SceneRenderer {
 // Local entity coordinates (centred at zero) to project coordinates.
 QTransform entityTransform(const Project& project, const Entity& entity, int frame);
 
+// Parent chain transform (identity for a world-space entity), and the full
+// local-to-project transform including all parents.
+QTransform parentWorldTransform(const Project& project, const Entity& entity, int frame);
+QTransform worldTransform(const Project& project, const Entity& entity, int frame);
+
 QRectF entityLocalBounds(const Entity& entity);
 
 // Draws the entity into a painter already clipped by the caller. The

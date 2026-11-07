@@ -189,6 +189,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     });
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
+    connect(m_props, &PropertiesPanel::parentEdited, this, &MainWindow::onParentEdited);
     connect(m_props, &PropertiesPanel::keyframeEasingEdited, this,
             &MainWindow::onKeyframeEasingEdited);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
@@ -222,6 +223,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onKeyframeEasingRequested);
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
     connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
+    connect(m_timeline, &TimelinePanel::entityMoveRequested, this,
+            &MainWindow::onEntityMoveRequested);
+    connect(m_timeline, &TimelinePanel::folderCreateRequested, this,
+            &MainWindow::onCreateFolderRequested);
     connect(m_history, &History::changed, this, [this] {
         m_undoAction->setEnabled(m_history->canUndo());
         m_redoAction->setEnabled(m_history->canRedo());
@@ -519,8 +524,13 @@ void MainWindow::deleteSelectedEntity()
     if (m_selected == kInvalidEntity)
         return;
     const Entity* e = m_project->entity(m_selected);
-    if (!e || e->locked)
+    if (!e || m_project->isEffectivelyLocked(m_selected))
         return;
+    if (m_project->hasChildren(m_selected))
+    {
+        statusBar()->showMessage(QStringLiteral("先移动或删除子对象，再删除这个父级"), 3000);
+        return;
+    }
 
     const Entity copy = *e;
     const int index = m_project->removeEntity(m_selected);
@@ -620,7 +630,7 @@ void MainWindow::packAllAssets()
 void MainWindow::onEntityRenamed(EntityId id, const QString& name)
 {
     const Entity* e = m_project->entity(id);
-    if (!e || e->name == name)
+    if (!e || m_project->isEffectivelyLocked(id) || e->name == name)
         return;
     m_history->push(std::make_unique<RenameEntityCommand>(id, e->name, name), *m_project);
 }
@@ -640,6 +650,72 @@ void MainWindow::onAudioMoved(EntityId id, double startFrame)
                     *m_project);
     statusBar()->showMessage(
         QStringLiteral("音频已移动到第 %1 帧").arg(std::lround(startFrame)), 2000);
+}
+
+void MainWindow::onParentEdited(EntityId id, EntityId parent)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || m_project->isEffectivelyLocked(id) || e->parent == parent)
+        return;
+    if (parent != kInvalidEntity)
+    {
+        const Entity* newParent = m_project->entity(parent);
+        if (!newParent || newParent->isCamera() || newParent->isAudio()
+            || m_project->isDescendantOf(parent, id))
+        {
+            return;
+        }
+    }
+    m_history->push(std::make_unique<SetParentCommand>(id, e->parent, parent),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已修改父级坐标系"), 2000);
+}
+
+void MainWindow::onEntityMoveRequested(EntityId id, EntityId parent, int index)
+{
+    Entity* e = m_project->entity(id);
+    if (!e || m_project->isEffectivelyLocked(id))
+        return;
+    if (parent != kInvalidEntity)
+    {
+        const Entity* newParent = m_project->entity(parent);
+        if (!newParent || newParent->isCamera() || newParent->isAudio()
+            || m_project->isDescendantOf(parent, id))
+        {
+            return;
+        }
+    }
+
+    const auto& entities = m_project->entities();
+    int oldIndex = -1;
+    for (int i = 0; i < int(entities.size()); ++i)
+        if (entities[i].id == id)
+        {
+            oldIndex = i;
+            break;
+        }
+    if (oldIndex < 0)
+        return;
+    if (e->parent == parent && (index == oldIndex || index == oldIndex + 1))
+        return;
+
+    m_history->push(std::make_unique<MoveEntityCommand>(id, e->parent, parent,
+                                                        oldIndex, index),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已调整图层顺序"), 2000);
+}
+
+void MainWindow::onCreateFolderRequested(EntityId parent)
+{
+    if (parent != kInvalidEntity)
+    {
+        const Entity* parentEntity = m_project->entity(parent);
+        if (!parentEntity || m_project->isEffectivelyLocked(parent))
+            return;
+    }
+    Entity* folder = m_project->addFolder(QString(), parent);
+    if (folder)
+        onEntityCreated(folder->id);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -707,7 +783,7 @@ void MainWindow::setFrame(int frame)
 void MainWindow::setSelectedEntity(EntityId id)
 {
     Entity* selected = m_project->entity(id);
-    if (selected && selected->locked)
+    if (selected && m_project->isEffectivelyLocked(id))
     {
         id = kInvalidEntity;
         selected = nullptr;
@@ -1010,7 +1086,7 @@ void MainWindow::onDeleteKeyframesRequested()
     for (const KeyframeSelection& selection : m_timeline->selectedKeyframes())
     {
         const Entity* entity = m_project->entity(selection.entity);
-        if (!entity || entity->locked)
+        if (!entity || m_project->isEffectivelyLocked(selection.entity))
             continue;
         records += m_project->removeKeyframesAt(selection.entity, selection.frame);
     }
@@ -1094,7 +1170,7 @@ void MainWindow::refreshAll()
     if (m_selected != kInvalidEntity)
     {
         const Entity* selected = m_project->entity(m_selected);
-        if (!selected || selected->locked)
+        if (!selected || m_project->isEffectivelyLocked(m_selected))
             setSelectedEntity(kInvalidEntity);
     }
     m_videoPlayer.update(*m_project, m_frame);

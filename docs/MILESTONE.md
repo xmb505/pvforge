@@ -59,7 +59,11 @@
 - 文字：内容/字体/字号/颜色/对齐
 - 矢量 9 种形状：矩形、圆角矩形、椭圆、直线、三角形、心形、星形、多边形、箭头
   - 参数：宽高、圆角、边数、内径比、填充、描边
-- 每实体：位置、旋转、缩放、透明度、隐藏、锁定
+- 每实体：位置、旋转、缩放、透明度、隐藏、锁定、父级
+- 文件夹是 `EntityType::Folder`：无实物、可嵌套、可折叠；实体栏按父级形成图层树
+- 父级坐标：子级的 X/Y/旋转/缩放相对父级；渲染、命中测试、手柄和拖拽使用父级世界变换
+- 时间轴支持拖拽排序、拖入文件夹、右键新建文件夹；收起状态只影响显示，不影响渲染
+- 锁定/隐藏沿父级链生效：锁定文件夹下的子对象不可选中，隐藏文件夹下的子对象不渲染
 - 摄像机：时间轴对象，活动摄像机、取景比例 5%–100%、旋转、关键帧；位置限制在画布内，旋转允许越界
 - 自定义轴心（`rotPointX/Y`）：位置锚定轴心，改轴心自动补偿位置，旋转围绕轴心
 - 锁定在数据层强制：值、关键帧不可改；锁定后自动取消选择，视口和时间轴都不能再选中
@@ -110,6 +114,18 @@
 - 画布内显示项目背景，画布外纯黑；工作摄像机显示主视口原始内容（包括画布外）
 - OBS 式独立窗口：按钮或拖出主窗口；关闭独立窗口停靠回右下角；默认不置顶，可切换「置顶」
 - 共享 `SceneRenderer` / `CameraRenderer`，主视口、监视器、未来 MP4 导出共用
+
+### 文件夹与父级
+
+- `EntityType::Folder` 是无实物实体，只提供层级和坐标变换；可嵌套
+- `Entity::parent` 指向父级，`kInvalidEntity` 表示工作台世界坐标
+- 图层顺序由 `Project::entityOrder()` 按父级做前序遍历；渲染和命中测试使用同一顺序，保证图层前后关系一致
+- 时间轴实体栏按层级缩进，文件夹行有展开/收起三角；收起只影响显示
+- 支持拖动实体行排序、拖到文件夹行中间移入文件夹、右键新建文件夹/子文件夹/同级文件夹
+- 属性面板「父级」下拉框列出工作台和所有可用实体（排除自身与后代），修改走 `SetParentCommand`
+- 父级变换沿链组合：`world = childLocal * parentLocal * ...`；子级的 X/Y/旋转/缩放是相对父级的
+- 缩放/移动父级时子级一起变换；隐藏/锁定沿父级链生效（隐藏不渲染，锁定不可选中）
+- 移动/父级修改/新建文件夹均接入撤销栈；删除有子对象的父级会被阻止
 
 ### 视频播放
 
@@ -162,7 +178,7 @@
 
 ```
 src/
-├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
+├─ core/     Project/Entity（父级/文件夹）/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
 ├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、VideoProxy（后台预览代理）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
@@ -191,15 +207,17 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / audio / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 34 个模式，全部通过。
+共 35 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
 - 无频谱可视化对象（音频轨波形已支持）
+- 父级坐标作用于可视实体；摄像机不作为父级，音频没有空间坐标
+- 删除有子对象的父级前需要先把子对象拖到工作台或删除
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频擦洗是短片段预览，不是变速连续擦洗
 - 音频波形目前只有 1ms 峰值、没有独立的整轨大波形页

@@ -34,6 +34,7 @@ public:
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);
     void pivotEdited(EntityId id, double ax, double ay);
+    void parentEdited(EntityId id, EntityId parent);
     void keyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
 
 private:
@@ -65,6 +66,9 @@ private:
     QLabel* m_title = nullptr;
     QPushButton* m_keyButton = nullptr;
     QPushButton* m_easeButton = nullptr;
+    QWidget* m_parentRow = nullptr;
+    QLabel* m_parentLabel = nullptr;
+    QComboBox* m_parent = nullptr;
     QVector<Row> m_rows;
 
     CollapsibleSection* m_transformSection = nullptr;

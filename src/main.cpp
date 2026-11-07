@@ -1939,6 +1939,332 @@ int videoTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+int folderTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* first =
+        project->addVector(0, 120, 90, QColor(230, 90, 90), Qt::white, 0);
+    pvf::Entity* folder = project->addFolder(QStringLiteral("Group"));
+    pvf::Entity* second =
+        project->addVector(0, 120, 90, QColor(90, 140, 230), Qt::white, 0);
+    const pvf::EntityId firstId = first->id;
+    const pvf::EntityId folderId = folder->id;
+    const pvf::EntityId secondId = second->id;
+
+    int failures = 0;
+    if (!project->setEntityParent(secondId, folderId)
+        || second->parent != folderId)
+    {
+        qCritical() << "folder-test: set parent";
+        ++failures;
+    }
+    if (project->isDescendantOf(secondId, folderId) != true
+        || project->isDescendantOf(folderId, secondId))
+    {
+        qCritical() << "folder-test: descendant check";
+        ++failures;
+    }
+    if (project->setEntityParent(folderId, secondId))
+    {
+        qCritical() << "folder-test: cycle was allowed";
+        ++failures;
+    }
+
+    // Layer order is pre-order: first, folder, then its child.
+    QVector<int> order = project->entityOrder();
+    if (order.size() != 3
+        || project->entities()[order[0]].id != firstId
+        || project->entities()[order[1]].id != folderId
+        || project->entities()[order[2]].id != secondId)
+    {
+        qCritical() << "folder-test: entity order";
+        ++failures;
+    }
+
+    // Children follow the folder's coordinate system.
+    project->setValue(folderId, QStringLiteral("x"), 0, 100.0, false);
+    project->setValue(folderId, QStringLiteral("y"), 0, 50.0, false);
+    project->setValue(secondId, QStringLiteral("x"), 0, 10.0, false);
+    QPointF childWorld = pvf::SceneRenderer::worldTransform(
+                             *project, *project->entity(secondId), 0)
+                             .map(QPointF(0, 0));
+    if (std::abs(childWorld.x() - 110.0) > 1e-6
+        || std::abs(childWorld.y() - 50.0) > 1e-6)
+    {
+        qCritical() << "folder-test: parent translation" << childWorld;
+        ++failures;
+    }
+    project->setValue(folderId, QStringLiteral("scaleX"), 0, 2.0, false);
+    project->setValue(folderId, QStringLiteral("scaleY"), 0, 2.0, false);
+    childWorld = pvf::SceneRenderer::worldTransform(
+                     *project, *project->entity(secondId), 0)
+                     .map(QPointF(0, 0));
+    if (std::abs(childWorld.x() - 120.0) > 1e-6
+        || std::abs(childWorld.y() - 50.0) > 1e-6)
+    {
+        qCritical() << "folder-test: parent scale" << childWorld;
+        ++failures;
+    }
+    project->setValue(folderId, QStringLiteral("x"), 0, 0.0, false);
+    project->setValue(folderId, QStringLiteral("y"), 0, 0.0, false);
+    project->setValue(folderId, QStringLiteral("scaleX"), 0, 1.0, false);
+    project->setValue(folderId, QStringLiteral("scaleY"), 0, 1.0, false);
+    project->setValue(secondId, QStringLiteral("x"), 0, 0.0, false);
+
+    project->setEntityFlag(folderId, pvf::EntityFlag::Locked, true);
+    if (!project->isEffectivelyLocked(secondId)
+        || !project->isEffectivelyLocked(folderId))
+    {
+        qCritical() << "folder-test: effective lock";
+        ++failures;
+    }
+    project->setEntityFlag(folderId, pvf::EntityFlag::Locked, false);
+    project->setEntityFlag(folderId, pvf::EntityFlag::Hidden, true);
+    if (!project->isEffectivelyHidden(secondId))
+    {
+        qCritical() << "folder-test: effective hide";
+        ++failures;
+    }
+    project->setEntityFlag(folderId, pvf::EntityFlag::Hidden, false);
+
+    // Parent references survive save/load.
+    const QString projectPath = QStringLiteral("/tmp/pvf_folder.pvproj");
+    QString error;
+    if (!project->save(projectPath, &error))
+    {
+        qCritical() << "folder-test: save" << error;
+        ++failures;
+    }
+    else
+    {
+        pvf::Project loaded;
+        if (!loaded.load(projectPath, &error))
+        {
+            qCritical() << "folder-test: load" << error;
+            ++failures;
+        }
+        else
+        {
+            const pvf::Entity* loadedFolder = loaded.entity(folderId);
+            const pvf::Entity* loadedSecond = loaded.entity(secondId);
+            if (!loadedFolder || !loadedFolder->isFolder() || !loadedSecond
+                || loadedSecond->parent != folderId)
+            {
+                qCritical() << "folder-test: hierarchy not restored";
+                ++failures;
+            }
+        }
+    }
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window,
+                       [&app, &window, project, firstId, folderId, secondId, failures]() mutable {
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!timeline || !viewport)
+        {
+            qCritical() << "folder-test: widgets missing";
+            app.exit(1);
+            return;
+        }
+
+        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
+                                    Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        if (timeline->rowCountForTest() != 3
+            || timeline->rowEntityForTest(0) != firstId
+            || timeline->rowEntityForTest(1) != folderId
+            || timeline->rowEntityForTest(2) != secondId
+            || timeline->rowDepthForTest(2) != 1)
+        {
+            qCritical() << "folder-test: tree rows" << timeline->rowCountForTest();
+            ++failures;
+        }
+
+        // Folder arrow collapses and expands its children.
+        const QPoint arrow = timeline->folderArrowRectForTest(1).center();
+        sendMouse(QEvent::MouseButtonPress, arrow, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, arrow, Qt::NoButton);
+        if (timeline->rowCountForTest() != 2
+            || !timeline->rowCollapsedForTest(folderId))
+        {
+            qCritical() << "folder-test: collapse" << timeline->rowCountForTest();
+            ++failures;
+        }
+        sendMouse(QEvent::MouseButtonPress, arrow, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, arrow, Qt::NoButton);
+        if (timeline->rowCountForTest() != 3
+            || timeline->rowCollapsedForTest(folderId))
+        {
+            qCritical() << "folder-test: expand" << timeline->rowCountForTest();
+            ++failures;
+        }
+
+        // Drag the first row into the folder row.
+        const QPoint from(10, timeline->rowButtonRect(0, 0).center().y());
+        const QPoint to(10, timeline->rowButtonRect(1, 0).center().y());
+        sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, to, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, to, Qt::NoButton);
+        QApplication::processEvents();
+
+        const pvf::Entity* first = project->entity(firstId);
+        if (!first || first->parent != folderId
+            || timeline->rowEntityForTest(0) != folderId
+            || timeline->rowEntityForTest(1) != firstId
+            || timeline->rowDepthForTest(1) != 1)
+        {
+            qCritical() << "folder-test: drag into folder"
+                        << (first ? first->parent : -999)
+                        << timeline->rowEntityForTest(0)
+                        << timeline->rowEntityForTest(1);
+            ++failures;
+        }
+
+        // Layer moves are undoable.
+        auto* undoAction = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        auto* redoAction = window.findChild<QAction*>(QStringLiteral("redoAction"));
+        if (!undoAction || !redoAction)
+        {
+            qCritical() << "folder-test: undo actions missing";
+            ++failures;
+        }
+        else
+        {
+            undoAction->trigger();
+            QApplication::processEvents();
+            first = project->entity(firstId);
+            if (!first || first->parent != pvf::kInvalidEntity
+                || timeline->rowEntityForTest(0) != firstId
+                || timeline->rowEntityForTest(1) != folderId)
+            {
+                qCritical() << "folder-test: move undo"
+                            << (first ? first->parent : -999);
+                ++failures;
+            }
+            redoAction->trigger();
+            QApplication::processEvents();
+            first = project->entity(firstId);
+            if (!first || first->parent != folderId
+                || timeline->rowEntityForTest(0) != folderId
+                || timeline->rowEntityForTest(1) != firstId)
+            {
+                qCritical() << "folder-test: move redo"
+                            << (first ? first->parent : -999);
+                ++failures;
+            }
+        }
+
+        // The parent combo switches between world and a specific entity.
+        window.setSelectedEntityForTest(firstId);
+        QApplication::processEvents();
+        auto* parents = window.findChild<QComboBox*>(QStringLiteral("parentCombo"));
+        if (!parents)
+        {
+            qCritical() << "folder-test: parent combo missing";
+            ++failures;
+        }
+        else
+        {
+            const int worldIndex = parents->findData(int(pvf::kInvalidEntity));
+            const int folderIndex = parents->findData(int(folderId));
+            if (worldIndex < 0 || folderIndex < 0)
+            {
+                qCritical() << "folder-test: parent choices missing"
+                            << parents->count();
+                ++failures;
+            }
+            else
+            {
+                parents->setCurrentIndex(worldIndex);
+                QApplication::processEvents();
+                if (first->parent != pvf::kInvalidEntity)
+                {
+                    qCritical() << "folder-test: parent to world" << first->parent;
+                    ++failures;
+                }
+                parents->setCurrentIndex(folderIndex);
+                QApplication::processEvents();
+                if (first->parent != folderId)
+                {
+                    qCritical() << "folder-test: parent to folder" << first->parent;
+                    ++failures;
+                }
+            }
+        }
+
+        // Moving a child inside a translated folder keeps the movement in
+        // parent space.
+        project->setValue(folderId, QStringLiteral("x"), 0, 100.0, false);
+        project->setValue(folderId, QStringLiteral("y"), 0, 50.0, false);
+        project->setValue(secondId, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(secondId, QStringLiteral("y"), 0, 0.0, false);
+        window.setSelectedEntityForTest(secondId);
+        QApplication::processEvents();
+        const double viewScale = viewport->currentScale();
+        const QPoint bodyPoint = viewport->entityPivotForTest(secondId).toPoint();
+        auto sendViewport = [viewport](QEvent::Type type, const QPoint& pos,
+                                       Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(viewport->mapToGlobal(pos)), Qt::LeftButton,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        sendViewport(QEvent::MouseButtonPress, bodyPoint, Qt::LeftButton);
+        sendViewport(QEvent::MouseMove, bodyPoint + QPoint(50, 0), Qt::LeftButton);
+        sendViewport(QEvent::MouseButtonRelease, bodyPoint + QPoint(50, 0),
+                     Qt::NoButton);
+        const double childX = project->value(secondId, QStringLiteral("x"), 0);
+        if (std::abs(childX - 50.0 / viewScale) > 0.5)
+        {
+            qCritical() << "folder-test: parent-space move" << childX
+                        << 50.0 / viewScale;
+            ++failures;
+        }
+        project->setValue(folderId, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(folderId, QStringLiteral("y"), 0, 0.0, false);
+        project->setValue(secondId, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(secondId, QStringLiteral("y"), 0, 0.0, false);
+
+        // Locking the folder locks and deselects its children.
+        window.setSelectedEntityForTest(secondId);
+        project->setEntityFlag(folderId, pvf::EntityFlag::Locked, true);
+        QApplication::processEvents();
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "folder-test: locked folder child stayed selected";
+            ++failures;
+        }
+        window.setSelectedEntityForTest(secondId);
+        if (window.selectedEntityForTest() != pvf::kInvalidEntity)
+        {
+            qCritical() << "folder-test: locked folder child selectable";
+            ++failures;
+        }
+        project->setEntityFlag(folderId, pvf::EntityFlag::Locked, false);
+        window.setSelectedEntityForTest(secondId);
+        if (window.selectedEntityForTest() != secondId)
+        {
+            qCritical() << "folder-test: unlocked folder child not selectable";
+            ++failures;
+        }
+
+        window.grab().toImage().save(QStringLiteral("/tmp/pvf_folder_tree.png"));
+        qInfo() << "folder-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int audioTest(QApplication& app)
 {
     int failures = 0;
@@ -4532,6 +4858,8 @@ int main(int argc, char* argv[])
         return cameraTest(app);
     if (app.arguments().contains(QStringLiteral("--easing-test")))
         return easingTest(app);
+    if (app.arguments().contains(QStringLiteral("--folder-test")))
+        return folderTest(app);
     if (app.arguments().contains(QStringLiteral("--audio-test")))
         return audioTest(app);
     if (app.arguments().contains(QStringLiteral("--video-test")))

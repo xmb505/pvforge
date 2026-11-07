@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
@@ -41,6 +42,8 @@ QString typeName(EntityType type)
         return QStringLiteral("摄像机");
     case EntityType::Audio:
         return QStringLiteral("音频");
+    case EntityType::Folder:
+        return QStringLiteral("文件夹");
     }
     return QString();
 }
@@ -66,6 +69,24 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     auto* transformForm = new QFormLayout(transformContent);
     transformForm->setContentsMargins(10, 8, 10, 8);
     transformForm->setVerticalSpacing(6);
+    m_parentRow = new QWidget(transformContent);
+    auto* parentLayout = new QHBoxLayout(m_parentRow);
+    parentLayout->setContentsMargins(0, 0, 0, 0);
+    m_parent = new QComboBox(m_parentRow);
+    m_parent->setObjectName(QStringLiteral("parentCombo"));
+    m_parent->setToolTip(
+        QStringLiteral("选择实体的坐标系：工作台或另一个实体；子级的位置/旋转/缩放相对父级"));
+    parentLayout->addWidget(m_parent);
+    transformForm->addRow(QStringLiteral("父级"), m_parentRow);
+    m_parentLabel = qobject_cast<QLabel*>(transformForm->labelForField(m_parentRow));
+    connect(m_parent, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                if (m_entity == kInvalidEntity || m_parent->currentIndex() < 0)
+                    return;
+                emit parentEdited(
+                    m_entity, EntityId(m_parent->currentData().toInt()));
+            });
+
     addRow(transformForm, QStringLiteral("X"), QStringLiteral("x"), -10000, 10000, 1, 1);
     addRow(transformForm, QStringLiteral("Y"), QStringLiteral("y"), -10000, 10000, 1, 1);
     addRow(transformForm, QStringLiteral("旋转"), QStringLiteral("rotation"), -3600, 3600, 1, 1);
@@ -630,7 +651,7 @@ void PropertiesPanel::refresh()
     m_audioSection->setVisible(audio);
     m_pivotSection->setVisible(valid && !e->isCamera() && !audio);
 
-    const bool editable = valid && !e->locked;
+    const bool editable = valid && !m_project->isEffectivelyLocked(e->id);
     const bool camera = valid && e->isCamera();
     m_pivotSection->setEnabled(editable);
     m_transformSection->setEnabled(editable);
@@ -639,6 +660,51 @@ void PropertiesPanel::refresh()
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);
+
+    {
+        const QSignalBlocker blocker(m_parent);
+        m_parent->clear();
+        m_parent->addItem(QStringLiteral("工作台（世界坐标）"),
+                          int(kInvalidEntity));
+        if (valid && !camera && !audio)
+        {
+            for (int index : m_project->entityOrder())
+            {
+                const Entity& candidate = m_project->entities()[index];
+                if (candidate.id == e->id || candidate.isCamera()
+                    || candidate.isAudio())
+                    continue;
+                if (m_project->isDescendantOf(candidate.id, e->id))
+                    continue;
+
+                int depth = 0;
+                QSet<EntityId> seen;
+                EntityId parentId = candidate.parent;
+                while (parentId != kInvalidEntity && !seen.contains(parentId)
+                       && depth < 32)
+                {
+                    seen.insert(parentId);
+                    const Entity* parent = m_project->entity(parentId);
+                    if (!parent)
+                        break;
+                    ++depth;
+                    parentId = parent->parent;
+                }
+                const QString prefix = QStringLiteral("  ").repeated(depth);
+                const QString typePrefix =
+                    candidate.isFolder() ? QStringLiteral("[文件夹] ")
+                                         : QString();
+                m_parent->addItem(prefix + typePrefix + candidate.name,
+                                  candidate.id);
+            }
+            const int parentIndex = m_parent->findData(e->parent);
+            m_parent->setCurrentIndex(parentIndex >= 0 ? parentIndex : 0);
+        }
+        m_parentRow->setVisible(valid && !camera && !audio);
+        if (m_parentLabel)
+            m_parentLabel->setVisible(valid && !camera && !audio);
+        m_parentRow->setEnabled(editable && !camera && !audio);
+    }
 
     for (Row& r : m_rows)
     {

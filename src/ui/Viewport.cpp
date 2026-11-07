@@ -268,7 +268,7 @@ bool Viewport::handleCameraPress(QMouseEvent* event)
         return false;
 
     Entity* entity = m_project->entity(id);
-    if (!entity || entity->locked)
+    if (!entity || m_project->isEffectivelyLocked(id))
         return true;
 
     emit entitySelected(id);
@@ -402,7 +402,7 @@ void Viewport::applyCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifie
     if (id == kInvalidEntity || m_cameraPart == CameraPart::None)
         return;
     Entity* entity = m_project->entity(id);
-    if (!entity || entity->locked)
+    if (!entity || m_project->isEffectivelyLocked(entity->id))
         return;
 
     const Camera::State start = m_cameraStartState;
@@ -554,14 +554,17 @@ QRectF Viewport::entityLocalBounds(const Entity& e) const
 
 const Entity* Viewport::hitTest(const QPointF& pos) const
 {
-    const auto& entities = m_project->entities();
-
-    // Topmost first.
-    for (int i = entities.size() - 1; i >= 0; --i)
+    // Topmost first, following the hierarchy layer order.
+    const QVector<int> order = m_project->entityOrder();
+    for (int oi = int(order.size()) - 1; oi >= 0; --oi)
     {
-        const Entity& e = entities[i];
-        if (e.hidden || e.locked)
+        const Entity& e = m_project->entities()[order[oi]];
+        if (e.isFolder() || e.isCamera()
+            || m_project->isEffectivelyHidden(e.id)
+            || m_project->isEffectivelyLocked(e.id))
+        {
             continue;
+        }
         const QRectF bounds = entityLocalBounds(e);
         if (bounds.isEmpty())
             continue;
@@ -579,7 +582,8 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
 
 void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
 {
-    if (e.hidden || e.isCamera())
+    if (e.hidden || e.isCamera() || e.isFolder()
+        || m_project->isEffectivelyHidden(e.id))
         return;
 
     const double opacity =
@@ -593,7 +597,7 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
 
     SceneRenderer::drawEntity(p, *m_project, e, m_frame, worldToScreenTransform(), false);
 
-    if (e.id == m_selected && !e.locked)
+    if (e.id == m_selected && !e.locked && !m_project->isEffectivelyLocked(e.id))
     {
         p.save();
         p.setTransform(entityTransform(e));
@@ -638,11 +642,14 @@ QPointF Viewport::entityPivotForTest(EntityId id) const
 
 QPointF Viewport::entityPivotScreen(const Entity& e) const
 {
-    // The position is the pivot, so the gizmo always sits there.
-    const QRectF canvas = canvasRect();
-    const double s = viewScale();
-    return canvas.center() + QPointF(m_project->value(e.id, "x", m_frame) * s,
-                                     m_project->value(e.id, "y", m_frame) * s);
+    // X/Y are the pivot position in parent space. Applying the parent chain
+    // (without the entity's own scale) keeps the gizmo on the pivot.
+    const double x = m_project->value(e.id, "x", m_frame);
+    const double y = m_project->value(e.id, "y", m_frame);
+    const QPointF world =
+        SceneRenderer::parentWorldTransform(*m_project, e, m_frame)
+            .map(QPointF(x, y));
+    return worldToScreenTransform().map(world);
 }
 
 Viewport::VisualBounds Viewport::visualBoundsOf(const Entity& e, double posX,
@@ -676,7 +683,7 @@ Viewport::VisualBounds Viewport::visualBoundsOf(const Entity& e, double posX,
 
 QTransform Viewport::entityTransform(const Entity& e) const
 {
-    return SceneRenderer::entityTransform(*m_project, e, m_frame)
+    return SceneRenderer::worldTransform(*m_project, e, m_frame)
            * worldToScreenTransform();
 }
 
@@ -714,7 +721,8 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     if (m_selected == kInvalidEntity)
         return false;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity || entity->isCamera())
+    if (!entity || entity->isCamera() || entity->isFolder()
+        || m_project->isEffectivelyLocked(entity->id))
         return false;
 
     const QPointF delta = pos - entityPivotScreen(*entity);
@@ -848,7 +856,8 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
     if (m_selected == kInvalidEntity)
         return Handle::None;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity || entity->isCamera())
+    if (!entity || entity->isCamera() || entity->isFolder()
+        || m_project->isEffectivelyLocked(entity->id))
         return Handle::None;
 
     // Only corner handles: edge midpoints sit exactly on the gizmo axes and
@@ -891,17 +900,20 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
     const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
     const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+    const bool parented = entity->parent != kInvalidEntity;
     m_showGuideX = false;
     m_showGuideY = false;
 
     // Measure against the drag-start centre: the fixed opposite corner moves
     // the entity while dragging, so the current centre would drift.
-    const QRectF canvas = canvasRect();
-    QTransform base;
-    base.translate(canvas.center().x() + m_scaleStartPosX * s,
-                   canvas.center().y() + m_scaleStartPosY * s);
-    base.rotate(rotation);
-    base.translate(-ax * s, -ay * s);
+    const QTransform parentTransform =
+        SceneRenderer::parentWorldTransform(*m_project, *entity, m_frame);
+    QTransform childBase;
+    childBase.translate(m_scaleStartPosX, m_scaleStartPosY);
+    childBase.rotate(rotation);
+    childBase.translate(-ax, -ay);
+    QTransform base =
+        childBase * parentTransform * worldToScreenTransform();
     bool ok = false;
     const QPointF local = base.inverted(&ok).map(mousePos);
     if (!ok)
@@ -949,9 +961,9 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     double newScaleX = m_scaleStartX;
     double newScaleY = m_scaleStartY;
     if (signX != 0.0)
-        newScaleX = signX * local.x() / (halfW * s);
+        newScaleX = signX * local.x() / halfW;
     if (signY != 0.0)
-        newScaleY = signY * local.y() / (halfH * s);
+        newScaleY = signY * local.y() / halfH;
 
     if (uniform)
     {
@@ -980,20 +992,30 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
     // Shift: uniform scaling around the entity anchor. Keeping the anchor
     // fixed makes it possible to fill the canvas from the centre, and the
-    // visual AABB can snap to canvas/entity edges even when rotated.
+    // visual AABB can snap to canvas/entity edges even when rotated or inside
+    // a transformed parent.
     if (uniform)
     {
-        const double radians = rotation * M_PI / 180.0;
-        const double cosA = std::abs(std::cos(radians));
-        const double sinA = std::abs(std::sin(radians));
-        const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
-        const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
-        const double centerX = currentX - rotatedAx;
-        const double centerY = currentY - rotatedAy;
-        double halfVisualW = halfW * std::abs(newScaleX) * cosA
-                             + halfH * std::abs(newScaleY) * sinA;
-        double halfVisualH = halfW * std::abs(newScaleX) * sinA
-                             + halfH * std::abs(newScaleY) * cosA;
+        const QRectF localBounds = entityLocalBounds(*entity);
+        QTransform localTransform;
+        localTransform.translate(currentX, currentY);
+        localTransform.rotate(rotation);
+        localTransform.translate(-ax, -ay);
+        localTransform.scale(newScaleX, newScaleY);
+        const QTransform visual = localTransform * parentTransform;
+
+        const QPointF c0 = visual.map(localBounds.topLeft());
+        const QPointF c1 = visual.map(localBounds.topRight());
+        const QPointF c2 = visual.map(localBounds.bottomRight());
+        const QPointF c3 = visual.map(localBounds.bottomLeft());
+        const double minX = std::min({c0.x(), c1.x(), c2.x(), c3.x()});
+        const double maxX = std::max({c0.x(), c1.x(), c2.x(), c3.x()});
+        const double minY = std::min({c0.y(), c1.y(), c2.y(), c3.y()});
+        const double maxY = std::max({c0.y(), c1.y(), c2.y(), c3.y()});
+        const double centerX = (minX + maxX) / 2.0;
+        const double centerY = (minY + maxY) / 2.0;
+        double halfVisualW = (maxX - minX) / 2.0;
+        double halfVisualH = (maxY - minY) / 2.0;
 
         if (snap && m_snapPixels > 0 && halfVisualW > 1e-9 && halfVisualH > 1e-9)
         {
@@ -1082,7 +1104,7 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
         double handleX = fixedX + 2.0 * signX * halfW * newScaleX;
         double handleY = fixedY + 2.0 * signY * halfH * newScaleY;
 
-        if (snap && m_snapPixels > 0)
+        if (snap && m_snapPixels > 0 && !parented)
         {
             const double threshold = m_snapPixels / s;
             const double canvasHalfW = m_project->width / 2.0;
@@ -1209,7 +1231,8 @@ void Viewport::paintEvent(QPaintEvent*)
     {
         if (const Entity* entity = m_project->entity(m_selected))
         {
-            if (!entity->isCamera() && !entity->locked)
+            if (!entity->isCamera() && !entity->isFolder()
+                && !m_project->isEffectivelyLocked(entity->id))
             {
                 drawHandles(p, *entity);
                 drawGizmo(p, *entity);
@@ -1250,7 +1273,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         return;
 
     const Entity* selectedEntity = m_project->entity(m_selected);
-    if (!selectedEntity || !selectedEntity->locked)
+    if (!selectedEntity || !m_project->isEffectivelyLocked(selectedEntity->id))
     {
         // Scaling handles take priority over the gizmo axes.
         const Handle handle = hitHandle(event->position());
@@ -1542,8 +1565,23 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
     const double totalX = (event->position().x() - m_gizmoStartMouse.x()) / s;
     const double totalY = (event->position().y() - m_gizmoStartMouse.y()) / s;
-    double x = m_gizmoStartX + totalX;
-    double y = m_gizmoStartY + totalY;
+
+    const Entity* moving = m_project->entity(m_dragEntity);
+    const bool parented = moving && moving->parent != kInvalidEntity;
+    double localDeltaX = totalX;
+    double localDeltaY = totalY;
+    if (parented)
+    {
+        const QTransform parent =
+            SceneRenderer::parentWorldTransform(*m_project, *moving, m_frame);
+        const QPointF origin = parent.map(QPointF(0, 0));
+        const QPointF mapped = parent.map(QPointF(totalX, totalY));
+        localDeltaX = mapped.x() - origin.x();
+        localDeltaY = mapped.y() - origin.y();
+    }
+
+    double x = m_gizmoStartX + localDeltaX;
+    double y = m_gizmoStartY + localDeltaY;
 
     m_showGuideX = false;
     m_showGuideY = false;
@@ -1551,7 +1589,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
     const bool free = event->modifiers() & Qt::ControlModifier;
     bool lockX = false;
     bool lockY = false;
-    if (!free && std::abs(totalX) > 1e-6 && std::abs(totalY) > 1e-6)
+    if (!parented && !free && std::abs(totalX) > 1e-6
+        && std::abs(totalY) > 1e-6)
     {
         if (std::abs(totalX) >= std::abs(totalY) * 4.0)
         {
@@ -1565,7 +1604,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
         }
     }
 
-    if (!free && m_snapPixels > 0)
+    if (!parented && !free && m_snapPixels > 0)
     {
         const double threshold = m_snapPixels / s;
         const double canvasHalfW = m_project->width / 2.0;

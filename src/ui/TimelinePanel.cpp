@@ -247,12 +247,79 @@ int TimelinePanel::visibleWidth() const
 
 QVector<int> TimelinePanel::visibleEntities() const
 {
-    QVector<int> result;
-    const QString filter = m_search ? m_search->text().trimmed() : QString();
     const auto& entities = m_project->entities();
-    for (int i = 0; i < entities.size(); ++i)
-        if (filter.isEmpty() || entities[i].name.contains(filter, Qt::CaseInsensitive))
-            result.append(i);
+    const QVector<int> order = m_project->entityOrder();
+    const QString filter = m_search ? m_search->text().trimmed() : QString();
+
+    QSet<EntityId> searchVisible;
+    if (!filter.isEmpty())
+    {
+        for (int i : order)
+        {
+            const Entity& e = entities[i];
+            if (!e.name.contains(filter, Qt::CaseInsensitive))
+                continue;
+            searchVisible.insert(e.id);
+            // Show the ancestors so the tree context remains visible.
+            QSet<EntityId> seen;
+            EntityId parent = e.parent;
+            while (parent != kInvalidEntity && !seen.contains(parent))
+            {
+                seen.insert(parent);
+                searchVisible.insert(parent);
+                const Entity* parentEntity = m_project->entity(parent);
+                if (!parentEntity)
+                    break;
+                parent = parentEntity->parent;
+            }
+            // A matching folder reveals its whole subtree.
+            if (e.isFolder())
+            {
+                for (int j : order)
+                {
+                    const EntityId candidate = entities[j].id;
+                    if (candidate != e.id
+                        && m_project->isDescendantOf(candidate, e.id))
+                    {
+                        searchVisible.insert(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    QVector<int> result;
+    for (int i : order)
+    {
+        const Entity& e = entities[i];
+        if (!filter.isEmpty())
+        {
+            if (!searchVisible.contains(e.id))
+                continue;
+        }
+        else
+        {
+            bool collapsed = false;
+            QSet<EntityId> seen;
+            EntityId parent = e.parent;
+            while (parent != kInvalidEntity && !seen.contains(parent))
+            {
+                if (m_collapsedFolders.contains(parent))
+                {
+                    collapsed = true;
+                    break;
+                }
+                seen.insert(parent);
+                const Entity* parentEntity = m_project->entity(parent);
+                if (!parentEntity)
+                    break;
+                parent = parentEntity->parent;
+            }
+            if (collapsed)
+                continue;
+        }
+        result.append(i);
+    }
     return result;
 }
 
@@ -317,6 +384,96 @@ EntityId TimelinePanel::entityAtRow(int row) const
     return m_project->entities()[visible[row]].id;
 }
 
+int TimelinePanel::depthOf(EntityId id) const
+{
+    int depth = 0;
+    QSet<EntityId> seen;
+    EntityId parent = m_project->entity(id) ? m_project->entity(id)->parent
+                                            : kInvalidEntity;
+    while (parent != kInvalidEntity && !seen.contains(parent) && depth < 64)
+    {
+        seen.insert(parent);
+        const Entity* parentEntity = m_project->entity(parent);
+        if (!parentEntity)
+            break;
+        ++depth;
+        parent = parentEntity->parent;
+    }
+    return depth;
+}
+
+QRect TimelinePanel::folderArrowRect(int row) const
+{
+    const Entity* entity = m_project->entity(entityAtRow(row));
+    if (!entity || !entity->isFolder())
+        return QRect();
+    const int indent = depthOf(entity->id) * 14;
+    const int top = rowTop(row);
+    const int height = rowHeight(row);
+    return QRect(6 + indent, top + (height - 14) / 2, 14, 14);
+}
+
+void TimelinePanel::updateRowDropTarget(const QPointF& pos)
+{
+    m_dropRow = -1;
+    m_dropMode = DropMode::None;
+    const int y = int(pos.y());
+    const int bodyBottom = height() - kScrollBarHeight;
+    if (y < kHeaderHeight || y >= bodyBottom)
+    {
+        update();
+        return;
+    }
+
+    const int count = int(visibleEntities().size());
+    if (count == 0)
+    {
+        update();
+        return;
+    }
+
+    int row = rowAt(y);
+    if (row < 0)
+        row = 0;
+    if (row >= count)
+        row = count - 1;
+    const Entity* target = m_project->entity(entityAtRow(row));
+    if (!target)
+    {
+        update();
+        return;
+    }
+
+    // Never drop a folder into itself or one of its descendants.
+    if (target->id == m_rowDragId
+        || m_project->isDescendantOf(target->id, m_rowDragId)
+        || m_project->isEffectivelyLocked(target->id))
+    {
+        update();
+        return;
+    }
+
+    const int top = rowTop(row);
+    const int rowHeightPx = rowHeight(row);
+    const bool middle = y >= top + rowHeightPx / 4
+                        && y <= top + rowHeightPx * 3 / 4;
+    const Entity* dragged = m_project->entity(m_rowDragId);
+    const bool canParent =
+        dragged && !dragged->isCamera() && !dragged->isAudio();
+    if (target->isFolder() && middle && canParent
+        && !m_collapsedFolders.contains(target->id))
+    {
+        m_dropRow = row;
+        m_dropMode = DropMode::Into;
+    }
+    else
+    {
+        m_dropRow = row;
+        m_dropMode = y < top + rowHeightPx / 2 ? DropMode::Above : DropMode::Below;
+    }
+    update();
+}
+
 QVector<double> TimelinePanel::keyframeFrames(EntityId id) const
 {
     const Entity* entity = m_project->entity(id);
@@ -346,7 +503,7 @@ bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFram
     if (id == kInvalidEntity)
         return false;
     const Entity* entity = m_project->entity(id);
-    if (!entity || entity->locked)
+    if (!entity || m_project->isEffectivelyLocked(id))
         return false;
 
     const double frame = frameFromX(x);
@@ -412,7 +569,7 @@ void TimelinePanel::handleRowButton(int row, int index)
         break;
     case 2:   // Select every keyframe of the entity
     {
-        if (entity->locked)
+        if (m_project->isEffectivelyLocked(id))
             break;
         m_selectedKeyframes.clear();
         for (const double frame : keyframeFrames(id))
@@ -519,18 +676,31 @@ EntityId TimelinePanel::audioClipAt(int x, int y) const
 
 void TimelinePanel::updateHoverCursor(const QPointF& pos)
 {
-    if (m_dragMode == DragMode::MoveAudio)
+    if (m_dragMode == DragMode::MoveAudio || m_dragMode == DragMode::MoveRow
+        || m_dragMode == DragMode::PendingRowDrag)
     {
         setCursor(Qt::ClosedHandCursor);
         return;
     }
     const int x = int(pos.x());
     const int y = int(pos.y());
+    if (x < kNameWidth)
+    {
+        const Entity* entity =
+            (y >= kHeaderHeight && y < height() - kScrollBarHeight)
+                ? m_project->entity(entityAtRow(rowAt(y)))
+                : nullptr;
+        if (entity && !m_project->isEffectivelyLocked(entity->id))
+            setCursor(Qt::OpenHandCursor);
+        else
+            unsetCursor();
+        return;
+    }
     const Entity* clip =
         (y >= kHeaderHeight && y < height() - kScrollBarHeight)
             ? m_project->entity(audioClipAt(x, y))
             : nullptr;
-    if (clip && !clip->locked)
+    if (clip && !m_project->isEffectivelyLocked(clip->id))
     {
         setCursor(Qt::OpenHandCursor);
     }
@@ -747,13 +917,54 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         else if (row % 2)
             p.fillRect(rowRect, QColor(altColor.red(), altColor.green(), altColor.blue(), 120));
 
+        const int depth = depthOf(e.id);
+        const int indent = depth * 14;
+        const bool effectivelyHidden = m_project->isEffectivelyHidden(e.id);
+        const bool effectivelyLocked = m_project->isEffectivelyLocked(e.id);
+
+        // Subtle tree guides make nested layers readable.
+        if (depth > 0)
+        {
+            QColor guide = midColor;
+            guide.setAlpha(90);
+            p.setPen(QPen(guide, 1));
+            for (int level = 0; level < depth; ++level)
+            {
+                const int gx = 12 + level * 14;
+                p.drawLine(gx, top, gx, top + height - 1);
+            }
+        }
+
+        if (e.isFolder())
+        {
+            const QRect arrow = folderArrowRect(row);
+            const QPointF center = arrow.center();
+            QPolygonF triangle;
+            if (m_collapsedFolders.contains(e.id))
+            {
+                triangle << QPointF(center.x() - 3, center.y() - 5)
+                         << QPointF(center.x() + 4, center.y())
+                         << QPointF(center.x() - 3, center.y() + 5);
+            }
+            else
+            {
+                triangle << QPointF(center.x() - 5, center.y() - 3)
+                         << QPointF(center.x() + 5, center.y() - 3)
+                         << QPointF(center.x(), center.y() + 4);
+            }
+            p.setPen(Qt::NoPen);
+            p.setBrush(effectivelyLocked ? dimColor : textColor);
+            p.drawPolygon(triangle);
+        }
+
         if (e.id != m_renameEntity)
         {
-            const QColor nameColor = e.hidden ? dimColor
-                                   : e.locked ? dimColor
-                                              : textColor;
+            const QColor nameColor =
+                (effectivelyHidden || effectivelyLocked) ? dimColor : textColor;
+            const int nameX = (e.isFolder() ? 24 : 10) + indent;
             p.setPen(nameColor);
-            p.drawText(QRect(10, top, kNameWidth - 10 - 3 * (kButtonSize + 2), height),
+            p.drawText(QRect(nameX, top, kNameWidth - nameX - 3 * (kButtonSize + 2),
+                             height),
                        Qt::AlignVCenter | Qt::AlignLeft, e.name);
         }
 
@@ -779,7 +990,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.setPen(Qt::NoPen);
             if (isSelected)
                 p.setBrush(pal.color(QPalette::HighlightedText));
-            else if (e.locked)
+            else if (effectivelyLocked)
                 p.setBrush(QColor(accentColor.red(), accentColor.green(),
                                   accentColor.blue(), 90));
             else if (e.id == m_selected)
@@ -809,6 +1020,28 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             makeEyeIcon(e.hidden).paint(&p, rowButtonRect(row, 0));
             makeLockIcon(e.locked).paint(&p, rowButtonRect(row, 1));
             makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
+        }
+    }
+
+    if (m_dragMode == DragMode::MoveRow && m_dropRow >= 0
+        && m_dropMode != DropMode::None)
+    {
+        const int top = rowTop(m_dropRow);
+        const int height = rowHeight(m_dropRow);
+        const QColor accent(accentColor.red(), accentColor.green(), accentColor.blue());
+        if (m_dropMode == DropMode::Into)
+        {
+            p.fillRect(QRect(0, top, width(), height),
+                       QColor(accent.red(), accent.green(), accent.blue(), 40));
+            p.setPen(QPen(accent, 2));
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(QRect(1, top + 1, width() - 2, height - 2));
+        }
+        else
+        {
+            const int y = m_dropMode == DropMode::Above ? top : top + height - 1;
+            p.setPen(QPen(accent, 2));
+            p.drawLine(0, y, width(), y);
         }
     }
 
@@ -875,7 +1108,8 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     const int row = rowAt(y);
     const EntityId id = entityAtRow(row);
     const Entity* entity = m_project->entity(id);
-    if (id == kInvalidEntity || !entity || entity->locked)
+    if (id == kInvalidEntity || !entity
+        || m_project->isEffectivelyLocked(id))
         return;
 
     m_renameEntity = id;
@@ -959,14 +1193,33 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         }
     }
 
-    // Name column: select the entity row and drop keyframe selection.
+    // Name column: select the entity row, toggle folders and start a layer
+    // drag. Clicking the arrow collapses/expands a folder.
     if (x < kNameWidth)
     {
-        m_selectedKeyframes.clear();
-        const EntityId id = entityAtRow(rowAt(y));
+        const int row = rowAt(y);
+        const EntityId id = entityAtRow(row);
         const Entity* entity = m_project->entity(id);
-        if (entity && !entity->locked)
+        if (entity && entity->isFolder() && folderArrowRect(row).contains(x, y))
+        {
+            if (m_collapsedFolders.contains(id))
+                m_collapsedFolders.remove(id);
+            else
+                m_collapsedFolders.insert(id);
+            update();
+            return;
+        }
+
+        m_selectedKeyframes.clear();
+        if (entity && !m_project->isEffectivelyLocked(id))
+        {
             emit entitySelected(id);
+            m_rowDragId = id;
+            m_pressPos = event->position();
+            m_dropRow = -1;
+            m_dropMode = DropMode::None;
+            m_dragMode = DragMode::PendingRowDrag;
+        }
         update();
         return;
     }
@@ -1003,7 +1256,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         m_selectedKeyframes.clear();
         m_pressFrame = std::max(0, frameFromX(x));
-        if (!audio->locked)
+        if (!m_project->isEffectivelyLocked(audioId))
         {
             emit entitySelected(audioId);
             m_dragMode = DragMode::MoveAudio;
@@ -1053,6 +1306,20 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
     if (m_dragMode == DragMode::Scrub)
     {
         emit frameRequested(std::max(0, frameFromX(x)));
+        return;
+    }
+
+    if (m_dragMode == DragMode::PendingRowDrag)
+    {
+        if ((event->position() - m_pressPos).manhattanLength() <= 4.0)
+            return;
+        m_dragMode = DragMode::MoveRow;
+        setCursor(Qt::ClosedHandCursor);
+    }
+
+    if (m_dragMode == DragMode::MoveRow)
+    {
+        updateRowDropTarget(event->position());
         return;
     }
 
@@ -1181,27 +1448,107 @@ void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
     const QPoint pos = event->pos();
-    if (pos.y() < kHeaderHeight || pos.x() < kNameWidth)
+    if (pos.y() < kHeaderHeight)
         return;
 
-    EntityId entity = kInvalidEntity;
-    double frame = 0.0;
-    if (!hitKeyframe(rowAt(pos.y()), pos.x(), &entity, &frame))
-        return;
-
-    const KeyframeSelection selection{entity, frame};
-    const auto existing =
-        std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection);
-    if (existing == m_selectedKeyframes.end())
+    if (pos.x() >= kNameWidth)
     {
-        m_selectedKeyframes.clear();
-        m_selectedKeyframes.append(selection);
-        emit entitySelected(entity);
-        update();
+        EntityId keyEntity = kInvalidEntity;
+        double keyFrame = 0.0;
+        if (hitKeyframe(rowAt(pos.y()), pos.x(), &keyEntity, &keyFrame))
+        {
+            const KeyframeSelection selection{keyEntity, keyFrame};
+            const auto existing =
+                std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                          selection);
+            if (existing == m_selectedKeyframes.end())
+            {
+                m_selectedKeyframes.clear();
+                m_selectedKeyframes.append(selection);
+                emit entitySelected(keyEntity);
+                update();
+            }
+
+            showKeyframeMenu(event->globalPos());
+            event->accept();
+            return;
+        }
     }
 
-    showKeyframeMenu(event->globalPos());
-    event->accept();
+    const int row = rowAt(pos.y());
+    const Entity* entity = m_project->entity(entityAtRow(row));
+    QMenu menu(this);
+    QAction* createInside = nullptr;
+    QAction* createSibling = nullptr;
+    QAction* rename = nullptr;
+    QAction* toWorld = nullptr;
+
+    if (entity)
+    {
+        const bool locked = m_project->isEffectivelyLocked(entity->id);
+        if (entity->isFolder())
+        {
+            if (!locked)
+                createInside = menu.addAction(QStringLiteral("在此文件夹内新建文件夹"));
+            createSibling = menu.addAction(QStringLiteral("新建同级文件夹"));
+        }
+        else
+        {
+            createInside = menu.addAction(QStringLiteral("新建文件夹"));
+        }
+        if (!locked)
+            rename = menu.addAction(QStringLiteral("重命名"));
+        if (entity->parent != kInvalidEntity && !locked)
+            toWorld = menu.addAction(QStringLiteral("移到工作台"));
+    }
+    else
+    {
+        createInside = menu.addAction(QStringLiteral("新建文件夹"));
+    }
+
+    QAction* chosen = menu.exec(event->globalPos());
+    if (!chosen)
+        return;
+
+    if (chosen == createInside)
+    {
+        EntityId parent = kInvalidEntity;
+        if (entity)
+            parent = entity->isFolder() ? entity->id : entity->parent;
+        if (parent == kInvalidEntity || !m_project->isEffectivelyLocked(parent))
+        {
+            if (parent != kInvalidEntity)
+                m_collapsedFolders.remove(parent);
+            emit folderCreateRequested(parent);
+            update();
+        }
+    }
+    else if (chosen == createSibling)
+    {
+        const EntityId parent = entity ? entity->parent : kInvalidEntity;
+        if (parent == kInvalidEntity || !m_project->isEffectivelyLocked(parent))
+        {
+            if (parent != kInvalidEntity)
+                m_collapsedFolders.remove(parent);
+            emit folderCreateRequested(parent);
+            update();
+        }
+    }
+    else if (chosen == rename && entity)
+    {
+        m_renameEntity = entity->id;
+        m_renameEdit->setText(entity->name);
+        m_renameEdit->setGeometry(6, rowTop(row) + 2, kNameWidth - 12,
+                                  rowHeight(row) - 4);
+        m_renameEdit->show();
+        m_renameEdit->selectAll();
+        m_renameEdit->setFocus();
+    }
+    else if (chosen == toWorld && entity)
+    {
+        emit entityMoveRequested(entity->id, kInvalidEntity,
+                                 int(m_project->entities().size()));
+    }
 }
 
 void TimelinePanel::keyReleaseEvent(QKeyEvent* event){
@@ -1269,7 +1616,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         emit scrubStarted();
         emit frameRequested(m_pressFrame);
         const Entity* pressed = m_project->entity(m_pressEntity);
-        if (pressed && !pressed->locked)
+        if (pressed && !m_project->isEffectivelyLocked(m_pressEntity))
             emit entitySelected(m_pressEntity);
     }
     else if (m_dragMode == DragMode::BoxSelect)
@@ -1289,7 +1636,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
              row <= std::min(lastRow, int(visible.size()) - 1); ++row)
         {
             const Entity& entity = m_project->entities()[visible[row]];
-            if (entity.locked)
+            if (m_project->isEffectivelyLocked(entity.id))
                 continue;
             for (const double frame : keyframeFrames(entity.id))
             {
@@ -1306,10 +1653,57 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         if (lastRow >= 0 && lastRow < int(visible.size()))
         {
             const Entity& last = m_project->entities()[visible[lastRow]];
-            if (!last.locked)
+            if (!m_project->isEffectivelyLocked(last.id))
                 emit entitySelected(last.id);
         }
         update();
+    }
+    else if (m_dragMode == DragMode::MoveRow)
+    {
+        const EntityId dragged = m_rowDragId;
+        EntityId parent = kInvalidEntity;
+        int index = -1;
+        if (m_dropMode != DropMode::None && m_dropRow >= 0)
+        {
+            const Entity* target = m_project->entity(entityAtRow(m_dropRow));
+            if (target && target->id != dragged)
+            {
+                const auto& entities = m_project->entities();
+                int targetIndex = -1;
+                for (int i = 0; i < int(entities.size()); ++i)
+                    if (entities[i].id == target->id)
+                    {
+                        targetIndex = i;
+                        break;
+                    }
+                if (targetIndex >= 0)
+                {
+                    parent = target->parent;
+                    index = targetIndex;
+                    if (m_dropMode == DropMode::Into)
+                    {
+                        parent = target->id;
+                        index = int(entities.size());
+                    }
+                    else if (m_dropMode == DropMode::Below)
+                    {
+                        ++index;
+                    }
+                }
+            }
+        }
+
+        m_dragMode = DragMode::None;
+        m_rowDragId = kInvalidEntity;
+        m_dropRow = -1;
+        m_dropMode = DropMode::None;
+        unsetCursor();
+        if (index >= 0 && parent != dragged
+            && !m_project->isDescendantOf(parent, dragged))
+        {
+            emit entityMoveRequested(dragged, parent, index);
+        }
+        updateHoverCursor(event->position());
     }
     else if (m_dragMode == DragMode::MoveAudio)
     {

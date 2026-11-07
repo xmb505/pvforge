@@ -37,7 +37,8 @@ QByteArray AudioEngine::mixRange(const Project& project, double startSeconds,
 
     for (const Entity& entity : project.entities())
     {
-        if (entity.type != EntityType::Audio || entity.hidden || !entity.audio)
+        if (entity.type != EntityType::Audio || entity.hidden
+            || project.isEffectivelyHidden(entity.id) || !entity.audio)
             continue;
         const AudioClip& clip = *entity.audio;
         const double clipStart =

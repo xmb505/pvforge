@@ -178,6 +178,53 @@ QString RenameEntityCommand::text() const
     return QStringLiteral("重命名");
 }
 
+SetParentCommand::SetParentCommand(EntityId id, EntityId oldParent, EntityId newParent)
+    : m_id(id)
+    , m_oldParent(oldParent)
+    , m_newParent(newParent)
+{
+}
+
+void SetParentCommand::undo(Project& project)
+{
+    project.setEntityParent(m_id, m_oldParent);
+}
+
+void SetParentCommand::redo(Project& project)
+{
+    project.setEntityParent(m_id, m_newParent);
+}
+
+QString SetParentCommand::text() const
+{
+    return QStringLiteral("修改父级");
+}
+
+MoveEntityCommand::MoveEntityCommand(EntityId id, EntityId oldParent,
+                                     EntityId newParent, int oldIndex, int newIndex)
+    : m_id(id)
+    , m_oldParent(oldParent)
+    , m_newParent(newParent)
+    , m_oldIndex(oldIndex)
+    , m_newIndex(newIndex)
+{
+}
+
+void MoveEntityCommand::undo(Project& project)
+{
+    project.moveEntity(m_id, m_oldParent, m_oldIndex);
+}
+
+void MoveEntityCommand::redo(Project& project)
+{
+    project.moveEntity(m_id, m_newParent, m_newIndex);
+}
+
+QString MoveEntityCommand::text() const
+{
+    return QStringLiteral("调整图层顺序");
+}
+
 SetEntityDataCommand::SetEntityDataCommand(EntityId id, const QString& key,
                                            const QVariant& oldValue,
                                            const QVariant& newValue, const QString& text)

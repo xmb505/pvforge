@@ -38,6 +38,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("摄像机");
     case EntityType::Audio:
         return QStringLiteral("音频");
+    case EntityType::Folder:
+        return QStringLiteral("文件夹");
     }
     return QString();
 }

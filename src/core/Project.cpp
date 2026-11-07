@@ -14,9 +14,11 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QSet>
 #include <QUuid>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace pvf {
 
@@ -38,6 +40,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("camera");
     case EntityType::Audio:
         return QStringLiteral("audio");
+    case EntityType::Folder:
+        return QStringLiteral("folder");
     }
     return QStringLiteral("image");
 }
@@ -54,6 +58,8 @@ EntityType typeFromString(const QString& text)
         return EntityType::Camera;
     if (text == QLatin1String("audio"))
         return EntityType::Audio;
+    if (text == QLatin1String("folder"))
+        return EntityType::Folder;
     return EntityType::Image;
 }
 
@@ -352,6 +358,160 @@ Entity* Project::addCamera(const QString& name)
     return append(std::move(e));
 }
 
+Entity* Project::addFolder(const QString& name, EntityId parent)
+{
+    const QString base = name.isEmpty() ? QStringLiteral("文件夹") : name;
+    QString unique = base;
+    int suffix = 2;
+    const auto nameTaken = [this](const QString& candidate) {
+        for (const Entity& e : m_entities)
+            if (e.isFolder() && e.name == candidate)
+                return true;
+        return false;
+    };
+    while (nameTaken(unique))
+        unique = QStringLiteral("%1 %2").arg(base).arg(suffix++);
+
+    Entity e = makeBase(EntityType::Folder, unique);
+    if (parent != kInvalidEntity && entity(parent) && parent != e.id)
+        e.parent = parent;
+    return append(std::move(e));
+}
+
+bool Project::setEntityParent(EntityId id, EntityId parent)
+{
+    Entity* e = entity(id);
+    if (!e || e->parent == parent)
+        return false;
+    if (parent != kInvalidEntity)
+    {
+        if (!entity(parent) || parent == id || isDescendantOf(parent, id))
+            return false;
+    }
+    e->parent = parent;
+    modified = true;
+    emit changed();
+    return true;
+}
+
+bool Project::moveEntity(EntityId id, EntityId parent, int index)
+{
+    const auto it = std::find_if(m_entities.begin(), m_entities.end(),
+                                 [id](const Entity& e) { return e.id == id; });
+    if (it == m_entities.end())
+        return false;
+    if (parent != kInvalidEntity)
+    {
+        if (!entity(parent) || parent == id || isDescendantOf(parent, id))
+            return false;
+    }
+
+    const int oldIndex = int(it - m_entities.begin());
+    Entity moved = *it;
+    m_entities.erase(it);
+    int target = std::clamp(index, 0, int(m_entities.size()));
+    if (target > oldIndex)
+        --target;
+    moved.parent = parent;
+    m_entities.insert(target, moved);
+    modified = true;
+    emit changed();
+    return true;
+}
+
+bool Project::isDescendantOf(EntityId id, EntityId ancestor) const
+{
+    if (id == kInvalidEntity || ancestor == kInvalidEntity)
+        return false;
+    QSet<EntityId> seen;
+    EntityId current = id;
+    while (current != kInvalidEntity && !seen.contains(current))
+    {
+        if (current == ancestor)
+            return true;
+        seen.insert(current);
+        const Entity* e = entity(current);
+        if (!e)
+            break;
+        current = e->parent;
+    }
+    return false;
+}
+
+bool Project::hasChildren(EntityId id) const
+{
+    for (const Entity& e : m_entities)
+        if (e.parent == id)
+            return true;
+    return false;
+}
+
+bool Project::isEffectivelyHidden(EntityId id) const
+{
+    QSet<EntityId> seen;
+    EntityId current = id;
+    while (current != kInvalidEntity && !seen.contains(current))
+    {
+        seen.insert(current);
+        const Entity* e = entity(current);
+        if (!e)
+            break;
+        if (e->hidden)
+            return true;
+        current = e->parent;
+    }
+    return false;
+}
+
+bool Project::isEffectivelyLocked(EntityId id) const
+{
+    QSet<EntityId> seen;
+    EntityId current = id;
+    while (current != kInvalidEntity && !seen.contains(current))
+    {
+        seen.insert(current);
+        const Entity* e = entity(current);
+        if (!e)
+            break;
+        if (e->locked)
+            return true;
+        current = e->parent;
+    }
+    return false;
+}
+
+QVector<int> Project::entityOrder() const
+{
+    QHash<EntityId, QVector<int>> children;
+    QVector<int> roots;
+    for (int i = 0; i < int(m_entities.size()); ++i)
+    {
+        const Entity& e = m_entities[i];
+        if (e.parent != kInvalidEntity && e.parent != e.id && entity(e.parent))
+            children[e.parent].append(i);
+        else
+            roots.append(i);
+    }
+
+    QVector<int> order;
+    QSet<EntityId> visited;
+    std::function<void(int)> visit = [&](int index) {
+        const Entity& e = m_entities[index];
+        if (visited.contains(e.id))
+            return;
+        visited.insert(e.id);
+        order.append(index);
+        for (int child : children.value(e.id))
+            visit(child);
+    };
+    for (int root : roots)
+        visit(root);
+    for (int i = 0; i < int(m_entities.size()); ++i)
+        if (!visited.contains(m_entities[i].id))
+            order.append(i);
+    return order;
+}
+
 Entity* Project::addAudio(const QString& path, const std::shared_ptr<AudioClip>& audio,
                           const QString& displayName)
 {
@@ -395,6 +555,8 @@ Entity* Project::addVector(int shape, double width, double height, const QColor&
 
 Template* Project::addTemplate(const Entity& entity)
 {
+    if (entity.isFolder())
+        return nullptr;
     Template tmpl;
     tmpl.type = entity.type;
     tmpl.name = entity.name;
@@ -543,6 +705,8 @@ Entity* Project::createFromTemplate(const Template& tmpl){
                          tmpl.data.value(QStringLiteral("stroke")).value<QColor>(),
                          tmpl.data.value(QStringLiteral("strokeWidth"), 0.0).toDouble());
     case EntityType::Camera:
+        return nullptr;
+    case EntityType::Folder:
         return nullptr;
     case EntityType::Audio:
     {
@@ -853,6 +1017,7 @@ QJsonObject Project::toJson() const
         QJsonObject entity;
         entity[QStringLiteral("id")] = e.id;
         entity[QStringLiteral("type")] = typeToString(e.type);
+        entity[QStringLiteral("parent")] = e.parent;
         entity[QStringLiteral("templateId")] = e.templateId;
         entity[QStringLiteral("hidden")] = e.hidden;
         entity[QStringLiteral("locked")] = e.locked;
@@ -1006,6 +1171,7 @@ bool Project::load(const QString& path, QString* error)
         Entity e;
         e.id = object.value(QStringLiteral("id")).toInt();
         e.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        e.parent = object.value(QStringLiteral("parent")).toInt(kInvalidEntity);
         e.templateId = object.value(QStringLiteral("templateId")).toString();
         e.hidden = object.value(QStringLiteral("hidden")).toBool();
         e.locked = object.value(QStringLiteral("locked")).toBool();
@@ -1090,6 +1256,33 @@ bool Project::load(const QString& path, QString* error)
 
         m_nextId = std::max(m_nextId, e.id + 1);
         m_entities.append(e);
+    }
+
+    // Validate parent references now that every entity has been loaded.
+    for (Entity& e : m_entities)
+    {
+        if (e.parent == e.id || (e.parent != kInvalidEntity && !entity(e.parent)))
+        {
+            e.parent = kInvalidEntity;
+        }
+    }
+    for (Entity& e : m_entities)
+    {
+        QSet<EntityId> seen;
+        EntityId current = e.id;
+        while (current != kInvalidEntity && !seen.contains(current))
+        {
+            seen.insert(current);
+            const Entity* currentEntity = entity(current);
+            if (!currentEntity)
+                break;
+            if (currentEntity->parent == e.id && current != e.id)
+            {
+                e.parent = kInvalidEntity;
+                break;
+            }
+            current = currentEntity->parent;
+        }
     }
 
     m_templates.clear();

@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSet>
 #include <algorithm>
 #include <cmath>
 
@@ -34,6 +35,31 @@ QTransform entityTransform(const Project& project, const Entity& entity, int fra
     transform.translate(-ax, -ay);
     transform.scale(scaleX, scaleY);
     return transform;
+}
+
+QTransform worldTransform(const Project& project, const Entity& entity, int frame)
+{
+    // Qt composes A * B as "apply A, then B"; the child goes first, then the
+    // parent chain.
+    return entityTransform(project, entity, frame)
+           * parentWorldTransform(project, entity, frame);
+}
+
+QTransform parentWorldTransform(const Project& project, const Entity& entity, int frame)
+{
+    QTransform result;
+    QSet<EntityId> seen;
+    EntityId parent = entity.parent;
+    while (parent != kInvalidEntity && !seen.contains(parent))
+    {
+        seen.insert(parent);
+        const Entity* parentEntity = project.entity(parent);
+        if (!parentEntity)
+            break;
+        result = result * entityTransform(project, *parentEntity, frame);
+        parent = parentEntity->parent;
+    }
+    return result;
 }
 
 QRectF entityLocalBounds(const Entity& entity)
@@ -91,6 +117,8 @@ QRectF entityLocalBounds(const Entity& entity)
         return QRectF();
     case EntityType::Audio:
         return QRectF();
+    case EntityType::Folder:
+        return QRectF();
     }
     return QRectF();
 }
@@ -109,11 +137,24 @@ const QImage& thumbnail(const Entity& entity)
 void drawEntity(QPainter& painter, const Project& project, const Entity& entity, int frame,
                 const QTransform& worldToScreen, bool useThumbnail)
 {
-    if (entity.hidden || entity.isCamera() || entity.isAudio())
+    if (entity.isFolder() || entity.isCamera() || entity.isAudio()
+        || project.isEffectivelyHidden(entity.id))
         return;
 
-    const double opacity = std::clamp(
-        project.value(entity.id, QStringLiteral("opacity"), frame), 0.0, 1.0);
+    double opacity =
+        std::clamp(project.value(entity.id, QStringLiteral("opacity"), frame), 0.0, 1.0);
+    QSet<EntityId> seen;
+    EntityId parent = entity.parent;
+    while (parent != kInvalidEntity && !seen.contains(parent))
+    {
+        seen.insert(parent);
+        const Entity* parentEntity = project.entity(parent);
+        if (!parentEntity)
+            break;
+        opacity *= std::clamp(
+            project.value(parentEntity->id, QStringLiteral("opacity"), frame), 0.0, 1.0);
+        parent = parentEntity->parent;
+    }
     if (opacity <= 0.0)
         return;
 
@@ -121,7 +162,7 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
     if (bounds.isEmpty())
         return;
 
-    const QTransform transform = entityTransform(project, entity, frame) * worldToScreen;
+    const QTransform transform = worldTransform(project, entity, frame) * worldToScreen;
 
     painter.save();
     painter.setOpacity(opacity);
@@ -204,6 +245,8 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         break;
     case EntityType::Audio:
         break;
+    case EntityType::Folder:
+        break;
     }
 
     painter.restore();
@@ -212,8 +255,9 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
 void drawEntities(QPainter& painter, const Project& project, int frame,
                   const QTransform& worldToScreen, bool useThumbnail)
 {
-    for (const Entity& entity : project.entities())
-        drawEntity(painter, project, entity, frame, worldToScreen, useThumbnail);
+    for (int index : project.entityOrder())
+        drawEntity(painter, project, project.entities()[index], frame, worldToScreen,
+                   useThumbnail);
 }
 
 } // namespace SceneRenderer
