@@ -1396,11 +1396,19 @@ int easingTest(QApplication& app)
         pvf::MainWindow window(windowProject);
         pvf::Entity* entity = windowProject->addVector(0, 200, 200, Qt::red, Qt::white, 0);
         windowProject->setValue(entity->id, QStringLiteral("x"), 0, 0.0, true);
-        windowProject->setValue(entity->id, QStringLiteral("x"), 10, 100.0, true);
-        window.goToFrame(10);
+        window.goToFrame(0);
         window.setSelectedEntityForTest(entity->id);
         auto* button =
             window.findChild<QPushButton*>(QStringLiteral("keyframeEasingButton"));
+        if (!button || button->isEnabled()
+            || !button->text().contains(QStringLiteral("首帧")))
+        {
+            qCritical() << "easing-test: first keyframe must not own a curve"
+                        << (button ? button->text() : QStringLiteral("missing"));
+            ++failures;
+        }
+        windowProject->setValue(entity->id, QStringLiteral("x"), 10, 100.0, true);
+        window.goToFrame(10);
         if (!button || !button->isEnabled()
             || !button->text().contains(QStringLiteral("→")))
         {

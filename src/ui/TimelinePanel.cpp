@@ -598,7 +598,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.drawPolygon(diamond);
 
             const EasingSpec ease = keyframeEasingAt(e.id, keyFrame);
-            if (ease.easing != Easing::Linear)
+            if (ease.easing != Easing::Linear
+                && m_project->previousKeyframeFrame(e.id, keyFrame) >= 0.0)
             {
                 const QColor marker = ease.easing == Easing::Instant
                                           ? QColor(255, 150, 90, 210)
