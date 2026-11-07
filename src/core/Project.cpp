@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QUuid>
 #include <algorithm>
 #include <cmath>
 
@@ -199,7 +200,8 @@ Entity* Project::addImage(const QString& path)
     e.values["scaleX"] = fit;
     e.values["scaleY"] = fit;
 
-    addTemplate(e);
+    if (Template* tmpl = addTemplate(e))
+        e.templateId = tmpl->id;
     return append(std::move(e));
 }
 
@@ -218,7 +220,8 @@ Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double 
         e.values["scaleX"] = fit;
         e.values["scaleY"] = fit;
     }
-    addTemplate(e);
+    if (Template* tmpl = addTemplate(e))
+        e.templateId = tmpl->id;
     return append(std::move(e));
 }
 
@@ -231,7 +234,8 @@ Entity* Project::addText(const QString& text, const QString& family, int pixelSi
     e.data["size"] = pixelSize;
     e.data["color"] = color;
     e.data["align"] = align;
-    addTemplate(e);
+    if (Template* tmpl = addTemplate(e))
+        e.templateId = tmpl->id;
     return append(std::move(e));
 }
 
@@ -248,7 +252,8 @@ Entity* Project::addVector(int shape, double width, double height, const QColor&
     e.data["fill"] = fill;
     e.data["stroke"] = stroke;
     e.data["strokeWidth"] = strokeWidth;
-    addTemplate(e);
+    if (Template* tmpl = addTemplate(e))
+        e.templateId = tmpl->id;
     return append(std::move(e));
 }
 
@@ -274,6 +279,7 @@ Template* Project::addTemplate(const Entity& entity)
         }
     }
 
+    tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_templates.append(tmpl);
     return &m_templates.last();
 }
@@ -390,6 +396,7 @@ QJsonObject Project::toJson() const
         QJsonObject entity;
         entity[QStringLiteral("id")] = e.id;
         entity[QStringLiteral("type")] = typeToString(e.type);
+        entity[QStringLiteral("templateId")] = e.templateId;
         entity[QStringLiteral("name")] = e.name;
         entity[QStringLiteral("sourcePath")] = e.sourcePath;
 
@@ -431,6 +438,7 @@ QJsonObject Project::toJson() const
     for (const Template& t : m_templates)
     {
         QJsonObject object;
+        object[QStringLiteral("id")] = t.id;
         object[QStringLiteral("type")] = typeToString(t.type);
         object[QStringLiteral("name")] = t.name;
         object[QStringLiteral("path")] = t.path;
@@ -521,6 +529,7 @@ bool Project::load(const QString& path, QString* error)
         Entity e;
         e.id = object.value(QStringLiteral("id")).toInt();
         e.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        e.templateId = object.value(QStringLiteral("templateId")).toString();
         e.name = object.value(QStringLiteral("name")).toString();
         e.sourcePath = object.value(QStringLiteral("sourcePath")).toString();
 
@@ -577,6 +586,9 @@ bool Project::load(const QString& path, QString* error)
     {
         const QJsonObject object = value.toObject();
         Template tmpl;
+        tmpl.id = object.value(QStringLiteral("id")).toString();
+        if (tmpl.id.isEmpty())
+            tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         tmpl.type = typeFromString(object.value(QStringLiteral("type")).toString());
         tmpl.name = object.value(QStringLiteral("name")).toString();
         tmpl.path = object.value(QStringLiteral("path")).toString();

@@ -36,7 +36,9 @@ struct Track
 
 struct Entity
 {
-    EntityId id = kInvalidEntity;    EntityType type = EntityType::Image;
+    EntityId id = kInvalidEntity;
+    EntityType type = EntityType::Image;
+    QString templateId;        // template this instance was created from
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache
@@ -64,6 +66,7 @@ struct Entity
 // library entries: media path or text/vector parameters, plus a preview.
 struct Template
 {
+    QString id;
     EntityType type = EntityType::Image;
     QString name;
     QString path;

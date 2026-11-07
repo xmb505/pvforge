@@ -144,6 +144,11 @@ int saveTest()
         qCritical() << "save-test: templates" << after.templates().size();
         return 1;
     }
+    if (after.entities().first().templateId != after.templates().first().id)
+    {
+        qCritical() << "save-test: template association lost";
+        return 1;
+    }
     if (std::abs(after.value(imageId, QStringLiteral("x"), 45) - 300.0) > 1e-6)
     {
         qCritical() << "save-test: keyframe roundtrip mismatch";

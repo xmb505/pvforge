@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
@@ -268,9 +269,42 @@ void AssetLibraryPanel::createSelected()
 void AssetLibraryPanel::removeSelected()
 {
     const int index = selectedIndex();
-    if (index < 0 || index >= m_project->templates().size())
+    const auto& templates = m_project->templates();
+    if (index < 0 || index >= templates.size())
         return;
+
+    const QString templateId = templates[index].id;
+    QVector<EntityId> instances;
+    for (const Entity& e : m_project->entities())
+        if (e.templateId == templateId)
+            instances.append(e.id);
+
+    if (!instances.isEmpty())
+    {
+        QMessageBox box(QMessageBox::Question, QStringLiteral("删除素材"),
+                        QStringLiteral("该素材在场景中还有 %1 个实例。\n要同时删除它们吗？")
+                            .arg(instances.size()),
+                        QMessageBox::NoButton, this);
+        auto* both =
+            box.addButton(QStringLiteral("同时删除实例"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("只删模板"), QMessageBox::RejectRole);
+        auto* cancel = box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+        box.setDefaultButton(both);
+        box.exec();
+
+        if (box.clickedButton() == cancel)
+            return;
+        if (box.clickedButton() != both)
+        {
+            m_project->removeTemplate(index);
+            return;
+        }
+    }
+
+    // Remove the template first so its index stays valid while entities go.
     m_project->removeTemplate(index);
+    for (EntityId id : instances)
+        m_project->removeEntity(id);
 }
 
 } // namespace pvf
