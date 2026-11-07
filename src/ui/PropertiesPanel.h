@@ -54,6 +54,8 @@ private:
     void buildAudioSection(QVBoxLayout* layout);
     void buildPivotSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
+    void applyAudioTrimStart(int playheadFrame);
+    void applyAudioTrimEnd(int playheadFrame);
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
 

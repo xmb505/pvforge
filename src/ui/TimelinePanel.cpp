@@ -937,6 +937,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         m_selectedKeyframes.clear();
         emit entitySelected(audioId);
+        m_pressFrame = std::max(0, frameFromX(x));
         if (!audio->locked)
         {
             m_dragMode = DragMode::MoveAudio;
@@ -946,6 +947,11 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
             m_audioDragOffset = 0.0;
             m_pressPos = event->position();
             setCursor(Qt::ClosedHandCursor);
+        }
+        else
+        {
+            emit scrubStarted();
+            emit frameRequested(m_pressFrame);
         }
         update();
         return;
@@ -1238,11 +1244,21 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         const double newStart =
             std::max(0.0, m_audioDragStart + m_audioDragOffset);
         const bool changed = std::abs(newStart - m_audioDragStart) > 1e-9;
+        const int clickFrame = m_pressFrame;
         m_dragMode = DragMode::None;
         m_audioDragId = kInvalidEntity;
         m_audioDragOffset = 0.0;
         if (changed)
+        {
             emit audioMoved(id, newStart);
+        }
+        else
+        {
+            // A click without dragging still positions the playhead, as it
+            // did before clips became draggable.
+            emit scrubStarted();
+            emit frameRequested(clickFrame);
+        }
     }
 
     m_dragMode = DragMode::None;

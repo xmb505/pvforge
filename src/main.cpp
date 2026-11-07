@@ -1738,8 +1738,19 @@ int audioTest(QApplication& app)
             }
         }
 
-        // Capturing the playhead inside/after the clip moves the start there;
-        // it must not fall back to frame 0.
+        // A click without dragging still positions the playhead.
+        window.goToFrame(0);
+        sendMouse(QEvent::MouseButtonPress, dragFrom, Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, dragFrom, Qt::NoButton);
+        if (window.currentFrame() != 20)
+        {
+            qCritical() << "audio-test: audio click did not move the playhead"
+                        << window.currentFrame();
+            ++failures;
+        }
+
+        // Capturing the playhead inside the clip moves the start there; it
+        // must not fall back to frame 0.
         window.goToFrame(30);
         startButton->click();
         if (window.currentFrame() != 30)
@@ -1750,25 +1761,41 @@ int audioTest(QApplication& app)
         }
         window.goToFrame(40);
         trimStartButton->click();
-        window.goToFrame(35);
+        startFrame =
+            uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+        double trimStart =
+            uiAudio->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+        if (std::abs(startFrame - 40.0) > 1e-6
+            || std::abs(trimStart - 1.0 / 3.0) > 1e-3
+            || std::abs(startFrame + (1.0 - trimStart) * 30.0 - 60.0) > 1e-3)
+        {
+            qCritical() << "audio-test: trim start moved the remaining audio"
+                        << startFrame << trimStart;
+            ++failures;
+        }
+        timeline->grab().toImage().save(QStringLiteral("/tmp/pvf_audio_trim.png"));
+        window.goToFrame(50);
         trimEndButton->click();
         startFrame =
             uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-        const double trimStart =
+        trimStart =
             uiAudio->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
         const double trimEnd =
             uiAudio->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
-        if (std::abs(startFrame - 30.0) > 1e-6
+        if (std::abs(startFrame - 40.0) > 1e-6
             || std::abs(trimStart - 1.0 / 3.0) > 1e-3
-            || std::abs(trimEnd - 2.0 / 3.0) > 1e-3)
+            || std::abs(trimEnd - 1.0 / 3.0) > 1e-3
+            || std::abs(startFrame
+                        + (1.0 - trimStart - trimEnd) * 30.0 - 50.0)
+                   > 1e-3)
         {
-            qCritical() << "audio-test: playhead capture" << startFrame << trimStart
+            qCritical() << "audio-test: trim end" << startFrame << trimStart
                         << trimEnd;
             ++failures;
         }
         auto* startSpin =
             window.findChild<QSpinBox*>(QStringLiteral("audioStartFrame"));
-        if (!startSpin || startSpin->value() != 30)
+        if (!startSpin || startSpin->value() != 40)
         {
             qCritical() << "audio-test: start frame field"
                         << (startSpin ? startSpin->value() : -1);

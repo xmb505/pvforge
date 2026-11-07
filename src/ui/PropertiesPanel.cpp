@@ -414,23 +414,8 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     addCaptureRow(
         QStringLiteral("裁掉开头"), m_audioTrimStart,
         QStringLiteral("audioTrimStartFromPlayhead"),
-        QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；不会移动音频块"),
-        [this] {
-            const Entity* entity = m_project->entity(m_entity);
-            if (!entity)
-                return;
-            const double fps = std::max(1, m_project->fps);
-            const double startFrame =
-                entity->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-            const double duration =
-                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
-            const double trimEnd =
-                entity->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
-            const double relative = (m_frame - startFrame) / fps;
-            const double value =
-                std::clamp(relative, 0.0, std::max(0.0, duration - trimEnd));
-            applyData(QStringLiteral("trimStart"), value);
-        });
+        QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；后面的波形保持原位"),
+        [this] { applyAudioTrimStart(m_frame); });
 
     m_audioTrimEnd = new QDoubleSpinBox(content);
     m_audioTrimEnd->setObjectName(QStringLiteral("audioTrimEnd"));
@@ -443,23 +428,8 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     addCaptureRow(
         QStringLiteral("裁掉结尾"), m_audioTrimEnd,
         QStringLiteral("audioTrimEndFromPlayhead"),
-        QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；不会移动音频块"),
-        [this] {
-            const Entity* entity = m_project->entity(m_entity);
-            if (!entity)
-                return;
-            const double fps = std::max(1, m_project->fps);
-            const double startFrame =
-                entity->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-            const double duration =
-                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
-            const double trimStart =
-                entity->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
-            const double relative = (m_frame - startFrame) / fps;
-            const double value = std::clamp(
-                duration - relative, 0.0, std::max(0.0, duration - trimStart));
-            applyData(QStringLiteral("trimEnd"), value);
-        });
+        QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；前面的波形保持原位"),
+        [this] { applyAudioTrimEnd(m_frame); });
 
     m_audioVolume = new QSpinBox(content);
     m_audioVolume->setObjectName(QStringLiteral("audioVolume"));
@@ -470,7 +440,8 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
 
     auto* hint =
         new QLabel(QStringLiteral("直接拖动时间轴上的音频块可以整体移动；「时间轴开始」决定位置，"
-                                  "「裁掉开头/结尾」只改变音频内部范围。「取」把播放头位置填入字段。"),
+                                  "「裁掉开头/结尾」会缩短音频块，但保留的波形保持原位。"
+                                  "「取」把播放头位置填入字段。"),
                    content);
     hint->setWordWrap(true);
     form->addRow(hint);
@@ -546,6 +517,72 @@ void PropertiesPanel::applyData(const QString& key, const QVariant& value)
     if (!e)
         return;
     e->data[key] = value;
+    m_project->modified = true;
+    m_project->notifyChanged();
+}
+
+void PropertiesPanel::applyAudioTrimStart(int playheadFrame)
+{
+    Entity* e = m_project->entity(m_entity);
+    if (!e)
+        return;
+    const double fps = std::max(1, m_project->fps);
+    const double startFrame =
+        e->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    const double duration =
+        e->data.value(QStringLiteral("duration"), 0.0).toDouble();
+    const double trimStart =
+        e->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+    const double trimEnd =
+        e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+    const double audibleFrames =
+        std::max(0.0, (duration - trimStart - trimEnd) * fps);
+    if (audibleFrames <= 1e-9)
+        return;
+
+    // Trimming the left edge moves the clip start to the playhead while the
+    // rest of the waveform stays exactly where it was. Leave one frame.
+    const double deltaFrames =
+        std::clamp(playheadFrame - startFrame, 0.0,
+                   std::max(0.0, audibleFrames - 1.0));
+    if (deltaFrames <= 1e-9)
+        return;
+
+    e->data[QStringLiteral("startFrame")] = startFrame + deltaFrames;
+    e->data[QStringLiteral("trimStart")] = trimStart + deltaFrames / fps;
+    m_project->modified = true;
+    m_project->notifyChanged();
+}
+
+void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
+{
+    Entity* e = m_project->entity(m_entity);
+    if (!e)
+        return;
+    const double fps = std::max(1, m_project->fps);
+    const double startFrame =
+        e->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    const double duration =
+        e->data.value(QStringLiteral("duration"), 0.0).toDouble();
+    const double trimStart =
+        e->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+    const double trimEnd =
+        e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+    const double audibleFrames =
+        std::max(0.0, (duration - trimStart - trimEnd) * fps);
+    if (audibleFrames <= 1.0)
+        return;
+
+    // The playhead is relative to the clip start; trimEnd counts from the end
+    // of the source, so trimStart has to be subtracted as well.
+    const double deltaFrames =
+        std::clamp(playheadFrame - startFrame, 1.0, audibleFrames);
+    const double value =
+        std::max(0.0, duration - trimStart - deltaFrames / fps);
+    if (std::abs(value - trimEnd) < 1e-9)
+        return;
+
+    e->data[QStringLiteral("trimEnd")] = value;
     m_project->modified = true;
     m_project->notifyChanged();
 }
