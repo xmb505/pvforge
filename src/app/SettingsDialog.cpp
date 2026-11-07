@@ -7,6 +7,7 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QSpinBox>
@@ -46,6 +47,26 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     m_edgeCenterSnap = new QCheckBox(QStringLiteral("实体边缘吸附到画面中心线"), editor);
     m_edgeCenterSnap->setChecked(Settings::edgeCenterSnap());
     editorForm->addRow(m_edgeCenterSnap);
+
+    auto* angleRow = new QWidget(editor);
+    auto* angleLayout = new QHBoxLayout(angleRow);
+    angleLayout->setContentsMargins(0, 0, 0, 0);
+    angleLayout->setSpacing(8);
+    const QList<int> angles = Settings::snapAngles();
+    m_angle0 = new QCheckBox(QStringLiteral("0°"), angleRow);
+    m_angle90 = new QCheckBox(QStringLiteral("90°"), angleRow);
+    m_angle180 = new QCheckBox(QStringLiteral("180°"), angleRow);
+    m_angle270 = new QCheckBox(QStringLiteral("270°"), angleRow);
+    m_angle0->setChecked(angles.contains(0));
+    m_angle90->setChecked(angles.contains(90));
+    m_angle180->setChecked(angles.contains(180));
+    m_angle270->setChecked(angles.contains(270));
+    angleLayout->addWidget(m_angle0);
+    angleLayout->addWidget(m_angle90);
+    angleLayout->addWidget(m_angle180);
+    angleLayout->addWidget(m_angle270);
+    angleLayout->addStretch(1);
+    editorForm->addRow(QStringLiteral("旋转吸附角度"), angleRow);
     m_autoKey = new QCheckBox(QStringLiteral("新项目默认开启自动关键帧"), editor);
     m_autoKey->setChecked(Settings::autoKeyDefault());
     editorForm->addRow(m_autoKey);
@@ -97,6 +118,16 @@ void SettingsDialog::accept()
     Settings::setLanguage(m_language->currentData().toString());
     Settings::setSnapPixels(m_snapPixels->value());
     Settings::setEdgeCenterSnap(m_edgeCenterSnap->isChecked());
+    QList<int> angles;
+    if (m_angle0->isChecked())
+        angles.append(0);
+    if (m_angle90->isChecked())
+        angles.append(90);
+    if (m_angle180->isChecked())
+        angles.append(180);
+    if (m_angle270->isChecked())
+        angles.append(270);
+    Settings::setSnapAngles(angles);
     Settings::setAutoKeyDefault(m_autoKey->isChecked());
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());

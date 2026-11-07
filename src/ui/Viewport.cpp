@@ -1,6 +1,7 @@
 #include "Viewport.h"
 
 #include "app/AppIcon.h"
+#include "core/Settings.h"
 #include "core/VectorShape.h"
 
 #include <QApplication>
@@ -937,8 +938,24 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             delta -= 360.0;
         while (delta < -180.0)
             delta += 360.0;
-        emit valueEdited(m_dragEntity, QStringLiteral("rotation"),
-                         m_gizmoStartRotation + delta);
+
+        double rotation = m_gizmoStartRotation + delta;
+        if (!(event->modifiers() & Qt::ControlModifier))
+        {
+            constexpr double tolerance = 3.0;
+            for (int snapAngle : Settings::snapAngles())
+            {
+                // Compare on the circle so 268° still snaps to 270°.
+                const double diff =
+                    std::remainder(rotation - double(snapAngle), 360.0);
+                if (std::abs(diff) <= tolerance)
+                {
+                    rotation = snapAngle;
+                    break;
+                }
+            }
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("rotation"), rotation);
         return;
     }
 

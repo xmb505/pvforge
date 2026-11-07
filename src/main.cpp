@@ -2,6 +2,7 @@
 #include "core/Commands.h"
 #include "core/History.h"
 #include "core/Lang.h"
+#include "core/Settings.h"
 #include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
@@ -736,6 +737,96 @@ int scaleHandleTest(QApplication& app)
         }
 
         qInfo() << "scale-handle-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int rotationSnapTest(QApplication& app)
+{
+    const QList<int> oldAngles = pvf::Settings::snapAngles();
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project, oldAngles] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "rotation-snap-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 200, 120, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto angleDistance = [](double a, double b) {
+            return std::abs(std::remainder(a - b, 360.0));
+        };
+        auto rotateTo = [&](double degrees) {
+            project->setValue(id, QStringLiteral("rotation"), 0, 0.0, false);
+            const QPoint center = viewport->entityPivotForTest(id).toPoint();
+            const double radians = degrees * M_PI / 180.0;
+            const QPoint end(center.x() + int(std::lround(48.0 * std::cos(radians))),
+                             center.y() + int(std::lround(48.0 * std::sin(radians))));
+            send(QEvent::MouseButtonPress, center + QPoint(48, 0), Qt::LeftButton,
+                 Qt::LeftButton);
+            send(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+            return project->value(id, QStringLiteral("rotation"), 0);
+        };
+
+        pvf::Settings::setSnapAngles({0, 90});
+
+        double rotation = rotateTo(2.0);
+        if (std::abs(rotation) > 1e-6)
+        {
+            qCritical() << "rotation-snap-test: 0 snap" << rotation;
+            ++failures;
+        }
+
+        rotation = rotateTo(88.0);
+        if (std::abs(rotation - 90.0) > 1e-6)
+        {
+            qCritical() << "rotation-snap-test: 90 snap" << rotation;
+            ++failures;
+        }
+
+        rotation = rotateTo(45.0);
+        if (std::abs(rotation - 45.0) > 1.5)
+        {
+            qCritical() << "rotation-snap-test: 45 should not snap" << rotation;
+            ++failures;
+        }
+
+        rotation = rotateTo(268.0);
+        if (angleDistance(rotation, 268.0) > 1.5)
+        {
+            qCritical() << "rotation-snap-test: 270 disabled" << rotation;
+            ++failures;
+        }
+
+        pvf::Settings::setSnapAngles({0, 90, 270});
+        rotation = rotateTo(268.0);
+        if (angleDistance(rotation, 270.0) > 1e-6)
+        {
+            qCritical() << "rotation-snap-test: 270 snap" << rotation;
+            ++failures;
+        }
+
+        pvf::Settings::setSnapAngles(oldAngles);
+        qInfo() << "rotation-snap-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -2245,6 +2336,8 @@ int main(int argc, char* argv[])
         return importAsyncTest(app);
     if (app.arguments().contains(QStringLiteral("--drag-undo-test")))
         return dragUndoTest(app);
+    if (app.arguments().contains(QStringLiteral("--rotation-snap-test")))
+        return rotationSnapTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))

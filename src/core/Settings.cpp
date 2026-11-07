@@ -32,6 +32,28 @@ void setEdgeCenterSnap(bool on)
     store().setValue(QStringLiteral("editor/edgeCenterSnap"), on);
 }
 
+QList<int> snapAngles()
+{
+    const QString raw =
+        store().value(QStringLiteral("editor/snapAngles"), QStringLiteral("0,90"))
+            .toString();
+    QList<int> angles;
+    const QStringList parts = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& part : parts)
+        angles.append(part.trimmed().toInt());
+    if (angles.isEmpty())
+        angles.append(0);
+    return angles;
+}
+
+void setSnapAngles(const QList<int>& angles)
+{
+    QStringList parts;
+    for (int angle : angles)
+        parts.append(QString::number(angle));
+    store().setValue(QStringLiteral("editor/snapAngles"), parts.join(QLatin1Char(',')));
+}
+
 QString language()
 {
     return store().value(QStringLiteral("ui/language"), QStringLiteral("zh_CN")).toString();
