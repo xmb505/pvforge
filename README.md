@@ -81,6 +81,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --workbench-test
 
 ## 路线
 
-保存/加载 → 缓动曲线与关键帧编辑 → 视频逐帧播放 → 音频波形/频谱 → 后处理 → MP4 导出。
+下一步：**关键帧缓动函数与曲线编辑 → 视频逐帧播放 → 音频波形/频谱 → MP4 导出**。
 
+当前里程碑状态、架构与已知限制见 [docs/MILESTONE.md](docs/MILESTONE.md)，
 完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
