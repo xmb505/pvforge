@@ -36,5 +36,7 @@
   "workbench.selectVideo": "Choose Video…",
   "search.objects": "Search objects…",
   "search.assets": "Search assets…",
+    "title.unsaved": "Unsaved",
+  "title.saved": "Saved",
   "timeline.title": "Timeline"
 }

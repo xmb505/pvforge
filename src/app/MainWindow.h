@@ -59,6 +59,7 @@ private:
     void onEntityCreated(EntityId id);
     void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void onDeleteKeyframesRequested();
+    void updateWindowTitle();
     bool saveProject();
     bool saveProjectAs();
     void onEntityRenamed(EntityId id, const QString& name);

@@ -36,5 +36,7 @@
   "workbench.selectVideo": "选择视频…",
   "search.objects": "搜索对象…",
   "search.assets": "搜索素材…",
+    "title.unsaved": "未保存",
+  "title.saved": "已保存",
   "timeline.title": "时间轴"
 }

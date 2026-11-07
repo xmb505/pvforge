@@ -40,7 +40,6 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     , m_project(project)
 {
     m_project->setParent(this);
-    setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
     resize(1440, 900);
     setMinimumSize(1000, 620);
 
@@ -145,7 +144,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::setSelectedEntity);
     connect(m_projectProps, &ProjectPropertiesPanel::settingsChanged, this, [this] {
-        setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
+        updateWindowTitle();
         setFrame(m_frame);
     });
     connect(m_project, &Project::changed, this, &MainWindow::refreshAll);
@@ -172,6 +171,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     createToolBar();
 
     setFrame(0);
+    updateWindowTitle();
 }
 
 void MainWindow::createActions()
@@ -227,6 +227,7 @@ void MainWindow::createActions()
     addAction(m_quitAction);
 
     m_saveAction = new QAction(Lang::t(QStringLiteral("action.save"), QStringLiteral("保存")), this);
+    m_saveAction->setObjectName(QStringLiteral("saveAction"));
     m_saveAction->setShortcut(QKeySequence::Save);
     connect(m_saveAction, &QAction::triggered, this, &MainWindow::saveProject);
     addAction(m_saveAction);
@@ -339,6 +340,14 @@ void MainWindow::toggleWorkbench()
     m_workbench->showAt(anchor);
 }
 
+void MainWindow::updateWindowTitle()
+{
+    const QString status = m_project->modified
+                               ? Lang::t(QStringLiteral("title.unsaved"), QStringLiteral("未保存"))
+                               : Lang::t(QStringLiteral("title.saved"), QStringLiteral("已保存"));
+    setWindowTitle(QStringLiteral("PVForge — %1 [%2]").arg(m_project->name, status));
+}
+
 void MainWindow::deleteSelectedEntity()
 {
     if (m_selected == kInvalidEntity)
@@ -376,6 +385,7 @@ bool MainWindow::saveProject()
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
         return false;
     }
+    updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存"), 2000);
     return true;
 }
@@ -396,6 +406,7 @@ bool MainWindow::saveProjectAs()
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
         return false;
     }
+    updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
     return true;
 }
@@ -598,6 +609,7 @@ void MainWindow::refreshAll()
     m_timeline->update();
     m_props->refresh();
     updateStatus();
+    updateWindowTitle();
 }
 
 void MainWindow::togglePlayback()

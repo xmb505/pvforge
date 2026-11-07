@@ -1076,12 +1076,26 @@ int renameTest(QApplication& app)
             ++failures;
         }
 
-        // Saving clears the modified flag.
+        // The title tracks the saved/unsaved state.
+        if (!window.windowTitle().contains(QStringLiteral("未保存")))
+        {
+            qCritical() << "rename-test: title not marked unsaved" << window.windowTitle();
+            ++failures;
+        }
+
+        // Saving clears the modified flag and updates the title.
         const QString projectPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.pvproj");
         QString error;
         if (!project->save(projectPath, &error) || project->modified)
         {
             qCritical() << "rename-test: modified flag not cleared";
+            ++failures;
+        }
+        if (auto* saveAction = window.findChild<QAction*>(QStringLiteral("saveAction")))
+            saveAction->trigger();
+        if (!window.windowTitle().contains(QStringLiteral("已保存")))
+        {
+            qCritical() << "rename-test: title not marked saved" << window.windowTitle();
             ++failures;
         }
 
