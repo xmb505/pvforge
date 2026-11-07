@@ -11,7 +11,6 @@ class QTimer;
 
 namespace pvf {
 
-class ObjectTreePanel;
 class PropertiesPanel;
 class TimelinePanel;
 class Viewport;
@@ -45,7 +44,6 @@ private:
 
     Project* m_project = nullptr;
     Viewport* m_viewport = nullptr;
-    ObjectTreePanel* m_tree = nullptr;
     PropertiesPanel* m_props = nullptr;
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;

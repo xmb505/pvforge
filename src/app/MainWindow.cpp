@@ -1,6 +1,5 @@
 #include "MainWindow.h"
 
-#include "ui/ObjectTreePanel.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
@@ -27,33 +26,32 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle(QStringLiteral("PVForge — 未命名工程"));
     resize(1440, 900);
+    setMinimumSize(1000, 620);
 
     m_project = new Project(this);
     m_viewport = new Viewport(m_project, this);
-    m_tree = new ObjectTreePanel(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
 
-    m_tree->setMinimumWidth(160);
-    m_tree->setMaximumWidth(360);
     m_props->setMinimumWidth(220);
     m_props->setMaximumWidth(380);
+    m_viewport->setMinimumWidth(480);
 
     auto* top = new QSplitter(Qt::Horizontal, this);
-    top->addWidget(m_tree);
     top->addWidget(m_viewport);
     top->addWidget(m_props);
-    top->setStretchFactor(0, 0);
-    top->setStretchFactor(1, 1);
-    top->setStretchFactor(2, 0);
-    top->setSizes({220, 900, 280});
+    top->setChildrenCollapsible(false);
+    top->setStretchFactor(0, 1);
+    top->setStretchFactor(1, 0);
+    top->setSizes({1100, 280});
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
     mainSplit->addWidget(m_timeline);
+    mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
     mainSplit->setSizes({640, 220});
@@ -71,17 +69,15 @@ MainWindow::MainWindow(QWidget* parent)
     m_playTimer = new QTimer(this);
     connect(m_playTimer, &QTimer::timeout, this, &MainWindow::onPlayTick);
 
-    connect(m_tree, &ObjectTreePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_viewport, &Viewport::valueEdited, this, &MainWindow::applyValue);
     connect(m_viewport, &Viewport::workbenchRequested, this, &MainWindow::toggleWorkbench);
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
+    connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_project, &Project::changed, this, &MainWindow::refreshAll);
-    connect(m_workbench, &WorkbenchPanel::created, this, [this](EntityId id) {
-        m_tree->rebuild();
-        setSelectedEntity(id);
-    });
+    connect(m_workbench, &WorkbenchPanel::created, this,
+            [this](EntityId id) { setSelectedEntity(id); });
 
     createActions();
     createMenus();
@@ -183,7 +179,6 @@ EntityId MainWindow::importImageFile(const QString& path)
         return kInvalidEntity;
 
     const EntityId id = e->id;
-    m_tree->rebuild();
     setSelectedEntity(id);
     return id;
 }
@@ -204,7 +199,6 @@ void MainWindow::setSelectedEntity(EntityId id)
     m_selected = id;
     m_viewport->setSelectedEntity(id);
     m_props->setEntity(id);
-    m_tree->selectEntity(id);
     m_timeline->setSelectedEntity(id);
 }
 

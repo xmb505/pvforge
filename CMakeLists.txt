@@ -18,7 +18,6 @@ add_executable(pvforge
     src/core/Project.cpp
     src/media/VideoDecoder.cpp
     src/app/MainWindow.cpp
-    src/ui/ObjectTreePanel.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp

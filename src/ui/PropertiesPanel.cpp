@@ -44,9 +44,15 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
+    auto* header = new QLabel(QStringLiteral("属性"), this);
+    QFont headerFont = header->font();
+    headerFont.setBold(true);
+    header->setFont(headerFont);
+    layout->addWidget(header);
+
     m_title = new QLabel(QStringLiteral("未选择对象"), this);
     QFont titleFont = m_title->font();
-    titleFont.setBold(true);
+    titleFont.setItalic(true);
     m_title->setFont(titleFont);
     layout->addWidget(m_title);
 

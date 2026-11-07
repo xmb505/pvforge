@@ -1,6 +1,8 @@
 #include "app/MainWindow.h"
 #include "core/Project.h"
 #include "media/VideoDecoder.h"
+#include "ui/TimelinePanel.h"
+#include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
 
 #include <QApplication>
@@ -184,6 +186,26 @@ int playTest(QApplication& app)
     return app.exec();
 }
 
+int layoutTest(QApplication& app)
+{
+    pvf::MainWindow window;
+    window.resize(480, 1060);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window] {
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_layout_narrow.png"));
+        qInfo() << "layout-test: size" << window.size() << "minimum" << window.minimumSize();
+        if (auto* timeline = window.findChild<pvf::TimelinePanel*>())
+            qInfo() << "timeline geometry" << timeline->geometry()
+                    << "min" << timeline->minimumSize();
+        if (auto* viewport = window.findChild<pvf::Viewport*>())
+            qInfo() << "viewport geometry" << viewport->geometry()
+                    << "min" << viewport->minimumSize();
+        app.exit(0);
+    });
+    return app.exec();
+}
+
 int workbenchTest(QApplication& app)
 {
     QString error;
@@ -287,6 +309,8 @@ int main(int argc, char* argv[])
         return playTest(app);
     if (app.arguments().contains(QStringLiteral("--workbench-test")))
         return workbenchTest(app);
+    if (app.arguments().contains(QStringLiteral("--layout-test")))
+        return layoutTest(app);
 
     pvf::MainWindow window;
     window.show();

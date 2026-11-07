@@ -70,6 +70,15 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.drawLine(kNameWidth, 0, kNameWidth, height());
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
+    {
+        QFont titleFont = p.font();
+        titleFont.setBold(true);
+        p.setFont(titleFont);
+        p.setPen(QColor(215, 215, 225));
+        p.drawText(QRect(10, 0, kNameWidth - 20, kHeaderHeight),
+                   Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("时间轴"));
+    }
+
     // Ruler.
     const int fps = std::max(1, m_project->fps);
     const double ppf = timeWidth / double(std::max(1, m_project->duration));
@@ -157,8 +166,17 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+
+    // Name column selects the entity row.
     if (event->position().x() < kNameWidth)
+    {
+        const int row = rowAt(int(event->position().y()));
+        const auto& entities = m_project->entities();
+        if (row >= 0 && row < entities.size())
+            emit entitySelected(entities[row].id);
         return;
+    }
+
     m_scrubbing = true;
     emit frameRequested(frameFromX(event->position().x()));
 }

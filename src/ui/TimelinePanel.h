@@ -20,6 +20,7 @@ public:
 
 signals:
     void frameRequested(int frame);
+    void entitySelected(EntityId id);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
