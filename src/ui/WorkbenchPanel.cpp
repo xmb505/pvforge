@@ -3,9 +3,7 @@
 #include "app/AppIcon.h"
 #include "app/MainWindow.h"
 #include "core/Lang.h"
-#include "media/AudioDecoder.h"
 #include "media/MediaImporter.h"
-#include "media/VideoDecoder.h"
 
 #include <QApplication>
 #include <QColorDialog>
@@ -443,12 +441,8 @@ void WorkbenchPanel::selectMedia(int templateIndex)
     if (!tmpl)
         return;
 
-    m_mediaType = tmpl->type;
     m_mediaPath = tmpl->path;
-    m_mediaName = tmpl->name;
-    m_mediaFrame = tmpl->thumbnail;
-    m_mediaAudio = tmpl->audio;
-    m_mediaDuration = tmpl->duration;
+    m_mediaTemplateIndex = templateIndex;
 
     if (!tmpl->thumbnail.isNull())
         m_mediaPreview->setPixmap(QPixmap::fromImage(tmpl->thumbnail)
@@ -499,9 +493,7 @@ void WorkbenchPanel::pickMedia()
                 return;
             }
 
-            if (!m_project->addMediaTemplate(result.importedPath, result.type,
-                                             result.thumbnail, result.duration,
-                                             result.displayName, result.audio))
+            if (!m_project->addImportedMedia(result))
                 return;
 
             refreshMediaLibrary();
@@ -534,33 +526,9 @@ void WorkbenchPanel::createCurrent()
         if (m_mediaPath.isEmpty())
             return;
 
-        if (m_mediaType == EntityType::Audio)
+        if (const Template* tmpl = m_project->templateAt(m_mediaTemplateIndex))
         {
-            std::shared_ptr<AudioClip> clip = m_mediaAudio;
-            if (!clip)
-            {
-                const AudioDecodeResult decoded = decodeAudioFile(m_mediaPath);
-                clip = decoded.clip;
-            }
-            if (clip)
-            {
-                if (Entity* e = m_project->addAudio(m_mediaPath, clip, m_mediaName))
-                    id = e->id;
-            }
-        }
-        else if (m_mediaType == EntityType::Video)
-        {
-            double duration = m_mediaDuration;
-            QString error;
-            const QImage frame = decodeVideoFirstFrame(m_mediaPath, &error, &duration);
-            if (Entity* e = m_project->addVideo(m_mediaPath,
-                                                frame.isNull() ? m_mediaFrame : frame,
-                                                duration, m_mediaName))
-                id = e->id;
-        }
-        else
-        {
-            if (Entity* e = m_project->addImage(m_mediaPath, m_mediaName))
+            if (Entity* e = m_project->createFromTemplate(*tmpl))
                 id = e->id;
         }
     }

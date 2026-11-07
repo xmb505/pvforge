@@ -463,6 +463,29 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
     return &m_templates.last();
 }
 
+bool Project::addImportedMedia(const MediaImportResult& result)
+{
+    if (!result.error.isEmpty() || result.importedPath.isEmpty())
+        return false;
+
+    if (!addMediaTemplate(result.importedPath, result.type, result.thumbnail,
+                          result.duration, result.displayName, result.audio))
+    {
+        return false;
+    }
+
+    if (result.type == EntityType::Video && result.audio)
+    {
+        const QImage thumbnail =
+            renderAudioThumbnail(*result.audio, QSize(320, 80));
+        addMediaTemplate(result.importedPath, EntityType::Audio, thumbnail,
+                         result.audio->duration,
+                         result.displayName + QStringLiteral(" · 音频"),
+                         result.audio);
+    }
+    return true;
+}
+
 QString Project::importMediaFile(const QString& path, QString* error)
 {
     const MediaImportResult result = processMediaFile(path, assetDirectory());
@@ -473,8 +496,7 @@ QString Project::importMediaFile(const QString& path, QString* error)
         return QString();
     }
 
-    addMediaTemplate(result.importedPath, result.type, result.thumbnail, result.duration,
-                     result.displayName, result.audio);
+    addImportedMedia(result);
     return result.importedPath;
 }
 
@@ -488,8 +510,23 @@ Entity* Project::createFromTemplate(const Template& tmpl){
         double duration = tmpl.duration;
         QString error;
         const QImage frame = decodeVideoFirstFrame(tmpl.path, &error, &duration);
-        return addVideo(tmpl.path, frame.isNull() ? tmpl.thumbnail : frame, duration,
-                        tmpl.name);
+        Entity* video = addVideo(tmpl.path, frame.isNull() ? tmpl.thumbnail : frame,
+                                 duration, tmpl.name);
+        if (!video)
+            return nullptr;
+        const EntityId videoId = video->id;
+        if (tmpl.audio)
+        {
+            // A video with an extracted audio track creates the paired audio
+            // entity as well, so the timeline gets picture and sound together.
+            if (Entity* audio =
+                    addAudio(tmpl.path, tmpl.audio,
+                             tmpl.name + QStringLiteral(" · 音频")))
+            {
+                audio->data[QStringLiteral("pairedVideo")] = videoId;
+            }
+        }
+        return entity(videoId);
     }
     case EntityType::Text:
         return addText(tmpl.data.value(QStringLiteral("text")).toString(),
@@ -1074,6 +1111,24 @@ bool Project::load(const QString& path, QString* error)
 
         if (!tmpl.path.isEmpty())
         {
+            // A video template remembers its extracted audio track so that
+            // creating it after loading the project still adds both entities.
+            if (tmpl.type == EntityType::Video || tmpl.type == EntityType::Audio)
+            {
+                auto cached = audioCache.constFind(tmpl.path);
+                if (cached != audioCache.constEnd())
+                {
+                    tmpl.audio = cached.value();
+                }
+                else
+                {
+                    const AudioDecodeResult decoded = decodeAudioFile(tmpl.path);
+                    tmpl.audio = decoded.clip;
+                    if (tmpl.audio)
+                        audioCache.insert(tmpl.path, tmpl.audio);
+                }
+            }
+
             for (const Entity& e : m_entities)
             {
                 if (e.sourcePath != tmpl.path)
@@ -1084,7 +1139,8 @@ bool Project::load(const QString& path, QString* error)
                     tmpl.thumbnail = renderAudioThumbnail(*e.audio, QSize(320, 80));
                     break;
                 }
-                if (!e.image.isNull())
+                if ((tmpl.type == EntityType::Image || tmpl.type == EntityType::Video)
+                    && !e.image.isNull())
                 {
                     tmpl.thumbnail = e.image.scaled(320, 240, Qt::KeepAspectRatio,
                                                     Qt::SmoothTransformation);
@@ -1109,11 +1165,19 @@ bool Project::load(const QString& path, QString* error)
                 }
                 else if (tmpl.type == EntityType::Audio)
                 {
-                    const AudioDecodeResult decoded = decodeAudioFile(tmpl.path);
-                    if (decoded.clip)
+                    if (!tmpl.audio)
                     {
-                        tmpl.audio = decoded.clip;
-                        tmpl.thumbnail = renderAudioThumbnail(*decoded.clip, QSize(320, 80));
+                        const AudioDecodeResult decoded = decodeAudioFile(tmpl.path);
+                        if (decoded.clip)
+                        {
+                            tmpl.audio = decoded.clip;
+                            audioCache.insert(tmpl.path, tmpl.audio);
+                        }
+                    }
+                    if (tmpl.audio)
+                    {
+                        tmpl.thumbnail =
+                            renderAudioThumbnail(*tmpl.audio, QSize(320, 80));
                     }
                 }
             }

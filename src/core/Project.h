@@ -102,7 +102,7 @@ struct Template
     double duration = 0.0;   // seconds, video only
     QVariantMap data;        // text/vector parameters
     QImage thumbnail;        // runtime cache
-    std::shared_ptr<AudioClip> audio;   // runtime cache for audio templates
+    std::shared_ptr<AudioClip> audio;   // audio template, or a video's extracted track
 };
 
 // A removed keyframe, kept so it can be restored by undo.
@@ -116,6 +116,8 @@ struct KeyframeRecord
 };
 
 enum class EntityFlag { Hidden, Locked };
+
+struct MediaImportResult;
 
 class Project : public QObject
 {
@@ -184,6 +186,9 @@ public:
                                double duration = 0.0,
                                const QString& displayName = QString(),
                                const std::shared_ptr<AudioClip>& audio = nullptr);
+    // Adds the imported asset. A video with an audio track also becomes an
+    // audio template that shares the same source file.
+    bool addImportedMedia(const MediaImportResult& result);
     QString importMediaFile(const QString& path, QString* error = nullptr);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);

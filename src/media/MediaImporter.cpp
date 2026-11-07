@@ -149,6 +149,12 @@ MediaImportResult processMediaFile(const QString& path, const QString& assetDire
     result.duration = duration;
     result.thumbnail =
         frame.scaled(320, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    // Videos often carry an audio track. Decode it now (worker thread) so the
+    // library can offer it as a separate audio asset.
+    const AudioDecodeResult audio = decodeAudioFile(result.importedPath);
+    if (audio.clip && audio.clip->duration > 0.0)
+        result.audio = audio.clip;
     return result;
 }
 

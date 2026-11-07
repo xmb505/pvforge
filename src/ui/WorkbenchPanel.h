@@ -4,7 +4,6 @@
 
 #include <QColor>
 #include <QFrame>
-#include <QImage>
 
 class QComboBox;
 class QDoubleSpinBox;
@@ -57,13 +56,9 @@ private:
     QStackedWidget* m_pages = nullptr;
     QPushButton* m_create = nullptr;
 
-    // Selected media (image or video).
-    EntityType m_mediaType = EntityType::Image;
+    // Selected media template.
+    int m_mediaTemplateIndex = -1;
     QString m_mediaPath;
-    QString m_mediaName;
-    QImage m_mediaFrame;
-    std::shared_ptr<AudioClip> m_mediaAudio;
-    double m_mediaDuration = 0.0;
     QLabel* m_mediaPreview = nullptr;
     QLabel* m_mediaInfo = nullptr;
     QListWidget* m_mediaLibrary = nullptr;

@@ -1518,11 +1518,17 @@ int videoTest(QApplication& app)
                   QStringLiteral("color=c=red:s=320x240:d=1:r=30"),
                   QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
                   QStringLiteral("color=c=blue:s=320x240:d=1:r=30"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("sine=frequency=440:sample_rate=48000:duration=2"),
                   QStringLiteral("-filter_complex"),
-                  QStringLiteral("[0:v][1:v]concat=n=2:v=1:a=0"),
+                  QStringLiteral("[0:v][1:v]concat=n=2:v=1:a=0[v]"),
+                  QStringLiteral("-map"), QStringLiteral("[v]"),
+                  QStringLiteral("-map"), QStringLiteral("2:a"),
                   QStringLiteral("-c:v"), QStringLiteral("libx264"),
                   QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
-                  QStringLiteral("-preset"), QStringLiteral("ultrafast"), path});
+                  QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+                  QStringLiteral("-c:a"), QStringLiteral("aac"),
+                  QStringLiteral("-shortest"), path});
     if (!ffmpeg.waitForFinished(30000) || ffmpeg.exitCode() != 0)
     {
         qCritical() << "video-test: cannot generate test video"
@@ -1585,6 +1591,120 @@ int videoTest(QApplication& app)
         ++failures;
     }
 
+    const pvf::MediaImportResult imported =
+        pvf::processMediaFile(path, QString());
+    if (imported.type != pvf::EntityType::Video || !imported.audio
+        || imported.audio->duration < 1.8 || imported.audio->peaks.isEmpty())
+    {
+        qCritical() << "video-test: audio track was not extracted"
+                    << imported.error
+                    << (imported.audio ? imported.audio->duration : -1.0);
+        ++failures;
+    }
+    else
+    {
+        float peak = 0.0f;
+        for (float sample : imported.audio->peaks)
+            peak = std::max(peak, sample);
+        if (peak < 0.05f)
+        {
+            qCritical() << "video-test: extracted audio is silent" << peak;
+            ++failures;
+        }
+    }
+
+    pvf::Project importProject;
+    importProject.fps = 10;
+    if (!importProject.addImportedMedia(imported))
+    {
+        qCritical() << "video-test: addImportedMedia failed";
+        ++failures;
+    }
+    else
+    {
+        const auto& templates = importProject.templates();
+        if (templates.size() != 2)
+        {
+            qCritical() << "video-test: expected two templates" << templates.size();
+            ++failures;
+        }
+        const pvf::Template* videoTemplate = nullptr;
+        const pvf::Template* audioTemplate = nullptr;
+        for (const pvf::Template& tmpl : templates)
+        {
+            if (tmpl.type == pvf::EntityType::Video)
+                videoTemplate = &tmpl;
+            else if (tmpl.type == pvf::EntityType::Audio)
+                audioTemplate = &tmpl;
+        }
+        if (!videoTemplate || !audioTemplate || !audioTemplate->audio
+            || !audioTemplate->name.endsWith(QStringLiteral(" · 音频")))
+        {
+            qCritical() << "video-test: audio template missing";
+            ++failures;
+        }
+        else
+        {
+            const pvf::Template videoCopy = *videoTemplate;
+            pvf::Entity* createdVideo = importProject.createFromTemplate(videoCopy);
+            const auto& entities = importProject.entities();
+            const pvf::Entity* createdAudio = nullptr;
+            for (const pvf::Entity& e : entities)
+                if (e.type == pvf::EntityType::Audio)
+                    createdAudio = &e;
+            if (!createdVideo || entities.size() != 2 || !createdAudio
+                || !createdAudio->audio
+                || createdAudio->data.value(QStringLiteral("pairedVideo")).toInt()
+                       != createdVideo->id
+                || createdAudio->sourcePath != path)
+            {
+                qCritical() << "video-test: paired audio entity missing"
+                            << entities.size();
+                ++failures;
+            }
+        }
+    }
+
+    const QString projectPath = QStringLiteral("/tmp/pvf_video_audio.pvproj");
+    QString saveError;
+    if (!importProject.save(projectPath, &saveError))
+    {
+        qCritical() << "video-test: save project" << saveError;
+        ++failures;
+    }
+    else
+    {
+        pvf::Project loaded;
+        if (!loaded.load(projectPath, &saveError))
+        {
+            qCritical() << "video-test: load project" << saveError;
+            ++failures;
+        }
+        else
+        {
+            bool hasVideoTemplate = false;
+            bool hasAudioTemplate = false;
+            bool hasAudioEntity = false;
+            for (const pvf::Template& tmpl : loaded.templates())
+            {
+                if (tmpl.type == pvf::EntityType::Video)
+                    hasVideoTemplate = true;
+                if (tmpl.type == pvf::EntityType::Audio && tmpl.audio)
+                    hasAudioTemplate = true;
+            }
+            for (const pvf::Entity& e : loaded.entities())
+                if (e.type == pvf::EntityType::Audio && e.audio)
+                    hasAudioEntity = true;
+            if (!hasVideoTemplate || !hasAudioTemplate || !hasAudioEntity)
+            {
+                qCritical() << "video-test: audio pairing not restored"
+                            << hasVideoTemplate << hasAudioTemplate
+                            << hasAudioEntity;
+                ++failures;
+            }
+        }
+    }
+
     auto* windowProject = new pvf::Project;
     windowProject->fps = 10;
     pvf::Entity* uiVideo =
@@ -1628,6 +1748,76 @@ int videoTest(QApplication& app)
         qCritical() << "video-test: playback did not reach the blue frame"
                     << window.currentFrame() << color;
         ++failures;
+    }
+
+    // Library flow: creating the video asset must also create the extracted
+    // audio entity, and undo/redo must treat both as one step.
+    auto* pairProject = new pvf::Project;
+    pairProject->fps = 10;
+    pairProject->addImportedMedia(imported);
+    pvf::MainWindow pairWindow(pairProject);
+    pairWindow.resize(900, 700);
+    pairWindow.show();
+    QApplication::processEvents();
+
+    auto* assetList =
+        pairWindow.findChild<QListWidget*>(QStringLiteral("assetList"));
+    auto* assetCreate =
+        pairWindow.findChild<QPushButton*>(QStringLiteral("assetCreate"));
+    if (!assetList || !assetCreate || assetList->count() < 1)
+    {
+        qCritical() << "video-test: asset library controls missing";
+        ++failures;
+    }
+    else
+    {
+        assetList->setCurrentRow(0);
+        assetCreate->click();
+        QApplication::processEvents();
+
+        auto countAudio = [pairProject]() {
+            int count = 0;
+            for (const pvf::Entity& e : pairProject->entities())
+                if (e.type == pvf::EntityType::Audio)
+                    ++count;
+            return count;
+        };
+        if (pairProject->entities().size() != 2 || countAudio() != 1)
+        {
+            qCritical() << "video-test: video asset did not create audio"
+                        << pairProject->entities().size() << countAudio();
+            ++failures;
+        }
+
+        auto* undoAction =
+            pairWindow.findChild<QAction*>(QStringLiteral("undoAction"));
+        auto* redoAction =
+            pairWindow.findChild<QAction*>(QStringLiteral("redoAction"));
+        if (!undoAction || !redoAction)
+        {
+            qCritical() << "video-test: undo actions missing";
+            ++failures;
+        }
+        else
+        {
+            undoAction->trigger();
+            QApplication::processEvents();
+            if (!pairProject->entities().isEmpty())
+            {
+                qCritical() << "video-test: paired undo left entities"
+                            << pairProject->entities().size();
+                ++failures;
+            }
+            redoAction->trigger();
+            QApplication::processEvents();
+            if (pairProject->entities().size() != 2 || countAudio() != 1)
+            {
+                qCritical() << "video-test: paired redo failed"
+                            << pairProject->entities().size() << countAudio();
+                ++failures;
+            }
+            pairWindow.grab().save(QStringLiteral("/tmp/pvf_video_pair.png"));
+        }
     }
 
     Q_UNUSED(app);

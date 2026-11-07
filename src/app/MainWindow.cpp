@@ -924,13 +924,35 @@ void MainWindow::onEntityCreated(EntityId id)
     }
 
     const auto& entities = m_project->entities();
+    int videoIndex = -1;
     for (int i = 0; i < int(entities.size()); ++i)
     {
-        if (entities[i].id != id)
-            continue;
-        m_history->push(std::make_unique<AddEntityCommand>(entities[i], i), *m_project);
-        return;
+        if (entities[i].id == id)
+        {
+            videoIndex = i;
+            break;
+        }
     }
+    if (videoIndex < 0)
+        return;
+
+    // A video with an extracted track creates its paired audio at the same
+    // time; keep both in one undo step.
+    QVector<Entity> created;
+    QVector<int> indices;
+    created.append(entities[videoIndex]);
+    indices.append(videoIndex);
+    for (int i = 0; i < int(entities.size()); ++i)
+    {
+        const Entity& e = entities[i];
+        if (e.type == EntityType::Audio
+            && e.data.value(QStringLiteral("pairedVideo")).toInt() == id)
+        {
+            created.append(e);
+            indices.append(i);
+        }
+    }
+    m_history->push(std::make_unique<AddEntitiesCommand>(created, indices), *m_project);
 }
 
 void MainWindow::onEntityFlagChanged(EntityId id, EntityFlag flag, bool value)

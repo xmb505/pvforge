@@ -72,6 +72,37 @@ QString AddEntityCommand::text() const
     return QStringLiteral("创建实体");
 }
 
+AddEntitiesCommand::AddEntitiesCommand(QVector<Entity> entities, QVector<int> indices)
+{
+    const int count = std::min(entities.size(), indices.size());
+    m_items.reserve(count);
+    for (int i = 0; i < count; ++i)
+        m_items.append(Item{entities[i], indices[i]});
+}
+
+void AddEntitiesCommand::undo(Project& project)
+{
+    if (!m_present)
+        return;
+    for (int i = int(m_items.size()) - 1; i >= 0; --i)
+        project.removeEntity(m_items[i].entity.id);
+    m_present = false;
+}
+
+void AddEntitiesCommand::redo(Project& project)
+{
+    if (m_present)
+        return;
+    for (const Item& item : m_items)
+        project.insertEntity(item.entity, item.index);
+    m_present = true;
+}
+
+QString AddEntitiesCommand::text() const
+{
+    return QStringLiteral("创建实体");
+}
+
 RemoveEntityCommand::RemoveEntityCommand(const Entity& entity, int index)
     : m_entity(entity)
     , m_index(index)

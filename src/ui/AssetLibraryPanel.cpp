@@ -191,9 +191,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
                                            result.error);
                         continue;
                     }
-                    if (m_project->addMediaTemplate(result.importedPath, result.type,
-                                                    result.thumbnail, result.duration,
-                                                    result.displayName, result.audio))
+                    if (m_project->addImportedMedia(result))
                         ++imported;
                 }
 

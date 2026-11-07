@@ -43,6 +43,26 @@ private:
     bool m_present = true;   // the entity already exists when recorded
 };
 
+// Creating a group of entities as one undo step (video plus its extracted audio).
+class AddEntitiesCommand : public UndoCommand
+{
+public:
+    AddEntitiesCommand(QVector<Entity> entities, QVector<int> indices);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    struct Item
+    {
+        Entity entity;
+        int index = 0;
+    };
+    QVector<Item> m_items;
+    bool m_present = true;
+};
+
 // Removing an entity, keeping a copy so it can be restored.
 class RemoveEntityCommand : public UndoCommand
 {
