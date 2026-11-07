@@ -1028,6 +1028,30 @@ int timelineFrameTest(QApplication& app)
         }
         else
         {
+            // The visible unit button in the timeline header toggles both the
+            // ruler and the status bar, and keeps the menu in sync.
+            auto* unitButton =
+                window.findChild<QToolButton*>(QStringLiteral("timelineUnitButton"));
+            if (!unitButton)
+            {
+                qCritical() << "timeline-frame-test: unit button missing";
+                ++failures;
+            }
+            else
+            {
+                const bool before = timeline->displayFrames();
+                unitButton->click();
+                if (timeline->displayFrames() == before
+                    || framesAction->isChecked() != timeline->displayFrames())
+                {
+                    qCritical() << "timeline-frame-test: unit button did not sync"
+                                << timeline->displayFrames()
+                                << framesAction->isChecked();
+                    ++failures;
+                }
+                unitButton->click();   // back to seconds
+            }
+
             window.goToFrame(20);
             if (!status->text().contains(QStringLiteral("s /"))
                 || status->text().contains(QStringLiteral("帧")))

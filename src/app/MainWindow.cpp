@@ -163,6 +163,15 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         if (m_playing)
             togglePlayback();
     });
+    connect(m_timeline, &TimelinePanel::displayFramesChanged, this,
+            [this](bool frames) {
+                Settings::setTimelineDisplayFrames(frames);
+                if (auto* action = findChild<QAction*>(
+                        frames ? QStringLiteral("timelineFramesAction")
+                               : QStringLiteral("timelineSecondsAction")))
+                    action->setChecked(true);
+                updateStatus();
+            });
     connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::setSelectedEntity);
     connect(m_projectProps, &ProjectPropertiesPanel::settingsChanged, this, [this] {

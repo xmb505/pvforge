@@ -8,6 +8,7 @@ class QKeyEvent;
 class QLineEdit;
 class QScrollBar;
 class QTimer;
+class QToolButton;
 class QWheelEvent;
 
 namespace pvf {
@@ -49,6 +50,7 @@ public:
 signals:
     void frameRequested(int frame);
     void scrubStarted();   // the user takes manual control of the playhead
+    void displayFramesChanged(bool frames);
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
@@ -97,6 +99,7 @@ private:
     int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;
+    QToolButton* m_unitButton = nullptr;
     QLineEdit* m_renameEdit = nullptr;
     EntityId m_renameEntity = kInvalidEntity;
     QScrollBar* m_hScroll = nullptr;

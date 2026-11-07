@@ -15,6 +15,7 @@
 #include <QSet>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -115,6 +116,17 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         update();
     });
 
+    // Visible unit switch: the ruler is either pure frames or pure seconds.
+    m_unitButton = new QToolButton(this);
+    m_unitButton->setObjectName(QStringLiteral("timelineUnitButton"));
+    m_unitButton->setToolTip(QStringLiteral("切换时间轴刻度单位（帧 / 秒）"));
+    m_unitButton->setFocusPolicy(Qt::NoFocus);
+    m_unitButton->setText(m_displayFrames ? QStringLiteral("帧") : QStringLiteral("秒"));
+    connect(m_unitButton, &QToolButton::clicked, this, [this] {
+        setDisplayFrames(!m_displayFrames);
+        emit displayFramesChanged(m_displayFrames);
+    });
+
     m_renameEdit = new QLineEdit(this);
     m_renameEdit->setObjectName(QStringLiteral("renameEdit"));
     m_renameEdit->hide();
@@ -140,9 +152,9 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
 
 void TimelinePanel::setDisplayFrames(bool frames)
 {
-    if (m_displayFrames == frames)
-        return;
     m_displayFrames = frames;
+    if (m_unitButton)
+        m_unitButton->setText(frames ? QStringLiteral("帧") : QStringLiteral("秒"));
     update();
 }
 
@@ -398,7 +410,10 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    m_search->setGeometry(8, 2, kNameWidth - 16, kHeaderHeight - 6);
+    const int unitWidth = 40;
+    m_search->setGeometry(8, 2, kNameWidth - 16 - unitWidth - 4, kHeaderHeight - 6);
+    m_unitButton->setGeometry(kNameWidth - 8 - unitWidth, 2, unitWidth,
+                              kHeaderHeight - 6);
     m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
                            kScrollBarHeight);
     updateScrollBar();
