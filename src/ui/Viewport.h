@@ -23,6 +23,9 @@ public:
 
     QToolButton* workbenchButton() const { return m_workbenchButton; }
 
+    // Canvas pixels per screen pixel, used by the gizmo and tests.
+    double currentScale() const { return viewScale(); }
+
     QSize minimumSizeHint() const override { return {480, 270}; }
 
 signals:
@@ -38,12 +41,17 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    enum class GizmoMode { None, Move, AxisX, AxisY, Rotate };
+
     QRectF canvasRect() const;
     double viewScale() const;
     QPointF screenToCanvas(const QPointF& pos) const;
     QRectF entityLocalBounds(const Entity& e) const;
     const Entity* hitTest(const QPointF& pos) const;
     void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
+    QPointF entityScreenCenter(const Entity& e) const;
+    bool gizmoHitTest(const QPointF& pos, GizmoMode* mode) const;
+    void drawGizmo(QPainter& painter, const Entity& e);
 
     Project* m_project = nullptr;
     int m_frame = 0;
@@ -54,6 +62,14 @@ private:
     bool m_dragging = false;
     QPointF m_dragLast;
     EntityId m_dragEntity = kInvalidEntity;
+
+    GizmoMode m_gizmoMode = GizmoMode::None;
+    QPointF m_gizmoCenter;             // screen position of the gizmo
+    QPointF m_gizmoStartMouse;
+    double m_gizmoStartAngle = 0.0;
+    double m_gizmoStartRotation = 0.0;
+    double m_gizmoStartX = 0.0;
+    double m_gizmoStartY = 0.0;
 
     bool m_panning = false;
     QPointF m_panLast;

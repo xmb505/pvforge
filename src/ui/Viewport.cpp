@@ -3,6 +3,7 @@
 #include "app/AppIcon.h"
 
 #include <QApplication>
+#include <QDebug>
 #include <QFontMetricsF>
 #include <QIcon>
 #include <QMouseEvent>
@@ -14,6 +15,16 @@
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+// Gizmo geometry in screen pixels, so it keeps a constant size while zooming.
+constexpr double kGizmoAxisLength = 78.0;
+constexpr double kGizmoRingRadius = 48.0;
+constexpr double kGizmoHitWidth = 7.0;
+constexpr double kGizmoCenterDeadzone = 14.0;
+
+} // namespace
 
 
 Viewport::Viewport(Project* project, QWidget* parent)
@@ -276,6 +287,94 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF& canvas, do
     }
 }
 
+QPointF Viewport::entityScreenCenter(const Entity& e) const
+{
+    const QRectF canvas = canvasRect();
+    const double s = viewScale();
+    const double x = m_project->value(e.id, "x", m_frame);
+    const double y = m_project->value(e.id, "y", m_frame);
+    return canvas.center() + QPointF(x * s, y * s);
+}
+
+bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
+{
+    if (m_selected == kInvalidEntity)
+        return false;
+    const Entity* entity = m_project->entity(m_selected);
+    if (!entity)
+        return false;
+
+    const QPointF delta = pos - entityScreenCenter(*entity);
+    const double distance = std::hypot(delta.x(), delta.y());
+
+    // The rotation ring sits on top of the axes.
+    if (std::abs(distance - kGizmoRingRadius) <= kGizmoHitWidth)
+    {
+        *mode = GizmoMode::Rotate;
+        return true;
+    }
+
+    // Close to the centre the entity itself is grabbed instead.
+    if (distance <= kGizmoCenterDeadzone)
+        return false;
+
+    if (std::abs(delta.y()) <= kGizmoHitWidth && std::abs(delta.x()) <= kGizmoAxisLength)
+    {
+        *mode = GizmoMode::AxisX;
+        return true;
+    }
+    if (std::abs(delta.x()) <= kGizmoHitWidth && std::abs(delta.y()) <= kGizmoAxisLength)
+    {
+        *mode = GizmoMode::AxisY;
+        return true;
+    }
+    return false;
+}
+
+void Viewport::drawGizmo(QPainter& p, const Entity& e)
+{
+    const QPointF center = entityScreenCenter(e);
+    const double len = kGizmoAxisLength;
+    const double ring = kGizmoRingRadius;
+
+    const auto arrow = [&p](const QPointF& tip, const QPointF& back, const QColor& color) {
+        const QPointF dir = tip - back;
+        const double length = std::hypot(dir.x(), dir.y());
+        if (length < 1.0)
+            return;
+        const QPointF unit = dir / length;
+        const QPointF side(-unit.y(), unit.x());
+        QPolygonF triangle;
+        triangle << tip << tip - unit * 11.0 + side * 5.0 << tip - unit * 11.0 - side * 5.0;
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawPolygon(triangle);
+    };
+
+    // X axis.
+    const bool hotX = m_gizmoMode == GizmoMode::AxisX;
+    const QColor xColor = hotX ? QColor(255, 150, 150) : QColor(226, 86, 86);
+    p.setPen(QPen(xColor, hotX ? 4.0 : 3.0));
+    p.drawLine(center - QPointF(len, 0), center + QPointF(len, 0));
+    arrow(center + QPointF(len, 0), center, xColor);
+    arrow(center - QPointF(len, 0), center, xColor);
+
+    // Y axis.
+    const bool hotY = m_gizmoMode == GizmoMode::AxisY;
+    const QColor yColor = hotY ? QColor(150, 235, 150) : QColor(96, 200, 96);
+    p.setPen(QPen(yColor, hotY ? 4.0 : 3.0));
+    p.drawLine(center - QPointF(0, len), center + QPointF(0, len));
+    arrow(center + QPointF(0, len), center, yColor);
+    arrow(center - QPointF(0, len), center, yColor);
+
+    // Rotation ring.
+    const bool hotRotate = m_gizmoMode == GizmoMode::Rotate;
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(hotRotate ? QColor(255, 214, 120) : QColor(210, 200, 160),
+                  hotRotate ? 3.5 : 2.0));
+    p.drawEllipse(center, ring, ring);
+}
+
 void Viewport::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -299,6 +398,13 @@ void Viewport::paintEvent(QPaintEvent*)
 
     for (const Entity& e : m_project->entities())
         drawEntity(p, e, canvas, s);
+
+    // Gizmo on top of the selected entity.
+    if (m_selected != kInvalidEntity)
+    {
+        if (const Entity* entity = m_project->entity(m_selected))
+            drawGizmo(p, *entity);
+    }
 
     // Empty state hint.
     if (m_project->entities().isEmpty())
@@ -326,6 +432,27 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         return;
 
     setFocus(Qt::MouseFocusReason);
+
+    // The gizmo takes priority over the entity body.
+    GizmoMode gizmoMode = GizmoMode::None;
+    if (gizmoHitTest(event->position(), &gizmoMode))
+    {
+        const Entity* entity = m_project->entity(m_selected);
+        m_gizmoMode = gizmoMode;
+        m_dragging = true;
+        m_dragEntity = m_selected;
+        m_gizmoCenter = entityScreenCenter(*entity);
+        m_gizmoStartMouse = event->position();
+        m_gizmoStartAngle = std::atan2(event->position().y() - m_gizmoCenter.y(),
+                                      event->position().x() - m_gizmoCenter.x())
+                            * 180.0 / M_PI;
+        m_gizmoStartRotation = m_project->value(m_selected, "rotation", m_frame);
+        m_gizmoStartX = m_project->value(m_selected, "x", m_frame);
+        m_gizmoStartY = m_project->value(m_selected, "y", m_frame);
+        m_dragLast = event->position();
+        return;
+    }
+
     const Entity* hit = hitTest(event->position());
     if (hit)
     {
@@ -360,6 +487,36 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
         return;
 
     const double s = viewScale();
+
+    if (m_gizmoMode == GizmoMode::AxisX)
+    {
+        const double total = (event->position().x() - m_gizmoStartMouse.x()) / s;
+        emit valueEdited(m_dragEntity, QStringLiteral("x"), m_gizmoStartX + total);
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::AxisY)
+    {
+        const double total = (event->position().y() - m_gizmoStartMouse.y()) / s;
+        emit valueEdited(m_dragEntity, QStringLiteral("y"), m_gizmoStartY + total);
+        return;
+    }
+
+    if (m_gizmoMode == GizmoMode::Rotate)
+    {
+        const double angle = std::atan2(event->position().y() - m_gizmoCenter.y(),
+                                         event->position().x() - m_gizmoCenter.x())
+                             * 180.0 / M_PI;
+        double delta = angle - m_gizmoStartAngle;
+        while (delta > 180.0)
+            delta -= 360.0;
+        while (delta < -180.0)
+            delta += 360.0;
+        emit valueEdited(m_dragEntity, QStringLiteral("rotation"),
+                         m_gizmoStartRotation + delta);
+        return;
+    }
+
     const QPointF delta = (event->position() - m_dragLast) / s;
     m_dragLast = event->position();
 
@@ -380,6 +537,7 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
     {
         m_dragging = false;
         m_dragEntity = kInvalidEntity;
+        m_gizmoMode = GizmoMode::None;
     }
 }
 

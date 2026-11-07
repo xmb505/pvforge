@@ -401,6 +401,108 @@ int timelineInteractionTest(QApplication& app)
     return app.exec();
 }
 
+int gizmoTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "gizmo-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const double scale = viewport->currentScale();
+        const QPoint center = viewport->rect().center();
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_gizmo.png"));
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+        };
+
+        // Drag the X axis: horizontal only.
+        drag(center + QPoint(40, 0), center + QPoint(140, 0));
+        const double xAfterAxis = project->value(id, QStringLiteral("x"), 0);
+        if (xAfterAxis <= 0.0
+            || std::abs(project->value(id, QStringLiteral("y"), 0)) > 1e-6)
+        {
+            qCritical() << "gizmo-test: x axis drag" << xAfterAxis;
+            ++failures;
+        }
+        const double expectedX = 100.0 / scale;
+        if (std::abs(xAfterAxis - expectedX) > 1.0)
+        {
+            qCritical() << "gizmo-test: x axis delta" << xAfterAxis << expectedX;
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("x"), 0, 0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0, false);
+
+        // Drag the Y axis: vertical only.
+        drag(center + QPoint(0, 40), center + QPoint(0, 140));
+        const double yAfterAxis = project->value(id, QStringLiteral("y"), 0);
+        if (yAfterAxis <= 0.0
+            || std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "gizmo-test: y axis drag" << yAfterAxis;
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("x"), 0, 0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0, false);
+        project->setValue(id, QStringLiteral("rotation"), 0, 0, false);
+
+        // Drag the rotation ring: changes the angle, keeps the position.
+        drag(center + QPoint(48, 0), center + QPoint(0, 48));
+        const double rotation = project->value(id, QStringLiteral("rotation"), 0);
+        if (std::abs(rotation - 90.0) > 2.0)
+        {
+            qCritical() << "gizmo-test: rotation" << rotation;
+            ++failures;
+        }
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("y"), 0)) > 1e-6)
+        {
+            qCritical() << "gizmo-test: rotation moved the entity";
+            ++failures;
+        }
+
+        project->setValue(id, QStringLiteral("rotation"), 0, 0, false);
+
+        // Dragging the body moves freely.
+        drag(center, center + QPoint(60, 30));
+        if (project->value(id, QStringLiteral("x"), 0) <= 0.0
+            || project->value(id, QStringLiteral("y"), 0) <= 0.0)
+        {
+            qCritical() << "gizmo-test: body drag";
+            ++failures;
+        }
+
+        qInfo() << "gizmo-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int lockTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1192,6 +1294,8 @@ int main(int argc, char* argv[])
         return packTest(app);
     if (app.arguments().contains(QStringLiteral("--lock-test")))
         return lockTest(app);
+    if (app.arguments().contains(QStringLiteral("--gizmo-test")))
+        return gizmoTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

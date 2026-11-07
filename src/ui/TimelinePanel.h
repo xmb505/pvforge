@@ -33,8 +33,7 @@ public:
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
 
-    double pixelsPerFrame() const { return m_pixelsPerFrame; }
-    int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
+    double pixelsPerFrame() const { return m_pixelsPerFrame; }    int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
 

@@ -36,7 +36,7 @@ public:
     void goToFrame(int frame) { setFrame(frame); }
     int currentFrame() const { return m_frame; }
     void togglePlayback();
-
+    void setSelectedEntityForTest(EntityId id) { setSelectedEntity(id); }
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
