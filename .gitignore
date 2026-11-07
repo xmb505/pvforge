@@ -5,3 +5,11 @@ compile_commands.json
 *.user
 *.swp
 .DS_Store
+
+# Local projects and their packed media
+*.pvproj
+*.pvproj~
+
+# Editors
+.idea/
+.vscode/

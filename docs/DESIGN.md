@@ -1,6 +1,8 @@
 # PVForge 设计文档
 
 > 工作名 PVForge，可随时更名。仓库 `pvforge`。
+>
+> 本文是设计目标和范围，不代表当前实现进度；当前进度与已知限制见 [MILESTONE.md](MILESTONE.md)。
 
 ## 1. 定位
 

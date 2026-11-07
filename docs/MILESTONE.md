@@ -1,7 +1,7 @@
 # 里程碑 M1：可用的 2D PV 编辑器核心
 
 记录时间：2026-11-07
-仓库：`/home/xmb505/pvforge`
+仓库：PVForge（GitHub 仓库根目录）
 用途：压缩上下文后快速恢复项目状态。
 
 ## 一句话状态
@@ -167,7 +167,7 @@ self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo
 ## 运行
 
 ```bash
-cd /home/xmb505/pvforge
+cd PVForge
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ./build/pvforge

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PVForge VERSION 0.1.0 LANGUAGES CXX)
+project(PVForge VERSION 0.1.0 DESCRIPTION "2D music PV editor with a Mine-imator style animation workflow" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
