@@ -20,6 +20,7 @@ class QTimer;
 namespace pvf {
 
 class AssetLibraryPanel;
+class AudioEngine;
 class CameraMonitor;
 class EnvironmentPanel;
 class ProjectPropertiesPanel;
@@ -100,6 +101,7 @@ private:
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
+    AudioEngine* m_audioEngine = nullptr;
 
     QTimer* m_playTimer = nullptr;
     QElapsedTimer m_playClock;

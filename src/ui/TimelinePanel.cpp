@@ -283,7 +283,30 @@ int TimelinePanel::rowAt(int y) const
 {
     if (y < kHeaderHeight)
         return -1;
-    return (y - kHeaderHeight) / kRowHeight;
+    const QVector<int> visible = visibleEntities();
+    int top = kHeaderHeight;
+    for (int row = 0; row < visible.size(); ++row)
+    {
+        const int height = rowHeight(row);
+        if (y < top + height)
+            return row;
+        top += height;
+    }
+    return int(visible.size());
+}
+
+int TimelinePanel::rowTop(int row) const
+{
+    int top = kHeaderHeight;
+    for (int i = 0; i < row; ++i)
+        top += rowHeight(i);
+    return top;
+}
+
+int TimelinePanel::rowHeight(int row) const
+{
+    const Entity* entity = m_project->entity(entityAtRow(row));
+    return entity && entity->isAudio() ? kAudioRowHeight : kRowHeight;
 }
 
 EntityId TimelinePanel::entityAtRow(int row) const
@@ -353,9 +376,10 @@ bool TimelinePanel::hitKeyframe(int row, int x, EntityId* outId, double* outFram
 QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
     // Mine-imator keeps these buttons at the end of the name column.
-    const int top = kHeaderHeight + row * kRowHeight;
+    const int top = rowTop(row);
+    const int height = rowHeight(row);
     const int x = kNameWidth - 8 - (index + 1) * (kButtonSize + 2);
-    return QRect(x, top + (kRowHeight - kButtonSize) / 2, kButtonSize, kButtonSize);
+    return QRect(x, top + (height - kButtonSize) / 2, kButtonSize, kButtonSize);
 }
 
 void TimelinePanel::handleRowButton(int row, int index)
@@ -432,6 +456,77 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
                            kScrollBarHeight);
     updateScrollBar();
+}
+
+void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
+                                       const QRect& row, int right)
+{
+    const double fps = std::max(1, m_project->fps);
+    const double startFrame =
+        entity.data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    const double trimStart =
+        entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+    const double trimEnd = entity.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+    const double duration =
+        entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
+    const double clipFrames =
+        std::max(0.0, (duration - trimStart - trimEnd) * fps);
+    if (clipFrames <= 0.0)
+        return;
+
+    const double x0 = kNameWidth + startFrame * m_pixelsPerFrame - m_scrollX;
+    const double x1 = x0 + clipFrames * m_pixelsPerFrame;
+    const int left = std::max(kNameWidth, int(std::ceil(x0)));
+    const int rightEdge = std::min(right, int(std::floor(x1)));
+    if (rightEdge <= left)
+        return;
+
+    const QColor accent = QApplication::palette().color(QPalette::Highlight);
+    p.fillRect(QRect(left, row.top() + 1, rightEdge - left, row.height() - 2),
+               QColor(accent.red(), accent.green(), accent.blue(), 22));
+
+    const int center = row.center().y();
+    const int half = std::max(3, row.height() / 2 - 3);
+
+    if (!entity.audio || entity.audio->peaks.isEmpty())
+    {
+        p.setPen(QPen(QApplication::palette().color(QPalette::PlaceholderText), 1.0,
+                      Qt::DashLine));
+        p.drawLine(left, center, rightEdge, center);
+        p.setPen(QApplication::palette().color(QPalette::PlaceholderText));
+        p.drawText(QRect(left, row.top(), rightEdge - left, row.height()),
+                   Qt::AlignCenter, QStringLiteral("音频未解码"));
+        return;
+    }
+
+    const QVector<float>& peaks = entity.audio->peaks;
+    p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 210), 1.0));
+    for (int x = left; x < rightEdge; ++x)
+    {
+        const double local0 = (x - x0) / m_pixelsPerFrame;
+        const double local1 = (x + 1 - x0) / m_pixelsPerFrame;
+        const double source0 = trimStart + local0 / fps;
+        const double source1 = trimStart + local1 / fps;
+        int i0 = int(std::floor(source0 * 1000.0));
+        int i1 = int(std::ceil(source1 * 1000.0));
+        if (i1 <= 0 || i0 >= peaks.size())
+            continue;
+        i0 = std::clamp(i0, 0, int(peaks.size()) - 1);
+        i1 = std::clamp(i1, i0 + 1, int(peaks.size()));
+        float peak = 0.0f;
+        for (int i = i0; i < i1; ++i)
+            peak = std::max(peak, peaks[i]);
+        const int amplitude = int(std::lround(peak * half));
+        p.drawLine(x, center - amplitude, x, center + amplitude);
+    }
+
+    p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 180), 1.0));
+    const int startX = int(std::lround(x0));
+    const int endX = int(std::lround(x1));
+    if (startX >= kNameWidth && startX <= right)
+        p.drawLine(startX, row.top() + 1, startX, row.bottom() - 1);
+    if (endX >= kNameWidth && endX <= right)
+        p.drawLine(endX, row.top() + 1, endX, row.bottom() - 1);
 }
 
 void TimelinePanel::paintEvent(QPaintEvent*)
@@ -547,11 +642,12 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     for (int row = 0; row < visible.size(); ++row)
     {
         const Entity& e = entities[visible[row]];
-        const int top = kHeaderHeight + row * kRowHeight;
+        const int top = rowTop(row);
+        const int height = rowHeight(row);
         if (top > bodyBottom)
             break;
 
-        const QRect rowRect(0, top, width(), kRowHeight);
+        const QRect rowRect(0, top, width(), height);
         if (e.id == m_selected)
             p.fillRect(rowRect, QColor(accentColor.red(), accentColor.green(),
                                         accentColor.blue(), 70));
@@ -564,16 +660,19 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                                    : e.locked ? dimColor
                                               : textColor;
             p.setPen(nameColor);
-            p.drawText(QRect(10, top, kNameWidth - 10 - 3 * (kButtonSize + 2), kRowHeight),
+            p.drawText(QRect(10, top, kNameWidth - 10 - 3 * (kButtonSize + 2), height),
                        Qt::AlignVCenter | Qt::AlignLeft, e.name);
         }
+
+        if (e.isAudio())
+            drawAudioWaveform(p, e, rowRect, right);
 
         for (const double keyFrame : keyframeFrames(e.id))
         {
             const int x = xFromFrame(int(std::lround(keyFrame)));
             if (x < kNameWidth || x > right)
                 continue;
-            const int cy = top + kRowHeight / 2;
+            const int cy = top + height / 2;
             const double r = 4.5;
             QPolygonF diamond;
             diamond << QPointF(x, cy - r) << QPointF(x + r, cy) << QPointF(x, cy + r)
@@ -688,8 +787,8 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 
     m_renameEntity = id;
     m_renameEdit->setText(entity->name);
-    m_renameEdit->setGeometry(6, kHeaderHeight + row * kRowHeight + 2, kNameWidth - 12,
-                              kRowHeight - 4);
+    m_renameEdit->setGeometry(6, rowTop(row) + 2, kNameWidth - 12,
+                              rowHeight(row) - 4);
     m_renameEdit->show();
     m_renameEdit->selectAll();
     m_renameEdit->setFocus();

@@ -36,6 +36,8 @@ QString typeName(EntityType type)
         return QStringLiteral("矢量");
     case EntityType::Camera:
         return QStringLiteral("摄像机");
+    case EntityType::Audio:
+        return QStringLiteral("音频");
     }
     return QString();
 }
@@ -94,6 +96,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildTextSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
+    buildAudioSection(layout);
     buildPivotSection(layout);
     layout->addStretch(1);
 
@@ -355,6 +358,62 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     layout->addWidget(m_mediaSection);
 }
 
+void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    m_audioStart = new QSpinBox(content);
+    m_audioStart->setObjectName(QStringLiteral("audioStartFrame"));
+    m_audioStart->setRange(0, 1000000);
+    m_audioStart->setSuffix(QStringLiteral(" 帧"));
+    m_audioStart->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("开始帧"), m_audioStart);
+
+    m_audioTrimStart = new QDoubleSpinBox(content);
+    m_audioTrimStart->setObjectName(QStringLiteral("audioTrimStart"));
+    m_audioTrimStart->setRange(0.0, 36000.0);
+    m_audioTrimStart->setDecimals(3);
+    m_audioTrimStart->setSuffix(QStringLiteral(" s"));
+    m_audioTrimStart->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("裁剪开始"), m_audioTrimStart);
+
+    m_audioTrimEnd = new QDoubleSpinBox(content);
+    m_audioTrimEnd->setObjectName(QStringLiteral("audioTrimEnd"));
+    m_audioTrimEnd->setRange(0.0, 36000.0);
+    m_audioTrimEnd->setDecimals(3);
+    m_audioTrimEnd->setSuffix(QStringLiteral(" s"));
+    m_audioTrimEnd->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("裁剪结尾"), m_audioTrimEnd);
+
+    m_audioVolume = new QSpinBox(content);
+    m_audioVolume->setObjectName(QStringLiteral("audioVolume"));
+    m_audioVolume->setRange(0, 200);
+    m_audioVolume->setSuffix(QStringLiteral(" %"));
+    m_audioVolume->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("音量"), m_audioVolume);
+
+    auto* hint =
+        new QLabel(QStringLiteral("时间轴上的波形按裁剪后的范围绘制。"), content);
+    hint->setWordWrap(true);
+    form->addRow(hint);
+
+    m_audioSection = new CollapsibleSection(QStringLiteral("音频"), content, this);
+    m_audioSection->setExpanded(true);
+    layout->addWidget(m_audioSection);
+
+    connect(m_audioStart, &QSpinBox::valueChanged, this,
+            [this](int value) { applyData(QStringLiteral("startFrame"), double(value)); });
+    connect(m_audioTrimStart, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("trimStart"), value); });
+    connect(m_audioTrimEnd, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("trimEnd"), value); });
+    connect(m_audioVolume, &QSpinBox::valueChanged, this,
+            [this](int value) { applyData(QStringLiteral("volume"), value / 100.0); });
+}
+
 void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
@@ -412,6 +471,7 @@ void PropertiesPanel::applyData(const QString& key, const QVariant& value)
     if (!e)
         return;
     e->data[key] = value;
+    m_project->modified = true;
     m_project->notifyChanged();
 }
 
@@ -452,7 +512,9 @@ void PropertiesPanel::refresh()
     m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
     m_mediaSection->setVisible(valid
                                && (e->type == EntityType::Image
-                                   || e->type == EntityType::Video));
+                                   || e->type == EntityType::Video
+                                   || e->type == EntityType::Audio));
+    m_audioSection->setVisible(valid && e->type == EntityType::Audio);
     m_pivotSection->setVisible(valid && !e->isCamera());
 
     const bool editable = valid && !e->locked;
@@ -462,6 +524,7 @@ void PropertiesPanel::refresh()
     m_keySection->setEnabled(editable);
     m_textSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
+    m_audioSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);
 
     for (Row& r : m_rows)
@@ -567,6 +630,32 @@ void PropertiesPanel::refresh()
     m_pivotX->setEnabled(editable && pivotEnabled);
     m_pivotY->setEnabled(editable && pivotEnabled);
 
+    if (e->type == EntityType::Audio)
+    {
+        const double duration = e->data.value(QStringLiteral("duration"), 0.0).toDouble();
+        {
+            const QSignalBlocker blocker(m_audioStart);
+            m_audioStart->setValue(
+                int(std::lround(e->data.value(QStringLiteral("startFrame"), 0.0).toDouble())));
+        }
+        {
+            const QSignalBlocker blocker(m_audioTrimStart);
+            const QSignalBlocker blockerEnd(m_audioTrimEnd);
+            m_audioTrimStart->setRange(0.0, std::max(0.0, duration));
+            m_audioTrimEnd->setRange(0.0, std::max(0.0, duration));
+            m_audioTrimStart->setValue(
+                e->data.value(QStringLiteral("trimStart"), 0.0).toDouble());
+            m_audioTrimEnd->setValue(
+                e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble());
+        }
+        {
+            const QSignalBlocker blocker(m_audioVolume);
+            m_audioVolume->setValue(int(
+                std::lround(e->data.value(QStringLiteral("volume"), 1.0).toDouble()
+                            * 100.0)));
+        }
+    }
+
     for (Row& r : m_rows)
     {
         const QSignalBlocker blocker(r.spin);
@@ -656,6 +745,16 @@ void PropertiesPanel::refresh()
         QString info = typeName(e->type);
         if (!e->image.isNull())
             info += QStringLiteral(" · %1×%2").arg(e->image.width()).arg(e->image.height());
+        if (e->type == EntityType::Audio)
+        {
+            const double duration =
+                e->data.value(QStringLiteral("duration"), 0.0).toDouble();
+            info += QStringLiteral(" · %1 秒").arg(duration, 0, 'f', 2);
+            if (e->audio)
+                info += QStringLiteral(" · 48 kHz stereo");
+            else
+                info += QStringLiteral(" · 解码失败或未解码");
+        }
         if (!e->sourcePath.isEmpty())
             info += QStringLiteral("\n") + e->sourcePath;
         m_mediaInfo->setText(info);

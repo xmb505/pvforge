@@ -1,5 +1,6 @@
 #include "MediaImporter.h"
 
+#include "media/AudioDecoder.h"
 #include "media/VideoDecoder.h"
 
 #include <QCryptographicHash>
@@ -24,6 +25,17 @@ const QStringList& videoExtensions()
     static const QStringList extensions = {QStringLiteral("mp4"), QStringLiteral("webm"),
                                            QStringLiteral("mov"), QStringLiteral("mkv"),
                                            QStringLiteral("avi"), QStringLiteral("m4v")};
+    return extensions;
+}
+
+const QStringList& audioExtensions()
+{
+    static const QStringList extensions = {
+        QStringLiteral("wav"),  QStringLiteral("mp3"),  QStringLiteral("flac"),
+        QStringLiteral("ogg"),  QStringLiteral("opus"), QStringLiteral("m4a"),
+        QStringLiteral("aac"),  QStringLiteral("wma"),  QStringLiteral("aiff"),
+        QStringLiteral("aif"),  QStringLiteral("mka"),
+    };
     return extensions;
 }
 
@@ -82,7 +94,8 @@ MediaImportResult processMediaFile(const QString& path, const QString& assetDire
     const QString suffix = QFileInfo(path).suffix().toLower();
     const bool isImage = imageExtensions().contains(suffix);
     const bool isVideo = videoExtensions().contains(suffix);
-    if (!isImage && !isVideo)
+    const bool isAudio = audioExtensions().contains(suffix);
+    if (!isImage && !isVideo && !isAudio)
     {
         result.error = QStringLiteral("不支持的文件类型");
         return result;
@@ -92,6 +105,21 @@ MediaImportResult processMediaFile(const QString& path, const QString& assetDire
     if (result.importedPath.isEmpty())
     {
         result.error = QStringLiteral("复制失败");
+        return result;
+    }
+
+    if (isAudio)
+    {
+        const AudioDecodeResult decoded = decodeAudioFile(result.importedPath);
+        if (!decoded.clip)
+        {
+            result.error = decoded.error;
+            return result;
+        }
+        result.type = EntityType::Audio;
+        result.audio = decoded.clip;
+        result.duration = decoded.clip->duration;
+        result.thumbnail = renderAudioThumbnail(*decoded.clip, QSize(320, 80));
         return result;
     }
 

@@ -6,6 +6,7 @@
 
 class QKeyEvent;
 class QLineEdit;
+class QPainter;
 class QScrollBar;
 class QTimer;
 class QToolButton;
@@ -75,6 +76,8 @@ private:
     int xFromFrame(int frame) const;
     int frameFromX(int x) const;
     int rowAt(int y) const;
+    int rowTop(int row) const;
+    int rowHeight(int row) const;
     EntityId entityAtRow(int row) const;
     bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
     QVector<double> keyframeFrames(EntityId id) const;
@@ -89,6 +92,8 @@ private:
     void stopHold();
     EasingSpec keyframeEasingAt(EntityId id, double frame) const;
     void showKeyframeMenu(const QPoint& globalPos);
+    void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
+                           int right);
 
     enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
 
@@ -118,6 +123,7 @@ private:
     static constexpr int kNameWidth = 180;
     static constexpr int kHeaderHeight = 28;
     static constexpr int kRowHeight = 24;
+    static constexpr int kAudioRowHeight = 56;
     static constexpr int kRightPad = 16;
     static constexpr int kScrollBarHeight = 14;
     static constexpr int kButtonSize = 16;

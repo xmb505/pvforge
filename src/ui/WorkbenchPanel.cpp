@@ -3,6 +3,7 @@
 #include "app/AppIcon.h"
 #include "app/MainWindow.h"
 #include "core/Lang.h"
+#include "media/AudioDecoder.h"
 #include "media/MediaImporter.h"
 #include "media/VideoDecoder.h"
 
@@ -136,7 +137,7 @@ QWidget* WorkbenchPanel::buildMediaPage()
     layout->addWidget(m_mediaLibrary, 1);
 
     m_mediaInfo = new QLabel(
-        QStringLiteral("支持图片与视频，导入后自动识别并加入素材库。"), page);
+        QStringLiteral("支持图片、视频与音频，导入后自动识别并加入素材库。"), page);
     m_mediaInfo->setWordWrap(true);
     layout->addWidget(m_mediaInfo);
 
@@ -421,7 +422,9 @@ void WorkbenchPanel::refreshMediaLibrary()
     for (int i = 0; i < m_project->templateCount(); ++i)
     {
         const Template* tmpl = m_project->templateAt(i);
-        if (!tmpl || (tmpl->type != EntityType::Image && tmpl->type != EntityType::Video))
+        if (!tmpl
+            || (tmpl->type != EntityType::Image && tmpl->type != EntityType::Video
+                && tmpl->type != EntityType::Audio))
             continue;
 
         auto* item = new QListWidgetItem(tmpl->name, m_mediaLibrary);
@@ -444,6 +447,7 @@ void WorkbenchPanel::selectMedia(int templateIndex)
     m_mediaPath = tmpl->path;
     m_mediaName = tmpl->name;
     m_mediaFrame = tmpl->thumbnail;
+    m_mediaAudio = tmpl->audio;
     m_mediaDuration = tmpl->duration;
 
     if (!tmpl->thumbnail.isNull())
@@ -453,10 +457,16 @@ void WorkbenchPanel::selectMedia(int templateIndex)
     else
         m_mediaPreview->setText(QStringLiteral("无预览"));
 
-    const QString typeName = tmpl->type == EntityType::Video ? QStringLiteral("视频")
-                                                             : QStringLiteral("图片");
+    QString typeName;
+    if (tmpl->type == EntityType::Video)
+        typeName = QStringLiteral("视频");
+    else if (tmpl->type == EntityType::Audio)
+        typeName = QStringLiteral("音频");
+    else
+        typeName = QStringLiteral("图片");
     QString info = typeName + QStringLiteral(" · ") + tmpl->name;
-    if (tmpl->type == EntityType::Video && tmpl->duration > 0.0)
+    if ((tmpl->type == EntityType::Video || tmpl->type == EntityType::Audio)
+        && tmpl->duration > 0.0)
         info += QStringLiteral(" · %1 秒").arg(tmpl->duration, 0, 'f', 2);
     info += QStringLiteral("\n") + tmpl->path;
     m_mediaInfo->setText(info);
@@ -469,7 +479,8 @@ void WorkbenchPanel::pickMedia()
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("选择媒体文件"), QString(),
         QStringLiteral("媒体文件 (*.png *.jpg *.jpeg *.webp *.bmp *.mp4 *.webm *.mov "
-                       "*.mkv *.avi *.m4v);;所有文件 (*)"));
+                       "*.mkv *.avi *.m4v *.wav *.mp3 *.flac *.ogg *.opus *.m4a "
+                       "*.aac *.wma *.aiff *.aif *.mka);;所有文件 (*)"));
     if (path.isEmpty())
         return;
 
@@ -490,7 +501,7 @@ void WorkbenchPanel::pickMedia()
 
             if (!m_project->addMediaTemplate(result.importedPath, result.type,
                                              result.thumbnail, result.duration,
-                                             result.displayName))
+                                             result.displayName, result.audio))
                 return;
 
             refreshMediaLibrary();
@@ -523,7 +534,21 @@ void WorkbenchPanel::createCurrent()
         if (m_mediaPath.isEmpty())
             return;
 
-        if (m_mediaType == EntityType::Video)
+        if (m_mediaType == EntityType::Audio)
+        {
+            std::shared_ptr<AudioClip> clip = m_mediaAudio;
+            if (!clip)
+            {
+                const AudioDecodeResult decoded = decodeAudioFile(m_mediaPath);
+                clip = decoded.clip;
+            }
+            if (clip)
+            {
+                if (Entity* e = m_project->addAudio(m_mediaPath, clip, m_mediaName))
+                    id = e->id;
+            }
+        }
+        else if (m_mediaType == EntityType::Video)
         {
             double duration = m_mediaDuration;
             QString error;

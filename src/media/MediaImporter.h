@@ -1,11 +1,14 @@
 #pragma once
 
 #include "core/Project.h"
+#include "media/AudioClip.h"
 
 #include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+#include <memory>
 
 namespace pvf {
 
@@ -15,6 +18,7 @@ struct MediaImportResult
     QString importedPath;
     EntityType type = EntityType::Image;
     QImage thumbnail;
+    std::shared_ptr<AudioClip> audio;
     double duration = 0.0;
     QString displayName;
     QString error;

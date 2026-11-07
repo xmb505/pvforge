@@ -51,6 +51,7 @@ private:
     void buildTextSection(QVBoxLayout* layout);
     void buildVectorSection(QVBoxLayout* layout);
     void buildMediaSection(QVBoxLayout* layout);
+    void buildAudioSection(QVBoxLayout* layout);
     void buildPivotSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
     void setColorButton(QPushButton* button, const QColor& color);
@@ -69,6 +70,7 @@ private:
     CollapsibleSection* m_textSection = nullptr;
     CollapsibleSection* m_vectorSection = nullptr;
     CollapsibleSection* m_mediaSection = nullptr;
+    CollapsibleSection* m_audioSection = nullptr;
     CollapsibleSection* m_pivotSection = nullptr;
     QCheckBox* m_usePivot = nullptr;
     QDoubleSpinBox* m_pivotX = nullptr;
@@ -94,6 +96,10 @@ private:
     QColor m_strokeValue{Qt::white};
 
     QLabel* m_mediaInfo = nullptr;
+    QSpinBox* m_audioStart = nullptr;
+    QDoubleSpinBox* m_audioTrimStart = nullptr;
+    QDoubleSpinBox* m_audioTrimEnd = nullptr;
+    QSpinBox* m_audioVolume = nullptr;
 };
 
 } // namespace pvf

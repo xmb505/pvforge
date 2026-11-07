@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Easing.h"
+#include "media/AudioClip.h"
 
 #include <QColor>
 #include <QHash>
@@ -11,6 +12,8 @@
 #include <QVariantMap>
 #include <QVector>
 
+#include <memory>
+
 class QJsonObject;
 
 namespace pvf {
@@ -20,7 +23,7 @@ constexpr EntityId kInvalidEntity = -1;
 constexpr int kWorkCameraView = -2;
 constexpr int kWholeCanvasView = -3;
 
-enum class EntityType { Image, Video, Text, Vector, Camera };
+enum class EntityType { Image, Video, Text, Vector, Camera, Audio };
 
 struct Keyframe
 {
@@ -52,6 +55,7 @@ struct Entity
     QImage image;              // image or decoded video frame, runtime cache
     mutable QImage thumbnail;  // downscaled cache for draft previews
     mutable QPixmap pixmap;    // painter cache, built on first draw
+    std::shared_ptr<AudioClip> audio;   // decoded PCM/waveform, runtime cache
     QVariantMap data;          // type-specific static data (text, font, shape, ...)
     QHash<QString, Track> tracks;
     QHash<QString, double> values;
@@ -59,6 +63,7 @@ struct Entity
     double staticValue(const QString& prop) const;
 
     bool isCamera() const { return type == EntityType::Camera; }
+    bool isAudio() const { return type == EntityType::Audio; }
     QString textContent() const { return data.value(QStringLiteral("text")).toString(); }
     bool rotPointCustom() const
     {
@@ -97,6 +102,7 @@ struct Template
     double duration = 0.0;   // seconds, video only
     QVariantMap data;        // text/vector parameters
     QImage thumbnail;        // runtime cache
+    std::shared_ptr<AudioClip> audio;   // runtime cache for audio templates
 };
 
 // A removed keyframe, kept so it can be restored by undo.
@@ -149,6 +155,8 @@ public:
     Entity* addVector(int shape, double width, double height, const QColor& fill,
                       const QColor& stroke, double strokeWidth);
     Entity* addCamera(const QString& name = QString());
+    Entity* addAudio(const QString& path, const std::shared_ptr<AudioClip>& audio,
+                     const QString& displayName = QString());
 
     Entity* entity(EntityId id);
     const Entity* entity(EntityId id) const;
@@ -173,7 +181,8 @@ public:
     Template* addTemplate(const Entity& entity);
     Template* addMediaTemplate(const QString& path, EntityType type, const QImage& thumbnail,
                                double duration = 0.0,
-                               const QString& displayName = QString());
+                               const QString& displayName = QString(),
+                               const std::shared_ptr<AudioClip>& audio = nullptr);
     QString importMediaFile(const QString& path, QString* error = nullptr);
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);

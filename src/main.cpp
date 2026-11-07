@@ -5,6 +5,8 @@
 #include "core/Lang.h"
 #include "core/Settings.h"
 #include "media/MediaImporter.h"
+#include "media/AudioDecoder.h"
+#include "audio/AudioEngine.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
@@ -26,6 +28,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QDataStream>
 #include <QFont>
 #include <QImage>
 #include <QKeyEvent>
@@ -1422,6 +1425,170 @@ int easingTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+int audioTest(QApplication& app)
+{
+    int failures = 0;
+    const QString wavPath = QStringLiteral("/tmp/pvf_audio.wav");
+    {
+        QFile file(wavPath);
+        if (!file.open(QIODevice::WriteOnly))
+        {
+            qCritical() << "audio-test: cannot write wav";
+            return 1;
+        }
+        QDataStream out(&file);
+        out.setByteOrder(QDataStream::LittleEndian);
+        QVector<qint16> samples(48000, 0);
+        for (int i = 0; i < 100; ++i)
+        {
+            const qint16 click = qint16(30000 * (1.0 - i / 100.0));
+            samples[12000 + i] = click;   // 250 ms
+            samples[36000 + i] = click;   // 750 ms
+        }
+        const quint32 dataSize = quint32(samples.size() * 2);
+        out.writeRawData("RIFF", 4);
+        out << quint32(36 + dataSize);
+        out.writeRawData("WAVEfmt ", 8);
+        out << quint32(16) << quint16(1) << quint16(1) << quint32(48000)
+            << quint32(96000) << quint16(2) << quint16(16);
+        out.writeRawData("data", 4);
+        out << dataSize;
+        for (qint16 sample : samples)
+            out << sample;
+    }
+
+    const pvf::AudioDecodeResult decoded = pvf::decodeAudioFile(wavPath);
+    if (!decoded.clip)
+    {
+        qCritical() << "audio-test: decode failed" << decoded.error;
+        return 1;
+    }
+    const auto& clip = decoded.clip;
+    if (std::abs(clip->duration - 1.0) > 0.02 || clip->peaks.size() < 900)
+    {
+        qCritical() << "audio-test: wrong duration/peaks" << clip->duration
+                    << clip->peaks.size();
+        ++failures;
+    }
+    const auto peakAt = [&clip](int ms) {
+        return ms >= 0 && ms < clip->peaks.size() ? clip->peaks[ms] : 0.0f;
+    };
+    if (peakAt(250) < 0.5f || peakAt(750) < 0.5f || peakAt(500) > 0.05f)
+    {
+        qCritical() << "audio-test: peak positions" << peakAt(250) << peakAt(750)
+                    << peakAt(500);
+        ++failures;
+    }
+
+    const pvf::MediaImportResult imported = pvf::processMediaFile(wavPath, QString());
+    if (!imported.error.isEmpty() || imported.type != pvf::EntityType::Audio
+        || !imported.audio || imported.thumbnail.isNull())
+    {
+        qCritical() << "audio-test: media import" << imported.error
+                    << int(imported.type);
+        ++failures;
+    }
+
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* audio = project->addAudio(wavPath, clip, QStringLiteral("Audio"));
+    const pvf::EntityId audioId = audio->id;
+    audio->data[QStringLiteral("startFrame")] = 10.0;
+    audio->data[QStringLiteral("trimStart")] = 0.25;
+    audio->data[QStringLiteral("trimEnd")] = 0.25;
+    project->notifyChanged();
+    if (project->timelineLength() != 25)
+    {
+        qCritical() << "audio-test: timeline length" << project->timelineLength();
+        ++failures;
+    }
+
+    {
+        pvf::Project mixProject;
+        mixProject.fps = 30;
+        mixProject.addAudio(wavPath, clip, QStringLiteral("Mix"));
+        const QByteArray pcm = pvf::AudioEngine::mixRange(mixProject, 0.0, 1.0);
+        if (pcm.size() != 48000 * 2 * 2)
+        {
+            qCritical() << "audio-test: mix size" << pcm.size();
+            ++failures;
+        }
+        else
+        {
+            const auto* samples = reinterpret_cast<const qint16*>(pcm.constData());
+            const int click = std::abs(int(samples[12000 * 2]));
+            const int silence = std::abs(int(samples[24000 * 2]));
+            if (click < 20000 || silence > 50)
+            {
+                qCritical() << "audio-test: mix timeline" << click << silence;
+                ++failures;
+            }
+        }
+    }
+
+    const QString projectPath = QStringLiteral("/tmp/pvf_audio.pvproj");
+    QString error;
+    if (!project->save(projectPath, &error))
+    {
+        qCritical() << "audio-test: save" << error;
+        ++failures;
+    }
+    else
+    {
+        pvf::Project loaded;
+        if (!loaded.load(projectPath, &error))
+        {
+            qCritical() << "audio-test: load" << error;
+            ++failures;
+        }
+        else
+        {
+            const pvf::Entity* loadedAudio = loaded.entity(audioId);
+            if (!loadedAudio || loadedAudio->type != pvf::EntityType::Audio
+                || !loadedAudio->audio || loadedAudio->audio->peaks.isEmpty())
+            {
+                qCritical() << "audio-test: audio not restored";
+                ++failures;
+            }
+        }
+    }
+
+    {
+        pvf::Project libraryProject;
+        pvf::Template* tmpl = libraryProject.addMediaTemplate(
+            wavPath, pvf::EntityType::Audio, imported.thumbnail, clip->duration,
+            QStringLiteral("Library Audio"), clip);
+        const pvf::Entity* created =
+            tmpl ? libraryProject.createFromTemplate(*tmpl) : nullptr;
+        if (!created || created->type != pvf::EntityType::Audio || !created->audio)
+        {
+            qCritical() << "audio-test: library audio creation failed";
+            ++failures;
+        }
+    }
+
+    // Timeline waveform smoke test.
+    auto* uiProject = new pvf::Project;
+    pvf::MainWindow window(uiProject);
+    window.resize(1200, 800);
+    auto* uiAudio = uiProject->addAudio(wavPath, clip, QStringLiteral("Audio"));
+    window.setSelectedEntityForTest(uiAudio->id);
+    window.show();
+    QApplication::processEvents();
+    if (auto* timeline = window.findChild<pvf::TimelinePanel*>())
+    {
+        timeline->grab().toImage().save(QStringLiteral("/tmp/pvf_audio_timeline.png"));
+    }
+    else
+    {
+        qCritical() << "audio-test: timeline missing";
+        ++failures;
+    }
+
+    qInfo() << "audio-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int cameraTest(QApplication& app)
 {
     pvf::Settings::setMonitorVisible(true);
@@ -2249,7 +2416,7 @@ int importAsyncTest(QApplication& app)
                     }
                     project->addMediaTemplate(result.importedPath, result.type,
                                               result.thumbnail, result.duration,
-                                              result.displayName);
+                                              result.displayName, result.audio);
                 }
                 finished = true;
                 loop.quit();
@@ -3634,6 +3801,8 @@ int main(int argc, char* argv[])
         return cameraTest(app);
     if (app.arguments().contains(QStringLiteral("--easing-test")))
         return easingTest(app);
+    if (app.arguments().contains(QStringLiteral("--audio-test")))
+        return audioTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
         return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))

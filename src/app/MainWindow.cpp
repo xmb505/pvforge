@@ -3,6 +3,7 @@
 #include "core/Commands.h"
 #include "core/Camera.h"
 #include "core/Lang.h"
+#include "audio/AudioEngine.h"
 #include "media/MediaImporter.h"
 #include "core/Settings.h"
 #include "SettingsDialog.h"
@@ -51,6 +52,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     setMinimumSize(1000, 620);
 
     m_history = new History(this);
+    m_audioEngine = new AudioEngine(m_project, this);
     m_project->autoKey = Settings::autoKeyDefault();
     m_project->packAssets = Settings::packAssetsDefault();
     m_viewport = new Viewport(m_project, this);
@@ -982,6 +984,7 @@ void MainWindow::togglePlayback()
     if (m_playing)
     {
         m_playTimer->stop();
+        m_audioEngine->stop();
         m_playing = false;
         if (m_monitor)
             m_monitor->setPlaying(false);
@@ -993,9 +996,11 @@ void MainWindow::togglePlayback()
         setFrame(0);
 
     m_playStart = m_frame;
+    m_playing = true;
+    const bool audioClock = m_audioEngine->play(m_frame);
+    Q_UNUSED(audioClock);
     m_playClock.restart();
     m_playTimer->start(std::max(1, 1000 / std::max(1, m_project->fps)));
-    m_playing = true;
     if (m_monitor)
         m_monitor->setPlaying(true);
     m_playAction->setText(Lang::t(QStringLiteral("action.pause"), QStringLiteral("暂停")));
@@ -1003,8 +1008,17 @@ void MainWindow::togglePlayback()
 
 void MainWindow::onPlayTick()
 {
-    const double seconds = m_playClock.elapsed() / 1000.0;
-    int f = m_playStart + int(seconds * m_project->fps);
+    const int fps = std::max(1, m_project->fps);
+    int f = 0;
+    if (m_audioEngine->isRunning())
+    {
+        f = int(std::lround(m_audioEngine->positionSeconds() * fps));
+    }
+    else
+    {
+        const double seconds = m_playClock.elapsed() / 1000.0;
+        f = m_playStart + int(seconds * fps);
+    }
 
     const int length = m_project->timelineLength();
     if (length > 0 && f > length)
@@ -1013,6 +1027,7 @@ void MainWindow::onPlayTick()
         {
             m_playStart = 0;
             m_playClock.restart();
+            m_audioEngine->play(0);
             f = 0;
         }
         else

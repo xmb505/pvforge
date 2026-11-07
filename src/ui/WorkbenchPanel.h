@@ -62,6 +62,7 @@ private:
     QString m_mediaPath;
     QString m_mediaName;
     QImage m_mediaFrame;
+    std::shared_ptr<AudioClip> m_mediaAudio;
     double m_mediaDuration = 0.0;
     QLabel* m_mediaPreview = nullptr;
     QLabel* m_mediaInfo = nullptr;

@@ -36,6 +36,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("矢量");
     case EntityType::Camera:
         return QStringLiteral("摄像机");
+    case EntityType::Audio:
+        return QStringLiteral("音频");
     }
     return QString();
 }
@@ -125,6 +127,14 @@ QIcon listIcon(const Template& tmpl)
         else
             p.drawRect(rect);
     }
+    else if (tmpl.type == EntityType::Audio)
+    {
+        p.setPen(QColor(160, 200, 240));
+        QFont font = p.font();
+        font.setPixelSize(22);
+        p.setFont(font);
+        p.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+    }
     return QIcon(pixmap);
 }
 
@@ -153,7 +163,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     auto* importButton = new QToolButton(this);
     importButton->setObjectName(QStringLiteral("assetImport"));
     importButton->setText(QStringLiteral("+"));
-    importButton->setToolTip(QStringLiteral("导入素材文件（图片 / 视频）"));
+    importButton->setToolTip(QStringLiteral("导入素材文件（图片 / 视频 / 音频）"));
     importButton->setFixedSize(26, 26);
     searchRow->addWidget(importButton);
     layout->addLayout(searchRow);
@@ -183,7 +193,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
                     }
                     if (m_project->addMediaTemplate(result.importedPath, result.type,
                                                     result.thumbnail, result.duration,
-                                                    result.displayName))
+                                                    result.displayName, result.audio))
                         ++imported;
                 }
 
@@ -306,7 +316,8 @@ void AssetLibraryPanel::updatePreview()
     m_preview->setPixmap(renderTemplate(tmpl, QSize(240, 150)));
 
     QString info = templateTypeName(tmpl.type);
-    if (tmpl.type == EntityType::Video && tmpl.duration > 0.0)
+    if ((tmpl.type == EntityType::Video || tmpl.type == EntityType::Audio)
+        && tmpl.duration > 0.0)
         info += QStringLiteral(" · %1 秒").arg(tmpl.duration, 0, 'f', 2);
     if (!tmpl.path.isEmpty())
         info += QStringLiteral("\n") + tmpl.path;

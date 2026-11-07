@@ -75,6 +75,8 @@ QRectF entityLocalBounds(const Entity& entity)
 
     case EntityType::Camera:
         return QRectF();
+    case EntityType::Audio:
+        return QRectF();
     }
     return QRectF();
 }
@@ -93,7 +95,7 @@ const QImage& thumbnail(const Entity& entity)
 void drawEntity(QPainter& painter, const Project& project, const Entity& entity, int frame,
                 const QTransform& worldToScreen, bool useThumbnail)
 {
-    if (entity.hidden || entity.isCamera())
+    if (entity.hidden || entity.isCamera() || entity.isAudio())
         return;
 
     const double opacity = std::clamp(
@@ -185,6 +187,8 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
     }
 
     case EntityType::Camera:
+        break;
+    case EntityType::Audio:
         break;
     }
 

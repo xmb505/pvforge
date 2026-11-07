@@ -1,5 +1,6 @@
 #include "Project.h"
 
+#include "media/AudioDecoder.h"
 #include "media/MediaImporter.h"
 #include "media/VideoDecoder.h"
 
@@ -35,6 +36,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("vector");
     case EntityType::Camera:
         return QStringLiteral("camera");
+    case EntityType::Audio:
+        return QStringLiteral("audio");
     }
     return QStringLiteral("image");
 }
@@ -49,6 +52,8 @@ EntityType typeFromString(const QString& text)
         return EntityType::Vector;
     if (text == QLatin1String("camera"))
         return EntityType::Camera;
+    if (text == QLatin1String("audio"))
+        return EntityType::Audio;
     return EntityType::Image;
 }
 
@@ -139,7 +144,21 @@ int Project::timelineLength() const
     {
         const double media = e.data.value(QStringLiteral("duration"), 0.0).toDouble();
         if (media > 0.0)
-            last = std::max(last, media * fps);
+        {
+            if (e.type == EntityType::Audio)
+            {
+                const double start = e.data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+                const double trimStart =
+                    e.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+                const double trimEnd =
+                    e.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+                last = std::max(last, start + std::max(0.0, media - trimStart - trimEnd) * fps);
+            }
+            else
+            {
+                last = std::max(last, media * fps);
+            }
+        }
         for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
             if (!it->keys.isEmpty())
                 last = std::max(last, it->keys.last().frame);
@@ -332,6 +351,26 @@ Entity* Project::addCamera(const QString& name)
     return append(std::move(e));
 }
 
+Entity* Project::addAudio(const QString& path, const std::shared_ptr<AudioClip>& audio,
+                          const QString& displayName)
+{
+    Entity e = makeBase(EntityType::Audio,
+                        displayName.isEmpty() ? QFileInfo(path).completeBaseName()
+                                              : displayName);
+    e.sourcePath = path;
+    e.audio = audio;
+    e.data["duration"] = audio ? audio->duration : 0.0;
+    e.data["startFrame"] = 0.0;
+    e.data["trimStart"] = 0.0;
+    e.data["trimEnd"] = 0.0;
+    e.data["volume"] = 1.0;
+    e.data["fadeIn"] = 0.0;
+    e.data["fadeOut"] = 0.0;
+    if (Template* tmpl = addTemplate(e))
+        e.templateId = tmpl->id;
+    return append(std::move(e));
+}
+
 Entity* Project::addVector(int shape, double width, double height, const QColor& fill,
                            const QColor& stroke, double strokeWidth)
 {
@@ -365,6 +404,11 @@ Template* Project::addTemplate(const Entity& entity)
     if (!entity.image.isNull())
         tmpl.thumbnail = entity.image.scaled(320, 240, Qt::KeepAspectRatio,
                                              Qt::SmoothTransformation);
+    if (entity.type == EntityType::Audio && entity.audio)
+    {
+        tmpl.thumbnail = renderAudioThumbnail(*entity.audio, QSize(320, 80));
+        tmpl.audio = entity.audio;
+    }
     if (entity.type == EntityType::Text || entity.type == EntityType::Vector)
         tmpl.data = entity.data;
 
@@ -386,7 +430,8 @@ Template* Project::addTemplate(const Entity& entity)
 
 Template* Project::addMediaTemplate(const QString& path, EntityType type,
                                     const QImage& thumbnail, double duration,
-                                    const QString& displayName)
+                                    const QString& displayName,
+                                    const std::shared_ptr<AudioClip>& audio)
 {
     for (Template& existing : m_templates)
     {
@@ -395,6 +440,8 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
             if (existing.thumbnail.isNull() && !thumbnail.isNull())
                 existing.thumbnail = thumbnail.scaled(320, 240, Qt::KeepAspectRatio,
                                                       Qt::SmoothTransformation);
+            if (!existing.audio && audio)
+                existing.audio = audio;
             return &existing;
         }
     }
@@ -408,6 +455,7 @@ Template* Project::addMediaTemplate(const QString& path, EntityType type,
     if (!thumbnail.isNull())
         tmpl.thumbnail = thumbnail.scaled(320, 240, Qt::KeepAspectRatio,
                                           Qt::SmoothTransformation);
+    tmpl.audio = audio;
 
     m_templates.append(tmpl);
     modified = true;
@@ -426,7 +474,7 @@ QString Project::importMediaFile(const QString& path, QString* error)
     }
 
     addMediaTemplate(result.importedPath, result.type, result.thumbnail, result.duration,
-                     result.displayName);
+                     result.displayName, result.audio);
     return result.importedPath;
 }
 
@@ -458,6 +506,18 @@ Entity* Project::createFromTemplate(const Template& tmpl){
                          tmpl.data.value(QStringLiteral("strokeWidth"), 0.0).toDouble());
     case EntityType::Camera:
         return nullptr;
+    case EntityType::Audio:
+    {
+        std::shared_ptr<AudioClip> clip = tmpl.audio;
+        if (!clip)
+        {
+            const AudioDecodeResult decoded = decodeAudioFile(tmpl.path);
+            clip = decoded.clip;
+        }
+        if (!clip)
+            return nullptr;
+        return addAudio(tmpl.path, clip, tmpl.name);
+    }
     }
     return nullptr;
 }
@@ -891,6 +951,7 @@ bool Project::load(const QString& path, QString* error)
     m_nextId = 1;
 
     const QJsonArray entities = root.value(QStringLiteral("entities")).toArray();
+    QHash<QString, std::shared_ptr<AudioClip>> audioCache;
     for (const QJsonValue& value : entities)
     {
         const QJsonObject object = value.toObject();
@@ -956,6 +1017,22 @@ bool Project::load(const QString& path, QString* error)
             {
                 e.image = QImage(e.sourcePath);
             }
+            else if (e.type == EntityType::Audio)
+            {
+                auto cached = audioCache.constFind(e.sourcePath);
+                if (cached != audioCache.constEnd())
+                {
+                    e.audio = cached.value();
+                }
+                else
+                {
+                    const AudioDecodeResult decoded = decodeAudioFile(e.sourcePath);
+                    e.audio = decoded.clip;
+                    audioCache.insert(e.sourcePath, e.audio);
+                    if (e.audio)
+                        e.data[QStringLiteral("duration")] = e.audio->duration;
+                }
+            }
         }
 
         m_nextId = std::max(m_nextId, e.id + 1);
@@ -989,7 +1066,15 @@ bool Project::load(const QString& path, QString* error)
         {
             for (const Entity& e : m_entities)
             {
-                if (e.sourcePath == tmpl.path && !e.image.isNull())
+                if (e.sourcePath != tmpl.path)
+                    continue;
+                if (tmpl.type == EntityType::Audio && e.audio)
+                {
+                    tmpl.audio = e.audio;
+                    tmpl.thumbnail = renderAudioThumbnail(*e.audio, QSize(320, 80));
+                    break;
+                }
+                if (!e.image.isNull())
                 {
                     tmpl.thumbnail = e.image.scaled(320, 240, Qt::KeepAspectRatio,
                                                     Qt::SmoothTransformation);
@@ -1011,6 +1096,15 @@ bool Project::load(const QString& path, QString* error)
                     if (!image.isNull())
                         tmpl.thumbnail = image.scaled(320, 240, Qt::KeepAspectRatio,
                                                       Qt::SmoothTransformation);
+                }
+                else if (tmpl.type == EntityType::Audio)
+                {
+                    const AudioDecodeResult decoded = decodeAudioFile(tmpl.path);
+                    if (decoded.clip)
+                    {
+                        tmpl.audio = decoded.clip;
+                        tmpl.thumbnail = renderAudioThumbnail(*decoded.clip, QSize(320, 80));
+                    }
                 }
             }
         }

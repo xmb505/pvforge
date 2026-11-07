@@ -20,6 +20,7 @@
 - **OBS 式弹出**：监视器可拖出为独立窗口，关闭停靠回视口，可置顶
 - **主题**：自绘图标和缓动曲线使用 QPalette 颜色，跟随 Breeze 等系统主题，暗色下已验证
 - **素材库**：异步导入、内容寻址去重、搜索、预览、复用
+- **音轨**：音频对象、时间轴 56px 波形行、裁剪/音量/开始帧、FFmpeg 解码、Qt Multimedia 播放与音频主时钟
 - **撤销/重做**：移动、缩放、轴心、旋转、摄像机拖动均合并为一条撤销
 - **工程**：关闭未保存提示、相对路径素材、可选打包进工程目录
 
@@ -29,8 +30,8 @@
 
 - CMake 3.21+
 - C++20 编译器（Clang 或 GCC）
-- Qt 6.5+：Widgets、Concurrent
-- FFmpeg 开发库：libavformat、libavcodec、libavutil、libswscale
+- Qt 6.5+：Widgets、Concurrent、Multimedia
+- FFmpeg 开发库：libavformat、libavcodec、libavutil、libswscale、libswresample
 - Ninja（可选）
 
 ```bash
@@ -78,6 +79,8 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 视口缩放/平移 | 滚轮 / 中键拖动 |
 | 时间轴缩放 | `Ctrl+滚轮` |
 | 创建摄像机 | 工作台选「摄像机」，填名字（可留空），创建后自动选中并激活 |
+| 导入音频 | 工作台「媒体」或素材库导入 WAV/MP3/FLAC/OGG/M4A 等 |
+| 调整音频 | 属性面板「音频」设置开始帧、裁剪开始/结尾、音量 |
 | 调整取景框 | 拖边框或标题条移动；拖四角以中心缩放；拖顶边圆点旋转 |
 | 切换活动摄像机 | 时间轴选中摄像机，或监视器标题栏下拉 |
 | 摄像机监视器 | 视口右下角；标题栏切草稿/高质量、弹出、关闭；拖标题条左侧点阵移出窗口 |
@@ -91,6 +94,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 文字 | 内容、字体、字号、颜色、对齐，创建后属性面板可继续改 |
 | 矢量 | 矩形/圆角矩形/椭圆/直线/三角形/心形/星形/多边形/箭头 |
 | 摄像机 | 取景框对象；位置/取景比例/旋转可打关键帧，5%–100%，画布内限制 |
+| 音频 | WAV/MP3/FLAC/OGG/M4A 等；时间轴波形、开始帧、裁剪、音量 |
 
 ## 工程与素材
 
@@ -102,17 +106,19 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-32 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+33 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --easing-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --audio-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --timeline-frame-test
 ```
 
 ## 路线
 
-**整轨曲线编辑器与关键帧拖动 → 视频逐帧播放 → 音频波形/频谱 → MP4 导出**。
+**音频波形细化和撤销 → 视频逐帧播放 → 频谱对象 → MP4 导出**。
 
 当前里程碑、架构和已知限制见 [docs/MILESTONE.md](docs/MILESTONE.md)，设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。
 
@@ -120,7 +126,10 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --timeline-frame-test
 
 - 没有 MP4 导出
 - 视频只显示首帧，无逐帧播放
-- 无音频、波形、频谱对象
+- 无频谱可视化对象
+- 音频属性修改暂未接入撤销栈
+- 音频波形只有时间轴行，没有独立的大波形页
+- 工程加载时同步解码音频，长音频可能卡一下
 - 关键帧缓动目前是单段模板/贝塞尔，没有整轨曲线图
 - 关键帧不能拖动改时间、复制、粘贴
 - 旋转实体的角缩放仍围绕中心

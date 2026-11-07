@@ -10,6 +10,39 @@
 
 **尚不能导出视频**，这是出片闭环的最后缺口。
 
+## 里程碑 M2：音频与波形（进行中）
+
+记录时间：2026-11-07
+
+目标：让音乐 PV 能对着 BGM 波形卡点，再逐步接入播放和导出。
+
+### 依赖策略
+
+- 解码、重采样、格式探测全部走 **FFmpeg**（系统包），不自己写 FLAC/MP3/AAC 解码
+- 播放走 **Qt 6 Multimedia `QAudioSink`**（系统 Qt 包）
+- FLAC/OGG/Opus 等由 FFmpeg 内置解码器处理；需要 libflac 时用发行版包，不内嵌第三方源码
+- 这样音频格式支持跟着系统 FFmpeg 走，减少自维护解码器的消耗
+
+### 已定设计
+
+- 音频是时间轴对象（`EntityType::Audio`），不是单独固定音轨
+- 字段：`startFrame`、`trimStart`、`trimEnd`、`volume`、`fadeIn`、`fadeOut`、`duration`
+- 波形数据：48kHz 立体声 int16 PCM 用于播放；1ms 峰值包络用于波形绘制
+- 波形峰值按像素聚合，不在 `paintEvent` 扫原始 PCM
+- 音频对象显示在时间轴行里；后续加高/独立大波形条供字幕对齐
+- 播放以音频为主时钟；没有音频时退回 `QElapsedTimer`
+- 音频属性先静态，音量关键帧后续复用现有 Track
+
+### 分步
+
+1. FFmpeg 音频解码 + 1ms 峰值 + 波形缩略图
+2. 音频实体、工作台导入、素材库、时间轴波形行
+3. Qt Multimedia 播放、混音、播放头同步
+4. 裁剪/移动/音量属性与撤销
+5. 导出时复用同一混音器
+
+当前完成：1–3 的首版；时间轴音频行高 56px，裁剪/音量/开始帧属性可用但未接撤销；独立大波形条和音量关键帧后续补。
+
 ## 已实现
 
 ### 工程
@@ -77,6 +110,16 @@
 - OBS 式独立窗口：按钮或拖出主窗口；关闭独立窗口停靠回右下角；默认不置顶，可切换「置顶」
 - 共享 `SceneRenderer` / `CameraRenderer`，主视口、监视器、未来 MP4 导出共用
 
+### 音频与波形
+
+- 音频是时间轴对象：开始帧、裁剪开始/结尾、音量、淡入淡出
+- FFmpeg 系统包解码（含 FLAC/OGG/Opus 等），统一为 48kHz 立体声 int16
+- 1ms 峰值包络；时间轴音频行按波形峰值绘制，音频行高 56px
+- 工作台「媒体」和素材库支持导入音频；波形缩略图进素材库
+- Qt Multimedia `QAudioSink` 播放；多音频混音、裁剪、音量、淡入淡出
+- 有音频时以音频播放位置驱动动画播放头
+- PCM/波形是运行时缓存，工程只存哈希路径和参数
+
 ### 素材
 - 工作台：媒体（图片/视频自动识别）、文字、矢量图标网格、内嵌素材库
 - 素材库：`+` 多文件导入、搜索、预览、创建实体、删除（可选同时删实例）
@@ -106,8 +149,8 @@ src/
 ├─ core/     Project/Entity/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
-├─ media/    VideoDecoder（FFmpeg 首帧）、MediaImporter（哈希/复制/解码，可线程运行）
-├─ audio/    （预留）
+├─ media/    VideoDecoder（FFmpeg 首帧）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter
+├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
 ├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
@@ -124,21 +167,25 @@ src/
 - **命令历史**：复合命令 + 合并，一次拖动一条撤销
 - **缓动归属目标关键帧**：设置到达 1s 的曲线，就改 0s → 1s 这一段；和 Mine-imator 的“出发段”模型相反，目的是符合“到这个姿势”的直觉
 - **异步导入**：重活在工作线程，主线程入库
+- **音频主时钟**：有音频时播放头跟随 `QAudioSink` 实际播放位置；无音频才用计时器
 - **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
 
 ## 测试
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / easing / audio / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 32 个模式，全部通过。
+共 33 个模式，全部通过。
 
 ## 已知限制
 
 - 没有视频导出（MP4）
 - 视频只显示首帧，无逐帧播放
-- 无音频、波形、频谱对象
+- 无频谱可视化对象（音频轨波形已支持）
+- 音频属性修改暂未接入撤销栈
+- 音频波形目前只有 1ms 峰值、没有独立的整轨大波形页
+- 音频工程加载时同步解码；长音频可能卡一下
 - 关键帧缓动目前是单段模板/贝塞尔，没有整轨曲线图
 - 关键帧不能拖动改时间、复制、粘贴
 - 旋转实体的角缩放仍围绕中心
@@ -175,4 +222,4 @@ cmake --build build
 ./build/pvforge
 ```
 
-依赖：Qt 6.10（Widgets/Concurrent）、FFmpeg 62、Clang 21、CMake 4。
+依赖：Qt 6（Widgets/Concurrent/Multimedia）、FFmpeg（含 libswresample）、Clang 21、CMake 4。
