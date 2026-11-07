@@ -123,6 +123,8 @@
 - **RTP 串流**：同一管道可切换为 RTP/MPEG-TS 组播到 `239.255.42.99:5004`；手机 VLC 打开 `rtp://@239.255.42.99:5004`；组播地址不是本机 IP
 - 串流时停靠监视器固定为标题栏高度，停止后恢复几何；分辨率长边按画质档位，帧率取项目帧率并限制 10–30；只传画面，不传项目音频
 - 原始 RGBA 帧按整帧写入 ffmpeg stdin；缓冲区不够时丢弃整帧而不是写半帧，避免宏块错位/花屏
+- 低延迟：mpegts 输出 `-muxdelay 0 -muxpreload 0 -flush_packets 1`，HTTP 客户端 socket 开 TCP_NODELAY 并每块 flush；软件 H.264 用 zerolatency/veryfast，VAAPI 用 `-bf 0 -async_depth 1`
+- VLC 端仍默认缓存约 1 秒；手机 VLC 的网络缓存需调到 0–200 ms。串流帧率跟随项目帧率（10–30），低帧率项目本身就会显得不流畅
 
 ### 文件夹与父级
 

@@ -783,6 +783,9 @@ void CameraMonitor::buildStreamMenu()
     QAction* note =
         m_streamMenu->addAction(QStringLiteral("手机 VLC：网络串流 → 粘贴地址（同一 Wi-Fi）"));
     note->setEnabled(false);
+    QAction* latencyNote = m_streamMenu->addAction(
+        QStringLiteral("把 VLC 网络缓存调到 0–200 ms 可降低延迟"));
+    latencyNote->setEnabled(false);
 
     updateStreamMenu();
 }
@@ -930,6 +933,7 @@ QStringList CameraMonitor::codecArguments() const
                 QStringLiteral("-maxrate"), maxrate,
                 QStringLiteral("-bufsize"), bufsize,
                 QStringLiteral("-bf"), QStringLiteral("0"),
+                QStringLiteral("-async_depth"), QStringLiteral("1"),
                 QStringLiteral("-g"), QStringLiteral("15")};
     case StreamCodec::H265Vaapi:
         return {QStringLiteral("-vaapi_device"),
@@ -940,6 +944,7 @@ QStringList CameraMonitor::codecArguments() const
                 QStringLiteral("-maxrate"), maxrate,
                 QStringLiteral("-bufsize"), bufsize,
                 QStringLiteral("-bf"), QStringLiteral("0"),
+                QStringLiteral("-async_depth"), QStringLiteral("1"),
                 QStringLiteral("-g"), QStringLiteral("15")};
     case StreamCodec::H264Software:
     default:
@@ -992,7 +997,10 @@ void CameraMonitor::startHttpStream()
                     .arg(preferredLocalIp())
                     .arg(port);
     if (!launchStreamProcess(
-            {QStringLiteral("-f"), QStringLiteral("mpegts"), QStringLiteral("pipe:1")},
+            {QStringLiteral("-muxdelay"), QStringLiteral("0"),
+             QStringLiteral("-muxpreload"), QStringLiteral("0"),
+             QStringLiteral("-flush_packets"), QStringLiteral("1"),
+             QStringLiteral("-f"), QStringLiteral("mpegts"), QStringLiteral("pipe:1")},
             true))
     {
         m_httpServer->close();
@@ -1108,6 +1116,7 @@ void CameraMonitor::onHttpNewConnection()
         return;
     while (QTcpSocket* socket = m_httpServer->nextPendingConnection())
     {
+        socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
         m_httpClients.append(socket);
         connect(socket, &QTcpSocket::readyRead, this, [this, socket] {
             if (m_httpReady.contains(socket))
@@ -1146,6 +1155,7 @@ void CameraMonitor::relayHttpData(const QByteArray& data)
             continue;
         }
         socket->write(data);
+        socket->flush();
     }
 }
 
