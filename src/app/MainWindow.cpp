@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "ui/AssetLibraryPanel.h"
+#include "ui/ProjectPropertiesPanel.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
@@ -13,6 +15,7 @@
 #include <QMessageBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -33,22 +36,30 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     m_viewport = new Viewport(m_project, this);
     m_props = new PropertiesPanel(m_project, this);
+    m_library = new AssetLibraryPanel(m_project, this);
+    m_projectProps = new ProjectPropertiesPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
 
-    m_props->setMinimumWidth(220);
-    m_props->setMaximumWidth(380);
+    auto* tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("rightTabs"));
+    tabs->addTab(m_props, QStringLiteral("属性"));
+    tabs->addTab(m_library, QStringLiteral("素材库"));
+    tabs->addTab(m_projectProps, QStringLiteral("项目"));
+    tabs->setMinimumWidth(280);
+    tabs->setMaximumWidth(420);
+
     m_viewport->setMinimumWidth(480);
 
     auto* top = new QSplitter(Qt::Horizontal, this);
     top->addWidget(m_viewport);
-    top->addWidget(m_props);
+    top->addWidget(tabs);
     top->setChildrenCollapsible(false);
     top->setStretchFactor(0, 1);
     top->setStretchFactor(1, 0);
-    top->setSizes({1100, 280});
+    top->setSizes({1100, 320});
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
@@ -77,6 +88,11 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
     connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
+    connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::setSelectedEntity);
+    connect(m_projectProps, &ProjectPropertiesPanel::settingsChanged, this, [this] {
+        setWindowTitle(QStringLiteral("PVForge — %1").arg(m_project->name));
+        setFrame(m_frame);
+    });
     connect(m_project, &Project::changed, this, &MainWindow::refreshAll);
     connect(m_workbench, &WorkbenchPanel::created, this,
             [this](EntityId id) { setSelectedEntity(id); });

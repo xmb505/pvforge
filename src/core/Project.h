@@ -36,8 +36,7 @@ struct Track
 
 struct Entity
 {
-    EntityId id = kInvalidEntity;
-    EntityType type = EntityType::Image;
+    EntityId id = kInvalidEntity;    EntityType type = EntityType::Image;
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache
@@ -59,6 +58,18 @@ struct Entity
     QColor fillColor() const;
     QColor strokeColor() const;
     double strokeWidth() const { return data.value(QStringLiteral("strokeWidth"), 0.0).toDouble(); }
+};
+
+// A reusable template captured from the workbench, matching Mine-imator's
+// library entries: media path or text/vector parameters, plus a preview.
+struct Template
+{
+    EntityType type = EntityType::Image;
+    QString name;
+    QString path;
+    double duration = 0.0;   // seconds, video only
+    QVariantMap data;        // text/vector parameters
+    QImage thumbnail;        // runtime cache
 };
 
 class Project : public QObject
@@ -96,6 +107,11 @@ public:
     const QVector<Entity>& entities() const { return m_entities; }
     EntityId nextId() const { return m_nextId; }
 
+    const QVector<Template>& templates() const { return m_templates; }
+    Template* addTemplate(const Entity& entity);
+    Entity* createFromTemplate(const Template& tmpl);
+    void removeTemplate(int index);
+
     double value(EntityId id, const QString& prop, double frame) const;
     void setValue(EntityId id, const QString& prop, double frame, double value, bool keyframe);
 
@@ -113,6 +129,7 @@ private:
     QJsonObject toJson() const;
 
     QVector<Entity> m_entities;
+    QVector<Template> m_templates;
     EntityId m_nextId = 1;
 };
 

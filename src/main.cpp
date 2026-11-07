@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSettings>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <cmath>
@@ -122,6 +123,16 @@ int saveTest()
         qCritical() << "save-test: metadata mismatch";
         return 1;
     }
+    if (after.width != 1280 || after.height != 720)
+    {
+        qCritical() << "save-test: resolution mismatch";
+        return 1;
+    }
+    if (after.templates().size() != 1)
+    {
+        qCritical() << "save-test: templates" << after.templates().size();
+        return 1;
+    }
     if (std::abs(after.value(imageId, QStringLiteral("x"), 45) - 300.0) > 1e-6)
     {
         qCritical() << "save-test: keyframe roundtrip mismatch";
@@ -183,6 +194,77 @@ int welcomeTest(QApplication& app)
                 settings.remove(QStringLiteral("recentProjects"));
             QFile::remove(projectPath);
             app.exit(0);
+        });
+    });
+    return app.exec();
+}
+
+int libraryTest(QApplication& app)
+{
+    const QString assetPath =
+        QDir::tempPath() + QStringLiteral("/pvforge_library_asset.png");
+    QImage img(320, 200, QImage::Format_ARGB32);
+    img.fill(QColor(70, 130, 200));
+    {
+        QPainter p(&img);
+        p.setPen(Qt::white);
+        QFont f = p.font();
+        f.setPointSize(28);
+        f.setBold(true);
+        p.setFont(f);
+        p.drawText(img.rect(), Qt::AlignCenter, QStringLiteral("ASSET"));
+    }
+    if (!img.save(assetPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("素材库测试");
+    pvf::MainWindow window(project);
+    window.resize(1440, 900);
+    window.show();
+
+    project->addImage(assetPath);
+    project->addText(QStringLiteral("素材库文字"), QFont().family(), 96, Qt::white,
+                     int(Qt::AlignCenter));
+    project->addVector(1, 220, 220, QColor(255, 120, 160), QColor(255, 255, 255), 6);
+
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
+    if (!tabs)
+    {
+        qCritical() << "library-test: tabs not found";
+        return 1;
+    }
+    tabs->setCurrentIndex(1);
+    qInfo() << "library-test: templates" << project->templates().size()
+            << "entities" << project->entities().size();
+
+    QTimer::singleShot(400, &window, [&app, &window, project, tabs, assetPath] {
+        if (auto* list = window.findChild<QListWidget*>(QStringLiteral("assetList")))
+            qInfo() << "library-test: list items" << list->count();
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_library.png"));
+
+        auto* create = window.findChild<QPushButton*>(QStringLiteral("assetCreate"));
+        if (!create)
+        {
+            qCritical() << "library-test: create button not found";
+            app.exit(1);
+            return;
+        }
+
+        const int before = project->entities().size();
+        create->click();
+
+        QTimer::singleShot(300, &window, [&app, &window, project, tabs, before, assetPath] {
+            const int after = project->entities().size();
+            qInfo() << "library-test: entities" << before << "->" << after;
+
+            tabs->setCurrentIndex(2);
+            QTimer::singleShot(250, &window, [&app, &window, after, before, assetPath] {
+                window.grab().toImage().save(
+                    QStringLiteral("/tmp/pvforge_projectprops.png"));
+                QFile::remove(assetPath);
+                app.exit(after == before + 1 ? 0 : 1);
+            });
         });
     });
     return app.exec();
@@ -431,6 +513,8 @@ int main(int argc, char* argv[])
         return saveTest();
     if (app.arguments().contains(QStringLiteral("--welcome-test")))
         return welcomeTest(app);
+    if (app.arguments().contains(QStringLiteral("--library-test")))
+        return libraryTest(app);
     if (app.arguments().contains(QStringLiteral("--demo-shot")))
         return renderDemo(app);
     if (app.arguments().contains(QStringLiteral("--play-test")))

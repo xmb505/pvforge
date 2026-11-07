@@ -199,6 +199,7 @@ Entity* Project::addImage(const QString& path)
     e.values["scaleX"] = fit;
     e.values["scaleY"] = fit;
 
+    addTemplate(e);
     return append(std::move(e));
 }
 
@@ -217,6 +218,7 @@ Entity* Project::addVideo(const QString& path, const QImage& firstFrame, double 
         e.values["scaleX"] = fit;
         e.values["scaleY"] = fit;
     }
+    addTemplate(e);
     return append(std::move(e));
 }
 
@@ -229,6 +231,7 @@ Entity* Project::addText(const QString& text, const QString& family, int pixelSi
     e.data["size"] = pixelSize;
     e.data["color"] = color;
     e.data["align"] = align;
+    addTemplate(e);
     return append(std::move(e));
 }
 
@@ -245,7 +248,67 @@ Entity* Project::addVector(int shape, double width, double height, const QColor&
     e.data["fill"] = fill;
     e.data["stroke"] = stroke;
     e.data["strokeWidth"] = strokeWidth;
+    addTemplate(e);
     return append(std::move(e));
+}
+
+Template* Project::addTemplate(const Entity& entity)
+{
+    Template tmpl;
+    tmpl.type = entity.type;
+    tmpl.name = entity.name;
+    tmpl.path = entity.sourcePath;
+    tmpl.duration = entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
+    tmpl.thumbnail = entity.image;
+    if (entity.type == EntityType::Text || entity.type == EntityType::Vector)
+        tmpl.data = entity.data;
+
+    for (Template& existing : m_templates)
+    {
+        if (existing.type == tmpl.type && existing.path == tmpl.path
+            && existing.data == tmpl.data)
+        {
+            if (existing.thumbnail.isNull() && !tmpl.thumbnail.isNull())
+                existing.thumbnail = tmpl.thumbnail;
+            return &existing;
+        }
+    }
+
+    m_templates.append(tmpl);
+    return &m_templates.last();
+}
+
+Entity* Project::createFromTemplate(const Template& tmpl)
+{
+    switch (tmpl.type)
+    {
+    case EntityType::Image:
+        return addImage(tmpl.path);
+    case EntityType::Video:
+        return addVideo(tmpl.path, tmpl.thumbnail, tmpl.duration);
+    case EntityType::Text:
+        return addText(tmpl.data.value(QStringLiteral("text")).toString(),
+                       tmpl.data.value(QStringLiteral("font")).toString(),
+                       tmpl.data.value(QStringLiteral("size"), 96).toInt(),
+                       tmpl.data.value(QStringLiteral("color")).value<QColor>(),
+                       tmpl.data.value(QStringLiteral("align"), int(Qt::AlignCenter)).toInt());
+    case EntityType::Vector:
+        return addVector(tmpl.data.value(QStringLiteral("shape"), 0).toInt(),
+                         tmpl.data.value(QStringLiteral("width"), 400.0).toDouble(),
+                         tmpl.data.value(QStringLiteral("height"), 300.0).toDouble(),
+                         tmpl.data.value(QStringLiteral("fill")).value<QColor>(),
+                         tmpl.data.value(QStringLiteral("stroke")).value<QColor>(),
+                         tmpl.data.value(QStringLiteral("strokeWidth"), 0.0).toDouble());
+    }
+    return nullptr;
+}
+
+void Project::removeTemplate(int index)
+{
+    if (index < 0 || index >= m_templates.size())
+        return;
+    m_templates.removeAt(index);
+    emit changed();
 }
 
 Entity* Project::entity(EntityId id)
@@ -353,6 +416,28 @@ QJsonObject Project::toJson() const
         entities.append(entity);
     }
     root[QStringLiteral("entities")] = entities;
+
+    QJsonArray templates;
+    for (const Template& t : m_templates)
+    {
+        QJsonObject object;
+        object[QStringLiteral("type")] = typeToString(t.type);
+        object[QStringLiteral("name")] = t.name;
+        object[QStringLiteral("path")] = t.path;
+        object[QStringLiteral("duration")] = t.duration;
+
+        QJsonObject data;
+        for (auto it = t.data.constBegin(); it != t.data.constEnd(); ++it)
+        {
+            if (isColorKey(it.key()))
+                data[it.key()] = it.value().value<QColor>().name(QColor::HexArgb);
+            else
+                data[it.key()] = QJsonValue::fromVariant(it.value());
+        }
+        object[QStringLiteral("data")] = data;
+        templates.append(object);
+    }
+    root[QStringLiteral("templates")] = templates;
     return root;
 }
 
@@ -474,6 +559,48 @@ bool Project::load(const QString& path, QString* error)
 
         m_nextId = std::max(m_nextId, e.id + 1);
         m_entities.append(e);
+    }
+
+    m_templates.clear();
+    const QJsonArray templates = root.value(QStringLiteral("templates")).toArray();
+    for (const QJsonValue& value : templates)
+    {
+        const QJsonObject object = value.toObject();
+        Template tmpl;
+        tmpl.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        tmpl.name = object.value(QStringLiteral("name")).toString();
+        tmpl.path = object.value(QStringLiteral("path")).toString();
+        tmpl.duration = object.value(QStringLiteral("duration")).toDouble();
+
+        const QJsonObject data = object.value(QStringLiteral("data")).toObject();
+        for (auto it = data.constBegin(); it != data.constEnd(); ++it)
+        {
+            if (isColorKey(it.key()))
+                tmpl.data[it.key()] = QColor(it.value().toString());
+            else
+                tmpl.data[it.key()] = it.value().toVariant();
+        }
+
+        if (!tmpl.path.isEmpty())
+        {
+            for (const Entity& e : m_entities)
+            {
+                if (e.sourcePath == tmpl.path && !e.image.isNull())
+                {
+                    tmpl.thumbnail = e.image;
+                    break;
+                }
+            }
+            if (tmpl.thumbnail.isNull())
+            {
+                if (tmpl.type == EntityType::Video)
+                    tmpl.thumbnail = decodeVideoFirstFrame(tmpl.path, nullptr, nullptr);
+                else if (tmpl.type == EntityType::Image)
+                    tmpl.thumbnail = QImage(tmpl.path);
+            }
+        }
+
+        m_templates.append(tmpl);
     }
 
     filePath = path;
