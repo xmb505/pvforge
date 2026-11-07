@@ -7,6 +7,7 @@
 class QKeyEvent;
 class QLineEdit;
 class QScrollBar;
+class QTimer;
 class QWheelEvent;
 
 namespace pvf {
@@ -33,12 +34,19 @@ public:
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
 
-    double pixelsPerFrame() const { return m_pixelsPerFrame; }    int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
+    double pixelsPerFrame() const { return m_pixelsPerFrame; }
+    int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
 
+    bool displayFrames() const { return m_displayFrames; }
+    void setDisplayFrames(bool frames);
+    void setPixelsPerFrameForTest(double pixels);
+    int rulerTickStepForTest() const;
+    int rulerLabelStepForTest() const;
 signals:
     void frameRequested(int frame);
+    void scrubStarted();   // the user takes manual control of the playhead
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
@@ -51,6 +59,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -69,6 +79,7 @@ private:
     void updateScrollBar();
     void zoomAt(double factor, int anchorX);
     void commitRename();
+    void stepFrame(int delta);
 
     enum class DragMode { None, Scrub, PendingSelect, BoxSelect };
 
@@ -89,6 +100,9 @@ private:
     QScrollBar* m_hScroll = nullptr;
     int m_scrollX = 0;
     double m_pixelsPerFrame = 6.0;
+    bool m_displayFrames = false;
+    QTimer* m_holdTimer = nullptr;
+    int m_holdDirection = 0;
 
     static constexpr int kNameWidth = 180;
     static constexpr int kHeaderHeight = 28;

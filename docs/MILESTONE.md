@@ -36,6 +36,9 @@
 - 自动关键帧（默认开）
 - 时间轴：固定缩放 + 横向滚动 + 自动跟随播放头
 - `Ctrl+滚轮` 缩放（0.25–32 px/帧）
+- 刻度行按 Mine-imator 密度自适应：缩放越粗刻度越稀，逐帧小刻度 + 每 5/10/50… 帧长刻度
+- 刻度行可切换显示秒数或帧号（视图菜单，设置持久化）；状态栏同时显示帧与秒
+- 点刻度行后 `←` / `→` 单帧步进；长按按工程帧率连续播放 / 倒退
 - 刻度行拖播放头；轨道空白点击跳转；点关键帧选中不跳转
 - 框选关键帧（行 × 帧范围），高亮选中
 - 关键帧可以 `Delete` 删除，撤销恢复
@@ -107,9 +110,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 29 个模式，全部通过。
+共 30 个模式，全部通过。
 
 ## 已知限制
 

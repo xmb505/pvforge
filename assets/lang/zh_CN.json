@@ -17,6 +17,8 @@
   "action.home": "回到开头",
   "action.end": "跳到结尾",
   "action.fitWindow": "适配窗口",
+  "action.timelineSeconds": "时间轴显示秒",
+  "action.timelineFrames": "时间轴显示帧",
   "action.settings": "设置…",
   "action.packAssets": "全部打包到项目",
   "action.packAll": "立即打包所有素材",

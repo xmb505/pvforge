@@ -34,6 +34,9 @@ void setDefaultSize(int width, int height, int fps);
 double timelinePixelsPerFrame();
 void setTimelinePixelsPerFrame(double pixels);
 
+bool timelineDisplayFrames();           // ruler labels show frames instead of seconds
+void setTimelineDisplayFrames(bool on);
+
 bool packAssetsDefault();
 void setPackAssetsDefault(bool on);
 

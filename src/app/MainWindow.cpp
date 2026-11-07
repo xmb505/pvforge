@@ -15,6 +15,7 @@
 #include "ui/WorkbenchPanel.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QFileDialog>
@@ -157,6 +158,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
+    connect(m_timeline, &TimelinePanel::scrubStarted, this, [this] {
+        if (m_playing)
+            togglePlayback();
+    });
     connect(m_timeline, &TimelinePanel::entitySelected, this, &MainWindow::setSelectedEntity);
     connect(m_library, &AssetLibraryPanel::entityCreated, this, &MainWindow::setSelectedEntity);
     connect(m_projectProps, &ProjectPropertiesPanel::settingsChanged, this, [this] {
@@ -321,6 +326,39 @@ void MainWindow::createMenus()
 
     auto* viewMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.view"), QStringLiteral("视图")));
     viewMenu->addAction(m_fitAction);
+    viewMenu->addSeparator();
+
+    auto* secondsAction =
+        new QAction(Lang::t(QStringLiteral("action.timelineSeconds"),
+                            QStringLiteral("时间轴显示秒")),
+                    this);
+    secondsAction->setObjectName(QStringLiteral("timelineSecondsAction"));
+    secondsAction->setCheckable(true);
+    secondsAction->setChecked(!Settings::timelineDisplayFrames());
+
+    auto* framesAction =
+        new QAction(Lang::t(QStringLiteral("action.timelineFrames"),
+                            QStringLiteral("时间轴显示帧")),
+                    this);
+    framesAction->setObjectName(QStringLiteral("timelineFramesAction"));
+    framesAction->setCheckable(true);
+    framesAction->setChecked(Settings::timelineDisplayFrames());
+
+    auto* displayGroup = new QActionGroup(this);
+    displayGroup->setExclusive(true);
+    displayGroup->addAction(secondsAction);
+    displayGroup->addAction(framesAction);
+    viewMenu->addAction(secondsAction);
+    viewMenu->addAction(framesAction);
+
+    auto setDisplayFrames = [this](bool frames) {
+        Settings::setTimelineDisplayFrames(frames);
+        m_timeline->setDisplayFrames(frames);
+    };
+    connect(secondsAction, &QAction::triggered, this,
+            [setDisplayFrames] { setDisplayFrames(false); });
+    connect(framesAction, &QAction::triggered, this,
+            [setDisplayFrames] { setDisplayFrames(true); });
 
     menuBar()->setFixedHeight(menuBar()->sizeHint().height());
 
@@ -785,10 +823,14 @@ void MainWindow::onPlayTick()
 
 void MainWindow::updateStatus()
 {
-    m_status->setText(QStringLiteral("帧 %1 / %2 · %3 fps · %4×%5")
+    const int fps = std::max(1, m_project->fps);
+    const int length = m_project->timelineLength();
+    m_status->setText(QStringLiteral("帧 %1 / %2 · %3s / %4s · %5 fps · %6×%7")
                           .arg(m_frame)
-                          .arg(m_project->timelineLength())
-                          .arg(m_project->fps)
+                          .arg(length)
+                          .arg(m_frame / double(fps), 0, 'f', 2)
+                          .arg(length / double(fps), 0, 'f', 2)
+                          .arg(fps)
                           .arg(m_project->width)
                           .arg(m_project->height));
 }

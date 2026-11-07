@@ -2,8 +2,10 @@
 
 #include "app/AppIcon.h"
 #include "core/Lang.h"
+#include "core/Settings.h"
 
 #include <QApplication>
+#include <QFocusEvent>
 #include <QLineEdit>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -12,11 +14,57 @@
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+// Mine-imator's timeline tick density: the tick interval is measured in
+// frames and gets coarser as the timeline zooms out.
+void rulerSteps(double pixelsPerFrame, int* tickStep, int* labelStep)
+{
+    *tickStep = 1;
+    *labelStep = 5;
+    if (pixelsPerFrame < 5.0)
+    {
+        *tickStep = 5;
+        *labelStep = 10;
+    }
+    if (pixelsPerFrame < 3.0)
+    {
+        *tickStep = 10;
+        *labelStep = 50;
+    }
+    if (pixelsPerFrame < 1.0)
+    {
+        *tickStep = 20;
+        *labelStep = 100;
+    }
+    if (pixelsPerFrame < 0.5)
+    {
+        *tickStep = 50;
+        *labelStep = 200;
+    }
+}
+
+// Seconds-mode label interval: at least one second, doubling until labels
+// are readable when zoomed out, and halving for sub-second labels when
+// zoomed in.
+int secondsLabelFrames(int fps, double pixelsPerFrame)
+{
+    int frames = std::max(1, fps);
+    while (frames * pixelsPerFrame < 64.0)
+        frames *= 2;
+    while (frames > 1 && frames % 2 == 0 && frames * pixelsPerFrame > 240.0)
+        frames /= 2;
+    return frames;
+}
+
+} // namespace
 
 TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     : QWidget(parent)
@@ -25,6 +73,9 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     setMinimumHeight(140);
     setFocusPolicy(Qt::ClickFocus);
     setMouseTracking(true);   // hover row buttons need motion without a press
+
+    m_pixelsPerFrame = std::clamp(Settings::timelinePixelsPerFrame(), 0.25, 32.0);
+    m_displayFrames = Settings::timelineDisplayFrames();
 
     m_search = new QLineEdit(this);
     m_search->setPlaceholderText(Lang::t(QStringLiteral("search.objects"), QStringLiteral("搜索对象…")));
@@ -45,6 +96,46 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         update();
     });
     updateScrollBar();
+
+    // Holding an arrow key keeps stepping at the project frame rate, which
+    // turns into forward/backward playback. A quick tap moves one frame.
+    m_holdTimer = new QTimer(this);
+    m_holdTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_holdTimer, &QTimer::timeout, this, [this] {
+        if (m_holdDirection != 0)
+            stepFrame(m_holdDirection);
+    });
+}
+
+void TimelinePanel::setDisplayFrames(bool frames)
+{
+    if (m_displayFrames == frames)
+        return;
+    m_displayFrames = frames;
+    update();
+}
+
+void TimelinePanel::setPixelsPerFrameForTest(double pixels)
+{
+    m_pixelsPerFrame = std::clamp(pixels, 0.25, 32.0);
+    updateScrollBar();
+    update();
+}
+
+int TimelinePanel::rulerTickStepForTest() const
+{
+    int tickStep = 0;
+    int labelStep = 0;
+    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+    return tickStep;
+}
+
+int TimelinePanel::rulerLabelStepForTest() const
+{
+    int tickStep = 0;
+    int labelStep = 0;
+    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+    return labelStep;
 }
 
 void TimelinePanel::setCurrentFrame(int frame)
@@ -297,29 +388,71 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
 
-    // Ruler.
+    // Ruler: Mine-imator-style adaptive ticks. Ticks are always spaced in
+    // frames; zooming out coarsens the interval, and the labels switch
+    // between frame numbers and elapsed seconds.
     const int fps = std::max(1, m_project->fps);
-    int step = fps;
-    while (step * m_pixelsPerFrame < 60.0)
-        step *= 2;
+    int tickStep = 0;
+    int labelStep = 0;
+    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
 
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
 
-    for (int f = 0; f <= frameFromX(right) + step; f += step)
-    {
+    auto drawTick = [&](int f, int tickHeight, const QColor& color) {
         const int x = xFromFrame(f);
-        if (x > right)
-            break;
-        if (x < kNameWidth - 10)
-            continue;
-        p.setPen(midColor);
-        p.drawLine(x, kHeaderHeight - 6, x, kHeaderHeight);
-        p.setPen(textColor);
-        const double seconds = f / double(fps);
-        p.drawText(QRect(x + 4, 2, 80, kHeaderHeight - 4), Qt::AlignVCenter | Qt::AlignLeft,
-                   QString::number(seconds, 'g', 4) + QStringLiteral("s"));
+        if (x < kNameWidth || x > right)
+            return;
+        p.setPen(QPen(color, 1));
+        p.drawLine(x, kHeaderHeight - tickHeight, x, kHeaderHeight);
+    };
+    auto drawLabel = [&](int f, const QString& text, const QColor& color) {
+        const int x = xFromFrame(f);
+        if (x < kNameWidth - 20 || x > right)
+            return;
+        p.setPen(color);
+        p.drawText(QRect(x + 4, 2, 96, kHeaderHeight - 4),
+                   Qt::AlignVCenter | Qt::AlignLeft, text);
+    };
+
+    const int leftFrame = std::max(0, frameFromX(kNameWidth));
+    const int lastFrame = frameFromX(right) + tickStep;
+    const int firstTick = (leftFrame / tickStep) * tickStep;
+
+    // Minor frame ticks. Mine-imator highlights every Nth frame with a
+    // longer notch, which is what makes frame-level spacing readable.
+    for (int f = firstTick; f <= lastFrame; f += tickStep)
+    {
+        const bool major = (f % labelStep == 0);
+        drawTick(f, major ? 7 : 3, major ? textColor : midColor);
+    }
+
+    if (m_displayFrames)
+    {
+        for (int f = firstTick; f <= lastFrame; f += tickStep)
+        {
+            if (f % labelStep == 0)
+                drawLabel(f, QString::number(f), textColor);
+        }
+    }
+    else
+    {
+        // Whole-second ticks and labels; the density adapts to the zoom so
+        // the frame ticks stay visible underneath.
+        const int labelFrames = secondsLabelFrames(fps, m_pixelsPerFrame);
+        const int firstLabel = (leftFrame / labelFrames) * labelFrames;
+        for (int f = firstLabel; f <= lastFrame; f += labelFrames)
+        {
+            drawTick(f, 9, textColor);
+            const double seconds = f / double(fps);
+            const bool whole = std::abs(seconds - std::round(seconds)) < 1e-9;
+            const QString text =
+                (whole ? QString::number(int(std::round(seconds)))
+                       : QString::number(seconds, 'g', 3))
+                + QStringLiteral("s");
+            drawLabel(f, text, textColor);
+        }
     }
 
     // Entity rows.
@@ -512,6 +645,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         if (x >= kNameWidth)
         {
+            setFocus(Qt::MouseFocusReason);
+            emit scrubStarted();
             m_dragMode = DragMode::Scrub;
             emit frameRequested(std::max(0, frameFromX(x)));
         }
@@ -618,6 +753,24 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 
 void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
+    if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
+        && event->modifiers() == Qt::NoModifier)
+    {
+        const int direction = event->key() == Qt::Key_Right ? 1 : -1;
+
+        // Auto-repeat is ignored: the hold timer does the continuous part.
+        if (!event->isAutoRepeat())
+        {
+            emit scrubStarted();
+            m_holdDirection = direction;
+            stepFrame(direction);
+            m_holdTimer->setInterval(std::max(1, 1000 / std::max(1, m_project->fps)));
+            m_holdTimer->start();
+        }
+        event->accept();
+        return;
+    }
+
     if (event->key() == Qt::Key_Escape && !m_selectedKeyframes.isEmpty())
     {
         m_selectedKeyframes.clear();
@@ -638,6 +791,57 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
+void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
+{
+    if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
+        && !event->isAutoRepeat())
+    {
+        m_holdDirection = 0;
+        m_holdTimer->stop();
+        event->accept();
+        return;
+    }
+
+    QWidget::keyReleaseEvent(event);
+}
+
+void TimelinePanel::focusOutEvent(QFocusEvent* event)
+{
+    // A key release can be lost when the focus moves mid-hold.
+    m_holdDirection = 0;
+    m_holdTimer->stop();
+    QWidget::focusOutEvent(event);
+}
+
+void TimelinePanel::stepFrame(int delta)
+{
+    int next = m_frame + delta;
+
+    if (next < 0)
+    {
+        next = 0;
+        m_holdDirection = 0;
+        m_holdTimer->stop();
+    }
+
+    const int length = m_project->timelineLength();
+    if (delta > 0 && length > 0 && next >= length)
+    {
+        if (m_project->loop)
+        {
+            next = 0;
+        }
+        else
+        {
+            next = length;
+            m_holdDirection = 0;
+            m_holdTimer->stop();
+        }
+    }
+
+    emit frameRequested(next);
+}
+
 void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
@@ -647,6 +851,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
     {
         // Mine-imator deselects everything on a plain click.
         m_selectedKeyframes.clear();
+        emit scrubStarted();
         emit frameRequested(m_pressFrame);
         if (m_pressEntity != kInvalidEntity)
             emit entitySelected(m_pressEntity);

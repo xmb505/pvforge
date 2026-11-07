@@ -116,6 +116,16 @@ void setTimelinePixelsPerFrame(double pixels)
     store().setValue(QStringLiteral("timeline/pixelsPerFrame"), pixels);
 }
 
+bool timelineDisplayFrames()
+{
+    return store().value(QStringLiteral("timeline/displayFrames"), false).toBool();
+}
+
+void setTimelineDisplayFrames(bool on)
+{
+    store().setValue(QStringLiteral("timeline/displayFrames"), on);
+}
+
 bool packAssetsDefault()
 {
     return store().value(QStringLiteral("assets/packDefault"), false).toBool();

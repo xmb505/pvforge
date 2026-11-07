@@ -17,6 +17,8 @@
   "action.home": "Go to Start",
   "action.end": "Go to End",
   "action.fitWindow": "Fit Window",
+  "action.timelineSeconds": "Timeline: Seconds",
+  "action.timelineFrames": "Timeline: Frames",
   "action.settings": "Settings…",
   "action.packAssets": "Pack All Assets",
   "action.packAll": "Pack Assets Now",

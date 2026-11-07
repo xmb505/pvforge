@@ -848,6 +848,155 @@ int scaleUndoTest(QApplication& app)
     return app.exec();
 }
 
+int timelineFrameTest(QApplication& app)
+{
+    pvf::Settings::setTimelineDisplayFrames(false);
+
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+    window.activateWindow();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        if (!timeline)
+        {
+            qCritical() << "timeline-frame-test: timeline missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        project->addKeyframe(entity->id, QStringLiteral("x"), 100.0, 300.0);
+
+        // Mine-imator's tick density table.
+        auto checkSteps = [&](double pixels, int tick, int label) {
+            timeline->setPixelsPerFrameForTest(pixels);
+            if (timeline->rulerTickStepForTest() != tick
+                || timeline->rulerLabelStepForTest() != label)
+            {
+                qCritical() << "timeline-frame-test: wrong steps at" << pixels
+                            << timeline->rulerTickStepForTest()
+                            << timeline->rulerLabelStepForTest();
+                ++failures;
+            }
+        };
+        checkSteps(8.0, 1, 5);
+        checkSteps(6.0, 1, 5);
+        checkSteps(4.0, 5, 10);
+        checkSteps(2.0, 10, 50);
+        checkSteps(0.8, 20, 100);
+        checkSteps(0.4, 50, 200);
+
+        // Clicking the ruler focuses the timeline so arrow keys work.
+        const QPoint rulerPoint(230, 10);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(rulerPoint),
+                          QPointF(timeline->mapToGlobal(rulerPoint)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(rulerPoint),
+                            QPointF(timeline->mapToGlobal(rulerPoint)), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &release);
+        if (!timeline->hasFocus())
+        {
+            qCritical() << "timeline-frame-test: ruler click did not focus the timeline";
+            ++failures;
+        }
+
+        auto sendKey = [&](QEvent::Type type, int key, bool autoRepeat) {
+            QKeyEvent event(type, key, Qt::NoModifier, QString(), autoRepeat);
+            QApplication::sendEvent(timeline, &event);
+        };
+        auto wait = [](int ms) {
+            QEventLoop loop;
+            QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+            loop.exec();
+        };
+
+        // A quick right-arrow press advances exactly one frame.
+        window.goToFrame(10);
+        sendKey(QEvent::KeyPress, Qt::Key_Right, false);
+        if (window.currentFrame() != 11)
+        {
+            qCritical() << "timeline-frame-test: tap did not step one frame"
+                        << window.currentFrame();
+            ++failures;
+        }
+
+        // Holding keeps stepping at the project frame rate.
+        wait(150);
+        const int heldTo = window.currentFrame();
+        if (heldTo <= 11)
+        {
+            qCritical() << "timeline-frame-test: hold did not advance" << heldTo;
+            ++failures;
+        }
+        sendKey(QEvent::KeyRelease, Qt::Key_Right, false);
+        wait(120);
+        if (window.currentFrame() != heldTo)
+        {
+            qCritical() << "timeline-frame-test: release did not stop"
+                        << heldTo << window.currentFrame();
+            ++failures;
+        }
+
+        // Left arrow runs backwards.
+        window.goToFrame(40);
+        sendKey(QEvent::KeyPress, Qt::Key_Left, false);
+        wait(150);
+        const int reverseTo = window.currentFrame();
+        sendKey(QEvent::KeyRelease, Qt::Key_Left, false);
+        if (reverseTo >= 40)
+        {
+            qCritical() << "timeline-frame-test: reverse hold did not move" << reverseTo;
+            ++failures;
+        }
+
+        // Reverse stops at the start, forward loops at the end.
+        window.goToFrame(0);
+        sendKey(QEvent::KeyPress, Qt::Key_Left, false);
+        wait(80);
+        sendKey(QEvent::KeyRelease, Qt::Key_Left, false);
+        if (window.currentFrame() != 0)
+        {
+            qCritical() << "timeline-frame-test: reverse passed zero"
+                        << window.currentFrame();
+            ++failures;
+        }
+        window.goToFrame(project->timelineLength() - 1);
+        sendKey(QEvent::KeyPress, Qt::Key_Right, false);
+        sendKey(QEvent::KeyRelease, Qt::Key_Right, false);
+        if (window.currentFrame() != 0)
+        {
+            qCritical() << "timeline-frame-test: forward hold did not loop"
+                        << window.currentFrame();
+            ++failures;
+        }
+
+        // Both ruler label modes render.
+        timeline->setPixelsPerFrameForTest(8.0);
+        timeline->setDisplayFrames(true);
+        if (!timeline->displayFrames())
+        {
+            qCritical() << "timeline-frame-test: frame mode not applied";
+            ++failures;
+        }
+        QApplication::processEvents();
+        timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_frames.png"));
+        timeline->setDisplayFrames(false);
+        QApplication::processEvents();
+        timeline->grab().save(QStringLiteral("/tmp/pvforge_timeline_seconds.png"));
+
+        pvf::Settings::setTimelineDisplayFrames(false);
+        qInfo() << "timeline-frame-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int guideTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -2603,6 +2752,8 @@ int main(int argc, char* argv[])
         return entitySnapTest(app);
     if (app.arguments().contains(QStringLiteral("--guide-test")))
         return guideTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-frame-test")))
+        return timelineFrameTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-undo-test")))
         return scaleUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
