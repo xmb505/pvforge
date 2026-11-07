@@ -20,6 +20,8 @@
 - **摄像机**：时间轴对象，位置/取景比例/旋转关键帧；取景框外压暗，框内点击穿透；摄像机可作为父级，让台标/新闻条在镜头画面内固定；也可挂到实体或文件夹下跟随移动
 - **监视器**：工作摄像机 / 场景摄像机 / 整画布；标题栏显示帧率（播放时显示实际刷新率）；草稿缩略图、高质量原图；无辅助线、等比黑边
 - **OBS 式弹出**：监视器可拖出为独立窗口，关闭停靠回视口，可置顶
+- **监视器临摹**：小监视器「临摹」菜单导入参考视频，按播放头同步叠在画面上，透明度可调，用于描改 PV；可一键清除
+- **监视器串流**：小监视器「串流」菜单通过 RTP/MPEG-TS 把画面发到同一局域网的手机 VLC，地址 `rtp://@239.255.42.99:5004`；串流时工作区监视器收起成工具条
 - **主题**：自绘图标和缓动曲线使用 QPalette 颜色，跟随 Breeze 等系统主题，暗色下已验证
 - **解码信息**：设置→解码显示解码方式（当前固定为软件解码）和实际使用的 FFmpeg / Qt Multimedia 路径；视频帧和音频均为软件解码，硬件视频解码尚未启用
 - **关于页**：设置→关于显示系统、CPU、内存、显卡、显示器和 Qt/FFmpeg 版本，可一键复制；帮助菜单的「关于 PVForge」也打开此页
@@ -38,7 +40,7 @@
 - C++20 编译器（Clang 或 GCC）
 - Qt 6.5+：Widgets、Concurrent、Multimedia
 - FFmpeg 开发库：libavformat、libavcodec、libavutil、libswscale、libswresample
-- `ffmpeg` 命令行：可选，用于后台生成视频预览代理；缺失时直接播放原视频
+- `ffmpeg` 命令行：可选，用于后台生成视频预览代理和 RTP 串流；缺失时直接播放原视频/不启用串流
 - Ninja（可选）
 
 ```bash
@@ -90,6 +92,8 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 父级坐标系 | 属性面板「父级」选工作台或任意实体；X/Y/旋转/缩放相对父级 |
 | 摄像机作为父级 | 选中台标/文字，父级选摄像机；监视器里固定在画面位置，镜头缩放旋转时不跑位 |
 | 摄像机跟随实体 | 选中摄像机，父级选文件夹/实体；摄像机只读跟随，画框拖动暂停，改属性 X/Y/旋转/取景比例 |
+| 临摹参考 | 监视器「临摹」→ 导入临摹视频；拖动透明度；按播放头同步叠加 |
+| 手机当副屏 | 监视器「串流」→ 开始 RTP 串流；手机 VLC 打开 `rtp://@239.255.42.99:5004` |
 | 锁定 / 解锁 | 点时间轴行的锁按钮；锁定后自动取消选择，画布和时间轴都不能再选中 |
 | 播放/暂停 | `空格` |
 | 视口缩放/平移 | 滚轮 / 中键拖动 |
@@ -128,12 +132,13 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-36 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+37 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --easing-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --audio-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --video-test
@@ -157,6 +162,8 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --timeline-frame-test
 - 父级坐标作用于可视实体；摄像机可以作为父级，也可以挂到文件夹或实体下；音频没有空间坐标
 - 摄像机不能作为另一个摄像机的子级；挂到父级后画框拖动暂停，改属性 X/Y/旋转/取景比例
 - 父级非均匀缩放时，摄像机取景框用平均缩放近似
+- 监视器串流只有画面，没有项目音频；使用组播，手机和电脑需在同一局域网且允许组播
+- 临摹参考从项目第 0 帧开始同步，暂不支持单独调整参考视频偏移
 - 删除有子对象的父级前需要先把子对象拖到工作台或删除
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频波形只有时间轴行，没有独立的大波形页

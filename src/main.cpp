@@ -3053,6 +3053,138 @@ int cameraTest(QApplication& app)
     return app.exec();
 }
 
+int monitorFeatureTest(QApplication& app)
+{
+    const QString tracePath = QStringLiteral("/tmp/pvf_trace.mp4");
+    QFile::remove(tracePath);
+    QProcess ffmpeg;
+    ffmpeg.start(QStringLiteral("ffmpeg"),
+                 {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("color=c=red:s=320x240:d=1:r=10"),
+                  QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+                  QStringLiteral("color=c=blue:s=320x240:d=1:r=10"),
+                  QStringLiteral("-filter_complex"),
+                  QStringLiteral("[0:v][1:v]concat=n=2:v=1:a=0"),
+                  QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                  QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                  QStringLiteral("-preset"), QStringLiteral("ultrafast"), tracePath});
+    if (!ffmpeg.waitForFinished(30000) || ffmpeg.exitCode() != 0)
+    {
+        qCritical() << "monitor-feature-test: cannot generate trace video";
+        return 1;
+    }
+
+    pvf::Settings::setMonitorVisible(true);
+    pvf::Settings::setShowCameraFrame(true);
+    auto* project = new pvf::Project;
+    project->width = 1920;
+    project->height = 1080;
+    project->fps = 10;
+    pvf::Entity* camera = project->addCamera(QStringLiteral("Monitor Camera"));
+    const pvf::EntityId cameraId = camera->id;
+    project->setValue(cameraId, QStringLiteral("scaleX"), 0, 1.0, false);
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+    window.setSelectedEntityForTest(cameraId);
+    QApplication::processEvents();
+
+    auto* monitor = window.findChild<pvf::CameraMonitor*>();
+    if (!monitor)
+    {
+        qCritical() << "monitor-feature-test: monitor missing";
+        return 1;
+    }
+    auto* traceButton =
+        monitor->findChild<QToolButton*>(QStringLiteral("monitorTraceButton"));
+    auto* streamButton =
+        monitor->findChild<QToolButton*>(QStringLiteral("monitorStreamButton"));
+    int failures = 0;
+    if (!traceButton || !streamButton)
+    {
+        qCritical() << "monitor-feature-test: monitor buttons missing";
+        ++failures;
+    }
+
+    if (!monitor->loadTraceVideo(tracePath))
+    {
+        qCritical() << "monitor-feature-test: trace import failed";
+        ++failures;
+    }
+    else
+    {
+        monitor->setTraceOpacity(1.0);
+        window.goToFrame(15);
+        QApplication::processEvents();
+        QImage shot = monitor->grab().toImage();
+        QColor color = shot.pixelColor(shot.width() / 2, 28 + (shot.height() - 28) / 2);
+        if (color.blue() < 180 || color.red() > 90)
+        {
+            qCritical() << "monitor-feature-test: trace blue frame" << color;
+            ++failures;
+        }
+        window.goToFrame(2);
+        QApplication::processEvents();
+        shot = monitor->grab().toImage();
+        color = shot.pixelColor(shot.width() / 2, 28 + (shot.height() - 28) / 2);
+        if (color.red() < 180 || color.blue() > 90)
+        {
+            qCritical() << "monitor-feature-test: trace red frame" << color;
+            ++failures;
+        }
+        window.goToFrame(15);
+        QApplication::processEvents();
+        window.grab().toImage().save(QStringLiteral("/tmp/pvf_monitor_features.png"));
+
+        monitor->clearTraceForTest();
+        window.goToFrame(15);
+        QApplication::processEvents();
+        const QImage cleared = monitor->grab().toImage();
+        const QColor clearedColor =
+            cleared.pixelColor(cleared.width() / 2,
+                               28 + (cleared.height() - 28) / 2);
+        if (clearedColor.blue() > 90 || clearedColor.red() > 90)
+        {
+            qCritical() << "monitor-feature-test: trace clear failed"
+                        << clearedColor;
+            ++failures;
+        }
+    }
+
+    if (!QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty())
+    {
+        const bool started = monitor->startStreamingForTest();
+        if (!started || !monitor->isStreaming())
+        {
+            qCritical() << "monitor-feature-test: RTP stream did not start";
+            ++failures;
+        }
+        else if (monitor->height() > 60)
+        {
+            qCritical() << "monitor-feature-test: monitor not collapsed"
+                        << monitor->height();
+            ++failures;
+        }
+        monitor->stopStreamingForTest();
+        QApplication::processEvents();
+        if (monitor->isStreaming() || monitor->height() < 100)
+        {
+            qCritical() << "monitor-feature-test: RTP stream did not stop"
+                        << monitor->height();
+            ++failures;
+        }
+    }
+    else
+    {
+        qInfo() << "monitor-feature-test: ffmpeg missing, streaming skipped";
+    }
+
+    qInfo() << "monitor-feature-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int cameraParentTest(QApplication& app)
 {
     pvf::Settings::setMonitorVisible(true);
@@ -5110,6 +5242,8 @@ int main(int argc, char* argv[])
         return cameraTest(app);
     if (app.arguments().contains(QStringLiteral("--camera-parent-test")))
         return cameraParentTest(app);
+    if (app.arguments().contains(QStringLiteral("--monitor-feature-test")))
+        return monitorFeatureTest(app);
     if (app.arguments().contains(QStringLiteral("--easing-test")))
         return easingTest(app);
     if (app.arguments().contains(QStringLiteral("--folder-test")))

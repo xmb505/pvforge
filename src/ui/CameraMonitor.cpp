@@ -2,25 +2,64 @@
 
 #include "core/Camera.h"
 #include "core/Settings.h"
+#include "media/VideoDecoder.h"
+#include "media/VideoPlayer.h"
+#include "media/VideoProxy.h"
 #include "render/CameraRenderer.h"
 #include "ui/Viewport.h"
 
+#include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QProcess>
 #include <QScreen>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QSlider>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QToolButton>
+#include <QWidgetAction>
 #include <algorithm>
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+constexpr const char* kRtpHost = "239.255.42.99";
+constexpr int kRtpPort = 5004;
+constexpr int kStreamLongEdge = 640;
+
+QString rtpUrl()
+{
+    return QStringLiteral("rtp://@%1:%2").arg(QLatin1String(kRtpHost)).arg(kRtpPort);
+}
+
+QSize streamSize(const Project& project)
+{
+    int width = kStreamLongEdge;
+    int height = int(std::lround(width * project.height
+                                 / double(std::max(1, project.width))));
+    if (project.height > project.width)
+    {
+        height = kStreamLongEdge;
+        width = int(std::lround(height * project.width
+                                / double(std::max(1, project.height))));
+    }
+    return QSize(std::max(2, width & ~1), std::max(2, height & ~1));
+}
+} // namespace
 
 CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* parent)
     : QWidget(parent)
@@ -28,7 +67,7 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     , m_viewport(viewport)
 {
     setObjectName(QStringLiteral("cameraMonitor"));
-    setMinimumSize(220, 150);
+    setMinimumSize(380, 150);
     setFocusPolicy(Qt::NoFocus);
     setWindowTitle(QStringLiteral("摄像机监视器"));
 
@@ -118,15 +157,54 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
         emit visibilityChanged(false);
     });
 
+    m_traceButton = new QToolButton(this);
+    m_traceButton->setObjectName(QStringLiteral("monitorTraceButton"));
+    m_traceButton->setText(QStringLiteral("临摹"));
+    m_traceButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_traceButton->setFocusPolicy(Qt::NoFocus);
+    m_traceButton->setToolTip(QStringLiteral("临摹参考视频"));
+    buildTraceMenu();
+    connect(m_traceButton, &QToolButton::clicked, this, [this] {
+        m_traceMenu->exec(
+            m_traceButton->mapToGlobal(QPoint(0, m_traceButton->height())));
+    });
+
+    m_streamButton = new QToolButton(this);
+    m_streamButton->setObjectName(QStringLiteral("monitorStreamButton"));
+    m_streamButton->setText(QStringLiteral("串流"));
+    m_streamButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_streamButton->setFocusPolicy(Qt::NoFocus);
+    m_streamButton->setToolTip(QStringLiteral("RTP 串流到手机 VLC"));
+    buildStreamMenu();
+    connect(m_streamButton, &QToolButton::clicked, this, [this] {
+        m_streamMenu->exec(
+            m_streamButton->mapToGlobal(QPoint(0, m_streamButton->height())));
+    });
+
+    m_streamTimer = new QTimer(this);
+    connect(m_streamTimer, &QTimer::timeout, this, &CameraMonitor::onStreamTick);
+
     rebuildCameraCombo();
     updateButtons();
     updateFpsLabel();
     resize(Settings::monitorDockGeometry().size());
 }
 
+CameraMonitor::~CameraMonitor()
+{
+    if (m_streamTimer)
+        m_streamTimer->stop();
+    if (m_streamProcess)
+    {
+        m_streamProcess->kill();
+        m_streamProcess->waitForFinished(500);
+    }
+}
+
 void CameraMonitor::setFrame(int frame)
 {
     m_frame = std::max(0, frame);
+    updateTraceImage();
     if (isVisible())
         update();
 }
@@ -301,6 +379,8 @@ void CameraMonitor::layoutChildren()
     if (m_detached)
         place(m_pinButton, 40);
     place(m_qualityButton, 54);
+    place(m_streamButton, 38);
+    place(m_traceButton, 38);
     m_fpsLabel->setGeometry(right - 42, 5, 42, 18);
     right -= 46;
 
@@ -339,6 +419,7 @@ void CameraMonitor::paintEvent(QPaintEvent*)
     painter.fillRect(fitRect(), Qt::black);
 
     renderPreview(painter);
+    renderTraceOverlay(painter);
 
     // The grip is drawn above the image so it stays visible.
     painter.setPen(QPen(pal.color(QPalette::Mid), 1.0));
@@ -398,6 +479,385 @@ void CameraMonitor::renderPreview(QPainter& painter)
     }
 }
 
+
+void CameraMonitor::buildTraceMenu()
+{
+    m_traceMenu = new QMenu(this);
+    m_traceNameAction = m_traceMenu->addAction(QStringLiteral("未导入临摹视频"));
+    m_traceNameAction->setEnabled(false);
+    QAction* import = m_traceMenu->addAction(QStringLiteral("导入临摹视频…"));
+    connect(import, &QAction::triggered, this, &CameraMonitor::importTraceVideo);
+    m_clearTraceAction = m_traceMenu->addAction(QStringLiteral("清除临摹"));
+    connect(m_clearTraceAction, &QAction::triggered, this,
+            &CameraMonitor::clearTraceVideo);
+    m_traceMenu->addSeparator();
+
+    auto* opacityWidget = new QWidget(m_traceMenu);
+    opacityWidget->setMinimumWidth(190);
+    auto* opacityLayout = new QHBoxLayout(opacityWidget);
+    opacityLayout->setContentsMargins(8, 4, 8, 4);
+    opacityLayout->setSpacing(6);
+    opacityLayout->addWidget(new QLabel(QStringLiteral("透明度"), opacityWidget));
+    m_traceOpacitySlider = new QSlider(Qt::Horizontal, opacityWidget);
+    m_traceOpacitySlider->setRange(0, 100);
+    m_traceOpacitySlider->setValue(int(std::lround(m_traceOpacity * 100.0)));
+    opacityLayout->addWidget(m_traceOpacitySlider, 1);
+    m_traceOpacityLabel = new QLabel(QStringLiteral("45%"), opacityWidget);
+    m_traceOpacityLabel->setMinimumWidth(32);
+    opacityLayout->addWidget(m_traceOpacityLabel);
+    auto* sliderAction = new QWidgetAction(m_traceMenu);
+    sliderAction->setDefaultWidget(opacityWidget);
+    m_traceMenu->addAction(sliderAction);
+
+    connect(m_traceOpacitySlider, &QSlider::valueChanged, this, [this](int value) {
+        m_traceOpacity = value / 100.0;
+        m_traceOpacityLabel->setText(QStringLiteral("%1%").arg(value));
+        update();
+    });
+    connect(m_traceMenu, &QMenu::aboutToShow, this, &CameraMonitor::updateTraceMenu);
+    updateTraceMenu();
+}
+
+void CameraMonitor::updateTraceMenu()
+{
+    if (!m_traceNameAction || !m_clearTraceAction)
+        return;
+    m_traceNameAction->setText(
+        m_tracePath.isEmpty() ? QStringLiteral("未导入临摹视频")
+                              : QFileInfo(m_tracePath).fileName());
+    m_clearTraceAction->setEnabled(!m_tracePath.isEmpty());
+    m_traceButton->setToolTip(
+        m_tracePath.isEmpty()
+            ? QStringLiteral("临摹参考视频")
+            : QStringLiteral("临摹：%1").arg(QFileInfo(m_tracePath).fileName()));
+    if (m_traceOpacitySlider)
+    {
+        const QSignalBlocker blocker(m_traceOpacitySlider);
+        m_traceOpacitySlider->setValue(int(std::lround(m_traceOpacity * 100.0)));
+        m_traceOpacityLabel->setText(
+            QStringLiteral("%1%").arg(m_traceOpacitySlider->value()));
+    }
+}
+
+void CameraMonitor::importTraceVideo()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("导入临摹视频"), QString(),
+        QStringLiteral("视频文件 (*.mp4 *.webm *.mov *.mkv *.avi *.m4v);;所有文件 (*)"));
+    if (path.isEmpty())
+        return;
+    if (!loadTraceVideo(path))
+        QMessageBox::warning(this, QStringLiteral("无法导入临摹视频"),
+                             QStringLiteral("无法读取这个视频文件。"));
+}
+
+bool CameraMonitor::loadTraceVideo(const QString& path)
+{
+    QString error;
+    double duration = 0.0;
+    const QImage first = decodeVideoFirstFrame(path, &error, &duration);
+    if (first.isNull())
+        return false;
+
+    m_traceProject = std::make_unique<Project>();
+    m_traceProject->fps = std::max(1, m_project->fps);
+    m_traceProject->width = m_project->width;
+    m_traceProject->height = m_project->height;
+    Entity* entity =
+        m_traceProject->addVideo(path, first, duration, QStringLiteral("Trace"));
+    if (!entity)
+    {
+        m_traceProject.reset();
+        return false;
+    }
+
+    m_traceEntity = entity->id;
+    m_tracePath = path;
+    m_tracePlayer = std::make_unique<VideoPlayer>();
+    m_traceImage = first;
+
+    if (!m_traceProxy)
+    {
+        m_traceProxy = new VideoProxyGenerator(this);
+        connect(m_traceProxy, &VideoProxyGenerator::finished, this,
+                [this](const QString& source, bool success) {
+                    if (!success || source != m_tracePath || !m_tracePlayer)
+                        return;
+                    m_tracePlayer->clear();
+                    updateTraceImage();
+                    update();
+                });
+    }
+    m_traceProxy->ensure(path);
+
+    updateTraceImage();
+    updateTraceMenu();
+    update();
+    return true;
+}
+
+void CameraMonitor::clearTraceVideo()
+{
+    m_tracePlayer.reset();
+    m_traceProject.reset();
+    m_tracePath.clear();
+    m_traceEntity = kInvalidEntity;
+    m_traceImage = QImage();
+    updateTraceMenu();
+    update();
+}
+
+void CameraMonitor::updateTraceImage()
+{
+    if (!m_traceProject || !m_tracePlayer || m_traceEntity == kInvalidEntity)
+    {
+        m_traceImage = QImage();
+        return;
+    }
+    m_traceProject->fps = std::max(1, m_project->fps);
+    m_tracePlayer->update(*m_traceProject, m_frame);
+    const Entity* entity = m_traceProject->entity(m_traceEntity);
+    m_traceImage = entity ? entity->image : QImage();
+}
+
+void CameraMonitor::setTraceOpacity(double opacity)
+{
+    m_traceOpacity = std::clamp(opacity, 0.0, 1.0);
+    if (m_traceOpacitySlider)
+    {
+        const QSignalBlocker blocker(m_traceOpacitySlider);
+        m_traceOpacitySlider->setValue(int(std::lround(m_traceOpacity * 100.0)));
+        m_traceOpacityLabel->setText(
+            QStringLiteral("%1%").arg(m_traceOpacitySlider->value()));
+    }
+    update();
+}
+
+void CameraMonitor::renderTraceOverlay(QPainter& painter)
+{
+    if (m_traceImage.isNull() || m_traceOpacity <= 0.001)
+        return;
+    const QRect target = fitRect();
+    if (target.isEmpty())
+        return;
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setOpacity(m_traceOpacity);
+    painter.drawImage(target, m_traceImage);
+    painter.restore();
+}
+
+void CameraMonitor::buildStreamMenu()
+{
+    m_streamMenu = new QMenu(this);
+    m_streamAction = m_streamMenu->addAction(QStringLiteral("开始 RTP 串流"));
+    connect(m_streamAction, &QAction::triggered, this, [this] {
+        if (m_streaming)
+            stopRtpStream();
+        else
+            startRtpStream();
+    });
+    QAction* address = m_streamMenu->addAction(rtpUrl());
+    address->setEnabled(false);
+    m_copyStreamAction = m_streamMenu->addAction(QStringLiteral("复制串流地址"));
+    connect(m_copyStreamAction, &QAction::triggered, this, [this] {
+        QApplication::clipboard()->setText(rtpUrl());
+    });
+    m_streamMenu->addSeparator();
+    QAction* note =
+        m_streamMenu->addAction(QStringLiteral("手机 VLC：网络串流 → 粘贴地址"));
+    note->setEnabled(false);
+    updateStreamMenu();
+}
+
+void CameraMonitor::updateStreamMenu()
+{
+    if (!m_streamAction)
+        return;
+    m_streamAction->setText(m_streaming ? QStringLiteral("停止 RTP 串流")
+                                       : QStringLiteral("开始 RTP 串流"));
+    m_streamButton->setToolTip(
+        m_streaming ? QStringLiteral("串流中：%1").arg(rtpUrl())
+                    : QStringLiteral("RTP 串流到手机 VLC"));
+}
+
+void CameraMonitor::startRtpStream()
+{
+    if (m_streaming)
+        return;
+    const QString ffmpeg =
+        QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    if (ffmpeg.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("无法串流"),
+                             QStringLiteral("找不到 ffmpeg 命令。"));
+        return;
+    }
+
+    m_streamFps = std::clamp(m_project->fps, 10, 30);
+    const QSize size = streamSize(*m_project);
+    const QStringList arguments{
+        QStringLiteral("-hide_banner"),
+        QStringLiteral("-loglevel"),
+        QStringLiteral("error"),
+        QStringLiteral("-f"),
+        QStringLiteral("rawvideo"),
+        QStringLiteral("-pixel_format"),
+        QStringLiteral("rgba"),
+        QStringLiteral("-video_size"),
+        QStringLiteral("%1x%2").arg(size.width()).arg(size.height()),
+        QStringLiteral("-framerate"),
+        QString::number(m_streamFps),
+        QStringLiteral("-i"),
+        QStringLiteral("-"),
+        QStringLiteral("-pix_fmt"),
+        QStringLiteral("yuv420p"),
+        QStringLiteral("-c:v"),
+        QStringLiteral("libx264"),
+        QStringLiteral("-preset"),
+        QStringLiteral("ultrafast"),
+        QStringLiteral("-tune"),
+        QStringLiteral("zerolatency"),
+        QStringLiteral("-g"),
+        QStringLiteral("15"),
+        QStringLiteral("-b:v"),
+        QStringLiteral("2500k"),
+        QStringLiteral("-f"),
+        QStringLiteral("rtp_mpegts"),
+        QStringLiteral("-ttl"),
+        QStringLiteral("16"),
+        QStringLiteral("rtp://%1:%2").arg(QLatin1String(kRtpHost)).arg(kRtpPort)};
+
+    auto* process = new QProcess(this);
+    m_streamProcess = process;
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    connect(process, &QProcess::readyRead, this, [this] {
+        if (m_streamProcess)
+            m_streamProcess->readAll();
+    });
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this](int, QProcess::ExitStatus) {
+                if (m_streaming)
+                    stopRtpStream();
+            });
+    process->start(ffmpeg, arguments);
+    if (!process->waitForStarted(2000) || process->state() != QProcess::Running)
+    {
+        process->deleteLater();
+        m_streamProcess = nullptr;
+        QMessageBox::warning(this, QStringLiteral("无法串流"),
+                             QStringLiteral("ffmpeg 未能启动。"));
+        return;
+    }
+
+    m_streaming = true;
+    m_streamTimer->start(std::max(1, 1000 / m_streamFps));
+    collapseForStreaming();
+    updateStreamMenu();
+}
+
+void CameraMonitor::stopRtpStream()
+{
+    if (!m_streaming && !m_streamProcess)
+        return;
+    m_streaming = false;
+    if (m_streamTimer)
+        m_streamTimer->stop();
+    if (m_streamProcess)
+    {
+        m_streamProcess->closeWriteChannel();
+        if (!m_streamProcess->waitForFinished(800))
+            m_streamProcess->kill();
+        m_streamProcess->deleteLater();
+        m_streamProcess = nullptr;
+    }
+    restoreFromStreaming();
+    updateStreamMenu();
+}
+
+void CameraMonitor::onStreamTick()
+{
+    if (!m_streaming || !m_streamProcess
+        || m_streamProcess->state() != QProcess::Running)
+        return;
+    if (m_streamProcess->bytesToWrite() > 8 * 1024 * 1024)
+        return;
+
+    const QImage image = renderStreamImage();
+    if (image.isNull())
+        return;
+    const int rowBytes = image.width() * 4;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        const char* row =
+            reinterpret_cast<const char*>(image.constScanLine(y));
+        if (m_streamProcess->write(row, rowBytes) < 0)
+        {
+            stopRtpStream();
+            return;
+        }
+    }
+}
+
+void CameraMonitor::collapseForStreaming()
+{
+    if (m_detached || m_streamCollapsed)
+        return;
+    m_streamSavedGeometry = geometry();
+    setFixedHeight(kTitleHeight);
+    m_streamCollapsed = true;
+    layoutChildren();
+}
+
+void CameraMonitor::restoreFromStreaming()
+{
+    if (!m_streamCollapsed)
+        return;
+    setMinimumHeight(150);
+    setMaximumHeight(QWIDGETSIZE_MAX);
+    if (m_streamSavedGeometry.isValid())
+        setGeometry(clampedDockGeometry(m_streamSavedGeometry));
+    m_streamCollapsed = false;
+    layoutChildren();
+}
+
+QImage CameraMonitor::renderStreamImage() const
+{
+    const QSize size = streamSize(*m_project);
+    const int view = m_project->monitorView;
+    if (view == kWorkCameraView && m_viewport)
+    {
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::black);
+        QPainter painter(&image);
+        CameraRenderer::renderWorkCamera(
+            painter, *m_project, m_frame, QRect(QPoint(0, 0), size),
+            m_viewport->worldToScreenForTest(), m_viewport->size(),
+            m_viewport->palette().color(QPalette::Window), false);
+        painter.end();
+        return image.convertToFormat(QImage::Format_RGBA8888);
+    }
+
+    Camera::State state;
+    if (view >= 0)
+    {
+        const Entity* camera = m_project->entity(view);
+        if (camera && camera->isCamera()
+            && !m_project->isEffectivelyHidden(camera->id))
+            state = Camera::state(*m_project, camera->id, m_frame);
+    }
+    if (state.size.isEmpty())
+    {
+        state.scale = 1.0;
+        state.rotation = 0.0;
+        state.center = QPointF();
+        state.size = QSizeF(m_project->width, m_project->height);
+    }
+    const QImage image = CameraRenderer::renderCameraImage(
+        *m_project, m_frame, state, size, false);
+    return image.convertToFormat(QImage::Format_RGBA8888);
+}
+
 void CameraMonitor::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
@@ -413,7 +873,7 @@ void CameraMonitor::showEvent(QShowEvent* event)
     QRect geometry = Settings::monitorDockGeometry();
     if (geometry.x() < 0 || geometry.y() < 0)
     {
-        geometry.setSize(QSize(320, 208));
+        geometry.setSize(QSize(400, 250));
         if (m_viewport)
             geometry.moveTopLeft(QPoint(m_viewport->width() - geometry.width() - 16,
                                         m_viewport->height() - geometry.height() - 16));

@@ -117,6 +117,9 @@
 - 摄像机可以作为父级：台标/新闻条按镜头空间定位；摄像机视图会抵消镜头父级变换，所以它们在监视器里固定位置和大小
 - 摄像机也可以作为子级挂到文件夹/实体下跟随移动；`Camera::state` 组合父级位移/旋转/缩放；挂父级后暂停画框直接拖动，改属性 X/Y/旋转/取景比例
 - 摄像机不能作为另一个摄像机的子级；父级非均匀缩放时取景框用平均缩放近似
+- **临摹参考**：监视器标题栏「临摹」菜单导入视频；独立临时 Project + VideoPlayer 按项目帧解码，叠在监视器画面上，透明度 0–100%，支持清除；参考视频使用同一代理缓存
+- **RTP 串流**：监视器标题栏「串流」菜单启动 ffmpeg 原始帧管道，编码 H.264 后以 RTP/MPEG-TS 组播到 `239.255.42.99:5004`；手机 VLC 打开 `rtp://@239.255.42.99:5004`；串流时停靠监视器固定为标题栏高度，停止后恢复几何
+- 串流分辨率长边 640，帧率取项目帧率并限制 10–30；只传画面，不传项目音频
 
 ### 文件夹与父级
 
@@ -211,9 +214,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 36 个模式，全部通过。
+共 37 个模式，全部通过。
 
 ## 已知限制
 
@@ -223,6 +226,8 @@ self / save / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo
 - 父级坐标作用于可视实体；摄像机可以作为父级，也可以挂到文件夹或实体下；音频没有空间坐标
 - 摄像机不能作为另一个摄像机的子级；挂到父级后画框拖动暂停，改属性 X/Y/旋转/取景比例
 - 父级非均匀缩放时，摄像机取景框用平均缩放近似
+- 监视器串流只有画面，没有项目音频；组播需要同一局域网且网络允许
+- 临摹参考从项目第 0 帧开始同步，暂不支持单独偏移
 - 删除有子对象的父级前需要先把子对象拖到工作台或删除
 - 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
 - 音频擦洗是短片段预览，不是变速连续擦洗

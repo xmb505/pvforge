@@ -7,18 +7,27 @@
 #include <QRect>
 #include <QWidget>
 
+#include <memory>
+
+class QAction;
+class QProcess;
 class QCloseEvent;
 class QComboBox;
 class QLabel;
+class QMenu;
 class QMouseEvent;
 class QPaintEvent;
 class QResizeEvent;
 class QShowEvent;
+class QSlider;
 class QTimer;
 class QToolButton;
+class QWidgetAction;
 
 namespace pvf {
 
+class VideoPlayer;
+class VideoProxyGenerator;
 class Viewport;
 
 // OBS-style viewer for the final camera image. It starts as a floating child
@@ -30,6 +39,7 @@ class CameraMonitor : public QWidget
 
 public:
     CameraMonitor(Project* project, Viewport* viewport, QWidget* parent = nullptr);
+    ~CameraMonitor() override;
 
     void setFrame(int frame);
     void setPlaying(bool playing);
@@ -40,6 +50,14 @@ public:
 
     bool isDetached() const { return m_detached; }
     bool isHighQuality() const { return m_highQuality; }
+
+    // Test hooks / programmatic trace import.
+    bool loadTraceVideo(const QString& path);
+    void clearTraceForTest() { clearTraceVideo(); }
+    void setTraceOpacity(double opacity);
+    bool startStreamingForTest() { startRtpStream(); return m_streaming; }
+    void stopStreamingForTest() { stopRtpStream(); }
+    bool isStreaming() const { return m_streaming; }
 
 signals:
     void cameraActivated(EntityId id);
@@ -71,6 +89,20 @@ private:
     QRect clampedDockGeometry(const QRect& geometry) const;
     void saveDockGeometry();
     void renderPreview(QPainter& painter);
+    void renderTraceOverlay(QPainter& painter);
+    void importTraceVideo();
+    void clearTraceVideo();
+    void updateTraceImage();
+    void updateTraceMenu();
+    void buildTraceMenu();
+    void buildStreamMenu();
+    void startRtpStream();
+    void stopRtpStream();
+    void onStreamTick();
+    void updateStreamMenu();
+    void collapseForStreaming();
+    void restoreFromStreaming();
+    QImage renderStreamImage() const;
 
     Project* m_project = nullptr;
     Viewport* m_viewport = nullptr;
@@ -80,6 +112,31 @@ private:
     QToolButton* m_pinButton = nullptr;
     QToolButton* m_detachButton = nullptr;
     QToolButton* m_closeButton = nullptr;
+    QToolButton* m_traceButton = nullptr;
+    QToolButton* m_streamButton = nullptr;
+
+    QMenu* m_traceMenu = nullptr;
+    QAction* m_traceNameAction = nullptr;
+    QAction* m_clearTraceAction = nullptr;
+    QSlider* m_traceOpacitySlider = nullptr;
+    QLabel* m_traceOpacityLabel = nullptr;
+    std::unique_ptr<Project> m_traceProject;
+    std::unique_ptr<VideoPlayer> m_tracePlayer;
+    VideoProxyGenerator* m_traceProxy = nullptr;
+    QString m_tracePath;
+    EntityId m_traceEntity = kInvalidEntity;
+    QImage m_traceImage;
+    double m_traceOpacity = 0.45;
+
+    QMenu* m_streamMenu = nullptr;
+    QAction* m_streamAction = nullptr;
+    QAction* m_copyStreamAction = nullptr;
+    QProcess* m_streamProcess = nullptr;
+    QTimer* m_streamTimer = nullptr;
+    bool m_streaming = false;
+    bool m_streamCollapsed = false;
+    QRect m_streamSavedGeometry;
+    int m_streamFps = 24;
 
     int m_frame = 0;
     bool m_playing = false;
