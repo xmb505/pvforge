@@ -635,6 +635,24 @@ int snapTest(QApplication& app)
         }
         window.applyPivotForTest(id, 0.0, 0.0);
 
+        // Rotated entities snap using their rotated bounds (90° swaps w/h).
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("rotation"), 0, 90.0, false);
+        const int rotatedDx =
+            int(std::lround((canvasHalfW - 100.0 - 5.0) * s));   // half height now
+        drag(center + QPoint(40, 0), center + QPoint(40 + rotatedDx, 0), Qt::NoModifier);
+        const double rotatedExpected = canvasHalfW - 100.0;
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - rotatedExpected) > 1.5)
+        {
+            qCritical() << "snap-test: rotated edge snap"
+                        << project->value(id, QStringLiteral("x"), 0) << rotatedExpected;
+            ++failures;
+        }
+        project->setValue(id, QStringLiteral("rotation"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
+
         // Scaling the bottom-right corner snaps the edge to the canvas edge.
         project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
         project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
