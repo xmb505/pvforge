@@ -64,6 +64,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
@@ -82,6 +83,8 @@ private:
     EntityId entityAtRow(int row) const;
     bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
     bool audioClipRange(const Entity& entity, double* left, double* right) const;
+    EntityId audioClipAt(int x, int y) const;
+    void updateHoverCursor(const QPointF& pos);
     QVector<double> keyframeFrames(EntityId id) const;
     void handleRowButton(int row, int index);
     int contentWidth() const;

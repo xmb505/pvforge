@@ -1706,10 +1706,27 @@ int audioTest(QApplication& app)
         };
         const QPoint dragFrom(300, 56);   // middle of the 10..40 frame clip
         const QPoint dragTo(360, 56);     // +10 frames
+
+        sendMouse(QEvent::MouseMove, dragFrom, Qt::NoButton);
+        if (timeline->cursor().shape() != Qt::OpenHandCursor)
+        {
+            qCritical() << "audio-test: no open-hand cursor over the clip";
+            ++failures;
+        }
         sendMouse(QEvent::MouseButtonPress, dragFrom, Qt::LeftButton);
+        if (timeline->cursor().shape() != Qt::ClosedHandCursor)
+        {
+            qCritical() << "audio-test: no closed-hand cursor while dragging";
+            ++failures;
+        }
         sendMouse(QEvent::MouseMove, dragTo, Qt::LeftButton);
         timeline->grab().toImage().save(QStringLiteral("/tmp/pvf_audio_drag.png"));
         sendMouse(QEvent::MouseButtonRelease, dragTo, Qt::NoButton);
+        if (timeline->cursor().shape() != Qt::OpenHandCursor)
+        {
+            qCritical() << "audio-test: cursor not restored after drag";
+            ++failures;
+        }
 
         double startFrame =
             uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();

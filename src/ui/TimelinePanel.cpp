@@ -458,6 +458,13 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     updateScrollBar();
 }
 
+void TimelinePanel::leaveEvent(QEvent* event)
+{
+    if (m_dragMode != DragMode::MoveAudio)
+        unsetCursor();
+    QWidget::leaveEvent(event);
+}
+
 bool TimelinePanel::audioClipRange(const Entity& entity, double* left, double* right) const
 {
     if (!entity.isAudio())
@@ -478,6 +485,41 @@ bool TimelinePanel::audioClipRange(const Entity& entity, double* left, double* r
     *left = x0;
     *right = x0 + clipFrames * m_pixelsPerFrame;
     return true;
+}
+
+EntityId TimelinePanel::audioClipAt(int x, int y) const
+{
+    if (x < kNameWidth || y < kHeaderHeight)
+        return kInvalidEntity;
+    const Entity* entity = m_project->entity(entityAtRow(rowAt(y)));
+    double left = 0.0;
+    double right = 0.0;
+    if (!entity || !audioClipRange(*entity, &left, &right))
+        return kInvalidEntity;
+    constexpr double kGrabPadding = 4.0;
+    if (x < left - kGrabPadding || x > right + kGrabPadding)
+        return kInvalidEntity;
+    return entity->id;
+}
+
+void TimelinePanel::updateHoverCursor(const QPointF& pos)
+{
+    if (m_dragMode == DragMode::MoveAudio)
+    {
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+    const int x = int(pos.x());
+    const int y = int(pos.y());
+    if (y >= kHeaderHeight && y < height() - kScrollBarHeight
+        && audioClipAt(x, y) != kInvalidEntity)
+    {
+        setCursor(Qt::OpenHandCursor);
+    }
+    else
+    {
+        unsetCursor();
+    }
 }
 
 void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
@@ -506,8 +548,10 @@ void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
         return;
 
     const QColor accent = QApplication::palette().color(QPalette::Highlight);
+    const bool selected = entity.id == m_selected;
     p.fillRect(QRect(left, row.top() + 1, rightEdge - left, row.height() - 2),
-               QColor(accent.red(), accent.green(), accent.blue(), 22));
+               QColor(accent.red(), accent.green(), accent.blue(),
+                      selected ? 70 : 22));
 
     const int center = row.center().y();
     const int half = std::max(3, row.height() / 2 - 3);
@@ -551,6 +595,13 @@ void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
         p.drawLine(startX, row.top() + 1, startX, row.bottom() - 1);
     if (endX >= kNameWidth && endX <= right)
         p.drawLine(endX, row.top() + 1, endX, row.bottom() - 1);
+
+    // Top and bottom rails make the waveform read as a draggable clip block.
+    p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(),
+                         selected ? 150 : 90),
+                  1.0));
+    p.drawLine(left, row.top() + 1, rightEdge, row.top() + 1);
+    p.drawLine(left, row.bottom() - 1, rightEdge, row.bottom() - 1);
 }
 
 void TimelinePanel::paintEvent(QPaintEvent*)
@@ -672,7 +723,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             break;
 
         const QRect rowRect(0, top, width(), height);
-        if (e.id == m_selected)
+        if (e.id == m_selected && !e.isAudio())
             p.fillRect(rowRect, QColor(accentColor.red(), accentColor.green(),
                                         accentColor.blue(), 70));
         else if (row % 2)
@@ -927,13 +978,9 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     // Audio clip body: drag the clip to a new start frame.
-    const int row = rowAt(y);
-    const EntityId audioId = entityAtRow(row);
+    const EntityId audioId = audioClipAt(x, y);
     Entity* audio = m_project->entity(audioId);
-    double clipLeft = 0.0;
-    double clipRight = 0.0;
-    if (audio && audioClipRange(*audio, &clipLeft, &clipRight) && x >= clipLeft
-        && x <= clipRight)
+    if (audio)
     {
         m_selectedKeyframes.clear();
         emit entitySelected(audioId);
@@ -981,6 +1028,7 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
             m_hoverRow = row;
             update();
         }
+        updateHoverCursor(event->position());
     }
 
     if (m_dragMode == DragMode::Scrub)
@@ -1239,7 +1287,6 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
     }
     else if (m_dragMode == DragMode::MoveAudio)
     {
-        unsetCursor();
         const EntityId id = m_audioDragId;
         const double newStart =
             std::max(0.0, m_audioDragStart + m_audioDragOffset);
@@ -1259,6 +1306,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
             emit scrubStarted();
             emit frameRequested(clickFrame);
         }
+        updateHoverCursor(event->position());
     }
 
     m_dragMode = DragMode::None;
