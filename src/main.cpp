@@ -830,17 +830,17 @@ int scaleHandleTest(QApplication& app)
         project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
 
-        // Ctrl keeps the aspect ratio. Use the current corner as the target
+        // Shift keeps the aspect ratio. Use the current corner as the target
         // base so the drag distance matches the new centre.
-        const QPoint ctrlCorner = cornerNow();
-        drag(ctrlCorner, ctrlCorner + QPoint(int(std::lround(150.0 * s)),
-                                             int(std::lround(50.0 * s))),
-             Qt::ControlModifier);
+        const QPoint shiftCorner = cornerNow();
+        drag(shiftCorner, shiftCorner + QPoint(int(std::lround(150.0 * s)),
+                                               int(std::lround(50.0 * s))),
+             Qt::ShiftModifier);
         const double sx2 = project->value(id, QStringLiteral("scaleX"), 0);
         const double sy2 = project->value(id, QStringLiteral("scaleY"), 0);
         if (std::abs(sx2 - 2.0) > 0.1 || std::abs(sy2 - 2.0) > 0.1)
         {
-            qCritical() << "scale-handle-test: ctrl uniform" << sx2 << sy2;
+            qCritical() << "scale-handle-test: shift uniform" << sx2 << sy2;
             ++failures;
         }
 
@@ -855,6 +855,49 @@ int scaleHandleTest(QApplication& app)
             qCritical() << "scale-handle-test: mirror" << sx3;
             ++failures;
         }
+
+        // A 16:9 entity in a 16:9 project: Shift + corner must snap the
+        // visual bounds to the canvas edges and fill it from the centre.
+        pvf::Entity* videoLike =
+            project->addVector(0, 320, 180, Qt::blue, Qt::white, 0);
+        const pvf::EntityId videoId = videoLike->id;
+        window.setSelectedEntityForTest(videoId);
+        const QPoint videoCenter = viewport->entityPivotForTest(videoId).toPoint();
+        const QPoint videoCorner(
+            videoCenter.x() + int(std::lround(160.0 * s)),
+            videoCenter.y() + int(std::lround(90.0 * s)));
+        const QPoint canvasCorner(
+            videoCenter.x() + int(std::lround(960.0 * s)) - 3,
+            videoCenter.y() + int(std::lround(540.0 * s)) - 3);
+        drag(videoCorner, canvasCorner, Qt::ShiftModifier);
+        double fillX = project->value(videoId, QStringLiteral("scaleX"), 0);
+        double fillY = project->value(videoId, QStringLiteral("scaleY"), 0);
+        if (std::abs(fillX - 6.0) > 0.05 || std::abs(fillY - 6.0) > 0.05)
+        {
+            qCritical() << "scale-handle-test: fullscreen snap" << fillX << fillY;
+            ++failures;
+        }
+
+        // The same visual-AABB snap has to work at special rotation angles.
+        project->setValue(videoId, QStringLiteral("scaleX"), 0, 1.0, false);
+        project->setValue(videoId, QStringLiteral("scaleY"), 0, 1.0, false);
+        project->setValue(videoId, QStringLiteral("rotation"), 0, 180.0, false);
+        const QPoint rotatedCorner(
+            videoCenter.x() - int(std::lround(160.0 * s)),
+            videoCenter.y() - int(std::lround(90.0 * s)));
+        const QPoint rotatedTarget(
+            videoCenter.x() - int(std::lround(960.0 * s)) + 3,
+            videoCenter.y() - int(std::lround(540.0 * s)) + 3);
+        drag(rotatedCorner, rotatedTarget, Qt::ShiftModifier);
+        fillX = project->value(videoId, QStringLiteral("scaleX"), 0);
+        fillY = project->value(videoId, QStringLiteral("scaleY"), 0);
+        if (std::abs(fillX - 6.0) > 0.05 || std::abs(fillY - 6.0) > 0.05)
+        {
+            qCritical() << "scale-handle-test: rotated fullscreen snap" << fillX
+                        << fillY;
+            ++failures;
+        }
+        project->setValue(videoId, QStringLiteral("rotation"), 0, 0.0, false);
 
         qInfo() << "scale-handle-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);

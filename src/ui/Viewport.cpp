@@ -889,6 +889,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
     const double ax = m_project->value(m_dragEntity, "rotPointX", m_frame);
     const double ay = m_project->value(m_dragEntity, "rotPointY", m_frame);
+    m_showGuideX = false;
+    m_showGuideY = false;
 
     // Measure against the drag-start centre: the fixed opposite corner moves
     // the entity while dragging, so the current centre would drift.
@@ -974,6 +976,99 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     const double currentX = m_project->value(m_dragEntity, "x", m_frame);
     const double currentY = m_project->value(m_dragEntity, "y", m_frame);
 
+    // Shift: uniform scaling around the entity anchor. Keeping the anchor
+    // fixed makes it possible to fill the canvas from the centre, and the
+    // visual AABB can snap to canvas/entity edges even when rotated.
+    if (uniform)
+    {
+        const double radians = rotation * M_PI / 180.0;
+        const double cosA = std::abs(std::cos(radians));
+        const double sinA = std::abs(std::sin(radians));
+        const double rotatedAx = ax * std::cos(radians) - ay * std::sin(radians);
+        const double rotatedAy = ax * std::sin(radians) + ay * std::cos(radians);
+        const double centerX = currentX - rotatedAx;
+        const double centerY = currentY - rotatedAy;
+        double halfVisualW = halfW * std::abs(newScaleX) * cosA
+                             + halfH * std::abs(newScaleY) * sinA;
+        double halfVisualH = halfW * std::abs(newScaleX) * sinA
+                             + halfH * std::abs(newScaleY) * cosA;
+
+        if (snap && m_snapPixels > 0 && halfVisualW > 1e-9 && halfVisualH > 1e-9)
+        {
+            const double threshold = m_snapPixels / s;
+            const double canvasHalfW = m_project->width / 2.0;
+            const double canvasHalfH = m_project->height / 2.0;
+            QVector<double> targetsX = {-canvasHalfW, 0.0, canvasHalfW};
+            QVector<double> targetsY = {-canvasHalfH, 0.0, canvasHalfH};
+
+            for (const Entity& other : m_project->entities())
+            {
+                if (other.id == m_dragEntity || other.hidden)
+                    continue;
+                const double otherRotation =
+                    m_project->value(other.id, "rotation", m_frame);
+                const double modulo = std::fmod(std::abs(otherRotation) + 1e-6, 90.0);
+                if (std::abs(modulo) > 1e-3 && std::abs(modulo - 90.0) > 1e-3)
+                    continue;
+
+                const VisualBounds otherBounds =
+                    visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
+                                   m_project->value(other.id, "y", m_frame));
+                targetsX << otherBounds.left << otherBounds.right;
+                targetsY << otherBounds.top << otherBounds.bottom;
+                if (Settings::edgeMidpointSnap())
+                {
+                    targetsX << (otherBounds.left + otherBounds.right) / 2.0;
+                    targetsY << (otherBounds.top + otherBounds.bottom) / 2.0;
+                }
+            }
+
+            double bestDelta = threshold;
+            double bestFactor = 1.0;
+            double bestTarget = 0.0;
+            bool bestIsX = false;
+            const auto considerTarget = [&](double target, double center,
+                                            double half, bool isX) {
+                const double targetHalf = std::abs(target - center);
+                if (targetHalf <= 1e-9)
+                    return;
+                const double delta = std::abs(targetHalf - half);
+                if (delta <= bestDelta)
+                {
+                    bestDelta = delta;
+                    bestFactor = targetHalf / half;
+                    bestTarget = target;
+                    bestIsX = isX;
+                }
+            };
+            for (double target : targetsX)
+                considerTarget(target, centerX, halfVisualW, true);
+            for (double target : targetsY)
+                considerTarget(target, centerY, halfVisualH, false);
+
+            if (bestFactor != 1.0)
+            {
+                newScaleX *= bestFactor;
+                newScaleY *= bestFactor;
+                halfVisualW *= bestFactor;
+                halfVisualH *= bestFactor;
+                if (bestIsX)
+                {
+                    m_showGuideX = true;
+                    m_guideX = bestTarget;
+                }
+                else
+                {
+                    m_showGuideY = true;
+                    m_guideY = bestTarget;
+                }
+            }
+        }
+
+        emit scaleEdited(m_dragEntity, newScaleX, newScaleY, currentX, currentY);
+        return;
+    }
+
     // PPT-style corner scaling: the opposite corner stays fixed.
     if (std::abs(rotation) < 1e-6 && signX != 0.0 && signY != 0.0)
     {
@@ -1031,6 +1126,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
             {
                 newScaleX = signX * (snapX - fixedX) / (2.0 * halfW);
                 handleX = snapX;
+                m_showGuideX = true;
+                m_guideX = snapX;
             }
 
             double bestY = threshold + 1.0;
@@ -1045,7 +1142,11 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
                 }
             }
             if (bestY <= threshold)
+            {
                 newScaleY = signY * (snapY - fixedY) / (2.0 * halfH);
+                m_showGuideY = true;
+                m_guideY = snapY;
+            }
         }
 
         const double newCenterX = fixedX + signX * halfW * newScaleX;
@@ -1248,7 +1349,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
     if (m_gizmoMode == GizmoMode::Scale)
     {
-        applyHandleDrag(event->position(), event->modifiers() & Qt::ControlModifier,
+        applyHandleDrag(event->position(), event->modifiers() & Qt::ShiftModifier,
                         !(event->modifiers() & Qt::ControlModifier));
         return;
     }
