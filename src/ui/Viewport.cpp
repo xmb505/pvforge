@@ -24,6 +24,15 @@ constexpr double kGizmoRingRadius = 48.0;
 constexpr double kGizmoHitWidth = 7.0;
 constexpr double kGizmoCenterDeadzone = 14.0;
 
+// Snaps value to the nearest candidate within threshold.
+double snapTo(double value, std::initializer_list<double> candidates, double threshold)
+{
+    for (double candidate : candidates)
+        if (std::abs(value - candidate) <= threshold)
+            return candidate;
+    return value;
+}
+
 } // namespace
 
 
@@ -458,7 +467,7 @@ void Viewport::drawHandles(QPainter& p, const Entity& e)
     }
 }
 
-void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform)
+void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 {
     const Entity* entity = m_project->entity(m_dragEntity);
     if (!entity)
@@ -541,6 +550,35 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform)
         else if (signY != 0.0)
         {
             newScaleX = newScaleY / ratio;
+        }
+    }
+
+    // Corner snapping: the dragged corner sticks to the canvas centre lines
+    // and edges. Rotation makes the edge positions non-linear, so skip it.
+    const double rotation = m_project->value(m_dragEntity, QStringLiteral("rotation"), m_frame);
+    if (snap && std::abs(rotation) < 1e-6)
+    {
+        const double threshold = 8.0 / s;
+        const double x = m_project->value(m_dragEntity, QStringLiteral("x"), m_frame);
+        const double y = m_project->value(m_dragEntity, QStringLiteral("y"), m_frame);
+        const double canvasHalfW = m_project->width / 2.0;
+        const double canvasHalfH = m_project->height / 2.0;
+
+        if (signX != 0.0)
+        {
+            const double handleX = x + signX * newScaleX * halfW;
+            const double snapped =
+                snapTo(handleX, {0.0, -canvasHalfW, canvasHalfW}, threshold);
+            if (snapped != handleX)
+                newScaleX = (snapped - x) / (signX * halfW);
+        }
+        if (signY != 0.0)
+        {
+            const double handleY = y + signY * newScaleY * halfH;
+            const double snapped =
+                snapTo(handleY, {0.0, -canvasHalfH, canvasHalfH}, threshold);
+            if (snapped != handleY)
+                newScaleY = (snapped - y) / (signY * halfH);
         }
     }
 
@@ -680,21 +718,36 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
     if (m_gizmoMode == GizmoMode::Scale)
     {
-        applyHandleDrag(event->position(), event->modifiers() & Qt::ControlModifier);
+        applyHandleDrag(event->position(), event->modifiers() & Qt::ControlModifier,
+                        !(event->modifiers() & Qt::ControlModifier));
         return;
     }
 
     if (m_gizmoMode == GizmoMode::AxisX)
     {
         const double total = (event->position().x() - m_gizmoStartMouse.x()) / s;
-        emit valueEdited(m_dragEntity, QStringLiteral("x"), m_gizmoStartX + total);
+        double x = m_gizmoStartX + total;
+        if (!(event->modifiers() & Qt::ControlModifier))
+        {
+            const double threshold = 8.0 / s;
+            const double half = m_project->width / 2.0;
+            x = snapTo(x, {0.0, -half, half}, threshold);
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("x"), x);
         return;
     }
 
     if (m_gizmoMode == GizmoMode::AxisY)
     {
         const double total = (event->position().y() - m_gizmoStartMouse.y()) / s;
-        emit valueEdited(m_dragEntity, QStringLiteral("y"), m_gizmoStartY + total);
+        double y = m_gizmoStartY + total;
+        if (!(event->modifiers() & Qt::ControlModifier))
+        {
+            const double threshold = 8.0 / s;
+            const double half = m_project->height / 2.0;
+            y = snapTo(y, {0.0, -half, half}, threshold);
+        }
+        emit valueEdited(m_dragEntity, QStringLiteral("y"), y);
         return;
     }
 
@@ -716,8 +769,18 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
     const QPointF delta = (event->position() - m_dragLast) / s;
     m_dragLast = event->position();
 
-    const double x = m_project->value(m_dragEntity, "x", m_frame) + delta.x();
-    const double y = m_project->value(m_dragEntity, "y", m_frame) + delta.y();
+    double x = m_project->value(m_dragEntity, QStringLiteral("x"), m_frame) + delta.x();
+    double y = m_project->value(m_dragEntity, QStringLiteral("y"), m_frame) + delta.y();
+
+    if (!(event->modifiers() & Qt::ControlModifier))
+    {
+        const double threshold = 8.0 / s;
+        const double canvasHalfW = m_project->width / 2.0;
+        const double canvasHalfH = m_project->height / 2.0;
+        x = snapTo(x, {0.0, -canvasHalfW, canvasHalfW}, threshold);
+        y = snapTo(y, {0.0, -canvasHalfH, canvasHalfH}, threshold);
+    }
+
     emit valueEdited(m_dragEntity, QStringLiteral("x"), x);
     emit valueEdited(m_dragEntity, QStringLiteral("y"), y);
 }

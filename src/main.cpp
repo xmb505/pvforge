@@ -401,6 +401,113 @@ int timelineInteractionTest(QApplication& app)
     return app.exec();
 }
 
+int snapTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "snap-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->rect().center();
+        const double canvasHalfW = project->width / 2.0;
+        const double canvasHalfH = project->height / 2.0;
+
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons, Qt::KeyboardModifiers mods) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, mods);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto drag = [&](const QPoint& from, const QPoint& to, Qt::KeyboardModifiers mods) {
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton, mods);
+            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton, mods);
+            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, mods);
+        };
+
+        // X axis snaps to the centre line.
+        drag(center + QPoint(40, 0), center + QPoint(42, 0), Qt::NoModifier);
+        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        {
+            qCritical() << "snap-test: centre snap"
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        // X axis snaps to the canvas edge.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        const int edgeDx = int(std::lround((canvasHalfW - 5.0) * s));
+        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0), Qt::NoModifier);
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - canvasHalfW) > 1e-6)
+        {
+            qCritical() << "snap-test: edge snap"
+                        << project->value(id, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        // Ctrl disables snapping.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        drag(center + QPoint(40, 0), center + QPoint(42, 0), Qt::ControlModifier);
+        const double unsnapped = project->value(id, QStringLiteral("x"), 0);
+        if (std::abs(unsnapped) < 1.0)
+        {
+            qCritical() << "snap-test: ctrl still snapped";
+            ++failures;
+        }
+
+        // Free drag snaps to the bottom-right canvas corner.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
+        const int cornerDx = int(std::lround((canvasHalfW - 5.0) * s));
+        const int cornerDy = int(std::lround((canvasHalfH - 5.0) * s));
+        drag(center, center + QPoint(cornerDx, cornerDy), Qt::NoModifier);
+        if (std::abs(project->value(id, QStringLiteral("x"), 0) - canvasHalfW) > 1e-6
+            || std::abs(project->value(id, QStringLiteral("y"), 0) - canvasHalfH) > 1e-6)
+        {
+            qCritical() << "snap-test: corner snap"
+                        << project->value(id, QStringLiteral("x"), 0)
+                        << project->value(id, QStringLiteral("y"), 0);
+            ++failures;
+        }
+
+        // Scaling the bottom-right corner snaps the edge to the canvas edge.
+        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("y"), 0, 0.0, false);
+        project->setValue(id, QStringLiteral("scaleX"), 0, 1.0, false);
+        project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
+        const QPoint corner(center.x() + int(std::lround(150.0 * s)),
+                            center.y() + int(std::lround(100.0 * s)));
+        const QPoint edge(center.x() + int(std::lround((canvasHalfW - 5.0) * s)),
+                          center.y() + int(std::lround(100.0 * s)));
+        drag(corner, edge, Qt::NoModifier);
+        const double scaleX = project->value(id, QStringLiteral("scaleX"), 0);
+        const double expected = canvasHalfW / 150.0;
+        if (std::abs(scaleX - expected) > 0.05)
+        {
+            qCritical() << "snap-test: scale snap" << scaleX << expected;
+            ++failures;
+        }
+
+        qInfo() << "snap-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int scaleHandleTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -1397,6 +1504,8 @@ int main(int argc, char* argv[])
         return gizmoTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
+    if (app.arguments().contains(QStringLiteral("--snap-test")))
+        return snapTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-interaction-test")))
         return timelineInteractionTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-rowbuttons-test")))

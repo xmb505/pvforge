@@ -67,7 +67,7 @@ private:
     QPointF handleScreenPos(const Entity& e, Handle handle) const;
     Handle hitHandle(const QPointF& pos) const;
     void drawHandles(QPainter& painter, const Entity& e);
-    void applyHandleDrag(const QPointF& mousePos, bool uniform);
+    void applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap);
 
     Project* m_project = nullptr;
     int m_frame = 0;
