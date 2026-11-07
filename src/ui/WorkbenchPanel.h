@@ -84,6 +84,7 @@ private:
     QSpinBox* m_comicSize = nullptr;
     QPushButton* m_comicColor = nullptr;
     QColor m_comicColorValue{30, 30, 36};
+    TextStyle m_comicStyle;
     QSpinBox* m_radialCount = nullptr;
     QDoubleSpinBox* m_radialThickness = nullptr;
     QPushButton* m_radialColor = nullptr;

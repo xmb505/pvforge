@@ -558,6 +558,8 @@ int specialTest(QApplication& app)
                     ++local;
                 }
             }
+            special->setCurrentRow(1);   // rectangle comic, for the shot
+            QApplication::processEvents();
             workbench->grab().toImage().save(
                 QStringLiteral("/tmp/pvforge_special_workbench.png"));
         }

@@ -255,6 +255,9 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(10);
 
+    m_comicStyle.padding = 18.0;
+    m_comicStyle.pixelSize = 72;
+    m_comicStyle.color = m_comicColorValue;
     m_specialTypes = new QListWidget(page);
     m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
     const QStringList names = {
@@ -302,6 +305,27 @@ QWidget* WorkbenchPanel::buildSpecialPage()
         }
     });
     comicForm->addRow(QStringLiteral("文字颜色"), m_comicColor);
+    auto* comicLayout = new QPushButton(QStringLiteral("排版…"), comic);
+    comicLayout->setObjectName(QStringLiteral("comicLayoutButton"));
+    comicLayout->setToolTip(QStringLiteral("换行宽度、行距、内边距"));
+    connect(comicLayout, &QPushButton::clicked, this, [this] {
+        TextStyle seed = m_comicStyle;
+        seed.text = m_comicContent->text();
+        seed.pixelSize = m_comicSize->value();
+        seed.color = m_comicColorValue;
+        TextLayoutDialog dialog(seed, this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        m_comicStyle = dialog.style();
+        const QSignalBlocker contentBlocker(m_comicContent);
+        m_comicContent->setText(m_comicStyle.text);
+        const QSignalBlocker sizeBlocker(m_comicSize);
+        m_comicSize->setValue(m_comicStyle.pixelSize);
+        m_comicColorValue = m_comicStyle.color;
+        setColorButton(m_comicColor, m_comicColorValue);
+        updateSpecialPreview();
+    });
+    comicForm->addRow(comicLayout);
     m_specialForms->addWidget(comic);
 
     auto* radial = new QWidget(m_specialForms);
@@ -716,14 +740,13 @@ void WorkbenchPanel::updateSpecialPreview()
 
     if (row <= 2)
     {
-        TextStyle style;
+        TextStyle style = m_comicStyle;
         style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
                                                        : m_comicContent->text();
         style.fontFamily = QFont().family();
         style.pixelSize = m_comicSize->value();
         style.color = m_comicColorValue;
         style.align = int(Qt::AlignCenter);
-        style.padding = 16.0;
         BubbleStyle bubble;
         bubble.shape = row;
         const ComicBox box = ComicBox::build(style, bubble);
@@ -770,14 +793,13 @@ EntityId WorkbenchPanel::createSpecial()
 
     if (row <= 2)
     {
-        TextStyle style;
+        TextStyle style = m_comicStyle;
         style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
                                                        : m_comicContent->text();
         style.fontFamily = QFont().family();
         style.pixelSize = m_comicSize->value();
         style.color = m_comicColorValue;
         style.align = int(Qt::AlignCenter);
-        style.padding = 18.0;
         BubbleStyle bubble;
         bubble.shape = row;
         QVariantMap data;
