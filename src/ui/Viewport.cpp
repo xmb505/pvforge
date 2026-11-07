@@ -427,10 +427,10 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
     if (!entity)
         return Handle::None;
 
-    static const Handle handles[] = {Handle::TopLeft,    Handle::Top,
-                                     Handle::TopRight,   Handle::Right,
-                                     Handle::BottomRight, Handle::Bottom,
-                                     Handle::BottomLeft, Handle::Left};
+    // Only corner handles: edge midpoints sit exactly on the gizmo axes and
+    // would steal axis drags.
+    static const Handle handles[] = {Handle::TopLeft, Handle::TopRight,
+                                     Handle::BottomRight, Handle::BottomLeft};
     for (Handle handle : handles)
     {
         const QPointF point = handleScreenPos(*entity, handle);
@@ -442,10 +442,10 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
 
 void Viewport::drawHandles(QPainter& p, const Entity& e)
 {
-    static const Handle handles[] = {Handle::TopLeft,    Handle::Top,
-                                     Handle::TopRight,   Handle::Right,
-                                     Handle::BottomRight, Handle::Bottom,
-                                     Handle::BottomLeft, Handle::Left};
+    // Only corner handles: edge midpoints sit exactly on the gizmo axes and
+    // would steal axis drags.
+    static const Handle handles[] = {Handle::TopLeft, Handle::TopRight,
+                                     Handle::BottomRight, Handle::BottomLeft};
     const QColor accent = QApplication::palette().color(QPalette::Highlight);
     p.setPen(QPen(accent, 1.5));
     p.setBrush(Qt::white);

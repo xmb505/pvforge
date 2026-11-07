@@ -440,13 +440,14 @@ int scaleHandleTest(QApplication& app)
             send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton, mods);
         };
 
-        // Drag the right edge handle: X only.
-        drag(center + QPoint(halfW, 0), center + QPoint(2 * halfW, 0), Qt::NoModifier);
+        // Corner handle scales both axes independently.
+        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, 3 * halfH / 2),
+             Qt::NoModifier);
         const double sx1 = project->value(id, QStringLiteral("scaleX"), 0);
         const double sy1 = project->value(id, QStringLiteral("scaleY"), 0);
-        if (std::abs(sx1 - 2.0) > 0.1 || std::abs(sy1 - 1.0) > 1e-6)
+        if (std::abs(sx1 - 2.0) > 0.1 || std::abs(sy1 - 1.5) > 0.1)
         {
-            qCritical() << "scale-handle-test: right handle" << sx1 << sy1;
+            qCritical() << "scale-handle-test: corner handle" << sx1 << sy1;
             ++failures;
         }
 
@@ -454,7 +455,7 @@ int scaleHandleTest(QApplication& app)
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
 
         // Ctrl keeps the aspect ratio.
-        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, halfH),
+        drag(center + QPoint(halfW, halfH), center + QPoint(2 * halfW, 3 * halfH / 2),
              Qt::ControlModifier);
         const double sx2 = project->value(id, QStringLiteral("scaleX"), 0);
         const double sy2 = project->value(id, QStringLiteral("scaleY"), 0);
@@ -468,7 +469,8 @@ int scaleHandleTest(QApplication& app)
         project->setValue(id, QStringLiteral("scaleY"), 0, 1.0, false);
 
         // Dragging past the centre mirrors the entity.
-        drag(center + QPoint(halfW, 0), center - QPoint(halfW, 0), Qt::NoModifier);
+        drag(center + QPoint(halfW, halfH), center - QPoint(halfW, halfH),
+             Qt::NoModifier);
         const double sx3 = project->value(id, QStringLiteral("scaleX"), 0);
         if (sx3 >= -0.5)
         {
