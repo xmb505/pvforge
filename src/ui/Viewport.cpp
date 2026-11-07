@@ -691,6 +691,20 @@ void Viewport::paintEvent(QPaintEvent*)
     for (const Entity& e : m_project->entities())
         drawEntity(p, e, canvas, s);
 
+    // CAD-style alignment guides while dragging.
+    if (m_showGuideX)
+    {
+        const int gx = int(std::lround(canvas.center().x() + m_guideX * s));
+        p.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
+        p.drawLine(gx, int(canvas.top()), gx, int(canvas.bottom()));
+    }
+    if (m_showGuideY)
+    {
+        const int gy = int(std::lround(canvas.center().y() + m_guideY * s));
+        p.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
+        p.drawLine(int(canvas.left()), gy, int(canvas.right()), gy);
+    }
+
     // Gizmo on top of the selected entity.
     if (m_selected != kInvalidEntity)
     {
@@ -1167,6 +1181,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
     }
 
     emit positionEdited(m_dragEntity, x, y);
+    update();
 }
 
 void Viewport::mouseReleaseEvent(QMouseEvent* event)

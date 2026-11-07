@@ -760,6 +760,82 @@ int scaleHandleTest(QApplication& app)
     return app.exec();
 }
 
+int guideTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "guide-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        pvf::Entity* first = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId idA = first->id;
+        pvf::Entity* second = project->addVector(0, 200, 120, Qt::green, Qt::white, 0);
+        project->setValue(second->id, QStringLiteral("x"), 0, 500.0, false);
+        window.setSelectedEntityForTest(idA);
+
+        const double s = viewport->currentScale();
+        const QPoint center = viewport->entityPivotForTest(idA).toPoint();
+        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
+                        Qt::MouseButtons buttons) {
+            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
+                              buttons, Qt::NoModifier);
+            QApplication::sendEvent(viewport, &event);
+        };
+        auto hasGuide = [](const QImage& image) {
+            for (int y = 0; y < image.height(); y += 3)
+            {
+                const QRgb* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+                for (int x = 0; x < image.width(); ++x)
+                {
+                    if (qBlue(line[x]) > 200 && qGreen(line[x]) > 170
+                        && qRed(line[x]) < 140)
+                        return true;
+                }
+            }
+            return false;
+        };
+
+        send(QEvent::MouseButtonPress, center, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, center + QPoint(int(std::lround(245.0 * s)), 0),
+             Qt::NoButton, Qt::LeftButton);
+
+        viewport->grab().toImage().save(QStringLiteral("/tmp/pvforge_guide.png"));
+        if (!hasGuide(viewport->grab().toImage()))
+        {
+            qCritical() << "guide-test: no guide drawn while dragging";
+            ++failures;
+        }
+        if (std::abs(project->value(idA, QStringLiteral("x"), 0) - 250.0) > 1.5)
+        {
+            qCritical() << "guide-test: not snapped"
+                        << project->value(idA, QStringLiteral("x"), 0);
+            ++failures;
+        }
+
+        send(QEvent::MouseButtonRelease, center + QPoint(int(std::lround(245.0 * s)), 0),
+             Qt::LeftButton, Qt::NoButton);
+        if (hasGuide(viewport->grab().toImage()))
+        {
+            qCritical() << "guide-test: guide still visible after release";
+            ++failures;
+        }
+
+        qInfo() << "guide-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int entitySnapTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -2437,6 +2513,8 @@ int main(int argc, char* argv[])
         return rotationSnapTest(app);
     if (app.arguments().contains(QStringLiteral("--entity-snap-test")))
         return entitySnapTest(app);
+    if (app.arguments().contains(QStringLiteral("--guide-test")))
+        return guideTest(app);
     if (app.arguments().contains(QStringLiteral("--scale-handle-test")))
         return scaleHandleTest(app);
     if (app.arguments().contains(QStringLiteral("--snap-test")))
