@@ -46,6 +46,28 @@ EntityType typeFromString(const QString& text)
     return EntityType::Image;
 }
 
+bool filesIdentical(const QString& a, const QString& b)
+{
+    QFile fileA(a);
+    QFile fileB(b);
+    if (!fileA.open(QIODevice::ReadOnly) || !fileB.open(QIODevice::ReadOnly))
+        return false;
+    if (fileA.size() != fileB.size())
+        return false;
+
+    constexpr qint64 chunkSize = 1 << 20;
+    QByteArray chunkA = fileA.read(chunkSize);
+    QByteArray chunkB = fileB.read(chunkSize);
+    while (!chunkA.isEmpty() && !chunkB.isEmpty())
+    {
+        if (chunkA != chunkB)
+            return false;
+        chunkA = fileA.read(chunkSize);
+        chunkB = fileB.read(chunkSize);
+    }
+    return chunkA.isEmpty() && chunkB.isEmpty();
+}
+
 bool isColorKey(const QString& key)
 {
     return key == QLatin1String("color") || key == QLatin1String("fill")
@@ -92,19 +114,39 @@ QString Project::copyIntoProject(const QString& sourcePath) const
     if (directory.isEmpty())
         return sourcePath;
 
+    const QFileInfo info(sourcePath);
+    const QString absoluteSource = info.absoluteFilePath();
+    const QString absoluteDirectory = QFileInfo(directory).absoluteFilePath();
+
+    // Already inside the project folder: reuse as-is.
+    if (absoluteSource.startsWith(absoluteDirectory + QLatin1Char('/')))
+        return sourcePath;
+
     QDir().mkpath(directory);
 
-    const QFileInfo info(sourcePath);
-    QString target = QDir(directory).filePath(info.fileName());
-    int index = 1;
-    while (QFile::exists(target))
+    const auto candidateName = [&info](int index) {
+        if (index == 0)
+            return info.fileName();
+        return QStringLiteral("%1_%2.%3").arg(info.completeBaseName()).arg(index).arg(info.suffix());
+    };
+
+    QString target;
+    for (int index = 0; index < 10000; ++index)
     {
-        const QString candidate = QDir(directory).filePath(
-            QStringLiteral("%1_%2.%3").arg(info.completeBaseName()).arg(index++).arg(info.suffix()));
-        if (QFileInfo(candidate).absoluteFilePath() == info.absoluteFilePath())
-            return candidate;   // already inside the project folder
-        target = candidate;
+        const QString candidate = QDir(directory).filePath(candidateName(index));
+        if (!QFile::exists(candidate))
+        {
+            target = candidate;
+            break;
+        }
+        // The same file was already packed: reuse it instead of piling up
+        // numbered duplicates on every re-import.
+        if (filesIdentical(sourcePath, candidate))
+            return candidate;
     }
+
+    if (target.isEmpty())
+        return sourcePath;
 
     if (!QFile::copy(sourcePath, target))
         return sourcePath;

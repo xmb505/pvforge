@@ -1284,6 +1284,61 @@ int packTest(QApplication& app)
     QFile::remove(importImage);
     QFile::remove(importText);
 
+    // Packing deduplicates identical files and numbers same-name clashes.
+    const QString sourceDirA = QDir::tempPath() + QStringLiteral("/pvforge_pack_a");
+    const QString sourceDirB = QDir::tempPath() + QStringLiteral("/pvforge_pack_b");
+    QDir().mkpath(sourceDirA);
+    QDir().mkpath(sourceDirB);
+    const QString sameNameA = QDir(sourceDirA).filePath(QStringLiteral("same.png"));
+    const QString sameNameB = QDir(sourceDirB).filePath(QStringLiteral("same.png"));
+    QImage redImage(64, 64, QImage::Format_ARGB32);
+    redImage.fill(Qt::red);
+    QImage greenImage(64, 64, QImage::Format_ARGB32);
+    greenImage.fill(Qt::green);
+    if (!redImage.save(sameNameA) || !greenImage.save(sameNameB))
+        return 1;
+
+    const QString dedupeDir = QDir::tempPath() + QStringLiteral("/pvforge_pack_dedupe");
+    QDir().mkpath(dedupeDir);
+    pvf::Project dedupeProject;
+    if (!dedupeProject.save(QDir(dedupeDir).filePath(QStringLiteral("test.pvproj"))))
+        return 1;
+    dedupeProject.packAssets = true;
+
+    const QString packedFirst = dedupeProject.importAsset(sameNameA);
+    const QString packedAgain = dedupeProject.importAsset(sameNameA);
+    const QString packedSecond = dedupeProject.importAsset(sameNameB);
+    if (packedFirst != packedAgain)
+    {
+        qCritical() << "pack-test: repeat import created another copy";
+        ++failures;
+    }
+    if (packedFirst == packedSecond)
+    {
+        qCritical() << "pack-test: same-name content collision";
+        ++failures;
+    }
+    if (!QFile::exists(packedFirst) || !QFile::exists(packedSecond))
+    {
+        qCritical() << "pack-test: packed files missing";
+        ++failures;
+    }
+    const int packedFiles =
+        QDir(dedupeProject.assetDirectory()).entryList(QDir::Files).size();
+    if (packedFiles != 2)
+    {
+        qCritical() << "pack-test: asset folder exploded" << packedFiles;
+        ++failures;
+    }
+    if (dedupeProject.copyIntoProject(packedFirst) != packedFirst)
+    {
+        qCritical() << "pack-test: already packed file copied again";
+        ++failures;
+    }
+    QDir(sourceDirA).removeRecursively();
+    QDir(sourceDirB).removeRecursively();
+    QDir(dedupeDir).removeRecursively();
+
     // Library templates keep a small thumbnail, never the full-size bitmap.
     const QString bigPath = QDir::tempPath() + QStringLiteral("/pvforge_big.png");
     QImage big(1600, 1200, QImage::Format_ARGB32);
