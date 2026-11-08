@@ -19,7 +19,7 @@ class CdpClient;
 struct BrowserStartOptions
 {
     QString executable;            // empty: auto-detect
-    int timeoutMs = 15000;         // DevTools endpoint deadline
+    int timeoutMs = 15000;         // browser startup deadline
     bool offline = true;           // block DNS/background traffic
     QStringList extraArguments;
 };
@@ -47,6 +47,11 @@ public:
     static QString detectExecutable(const QString& explicitPath = QString());
     static QString installHint();
 
+    // Production transport is Chromium's --remote-debugging-pipe (fd 3/4).
+    // Setting PVFORGE_CDP_TRANSPORT=ws selects the loopback WebSocket backend
+    // for debugging; production never uses it.
+    static bool pipeTransportSupported();
+
     bool start(const QString& executable = QString(), QString* error = nullptr);
     bool start(const BrowserStartOptions& options, QString* error = nullptr);
     void stop();
@@ -62,6 +67,9 @@ public:
     QString devToolsUrl() const { return m_wsUrl; }
     QString lastError() const { return m_lastError; }
     CdpClient* cdp() const { return m_cdp; }
+    // True when the current process was started with --remote-debugging-pipe.
+    bool usesPipe() const { return m_usingPipe; }
+    qint64 browserProcessId() const;
 
     // Headless Chrome only composites the foreground tab. Every renderer asks
     // for this browser-wide capture slot before activating its page and taking
@@ -83,6 +91,9 @@ private:
 
     void grantNextCapture();
     bool waitForEndpoint(int timeoutMs, QString* error);
+    bool waitForPipeReady(int timeoutMs, QString* error);
+    bool openPipeDescriptors(QString* error);
+    void closePipeDescriptors();
     void cleanupProcess();
     void readProcessOutput(QByteArray* buffer);
 
@@ -95,6 +106,11 @@ private:
     QString m_wsUrl;
     QString m_lastError;
     bool m_stopping = false;
+    bool m_usingPipe = false;
+    // [0] is the child end mapped to fd 3 (commands); [1] is the parent end.
+    int m_pipeToBrowser[2] = {-1, -1};
+    // [0] is the parent end; [1] is the child end mapped to fd 4 (replies).
+    int m_pipeFromBrowser[2] = {-1, -1};
 
     const void* m_captureOwner = nullptr;
     QVector<CaptureWaiter> m_captureQueue;

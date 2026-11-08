@@ -1,10 +1,15 @@
 #include "html/HtmlBrowser.h"
 
 #include "html/CdpClient.h"
+#include "html/CdpTransport.h"
+#include "html/PipeCdpTransport.h"
 
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QJsonObject>
+#include <QPointer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -13,8 +18,12 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <cerrno>
+#include <cstring>
+
 #ifdef Q_OS_UNIX
 #include <csignal>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -52,6 +61,33 @@ bool hasArguments(const QStringList& arguments, const QString& flag)
             return true;
     return false;
 }
+
+bool usePipeTransport()
+{
+    if (!cdpPipeTransportSupported())
+        return false;
+    const QString mode =
+        qEnvironmentVariable("PVFORGE_CDP_TRANSPORT").trimmed().toLower();
+    return mode != QStringLiteral("ws") && mode != QStringLiteral("websocket")
+           && mode != QStringLiteral("port");
+}
+
+#ifdef Q_OS_UNIX
+bool makePipe(int descriptors[2], QString* error)
+{
+    if (::pipe(descriptors) != 0)
+    {
+        if (error)
+            *error = QStringLiteral("cannot create a CDP pipe: %1")
+                         .arg(QString::fromLocal8Bit(std::strerror(errno)));
+        return false;
+    }
+    for (int index = 0; index < 2; ++index)
+        ::fcntl(descriptors[index], F_SETFD,
+                ::fcntl(descriptors[index], F_GETFD) | FD_CLOEXEC);
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -140,6 +176,7 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
     m_version.clear();
     m_lastError.clear();
     m_wsUrl.clear();
+    m_usingPipe = usePipeTransport();
 
     QProcess versionProcess;
     versionProcess.start(executable, {QStringLiteral("--version")});
@@ -158,9 +195,20 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
         return fail(QStringLiteral("cannot create a temporary Chrome profile directory"));
     }
 
+    if (m_usingPipe)
+    {
+        QString pipeError;
+        if (!openPipeDescriptors(&pipeError))
+        {
+            cleanupProcess();
+            return fail(pipeError);
+        }
+    }
+
     QStringList arguments{
         QStringLiteral("--headless=new"),
-        QStringLiteral("--remote-debugging-port=0"),
+        // P0: the production transport is the inherited fd 3/4 pipe. The
+        // loopback port exists only for PVFORGE_CDP_TRANSPORT=ws.
         QStringLiteral("--user-data-dir=") + m_userDataDir->path(),
         QStringLiteral("--no-first-run"),
         QStringLiteral("--no-default-browser-check"),
@@ -180,9 +228,6 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
         QStringLiteral("--disable-domain-reliability"),
         QStringLiteral("--disable-default-apps"),
         QStringLiteral("--mute-audio"),
-        // P0 transport note: production must switch to --remote-debugging-pipe
-        // (fd 3/4). This stage still uses a loopback WebSocket and therefore
-        // deliberately does NOT pass --remote-allow-origins=*.
         // Network layers: dead proxy for everything, no DNS, no 3D APIs, no
         // crash dumps. Page CSP and CDP URL blocking are applied per page.
         QStringLiteral("--proxy-server=http://127.0.0.1:9"),
@@ -194,6 +239,9 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
         QStringLiteral("--disable-breakpad"),
         QStringLiteral("--disable-crash-reporter"),
     };
+    arguments.insert(1, m_usingPipe ? QStringLiteral("--remote-debugging-pipe")
+                                    : QStringLiteral("--remote-debugging-port=0"));
+
     if (options.offline && !hasArguments(arguments, QStringLiteral("--host-resolver-rules")))
     {
         arguments << QStringLiteral("--host-resolver-rules=MAP * ~NOTFOUND")
@@ -220,7 +268,31 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
 #ifdef Q_OS_UNIX
     // Chrome forks renderer and GPU children. Put them in a dedicated process
     // group so stop() can guarantee no leftover browser processes.
-    m_process->setChildProcessModifier([]() { ::setpgid(0, 0); });
+    if (m_usingPipe)
+    {
+        // Chrome reads commands from fd 3 and writes replies to fd 4. The
+        // descriptors must be inherited (dup2 clears FD_CLOEXEC); only the
+        // parent ends and the originals above 4 are closed here. Never close
+        // fd 3/4: an original descriptor number may alias them.
+        const int toChromeRead = m_pipeToBrowser[0];
+        const int toChromeWrite = m_pipeToBrowser[1];
+        const int fromChromeRead = m_pipeFromBrowser[0];
+        const int fromChromeWrite = m_pipeFromBrowser[1];
+        m_process->setChildProcessModifier(
+            [toChromeRead, toChromeWrite, fromChromeRead, fromChromeWrite]() {
+                if (::dup2(toChromeRead, 3) < 0 || ::dup2(fromChromeWrite, 4) < 0)
+                    ::_exit(127);
+                for (const int fd : {toChromeRead, toChromeWrite, fromChromeRead,
+                                     fromChromeWrite})
+                    if (fd > 4)
+                        ::close(fd);
+                ::setpgid(0, 0);
+            });
+    }
+    else
+    {
+        m_process->setChildProcessModifier([]() { ::setpgid(0, 0); });
+    }
 #endif
     connect(m_process, &QProcess::finished, this,
             [this](int exitCode, QProcess::ExitStatus status) {
@@ -243,23 +315,68 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
         return fail(message);
     }
 
-    QString endpointError;
-    if (!waitForEndpoint(qMax(1000, options.timeoutMs), &endpointError))
-    {
-        cleanupProcess();
-        return fail(endpointError);
-    }
-
-    m_cdp = new CdpClient(this);
-    QString connectError;
     const int connectTimeout = qMax(1000, qMin(options.timeoutMs, 5000));
-    if (!m_cdp->connectTo(QUrl(m_wsUrl), connectTimeout, &connectError))
+    if (m_usingPipe)
     {
-        delete m_cdp;
-        m_cdp = nullptr;
-        cleanupProcess();
-        return fail(QStringLiteral("cannot connect to the browser DevTools endpoint: %1")
-                        .arg(connectError));
+        // The child inherited its ends; the parent keeps the two ends used by
+        // the transport. Close the child ends before any hand-off so a dead
+        // browser surfaces as EOF instead of a pipe held open by ourselves.
+#ifdef Q_OS_UNIX
+        ::close(m_pipeToBrowser[0]);
+        m_pipeToBrowser[0] = -1;
+        ::close(m_pipeFromBrowser[1]);
+        m_pipeFromBrowser[1] = -1;
+#endif
+
+        QString handoffError;
+        if (!setPendingCdpPipe(m_pipeFromBrowser[0], m_pipeToBrowser[1], &handoffError))
+        {
+            cleanupProcess();
+            return fail(handoffError);
+        }
+        m_pipeToBrowser[1] = -1;
+        m_pipeFromBrowser[0] = -1;
+
+        m_cdp = new CdpClient(this);
+        QString connectError;
+        if (!m_cdp->connectTo(QUrl(), connectTimeout, &connectError))
+        {
+            delete m_cdp;
+            m_cdp = nullptr;
+            cleanupProcess();
+            return fail(QStringLiteral("cannot open the browser DevTools pipe: %1")
+                            .arg(connectError));
+        }
+
+        QString pipeError;
+        if (!waitForPipeReady(qMax(1000, options.timeoutMs), &pipeError))
+        {
+            delete m_cdp;
+            m_cdp = nullptr;
+            cleanupProcess();
+            return fail(pipeError);
+        }
+    }
+    else
+    {
+        QString endpointError;
+        if (!waitForEndpoint(qMax(1000, options.timeoutMs), &endpointError))
+        {
+            cleanupProcess();
+            return fail(endpointError);
+        }
+
+        m_cdp = new CdpClient(this);
+        QString connectError;
+        if (!m_cdp->connectTo(QUrl(m_wsUrl), connectTimeout, &connectError))
+        {
+            delete m_cdp;
+            m_cdp = nullptr;
+            cleanupProcess();
+            return fail(
+                QStringLiteral("cannot connect to the browser DevTools endpoint: %1")
+                    .arg(connectError));
+        }
     }
 
     connect(m_cdp, &CdpClient::disconnected, this, [this](const QString& reason) {
@@ -352,6 +469,7 @@ void HtmlBrowser::stop()
     m_executable.clear();
     m_version.clear();
     m_wsUrl.clear();
+    m_usingPipe = false;
     m_stopping = false;
 }
 
@@ -364,6 +482,120 @@ bool HtmlBrowser::isRunning() const
 bool HtmlBrowser::available() const
 {
     return !detectExecutable(m_requestedExecutable).isEmpty();
+}
+
+bool HtmlBrowser::pipeTransportSupported()
+{
+    return cdpPipeTransportSupported();
+}
+
+qint64 HtmlBrowser::browserProcessId() const
+{
+    return m_process ? m_process->processId() : 0;
+}
+
+bool HtmlBrowser::waitForPipeReady(int timeoutMs, QString* error)
+{
+    struct ReadyState
+    {
+        bool done = false;
+        bool ok = false;
+        QString error;
+    };
+    auto state = std::make_shared<ReadyState>();
+
+    QEventLoop loop;
+    QPointer<QEventLoop> loopGuard(&loop);
+    QTimer guard;
+    guard.setSingleShot(true);
+    QObject::connect(&guard, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    QTimer processWatch;
+    processWatch.setInterval(50);
+    QObject::connect(&processWatch, &QTimer::timeout, &loop, [this, &loop]() {
+        if (!m_process || m_process->state() == QProcess::NotRunning)
+            loop.quit();
+    });
+
+    // Browser.getVersion checks that the pipe is actually connected in both
+    // directions; pipe mode has no "DevTools listening" line to wait for.
+    m_cdp->call(QStringLiteral("Browser.getVersion"), QJsonObject{}, QString(),
+                qMax(1000, timeoutMs),
+                [state, loopGuard](const QJsonObject& result, const QString& callError) {
+                    state->done = true;
+                    state->ok = callError.isEmpty()
+                                && !result.value(QStringLiteral("product"))
+                                        .toString()
+                                        .isEmpty();
+                    state->error = callError;
+                    if (loopGuard)
+                        loopGuard->quit();
+                });
+
+    guard.start(qMax(1000, timeoutMs) + 1000);
+    processWatch.start();
+    if (!state->done)
+        loop.exec(QEventLoop::ExcludeUserInputEvents);
+    processWatch.stop();
+
+    if (state->done && state->ok)
+        return true;
+
+    QByteArray output;
+    readProcessOutput(&output);
+    const QString detail = QString::fromUtf8(output.right(2000)).trimmed();
+    if (error)
+    {
+        if (m_process && m_process->state() == QProcess::NotRunning)
+        {
+            *error = QStringLiteral("browser exited before the DevTools pipe was ready: %1")
+                         .arg(detail);
+        }
+        else if (!state->error.isEmpty())
+        {
+            *error = QStringLiteral("the browser DevTools pipe is not responding: %1")
+                         .arg(state->error);
+        }
+        else
+        {
+            *error = QStringLiteral("timed out waiting for the browser DevTools pipe");
+        }
+        if (!detail.isEmpty() && !error->contains(detail))
+            *error += QStringLiteral(" (%1)").arg(detail);
+    }
+    return false;
+}
+
+bool HtmlBrowser::openPipeDescriptors(QString* error)
+{
+#ifdef Q_OS_UNIX
+    if (!makePipe(m_pipeToBrowser, error))
+        return false;
+    if (!makePipe(m_pipeFromBrowser, error))
+    {
+        closePipeDescriptors();
+        return false;
+    }
+    return true;
+#else
+    Q_UNUSED(error);
+    return false;
+#endif
+}
+
+void HtmlBrowser::closePipeDescriptors()
+{
+#ifdef Q_OS_UNIX
+    for (int index = 0; index < 2; ++index)
+    {
+        if (m_pipeToBrowser[index] >= 0)
+            ::close(m_pipeToBrowser[index]);
+        if (m_pipeFromBrowser[index] >= 0)
+            ::close(m_pipeFromBrowser[index]);
+        m_pipeToBrowser[index] = -1;
+        m_pipeFromBrowser[index] = -1;
+    }
+#endif
 }
 
 bool HtmlBrowser::waitForEndpoint(int timeoutMs, QString* error)
@@ -412,6 +644,8 @@ void HtmlBrowser::readProcessOutput(QByteArray* buffer)
 
 void HtmlBrowser::cleanupProcess()
 {
+    closePipeDescriptors();
+    discardPendingCdpPipe();
     if (!m_process)
         return;
 

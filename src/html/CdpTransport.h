@@ -10,16 +10,21 @@ namespace html {
 
 // Transport seam for the Chrome DevTools Protocol.
 //
-// P0 (security review B4): production builds must use Chromium's
-// `--remote-debugging-pipe` (fd 3 read / fd 4 write, NUL-delimited JSON).
-// A loopback WebSocket is kept for this stage because it is already covered by
-// tests and can be swapped behind this interface without touching CdpClient or
-// HtmlRenderer. The current backend never uses `--remote-allow-origins`, never
-// listens on a fixed port, and accepts only 127.0.0.1 endpoints.
+// P0 (security review B4): production uses Chromium's
+// `--remote-debugging-pipe`: the browser reads commands from fd 3 and writes
+// replies to fd 4 (verified against Chrome 157 on Linux). Messages are
+// UTF-8 JSON followed by one NUL byte. No TCP port is opened, so other local
+// processes cannot reach /json or the DevTools socket.
 //
-// A future PipeCdpTransport will ignore the URL argument: HtmlBrowser creates
-// the pipes in setChildProcessModifier() and calls connectTo() with an empty
-// endpoint. Keep all transport-specific framing inside the implementation.
+// The loopback WebSocket backend remains only as a debugging fallback
+// (`PVFORGE_CDP_TRANSPORT=ws`). It still never passes `--remote-allow-origins`
+// and only accepts 127.0.0.1 endpoints.
+//
+// CdpClient constructs its own transport, so HtmlBrowser publishes the parent
+// ends of the child's fd 3/4 through setPendingCdpPipe() immediately before
+// constructing CdpClient. The factory below consumes that hand-off and returns
+// a PipeCdpTransport; without one it returns the loopback transport. Keep all
+// transport-specific framing inside the implementation.
 class CdpTransport : public QObject
 {
     Q_OBJECT
@@ -42,7 +47,8 @@ signals:
     void errorOccurred(const QString& error);
 };
 
-// Current stage backend. See the P0 note above.
+// Returns a pipe transport when HtmlBrowser handed off Chrome's fd 3/4 parent
+// ends, otherwise the loopback WebSocket transport.
 CdpTransport* createLoopbackCdpTransport(QObject* parent);
 
 } // namespace html

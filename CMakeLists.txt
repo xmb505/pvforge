@@ -12,9 +12,9 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia 
 # RFC 6455 subset CDP needs, so the build works without an extra dependency.
 find_package(Qt6 6.5 QUIET COMPONENTS WebSockets)
 if(TARGET Qt6::WebSockets)
-    message(STATUS "Qt6 WebSockets found; CDP still uses the built-in loopback client until the pipe backend lands")
+    message(STATUS "Qt6 WebSockets found; the CDP pipe transport is the default, the loopback WebSocket is a debug fallback")
 else()
-    message(STATUS "Qt6 WebSockets development files not found; using the built-in loopback RFC 6455 client (P0: pipe backend pending)")
+    message(STATUS "Qt6 WebSockets development files not found; the loopback RFC 6455 fallback uses the built-in client")
 endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
@@ -68,6 +68,7 @@ add_executable(pvforge
     src/html/HtmlAsset.cpp
     src/html/WsClient.cpp
     src/html/CdpTransport.cpp
+    src/html/PipeCdpTransport.cpp
     src/html/CdpClient.cpp
     src/html/HtmlBrowser.cpp
     src/html/HtmlRenderer.cpp

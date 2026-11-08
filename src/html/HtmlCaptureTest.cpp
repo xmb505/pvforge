@@ -1,21 +1,29 @@
 #include "html/HtmlCaptureTest.h"
 
+#include "html/CdpClient.h"
 #include "html/HtmlAsset.h"
 #include "html/HtmlBrowser.h"
 #include "html/HtmlRenderer.h"
 
 #include <QByteArrayView>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDebug>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
+#include <QHash>
 #include <QHostAddress>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QThread>
 #include <QTimer>
 
 #include <cmath>
@@ -288,6 +296,118 @@ int greenPixels(const QImage& image)
     return count;
 }
 
+QString processCmdline(qint64 pid)
+{
+    QFile file(QStringLiteral("/proc/%1/cmdline").arg(pid));
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+    QByteArray data = file.readAll();
+    data.replace('\0', ' ');
+    return QString::fromUtf8(data).trimmed();
+}
+
+// Descendants of rootPid, read from /proc/<pid>/stat. Chrome's launcher
+// exec()s in place, so the QProcess pid is the browser process itself.
+QSet<qint64> processTree(qint64 rootPid)
+{
+    QHash<qint64, QVector<qint64>> children;
+    const QDir proc(QStringLiteral("/proc"));
+    for (const QString& entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+    {
+        bool ok = false;
+        const qint64 pid = entry.toLongLong(&ok);
+        if (!ok)
+            continue;
+        QFile statFile(QStringLiteral("/proc/%1/stat").arg(pid));
+        if (!statFile.open(QIODevice::ReadOnly))
+            continue;
+        const QByteArray stat = statFile.readAll();
+        const int commandEnd = stat.lastIndexOf(')');
+        if (commandEnd < 0)
+            continue;
+        const QList<QByteArray> fields = stat.mid(commandEnd + 2).split(' ');
+        bool parentOk = false;
+        const qint64 parent = fields.value(1).toLongLong(&parentOk);
+        if (parentOk)
+            children[parent].append(pid);
+    }
+
+    QSet<qint64> tree;
+    QVector<qint64> queue{rootPid};
+    tree.insert(rootPid);
+    while (!queue.isEmpty())
+    {
+        const qint64 pid = queue.takeLast();
+        for (const qint64 child : children.value(pid))
+        {
+            if (tree.contains(child))
+                continue;
+            tree.insert(child);
+            queue.append(child);
+        }
+    }
+    return tree;
+}
+
+QSet<QString> socketInodes(const QSet<qint64>& pids)
+{
+    QSet<QString> inodes;
+    for (const qint64 pid : pids)
+    {
+        const QDir fdDir(QStringLiteral("/proc/%1/fd").arg(pid));
+        for (const QString& entry : fdDir.entryList(QDir::Files | QDir::System
+                                                    | QDir::NoDotAndDotDot))
+        {
+            const QString target = QFileInfo(fdDir.absoluteFilePath(entry)).symLinkTarget();
+            if (!target.startsWith(QStringLiteral("socket:[")))
+                continue;
+            const int close = target.lastIndexOf(QLatin1Char(']'));
+            if (close > 8)
+                inodes.insert(target.mid(8, close - 8));
+        }
+    }
+    return inodes;
+}
+
+QSet<QString> listeningTcpSocketInodes()
+{
+    QSet<QString> inodes;
+    for (const QString& path : {QStringLiteral("/proc/net/tcp"),
+                                QStringLiteral("/proc/net/tcp6")})
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        file.readLine();
+        while (!file.atEnd())
+        {
+            const QList<QByteArray> fields = file.readLine().simplified().split(' ');
+            if (fields.size() > 9 && fields.at(3) == "0A")
+                inodes.insert(QString::fromLatin1(fields.at(9)));
+        }
+    }
+    return inodes;
+}
+
+bool processesGone(const QSet<qint64>& pids)
+{
+    for (const qint64 pid : pids)
+        if (QFileInfo::exists(QStringLiteral("/proc/%1").arg(pid)))
+            return false;
+    return true;
+}
+
+void waitUntilProcessesGone(const QSet<qint64>& pids, int timeoutMs)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!processesGone(pids) && timer.elapsed() < timeoutMs)
+    {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(20);
+    }
+}
+
 } // namespace
 
 int htmlCaptureTest()
@@ -347,6 +467,73 @@ int htmlCaptureTest()
     check(browser.available(), QStringLiteral("detected browser must be available"));
     qInfo().noquote() << "html-capture-test: browser" << browser.executablePath()
                       << browser.version();
+
+    // Transport invariants: production must use the fd 3/4 pipe, so the
+    // browser command line has no debugging port and the process tree owns no
+    // listening TCP socket. The loopback backend is only allowed when
+    // explicitly requested for debugging.
+    const QString requestedTransport =
+        qEnvironmentVariable("PVFORGE_CDP_TRANSPORT").trimmed().toLower();
+    const bool websocketRequested =
+        requestedTransport == QStringLiteral("ws")
+        || requestedTransport == QStringLiteral("websocket")
+        || requestedTransport == QStringLiteral("port");
+    const bool expectedPipe = HtmlBrowser::pipeTransportSupported() && !websocketRequested;
+    check(browser.usesPipe() == expectedPipe,
+          QStringLiteral("transport selection: usesPipe=%1 expected=%2")
+              .arg(browser.usesPipe())
+              .arg(expectedPipe));
+    qInfo().noquote() << "html-capture-test: transport"
+                      << (browser.usesPipe() ? "pipe (fd 3/4)" : "loopback websocket");
+
+    const qint64 browserPid = browser.browserProcessId();
+    check(browserPid > 0, QStringLiteral("browser process id must be known"));
+    const QSet<qint64> browserProcesses = processTree(browserPid);
+    check(browserProcesses.size() >= 2,
+          QStringLiteral("browser process tree looks empty"));
+
+    QStringList browserCmdlines;
+    for (const qint64 pid : browserProcesses)
+        browserCmdlines.append(processCmdline(pid));
+    if (browser.usesPipe())
+    {
+        bool sawPipeArgument = false;
+        for (const QString& cmdline : browserCmdlines)
+        {
+            check(!cmdline.contains(QStringLiteral("--remote-debugging-port")),
+                  QStringLiteral("pipe mode passed --remote-debugging-port"));
+            check(!cmdline.contains(QStringLiteral("--remote-allow-origins")),
+                  QStringLiteral("pipe mode passed --remote-allow-origins"));
+            if (cmdline.contains(QStringLiteral("--remote-debugging-pipe")))
+                sawPipeArgument = true;
+        }
+        check(sawPipeArgument,
+              QStringLiteral("browser command line is missing --remote-debugging-pipe"));
+
+        const QString fd3 =
+            QFileInfo(QStringLiteral("/proc/%1/fd/3").arg(browserPid)).symLinkTarget();
+        const QString fd4 =
+            QFileInfo(QStringLiteral("/proc/%1/fd/4").arg(browserPid)).symLinkTarget();
+        check(fd3.contains(QStringLiteral("pipe:["))
+                  && fd4.contains(QStringLiteral("pipe:[")),
+              QStringLiteral("browser fd 3/4 are not pipes: %1 / %2").arg(fd3, fd4));
+
+        const QSet<QString> listeners = listeningTcpSocketInodes();
+        const QSet<QString> owned = socketInodes(browserProcesses);
+        QStringList listeningOwned;
+        for (const QString& inode : owned)
+            if (listeners.contains(inode))
+                listeningOwned.append(inode);
+        check(listeningOwned.isEmpty(),
+              QStringLiteral("pipe mode browser owns listening TCP socket(s): %1")
+                  .arg(listeningOwned.join(QStringLiteral(", "))));
+    }
+    else
+    {
+        check(browser.devToolsUrl().startsWith(QStringLiteral("ws://127.0.0.1:")),
+              QStringLiteral("websocket fallback endpoint is not loopback: %1")
+                  .arg(browser.devToolsUrl()));
+    }
 
     {
         HtmlRenderer renderer(&browser);
@@ -497,6 +684,31 @@ int htmlCaptureTest()
                   QStringLiteral("recovery bar width"));
         }
 
+        // Explicit cancel must deliver exactly one error and leave the page
+        // reusable for the next request.
+        {
+            auto cancelled = std::make_shared<CaptureState>();
+            renderer.requestFrame(progressRequest(asset, 20.0, 4),
+                                  [cancelled](const QImage& image, const QString& error) {
+                                      cancelled->done = true;
+                                      cancelled->callbacks += 1;
+                                      cancelled->image = image;
+                                      cancelled->error = error;
+                                  });
+            renderer.cancel(QStringLiteral("html-capture-test explicit cancel"));
+            check(cancelled->done, QStringLiteral("cancel must complete the callback"));
+            check(cancelled->callbacks == 1, QStringLiteral("cancel callback count"));
+            check(cancelled->error.contains(QStringLiteral("explicit cancel")),
+                  QStringLiteral("cancel error text: %1").arg(cancelled->error));
+
+            const CaptureResult afterCancel =
+                capture(renderer, progressRequest(asset, 65.0, 5));
+            check(afterCancel.error.isEmpty(),
+                  QStringLiteral("recovery after cancel: %1").arg(afterCancel.error));
+            check(greenPixels(afterCancel.image) > 160,
+                  QStringLiteral("recovery after cancel bar width"));
+        }
+
         // Newer request replaces the in-flight one; the old callback gets one
         // explicit error and the newest frame still renders.
         {
@@ -561,10 +773,84 @@ int htmlCaptureTest()
             check(captured == 30, QStringLiteral("30-frame capture count"));
         }
 
+        // Closing the browser closes the CDP pipe. HtmlBrowser must notice,
+        // and the next request must transparently start a fresh browser and
+        // pipe instead of hanging on the dead descriptors.
+        {
+            browser.cdp()->call(QStringLiteral("Browser.close"), QJsonObject{}, QString(),
+                                2000, [](const QJsonObject&, const QString&) {});
+            QElapsedTimer closing;
+            closing.start();
+            while (browser.isRunning() && closing.elapsed() < 5000)
+            {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                QThread::msleep(20);
+            }
+            check(!browser.isRunning(),
+                  QStringLiteral("closed DevTools pipe did not mark the browser stopped"));
+
+            const CaptureResult restarted =
+                capture(renderer, progressRequest(asset, 45.0, 400));
+            check(restarted.error.isEmpty(),
+                  QStringLiteral("capture after browser restart: %1").arg(restarted.error));
+            check(greenPixels(restarted.image) >= 120,
+                  QStringLiteral("capture after browser restart bar width"));
+        }
+
     }
 
+    const bool usedPipeTransport = browser.usesPipe();
+    // A browser restart replaces the process tree; collect the final one too.
+    QSet<qint64> allBrowserProcesses = browserProcesses;
+    if (const qint64 finalPid = browser.browserProcessId(); finalPid > 0)
+        allBrowserProcesses.unite(processTree(finalPid));
     browser.stop();
     check(!browser.isRunning(), QStringLiteral("browser stop left the process running"));
+    waitUntilProcessesGone(allBrowserProcesses, 3000);
+    check(processesGone(allBrowserProcesses),
+          QStringLiteral("browser stop left Chrome process(es) alive"));
+
+    // The loopback WebSocket backend stays available for debugging. Exercise
+    // one full frame through it, then restore the environment.
+    if (usedPipeTransport)
+    {
+        const QByteArray previousTransport = qgetenv("PVFORGE_CDP_TRANSPORT");
+        qputenv("PVFORGE_CDP_TRANSPORT", QByteArrayLiteral("ws"));
+        {
+            HtmlBrowser fallback;
+            QString fallbackError;
+            if (!fallback.start(QString(), &fallbackError))
+            {
+                check(false, QStringLiteral("ws fallback start: %1").arg(fallbackError));
+            }
+            else
+            {
+                check(!fallback.usesPipe(),
+                      QStringLiteral("PVFORGE_CDP_TRANSPORT=ws still used the pipe"));
+                check(fallback.devToolsUrl().startsWith(QStringLiteral("ws://127.0.0.1:")),
+                      QStringLiteral("ws fallback endpoint: %1").arg(fallback.devToolsUrl()));
+                {
+                    HtmlRenderer fallbackRenderer(&fallback);
+                    const CaptureResult fallbackFrame =
+                        capture(fallbackRenderer, progressRequest(asset, 55.0, 777));
+                    check(fallbackFrame.error.isEmpty(),
+                          QStringLiteral("ws fallback capture: %1").arg(fallbackFrame.error));
+                    check(fallbackFrame.image.size() == QSize(320, 180),
+                          QStringLiteral("ws fallback image size"));
+                    check(greenPixels(fallbackFrame.image) >= 135,
+                          QStringLiteral("ws fallback bar width"));
+                }
+                fallback.stop();
+                check(!fallback.isRunning(),
+                      QStringLiteral("ws fallback stop left the process running"));
+            }
+        }
+        if (previousTransport.isNull())
+            qunsetenv("PVFORGE_CDP_TRANSPORT");
+        else
+            qputenv("PVFORGE_CDP_TRANSPORT", previousTransport);
+    }
+
     qInfo().noquote() << "html-capture-test: failures" << failures;
     return failures == 0 ? 0 : 1;
 }
