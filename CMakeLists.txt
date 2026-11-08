@@ -60,6 +60,7 @@ add_executable(pvforge
     src/mcp/McpServer.cpp
     src/mcp/StdioBridge.cpp
     src/mcp/StdioBridgeTest.cpp
+    src/mcp/McpCommandService.cpp
     src/audio/AudioEngine.cpp
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
