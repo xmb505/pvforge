@@ -32,6 +32,7 @@
 #include "ui/TextLayoutDialog.h"
 #include "ui/WorkbenchPanel.h"
 #include "media/VideoDecoder.h"
+#include "mcp/McpServer.h"
 #include "ui/BezierEditorDialog.h"
 #include "ui/CameraMonitor.h"
 #include "ui/EasingPicker.h"
@@ -54,6 +55,7 @@
 #include <QDataStream>
 #include <QDoubleSpinBox>
 #include <QFont>
+#include <QHostAddress>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -8457,6 +8459,542 @@ int exportTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+struct McpHttpResponse
+{
+    int status = -1;
+    int expectedBody = 0;
+    QByteArray headers;
+    QByteArray body;
+    bool timedOut = false;
+};
+
+McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
+                            const QByteArray& token,
+                            const QByteArray& contentType =
+                                QByteArrayLiteral("application/json"),
+                            qint64 declaredLength = -1)
+{
+    McpHttpResponse response;
+    QTcpSocket socket;
+    QByteArray received;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+
+    QObject::connect(&timeout, &QTimer::timeout, &loop, [&response, &loop] {
+        response.timedOut = true;
+        loop.quit();
+    });
+    QObject::connect(&socket, &QTcpSocket::connected, &loop, [&] {
+        QByteArray request;
+        request += "POST /mcp HTTP/1.1\r\n";
+        request += "Host: 127.0.0.1\r\n";
+        request += "Authorization: Bearer " + token + "\r\n";
+        request += "Content-Type: " + contentType + "\r\n";
+        request += "Accept: application/json\r\n";
+        request += "Content-Length: "
+                   + QByteArray::number(declaredLength >= 0 ? declaredLength
+                                                            : qint64(payload.size()))
+                   + "\r\n";
+        request += "Connection: close\r\n\r\n";
+        request += payload;
+        socket.write(request);
+        socket.flush();
+    });
+    QObject::connect(&socket, &QTcpSocket::readyRead, &loop, [&] {
+        received += socket.readAll();
+        const int headerEnd = received.indexOf("\r\n\r\n");
+        if (headerEnd < 0)
+            return;
+        if (response.status < 0)
+        {
+            const QByteArray head = received.left(headerEnd);
+            response.headers = head;
+            const QList<QByteArray> statusLine =
+                head.split('\n').first().trimmed().split(' ');
+            if (statusLine.size() >= 2)
+                response.status = statusLine.at(1).toInt();
+            for (const QByteArray& rawLine : head.split('\n'))
+            {
+                QByteArray line = rawLine;
+                if (line.endsWith('\r'))
+                    line.chop(1);
+                const int colon = line.indexOf(':');
+                if (colon > 0
+                    && line.left(colon).trimmed().toLower()
+                           == QByteArrayLiteral("content-length"))
+                    response.expectedBody =
+                        line.mid(colon + 1).trimmed().toInt();
+            }
+        }
+        if (received.size() >= headerEnd + 4 + response.expectedBody)
+            loop.quit();
+    });
+    QObject::connect(&socket, &QTcpSocket::disconnected, &loop, &QEventLoop::quit);
+    QObject::connect(&socket, &QTcpSocket::errorOccurred, &loop,
+                     [&loop](QAbstractSocket::SocketError) { loop.quit(); });
+
+    timeout.start(5000);
+    socket.connectToHost(QHostAddress::LocalHost, port);
+    loop.exec();
+
+    const int headerEnd = received.indexOf("\r\n\r\n");
+    if (headerEnd >= 0)
+        response.body = received.mid(headerEnd + 4);
+    socket.abort();
+    return response;
+}
+
+QJsonObject mcpRpc(quint16 port, const QByteArray& token, const QJsonObject& request,
+                   int* statusOut = nullptr)
+{
+    const McpHttpResponse response = mcpHttpPost(
+        port, QJsonDocument(request).toJson(QJsonDocument::Compact), token);
+    if (statusOut)
+        *statusOut = response.status;
+    return QJsonDocument::fromJson(response.body).object();
+}
+
+int mcpReadonlyTest()
+{
+    int failures = 0;
+    const auto fail = [&failures](const QString& message) {
+        qCritical() << "mcp-readonly-test:" << message;
+        ++failures;
+    };
+    const auto failIf = [&fail](bool condition, const QString& message) {
+        if (condition)
+            fail(message);
+    };
+
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("MCP 测试工程");
+    project->width = 1280;
+    project->height = 720;
+    project->fps = 24;
+    pvf::Entity* folder = project->addFolder(QStringLiteral("组"));
+    pvf::Entity* child = project->addVector(0, 100, 100, Qt::red, Qt::white, 0);
+    child->name = QStringLiteral("移动矩形");
+    const pvf::EntityId childId = child->id;
+    project->setEntityParent(childId, folder->id);
+    project->setValue(childId, QStringLiteral("x"), 0, 0.0, true);
+    project->setValue(childId, QStringLiteral("x"), 48, 480.0, true);
+    pvf::Entity* camera = project->addCamera(QStringLiteral("主摄像机"));
+    project->activeCamera = camera->id;
+    const int entityCount = project->entities().size();
+
+    pvf::McpServer server(project);
+    server.setToken(QByteArrayLiteral("test-token"));
+
+    int signalled = 0;
+    int signalledFailures = 0;
+    QString lastSignalName;
+    QString lastArgsJson;
+    QString lastResultJson;
+    qint64 lastDuration = -1;
+    bool lastSignalOk = false;
+    QObject::connect(
+        &server, &pvf::McpServer::toolInvoked,
+        [&](const QString& name, const QString& argsJson, const QString& resultJson,
+            qint64 durationMs, bool ok) {
+            ++signalled;
+            if (!ok)
+                ++signalledFailures;
+            lastSignalName = name;
+            lastArgsJson = argsJson;
+            lastResultJson = resultJson;
+            lastDuration = durationMs;
+            lastSignalOk = ok;
+        });
+
+    QString error;
+    const quint16 startedPort = server.start(0, &error);
+    if (startedPort == 0)
+    {
+        qCritical() << "mcp-readonly-test: start failed" << error;
+        delete project;
+        return 1;
+    }
+    failIf(server.port() != startedPort,
+           QStringLiteral("start() port and port() disagree"));
+    failIf(server.port() == 0, QStringLiteral("start(0) did not report a port"));
+    failIf(!server.isRunning(), QStringLiteral("server is not running after start"));
+    failIf(server.endpointUrl().isEmpty(), QStringLiteral("endpoint URL is empty"));
+
+    const quint16 port = startedPort;
+    const QByteArray token = server.token();
+    failIf(token.isEmpty(), QStringLiteral("token is empty"));
+
+    // initialize
+    QJsonObject initParams;
+    initParams[QStringLiteral("protocolVersion")] = QStringLiteral("2025-06-18");
+    initParams[QStringLiteral("capabilities")] = QJsonObject();
+    initParams[QStringLiteral("clientInfo")] =
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("test-client")},
+                    {QStringLiteral("version"), QStringLiteral("0.0")}};
+    QJsonObject initRequest;
+    initRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    initRequest[QStringLiteral("id")] = 1;
+    initRequest[QStringLiteral("method")] = QStringLiteral("initialize");
+    initRequest[QStringLiteral("params")] = initParams;
+
+    const McpHttpResponse initHttp = mcpHttpPost(
+        port, QJsonDocument(initRequest).toJson(QJsonDocument::Compact), token);
+    failIf(initHttp.status != 200,
+           QStringLiteral("initialize HTTP status %1").arg(initHttp.status));
+    failIf(!initHttp.headers.toLower().contains(
+               QByteArrayLiteral("content-type: application/json")),
+           QStringLiteral("initialize response is not application/json"));
+    const QJsonObject initResult =
+        QJsonDocument::fromJson(initHttp.body).object().value(QStringLiteral("result"))
+            .toObject();
+    failIf(initResult.value(QStringLiteral("protocolVersion")).toString().isEmpty(),
+           QStringLiteral("initialize did not return protocolVersion"));
+    const QJsonObject capabilities =
+        initResult.value(QStringLiteral("capabilities")).toObject();
+    failIf(!capabilities.contains(QStringLiteral("tools")),
+           QStringLiteral("initialize missing tools capability"));
+    failIf(!capabilities.contains(QStringLiteral("resources")),
+           QStringLiteral("initialize missing resources capability"));
+    failIf(initResult.value(QStringLiteral("serverInfo"))
+                   .toObject()
+                   .value(QStringLiteral("name"))
+                   .toString()
+               != QStringLiteral("PVForge"),
+           QStringLiteral("initialize serverInfo.name mismatch"));
+
+    // tools/list
+    QJsonObject listRequest;
+    listRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    listRequest[QStringLiteral("id")] = 2;
+    listRequest[QStringLiteral("method")] = QStringLiteral("tools/list");
+    const QJsonObject listResponse = mcpRpc(port, token, listRequest);
+    const QJsonArray tools =
+        listResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("tools"))
+            .toArray();
+    QStringList toolNames;
+    for (const QJsonValue& value : tools)
+        toolNames.append(value.toObject().value(QStringLiteral("name")).toString());
+    for (const QString& required :
+         {QStringLiteral("project.summary"), QStringLiteral("timeline.get"),
+          QStringLiteral("entity.get"), QStringLiteral("assets.list"),
+          QStringLiteral("guide.get")})
+        failIf(!toolNames.contains(required),
+               QStringLiteral("tools/list missing %1").arg(required));
+    failIf(toolNames.contains(QStringLiteral("entity.create")),
+           QStringLiteral("tools/list advertises a write tool"));
+
+    const auto callTool = [&](int id, const QString& name, const QJsonObject& args,
+                              int* statusOut = nullptr) {
+        QJsonObject params;
+        params[QStringLiteral("name")] = name;
+        params[QStringLiteral("arguments")] = args;
+        QJsonObject request;
+        request[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+        request[QStringLiteral("id")] = id;
+        request[QStringLiteral("method")] = QStringLiteral("tools/call");
+        request[QStringLiteral("params")] = params;
+        return mcpRpc(port, token, request, statusOut);
+    };
+
+    // project.summary
+    int status = 0;
+    const QJsonObject summaryResponse =
+        callTool(3, QStringLiteral("project.summary"), QJsonObject(), &status);
+    failIf(status != 200, QStringLiteral("project.summary HTTP %1").arg(status));
+    const QJsonObject summaryResult =
+        summaryResponse.value(QStringLiteral("result")).toObject();
+    failIf(summaryResult.value(QStringLiteral("isError")).toBool(),
+           QStringLiteral("project.summary returned isError"));
+    const QJsonObject summaryStructured =
+        summaryResult.value(QStringLiteral("structuredContent")).toObject();
+    failIf(!summaryStructured.value(QStringLiteral("ok")).toBool(),
+           QStringLiteral("project.summary structured ok is false"));
+    const QJsonObject summaryData =
+        summaryStructured.value(QStringLiteral("data")).toObject();
+    failIf(summaryData.value(QStringLiteral("width")).toInt() != 1280,
+           QStringLiteral("project.summary width mismatch"));
+    failIf(summaryData.value(QStringLiteral("height")).toInt() != 720,
+           QStringLiteral("project.summary height mismatch"));
+    failIf(summaryData.value(QStringLiteral("fps")).toInt() != 24,
+           QStringLiteral("project.summary fps mismatch"));
+    failIf(summaryData.value(QStringLiteral("durationFrames")).toInt()
+               != project->timelineLength(),
+           QStringLiteral("project.summary duration mismatch"));
+    failIf(summaryData.value(QStringLiteral("activeCamera"))
+                   .toObject()
+                   .value(QStringLiteral("id"))
+                   .toInt()
+               != camera->id,
+           QStringLiteral("project.summary active camera mismatch"));
+    failIf(summaryData.value(QStringLiteral("scenesAvailable")).toBool(),
+           QStringLiteral("project.summary pretends scenes exist"));
+    failIf(summaryResult.value(QStringLiteral("content")).toArray().isEmpty(),
+           QStringLiteral("project.summary content is empty"));
+
+    // timeline.get
+    QJsonObject timelineArgs;
+    timelineArgs[QStringLiteral("limit")] = 10;
+    const QJsonObject timelineResponse =
+        callTool(4, QStringLiteral("timeline.get"), timelineArgs);
+    const QJsonObject timelineStructured =
+        timelineResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("structuredContent"))
+            .toObject();
+    const QJsonObject timelineData =
+        timelineStructured.value(QStringLiteral("data")).toObject();
+    const QJsonArray timelineEntities =
+        timelineData.value(QStringLiteral("entities")).toArray();
+    failIf(timelineEntities.size() != entityCount,
+           QStringLiteral("timeline.get entity count %1 != %2")
+               .arg(timelineEntities.size())
+               .arg(entityCount));
+    failIf(timelineStructured.value(QStringLiteral("page"))
+                   .toObject()
+                   .value(QStringLiteral("total"))
+                   .toInt()
+               != entityCount,
+           QStringLiteral("timeline.get page total mismatch"));
+    if (!timelineEntities.isEmpty())
+    {
+        const QJsonObject first = timelineEntities.first().toObject();
+        failIf(!first.contains(QStringLiteral("tracks")),
+               QStringLiteral("timeline.get omitted tracks"));
+    }
+
+    bool foundChild = false;
+    for (const QJsonValue& value : timelineEntities)
+    {
+        const QJsonObject object = value.toObject();
+        if (object.value(QStringLiteral("id")).toInt() != childId)
+            continue;
+        foundChild = true;
+        const QJsonObject tracks = object.value(QStringLiteral("tracks")).toObject();
+        failIf(tracks.value(QStringLiteral("x")).toArray().size() != 2,
+               QStringLiteral("timeline.get x track key count mismatch"));
+    }
+    failIf(!foundChild, QStringLiteral("timeline.get did not include the child"));
+
+    // entity.get
+    QJsonObject entityArgs;
+    entityArgs[QStringLiteral("id")] = childId;
+    entityArgs[QStringLiteral("frame")] = 24;
+    const QJsonObject entityResponse =
+        callTool(5, QStringLiteral("entity.get"), entityArgs);
+    const QJsonObject entityStructured =
+        entityResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("structuredContent"))
+            .toObject();
+    const QJsonObject entityData =
+        entityStructured.value(QStringLiteral("data")).toObject();
+    failIf(entityData.value(QStringLiteral("name")).toString()
+               != QStringLiteral("移动矩形"),
+           QStringLiteral("entity.get name mismatch"));
+    failIf(entityData.value(QStringLiteral("tracks"))
+                   .toObject()
+                   .value(QStringLiteral("x"))
+                   .toArray()
+                   .size()
+               != 2,
+           QStringLiteral("entity.get track mismatch"));
+    failIf(std::abs(entityData.value(QStringLiteral("evaluated"))
+                            .toObject()
+                            .value(QStringLiteral("x"))
+                            .toDouble()
+                        - 240.0)
+               > 1e-6,
+           QStringLiteral("entity.get x at frame 24 is not 240"));
+
+    // Write tools are rejected, and nothing changes.
+    const QJsonObject writeResponse = callTool(
+        6, QStringLiteral("entity.create"),
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("x")}});
+    const QJsonObject writeResult =
+        writeResponse.value(QStringLiteral("result")).toObject();
+    failIf(!writeResult.value(QStringLiteral("isError")).toBool(),
+           QStringLiteral("entity.create was not rejected"));
+    failIf(writeResult.value(QStringLiteral("structuredContent"))
+                   .toObject()
+                   .value(QStringLiteral("error"))
+                   .toObject()
+                   .value(QStringLiteral("code"))
+                   .toString()
+               != QStringLiteral("permission_denied"),
+           QStringLiteral("entity.create did not return permission_denied"));
+    failIf(project->entities().size() != entityCount,
+           QStringLiteral("rejected write tool changed the project"));
+
+    // Missing required id -> invalid_argument.
+    const QJsonObject invalidResponse =
+        callTool(7, QStringLiteral("entity.get"), QJsonObject());
+    const QJsonObject invalidResult =
+        invalidResponse.value(QStringLiteral("result")).toObject();
+    failIf(invalidResult.value(QStringLiteral("structuredContent"))
+                   .toObject()
+                   .value(QStringLiteral("error"))
+                   .toObject()
+                   .value(QStringLiteral("code"))
+                   .toString()
+               != QStringLiteral("invalid_argument"),
+           QStringLiteral("entity.get without id did not return invalid_argument"));
+
+    // Deferred scene tools -> not_available.
+    const QJsonObject sceneResponse =
+        callTool(8, QStringLiteral("scene.list"), QJsonObject());
+    failIf(sceneResponse.value(QStringLiteral("result"))
+                   .toObject()
+                   .value(QStringLiteral("structuredContent"))
+                   .toObject()
+                   .value(QStringLiteral("error"))
+                   .toObject()
+                   .value(QStringLiteral("code"))
+                   .toString()
+               != QStringLiteral("not_available"),
+           QStringLiteral("scene.list did not return not_available"));
+
+    // guide.get
+    const QJsonObject guideResponse =
+        callTool(9, QStringLiteral("guide.get"), QJsonObject());
+    const QString guideText =
+        guideResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("structuredContent"))
+            .toObject()
+            .value(QStringLiteral("data"))
+            .toObject()
+            .value(QStringLiteral("markdown"))
+            .toString();
+    failIf(guideText.isEmpty(), QStringLiteral("guide.get returned empty text"));
+
+    // resources/list + resources/read
+    QJsonObject resourcesRequest;
+    resourcesRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    resourcesRequest[QStringLiteral("id")] = 10;
+    resourcesRequest[QStringLiteral("method")] = QStringLiteral("resources/list");
+    const QJsonObject resourcesResponse = mcpRpc(port, token, resourcesRequest);
+    const QJsonArray resources =
+        resourcesResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("resources"))
+            .toArray();
+    QStringList resourceUris;
+    for (const QJsonValue& value : resources)
+        resourceUris.append(value.toObject().value(QStringLiteral("uri")).toString());
+    failIf(!resourceUris.contains(QStringLiteral("pvforge://guide/authoring")),
+           QStringLiteral("resources/list missing authoring guide"));
+    failIf(!resourceUris.contains(QStringLiteral("pvforge://project/schema")),
+           QStringLiteral("resources/list missing project schema"));
+
+    QJsonObject readParams;
+    readParams[QStringLiteral("uri")] = QStringLiteral("pvforge://guide/authoring");
+    QJsonObject readRequest;
+    readRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    readRequest[QStringLiteral("id")] = 11;
+    readRequest[QStringLiteral("method")] = QStringLiteral("resources/read");
+    readRequest[QStringLiteral("params")] = readParams;
+    const QJsonObject readResponse = mcpRpc(port, token, readRequest);
+    const QJsonArray contents =
+        readResponse.value(QStringLiteral("result"))
+            .toObject()
+            .value(QStringLiteral("contents"))
+            .toArray();
+    failIf(contents.isEmpty()
+               || contents.first()
+                      .toObject()
+                      .value(QStringLiteral("text"))
+                      .toString()
+                      .isEmpty(),
+           QStringLiteral("resources/read returned no text"));
+
+    // ping
+    QJsonObject pingRequest;
+    pingRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    pingRequest[QStringLiteral("id")] = 12;
+    pingRequest[QStringLiteral("method")] = QStringLiteral("ping");
+    const QJsonObject pingResponse = mcpRpc(port, token, pingRequest);
+    failIf(!pingResponse.value(QStringLiteral("result")).isObject(),
+           QStringLiteral("ping did not return an object result"));
+    failIf(!pingResponse.value(QStringLiteral("result")).toObject().isEmpty(),
+           QStringLiteral("ping result is not empty"));
+
+    // Notifications are accepted with 202 and no body.
+    QJsonObject noteRequest;
+    noteRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    noteRequest[QStringLiteral("method")] = QStringLiteral("notifications/cancelled");
+    noteRequest[QStringLiteral("params")] =
+        QJsonObject{{QStringLiteral("requestId"), 99},
+                    {QStringLiteral("reason"), QStringLiteral("test")}};
+    const McpHttpResponse noteResponse = mcpHttpPost(
+        port, QJsonDocument(noteRequest).toJson(QJsonDocument::Compact), token);
+    failIf(noteResponse.status != 202,
+           QStringLiteral("notification HTTP %1 != 202").arg(noteResponse.status));
+    failIf(!noteResponse.body.isEmpty(),
+           QStringLiteral("notification returned a body"));
+
+    // Authentication and transport rejection.
+    const McpHttpResponse badToken = mcpHttpPost(
+        port, QJsonDocument(initRequest).toJson(QJsonDocument::Compact),
+        QByteArrayLiteral("wrong-token"));
+    failIf(badToken.status != 401,
+           QStringLiteral("bad token HTTP %1 != 401").arg(badToken.status));
+    failIf(!badToken.headers.toLower().contains(QByteArrayLiteral("www-authenticate")),
+           QStringLiteral("401 response lacks WWW-Authenticate"));
+
+    QJsonObject simpleRequest;
+    simpleRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+    simpleRequest[QStringLiteral("id")] = 13;
+    simpleRequest[QStringLiteral("method")] = QStringLiteral("ping");
+    const McpHttpResponse wrongType = mcpHttpPost(
+        port, QJsonDocument(simpleRequest).toJson(QJsonDocument::Compact), token,
+        QByteArrayLiteral("text/plain"));
+    failIf(wrongType.status != 415,
+           QStringLiteral("wrong content type HTTP %1 != 415").arg(wrongType.status));
+
+    const McpHttpResponse tooLarge = mcpHttpPost(
+        port, QByteArrayLiteral("{}"), token, QByteArrayLiteral("application/json"),
+        server.maxBodyBytes() + 1);
+    failIf(tooLarge.status != 413,
+           QStringLiteral("oversized body HTTP %1 != 413").arg(tooLarge.status));
+
+    const McpHttpResponse malformed =
+        mcpHttpPost(port, QByteArrayLiteral("{"), token);
+    failIf(malformed.status != 200,
+           QStringLiteral("malformed JSON HTTP %1 != 200").arg(malformed.status));
+    const QJsonObject malformedResponse =
+        QJsonDocument::fromJson(malformed.body).object();
+    failIf(malformedResponse.value(QStringLiteral("error"))
+                   .toObject()
+                   .value(QStringLiteral("code"))
+                   .toInt()
+               != -32700,
+           QStringLiteral("malformed JSON did not return -32700"));
+
+    // Every tools/call emitted one log signal with the required fields.
+    failIf(signalled < 7,
+           QStringLiteral("toolInvoked emitted %1 times, expected at least 7")
+               .arg(signalled));
+    failIf(signalledFailures < 3,
+           QStringLiteral("toolInvoked did not report the rejected calls"));
+    failIf(lastSignalName != QStringLiteral("guide.get"),
+           QStringLiteral("toolInvoked last name is %1").arg(lastSignalName));
+    failIf(lastArgsJson.isEmpty() || lastResultJson.isEmpty(),
+           QStringLiteral("toolInvoked JSON payloads are empty"));
+    failIf(lastDuration < 0, QStringLiteral("toolInvoked duration is negative"));
+    failIf(!lastSignalOk, QStringLiteral("toolInvoked last call is not ok"));
+
+    server.stop();
+    failIf(server.isRunning(), QStringLiteral("server still running after stop"));
+    failIf(server.port() != 0, QStringLiteral("port not cleared after stop"));
+
+    delete project;
+    qInfo() << "mcp-readonly-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -8505,6 +9043,8 @@ int main(int argc, char* argv[])
         return exportTest(app);
     if (app.arguments().contains(QStringLiteral("--async-export-test")))
         return asyncExportTest(app);
+    if (app.arguments().contains(QStringLiteral("--mcp-readonly-test")))
+        return mcpReadonlyTest();
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))
