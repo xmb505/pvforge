@@ -658,6 +658,7 @@ void RemoveKeyframesCommand::undo(Project& project)
         key.frame = record.frame;
         key.value = record.value;
         key.ease = record.ease;
+        key.note = record.note;
         project.addKeyframe(record.entity, record.property, key);
     }
 }

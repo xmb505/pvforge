@@ -11,6 +11,7 @@
 #include <QObject>
 #include <QPixmap>
 #include <QString>
+#include <QStringList>
 #include <QVariantMap>
 #include <QVector>
 
@@ -24,6 +25,10 @@ using EntityId = int;
 constexpr EntityId kInvalidEntity = -1;
 constexpr int kWorkCameraView = -2;
 constexpr int kWholeCanvasView = -3;
+
+// Current on-disk project format. The loader also accepts 1..kProjectVersion
+// so older projects open and get migrated with a default scene.
+constexpr int kProjectVersion = 4;
 
 enum class EntityType
 {
@@ -46,6 +51,7 @@ struct Keyframe
     double frame = 0.0;
     double value = 0.0;
     EasingSpec ease;
+    QString note;      // optional author note, never rendered
 };
 
 // One animated property of an entity. Values are scalars in v1.
@@ -134,6 +140,34 @@ struct KeyframeRecord
     double frame = 0.0;
     double value = 0.0;
     EasingSpec ease;
+    QString note;
+};
+
+// A named frame range that owns a root folder. Scenes never overlap but may
+// leave gaps; startFrame/endFrame are inclusive. The folder is a normal
+// EntityType::Folder entity, so its children keep the same coordinate system
+// when the folder transform is identity.
+struct Scene
+{
+    QString id;
+    QString name;
+    int startFrame = 0;
+    int endFrame = 0;
+    EntityId folderId = kInvalidEntity;
+    QColor color{90, 170, 255};
+    QString note;
+};
+
+// A global timeline marker. Annotations are authoring metadata only: they do
+// not render and do not extend timelineLength().
+struct Annotation
+{
+    QString id;
+    int frame = 0;
+    QString title;
+    QString note;      // Markdown
+    QStringList tags;
+    QColor color{255, 190, 60};
 };
 
 enum class EntityFlag { Hidden, Locked };
@@ -173,6 +207,9 @@ public:
     Entity* addImage(const QString& path, const QString& displayName = QString());
     Entity* addVideo(const QString& path, const QImage& firstFrame, double duration = 0.0,
                      const QString& displayName = QString());
+    // New entities stay at the root. Scene placement is opt-in for now: ask
+    // sceneFolderAt(frame) and pass the returned id to addFolder/setEntityParent
+    // (or a future UI/MCP layer) when the caller wants scene ownership.
     Entity* addEntity(EntityType type, const QString& name,
                        const QVariantMap& data);
     Entity* addBrandWall(const BrandWallParams& params);
@@ -248,6 +285,53 @@ public:
     Entity* createFromTemplate(const Template& tmpl);
     void removeTemplate(int index);
 
+    // ---- Scenes ---------------------------------------------------------
+    // A scene owns one root folder. addScene creates that Folder entity with
+    // an identity transform (x/y/rotation/rotPoint = 0, scale/opacity = 1) so
+    // wrapping existing entities cannot move them on screen.
+    //
+    // Ranges are inclusive and must satisfy 0 <= startFrame <= endFrame <=
+    // timelineLength(); overlapping scenes or out-of-range frames produce an
+    // error instead of being clamped. Gaps between scenes are allowed.
+    const QVector<Scene>& scenes() const { return m_scenes; }
+    Scene* addScene(const QString& name, int startFrame, int endFrame,
+                    const QColor& color = QColor(), const QString& note = QString(),
+                    QString* error = nullptr);
+    // Updates name/range/color/note. The folder id is fixed for the life of
+    // the scene, so the scene's entity ownership cannot become inconsistent.
+    bool updateScene(const QString& id, const QString& name, int startFrame,
+                     int endFrame, const QColor& color, const QString& note,
+                     QString* error = nullptr);
+    // Removes only the scene record. The folder entity and every entity inside
+    // it stay in the project as ordinary folders; nothing is deleted.
+    bool removeScene(const QString& id);
+    // Returns the scene whose inclusive range contains frame, or nullptr in a
+    // gap / outside every scene.
+    const Scene* sceneAt(int frame) const;
+    const Scene* sceneById(const QString& id) const;
+    // Convenience for future UI/MCP callers: the folder a new entity would
+    // belong to at this frame. addEntity does not reparent automatically yet.
+    EntityId sceneFolderAt(int frame) const;
+
+    // ---- Annotations ----------------------------------------------------
+    // Global markers, always kept sorted by frame. Adding or updating a marker
+    // does not touch timelineLength() or any entity.
+    const QVector<Annotation>& annotations() const { return m_annotations; }
+    Annotation* addAnnotation(int frame, const QString& title,
+                              const QString& note = QString(),
+                              const QStringList& tags = QStringList(),
+                              const QColor& color = QColor(),
+                              QString* error = nullptr);
+    bool updateAnnotation(const Annotation& annotation, QString* error = nullptr);
+    bool removeAnnotation(const QString& id);
+    const Annotation* annotationById(const QString& id) const;
+
+    // Optional author note on an existing keyframe. setKeyframeNote returns
+    // false when the keyframe does not exist; an empty note clears it.
+    bool setKeyframeNote(EntityId id, const QString& property, double frame,
+                         const QString& note);
+    QString keyframeNote(EntityId id, const QString& property, double frame) const;
+
     double value(EntityId id, const QString& prop, double frame) const;
     void setValue(EntityId id, const QString& prop, double frame, double value, bool keyframe);
 
@@ -269,12 +353,16 @@ signals:
 private:
     Entity makeBase(EntityType type, const QString& name) const;
     Entity* append(Entity e);
+    bool validateSceneRange(int startFrame, int endFrame, const QString& ignoreId,
+                            QString* error) const;
     QJsonObject toJson() const;
     void rebuildEntityIndex();
 
     QVector<Entity> m_entities;
     QHash<EntityId, int> m_entityIndex;
     QVector<Template> m_templates;
+    QVector<Scene> m_scenes;
+    QVector<Annotation> m_annotations;
     EntityId m_nextId = 1;
 };
 

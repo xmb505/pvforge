@@ -443,6 +443,233 @@ Entity* Project::addFolder(const QString& name, EntityId parent)
     return append(std::move(e));
 }
 
+bool Project::validateSceneRange(int startFrame, int endFrame, const QString& ignoreId,
+                                 QString* error) const
+{
+    if (startFrame < 0)
+    {
+        if (error)
+            *error = QStringLiteral("场景起始帧不能为负");
+        return false;
+    }
+    if (endFrame < startFrame)
+    {
+        if (error)
+            *error = QStringLiteral("场景结束帧不能早于起始帧");
+        return false;
+    }
+    if (endFrame > timelineLength())
+    {
+        if (error)
+            *error = QStringLiteral("场景结束帧 %1 超出时间轴长度 %2")
+                         .arg(endFrame)
+                         .arg(timelineLength());
+        return false;
+    }
+    for (const Scene& scene : m_scenes)
+    {
+        if (!ignoreId.isEmpty() && scene.id == ignoreId)
+            continue;
+        if (startFrame <= scene.endFrame && scene.startFrame <= endFrame)
+        {
+            if (error)
+                *error = QStringLiteral("场景区间与「%1」重叠").arg(scene.name);
+            return false;
+        }
+    }
+    return true;
+}
+
+Scene* Project::addScene(const QString& name, int startFrame, int endFrame,
+                         const QColor& color, const QString& note, QString* error)
+{
+    if (!validateSceneRange(startFrame, endFrame, QString(), error))
+        return nullptr;
+
+    QString sceneName = name.trimmed();
+    if (sceneName.isEmpty())
+        sceneName = QStringLiteral("场景 %1").arg(m_scenes.size() + 1);
+
+    Entity* folder = addFolder(sceneName);
+    if (!folder)
+    {
+        if (error)
+            *error = QStringLiteral("无法创建场景文件夹");
+        return nullptr;
+    }
+
+    Scene scene;
+    scene.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    scene.name = sceneName;
+    scene.startFrame = startFrame;
+    scene.endFrame = endFrame;
+    scene.folderId = folder->id;
+    scene.color = color.isValid() ? color : QColor(90, 170, 255);
+    scene.note = note;
+
+    int index = 0;
+    while (index < int(m_scenes.size())
+           && m_scenes[index].startFrame < scene.startFrame)
+    {
+        ++index;
+    }
+    m_scenes.insert(index, scene);
+    modified = true;
+    emit changed();
+    return &m_scenes[index];
+}
+
+bool Project::updateScene(const QString& id, const QString& name, int startFrame,
+                          int endFrame, const QColor& color, const QString& note,
+                          QString* error)
+{
+    for (Scene& scene : m_scenes)
+    {
+        if (scene.id != id)
+            continue;
+        if (!validateSceneRange(startFrame, endFrame, id, error))
+            return false;
+
+        if (!name.trimmed().isEmpty())
+            scene.name = name.trimmed();
+        scene.startFrame = startFrame;
+        scene.endFrame = endFrame;
+        if (color.isValid())
+            scene.color = color;
+        scene.note = note;
+        std::stable_sort(m_scenes.begin(), m_scenes.end(),
+                         [](const Scene& a, const Scene& b) {
+                             return a.startFrame < b.startFrame;
+                         });
+        modified = true;
+        emit changed();
+        return true;
+    }
+    if (error)
+        *error = QStringLiteral("场景不存在");
+    return false;
+}
+
+bool Project::removeScene(const QString& id)
+{
+    for (int i = 0; i < int(m_scenes.size()); ++i)
+    {
+        if (m_scenes[i].id != id)
+            continue;
+        m_scenes.removeAt(i);
+        modified = true;
+        emit changed();
+        return true;
+    }
+    return false;
+}
+
+const Scene* Project::sceneAt(int frame) const
+{
+    for (const Scene& scene : m_scenes)
+        if (frame >= scene.startFrame && frame <= scene.endFrame)
+            return &scene;
+    return nullptr;
+}
+
+const Scene* Project::sceneById(const QString& id) const
+{
+    for (const Scene& scene : m_scenes)
+        if (scene.id == id)
+            return &scene;
+    return nullptr;
+}
+
+EntityId Project::sceneFolderAt(int frame) const
+{
+    const Scene* scene = sceneAt(frame);
+    return scene ? scene->folderId : kInvalidEntity;
+}
+
+Annotation* Project::addAnnotation(int frame, const QString& title, const QString& note,
+                                   const QStringList& tags, const QColor& color,
+                                   QString* error)
+{
+    if (frame < 0)
+    {
+        if (error)
+            *error = QStringLiteral("注释帧不能为负");
+        return nullptr;
+    }
+
+    Annotation annotation;
+    annotation.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    annotation.frame = frame;
+    annotation.title = title;
+    annotation.note = note;
+    annotation.tags = tags;
+    annotation.color = color.isValid() ? color : QColor(255, 190, 60);
+
+    int index = 0;
+    while (index < int(m_annotations.size())
+           && m_annotations[index].frame <= annotation.frame)
+    {
+        ++index;
+    }
+    m_annotations.insert(index, annotation);
+    modified = true;
+    emit changed();
+    return &m_annotations[index];
+}
+
+bool Project::updateAnnotation(const Annotation& annotation, QString* error)
+{
+    if (annotation.frame < 0)
+    {
+        if (error)
+            *error = QStringLiteral("注释帧不能为负");
+        return false;
+    }
+    for (Annotation& existing : m_annotations)
+    {
+        if (existing.id != annotation.id)
+            continue;
+        existing.frame = annotation.frame;
+        existing.title = annotation.title;
+        existing.note = annotation.note;
+        existing.tags = annotation.tags;
+        if (annotation.color.isValid())
+            existing.color = annotation.color;
+        std::stable_sort(m_annotations.begin(), m_annotations.end(),
+                         [](const Annotation& a, const Annotation& b) {
+                             return a.frame < b.frame;
+                         });
+        modified = true;
+        emit changed();
+        return true;
+    }
+    if (error)
+        *error = QStringLiteral("注释不存在");
+    return false;
+}
+
+bool Project::removeAnnotation(const QString& id)
+{
+    for (int i = 0; i < int(m_annotations.size()); ++i)
+    {
+        if (m_annotations[i].id != id)
+            continue;
+        m_annotations.removeAt(i);
+        modified = true;
+        emit changed();
+        return true;
+    }
+    return false;
+}
+
+const Annotation* Project::annotationById(const QString& id) const
+{
+    for (const Annotation& annotation : m_annotations)
+        if (annotation.id == id)
+            return &annotation;
+    return nullptr;
+}
+
 bool Project::setEntityParent(EntityId id, EntityId parent)
 {
     Entity* e = entity(id);
@@ -458,7 +685,6 @@ bool Project::setEntityParent(EntityId id, EntityId parent)
     emit changed();
     return true;
 }
-
 bool Project::moveEntity(EntityId id, EntityId parent, int index)
 {
     const auto it = std::find_if(m_entities.begin(), m_entities.end(),
@@ -1145,7 +1371,7 @@ QVector<KeyframeRecord> Project::removeKeyframesAt(EntityId id, double frame)
             if (std::abs(track.keys[i].frame - frame) < 1e-6)
             {
                 removed.append({id, it.key(), track.keys[i].frame, track.keys[i].value,
-                                track.keys[i].ease});
+                                track.keys[i].ease, track.keys[i].note});
                 track.keys.removeAt(i);
             }
         }
@@ -1182,6 +1408,7 @@ void Project::addKeyframe(EntityId id, const QString& property, const Keyframe& 
         {
             existing.value = key.value;
             existing.ease = key.ease;
+            existing.note = key.note;
             modified = true;
             emit changed();
             return;
@@ -1309,6 +1536,35 @@ bool Project::setKeyframeEasing(EntityId id, const QString& property, double fra
     return false;
 }
 
+bool Project::setKeyframeNote(EntityId id, const QString& property, double frame,
+                              const QString& note)
+{
+    Entity* e = entity(id);
+    if (!e)
+        return false;
+    auto it = e->tracks.find(property);
+    if (it == e->tracks.end())
+        return false;
+    for (Keyframe& key : it->keys)
+    {
+        if (std::abs(key.frame - frame) >= 1e-6)
+            continue;
+        if (key.note == note)
+            return true;
+        key.note = note;
+        modified = true;
+        emit changed();
+        return true;
+    }
+    return false;
+}
+
+QString Project::keyframeNote(EntityId id, const QString& property, double frame) const
+{
+    const Keyframe* key = keyframe(id, property, frame);
+    return key ? key->note : QString();
+}
+
 const Keyframe* Project::keyframe(EntityId id, const QString& property, double frame) const
 {
     const Entity* e = entity(id);
@@ -1388,7 +1644,7 @@ QJsonObject Project::toJson() const
 {
     QJsonObject root;
     root[QStringLiteral("format")] = QStringLiteral("pvforge");
-    root[QStringLiteral("version")] = 3;
+    root[QStringLiteral("version")] = kProjectVersion;
     root[QStringLiteral("name")] = name;
     root[QStringLiteral("author")] = author;
     root[QStringLiteral("description")] = description;
@@ -1455,6 +1711,8 @@ QJsonObject Project::toJson() const
                     handles.append(key.ease.outY);
                     keyframe[QStringLiteral("e")] = handles;
                 }
+                if (!key.note.isEmpty())
+                    keyframe[QStringLiteral("note")] = key.note;
                 keys.append(keyframe);
             }
             tracks[it.key()] = keys;
@@ -1464,6 +1722,38 @@ QJsonObject Project::toJson() const
         entities.append(entity);
     }
     root[QStringLiteral("entities")] = entities;
+
+    QJsonArray scenes;
+    for (const Scene& scene : m_scenes)
+    {
+        QJsonObject object;
+        object[QStringLiteral("id")] = scene.id;
+        object[QStringLiteral("name")] = scene.name;
+        object[QStringLiteral("startFrame")] = scene.startFrame;
+        object[QStringLiteral("endFrame")] = scene.endFrame;
+        object[QStringLiteral("folderId")] = scene.folderId;
+        object[QStringLiteral("color")] = scene.color.name(QColor::HexArgb);
+        object[QStringLiteral("note")] = scene.note;
+        scenes.append(object);
+    }
+    root[QStringLiteral("scenes")] = scenes;
+
+    QJsonArray annotations;
+    for (const Annotation& annotation : m_annotations)
+    {
+        QJsonObject object;
+        object[QStringLiteral("id")] = annotation.id;
+        object[QStringLiteral("frame")] = annotation.frame;
+        object[QStringLiteral("title")] = annotation.title;
+        object[QStringLiteral("note")] = annotation.note;
+        QJsonArray tags;
+        for (const QString& tag : annotation.tags)
+            tags.append(tag);
+        object[QStringLiteral("tags")] = tags;
+        object[QStringLiteral("color")] = annotation.color.name(QColor::HexArgb);
+        annotations.append(object);
+    }
+    root[QStringLiteral("annotations")] = annotations;
 
     QJsonArray templates;
     for (const Template& t : m_templates)
@@ -1541,9 +1831,6 @@ bool Project::load(const QString& path, QString* error)
         return false;
     }
 
-    // Set the project path first so relative asset paths can be resolved.
-    filePath = path;
-
     const QJsonObject root = document.object();
     if (root.value(QStringLiteral("format")).toString() != QLatin1String("pvforge"))
     {
@@ -1551,6 +1838,25 @@ bool Project::load(const QString& path, QString* error)
             *error = QStringLiteral("不是 PVForge 工程文件");
         return false;
     }
+
+    const int version = root.value(QStringLiteral("version")).toInt(1);
+    if (version < 1)
+    {
+        if (error)
+            *error = QStringLiteral("工程版本 %1 无效").arg(version);
+        return false;
+    }
+    if (version > kProjectVersion)
+    {
+        if (error)
+            *error = QStringLiteral("工程版本 %1 过新，当前最高支持 %2")
+                         .arg(version)
+                         .arg(kProjectVersion);
+        return false;
+    }
+
+    // Set the project path first so relative asset paths can be resolved.
+    filePath = path;
 
     name = root.value(QStringLiteral("name")).toString(QStringLiteral("未命名项目"));
     author = root.value(QStringLiteral("author")).toString();
@@ -1626,6 +1932,7 @@ bool Project::load(const QString& path, QString* error)
                     frame.ease.outX = handles.at(2).toDouble(0.0);
                     frame.ease.outY = handles.at(3).toDouble(1.0);
                 }
+                frame.note = key.value(QStringLiteral("note")).toString();
                 track.keys.append(frame);
             }
             std::sort(track.keys.begin(), track.keys.end(),
@@ -1823,6 +2130,112 @@ bool Project::load(const QString& path, QString* error)
     else if (monitorView < 0 && monitorView != kWorkCameraView
              && monitorView != kWholeCanvasView)
         monitorView = kWorkCameraView;
+
+    m_scenes.clear();
+    const QJsonArray sceneValues = root.value(QStringLiteral("scenes")).toArray();
+    for (const QJsonValue& value : sceneValues)
+    {
+        const QJsonObject object = value.toObject();
+        Scene scene;
+        scene.id = object.value(QStringLiteral("id")).toString();
+        if (scene.id.isEmpty())
+            scene.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        scene.name = object.value(QStringLiteral("name")).toString(QStringLiteral("场景"));
+        scene.startFrame = object.value(QStringLiteral("startFrame")).toInt();
+        scene.endFrame = object.value(QStringLiteral("endFrame")).toInt(scene.startFrame);
+        scene.folderId = object.value(QStringLiteral("folderId")).toInt(kInvalidEntity);
+        scene.color = QColor(object.value(QStringLiteral("color")).toString());
+        if (!scene.color.isValid())
+            scene.color = QColor(90, 170, 255);
+        scene.note = object.value(QStringLiteral("note")).toString();
+
+        const Entity* folder = entity(scene.folderId);
+        if (!folder || !folder->isFolder())
+            scene.folderId = kInvalidEntity;
+
+        // A corrupt or hand-edited file must not break the load path: skip
+        // malformed ranges instead of clamping them.
+        if (scene.startFrame < 0 || scene.endFrame < scene.startFrame)
+            continue;
+        bool duplicate = false;
+        bool overlap = false;
+        for (const Scene& existing : m_scenes)
+        {
+            if (existing.id == scene.id)
+                duplicate = true;
+            if (scene.startFrame <= existing.endFrame
+                && existing.startFrame <= scene.endFrame)
+            {
+                overlap = true;
+            }
+        }
+        if (duplicate || overlap)
+            continue;
+        m_scenes.append(scene);
+    }
+    std::stable_sort(m_scenes.begin(), m_scenes.end(),
+                     [](const Scene& a, const Scene& b) {
+                         return a.startFrame < b.startFrame;
+                     });
+
+    m_annotations.clear();
+    const QJsonArray annotationValues =
+        root.value(QStringLiteral("annotations")).toArray();
+    for (const QJsonValue& value : annotationValues)
+    {
+        const QJsonObject object = value.toObject();
+        Annotation annotation;
+        annotation.id = object.value(QStringLiteral("id")).toString();
+        if (annotation.id.isEmpty())
+            annotation.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        annotation.frame = object.value(QStringLiteral("frame")).toInt();
+        annotation.title = object.value(QStringLiteral("title")).toString();
+        annotation.note = object.value(QStringLiteral("note")).toString();
+        for (const QJsonValue& tag : object.value(QStringLiteral("tags")).toArray())
+            annotation.tags.append(tag.toString());
+        annotation.color = QColor(object.value(QStringLiteral("color")).toString());
+        if (!annotation.color.isValid())
+            annotation.color = QColor(255, 190, 60);
+        if (annotation.frame < 0)
+            continue;
+        bool duplicate = false;
+        for (const Annotation& existing : m_annotations)
+            if (existing.id == annotation.id)
+                duplicate = true;
+        if (duplicate)
+            continue;
+        m_annotations.append(annotation);
+    }
+    std::stable_sort(m_annotations.begin(), m_annotations.end(),
+                     [](const Annotation& a, const Annotation& b) {
+                         return a.frame < b.frame;
+                     });
+
+    if (version < kProjectVersion && m_scenes.isEmpty())
+    {
+        // v1-v3 projects had no scene concept. Wrap every root entity in one
+        // default scene so later UI/MCP work has a context. The folder keeps
+        // the identity transform (makeBase defaults), so reparenting does not
+        // move anything. When the project has no content at all, use the
+        // single frame 0..0 instead of a synthetic 2-second range: the scene
+        // then matches timelineLength() and still exists for later editing.
+        Entity folder = makeBase(EntityType::Folder, QStringLiteral("默认场景"));
+        const EntityId folderId = folder.id;
+        for (Entity& e : m_entities)
+            if (e.parent == kInvalidEntity)
+                e.parent = folderId;
+        m_entities.append(folder);
+        m_entityIndex.insert(folderId, int(m_entities.size()) - 1);
+        ++m_nextId;
+
+        Scene scene;
+        scene.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        scene.name = QStringLiteral("默认场景");
+        scene.startFrame = 0;
+        scene.endFrame = timelineLength();
+        scene.folderId = folderId;
+        m_scenes.append(scene);
+    }
 
     filePath = path;
     modified = false;

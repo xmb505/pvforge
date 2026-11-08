@@ -77,6 +77,11 @@ State state(const Project& project, EntityId id, int frame)
             std::atan2(xAxis.y(), xAxis.x()) * 180.0 / M_PI;
         result.rotation = localRotation + parentRotation;
         result.scale = std::clamp(localScale * parentScale, kMinScale, kMaxScale);
+        // A scene folder is an identity parent. Keep the same project-space
+        // clamp a root camera gets, otherwise v3 migration could shift an
+        // out-of-bounds camera.
+        if (parent.isIdentity())
+            result.center = clampCenter(project, result.scale, result.center);
     }
     else
     {
