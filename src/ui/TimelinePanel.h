@@ -55,6 +55,13 @@ public:
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
     int horizontalScrollForTest() const { return m_scrollX; }
+    void setHorizontalScrollForTest(int value)
+    {
+        m_scrollX = std::max(0, value);
+        clampScroll();
+        update();
+        syncPopups();
+    }
     int verticalScrollForTest() const { return m_scrollY; }
     bool verticalScrollVisibleForTest() const;
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }

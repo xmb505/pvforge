@@ -9166,6 +9166,21 @@ int clipTimelineTest(QApplication& app)
                             << popupHidden << popupShown;
                 ++failures;
             }
+
+            // With the parent clip start scrolled off the left edge, the
+            // popup must scroll to the same global frame as the main axis.
+            timeline->setHorizontalScrollForTest(320);
+            QApplication::processEvents();
+            const int popupAxisX =
+                popup->mapToGlobal(QPoint(popup->frameXForTest(75), 0)).x();
+            const int mainAxisX =
+                timeline->mapToGlobal(QPoint(timeline->frameXForTest(75), 0)).x();
+            if (std::abs(popupAxisX - mainAxisX) > 2)
+            {
+                qCritical() << "clip-timeline-test: popup axis"
+                            << popupAxisX << mainAxisX;
+                ++failures;
+            }
             auto* assetList =
                 window.findChild<QListWidget*>(QStringLiteral("assetList"));
             auto* viewToggle =

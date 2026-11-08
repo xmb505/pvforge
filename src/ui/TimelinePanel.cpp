@@ -271,6 +271,19 @@ public:
         y = std::clamp(y, 0, std::max(0, host->height() - height));
 
         setGeometry(left, y, width, height);
+        m_panel->m_pixelsPerFrame = m_source->m_pixelsPerFrame;
+        // If the parent clip starts left of the visible main timeline, the
+        // popup's left edge is clamped to the viewport. Scroll the popup to
+        // the global frame under that edge so rulers, clips and playhead line
+        // up with the main timeline instead of restarting at the clip start.
+        const int sourceX =
+            m_source->mapFrom(host, QPoint(left, clip.top())).x();
+        const int sourceFrame = m_source->frameFromX(sourceX);
+        const int contentStart = m_panel->contentStart();
+        m_panel->m_scrollX = std::max(
+            0, int(std::lround((std::max(contentStart, sourceFrame)
+                                - contentStart)
+                               * m_panel->m_pixelsPerFrame)));
         m_panel->clampScroll();
         show();
         raise();
