@@ -1276,6 +1276,52 @@ int specialTest(QApplication& app)
         }
     }
 
+    // Balloon bounds must include half the stroke, or the rasterised image
+    // clips the outline at its top/bottom extremes.
+    {
+        QVariantMap data;
+        data.insert(QStringLiteral("text"), QStringLiteral("真是个变态啊"));
+        data.insert(QStringLiteral("size"), 96);
+        const pvf::ComicBox box = pvf::ComicBox::build(
+            pvf::TextStyle::fromData(data), pvf::BubbleStyle::fromData(data));
+
+        QImage canvas(1600, 1600, QImage::Format_ARGB32_Premultiplied);
+        canvas.fill(Qt::transparent);
+        {
+            QPainter painter(&canvas);
+            painter.translate(800, 800);
+            box.paint(painter);
+        }
+        const QRectF bounds = box.bounds();
+        const QRect area(int(std::floor(bounds.left())) + 800,
+                         int(std::floor(bounds.top())) + 800,
+                         int(std::ceil(bounds.width())),
+                         int(std::ceil(bounds.height())));
+        int edge = 0;
+        const QRect edgeRect = area.adjusted(0, 0, -1, -1);
+        for (int x = edgeRect.left(); x <= edgeRect.right(); ++x)
+        {
+            if (qAlpha(canvas.pixel(x, edgeRect.top())) > 0)
+                ++edge;
+            if (qAlpha(canvas.pixel(x, edgeRect.bottom())) > 0)
+                ++edge;
+        }
+        for (int y = edgeRect.top(); y <= edgeRect.bottom(); ++y)
+        {
+            if (qAlpha(canvas.pixel(edgeRect.left(), y)) > 0)
+                ++edge;
+            if (qAlpha(canvas.pixel(edgeRect.right(), y)) > 0)
+                ++edge;
+        }
+        canvas.save(QStringLiteral("/tmp/pvf_bubble_bounds.png"));
+        if (edge >= 50)
+        {
+            qCritical() << "special-test: balloon stroke clipped at bounds"
+                        << edge << bounds;
+            ++failures;
+        }
+    }
+
     // Glyph outline: stroke colour appears around the fill.
     {
         pvf::TextStyle style;
@@ -7154,11 +7200,38 @@ int layoutTest(QApplication& app)
 {
     auto* testProject = new pvf::Project;
     testProject->fps = 24;
+    pvf::Entity* entity =
+        testProject->addVector(0, 120, 120, Qt::red, Qt::white, 0);
+    const pvf::EntityId entityId = entity->id;
     pvf::MainWindow window(testProject);
     window.resize(480, 1060);
     window.show();
 
-    QTimer::singleShot(300, &window, [&app, &window] {
+    QTimer::singleShot(300, &window, [&app, &window, testProject, entityId] {
+        int failures = 0;
+        auto* objectTab =
+            window.findChild<QScrollArea*>(QStringLiteral("objectTab"));
+        if (!objectTab || objectTab->isVisible())
+        {
+            qCritical() << "layout-test: object tab visible at startup"
+                        << (objectTab ? objectTab->isVisible() : false);
+            ++failures;
+        }
+        window.setSelectedEntityForTest(entityId);
+        QApplication::processEvents();
+        if (!objectTab || !objectTab->isVisible())
+        {
+            qCritical() << "layout-test: object tab did not appear";
+            ++failures;
+        }
+        window.setSelectedEntityForTest(pvf::kInvalidEntity);
+        QApplication::processEvents();
+        if (objectTab && objectTab->isVisible())
+        {
+            qCritical() << "layout-test: object tab did not hide";
+            ++failures;
+        }
+
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_layout_narrow.png"));
         qInfo() << "layout-test: size" << window.size() << "minimum" << window.minimumSize();
         if (auto* timeline = window.findChild<pvf::TimelinePanel*>())
@@ -7167,7 +7240,7 @@ int layoutTest(QApplication& app)
         if (auto* viewport = window.findChild<pvf::Viewport*>())
             qInfo() << "viewport geometry" << viewport->geometry()
                     << "min" << viewport->minimumSize();
-        app.exit(0);
+        app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
 }

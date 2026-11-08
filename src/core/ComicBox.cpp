@@ -279,10 +279,11 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
     box->m_path = path;
 
     const QRectF pathBounds = path.boundingRect();
-    const double halfWidth =
-        std::max(std::abs(pathBounds.left()), std::abs(pathBounds.right()));
-    const double halfHeight =
-        std::max(std::abs(pathBounds.top()), std::abs(pathBounds.bottom()));
+    const double stroke = bubble.strokeWidth > 0 ? bubble.strokeWidth / 2.0 + 1.0 : 1.0;
+    const double halfWidth = std::ceil(
+        std::max(std::abs(pathBounds.left()), std::abs(pathBounds.right())) + stroke);
+    const double halfHeight = std::ceil(
+        std::max(std::abs(pathBounds.top()), std::abs(pathBounds.bottom())) + stroke);
     box->m_bounds = QRectF(-halfWidth, -halfHeight, halfWidth * 2.0, halfHeight * 2.0);
 
     if (cache.size() > 256)

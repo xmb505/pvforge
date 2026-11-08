@@ -109,6 +109,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     // Entity properties tab, added on demand when something is selected.
     m_objectTab = new QScrollArea(this);
+    m_objectTab->setObjectName(QStringLiteral("objectTab"));
     m_objectTab->setWidgetResizable(true);
     m_objectTab->setFrameShape(QFrame::NoFrame);
     m_objectTab->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
