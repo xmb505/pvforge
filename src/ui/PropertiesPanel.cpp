@@ -111,6 +111,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     auto* keyLayout = new QVBoxLayout(keyContent);
     keyLayout->setContentsMargins(10, 8, 10, 8);
     m_keyButton = new QPushButton(QStringLiteral("在当前帧打关键帧"), keyContent);
+    m_keyButton->setObjectName(QStringLiteral("keyframeButton"));
     m_keyButton->setEnabled(false);
     keyLayout->addWidget(m_keyButton);
 
@@ -197,6 +198,7 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
                              double lo, double hi, int decimals, double step, double factor)
 {
     auto* spin = new QDoubleSpinBox(form->parentWidget());
+    spin->setObjectName(QStringLiteral("row_") + prop);
     spin->setRange(lo, hi);
     spin->setDecimals(decimals);
     spin->setSingleStep(step);

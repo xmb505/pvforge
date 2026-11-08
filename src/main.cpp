@@ -326,6 +326,91 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int keyframeEditTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(400, &window, [&app, &window, project] {
+        int failures = 0;
+        pvf::Entity* entity = project->addVector(0, 200, 200, Qt::red, Qt::white, 0);
+        const pvf::EntityId id = entity->id;
+        window.setSelectedEntityForTest(id);
+        QApplication::processEvents();
+
+        auto* opacity =
+            window.findChild<QDoubleSpinBox*>(QStringLiteral("row_opacity"));
+        auto* keyButton =
+            window.findChild<QPushButton*>(QStringLiteral("keyframeButton"));
+        if (!opacity || !keyButton)
+        {
+            qCritical() << "keyframe-edit-test: widgets missing";
+            app.exit(1);
+            return;
+        }
+
+        // Key the element at frame 10, then at frame 5, using the button
+        // exactly like a user would.
+        window.goToFrame(10);
+        keyButton->click();
+        QApplication::processEvents();
+        window.goToFrame(5);
+        keyButton->click();
+        QApplication::processEvents();
+        // Now make the element appear at frame 5: keyframe 0 at frame 4.
+        window.goToFrame(4);
+        opacity->setValue(0);
+        QApplication::processEvents();
+
+        const auto at = [&](int frame) {
+            return project->value(id, QStringLiteral("opacity"), frame);
+        };
+        qInfo() << "keyframe-edit-test: opacity at 4/5/6/10" << at(4) << at(5) << at(6)
+                << at(10);
+        if (std::abs(at(4)) > 1e-6)
+        {
+            qCritical() << "keyframe-edit-test: frame 4 is not transparent";
+            ++failures;
+        }
+        if (at(5) < 0.99 || at(6) < 0.99 || at(10) < 0.99)
+        {
+            qCritical() << "keyframe-edit-test: later frames became transparent";
+            ++failures;
+        }
+        window.goToFrame(5);
+        QApplication::processEvents();
+        const double spinAt5 = opacity->value();
+        window.goToFrame(10);
+        QApplication::processEvents();
+        const double spinAt10 = opacity->value();
+        qInfo() << "keyframe-edit-test: spin at 5/10" << spinAt5 << spinAt10;
+        if (spinAt5 < 99.0 || spinAt10 < 99.0)
+        {
+            qCritical() << "keyframe-edit-test: panel shows transparency later";
+            ++failures;
+        }
+
+        const pvf::Entity* check = project->entity(id);
+        const auto it = check->tracks.constFind(QStringLiteral("opacity"));
+        if (it == check->tracks.constEnd())
+        {
+            qCritical() << "keyframe-edit-test: opacity track missing";
+            ++failures;
+        }
+        else
+        {
+            qInfo() << "keyframe-edit-test: keys" << it->keys.size();
+            for (const pvf::Keyframe& key : it->keys)
+                qInfo() << "   key frame" << key.frame << "value" << key.value;
+        }
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int specialTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -5386,7 +5471,15 @@ int timelineZoomTest(QApplication& app)
         return 1;
     }
 
-    QTimer::singleShot(400, &window, [&app, &window, timeline] {
+    for (int i = 0; i < 30; ++i)
+        project->addVector(0, 100, 100, Qt::red, Qt::white, 0);
+    // Give the time axis some content so it can actually scroll horizontally.
+    if (const pvf::Entity* first = project->entities().isEmpty()
+                                        ? nullptr
+                                        : &project->entities().first())
+        project->setValue(first->id, QStringLiteral("x"), 400, 100.0, true);
+
+    QTimer::singleShot(400, &window, [&app, &window, timeline, project] {
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_zoom_before.png"));
         const double before = timeline->pixelsPerFrame();
 
@@ -5398,11 +5491,45 @@ int timelineZoomTest(QApplication& app)
             QApplication::sendEvent(timeline, &event);
         }
 
+        int failures = 0;
         const double after = timeline->pixelsPerFrame();
-        QTimer::singleShot(200, &window, [&app, &window, before, after] {
+        if (!(after > before * 4.0))
+        {
+            qCritical() << "timeline-zoom-test: ctrl wheel did not zoom" << before
+                        << after;
+            ++failures;
+        }
+        if (!timeline->verticalScrollVisibleForTest())
+        {
+            qCritical() << "timeline-zoom-test: vertical scrollbar not visible";
+            ++failures;
+        }
+        const int verticalBefore = timeline->verticalScrollForTest();
+        QWheelEvent plain(pos, timeline->mapToGlobal(pos), QPoint(), QPoint(0, -120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(timeline, &plain);
+        if (timeline->verticalScrollForTest() <= verticalBefore)
+        {
+            qCritical() << "timeline-zoom-test: wheel did not scroll rows"
+                        << verticalBefore << timeline->verticalScrollForTest();
+            ++failures;
+        }
+        const int horizontalBefore = timeline->horizontalScrollForTest();
+        QWheelEvent shifted(pos, timeline->mapToGlobal(pos), QPoint(), QPoint(0, -120),
+                            Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(timeline, &shifted);
+        if (timeline->horizontalScrollForTest() == horizontalBefore)
+        {
+            qCritical() << "timeline-zoom-test: shift wheel did not scroll time"
+                        << horizontalBefore << timeline->horizontalScrollForTest();
+            ++failures;
+        }
+
+        QTimer::singleShot(200, &window, [&app, &window, before, after, failures] {
             window.grab().toImage().save(QStringLiteral("/tmp/pvforge_zoom_after.png"));
-            qInfo() << "timeline-zoom-test:" << before << "->" << after;
-            app.exit(after > before * 4.0 ? 0 : 1);
+            qInfo() << "timeline-zoom-test:" << before << "->" << after
+                    << "failures" << failures;
+            app.exit(failures == 0 ? 0 : 1);
         });
     });
     return app.exec();
@@ -5901,6 +6028,8 @@ int main(int argc, char* argv[])
         return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--special-test")))
         return specialTest(app);
+    if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
+        return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

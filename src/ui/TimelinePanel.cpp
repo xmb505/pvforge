@@ -142,6 +142,13 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         m_scrollX = value;
         update();
     });
+
+    m_vScroll = new QScrollBar(Qt::Vertical, this);
+    m_vScroll->setObjectName(QStringLiteral("timelineVScroll"));
+    connect(m_vScroll, &QScrollBar::valueChanged, this, [this](int value) {
+        m_scrollY = value;
+        update();
+    });
     updateScrollBar();
 
     // Holding an arrow key keeps stepping at the project frame rate, which
@@ -329,11 +336,30 @@ void TimelinePanel::updateScrollBar()
         return;
     const int maximum = std::max(0, contentWidth() - visibleWidth());
     m_scrollX = std::clamp(m_scrollX, 0, maximum);
-    const QSignalBlocker blocker(m_hScroll);
-    m_hScroll->setRange(0, maximum);
-    m_hScroll->setPageStep(visibleWidth());
-    m_hScroll->setSingleStep(60);
-    m_hScroll->setValue(m_scrollX);
+    {
+        const QSignalBlocker blocker(m_hScroll);
+        m_hScroll->setRange(0, maximum);
+        m_hScroll->setPageStep(visibleWidth());
+        m_hScroll->setSingleStep(60);
+        m_hScroll->setValue(m_scrollX);
+    }
+
+    if (!m_vScroll)
+        return;
+    // Entity rows scroll vertically when the list is taller than the body.
+    int total = 0;
+    const auto& entities = m_project->entities();
+    for (int index : visibleEntities())
+        total += entities[index].isAudio() ? kAudioRowHeight : kRowHeight;
+    const int page = std::max(0, height() - kHeaderHeight - kScrollBarHeight);
+    const int rowsMaximum = std::max(0, total - page);
+    m_scrollY = std::clamp(m_scrollY, 0, rowsMaximum);
+    const QSignalBlocker blocker(m_vScroll);
+    m_vScroll->setRange(0, rowsMaximum);
+    m_vScroll->setPageStep(page);
+    m_vScroll->setSingleStep(kRowHeight);
+    m_vScroll->setValue(m_scrollY);
+    m_vScroll->setVisible(rowsMaximum > 0);
 }
 
 int TimelinePanel::xFromFrame(int frame) const
@@ -346,12 +372,17 @@ int TimelinePanel::frameFromX(int x) const
     return int(std::lround((x - kNameWidth + m_scrollX) / m_pixelsPerFrame));
 }
 
+bool TimelinePanel::verticalScrollVisibleForTest() const
+{
+    return m_vScroll && m_vScroll->isVisible();
+}
+
 int TimelinePanel::rowAt(int y) const
 {
     if (y < kHeaderHeight)
         return -1;
     const QVector<int> visible = visibleEntities();
-    int top = kHeaderHeight;
+    int top = kHeaderHeight - m_scrollY;
     for (int row = 0; row < visible.size(); ++row)
     {
         const int height = rowHeight(row);
@@ -364,7 +395,7 @@ int TimelinePanel::rowAt(int y) const
 
 int TimelinePanel::rowTop(int row) const
 {
-    int top = kHeaderHeight;
+    int top = kHeaderHeight - m_scrollY;
     for (int i = 0; i < row; ++i)
         top += rowHeight(i);
     return top;
@@ -602,18 +633,30 @@ void TimelinePanel::zoomAt(double factor, int anchorX)
 
 void TimelinePanel::wheelEvent(QWheelEvent* event)
 {
-    const double steps = event->angleDelta().y() / 120.0;
-    if (steps == 0.0)
+    const double vsteps = event->angleDelta().y() / 120.0;
+    const double hsteps = event->angleDelta().x() / 120.0;
+    if (vsteps == 0.0 && hsteps == 0.0)
         return;
 
     if (event->modifiers() & Qt::ControlModifier)
     {
-        zoomAt(std::pow(2.0, steps), int(event->position().x()));
+        zoomAt(std::pow(2.0, vsteps != 0.0 ? vsteps : hsteps),
+               int(event->position().x()));
         event->accept();
         return;
     }
 
-    m_scrollX -= int(std::lround(steps * 80));
+    // Shift + wheel scrolls the time axis, the plain wheel scrolls the
+    // entity rows. Some platforms report Shift as a horizontal delta.
+    if ((event->modifiers() & Qt::ShiftModifier) || hsteps != 0.0)
+    {
+        const double amount = hsteps != 0.0 ? hsteps : vsteps;
+        m_scrollX -= int(std::lround(amount * 80));
+    }
+    else
+    {
+        m_scrollY -= int(std::lround(vsteps * kRowHeight * 3));
+    }
     updateScrollBar();
     update();
     event->accept();
@@ -628,6 +671,10 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
                               kHeaderHeight - 6);
     m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
                            kScrollBarHeight);
+    if (m_vScroll)
+        m_vScroll->setGeometry(width() - kScrollBarHeight, kHeaderHeight,
+                               kScrollBarHeight,
+                               height() - kHeaderHeight - kScrollBarHeight);
     updateScrollBar();
 }
 
@@ -797,6 +844,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
+    updateScrollBar();
 
     const int bodyBottom = height() - kScrollBarHeight;
     const int right = width() - kRightPad;
@@ -903,6 +951,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     // Entity rows.
     const auto& entities = m_project->entities();
     const QVector<int> visible = visibleEntities();
+    p.save();
+    p.setClipRect(QRect(0, kHeaderHeight, width(), bodyBottom - kHeaderHeight));
     for (int row = 0; row < visible.size(); ++row)
     {
         const Entity& e = entities[visible[row]];
@@ -1023,6 +1073,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
         }
     }
+
+    p.restore();
 
     if (m_dragMode == DragMode::MoveRow && m_dropRow >= 0
         && m_dropMode != DropMode::None)

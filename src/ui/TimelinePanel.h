@@ -38,6 +38,9 @@ public:
     void setSelectedEntity(EntityId id);
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
+    int horizontalScrollForTest() const { return m_scrollX; }
+    int verticalScrollForTest() const { return m_scrollY; }
+    bool verticalScrollVisibleForTest() const;
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
@@ -140,7 +143,9 @@ private:
     QLineEdit* m_renameEdit = nullptr;
     EntityId m_renameEntity = kInvalidEntity;
     QScrollBar* m_hScroll = nullptr;
+    QScrollBar* m_vScroll = nullptr;
     int m_scrollX = 0;
+    int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
     QTimer* m_holdTimer = nullptr;
