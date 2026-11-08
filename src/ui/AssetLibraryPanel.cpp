@@ -9,11 +9,13 @@
 #include "core/TextStyle.h"
 #include "media/MediaImporter.h"
 
+#include <QDialog>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLineEdit>
+#include <QListView>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPainter>
@@ -473,6 +475,93 @@ void AssetLibraryPanel::createSelected()
 
     if (Entity* e = m_project->createFromTemplate(templates[index]))
         emit entityCreated(e->id);
+}
+
+QVector<int> AssetLibraryPanel::mediaTemplateIndices(const Project& project,
+                                                   EntityType type)
+{
+    QVector<int> indices;
+    const auto& templates = project.templates();
+    for (int index = 0; index < int(templates.size()); ++index)
+        if (templates[index].type == type && !templates[index].path.isEmpty())
+            indices.append(index);
+    return indices;
+}
+
+QString AssetLibraryPanel::pickMedia(QWidget* parent, Project* project,
+                                     EntityType type, const QString& filter)
+{
+    if (!project)
+        return QString();
+
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("更换素材"));
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* hint = new QLabel(QStringLiteral("从素材库选择，或导入新文件"), &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    auto* list = new QListWidget(&dialog);
+    list->setViewMode(QListView::IconMode);
+    list->setIconSize(QSize(96, 72));
+    list->setGridSize(QSize(136, 110));
+    list->setResizeMode(QListView::Adjust);
+    list->setMovement(QListView::Static);
+    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    list->setMinimumSize(420, 260);
+    for (int index : mediaTemplateIndices(*project, type))
+    {
+        const Template& tmpl = project->templates()[index];
+        auto* item = new QListWidgetItem(listIcon(tmpl), tmpl.name, list);
+        item->setData(Qt::UserRole, index);
+        item->setToolTip(QStringLiteral("%1 · %2")
+                             .arg(templateTypeName(tmpl.type), tmpl.path));
+    }
+    if (list->count() > 0)
+        list->setCurrentRow(0);
+    layout->addWidget(list, 1);
+
+    auto* buttons = new QHBoxLayout();
+    auto* importButton = new QPushButton(QStringLiteral("导入新文件…"), &dialog);
+    buttons->addWidget(importButton);
+    buttons->addStretch(1);
+    auto* cancelButton = new QPushButton(QStringLiteral("取消"), &dialog);
+    buttons->addWidget(cancelButton);
+    auto* useButton = new QPushButton(QStringLiteral("使用选中素材"), &dialog);
+    useButton->setDefault(true);
+    useButton->setEnabled(list->count() > 0);
+    buttons->addWidget(useButton);
+    layout->addLayout(buttons);
+
+    QString imported;
+    QObject::connect(cancelButton, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(useButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    QObject::connect(list, &QListWidget::itemDoubleClicked, &dialog,
+                     [&dialog](QListWidgetItem*) { dialog.accept(); });
+    QObject::connect(importButton, &QPushButton::clicked, &dialog, [&] {
+        const QString file = QFileDialog::getOpenFileName(
+            &dialog, QStringLiteral("更换素材"), QString(), filter);
+        if (!file.isEmpty())
+        {
+            imported = file;
+            dialog.accept();
+        }
+    });
+
+    if (dialog.exec() != QDialog::Accepted)
+        return QString();
+    if (!imported.isEmpty())
+        return imported;
+
+    const QListWidgetItem* item = list->currentItem();
+    if (!item)
+        return QString();
+    const int index = item->data(Qt::UserRole).toInt();
+    const auto& templates = project->templates();
+    if (index < 0 || index >= int(templates.size()))
+        return QString();
+    return templates[index].path;
 }
 
 void AssetLibraryPanel::removeSelected()

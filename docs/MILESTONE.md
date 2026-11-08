@@ -66,7 +66,7 @@
   - 放射状线条：楔形集中线，中心收尖外缘宽，角度/长度随机抖动，约 60% 的线条随机加粗 1.4×；随机速度（Hz）和整体旋转（°/s）可调
   - 快速流过：成组平行线按帧流动，方向/速度/间距/长度可调，用作背景运动感
 - **自动保存**：默认开启、每 5 分钟一次，设置 → 常规可关闭或改间隔；QSaveFile 原子写入
-- **更换素材**：图片/视频/音频实体可右键或属性面板换源文件；位置、关键帧、配对音频保留，视频连配对音频一起换，整次替换一条撤销
+- **更换素材**：图片/视频/音频实体可右键或属性面板换源文件；弹出素材库选择器，只列出同类型的库素材（和 Mine-imator 的素材列表一致），也可以从「导入新文件…」走文件选择。位置、关键帧、配对音频保留，视频连配对音频一起换，整次替换一条撤销
 - **复制粘贴实体**：Ctrl+C / Ctrl+V 复制整棵子树（含关键帧与配对音频），Ctrl+D 原地复制；粘贴为同级实体并自动选中，一条撤销
 - **实体多选**：实体栏 Ctrl+点击切换、Shift+点击范围选择；右键「组成文件夹」把选中实体收进新文件夹（自动去掉已被其他选中项包含的子级），整次操作一条撤销
 - **拖动多选**：按住任一已选中的行拖动，整组实体一起移动；拖到文件夹中间即移入，拖到行间按图层顺序插入。拖动不会清空多选（与 Mine-imator 一致），整次移动一条撤销
@@ -294,9 +294,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / clipboard / group / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 47 个模式，全部通过。
+共 48 个模式，全部通过。
 
 ## 已知限制
 

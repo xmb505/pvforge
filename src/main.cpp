@@ -31,6 +31,7 @@
 #include "ui/CameraMonitor.h"
 #include "ui/EasingPicker.h"
 #include "ui/CollapsibleSection.h"
+#include "ui/AssetLibraryPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
@@ -38,6 +39,7 @@
 #include <QApplication>
 #include <QAction>
 #include <QComboBox>
+#include <QDialog>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -676,6 +678,90 @@ int clipboardTest(QApplication& app)
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
+}
+
+int libraryPickerTest()
+{
+    const QString firstPath =
+        QDir::tempPath() + QStringLiteral("/pvf_pick_a.png");
+    const QString secondPath =
+        QDir::tempPath() + QStringLiteral("/pvf_pick_b.png");
+    QImage image(32, 32, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    if (!image.save(firstPath))
+        return 1;
+    image.fill(Qt::blue);
+    if (!image.save(secondPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    project->addImage(firstPath);
+    project->addImage(secondPath);
+    project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+
+    int failures = 0;
+    const QVector<int> images =
+        pvf::AssetLibraryPanel::mediaTemplateIndices(*project,
+                                                     pvf::EntityType::Image);
+    if (images.size() != 2)
+    {
+        qCritical() << "library-picker-test: image entries" << images.size();
+        ++failures;
+    }
+    for (int index : images)
+        if (index < 0 || index >= project->templates().size()
+            || project->templates()[index].type != pvf::EntityType::Image
+            || project->templates()[index].path.isEmpty())
+        {
+            qCritical() << "library-picker-test: wrong entry" << index;
+            ++failures;
+            break;
+        }
+
+    const QVector<int> audios =
+        pvf::AssetLibraryPanel::mediaTemplateIndices(*project,
+                                                     pvf::EntityType::Audio);
+    if (!audios.isEmpty())
+    {
+        qCritical() << "library-picker-test: audio should be empty"
+                    << audios.size();
+        ++failures;
+    }
+
+    // Open the real picker, check that it lists the two library images and
+    // grab it for visual inspection, then cancel.
+    QTimer::singleShot(100, [&failures] {
+        for (QWidget* widget : QApplication::topLevelWidgets())
+        {
+            auto* dialog = qobject_cast<QDialog*>(widget);
+            if (!dialog || !dialog->isVisible()
+                || dialog->windowTitle() != QStringLiteral("更换素材"))
+                continue;
+            if (auto* list = dialog->findChild<QListWidget*>())
+                if (list->count() != 2)
+                {
+                    qCritical() << "library-picker-test: dialog entries"
+                                << list->count();
+                    ++failures;
+                }
+            dialog->grab().save(QStringLiteral("/tmp/pvf_media_picker.png"));
+            dialog->reject();
+            return;
+        }
+    });
+    const QString chosen = pvf::AssetLibraryPanel::pickMedia(
+        nullptr, project, pvf::EntityType::Image,
+        QStringLiteral("图片 (*.png *.jpg)"));
+    if (!chosen.isEmpty())
+    {
+        qCritical() << "library-picker-test: cancel returned a path" << chosen;
+        ++failures;
+    }
+
+    QFile::remove(firstPath);
+    QFile::remove(secondPath);
+    qInfo() << "library-picker-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int replaceSourceTest()
@@ -6797,6 +6883,8 @@ int main(int argc, char* argv[])
         return layerTest();
     if (app.arguments().contains(QStringLiteral("--replace-test")))
         return replaceSourceTest();
+    if (app.arguments().contains(QStringLiteral("--library-picker-test")))
+        return libraryPickerTest();
     if (app.arguments().contains(QStringLiteral("--clipboard-test")))
         return clipboardTest(app);
     if (app.arguments().contains(QStringLiteral("--group-test")))

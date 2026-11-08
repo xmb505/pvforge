@@ -1078,8 +1078,9 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
     if (!entity || m_project->isEffectivelyLocked(id))
         return;
 
+    const EntityType expected = entity->type;
     QString filter;
-    switch (entity->type)
+    switch (expected)
     {
     case EntityType::Image:
         filter = QStringLiteral("图片 (*.png *.jpg *.jpeg *.webp *.bmp *.svg)");
@@ -1094,12 +1095,10 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
         return;
     }
 
-    const QString file = QFileDialog::getOpenFileName(
-        this, QStringLiteral("更换素材"), QString(), filter);
+    const QString file =
+        AssetLibraryPanel::pickMedia(this, m_project, expected, filter);
     if (file.isEmpty())
         return;
-
-    const EntityType expected = entity->type;
     const QString directory = m_project->assetDirectory();
     auto* watcher = new QFutureWatcher<MediaImportResult>(this);
     connect(watcher, &QFutureWatcherBase::finished, this,

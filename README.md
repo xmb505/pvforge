@@ -28,7 +28,7 @@
 - **素材库**：异步导入、内容寻址去重、搜索、预览、复用；长文件名/长路径中间省略，悬停看完整内容
 - **自动保存**：默认每 5 分钟自动保存一次已有路径的工程；设置 → 常规可关闭或修改间隔
 - **播放头记忆**：退出或保存工程时记住当前帧，重新打开工程自动回到上次的播放条位置
-- **更换素材**：图片/视频/音频实体可以换源文件，位置、关键帧、配对音频都保留，一条撤销
+- **更换素材**：图片/视频/音频实体可以换源文件，弹出素材库选择（或导入新文件），位置、关键帧、配对音频都保留，一条撤销
 - **复制粘贴实体**：Ctrl+C / Ctrl+V 复制整棵子树（含关键帧和配对音频），Ctrl+D 原地复制；右键时间轴也有，一条撤销
 - **实体多选**：实体栏 Ctrl+点击切换、Shift+点击连选；右键「组成文件夹」把选中的实体收进新文件夹，一条撤销
 - **拖动多选**：按住任一已选中的行拖到文件夹上，整组实体一起移入；拖到两行之间按图层插入，一条撤销
@@ -99,7 +99,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 多选实体 | 实体名 Ctrl+点击切换选择，Shift+点击连续选择；右键「组成文件夹」；拖动任一选中行可整组移动 / 拖进文件夹 |
 | 拖动关键帧 | 时间轴上拖动关键帧；Shift 追加选择，Ctrl 取消选择，整组平移后一条撤销 |
 | 复制实体 | 选中实体 Ctrl+C，Ctrl+V 粘贴；Ctrl+D 原地复制；右键时间轴也可 |
-| 更换素材 | 右键时间轴里的图片/视频/音频实体 → 更换素材…，或属性面板「素材」区的按钮 |
+| 更换素材 | 右键时间轴里的图片/视频/音频实体 → 更换素材…，或属性面板「素材」区的按钮；从素材库选同类型素材，或导入新文件 |
 | 品牌瓷砖墙 | 工作台 → 特殊 → 品牌瓷砖墙 → 配置：任意添加 Logo 组、每组配色、密度（列×行）与间距；创建后属性面板可再次编辑 |
 | 跳转播放头 | 点击轨道空白处 |
 | 选关键帧 | 点击关键帧菱形（不移动播放头） |
@@ -153,7 +153,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-47 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+48 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
@@ -167,6 +167,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --clipboard-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --group-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --multidrag-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-drag-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --library-picker-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
