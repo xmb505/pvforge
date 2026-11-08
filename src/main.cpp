@@ -76,6 +76,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QListView>
 #include <QListWidget>
 #include <QPainter>
 #include <QPalette>
@@ -8958,7 +8959,7 @@ int clipTimelineTest(QApplication& app)
         timeline->setCurrentFrame(45);
         timeline->openPopup(groupId);
         QTimer::singleShot(400, &window,
-                           [&app, &window, groupId, rectId] {
+                           [&app, &window, timeline, groupId, rectId] {
             int failures = 0;
             pvf::TimelinePanel* popup = nullptr;
             for (pvf::TimelinePanel* panel :
@@ -8976,6 +8977,24 @@ int clipTimelineTest(QApplication& app)
                 app.exit(1);
                 return;
             }
+            QToolButton* timeMode = nullptr;
+            for (QToolButton* button : window.findChildren<QToolButton*>())
+            {
+                if (button->text() == QStringLiteral("相对"))
+                {
+                    timeMode = button;
+                    break;
+                }
+            }
+            bool relativeSwitched = false;
+            if (timeMode)
+            {
+                timeMode->click();
+                relativeSwitched = timeMode->text() == QStringLiteral("绝对");
+                timeMode->click();
+            }
+            if (!relativeSwitched)
+                ++failures;
             pvf::Project* project = window.project();
             if (!project)
             {
@@ -9062,6 +9081,77 @@ int clipTimelineTest(QApplication& app)
                             << (easeButton && easeButton->isEnabled());
                 ++failures;
             }
+
+            // Dragging the playhead past the right edge must keep scrolling
+            // and keep the line inside the visible timeline.
+            auto sendMain = [timeline](QEvent::Type type, const QPoint& pos,
+                                       Qt::MouseButtons buttons) {
+                QMouseEvent event(type, QPointF(pos),
+                                  QPointF(timeline->mapToGlobal(pos)),
+                                  Qt::LeftButton, buttons, Qt::NoModifier);
+                QApplication::sendEvent(timeline, &event);
+            };
+            const int beforeScroll = timeline->horizontalScrollForTest();
+            const int beforeFrame = window.currentFrame();
+            const QPoint scrubStart(100, 10);
+            const QPoint scrubEnd(timeline->width() + 80, 10);
+            sendMain(QEvent::MouseButtonPress, scrubStart, Qt::LeftButton);
+            sendMain(QEvent::MouseMove, scrubEnd, Qt::LeftButton);
+            QElapsedTimer wait;
+            wait.start();
+            while (wait.elapsed() < 400)
+                QApplication::processEvents(QEventLoop::AllEvents, 20);
+            sendMain(QEvent::MouseButtonRelease, scrubEnd, Qt::NoButton);
+            QApplication::processEvents();
+            const int playheadX = timeline->frameXForTest(window.currentFrame());
+            if (timeline->horizontalScrollForTest() <= beforeScroll
+                || window.currentFrame() <= beforeFrame || playheadX < 0
+                || playheadX >= timeline->width())
+            {
+                qCritical() << "clip-timeline-test: scrub" << beforeScroll
+                            << timeline->horizontalScrollForTest() << beforeFrame
+                            << window.currentFrame() << playheadX
+                            << timeline->width();
+                ++failures;
+            }
+            auto* assetList =
+                window.findChild<QListWidget*>(QStringLiteral("assetList"));
+            auto* viewToggle =
+                window.findChild<QToolButton*>(QStringLiteral("assetViewToggle"));
+            if (!assetList || !viewToggle)
+            {
+                qCritical() << "clip-timeline-test: asset widgets missing";
+                ++failures;
+            }
+            else
+            {
+                viewToggle->click();
+                const bool iconMode =
+                    assetList->viewMode() == QListView::IconMode;
+                viewToggle->click();
+                const bool listMode =
+                    assetList->viewMode() == QListView::ListMode;
+                QApplication::processEvents();
+                assetList->setCurrentRow(0);
+                const QRect itemRect = assetList->visualItemRect(assetList->item(0));
+                const QPoint hoverPos = itemRect.center();
+                QMouseEvent hover(
+                    QEvent::MouseMove, QPointF(hoverPos),
+                    QPointF(assetList->viewport()->mapToGlobal(hoverPos)),
+                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(assetList->viewport(), &hover);
+                QApplication::processEvents();
+                auto* hoverPreview = window.findChild<QWidget*>(
+                    QStringLiteral("assetHoverPreview"));
+                const bool hoverVisible = hoverPreview && hoverPreview->isVisible();
+                if (!iconMode || !listMode || !hoverVisible)
+                {
+                    qCritical() << "clip-timeline-test: asset view"
+                                << iconMode << listMode << hoverVisible;
+                    ++failures;
+                }
+            }
+
             window.grab().toImage().save(
                 QStringLiteral("/tmp/pvforge_clip_timeline.png"));
             qInfo() << "clip-timeline-test: popup panels"

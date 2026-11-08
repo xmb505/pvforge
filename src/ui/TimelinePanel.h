@@ -204,6 +204,7 @@ private:
     void clampScroll();
     void updateScrollBars();
     void ensureFrameVisible(int frame);
+    void setScrubFrame(double rawX);
 
     // Live preview during a drag.
     const QVector<Entity>& activeEntities() const;

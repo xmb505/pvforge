@@ -10,8 +10,12 @@
 #include "html/HtmlAsset.h"
 #include "media/MediaImporter.h"
 
+#include <QCursor>
 #include <QDialog>
 #include <QDir>
+#include <QEvent>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QFileDialog>
@@ -23,6 +27,8 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QScreen>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -383,6 +389,29 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
+    // Folder-like header: current location plus list/icon switch.
+    auto* pathRow = new QHBoxLayout();
+    pathRow->setSpacing(6);
+    auto* folderIcon = new QLabel(this);
+    folderIcon->setPixmap(style()->standardIcon(QStyle::SP_DirIcon).pixmap(16, 16));
+    pathRow->addWidget(folderIcon);
+    auto* pathLabel = new QLabel(QStringLiteral("全部素材"), this);
+    QFont pathFont = pathLabel->font();
+    pathFont.setBold(true);
+    pathLabel->setFont(pathFont);
+    pathRow->addWidget(pathLabel);
+    pathRow->addStretch(1);
+    m_viewButton = new QToolButton(this);
+    m_viewButton->setObjectName(QStringLiteral("assetViewToggle"));
+    m_viewButton->setCheckable(true);
+    m_viewButton->setText(QStringLiteral("▦"));
+    m_viewButton->setToolTip(QStringLiteral("切换到图标视图"));
+    m_viewButton->setFixedSize(26, 26);
+    pathRow->addWidget(m_viewButton);
+    layout->addLayout(pathRow);
+    connect(m_viewButton, &QToolButton::toggled, this,
+            [this](bool iconView) { setIconView(iconView); });
+
     m_preview = new QLabel(QStringLiteral("素材库为空"), this);
     m_preview->setObjectName(QStringLiteral("assetPreview"));
     m_preview->setAlignment(Qt::AlignCenter);
@@ -390,7 +419,9 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_preview->setMinimumWidth(0);
     m_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_preview->setFrameShape(QFrame::StyledPanel);
-    layout->addWidget(m_preview);
+    // The large preview is replaced by the hover popup; keeping it hidden
+    // leaves more room for the folder list.
+    m_preview->hide();
 
     m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("assetSearch"));
@@ -464,6 +495,10 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_list->setTextElideMode(Qt::ElideMiddle);
     m_list->setWordWrap(false);
+    m_list->setMouseTracking(true);
+    m_list->viewport()->installEventFilter(this);
+    connect(m_list, &QListWidget::itemEntered, this,
+            &AssetLibraryPanel::showHoverPreview);
     layout->addWidget(m_list, 1);
 
     auto* buttons = new QHBoxLayout();
@@ -518,8 +553,117 @@ void AssetLibraryPanel::refresh()
     rebuild();
 }
 
+void AssetLibraryPanel::setIconView(bool iconView)
+{
+    m_iconView = iconView;
+    if (iconView)
+    {
+        m_list->setViewMode(QListView::IconMode);
+        m_list->setIconSize(QSize(48, 48));
+        m_list->setGridSize(QSize(80, 84));
+        m_list->setWordWrap(true);
+        m_list->setResizeMode(QListView::Adjust);
+        m_list->setMovement(QListView::Static);
+        m_list->setSpacing(2);
+        m_list->setAlternatingRowColors(false);
+        m_viewButton->setText(QStringLiteral("☰"));
+        m_viewButton->setToolTip(QStringLiteral("切换到列表视图"));
+    }
+    else
+    {
+        m_list->setViewMode(QListView::ListMode);
+        m_list->setIconSize(QSize(40, 40));
+        m_list->setGridSize(QSize());
+        m_list->setWordWrap(false);
+        m_list->setSpacing(0);
+        m_list->setAlternatingRowColors(true);
+        m_viewButton->setText(QStringLiteral("▦"));
+        m_viewButton->setToolTip(QStringLiteral("切换到图标视图"));
+    }
+}
+
+void AssetLibraryPanel::hideHoverPreview()
+{
+    if (m_hoverPreview)
+        m_hoverPreview->hide();
+}
+
+void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
+{
+    if (!item)
+    {
+        hideHoverPreview();
+        return;
+    }
+
+    QPixmap preview;
+    if (item->data(Qt::UserRole + 1).toInt() == 0)
+    {
+        const int index = item->data(Qt::UserRole).toInt();
+        const auto& templates = m_project->templates();
+        if (index >= 0 && index < templates.size())
+            preview = renderTemplate(templates[index], QSize(240, 150));
+    }
+    else
+    {
+        const QString path = item->data(Qt::UserRole + 2).toString();
+        preview = QPixmap::fromImage(
+            htmlAssetThumbnail(*m_project, path, QSize(240, 150)));
+    }
+    if (preview.isNull())
+    {
+        hideHoverPreview();
+        return;
+    }
+
+    if (!m_hoverPreview)
+    {
+        m_hoverPreview = new QFrame(this, Qt::ToolTip);
+        m_hoverPreview->setObjectName(QStringLiteral("assetHoverPreview"));
+        m_hoverPreview->setAttribute(Qt::WA_ShowWithoutActivating);
+        m_hoverPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_hoverPreview->setStyleSheet(QStringLiteral(
+            "QFrame { background: #1e1f24; border: 1px solid #4a4d55; }"
+            "QLabel { background: transparent; border: none; color: #d8dce4; }"));
+        auto* hoverLayout = new QVBoxLayout(m_hoverPreview);
+        hoverLayout->setContentsMargins(4, 4, 4, 4);
+        hoverLayout->setSpacing(3);
+        m_hoverImage = new QLabel(m_hoverPreview);
+        m_hoverCaption = new QLabel(m_hoverPreview);
+        m_hoverCaption->setWordWrap(true);
+        m_hoverCaption->setMaximumWidth(240);
+        hoverLayout->addWidget(m_hoverImage);
+        hoverLayout->addWidget(m_hoverCaption);
+    }
+
+    m_hoverImage->setPixmap(preview);
+    m_hoverCaption->setText(item->text());
+    m_hoverPreview->adjustSize();
+
+    QPoint pos = QCursor::pos() + QPoint(18, 18);
+    if (QScreen* screen = QGuiApplication::screenAt(QCursor::pos()))
+    {
+        const QRect area = screen->availableGeometry();
+        if (pos.x() + m_hoverPreview->width() > area.right())
+            pos.setX(QCursor::pos().x() - m_hoverPreview->width() - 18);
+        if (pos.y() + m_hoverPreview->height() > area.bottom())
+            pos.setY(QCursor::pos().y() - m_hoverPreview->height() - 18);
+    }
+    m_hoverPreview->move(pos);
+    m_hoverPreview->show();
+    m_hoverPreview->raise();
+}
+
+bool AssetLibraryPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_list->viewport() && event->type() == QEvent::Leave)
+        hideHoverPreview();
+    return QWidget::eventFilter(watched, event);
+}
+
 void AssetLibraryPanel::rebuild()
 {
+    hideHoverPreview();
     const int previousTemplate = selectedIndex();
     const QString previousHtml = selectedHtmlAsset();
     const QSignalBlocker blocker(m_list);
@@ -536,7 +680,6 @@ void AssetLibraryPanel::rebuild()
         item->setData(Qt::UserRole, i);
         item->setData(Qt::UserRole + 1, 0);
         item->setIcon(listIcon(tmpl));
-        item->setToolTip(QStringLiteral("%1 · %2").arg(templateTypeName(tmpl.type), tmpl.path));
     }
 
     // TODO(M6): drag-to-create from the library; the HTML list currently
@@ -554,8 +697,6 @@ void AssetLibraryPanel::rebuild()
         const QImage image = htmlAssetThumbnail(*m_project, path, QSize(40, 40));
         item->setIcon(image.isNull() ? QIcon(htmlPlaceholder(QSize(40, 40), QStringLiteral("H")))
                                      : QIcon(QPixmap::fromImage(image)));
-        item->setToolTip(QStringLiteral("%1 · %2").arg(templateTypeName(EntityType::HtmlLayer),
-                                                       path));
     }
 
     int restore = m_list->count() > 0 ? 0 : -1;

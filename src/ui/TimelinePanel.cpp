@@ -318,6 +318,8 @@ TimelinePanel::~TimelinePanel()
 void TimelinePanel::setCurrentFrame(int frame)
 {
     m_frame = std::max(0, frame);
+    if (m_dragMode == DragMode::None)
+        ensureFrameVisible(m_frame);
     update();
     for (ClipPopup* popup : m_popups)
         if (popup && popup->panel())
@@ -676,6 +678,16 @@ void TimelinePanel::ensureFrameVisible(int frame)
     clampScroll();
     update();
     syncPopups();
+}
+
+void TimelinePanel::setScrubFrame(double rawX)
+{
+    // The pointer can leave the widget while scrubbing. Clamp it to the
+    // visible track so the playhead line can never disappear outside it.
+    const int x = std::clamp(int(std::lround(rawX)), 0, visibleWidth() - 1);
+    m_frame = std::max(0, frameFromX(x));
+    emit frameRequested(m_frame);
+    update();
 }
 
 // ---------------------------------------------------------------- editing
@@ -1052,8 +1064,26 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
 
 void TimelinePanel::autoScrollTick()
 {
-    if (!m_project || m_dragMode == DragMode::None
-        || m_dragMode == DragMode::Scrub || !m_moved)
+    if (!m_project || m_dragMode == DragMode::None)
+        return;
+    if (m_dragMode == DragMode::Scrub)
+    {
+        const double rawX = m_lastDragPos.x();
+        int dx = 0;
+        if (rawX > visibleWidth() - 12)
+            dx = 12;
+        else if (rawX < 12)
+            dx = -12;
+        else
+            return;
+        m_scrollX = std::max(0, m_scrollX + dx);
+        clampScroll();
+        // Keep the playhead pinned to the visible edge while the view scrolls.
+        setScrubFrame(rawX);
+        syncPopups();
+        return;
+    }
+    if (!m_moved)
         return;
     int dx = 0;
     int dy = 0;
@@ -1349,10 +1379,10 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     if (pos.y() < kRulerHeight)
     {
         m_dragMode = DragMode::Scrub;
+        m_lastDragPos = pos;
+        m_autoScroll->start(30);
         emit scrubStarted();
-        m_frame = std::max(0, frameFromX(int(std::lround(pos.x()))));
-        emit frameRequested(m_frame);
-        update();
+        setScrubFrame(pos.x());
         return;
     }
 
@@ -1362,10 +1392,10 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     if (!entity)
     {
         m_dragMode = DragMode::Scrub;
+        m_lastDragPos = pos;
+        m_autoScroll->start(30);
         emit scrubStarted();
-        m_frame = std::max(0, frameFromX(int(std::lround(pos.x()))));
-        emit frameRequested(m_frame);
-        update();
+        setScrubFrame(pos.x());
         return;
     }
 
@@ -1450,9 +1480,11 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         return;
     if (m_dragMode == DragMode::Scrub)
     {
-        m_frame = std::max(0, frameFromX(int(std::lround(event->position().x()))));
-        emit frameRequested(m_frame);
-        update();
+        m_lastDragPos = event->position();
+        setScrubFrame(event->position().x());
+        if (event->position().x() > visibleWidth() - 12
+            || event->position().x() < 12)
+            m_autoScroll->start(30);
         return;
     }
 
@@ -1505,6 +1537,8 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         return;
     if (m_dragMode == DragMode::Scrub)
     {
+        if (m_autoScroll)
+            m_autoScroll->stop();
         m_dragMode = DragMode::None;
         return;
     }

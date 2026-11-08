@@ -4,10 +4,14 @@
 
 #include <QWidget>
 
+class QEvent;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
+class QToolButton;
 
 namespace pvf {
 
@@ -32,9 +36,15 @@ public:
 signals:
     void entityCreated(EntityId id);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void rebuild();
     void updatePreview();
+    void setIconView(bool iconView);
+    void showHoverPreview(QListWidgetItem* item);
+    void hideHoverPreview();
     int selectedIndex() const;
     QString selectedHtmlAsset() const;
     void createSelected();
@@ -48,6 +58,11 @@ private:
     QLabel* m_info = nullptr;
     QPushButton* m_create = nullptr;
     QPushButton* m_remove = nullptr;
+    QToolButton* m_viewButton = nullptr;
+    QFrame* m_hoverPreview = nullptr;
+    QLabel* m_hoverImage = nullptr;
+    QLabel* m_hoverCaption = nullptr;
+    bool m_iconView = false;
     QStringList m_signature;
 };
 
