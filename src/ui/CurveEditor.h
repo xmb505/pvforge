@@ -53,6 +53,7 @@ public:
 signals:
     void frameRequested(int frame);
     void statusMessage(const QString& text);
+    void keyframeNoteRequested(EntityId id, double frame);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

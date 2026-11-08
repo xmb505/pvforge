@@ -397,4 +397,137 @@ private:
     QVector<KeyframeRecord> m_records;
 };
 
+// The scene root folder is marked with this data flag while retired. The
+// scene record itself is kept (and keeps reserving its frame range), so the
+// flag lives on the folder where it survives save/load without new fields.
+bool sceneIsRetired(const Project& project, const Scene& scene);
+
+// Creating a scene. The scene record and its folder already exist when the
+// command is recorded; undo removes both (unless the folder gained children
+// in the meantime, in which case it is kept as an ordinary folder).
+class AddSceneCommand : public UndoCommand
+{
+public:
+    AddSceneCommand(const Scene& scene, const Entity& folder, int folderIndex);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Scene m_scene;
+    Entity m_folder;
+    int m_folderIndex = 0;
+    bool m_present = true;
+};
+
+// Editing name, range, color or note. The folder id never changes; when the
+// folder name mirrored the old scene name it is renamed with the scene so a
+// retired folder lands at _retired/<scene name>.
+class UpdateSceneCommand : public UndoCommand
+{
+public:
+    UpdateSceneCommand(const Scene& before, const Scene& after,
+                       EntityId folderId = kInvalidEntity,
+                       const QString& oldFolderName = QString(),
+                       const QString& newFolderName = QString());
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Scene m_before;
+    Scene m_after;
+    EntityId m_folderId = kInvalidEntity;
+    QString m_oldFolderName;
+    QString m_newFolderName;
+};
+
+// Removing only the scene record; the folder and its entities stay.
+class RemoveSceneCommand : public UndoCommand
+{
+public:
+    RemoveSceneCommand(const Scene& scene, const Entity& folder, int folderIndex);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Scene m_scene;
+    Entity m_folder;
+    int m_folderIndex = 0;
+    bool m_present = false;
+};
+
+// Global annotation markers.
+class AddAnnotationCommand : public UndoCommand
+{
+public:
+    explicit AddAnnotationCommand(const Annotation& annotation);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Annotation m_annotation;
+    bool m_present = true;
+};
+
+class UpdateAnnotationCommand : public UndoCommand
+{
+public:
+    UpdateAnnotationCommand(const Annotation& before, const Annotation& after);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Annotation m_before;
+    Annotation m_after;
+};
+
+class RemoveAnnotationCommand : public UndoCommand
+{
+public:
+    explicit RemoveAnnotationCommand(const Annotation& annotation);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    Annotation m_annotation;
+    bool m_present = false;
+};
+
+// Author notes on every keyframe at one frame. Undo restores each property's
+// previous note, including clearing notes that did not exist before.
+struct KeyframeNoteRecord
+{
+    EntityId entity = kInvalidEntity;
+    QString property;
+    double frame = 0.0;
+    QString oldNote;
+    QString newNote;
+};
+
+class SetKeyframeNoteCommand : public UndoCommand
+{
+public:
+    explicit SetKeyframeNoteCommand(const QVector<KeyframeNoteRecord>& records);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    void apply(Project& project, bool useNew);
+
+    QVector<KeyframeNoteRecord> m_records;
+};
+
 } // namespace pvf

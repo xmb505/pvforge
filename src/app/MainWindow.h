@@ -75,6 +75,28 @@ public:
     // Test entry point that uses the same dialog wiring as Edit -> Settings,
     // but shows the dialog non-modally so a test can drive its controls.
     SettingsDialog* openSettingsDialogForTest();
+
+    // Scene and annotation UI tests drive the same code paths as the menus
+    // without opening modal dialogs.
+    QString addSceneForTest(const QString& name, int startFrame, int endFrame,
+                            const QColor& color = QColor(),
+                            const QString& note = QString());
+    bool updateSceneForTest(const QString& id, const QString& name, int startFrame,
+                            int endFrame, const QColor& color,
+                            const QString& note, QString* error = nullptr);
+    bool removeSceneForTest(const QString& id);
+    bool setSceneRetiredForTest(const QString& id, bool retired);
+    QString addAnnotationForTest(int frame, const QString& title,
+                                 const QString& note = QString(),
+                                 const QStringList& tags = QStringList(),
+                                 const QColor& color = QColor());
+    bool updateAnnotationForTest(const QString& id, int frame, const QString& title,
+                                 const QString& note, const QStringList& tags,
+                                 const QColor& color, QString* error = nullptr);
+    bool removeAnnotationForTest(const QString& id);
+    bool setKeyframeNoteForTest(EntityId id, double frame, const QString& note);
+    EntityId createFolderForTest(EntityId parent = kInvalidEntity);
+
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -150,6 +172,30 @@ private:
                                   double delta);
     void onCreateFolderRequested(EntityId parent);
     void packAllAssets();
+
+    // Scene and annotation UI helpers.
+    void showSceneDialog(const QString& sceneId = QString());
+    void showAnnotationDialog(const QString& annotationId = QString(),
+                              int frame = -1);
+    void editKeyframeNote(EntityId id, double frame);
+    bool commitSceneCreate(const QString& name, int startFrame, int endFrame,
+                           const QColor& color, const QString& note,
+                           QString* error = nullptr, QString* createdId = nullptr);
+    bool commitSceneUpdate(const QString& id, const QString& name, int startFrame,
+                           int endFrame, const QColor& color, const QString& note,
+                           QString* error = nullptr);
+    bool commitSceneRemove(const QString& id);
+    bool commitSceneRetired(const QString& id, bool retired);
+    bool commitAnnotationCreate(int frame, const QString& title,
+                                const QString& note, const QStringList& tags,
+                                const QColor& color, QString* error = nullptr,
+                                QString* createdId = nullptr);
+    bool commitAnnotationUpdate(const QString& id, int frame, const QString& title,
+                                const QString& note, const QStringList& tags,
+                                const QColor& color, QString* error = nullptr);
+    bool commitAnnotationRemove(const QString& id);
+    bool commitKeyframeNote(EntityId id, double frame, const QString& note);
+    void applyActiveSceneParent(EntityId id);
 
     Project* m_project = nullptr;
     History* m_history = nullptr;

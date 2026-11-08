@@ -1265,7 +1265,8 @@ void CurveEditor::contextMenuEvent(QContextMenuEvent* event)
         return;
 
     KeyframeSelection hit;
-    if (hitKeyframe(event->pos(), &hit) && !isSelectedFrame(hit.frame))
+    const bool hitKey = hitKeyframe(event->pos(), &hit);
+    if (hitKey && !isSelectedFrame(hit.frame))
     {
         m_selection.clear();
         m_selection.append(hit);
@@ -1277,6 +1278,7 @@ void CurveEditor::contextMenuEvent(QContextMenuEvent* event)
     QMenu menu(this);
     QAction* easing = menu.addAction(QStringLiteral("缓动…"));
     QAction* bezier = menu.addAction(QStringLiteral("转为贝塞尔"));
+    QAction* note = menu.addAction(QStringLiteral("备注…"));
     menu.addSeparator();
     QAction* copy = menu.addAction(QStringLiteral("复制关键帧"));
     QAction* paste = menu.addAction(QStringLiteral("粘贴到播放头"));
@@ -1286,6 +1288,7 @@ void CurveEditor::contextMenuEvent(QContextMenuEvent* event)
 
     easing->setEnabled(hasSelection);
     bezier->setEnabled(hasSelection);
+    note->setEnabled(hasSelection && !m_project->isEffectivelyLocked(m_entity));
     copy->setEnabled(hasSelection);
     paste->setEnabled(!m_clipboard.isEmpty() && m_entity != kInvalidEntity
                       && !m_project->isEffectivelyLocked(m_entity));
@@ -1299,6 +1302,9 @@ void CurveEditor::contextMenuEvent(QContextMenuEvent* event)
         showEasingMenu(event->globalPos());
     else if (chosen == bezier)
         convertToBezier();
+    else if (chosen == note)
+        emit keyframeNoteRequested(
+            m_entity, hitKey ? hit.frame : m_selection.first().frame);
     else if (chosen == copy)
         copySelection();
     else if (chosen == paste)

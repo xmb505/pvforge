@@ -674,4 +674,268 @@ QString RemoveKeyframesCommand::text() const
     return QStringLiteral("删除关键帧");
 }
 
+namespace {
+
+// Recreates the scene record on an existing folder. Project::addScene always
+// creates a throwaway folder; it is removed right after the record takes the
+// folder id that belongs to the scene.
+void attachSceneRecord(Project& project, const Scene& scene)
+{
+    const bool folderExists = project.entity(scene.folderId) != nullptr;
+    QString error;
+    Scene* created = project.addScene(scene.name, scene.startFrame, scene.endFrame,
+                                      scene.color, scene.note, &error);
+    if (!created)
+        return;
+    const EntityId temporary = created->folderId;
+    created->id = scene.id;
+    if (folderExists)
+    {
+        created->folderId = scene.folderId;
+        if (temporary != scene.folderId)
+            project.removeEntity(temporary);
+    }
+    // If the folder is gone, keep the fresh folder the API just created.
+}
+
+Annotation* attachAnnotationRecord(Project& project, const Annotation& annotation)
+{
+    Annotation* created = project.addAnnotation(annotation.frame, annotation.title,
+                                                annotation.note, annotation.tags,
+                                                annotation.color);
+    if (created)
+        created->id = annotation.id;
+    return created;
+}
+
+} // namespace
+
+bool sceneIsRetired(const Project& project, const Scene& scene)
+{
+    const Entity* folder = project.entity(scene.folderId);
+    return folder && folder->data.value(QStringLiteral("sceneRetired"), false).toBool();
+}
+
+AddSceneCommand::AddSceneCommand(const Scene& scene, const Entity& folder,
+                                 int folderIndex)
+    : m_scene(scene)
+    , m_folder(folder)
+    , m_folderIndex(folderIndex)
+{
+}
+
+void AddSceneCommand::undo(Project& project)
+{
+    if (!m_present)
+        return;
+    project.removeScene(m_scene.id);
+    // Children are normally removed by their own undo steps first. Keep the
+    // folder if something is still inside it instead of orphaning entities.
+    if (project.entity(m_scene.folderId) && !project.hasChildren(m_scene.folderId))
+        project.removeEntity(m_scene.folderId);
+    m_present = false;
+}
+
+void AddSceneCommand::redo(Project& project)
+{
+    if (m_present)
+        return;
+
+    bool inserted = false;
+    if (!project.entity(m_scene.folderId))
+    {
+        project.insertEntity(m_folder, m_folderIndex);
+        inserted = true;
+    }
+    QString error;
+    Scene* created = project.addScene(m_scene.name, m_scene.startFrame,
+                                      m_scene.endFrame, m_scene.color, m_scene.note,
+                                      &error);
+    if (!created)
+    {
+        if (inserted && m_folder.id == m_scene.folderId)
+            project.removeEntity(m_scene.folderId);
+        return;
+    }
+    const EntityId temporary = created->folderId;
+    created->id = m_scene.id;
+    created->folderId = m_scene.folderId;
+    if (temporary != m_scene.folderId)
+        project.removeEntity(temporary);
+    m_present = true;
+}
+
+QString AddSceneCommand::text() const
+{
+    return QStringLiteral("新建场景");
+}
+
+UpdateSceneCommand::UpdateSceneCommand(const Scene& before, const Scene& after,
+                                       EntityId folderId,
+                                       const QString& oldFolderName,
+                                       const QString& newFolderName)
+    : m_before(before)
+    , m_after(after)
+    , m_folderId(folderId)
+    , m_oldFolderName(oldFolderName)
+    , m_newFolderName(newFolderName)
+{
+}
+
+void UpdateSceneCommand::undo(Project& project)
+{
+    project.updateScene(m_before.id, m_before.name, m_before.startFrame,
+                        m_before.endFrame, m_before.color, m_before.note);
+    if (m_folderId != kInvalidEntity && m_oldFolderName != m_newFolderName)
+        project.setEntityName(m_folderId, m_oldFolderName);
+}
+
+void UpdateSceneCommand::redo(Project& project)
+{
+    project.updateScene(m_after.id, m_after.name, m_after.startFrame,
+                        m_after.endFrame, m_after.color, m_after.note);
+    if (m_folderId != kInvalidEntity && m_oldFolderName != m_newFolderName)
+        project.setEntityName(m_folderId, m_newFolderName);
+}
+
+QString UpdateSceneCommand::text() const
+{
+    return QStringLiteral("编辑场景");
+}
+
+RemoveSceneCommand::RemoveSceneCommand(const Scene& scene, const Entity& folder,
+                                       int folderIndex)
+    : m_scene(scene)
+    , m_folder(folder)
+    , m_folderIndex(folderIndex)
+{
+}
+
+void RemoveSceneCommand::undo(Project& project)
+{
+    if (m_present)
+        return;
+    if (m_folder.id == m_scene.folderId && !project.entity(m_scene.folderId))
+        project.insertEntity(m_folder, m_folderIndex);
+    attachSceneRecord(project, m_scene);
+    if (const Scene* restored = project.sceneById(m_scene.id))
+        m_scene.folderId = restored->folderId;
+    m_present = true;
+}
+
+void RemoveSceneCommand::redo(Project& project)
+{
+    if (!m_present)
+        return;
+    project.removeScene(m_scene.id);
+    m_present = false;
+}
+
+QString RemoveSceneCommand::text() const
+{
+    return QStringLiteral("删除场景");
+}
+
+AddAnnotationCommand::AddAnnotationCommand(const Annotation& annotation)
+    : m_annotation(annotation)
+{
+}
+
+void AddAnnotationCommand::undo(Project& project)
+{
+    if (!m_present)
+        return;
+    project.removeAnnotation(m_annotation.id);
+    m_present = false;
+}
+
+void AddAnnotationCommand::redo(Project& project)
+{
+    if (m_present)
+        return;
+    if (attachAnnotationRecord(project, m_annotation))
+        m_present = true;
+}
+
+QString AddAnnotationCommand::text() const
+{
+    return QStringLiteral("新建注释");
+}
+
+UpdateAnnotationCommand::UpdateAnnotationCommand(const Annotation& before,
+                                                 const Annotation& after)
+    : m_before(before)
+    , m_after(after)
+{
+}
+
+void UpdateAnnotationCommand::undo(Project& project)
+{
+    project.updateAnnotation(m_before);
+}
+
+void UpdateAnnotationCommand::redo(Project& project)
+{
+    project.updateAnnotation(m_after);
+}
+
+QString UpdateAnnotationCommand::text() const
+{
+    return QStringLiteral("编辑注释");
+}
+
+RemoveAnnotationCommand::RemoveAnnotationCommand(const Annotation& annotation)
+    : m_annotation(annotation)
+{
+}
+
+void RemoveAnnotationCommand::undo(Project& project)
+{
+    if (m_present)
+        return;
+    if (attachAnnotationRecord(project, m_annotation))
+        m_present = true;
+}
+
+void RemoveAnnotationCommand::redo(Project& project)
+{
+    if (!m_present)
+        return;
+    project.removeAnnotation(m_annotation.id);
+    m_present = false;
+}
+
+QString RemoveAnnotationCommand::text() const
+{
+    return QStringLiteral("删除注释");
+}
+
+SetKeyframeNoteCommand::SetKeyframeNoteCommand(
+    const QVector<KeyframeNoteRecord>& records)
+    : m_records(records)
+{
+}
+
+void SetKeyframeNoteCommand::apply(Project& project, bool useNew)
+{
+    for (const KeyframeNoteRecord& record : m_records)
+        project.setKeyframeNote(record.entity, record.property, record.frame,
+                                useNew ? record.newNote : record.oldNote);
+}
+
+void SetKeyframeNoteCommand::undo(Project& project)
+{
+    apply(project, false);
+}
+
+void SetKeyframeNoteCommand::redo(Project& project)
+{
+    apply(project, true);
+}
+
+QString SetKeyframeNoteCommand::text() const
+{
+    return QStringLiteral("编辑关键帧备注");
+}
+
 } // namespace pvf

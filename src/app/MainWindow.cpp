@@ -32,20 +32,30 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QColorDialog>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QFutureWatcher>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenuBar>
+#include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QMessageBox>
 #include <QPalette>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSet>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -58,6 +68,241 @@
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+class SceneDialog : public QDialog
+{
+public:
+    SceneDialog(Project* project, const Scene* scene, QWidget* parent = nullptr)
+        : QDialog(parent)
+        , m_project(project)
+    {
+        setWindowTitle(scene ? QStringLiteral("编辑场景") : QStringLiteral("新建场景"));
+        auto* layout = new QVBoxLayout(this);
+        auto* form = new QFormLayout();
+        layout->addLayout(form);
+
+        m_name = new QLineEdit(this);
+        m_name->setText(scene ? scene->name
+                              : QStringLiteral("场景 %1")
+                                    .arg(project->scenes().size() + 1));
+        form->addRow(QStringLiteral("名称"), m_name);
+
+        const int maximum = std::max(project->timelineLength(),
+                                     scene ? scene->endFrame : 0);
+        m_start = new QSpinBox(this);
+        m_start->setRange(0, maximum);
+        m_end = new QSpinBox(this);
+        m_end->setRange(0, maximum);
+        form->addRow(QStringLiteral("起始帧"), m_start);
+        form->addRow(QStringLiteral("结束帧"), m_end);
+
+        m_color = scene ? scene->color : QColor(90, 170, 255);
+        m_colorButton = new QPushButton(this);
+        m_colorButton->setObjectName(QStringLiteral("sceneColorButton"));
+        form->addRow(QStringLiteral("颜色"), m_colorButton);
+        connect(m_colorButton, &QPushButton::clicked, this, [this] {
+            const QColor chosen =
+                QColorDialog::getColor(m_color, this, QStringLiteral("场景颜色"));
+            if (chosen.isValid())
+            {
+                m_color = chosen;
+                updateColorButton();
+            }
+        });
+        updateColorButton();
+
+        m_note = new QPlainTextEdit(this);
+        m_note->setMaximumHeight(90);
+        m_note->setPlaceholderText(QStringLiteral("这一段是什么"));
+        form->addRow(QStringLiteral("备注"), m_note);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
+                                             | QDialogButtonBox::Cancel, this);
+        layout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, this, &SceneDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+
+        if (scene)
+        {
+            m_editId = scene->id;
+            m_start->setValue(scene->startFrame);
+            m_end->setValue(scene->endFrame);
+            m_note->setPlainText(scene->note);
+        }
+        else
+        {
+            m_start->setValue(0);
+            m_end->setValue(maximum);
+        }
+    }
+
+    QString name() const { return m_name->text().trimmed(); }
+    int startFrame() const { return m_start->value(); }
+    int endFrame() const { return m_end->value(); }
+    QColor color() const { return m_color; }
+    QString note() const { return m_note->toPlainText(); }
+
+    void accept() override
+    {
+        QString error;
+        if (!validate(&error))
+        {
+            QMessageBox::warning(this, QStringLiteral("场景"), error);
+            return;
+        }
+        QDialog::accept();
+    }
+
+private:
+    bool validate(QString* error) const
+    {
+        if (name().isEmpty())
+        {
+            *error = QStringLiteral("场景名称不能为空");
+            return false;
+        }
+        if (startFrame() > endFrame())
+        {
+            *error = QStringLiteral("场景结束帧不能早于起始帧");
+            return false;
+        }
+        if (endFrame() > m_project->timelineLength())
+        {
+            *error = QStringLiteral("场景结束帧 %1 超出时间轴长度 %2")
+                         .arg(endFrame())
+                         .arg(m_project->timelineLength());
+            return false;
+        }
+        for (const Scene& scene : m_project->scenes())
+        {
+            if (!m_editId.isEmpty() && scene.id == m_editId)
+                continue;
+            if (startFrame() <= scene.endFrame && scene.startFrame <= endFrame())
+            {
+                *error = QStringLiteral("场景区间与「%1」重叠").arg(scene.name);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void updateColorButton()
+    {
+        m_colorButton->setText(m_color.name());
+        const bool dark = m_color.lightness() < 140;
+        m_colorButton->setStyleSheet(
+            QStringLiteral("background:%1;color:%2;")
+                .arg(m_color.name(), dark ? QStringLiteral("white")
+                                          : QStringLiteral("black")));
+    }
+
+    Project* m_project = nullptr;
+    QLineEdit* m_name = nullptr;
+    QSpinBox* m_start = nullptr;
+    QSpinBox* m_end = nullptr;
+    QPushButton* m_colorButton = nullptr;
+    QPlainTextEdit* m_note = nullptr;
+    QColor m_color;
+    QString m_editId;
+};
+
+class AnnotationDialog : public QDialog
+{
+public:
+    AnnotationDialog(int frame, const Annotation* annotation,
+                     QWidget* parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle(annotation ? QStringLiteral("编辑注释")
+                                  : QStringLiteral("新建注释"));
+        auto* layout = new QVBoxLayout(this);
+        auto* form = new QFormLayout();
+        layout->addLayout(form);
+
+        m_title = new QLineEdit(this);
+        m_title->setText(annotation ? annotation->title : QString());
+        m_title->setPlaceholderText(QStringLiteral("这一帧发生了什么"));
+        form->addRow(QStringLiteral("标题"), m_title);
+
+        m_frame = new QSpinBox(this);
+        m_frame->setRange(0, 1000000);
+        m_frame->setValue(annotation ? annotation->frame : std::max(0, frame));
+        form->addRow(QStringLiteral("帧"), m_frame);
+
+        m_tags = new QLineEdit(this);
+        m_tags->setPlaceholderText(QStringLiteral("字幕, 场景, 副歌, 镜头"));
+        if (annotation)
+            m_tags->setText(annotation->tags.join(QStringLiteral(", ")));
+        form->addRow(QStringLiteral("标签"), m_tags);
+
+        m_color = annotation ? annotation->color : QColor(255, 190, 60);
+        m_colorButton = new QPushButton(this);
+        m_colorButton->setObjectName(QStringLiteral("annotationColorButton"));
+        form->addRow(QStringLiteral("颜色"), m_colorButton);
+        connect(m_colorButton, &QPushButton::clicked, this, [this] {
+            const QColor chosen =
+                QColorDialog::getColor(m_color, this, QStringLiteral("注释颜色"));
+            if (chosen.isValid())
+            {
+                m_color = chosen;
+                updateColorButton();
+            }
+        });
+        updateColorButton();
+
+        m_note = new QPlainTextEdit(this);
+        m_note->setPlaceholderText(QStringLiteral("Markdown / 纯文本备注"));
+        m_note->setMinimumHeight(120);
+        if (annotation)
+            m_note->setPlainText(annotation->note);
+        form->addRow(QStringLiteral("备注"), m_note);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
+                                             | QDialogButtonBox::Cancel, this);
+        layout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    }
+
+    QString title() const { return m_title->text().trimmed(); }
+    int frame() const { return m_frame->value(); }
+    QStringList tags() const
+    {
+        QStringList result;
+        for (QString tag : m_tags->text().split(QRegularExpression(
+                 QStringLiteral("[,，]")), Qt::SkipEmptyParts))
+        {
+            tag = tag.trimmed();
+            if (!tag.isEmpty() && !result.contains(tag))
+                result.append(tag);
+        }
+        return result;
+    }
+    QColor color() const { return m_color; }
+    QString note() const { return m_note->toPlainText(); }
+
+private:
+    void updateColorButton()
+    {
+        m_colorButton->setText(m_color.name());
+        const bool dark = m_color.lightness() < 140;
+        m_colorButton->setStyleSheet(
+            QStringLiteral("background:%1;color:%2;")
+                .arg(m_color.name(), dark ? QStringLiteral("white")
+                                          : QStringLiteral("black")));
+    }
+
+    QLineEdit* m_title = nullptr;
+    QSpinBox* m_frame = nullptr;
+    QLineEdit* m_tags = nullptr;
+    QPushButton* m_colorButton = nullptr;
+    QPlainTextEdit* m_note = nullptr;
+    QColor m_color;
+};
+
+} // namespace
 
 MainWindow::MainWindow(Project* project, QWidget* parent)
     : QMainWindow(parent)
@@ -329,6 +574,24 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onKeyframesMoveRequested);
     connect(m_timeline, &TimelinePanel::folderCreateRequested, this,
             &MainWindow::onCreateFolderRequested);
+    connect(m_timeline, &TimelinePanel::sceneCreateRequested, this,
+            [this] { showSceneDialog(); });
+    connect(m_timeline, &TimelinePanel::sceneEditRequested, this,
+            [this](const QString& id) { showSceneDialog(id); });
+    connect(m_timeline, &TimelinePanel::sceneDeleteRequested, this,
+            &MainWindow::commitSceneRemove);
+    connect(m_timeline, &TimelinePanel::sceneRetireRequested, this,
+            &MainWindow::commitSceneRetired);
+    connect(m_timeline, &TimelinePanel::annotationCreateRequested, this,
+            [this](int frame) { showAnnotationDialog(QString(), frame); });
+    connect(m_timeline, &TimelinePanel::annotationEditRequested, this,
+            [this](const QString& id) { showAnnotationDialog(id); });
+    connect(m_timeline, &TimelinePanel::annotationDeleteRequested, this,
+            &MainWindow::commitAnnotationRemove);
+    connect(m_timeline, &TimelinePanel::keyframeNoteRequested, this,
+            &MainWindow::editKeyframeNote);
+    connect(m_curve, &CurveEditor::keyframeNoteRequested, this,
+            &MainWindow::editKeyframeNote);
     connect(m_history, &History::changed, this, [this] {
         m_undoAction->setEnabled(m_history->canUndo());
         m_redoAction->setEnabled(m_history->canRedo());
@@ -1055,6 +1318,446 @@ void MainWindow::onCreateFolderRequested(EntityId parent)
         onEntityCreated(folder->id);
 }
 
+void MainWindow::applyActiveSceneParent(EntityId id)
+{
+    Entity* created = m_project->entity(id);
+    if (!created || created->parent != kInvalidEntity || created->isAudio())
+        return;
+    const Scene* scene = m_project->sceneAt(m_frame);
+    if (!scene || sceneIsRetired(*m_project, *scene))
+        return;
+    const EntityId folderId = m_project->sceneFolderAt(m_frame);
+    if (folderId == kInvalidEntity || folderId == id)
+        return;
+    const Entity* folder = m_project->entity(folderId);
+    if (!folder || !folder->isFolder())
+        return;
+    if (m_project->isDescendantOf(folderId, id))
+        return;
+    m_project->setEntityParent(id, folderId);
+}
+
+void MainWindow::showSceneDialog(const QString& sceneId)
+{
+    const Scene* existing =
+        sceneId.isEmpty() ? nullptr : m_project->sceneById(sceneId);
+    if (!sceneId.isEmpty() && !existing)
+        return;
+
+    SceneDialog dialog(m_project, existing, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    const bool ok =
+        existing ? commitSceneUpdate(sceneId, dialog.name(), dialog.startFrame(),
+                                     dialog.endFrame(), dialog.color(),
+                                     dialog.note(), &error)
+                 : commitSceneCreate(dialog.name(), dialog.startFrame(),
+                                     dialog.endFrame(), dialog.color(),
+                                     dialog.note(), &error);
+    if (!ok)
+        QMessageBox::warning(this, QStringLiteral("场景"), error);
+}
+
+bool MainWindow::commitSceneCreate(const QString& name, int startFrame, int endFrame,
+                                   const QColor& color, const QString& note,
+                                   QString* error, QString* createdId)
+{
+    Scene* scene = m_project->addScene(name, startFrame, endFrame, color, note, error);
+    if (!scene)
+        return false;
+
+    const Scene record = *scene;
+    if (createdId)
+        *createdId = record.id;
+    const Entity* folder = m_project->entity(record.folderId);
+    const Entity folderCopy = folder ? *folder : Entity();
+    int folderIndex = 0;
+    for (int i = 0; i < int(m_project->entities().size()); ++i)
+    {
+        if (m_project->entities()[i].id == record.folderId)
+        {
+            folderIndex = i;
+            break;
+        }
+    }
+    m_history->push(std::make_unique<AddSceneCommand>(record, folderCopy, folderIndex),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已新建场景「%1」").arg(record.name), 2000);
+    return true;
+}
+
+bool MainWindow::commitSceneUpdate(const QString& id, const QString& name,
+                                   int startFrame, int endFrame,
+                                   const QColor& color, const QString& note,
+                                   QString* error)
+{
+    const Scene* scene = m_project->sceneById(id);
+    if (!scene)
+    {
+        if (error)
+            *error = QStringLiteral("场景不存在");
+        return false;
+    }
+    const Scene before = *scene;
+    const Entity* folderBefore = m_project->entity(before.folderId);
+    const QString oldFolderName = folderBefore ? folderBefore->name : QString();
+    const bool syncFolderName = folderBefore && folderBefore->name == before.name;
+    if (!m_project->updateScene(id, name, startFrame, endFrame, color, note, error))
+        return false;
+    const Scene* updated = m_project->sceneById(id);
+    if (!updated)
+        return false;
+    QString newFolderName = oldFolderName;
+    if (syncFolderName && updated->name != oldFolderName)
+    {
+        m_project->setEntityName(updated->folderId, updated->name);
+        newFolderName = updated->name;
+    }
+    m_history->push(std::make_unique<UpdateSceneCommand>(
+                        before, *updated, before.folderId, oldFolderName,
+                        newFolderName),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已更新场景"), 2000);
+    return true;
+}
+
+bool MainWindow::commitSceneRemove(const QString& id)
+{
+    const Scene* scene = m_project->sceneById(id);
+    if (!scene)
+        return false;
+    const Scene record = *scene;
+    const Entity* folder = m_project->entity(record.folderId);
+    const Entity folderCopy = folder ? *folder : Entity();
+    int folderIndex = 0;
+    for (int i = 0; i < int(m_project->entities().size()); ++i)
+    {
+        if (m_project->entities()[i].id == record.folderId)
+        {
+            folderIndex = i;
+            break;
+        }
+    }
+    if (!m_project->removeScene(id))
+        return false;
+    m_history->push(std::make_unique<RemoveSceneCommand>(record, folderCopy,
+                                                        folderIndex),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已删除场景记录，文件夹保留"), 3000);
+    return true;
+}
+
+bool MainWindow::commitSceneRetired(const QString& id, bool retired)
+{
+    const Scene* scene = m_project->sceneById(id);
+    if (!scene)
+        return false;
+    const Scene record = *scene;
+    const Entity* folder = m_project->entity(record.folderId);
+    if (!folder || !folder->isFolder())
+        return false;
+    if (sceneIsRetired(*m_project, record) == retired)
+        return false;
+
+    const QVector<Entity> before = m_project->entities();
+    if (retired)
+    {
+        EntityId retiredRoot = kInvalidEntity;
+        for (const Entity& entity : m_project->entities())
+        {
+            if (entity.id != record.folderId && entity.parent == kInvalidEntity
+                && entity.isFolder()
+                && entity.name == QStringLiteral("_retired"))
+            {
+                retiredRoot = entity.id;
+                break;
+            }
+        }
+        if (retiredRoot == kInvalidEntity)
+        {
+            Entity* created = m_project->addFolder(QStringLiteral("_retired"));
+            if (!created)
+                return false;
+            retiredRoot = created->id;
+        }
+
+        Entity* current = m_project->entity(record.folderId);
+        if (!current)
+            return false;
+        // The retired path is _retired/<scene name>; keep the folder name in
+        // sync even if it was renamed independently in the layer tree.
+        if (current->name != record.name)
+            m_project->setEntityName(record.folderId, record.name);
+        current = m_project->entity(record.folderId);
+        if (!current)
+            return false;
+        // Remember the human values so restore does not depend on undo.
+        const double oldOpacity =
+            m_project->value(record.folderId, QStringLiteral("opacity"), 0);
+        current->data[QStringLiteral("sceneRetired")] = true;
+        current->data[QStringLiteral("sceneRetiredOpacity")] = oldOpacity;
+        current->data[QStringLiteral("sceneRetiredLocked")] = current->locked;
+        current->tracks.remove(QStringLiteral("opacity"));
+        current->values[QStringLiteral("opacity")] = 0.0;
+
+        m_project->setEntityParent(record.folderId, retiredRoot);
+        m_project->setEntityFlag(record.folderId, EntityFlag::Locked, true);
+    }
+    else
+    {
+        Entity* current = m_project->entity(record.folderId);
+        if (!current)
+            return false;
+        const double opacity =
+            current->data.value(QStringLiteral("sceneRetiredOpacity"), 1.0).toDouble();
+        const bool wasLocked =
+            current->data.value(QStringLiteral("sceneRetiredLocked"), false).toBool();
+
+        m_project->setEntityParent(record.folderId, kInvalidEntity);
+        m_project->setEntityFlag(record.folderId, EntityFlag::Locked, false);
+        current->tracks.remove(QStringLiteral("opacity"));
+        current->values[QStringLiteral("opacity")] = opacity;
+        current->data.remove(QStringLiteral("sceneRetired"));
+        current->data.remove(QStringLiteral("sceneRetiredOpacity"));
+        current->data.remove(QStringLiteral("sceneRetiredLocked"));
+        m_project->setEntityFlag(record.folderId, EntityFlag::Locked, wasLocked);
+    }
+
+    m_project->notifyChanged();
+    m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                        before, m_project->entities(),
+                        retired ? QStringLiteral("退休场景")
+                                : QStringLiteral("恢复场景")),
+                    *m_project);
+    statusBar()->showMessage(retired ? QStringLiteral("场景已退休到 _retired")
+                                     : QStringLiteral("场景已恢复"),
+                             3000);
+    return true;
+}
+
+void MainWindow::showAnnotationDialog(const QString& annotationId, int frame)
+{
+    const Annotation* existing =
+        annotationId.isEmpty() ? nullptr : m_project->annotationById(annotationId);
+    if (!annotationId.isEmpty() && !existing)
+        return;
+
+    AnnotationDialog dialog(frame, existing, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    const bool ok =
+        existing ? commitAnnotationUpdate(annotationId, dialog.frame(), dialog.title(),
+                                          dialog.note(), dialog.tags(),
+                                          dialog.color(), &error)
+                 : commitAnnotationCreate(dialog.frame(), dialog.title(),
+                                          dialog.note(), dialog.tags(),
+                                          dialog.color(), &error);
+    if (!ok)
+        QMessageBox::warning(this, QStringLiteral("注释"), error);
+}
+
+bool MainWindow::commitAnnotationCreate(int frame, const QString& title,
+                                        const QString& note,
+                                        const QStringList& tags, const QColor& color,
+                                        QString* error, QString* createdId)
+{
+    Annotation* annotation =
+        m_project->addAnnotation(frame, title, note, tags, color, error);
+    if (!annotation)
+        return false;
+    const Annotation record = *annotation;
+    if (createdId)
+        *createdId = record.id;
+    m_history->push(std::make_unique<AddAnnotationCommand>(record), *m_project);
+    statusBar()->showMessage(QStringLiteral("已新建注释"), 2000);
+    return true;
+}
+
+bool MainWindow::commitAnnotationUpdate(const QString& id, int frame,
+                                        const QString& title, const QString& note,
+                                        const QStringList& tags, const QColor& color,
+                                        QString* error)
+{
+    const Annotation* annotation = m_project->annotationById(id);
+    if (!annotation)
+    {
+        if (error)
+            *error = QStringLiteral("注释不存在");
+        return false;
+    }
+    const Annotation before = *annotation;
+    Annotation updated = before;
+    updated.frame = frame;
+    updated.title = title;
+    updated.note = note;
+    updated.tags = tags;
+    if (color.isValid())
+        updated.color = color;
+    if (!m_project->updateAnnotation(updated, error))
+        return false;
+    const Annotation* current = m_project->annotationById(id);
+    if (!current)
+        return false;
+    m_history->push(std::make_unique<UpdateAnnotationCommand>(before, *current),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已更新注释"), 2000);
+    return true;
+}
+
+bool MainWindow::commitAnnotationRemove(const QString& id)
+{
+    const Annotation* annotation = m_project->annotationById(id);
+    if (!annotation)
+        return false;
+    const Annotation record = *annotation;
+    if (!m_project->removeAnnotation(id))
+        return false;
+    m_history->push(std::make_unique<RemoveAnnotationCommand>(record), *m_project);
+    statusBar()->showMessage(QStringLiteral("已删除注释"), 2000);
+    return true;
+}
+
+bool MainWindow::commitKeyframeNote(EntityId id, double frame, const QString& note)
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return false;
+
+    QVector<KeyframeNoteRecord> records;
+    bool found = false;
+    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (std::abs(key.frame - frame) > 1e-6)
+                continue;
+            found = true;
+            if (key.note == note)
+                continue;
+            KeyframeNoteRecord record;
+            record.entity = id;
+            record.property = it.key();
+            record.frame = key.frame;
+            record.oldNote = key.note;
+            record.newNote = note;
+            records.append(record);
+        }
+    }
+    if (!found)
+        return false;
+    if (records.isEmpty())
+        return true;
+
+    m_history->push(std::make_unique<SetKeyframeNoteCommand>(records), *m_project);
+    statusBar()->showMessage(note.isEmpty() ? QStringLiteral("已清除关键帧备注")
+                                            : QStringLiteral("已保存关键帧备注"),
+                             2000);
+    return true;
+}
+
+void MainWindow::editKeyframeNote(EntityId id, double frame)
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity || m_project->isEffectivelyLocked(id))
+        return;
+
+    QStringList notes;
+    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (std::abs(key.frame - frame) > 1e-6 || key.note.isEmpty()
+                || notes.contains(key.note))
+                continue;
+            notes.append(key.note);
+        }
+    }
+
+    bool ok = false;
+    const QString note = QInputDialog::getMultiLineText(
+        this, QStringLiteral("关键帧备注"),
+        QStringLiteral("第 %1 帧 · 仅作创作备注，不参与渲染")
+            .arg(int(std::lround(frame))),
+        notes.join(QStringLiteral("\n")), &ok);
+    if (ok)
+        commitKeyframeNote(id, frame, note);
+}
+
+QString MainWindow::addSceneForTest(const QString& name, int startFrame, int endFrame,
+                                    const QColor& color, const QString& note)
+{
+    QString error;
+    QString id;
+    if (!commitSceneCreate(name, startFrame, endFrame, color, note, &error, &id))
+    {
+        qWarning() << "add scene failed" << error;
+        return QString();
+    }
+    return id;
+}
+
+bool MainWindow::updateSceneForTest(const QString& id, const QString& name,
+                                    int startFrame, int endFrame,
+                                    const QColor& color, const QString& note,
+                                    QString* error)
+{
+    return commitSceneUpdate(id, name, startFrame, endFrame, color, note, error);
+}
+
+bool MainWindow::removeSceneForTest(const QString& id)
+{
+    return commitSceneRemove(id);
+}
+
+bool MainWindow::setSceneRetiredForTest(const QString& id, bool retired)
+{
+    return commitSceneRetired(id, retired);
+}
+
+QString MainWindow::addAnnotationForTest(int frame, const QString& title,
+                                         const QString& note,
+                                         const QStringList& tags,
+                                         const QColor& color)
+{
+    QString error;
+    QString id;
+    if (!commitAnnotationCreate(frame, title, note, tags, color, &error, &id))
+    {
+        qWarning() << "add annotation failed" << error;
+        return QString();
+    }
+    return id;
+}
+
+bool MainWindow::updateAnnotationForTest(const QString& id, int frame,
+                                         const QString& title, const QString& note,
+                                         const QStringList& tags, const QColor& color,
+                                         QString* error)
+{
+    return commitAnnotationUpdate(id, frame, title, note, tags, color, error);
+}
+
+bool MainWindow::removeAnnotationForTest(const QString& id)
+{
+    return commitAnnotationRemove(id);
+}
+
+bool MainWindow::setKeyframeNoteForTest(EntityId id, double frame,
+                                        const QString& note)
+{
+    return commitKeyframeNote(id, frame, note);
+}
+
+EntityId MainWindow::createFolderForTest(EntityId parent)
+{
+    onCreateFolderRequested(parent);
+    return m_selected;
+}
+
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     if (m_project->modified)
@@ -1684,6 +2387,8 @@ void MainWindow::onRedo()
 void MainWindow::onEntityCreated(EntityId id)
 {
     setSelectedEntity(id);
+    applyActiveSceneParent(id);
+
     if (const Entity* created = m_project->entity(id))
     {
         if (created->isCamera())

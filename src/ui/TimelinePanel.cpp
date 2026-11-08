@@ -1,6 +1,7 @@
 #include "TimelinePanel.h"
 
 #include "app/AppIcon.h"
+#include "core/Commands.h"
 #include "core/Lang.h"
 #include "core/PerfMonitor.h"
 #include "core/Settings.h"
@@ -10,6 +11,8 @@
 #include <QElapsedTimer>
 #include <QContextMenuEvent>
 #include <QFocusEvent>
+#include <QFont>
+#include <QFontMetrics>
 #include <QLineEdit>
 #include <QKeyEvent>
 #include <QMenu>
@@ -21,6 +24,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
+#include <QToolTip>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
@@ -364,7 +368,7 @@ void TimelinePanel::updateScrollBar()
     const auto& entities = m_project->entities();
     for (int index : visibleEntities())
         total += entities[index].isAudio() ? kAudioRowHeight : kRowHeight;
-    const int page = std::max(0, height() - kHeaderHeight - kScrollBarHeight);
+    const int page = std::max(0, height() - kRowsTop - kScrollBarHeight);
     const int rowsMaximum = std::max(0, total - page);
     m_scrollY = std::clamp(m_scrollY, 0, rowsMaximum);
     const QSignalBlocker blocker(m_vScroll);
@@ -392,10 +396,10 @@ bool TimelinePanel::verticalScrollVisibleForTest() const
 
 int TimelinePanel::rowAt(int y) const
 {
-    if (y < kHeaderHeight)
+    if (y < kRowsTop)
         return -1;
     const QVector<int> visible = visibleEntities();
-    int top = kHeaderHeight - m_scrollY;
+    int top = kRowsTop - m_scrollY;
     for (int row = 0; row < visible.size(); ++row)
     {
         const int height = rowHeight(row);
@@ -408,7 +412,7 @@ int TimelinePanel::rowAt(int y) const
 
 int TimelinePanel::rowTop(int row) const
 {
-    int top = kHeaderHeight - m_scrollY;
+    int top = kRowsTop - m_scrollY;
     for (int i = 0; i < row; ++i)
         top += rowHeight(i);
     return top;
@@ -507,7 +511,7 @@ void TimelinePanel::updateRowDropTarget(const QPointF& pos)
     m_dropMode = DropMode::None;
     const int y = int(pos.y());
     const int bodyBottom = height() - kScrollBarHeight;
-    if (y < kHeaderHeight || y >= bodyBottom)
+    if (y < kRowsTop || y >= bodyBottom)
     {
         update();
         return;
@@ -743,14 +747,15 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
     m_hScroll->setGeometry(kNameWidth, height() - kScrollBarHeight, visibleWidth(),
                            kScrollBarHeight);
     if (m_vScroll)
-        m_vScroll->setGeometry(width() - kScrollBarHeight, kHeaderHeight,
+        m_vScroll->setGeometry(width() - kScrollBarHeight, kRowsTop,
                                kScrollBarHeight,
-                               height() - kHeaderHeight - kScrollBarHeight);
+                               height() - kRowsTop - kScrollBarHeight);
     updateScrollBar();
 }
 
 void TimelinePanel::leaveEvent(QEvent* event)
 {
+    QToolTip::hideText();
     if (m_dragMode != DragMode::MoveAudio)
         unsetCursor();
     QWidget::leaveEvent(event);
@@ -780,7 +785,7 @@ bool TimelinePanel::audioClipRange(const Entity& entity, double* left, double* r
 
 EntityId TimelinePanel::audioClipAt(int x, int y) const
 {
-    if (x < kNameWidth || y < kHeaderHeight)
+    if (x < kNameWidth || y < kRowsTop)
         return kInvalidEntity;
     const Entity* entity = m_project->entity(entityAtRow(rowAt(y)));
     double left = 0.0;
@@ -803,10 +808,20 @@ void TimelinePanel::updateHoverCursor(const QPointF& pos)
     }
     const int x = int(pos.x());
     const int y = int(pos.y());
+    if (y >= kHeaderHeight && y < kRowsTop)
+    {
+        const bool overScene = y < annotationTop() && sceneAtX(x) != nullptr;
+        const bool overAnnotation = y >= annotationTop() && annotationAtX(x) != nullptr;
+        if (overScene || overAnnotation)
+            setCursor(Qt::PointingHandCursor);
+        else
+            unsetCursor();
+        return;
+    }
     if (x < kNameWidth)
     {
         const Entity* entity =
-            (y >= kHeaderHeight && y < height() - kScrollBarHeight)
+            (y >= kRowsTop && y < height() - kScrollBarHeight)
                 ? m_project->entity(entityAtRow(rowAt(y)))
                 : nullptr;
         if (entity && !m_project->isEffectivelyLocked(entity->id))
@@ -816,7 +831,7 @@ void TimelinePanel::updateHoverCursor(const QPointF& pos)
         return;
     }
     const Entity* clip =
-        (y >= kHeaderHeight && y < height() - kScrollBarHeight)
+        (y >= kRowsTop && y < height() - kScrollBarHeight)
             ? m_project->entity(audioClipAt(x, y))
             : nullptr;
     if (clip && !m_project->isEffectivelyLocked(clip->id))
@@ -911,6 +926,243 @@ void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
     p.drawLine(left, row.bottom() - 1, rightEdge, row.bottom() - 1);
 }
 
+QRect TimelinePanel::sceneBandRect(const Scene& scene) const
+{
+    const int left = std::max(kNameWidth, xFromFrame(scene.startFrame));
+    const int right =
+        std::min(width() - kRightPad, xFromFrame(scene.endFrame + 1));
+    if (right <= left)
+        return QRect();
+    return QRect(left, kHeaderHeight + 1, right - left, kSceneBandHeight - 2);
+}
+
+QRect TimelinePanel::sceneBandRectForTest(const QString& id) const
+{
+    const Scene* scene = m_project->sceneById(id);
+    return scene ? sceneBandRect(*scene) : QRect();
+}
+
+QRect TimelinePanel::annotationRectForTest(const QString& id) const
+{
+    const Annotation* annotation = m_project->annotationById(id);
+    if (!annotation)
+        return QRect();
+    const int x = xFromFrame(annotation->frame);
+    if (x < kNameWidth - 6 || x > width() - kRightPad + 6)
+        return QRect();
+    return QRect(x - 4, annotationTop() + 1, 8, kAnnotationLaneHeight - 2);
+}
+
+const Scene* TimelinePanel::sceneAtX(int x) const
+{
+    if (x < kNameWidth)
+        return nullptr;
+    return m_project->sceneAt(frameFromX(x));
+}
+
+const Annotation* TimelinePanel::annotationAtX(int x) const
+{
+    const Annotation* best = nullptr;
+    int bestDistance = 7;
+    for (const Annotation& annotation : m_project->annotations())
+    {
+        const int distance = std::abs(xFromFrame(annotation.frame) - x);
+        if (distance <= bestDistance)
+        {
+            bestDistance = distance;
+            best = &annotation;
+        }
+    }
+    return best;
+}
+
+QString TimelinePanel::keyframeNoteAt(EntityId id, double frame) const
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return QString();
+    QStringList notes;
+    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
+    {
+        for (const Keyframe& key : it->keys)
+        {
+            if (std::abs(key.frame - frame) > 1e-6 || key.note.isEmpty()
+                || notes.contains(key.note))
+                continue;
+            notes.append(key.note);
+        }
+    }
+    return notes.join(QStringLiteral("\n"));
+}
+
+bool TimelinePanel::keyframeHasNote(EntityId id, double frame) const
+{
+    return !keyframeNoteAt(id, frame).isEmpty();
+}
+
+QString TimelinePanel::sceneTooltip(const Scene& scene) const
+{
+    QString text = QStringLiteral("%1\n帧 %2–%3")
+                       .arg(scene.name)
+                       .arg(scene.startFrame)
+                       .arg(scene.endFrame);
+    if (sceneIsRetired(*m_project, scene))
+        text += QStringLiteral("\n已退休（内容在 _retired 中，锁定且透明）");
+    if (!scene.note.isEmpty())
+        text += QStringLiteral("\n") + scene.note;
+    return text;
+}
+
+QString TimelinePanel::annotationTooltip(const Annotation& annotation) const
+{
+    QString text = QStringLiteral("%1\n帧 %2").arg(annotation.title).arg(annotation.frame);
+    if (!annotation.tags.isEmpty())
+        text += QStringLiteral("\n标签：%1").arg(annotation.tags.join(QStringLiteral("、")));
+    if (!annotation.note.isEmpty())
+        text += QStringLiteral("\n") + annotation.note;
+    return text;
+}
+
+void TimelinePanel::drawSceneBand(QPainter& p)
+{
+    p.save();
+    const QPalette pal = QApplication::palette();
+    const QColor altColor = pal.color(QPalette::AlternateBase);
+    const QColor midColor = pal.color(QPalette::Mid);
+    const QColor dimColor = pal.color(QPalette::PlaceholderText);
+    const QColor textColor = pal.color(QPalette::Text);
+
+    const QRect band(0, kHeaderHeight, width(), kRowsTop - kHeaderHeight);
+    p.fillRect(QRect(0, kHeaderHeight, kNameWidth, kRowsTop - kHeaderHeight),
+               pal.color(QPalette::Base));
+    p.fillRect(QRect(kNameWidth, kHeaderHeight, width() - kNameWidth,
+                     kRowsTop - kHeaderHeight),
+               QColor(altColor.red(), altColor.green(), altColor.blue(), 90));
+
+    p.setFont(QFont(p.font().family(),
+                    std::max(7, p.font().pointSize() - 2)));
+    p.setPen(dimColor);
+    p.drawText(QRect(8, kHeaderHeight, kNameWidth - 12, kSceneBandHeight),
+               Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("场景"));
+    p.drawText(QRect(8, annotationTop(), kNameWidth - 12, kAnnotationLaneHeight),
+               Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("注释"));
+
+    const Scene* active = m_project->sceneAt(m_frame);
+    for (const Scene& scene : m_project->scenes())
+    {
+        const QRect rect = sceneBandRect(scene);
+        if (!rect.isValid())
+            continue;
+        const bool retired = sceneIsRetired(*m_project, scene);
+        const bool isActive = active && active->id == scene.id;
+        const bool isSelected = m_selectedScene == scene.id;
+        QColor fill = scene.color;
+        fill.setAlpha(retired ? 40 : (isActive ? 150 : 85));
+        p.fillRect(rect, fill);
+        p.setPen(QPen(isSelected ? textColor : scene.color.darker(130),
+                      isSelected ? 2 : 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(rect);
+        QString label = scene.name;
+        if (retired)
+            label += QStringLiteral("（退休）");
+        p.setPen(retired ? dimColor : textColor);
+        const int textWidth = std::max(0, rect.width() - 8);
+        p.drawText(rect.adjusted(4, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                   QFontMetrics(p.font()).elidedText(label, Qt::ElideRight, textWidth));
+    }
+
+    // Annotation lane under the scene band.
+    p.fillRect(QRect(kNameWidth, annotationTop(), width() - kNameWidth,
+                     kAnnotationLaneHeight),
+               QColor(altColor.red(), altColor.green(), altColor.blue(), 55));
+    p.setPen(QPen(midColor, 1));
+    p.drawLine(0, kRowsTop, width(), kRowsTop);
+
+    const int right = width() - kRightPad;
+    for (const Annotation& annotation : m_project->annotations())
+    {
+        const int x = xFromFrame(annotation.frame);
+        if (x < kNameWidth - 4 || x > right)
+            continue;
+        const int top = annotationTop() + 2;
+        QPolygonF pin;
+        pin << QPointF(x, top) << QPointF(x + 5, top + 5)
+            << QPointF(x, top + 10) << QPointF(x - 5, top + 5);
+        p.setPen(Qt::NoPen);
+        p.setBrush(annotation.color);
+        p.drawPolygon(pin);
+
+        p.setPen(annotation.color.lighter(125));
+        const QString label = QStringLiteral("%1 %2")
+                                  .arg(annotation.frame)
+                                  .arg(annotation.title);
+        const int available = right - x - 7;
+        if (available > 12)
+        {
+            p.drawText(QRect(x + 7, annotationTop(), available,
+                             kAnnotationLaneHeight),
+                       Qt::AlignVCenter | Qt::AlignLeft,
+                       QFontMetrics(p.font()).elidedText(label, Qt::ElideRight,
+                                                        available));
+        }
+    }
+    p.restore();
+}
+
+void TimelinePanel::showSceneMenu(const QPoint& globalPos, const Scene* scene)
+{
+    QMenu menu(this);
+    QAction* create = menu.addAction(QStringLiteral("新建场景…"));
+    QAction* edit = nullptr;
+    QAction* remove = nullptr;
+    QAction* retire = nullptr;
+    if (scene)
+    {
+        menu.addSeparator();
+        edit = menu.addAction(QStringLiteral("编辑场景…"));
+        const bool retired = sceneIsRetired(*m_project, *scene);
+        retire = menu.addAction(retired ? QStringLiteral("恢复场景")
+                                        : QStringLiteral("退休场景"));
+        remove = menu.addAction(QStringLiteral("删除场景"));
+    }
+    QAction* chosen = menu.exec(globalPos);
+    if (!chosen)
+        return;
+    if (chosen == create)
+        emit sceneCreateRequested();
+    else if (chosen == edit && scene)
+        emit sceneEditRequested(scene->id);
+    else if (chosen == remove && scene)
+        emit sceneDeleteRequested(scene->id);
+    else if (chosen == retire && scene)
+        emit sceneRetireRequested(scene->id, !sceneIsRetired(*m_project, *scene));
+}
+
+void TimelinePanel::showAnnotationMenu(const QPoint& globalPos,
+                                       const Annotation* annotation, int frame)
+{
+    QMenu menu(this);
+    QAction* create = menu.addAction(QStringLiteral("新建注释…"));
+    QAction* edit = nullptr;
+    QAction* remove = nullptr;
+    if (annotation)
+    {
+        menu.addSeparator();
+        edit = menu.addAction(QStringLiteral("编辑注释…"));
+        remove = menu.addAction(QStringLiteral("删除注释"));
+    }
+    QAction* chosen = menu.exec(globalPos);
+    if (!chosen)
+        return;
+    if (chosen == create)
+        emit annotationCreateRequested(std::max(0, frame));
+    else if (chosen == edit && annotation)
+        emit annotationEditRequested(annotation->id);
+    else if (chosen == remove && annotation)
+        emit annotationDeleteRequested(annotation->id);
+}
+
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
     QElapsedTimer profile;
@@ -938,7 +1190,6 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.setPen(midColor);
     p.drawLine(kNameWidth, 0, kNameWidth, bodyBottom);
     p.drawLine(0, kHeaderHeight, width(), kHeaderHeight);
-
     // Ruler. Frame mode follows Mine-imator's density table; seconds mode
     // subdivides every second into whole cells derived from the project
     // frame rate: at 24 fps a second is 24, 12, 8, 6, 4, 3, 2 or 1 cells.
@@ -1021,11 +1272,14 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
+    // Scene band + annotation lane between the ruler and the entity rows.
+    drawSceneBand(p);
+
     // Entity rows.
     const auto& entities = m_project->entities();
     const QVector<int> visible = visibleEntities();
     p.save();
-    p.setClipRect(QRect(0, kHeaderHeight, width(), bodyBottom - kHeaderHeight));
+    p.setClipRect(QRect(0, kRowsTop, width(), bodyBottom - kRowsTop));
     for (int row = 0; row < visible.size(); ++row)
     {
         const Entity& e = entities[visible[row]];
@@ -1139,6 +1393,14 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                 p.drawLine(QPointF(x - 2.5, cy - r - 3.5),
                            QPointF(x + 2.5, cy - r - 3.5));
             }
+
+            // A small dot marks keyframes that carry an author note.
+            if (keyframeHasNote(e.id, keyFrame))
+            {
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(255, 220, 120));
+                p.drawEllipse(QPointF(x, cy + r + 4.0), 2.0, 2.0);
+            }
         }
 
         // Row buttons appear on hover, like Mine-imator's timeline list.
@@ -1177,14 +1439,14 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     if (entities.isEmpty())
     {
         p.setPen(dimColor);
-        p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
+        p.drawText(QRect(kNameWidth, kRowsTop, visibleWidth(), bodyBottom - kRowsTop),
                    Qt::AlignCenter,
                    QStringLiteral("点击左上角工作台创建实体"));
     }
     else if (visible.isEmpty())
     {
         p.setPen(dimColor);
-        p.drawText(QRect(kNameWidth, kHeaderHeight, visibleWidth(), bodyBottom - kHeaderHeight),
+        p.drawText(QRect(kNameWidth, kRowsTop, visibleWidth(), bodyBottom - kRowsTop),
                    Qt::AlignCenter, QStringLiteral("没有匹配的对象"));
     }
 
@@ -1219,8 +1481,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
         p.setPen(QPen(accentColor, 1, Qt::DashLine));
         p.setBrush(QColor(accentColor.red(), accentColor.green(), accentColor.blue(), 50));
-        p.drawRect(box.intersected(QRectF(kNameWidth, kHeaderHeight, visibleWidth(),
-                                          bodyBottom - kHeaderHeight)));
+        p.drawRect(box.intersected(QRectF(kNameWidth, kRowsTop, visibleWidth(),
+                                          bodyBottom - kRowsTop)));
     }
 
     p.setPen(midColor);
@@ -1232,7 +1494,14 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 {
     const int x = int(event->position().x());
     const int y = int(event->position().y());
-    if (x >= kNameWidth || y < kHeaderHeight)
+    if (y >= kHeaderHeight && y < annotationTop())
+    {
+        const Scene* scene = sceneAtX(x);
+        if (scene)
+            emit sceneEditRequested(scene->id);
+        return;
+    }
+    if (x >= kNameWidth || y < kRowsTop)
         return;
 
     const int row = rowAt(y);
@@ -1308,9 +1577,36 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    setFocus(Qt::MouseFocusReason);
+    // Scene band and annotation lane: select/jump without scrubbing.
+    if (y < kRowsTop)
+    {
+        setFocus(Qt::MouseFocusReason);
+        if (y < annotationTop())
+        {
+            const Scene* scene = sceneAtX(x);
+            if (scene)
+            {
+                m_selectedScene = scene->id;
+                emit scrubStarted();
+                emit frameRequested(scene->startFrame);
+            }
+            else
+            {
+                m_selectedScene.clear();
+            }
+        }
+        else
+        {
+            const Annotation* annotation = annotationAtX(x);
+            emit scrubStarted();
+            emit frameRequested(annotation ? annotation->frame
+                                           : std::max(0, frameFromX(x)));
+        }
+        update();
+        return;
+    }
 
-    // Hover buttons take priority.
+    setFocus(Qt::MouseFocusReason);
     if (m_hoverRow >= 0)
     {
         for (int index = 0; index < 3; ++index)
@@ -1512,13 +1808,50 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
     // Track the hovered row for the inline buttons.
     if (m_dragMode == DragMode::None)
     {
-        const int row = (y >= kHeaderHeight) ? rowAt(y) : -1;
+        const int row = (y >= kRowsTop) ? rowAt(y) : -1;
         if (row != m_hoverRow)
         {
             m_hoverRow = row;
             update();
         }
         updateHoverCursor(event->position());
+
+        const QPoint global = event->globalPosition().toPoint();
+        if (y >= kHeaderHeight && y < annotationTop())
+        {
+            if (const Scene* scene = sceneAtX(x))
+                QToolTip::showText(global, sceneTooltip(*scene), this);
+            else
+                QToolTip::hideText();
+        }
+        else if (y >= annotationTop() && y < kRowsTop)
+        {
+            if (const Annotation* annotation = annotationAtX(x))
+                QToolTip::showText(global, annotationTooltip(*annotation), this);
+            else
+                QToolTip::hideText();
+        }
+        else if (y >= kRowsTop && y < height() - kScrollBarHeight && x >= kNameWidth)
+        {
+            EntityId id = kInvalidEntity;
+            double frame = 0.0;
+            if (hitKeyframe(rowAt(y), x, &id, &frame))
+            {
+                const QString note = keyframeNoteAt(id, frame);
+                if (!note.isEmpty())
+                    QToolTip::showText(global, note, this);
+                else
+                    QToolTip::hideText();
+            }
+            else
+            {
+                QToolTip::hideText();
+            }
+        }
+        else
+        {
+            QToolTip::hideText();
+        }
     }
 
     if (m_dragMode == DragMode::Scrub)
@@ -1634,13 +1967,14 @@ EasingSpec TimelinePanel::keyframeEasingAt(EntityId id, double frame) const
     return EasingSpec();
 }
 
-void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
+void TimelinePanel::showKeyframeMenu(const QPoint& globalPos, EntityId id,
+                                     double frame)
 {
     if (m_selectedKeyframes.isEmpty())
         return;
 
     double previous = -1.0;
-    KeyframeSelection base;
+    KeyframeSelection base = m_selectedKeyframes.first();
     for (const KeyframeSelection& selection : m_selectedKeyframes)
     {
         const double candidate =
@@ -1653,15 +1987,34 @@ void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
         }
     }
 
+    QMenu menu(this);
+    QAction* easing = nullptr;
     if (previous < 0.0)
     {
-        QMenu menu(this);
-        QAction* action =
-            menu.addAction(QStringLiteral("首帧没有进入段，请在第二个关键帧上设置"));
-        action->setEnabled(false);
-        menu.exec(globalPos);
+        easing = menu.addAction(QStringLiteral("首帧没有进入段"));
+        easing->setEnabled(false);
+    }
+    else
+    {
+        const QString title = QStringLiteral("进入本帧：%1s → %2s")
+                                  .arg(previous / double(std::max(1, m_project->fps)),
+                                       0, 'f', 2)
+                                  .arg(base.frame / double(std::max(1, m_project->fps)),
+                                       0, 'f', 2);
+        easing = menu.addAction(QStringLiteral("缓动…（%1）").arg(title));
+    }
+    QAction* note = menu.addAction(QStringLiteral("备注…"));
+
+    QAction* chosen = menu.exec(globalPos);
+    if (!chosen)
+        return;
+    if (chosen == note)
+    {
+        emit keyframeNoteRequested(id, frame);
         return;
     }
+    if (chosen != easing || previous < 0.0)
+        return;
 
     const EasingSpec current = keyframeEasingAt(base.entity, base.frame);
     const int fps = std::max(1, m_project->fps);
@@ -1669,16 +2022,35 @@ void TimelinePanel::showKeyframeMenu(const QPoint& globalPos)
                               .arg(previous / double(fps), 0, 'f', 2)
                               .arg(base.frame / double(fps), 0, 'f', 2);
 
-    EasingSpec chosen;
-    if (EasingChooser::choose(this, current, globalPos, &chosen, title))
-        emit keyframeEasingRequested(chosen);
+    EasingSpec chosenEase;
+    if (EasingChooser::choose(this, current, globalPos, &chosenEase, title))
+        emit keyframeEasingRequested(chosenEase);
 }
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
     const QPoint pos = event->pos();
+    const int clickedFrame = std::max(0, frameFromX(pos.x()));
     if (pos.y() < kHeaderHeight)
+    {
+        showAnnotationMenu(event->globalPos(), annotationAtX(pos.x()),
+                           clickedFrame);
+        event->accept();
         return;
+    }
+    if (pos.y() < annotationTop())
+    {
+        showSceneMenu(event->globalPos(), sceneAtX(pos.x()));
+        event->accept();
+        return;
+    }
+    if (pos.y() < kRowsTop)
+    {
+        showAnnotationMenu(event->globalPos(), annotationAtX(pos.x()),
+                           clickedFrame);
+        event->accept();
+        return;
+    }
 
     if (pos.x() >= kNameWidth)
     {
@@ -1698,7 +2070,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
                 update();
             }
 
-            showKeyframeMenu(event->globalPos());
+            showKeyframeMenu(event->globalPos(), keyEntity, keyFrame);
             event->accept();
             return;
         }

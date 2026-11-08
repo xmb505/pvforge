@@ -1113,6 +1113,370 @@ int annotationTest()
     return failures == 0 ? 0 : 1;
 }
 
+int sceneUiTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* content =
+        project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+    const pvf::EntityId contentId = content->id;
+    project->setValue(contentId, QStringLiteral("x"), 0, 0.0, true);
+    project->setValue(contentId, QStringLiteral("x"), 120, 600.0, true);
+
+    pvf::MainWindow window(project);
+    window.resize(1100, 800);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, contentId] {
+        int failures = 0;
+        auto fail = [&failures](const char* text) {
+            qCritical() << "scene-ui-test:" << text;
+            ++failures;
+        };
+
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        auto* redo = window.findChild<QAction*>(QStringLiteral("redoAction"));
+        if (!timeline || !undo || !redo)
+        {
+            qCritical() << "scene-ui-test: timeline or undo actions missing";
+            app.exit(1);
+            return;
+        }
+        timeline->setPixelsPerFrameForTest(6.0);
+
+        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                              type == QEvent::MouseButtonPress ? Qt::LeftButton
+                                                               : Qt::NoButton,
+                              Qt::NoModifier);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        const QString firstId = window.addSceneForTest(
+            QStringLiteral("开场"), 10, 40, QColor(200, 80, 80),
+            QStringLiteral("第一段"));
+        if (firstId.isEmpty() || project->scenes().size() != 1)
+        {
+            fail("scene creation through the UI path failed");
+            qInfo() << "scene-ui-test failures" << failures;
+            app.exit(1);
+            return;
+        }
+        const pvf::Scene* scene = project->sceneById(firstId);
+        const pvf::EntityId sceneFolder =
+            scene ? scene->folderId : pvf::kInvalidEntity;
+        if (!scene || !project->entity(sceneFolder))
+            fail("scene folder missing");
+
+        const QRect band = timeline->sceneBandRectForTest(firstId);
+        if (!band.isValid() || band.width() <= 0)
+            fail("scene band is not visible");
+
+        // Clicking the band selects it and jumps the playhead to its start.
+        const QPoint bandPoint(band.center().x(), timeline->sceneBandCenterYForTest());
+        sendMouse(QEvent::MouseButtonPress, bandPoint);
+        sendMouse(QEvent::MouseButtonRelease, bandPoint);
+        QApplication::processEvents();
+        if (window.currentFrameForTest() != 10)
+            fail("clicking the scene band did not jump to the start frame");
+        if (timeline->selectedSceneForTest() != firstId)
+            fail("clicking the scene band did not select the scene");
+        if (!timeline->sceneActiveForTest(firstId))
+            fail("the playhead scene is not marked active in the band");
+
+        // A new folder with no explicit parent lands in the active scene.
+        window.goToFrame(25);
+        const pvf::EntityId created = window.createFolderForTest();
+        const pvf::Entity* createdFolder = project->entity(created);
+        if (!createdFolder || createdFolder->parent != sceneFolder)
+            fail("new entity did not land in the active scene folder");
+
+        const int beforeUndo = int(project->entities().size());
+        undo->trigger();
+        QApplication::processEvents();
+        if (project->entity(created) || int(project->entities().size()) != beforeUndo - 1)
+            fail("undo did not remove the auto-parented entity");
+        redo->trigger();
+        QApplication::processEvents();
+        createdFolder = project->entity(created);
+        if (!createdFolder || createdFolder->parent != sceneFolder)
+            fail("redo did not restore the auto-parented entity");
+
+        // Range/name edits and their undo/redo.
+        QString error;
+        if (!window.updateSceneForTest(firstId, QStringLiteral("开场改"), 5, 45,
+                                       QColor(10, 20, 30), QStringLiteral("改过"),
+                                       &error))
+            fail("scene update failed");
+        const pvf::Scene* updated = project->sceneById(firstId);
+        if (!updated || updated->name != QStringLiteral("开场改")
+            || updated->startFrame != 5 || updated->endFrame != 45
+            || updated->note != QStringLiteral("改过"))
+            fail("scene update fields are wrong");
+        if (const pvf::Entity* renamed = project->entity(sceneFolder);
+            !renamed || renamed->name != QStringLiteral("开场改"))
+            fail("scene folder did not follow the scene name");
+        undo->trigger();
+        QApplication::processEvents();
+        const pvf::Scene* restored = project->sceneById(firstId);
+        if (!restored || restored->name != QStringLiteral("开场")
+            || restored->startFrame != 10 || restored->endFrame != 40)
+            fail("undo did not restore the scene range/name");
+        if (const pvf::Entity* renamed = project->entity(sceneFolder);
+            !renamed || renamed->name != QStringLiteral("开场"))
+            fail("undo did not restore the scene folder name");
+        redo->trigger();
+        QApplication::processEvents();
+        updated = project->sceneById(firstId);
+        if (!updated || updated->startFrame != 5 || updated->endFrame != 45)
+            fail("redo did not reapply the scene edit");
+        if (const pvf::Entity* renamed = project->entity(sceneFolder);
+            !renamed || renamed->name != QStringLiteral("开场改"))
+            fail("redo did not rename the scene folder again");
+
+        const QString secondId = window.addSceneForTest(
+            QStringLiteral("后段"), 70, 100, QColor(80, 200, 120),
+            QStringLiteral("第二段"));
+        if (secondId.isEmpty())
+            fail("second scene creation failed");
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_scene_ui.png"));
+        error.clear();
+        if (window.updateSceneForTest(firstId, QStringLiteral("重叠"), 0, 100,
+                                      QColor(), QString(), &error)
+            || error.isEmpty())
+            fail("overlapping scene range was accepted");
+
+        // Retirement moves the folder under _retired, fades and locks it.
+        if (!window.setSceneRetiredForTest(firstId, true))
+            fail("retiring the scene failed");
+        const pvf::Scene* retiredScene = project->sceneById(firstId);
+        pvf::EntityId retiredRoot = pvf::kInvalidEntity;
+        for (const pvf::Entity& entity : project->entities())
+        {
+            if (entity.parent == pvf::kInvalidEntity && entity.isFolder()
+                && entity.name == QStringLiteral("_retired"))
+                retiredRoot = entity.id;
+        }
+        const pvf::Entity* retiredFolder = project->entity(sceneFolder);
+        if (!retiredScene || retiredRoot == pvf::kInvalidEntity || !retiredFolder
+            || retiredFolder->parent != retiredRoot)
+            fail("retired scene folder is not under _retired");
+        if (!retiredFolder || !retiredFolder->locked
+            || project->value(sceneFolder, QStringLiteral("opacity"), 0) > 1e-9)
+            fail("retired folder is not transparent and locked");
+        if (!pvf::sceneIsRetired(*project, *retiredScene))
+            fail("scene record is not marked retired");
+
+        undo->trigger();
+        QApplication::processEvents();
+        const pvf::Entity* restoredRetire = project->entity(sceneFolder);
+        if (!restoredRetire || restoredRetire->parent != pvf::kInvalidEntity
+            || restoredRetire->locked
+            || project->value(sceneFolder, QStringLiteral("opacity"), 0) < 0.999)
+            fail("undo did not restore the retired folder");
+        const pvf::Scene* afterUndoRetire = project->sceneById(firstId);
+        if (!afterUndoRetire || pvf::sceneIsRetired(*project, *afterUndoRetire))
+            fail("undo did not clear the retired mark");
+        redo->trigger();
+        QApplication::processEvents();
+
+        // Human restore is independent from undo.
+        if (!window.setSceneRetiredForTest(firstId, false))
+            fail("restoring the scene failed");
+        restoredRetire = project->entity(sceneFolder);
+        if (!restoredRetire || restoredRetire->parent != pvf::kInvalidEntity
+            || restoredRetire->locked
+            || std::abs(project->value(sceneFolder, QStringLiteral("opacity"), 0)
+                        - 1.0) > 1e-6)
+            fail("restore did not move the folder back and reset opacity/lock");
+        undo->trigger();
+        QApplication::processEvents();
+        const pvf::Scene* undoRestore = project->sceneById(firstId);
+        if (!undoRestore || !pvf::sceneIsRetired(*project, *undoRestore))
+            fail("undo did not return the scene to retired");
+        redo->trigger();
+        QApplication::processEvents();
+
+        // Removing a scene record keeps the folder; undo rebinds the same id.
+        if (!window.removeSceneForTest(firstId))
+            fail("removing the scene failed");
+        if (project->sceneById(firstId) || !project->entity(sceneFolder))
+            fail("scene removal deleted the folder");
+        undo->trigger();
+        QApplication::processEvents();
+        const pvf::Scene* reAdded = project->sceneById(firstId);
+        if (!reAdded || reAdded->folderId != sceneFolder
+            || !project->entity(sceneFolder))
+            fail("undo did not restore the scene record on the same folder");
+        redo->trigger();
+        QApplication::processEvents();
+        if (project->sceneById(firstId))
+            fail("redo did not remove the scene record again");
+
+        qInfo() << "scene-ui-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int annotationUiTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* entity = project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+    const pvf::EntityId id = entity->id;
+    project->setValue(id, QStringLiteral("x"), 10, 100.0, true);
+    project->setValue(id, QStringLiteral("x"), 20, 200.0, true);
+    project->setValue(id, QStringLiteral("y"), 10, 0.0, true);
+    project->setValue(id, QStringLiteral("y"), 20, 50.0, true);
+    const int lengthBefore = project->timelineLength();
+
+    pvf::MainWindow window(project);
+    window.resize(1100, 800);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, id, lengthBefore] {
+        int failures = 0;
+        auto fail = [&failures](const char* text) {
+            qCritical() << "annotation-ui-test:" << text;
+            ++failures;
+        };
+
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        auto* redo = window.findChild<QAction*>(QStringLiteral("redoAction"));
+        if (!timeline || !undo || !redo)
+        {
+            qCritical() << "annotation-ui-test: timeline or undo actions missing";
+            app.exit(1);
+            return;
+        }
+        timeline->setPixelsPerFrameForTest(6.0);
+
+        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                              type == QEvent::MouseButtonPress ? Qt::LeftButton
+                                                               : Qt::NoButton,
+                              Qt::NoModifier);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        const QString later = window.addAnnotationForTest(
+            30, QStringLiteral("副歌"), QStringLiteral("**副歌** 开始"),
+            {QStringLiteral("副歌")}, QColor(255, 120, 60));
+        const QString earlier = window.addAnnotationForTest(
+            10, QStringLiteral("开场"), QStringLiteral("第一帧"),
+            {QStringLiteral("镜头")}, QColor(90, 200, 255));
+        if (later.isEmpty() || earlier.isEmpty() || project->annotations().size() != 2)
+        {
+            fail("annotation creation through the UI path failed");
+            qInfo() << "annotation-ui-test failures" << failures;
+            app.exit(1);
+            return;
+        }
+        if (project->annotations()[0].id != earlier
+            || project->annotations()[1].id != later)
+            fail("annotations are not sorted by frame");
+        if (project->timelineLength() != lengthBefore)
+            fail("annotations changed the timeline length");
+
+        const QRect marker = timeline->annotationRectForTest(later);
+        if (!marker.isValid())
+            fail("annotation marker is not visible");
+        const QPoint markerPoint(marker.center().x(),
+                                 timeline->annotationLaneCenterYForTest());
+        sendMouse(QEvent::MouseButtonPress, markerPoint);
+        sendMouse(QEvent::MouseButtonRelease, markerPoint);
+        QApplication::processEvents();
+        if (window.currentFrameForTest() != 30)
+            fail("clicking an annotation marker did not jump to its frame");
+
+        // Editing moves the marker and re-sorts the list.
+        QString error;
+        if (!window.updateAnnotationForTest(earlier, 5, QStringLiteral("开场改"),
+                                            QStringLiteral("改过的备注"),
+                                            {QStringLiteral("镜头"),
+                                             QStringLiteral("字幕")},
+                                            QColor(20, 30, 40), &error))
+            fail("annotation update failed");
+        const pvf::Annotation* updated = project->annotationById(earlier);
+        if (!updated || updated->frame != 5
+            || updated->title != QStringLiteral("开场改")
+            || updated->note != QStringLiteral("改过的备注")
+            || updated->tags.size() != 2)
+            fail("annotation update fields are wrong");
+        if (project->annotations().first().id != earlier)
+            fail("annotation update did not re-sort");
+        undo->trigger();
+        QApplication::processEvents();
+        const pvf::Annotation* restored = project->annotationById(earlier);
+        if (!restored || restored->frame != 10
+            || restored->title != QStringLiteral("开场"))
+            fail("undo did not restore the annotation");
+        redo->trigger();
+        QApplication::processEvents();
+        updated = project->annotationById(earlier);
+        if (!updated || updated->frame != 5)
+            fail("redo did not reapply the annotation edit");
+
+        if (!window.removeAnnotationForTest(earlier))
+            fail("annotation removal failed");
+        if (project->annotationById(earlier))
+            fail("annotation was not removed");
+        undo->trigger();
+        QApplication::processEvents();
+        if (!project->annotationById(earlier))
+            fail("undo did not restore the annotation id");
+        redo->trigger();
+        QApplication::processEvents();
+        if (project->annotationById(earlier))
+            fail("redo did not remove the annotation again");
+
+        // Keyframe notes cover every property at the frame and undo fully.
+        if (!window.setKeyframeNoteForTest(id, 10, QStringLiteral("第一帧")))
+            fail("setting the keyframe note failed");
+        if (project->keyframeNote(id, QStringLiteral("x"), 10)
+                != QStringLiteral("第一帧")
+            || project->keyframeNote(id, QStringLiteral("y"), 10)
+                   != QStringLiteral("第一帧"))
+            fail("keyframe note was not applied to every property");
+        if (!timeline->keyframeHasNoteForTest(id, 10))
+            fail("keyframe note dot is not exposed");
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_annotation_ui.png"));
+        undo->trigger();
+        QApplication::processEvents();
+        if (!project->keyframeNote(id, QStringLiteral("x"), 10).isEmpty()
+            || !project->keyframeNote(id, QStringLiteral("y"), 10).isEmpty())
+            fail("undo did not clear the keyframe note");
+        redo->trigger();
+        QApplication::processEvents();
+        if (project->keyframeNote(id, QStringLiteral("x"), 10)
+            != QStringLiteral("第一帧"))
+            fail("redo did not restore the keyframe note");
+
+        if (!window.setKeyframeNoteForTest(id, 10, QString()))
+            fail("clearing the keyframe note failed");
+        if (!project->keyframeNote(id, QStringLiteral("x"), 10).isEmpty())
+            fail("keyframe note was not cleared");
+        undo->trigger();
+        QApplication::processEvents();
+        if (project->keyframeNote(id, QStringLiteral("x"), 10)
+            != QStringLiteral("第一帧"))
+            fail("undo did not restore the cleared note");
+        redo->trigger();
+        QApplication::processEvents();
+        if (!project->keyframeNote(id, QStringLiteral("x"), 10).isEmpty())
+            fail("redo did not clear the note again");
+
+        qInfo() << "annotation-ui-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int autoSaveTest()
 {
     const QString projectPath =
@@ -3316,13 +3680,16 @@ int timelineRowButtonsTest(QApplication& app)
         int failures = 0;
 
         // Hover the first row so the inline buttons show.
-        send(QEvent::MouseMove, QPoint(400, 40), Qt::NoButton, Qt::NoButton);
+        send(QEvent::MouseMove, QPoint(400, timeline->rowCenterYForTest(0)),
+             Qt::NoButton, Qt::NoButton);
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_row_buttons.png"));
 
         // Rubber-band across both rows to pick up every keyframe in range.
-        send(QEvent::MouseButtonPress, QPoint(200, 32), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseMove, QPoint(560, 56), Qt::NoButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(560, 56), Qt::LeftButton, Qt::NoButton);
+        const QPoint boxStart(200, timeline->rowCenterYForTest(0));
+        const QPoint boxEnd(560, timeline->rowCenterYForTest(1));
+        send(QEvent::MouseButtonPress, boxStart, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, boxEnd, Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, boxEnd, Qt::LeftButton, Qt::NoButton);
         const int boxed = timeline->selectedKeyframeCount();
         qInfo() << "boxed" << boxed << "entities" << project->entities().size();
         if (boxed != 2)
@@ -3403,8 +3770,9 @@ int timelineInteractionTest(QApplication& app)
         }
 
         // Empty track click jumps on release.
-        send(QEvent::MouseButtonPress, QPoint(300, 40), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(300, 40), Qt::LeftButton, Qt::NoButton);
+        const QPoint emptyRow(300, timeline->rowCenterYForTest(0));
+        send(QEvent::MouseButtonPress, emptyRow, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, emptyRow, Qt::LeftButton, Qt::NoButton);
         const int emptyFrame = window.currentFrame();
         if (std::abs(emptyFrame - 20) > 2)
         {
@@ -3415,8 +3783,9 @@ int timelineInteractionTest(QApplication& app)
         // Keyframe click selects it and moves the playhead to the keyframe,
         // so the property panel shows the values stored in that keyframe.
         const int beforeKey = window.currentFrame();
-        send(QEvent::MouseButtonPress, QPoint(540, 40), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(540, 40), Qt::LeftButton, Qt::NoButton);
+        const QPoint keyPoint(540, timeline->rowCenterYForTest(0));
+        send(QEvent::MouseButtonPress, keyPoint, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, keyPoint, Qt::LeftButton, Qt::NoButton);
         const int afterKey = window.currentFrame();
         if (afterKey != 60)
         {
@@ -3431,8 +3800,8 @@ int timelineInteractionTest(QApplication& app)
         }
 
         // Clicking empty space clears the keyframe selection.
-        send(QEvent::MouseButtonPress, QPoint(300, 40), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(300, 40), Qt::LeftButton, Qt::NoButton);
+        send(QEvent::MouseButtonPress, emptyRow, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, emptyRow, Qt::LeftButton, Qt::NoButton);
         if (timeline->selectedKeyframeCount() != 0)
         {
             qCritical() << "timeline-interaction-test: selection not cleared";
@@ -3440,9 +3809,11 @@ int timelineInteractionTest(QApplication& app)
         }
 
         // Dragging rubber-bands instead of scrubbing.
-        send(QEvent::MouseButtonPress, QPoint(250, 40), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseMove, QPoint(320, 68), Qt::NoButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(320, 68), Qt::LeftButton, Qt::NoButton);
+        const QPoint dragStart(250, timeline->rowCenterYForTest(0));
+        const QPoint dragEnd(320, timeline->rowCenterYForTest(1));
+        send(QEvent::MouseButtonPress, dragStart, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseMove, dragEnd, Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, dragEnd, Qt::LeftButton, Qt::NoButton);
         if (window.currentFrame() != emptyFrame)
         {
             qCritical() << "timeline-interaction-test: drag moved playhead";
@@ -5554,8 +5925,9 @@ int audioTest(QApplication& app)
                               buttons, Qt::NoModifier);
             QApplication::sendEvent(timeline, &event);
         };
-        const QPoint dragFrom(300, 56);   // middle of the 10..40 frame clip
-        const QPoint dragTo(360, 56);     // +10 frames
+        const int clipY = timeline->rowCenterYForTest(0);
+        const QPoint dragFrom(300, clipY);   // middle of the 10..40 frame clip
+        const QPoint dragTo(360, clipY);     // +10 frames
 
         sendMouse(QEvent::MouseMove, dragFrom, Qt::NoButton);
         if (timeline->cursor().shape() != Qt::OpenHandCursor)
@@ -8246,8 +8618,9 @@ int renameTest(QApplication& app)
         const QString oldName = project->entities().first().name;
 
         // Double click the name to start renaming.
-        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(20, 40),
-                                QPointF(timeline->mapToGlobal(QPoint(20, 40))), Qt::LeftButton,
+        const QPoint namePoint(20, timeline->rowCenterYForTest(0));
+        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(namePoint),
+                                QPointF(timeline->mapToGlobal(namePoint)), Qt::LeftButton,
                                 Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(timeline, &doubleClick);
         if (!renameEdit->isVisible())
@@ -11583,8 +11956,11 @@ int main(int argc, char* argv[])
             testMode = true;
     if (testMode)
     {
+        // Per-process config so parallel test runs in different worktrees do
+        // not delete each other's settings mid-test.
         const QString configDir =
-            QDir::tempPath() + QStringLiteral("/pvforge-test-config");
+            QDir::tempPath() + QStringLiteral("/pvforge-test-config-")
+            + QString::number(QCoreApplication::applicationPid());
         QDir(configDir).removeRecursively();
         QDir().mkpath(configDir);
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -11604,6 +11980,10 @@ int main(int argc, char* argv[])
         return annotationTest();
     if (app.arguments().contains(QStringLiteral("--checkpoint-test")))
         return checkpointTest();
+    if (app.arguments().contains(QStringLiteral("--scene-ui-test")))
+        return sceneUiTest(app);
+    if (app.arguments().contains(QStringLiteral("--annotation-ui-test")))
+        return annotationUiTest(app);
     if (app.arguments().contains(QStringLiteral("--autosave-test")))
         return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--special-test")))

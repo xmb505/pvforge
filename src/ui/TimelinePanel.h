@@ -67,6 +67,25 @@ public:
         return m_collapsedFolders.contains(id);
     }
     QRect folderArrowRectForTest(int row) const { return folderArrowRect(row); }
+
+    // Scene band and annotation lane used by the UI tests.
+    QString selectedSceneForTest() const { return m_selectedScene; }
+    QRect sceneBandRectForTest(const QString& id) const;
+    QRect annotationRectForTest(const QString& id) const;
+    int sceneBandCenterYForTest() const { return kHeaderHeight + kSceneBandHeight / 2; }
+    int annotationLaneCenterYForTest() const
+    {
+        return kHeaderHeight + kSceneBandHeight + kAnnotationLaneHeight / 2;
+    }
+    bool sceneActiveForTest(const QString& id) const
+    {
+        const Scene* scene = m_project->sceneAt(m_frame);
+        return scene && scene->id == id;
+    }
+    bool keyframeHasNoteForTest(EntityId id, double frame) const
+    {
+        return keyframeHasNote(id, frame);
+    }
 signals:
     void frameRequested(int frame);
     void scrubStarted();   // the user takes manual control of the playhead
@@ -83,11 +102,19 @@ signals:
                                 double delta);
     void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
+    void keyframeNoteRequested(EntityId id, double frame);
     void replaceSourceRequested(EntityId id);
     void copyEntityRequested(EntityId id);
     void duplicateEntityRequested(EntityId id);
     void pasteEntityRequested();
     void groupIntoFolderRequested(const QVector<EntityId>& ids);
+    void sceneCreateRequested();
+    void sceneEditRequested(const QString& id);
+    void sceneDeleteRequested(const QString& id);
+    void sceneRetireRequested(const QString& id, bool retire);
+    void annotationCreateRequested(int frame);
+    void annotationEditRequested(const QString& id);
+    void annotationDeleteRequested(const QString& id);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -131,9 +158,22 @@ private:
     void stepFrame(int delta);
     void stopHold();
     EasingSpec keyframeEasingAt(EntityId id, double frame) const;
-    void showKeyframeMenu(const QPoint& globalPos);
+    void showKeyframeMenu(const QPoint& globalPos, EntityId id, double frame);
     void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
                            int right);
+    int annotationTop() const { return kHeaderHeight + kSceneBandHeight; }
+    QRect sceneBandRect(const Scene& scene) const;
+    const Scene* sceneAtX(int x) const;
+    const Annotation* annotationAtX(int x) const;
+    QString keyframeNoteAt(EntityId id, double frame) const;
+    bool keyframeHasNote(EntityId id, double frame) const;
+    void drawSceneBand(QPainter& painter);
+    void drawAnnotations(QPainter& painter);
+    QString sceneTooltip(const Scene& scene) const;
+    QString annotationTooltip(const Annotation& annotation) const;
+    void showSceneMenu(const QPoint& globalPos, const Scene* scene);
+    void showAnnotationMenu(const QPoint& globalPos, const Annotation* annotation,
+                            int frame);
 
     enum class DragMode
     {
@@ -183,12 +223,17 @@ private:
     int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
+    QString m_selectedScene;
     QTimer* m_holdTimer = nullptr;
     QTimer* m_holdDelay = nullptr;
     int m_holdDirection = 0;
 
     static constexpr int kNameWidth = 180;
     static constexpr int kHeaderHeight = 28;
+    static constexpr int kSceneBandHeight = 18;
+    static constexpr int kAnnotationLaneHeight = 16;
+    static constexpr int kRowsTop =
+        kHeaderHeight + kSceneBandHeight + kAnnotationLaneHeight;
     static constexpr int kRowHeight = 24;
     static constexpr int kAudioRowHeight = 56;
     static constexpr int kRightPad = 16;
