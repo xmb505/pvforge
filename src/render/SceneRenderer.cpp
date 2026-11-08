@@ -302,9 +302,12 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
 void drawEntities(QPainter& painter, const Project& project, int frame,
                   const QTransform& worldToScreen, bool useThumbnail)
 {
-    for (int index : project.entityOrder())
-        drawEntity(painter, project, project.entities()[index], frame, worldToScreen,
-                   useThumbnail);
+    // The layer list runs top to bottom: draw the last (bottom) row first so
+    // the first (top) row ends up in front.
+    const QVector<int> order = project.entityOrder();
+    for (int index = int(order.size()) - 1; index >= 0; --index)
+        drawEntity(painter, project, project.entities()[order[index]], frame,
+                   worldToScreen, useThumbnail);
 }
 
 } // namespace SceneRenderer

@@ -327,6 +327,34 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int layerTest()
+{
+    auto* project = new pvf::Project;
+    project->width = 200;
+    project->height = 200;
+    // The first row of the layer list is the top layer.
+    project->addVector(0, 100, 100, Qt::red, Qt::white, 0);
+    project->addVector(0, 100, 100, Qt::blue, Qt::white, 0);
+
+    QImage image(200, 200, QImage::Format_ARGB32);
+    image.fill(Qt::black);
+    {
+        QPainter painter(&image);
+        QTransform worldToScreen;
+        worldToScreen.translate(100, 100);
+        pvf::SceneRenderer::drawEntities(painter, *project, 0, worldToScreen, false);
+    }
+    const QColor center = image.pixelColor(100, 100);
+    qInfo() << "layer-test: overlap colour" << center;
+    if (center.red() < 200 || center.blue() > 60)
+    {
+        qCritical() << "layer-test: bottom row is drawn on top" << center;
+        return 1;
+    }
+    image.save(QStringLiteral("/tmp/pvforge_layers.png"));
+    return 0;
+}
+
 int frameRestoreTest(QApplication& app)
 {
     const QString path =
@@ -3062,6 +3090,9 @@ int folderTest(QApplication& app)
         project->setValue(folderId, QStringLiteral("y"), 0, 50.0, false);
         project->setValue(secondId, QStringLiteral("x"), 0, 0.0, false);
         project->setValue(secondId, QStringLiteral("y"), 0, 0.0, false);
+        // The top layer wins the hit test; park the red rectangle away so
+        // the click reaches the child that is being dragged.
+        project->setValue(firstId, QStringLiteral("x"), 0, -500.0, false);
         window.setSelectedEntityForTest(secondId);
         QApplication::processEvents();
         const double viewScale = viewport->currentScale();
@@ -5956,8 +5987,6 @@ int specialDemo(QApplication& app)
     wallParams.tileColors =
         QStringList{QColor(248, 248, 250).name(QColor::HexArgb),
                     QColor(232, 232, 238).name(QColor::HexArgb)};
-    project->addBrandWall(wallParams);
-
     // Background motion streaks.
     pvf::FlowParams flow;
     flow.count = 34;
@@ -6033,6 +6062,10 @@ int specialDemo(QApplication& app)
     place(project->addEntity(pvf::EntityType::Text,
                              QStringLiteral("文字"), titleData),
           -650, -450);
+
+    // Created last so it sits on the bottom row of the layer list and stays
+    // behind the other tools.
+    project->addBrandWall(wallParams);
 
     auto* window = new pvf::MainWindow(project);
     window->resize(1440, 900);
@@ -6322,6 +6355,8 @@ int main(int argc, char* argv[])
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))
         return frameRestoreTest(app);
+    if (app.arguments().contains(QStringLiteral("--layer-test")))
+        return layerTest();
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

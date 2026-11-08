@@ -562,9 +562,9 @@ QRectF Viewport::entityLocalBounds(const Entity& e) const
 
 const Entity* Viewport::hitTest(const QPointF& pos) const
 {
-    // Topmost first, following the hierarchy layer order.
+    // The first row of the layer list is the topmost entity.
     const QVector<int> order = m_project->entityOrder();
-    for (int oi = int(order.size()) - 1; oi >= 0; --oi)
+    for (int oi = 0; oi < int(order.size()); ++oi)
     {
         const Entity& e = m_project->entities()[order[oi]];
         if (e.isFolder() || e.isCamera()
@@ -1257,8 +1257,11 @@ void Viewport::paintEvent(QPaintEvent*)
     p.drawLine(QPointF(canvas.left(), canvas.center().y()),
                QPointF(canvas.right(), canvas.center().y()));
 
-    for (const Entity& e : m_project->entities())
-        drawEntity(p, e, canvas, s);
+    // The layer list runs top to bottom: draw the last (bottom) row first so
+    // the first (top) row ends up in front.
+    const QVector<int> order = m_project->entityOrder();
+    for (int index = int(order.size()) - 1; index >= 0; --index)
+        drawEntity(p, m_project->entities()[order[index]], canvas, s);
 
     // Camera viewfinder and the veil outside it.
     drawCameraOverlay(p);

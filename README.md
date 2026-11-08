@@ -98,7 +98,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 框选关键帧 | 在轨道区拖动出选框 |
 | 悬停对象行 | 行尾出现隐藏 / 锁定 / 全选关键帧按钮 |
 | 新建文件夹 | 右键时间轴实体行：新建文件夹 / 在此文件夹内新建文件夹 |
-| 图层排序 | 拖动实体名上下移动；拖到文件夹行中间放入文件夹 |
+| 图层排序 | 拖动实体名上下移动；列表最上面 = 画面最前，新实体落在列表底部（最后），拖上去就提前；拖到文件夹行中间放入文件夹 |
 | 收起文件夹 | 点文件夹名前的三角；再点展开 |
 | 父级坐标系 | 属性面板「父级」选工作台或任意实体；X/Y/旋转/缩放相对父级 |
 | 摄像机作为父级 | 选中台标/文字，父级选摄像机；监视器里固定在画面位置，镜头缩放旋转时不跑位 |
@@ -143,7 +143,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-41 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+42 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
@@ -151,6 +151,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --autosave-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-edit-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --frame-restore-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --layer-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test

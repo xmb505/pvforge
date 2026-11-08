@@ -184,6 +184,7 @@
 - 摄像机也可以作为子级挂到文件夹/实体下跟随移动；`Camera::state` 组合父级位移/旋转/缩放；挂父级后暂停画框直接拖动，改属性 X/Y/旋转/取景比例
 - 摄像机不能作为另一个摄像机的子级；父级非均匀缩放时取景框用平均缩放近似
 - **临摹参考**：监视器标题栏「临摹」菜单导入视频；独立临时 Project + VideoPlayer 按项目帧解码，叠在监视器画面上，透明度 0–100%，支持清除；参考视频使用同一代理缓存
+- **图层顺序修复**：时间轴列表自上而下 = 画面前到后；主视口、监视器、串流统一按列表反向绘制（最后一行先画、第一行最后画），命中测试从第一行（最前）开始。之前主视口按存储序绘制、渲染器正向绘制，导致列表底部的图形反而遮住上面的图形
 - **时间轴滚动**：实体多时右侧出现垂直滚动条，滚轮上下滚动实体列表（每格 4 行），Shift+滚轮左右滚动时间轴（每格 120px），Ctrl+滚轮以鼠标为锚点缩放（0.25–32 px/帧）；垂直滚动会同步行位置与时间轴刻度
 - **单属性关键帧**：属性面板每行右侧有 ◇ / ◆ 按钮，点一下只给该属性在当前帧打关键帧（◆ 表示已有关键帧，再点删除）；添加/删除都进撤销栈，避免“以为给透明度打了帧其实没有”的情况
 - **HTTP 串流（默认）**：监视器标题栏「串流」菜单启动 ffmpeg 原始帧管道，编码后输出 MPEG-TS 到 stdout；`QTcpServer` 在 8080–8089 选择端口并用 `http://<本机IP>:<port>/stream.ts` 提供流，手机 VLC 直接打开本机 IP；菜单可复制地址、列出所有本机 IPv4
@@ -287,9 +288,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / frame-restore / layer / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 41 个模式，全部通过。
+共 42 个模式，全部通过。
 
 ## 已知限制
 
