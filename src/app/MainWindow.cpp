@@ -3291,14 +3291,21 @@ bool MainWindow::armMcpWrites(QString* error)
     }
 
     const Scene* scene = m_project->sceneAt(m_frame);
-    const EntityId sceneFolderId = m_project->sceneFolderAt(m_frame);
-    if (!scene || sceneFolderId == kInvalidEntity)
-        return fail(QStringLiteral("请先创建/选择场景：当前帧 %1 不在任何场景内。")
-                        .arg(m_frame));
-
-    const Entity* root = m_project->entity(sceneFolderId);
-    if (!root || !root->isFolder())
-        return fail(QStringLiteral("当前场景根文件夹不存在，保持只读。"));
+    EntityId sceneFolderId = m_project->sceneFolderAt(m_frame);
+    if (scene && sceneFolderId != kInvalidEntity)
+    {
+        const Entity* root = m_project->entity(sceneFolderId);
+        if (!root || !root->isFolder())
+            return fail(QStringLiteral("当前场景根文件夹不存在，保持只读。"));
+    }
+    else
+    {
+        // The clip timeline has no scene bands. With no scene at the
+        // playhead, arm the whole timeline instead of blocking the AI
+        // behind a scene it cannot create yet.
+        scene = nullptr;
+        sceneFolderId = kInvalidEntity;
+    }
 
     // The checkpoint must exist before the write service is created. A failed
     // checkpoint leaves the server read-only; there is no "continue without a
@@ -3315,15 +3322,24 @@ bool MainWindow::armMcpWrites(QString* error)
 
     QString checkpointError;
     QString checkpointId;
+    const QString scopeName =
+        scene ? scene->name : QStringLiteral("未分场景（整个时间轴）");
     if (!m_mcpCheckpoints->createCheckpoint(
             m_project->filePath, projectJson,
-            QStringLiteral("AI 解锁：%1").arg(scene->name), &checkpointError,
+            QStringLiteral("AI 解锁：%1").arg(scopeName), &checkpointError,
             &checkpointId))
         return fail(QStringLiteral("创建检查点失败，保持只读：%1")
                         .arg(checkpointError));
 
     m_mcpCommands = std::make_unique<McpCommandService>(
         m_project, m_history, sceneFolderId, true);
+    if (!scene)
+    {
+        QString armError;
+        if (!m_mcpCommands->armUnscoped(&armError))
+            return fail(QStringLiteral("无法解锁整个时间轴，保持只读：%1")
+                            .arg(armError));
+    }
     // Global objects (active camera, audio, root logos) remain locked until a
     // separate human confirmation sets setAllowGlobal(true).
     m_mcpCheckpointId = checkpointId;
