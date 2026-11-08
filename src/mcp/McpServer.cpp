@@ -147,7 +147,7 @@ QJsonObject tracksToJson(const Entity& entity)
     return object;
 }
 
-QJsonObject entityBriefJson(const Entity& entity)
+QJsonObject entityBriefJson(const Project& project, const Entity& entity)
 {
     QJsonObject object;
     object[QStringLiteral("id")] = entity.id;
@@ -161,13 +161,24 @@ QJsonObject entityBriefJson(const Entity& entity)
     object[QStringLiteral("locked")] = entity.locked;
     object[QStringLiteral("startFrame")] =
         entity.data.value(QStringLiteral("startFrame"), 0.0).toDouble();
+    // The clip timeline stores its range in data for normal entities and
+    // derives it from media fields for audio. Expose the effective range so
+    // MCP clients see the same clip the UI draws.
+    object[QStringLiteral("clipStart")] = project.clipStartFrame(entity.id);
+    object[QStringLiteral("clipEnd")] = project.clipEndFrame(entity.id);
+    object[QStringLiteral("clipOpen")] =
+        !entity.isAudio()
+        && entity.data.value(QStringLiteral("clipEnd"), 0).toInt()
+               <= project.clipStartFrame(entity.id);
+    object[QStringLiteral("row")] =
+        entity.data.value(QStringLiteral("timelineRow"), -1).toInt();
     object[QStringLiteral("values")] = valuesToJson(entity);
     return object;
 }
 
 QJsonObject entityFullJson(const Project& project, const Entity& entity)
 {
-    QJsonObject object = entityBriefJson(entity);
+    QJsonObject object = entityBriefJson(project, entity);
     object[QStringLiteral("sourcePath")] = project.storeAssetPath(entity.sourcePath);
     object[QStringLiteral("data")] = variantMapToJson(entity.data);
     object[QStringLiteral("tracks")] = tracksToJson(entity);
@@ -345,9 +356,13 @@ QString projectSchemaText()
         "`templateId`、`hidden`、`locked`、`name`、`sourcePath`、`data{}`、"
         "`values{}`、`tracks{属性: [{frame,value,ease,bezier?}]}`。\n"
         "\n"
+        "Clip 字段：`clipStart`、`clipEnd`（有效范围，左闭右开）、`clipOpen`"
+        "（true 表示没有显式收尾）、`row`（时间轴行号，-1 表示未分配）。"
+        "`data.clipStart/clipEnd/timelineRow` 是持久化字段。\n"
+        "\n"
         "坐标约定：2D 像素坐标，原点在画面中心，y 向下；帧号从 0 开始。\n"
-        "`parent = -1` 表示根层。M6 计划新增 `scenes`、`annotations`、HTML 层和 "
-        "`var.*` 轨道；本构建仍是 version 3。\n");
+        "`parent = -1` 表示根层；否则 `parent` 同时是私有时间线 owner，子实体"
+        "只在父 clip 的私有时间轴中显示。\n");
 }
 
 QJsonObject makeTool(const QString& name, const QString& description,
@@ -403,11 +418,14 @@ QJsonArray writeToolDefinitions()
     tools.append(makeWriteTool(
         QStringLiteral("entity.create"),
         QStringLiteral("在当前解锁场景内创建实体。参数由 McpCommandService 校验："
-                       "type、name、parent、data、transform、frame。")));
+                       "type、name、parent、data、transform、frame。parent 是私有"
+                       "时间线 owner（任意非音频实体）；data 可用 clipStart/clipEnd/"
+                       "timelineRow 指定 clip 范围与行。")));
     tools.append(makeWriteTool(
         QStringLiteral("entity.update"),
         QStringLiteral("修改当前解锁场景内的实体。参数：id、name、data、transform、"
-                       "tracks、frame、keyframe。")));
+                       "tracks、frame、keyframe。data.clipStart/clipEnd/timelineRow "
+                       "可改 clip 范围和行。")));
     tools.append(makeWriteTool(
         QStringLiteral("keyframes.set"),
         QStringLiteral("替换实体某属性的关键帧。参数：id、property、keys 或 "
@@ -417,10 +435,11 @@ QJsonArray writeToolDefinitions()
         QStringLiteral("修改已有到达关键帧的缓动。参数：id、property、frame、ease。")));
     tools.append(makeWriteTool(
         QStringLiteral("entity.move"),
-        QStringLiteral("在解锁场景根文件夹内移动实体。参数：id、parent、index。")));
+        QStringLiteral("移动到另一个私有时间线或调整层级。参数：id、parent、"
+                       "index、row。parent 是任意非音频实体；row 可选，指定时间轴行。")));
     tools.append(makeWriteTool(
         QStringLiteral("folder.create"),
-        QStringLiteral("在解锁场景根文件夹内创建文件夹。参数：name、parent。")));
+        QStringLiteral("在私有时间线内创建文件夹。参数：name、parent。")));
     tools.append(makeWriteTool(
         QStringLiteral("entities.retire"),
         QStringLiteral("退休实体：透明度 0、移入 _retired、锁定，永不删除。参数：id。")));
@@ -456,7 +475,9 @@ QJsonArray toolDefinitions(bool includeWrites)
     includeTracks[QStringLiteral("default")] = true;
     timelineProperties[QStringLiteral("includeTracks")] = includeTracks;
     tools.append(makeTool(QStringLiteral("timeline.get"),
-                          QStringLiteral("按图层顺序分页读取实体、轨道和关键帧。"),
+                          QStringLiteral("按图层/行顺序分页读取实体、clip 范围和"
+                                         "轨道关键帧（clipStart/clipEnd/clipOpen/"
+                                         "row）。"),
                           timelineProperties));
 
     QJsonObject entityProperties;
@@ -1626,7 +1647,7 @@ QJsonObject McpServer::executeTool(const QString& name, const QJsonObject& args,
         for (int i = offset; i < end; ++i)
         {
             const Entity& entity = m_project->entities().at(order.at(i));
-            QJsonObject object = entityBriefJson(entity);
+            QJsonObject object = entityBriefJson(*m_project, entity);
             if (includeTracks)
                 object[QStringLiteral("tracks")] = tracksToJson(entity);
             entities.append(object);

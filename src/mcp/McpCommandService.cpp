@@ -439,13 +439,19 @@ const QHash<QString, DataKind>& dataKinds()
         {QStringLiteral("logoOpacity"), DataKind::Double},
         {QStringLiteral("tileColors"), DataKind::Colors},
         {QStringLiteral("seed"), DataKind::Int},
+        {QStringLiteral("clipStart"), DataKind::Int},
+        {QStringLiteral("clipEnd"), DataKind::Int},
+        {QStringLiteral("timelineRow"), DataKind::Int},
     };
     return kinds;
 }
 
 QSet<QString> allowedDataKeys(EntityType type)
 {
-    QSet<QString> keys{QStringLiteral("rotPointCustom")};
+    QSet<QString> keys{QStringLiteral("rotPointCustom"),
+                       QStringLiteral("clipStart"),
+                       QStringLiteral("clipEnd"),
+                       QStringLiteral("timelineRow")};
     const auto add = [&keys](std::initializer_list<const char*> names) {
         for (const char* name : names)
             keys.insert(QString::fromLatin1(name));
@@ -1595,13 +1601,13 @@ McpWriteResult McpCommandService::createEntity(
     if (parent != kInvalidEntity)
     {
         const Entity* parentEntity = m_project->entity(parent);
-        if (!parentEntity || !parentEntity->isFolder())
+        if (!parentEntity || parentEntity->isAudio())
             return McpWriteResult::failure(
                 McpErrorCode::InvalidArgument,
-                QStringLiteral("parent 必须是已存在的文件夹实体"));
+                QStringLiteral("parent 必须是已存在的非音频实体"));
         if (m_project->isEffectivelyLocked(parent))
             return McpWriteResult::failure(McpErrorCode::Conflict,
-                                           QStringLiteral("parent 文件夹已锁定"));
+                                           QStringLiteral("parent 已锁定"));
         if (!scopeAllows(parent) && !(m_allowGlobal && isGlobalObject(parent)))
         {
             return McpWriteResult::failure(
@@ -1634,6 +1640,14 @@ McpWriteResult McpCommandService::createEntity(
 
     if (type != EntityType::Folder && parent != kInvalidEntity)
         m_project->setEntityParent(entity->id, parent);
+    if (type != EntityType::Folder && type != EntityType::Camera
+        && parent != kInvalidEntity && data.contains(QStringLiteral("timelineRow")))
+    {
+        // Reparenting clears the old row; an explicit row in entity.create
+        // belongs to the new private timeline, so put it back.
+        m_project->setEntityData(entity->id, QStringLiteral("timelineRow"),
+                                 data.value(QStringLiteral("timelineRow")));
+    }
     if ((type == EntityType::Camera || type == EntityType::Folder) && !data.isEmpty())
         m_project->setEntityDataMap(entity->id, data);
 
@@ -1978,7 +1992,7 @@ McpWriteResult McpCommandService::setEasing(const QJsonObject& args)
 McpWriteResult McpCommandService::moveEntity(const QJsonObject& args)
 {
     QString unknownError;
-    if (!rejectUnknownKeys(args, {"id", "parent", "index"}, &unknownError))
+    if (!rejectUnknownKeys(args, {"id", "parent", "index", "row"}, &unknownError))
         return McpWriteResult::failure(McpErrorCode::InvalidArgument, unknownError);
 
     EntityId id = kInvalidEntity;
@@ -2007,13 +2021,13 @@ McpWriteResult McpCommandService::moveEntity(const QJsonObject& args)
     if (parent != kInvalidEntity)
     {
         const Entity* parentEntity = m_project->entity(parent);
-        if (!parentEntity || !parentEntity->isFolder())
+        if (!parentEntity || parentEntity->isAudio())
             return McpWriteResult::failure(
                 McpErrorCode::InvalidArgument,
-                QStringLiteral("parent 必须是已存在的文件夹实体"));
+                QStringLiteral("parent 必须是已存在的非音频实体"));
         if (m_project->isEffectivelyLocked(parent))
             return McpWriteResult::failure(McpErrorCode::Conflict,
-                                           QStringLiteral("parent 文件夹已锁定"));
+                                           QStringLiteral("parent 已锁定"));
         if (!scopeAllows(parent)
             && !(m_allowGlobal && isGlobalObject(id) && isGlobalObject(parent)))
         {
@@ -2043,14 +2057,29 @@ McpWriteResult McpCommandService::moveEntity(const QJsonObject& args)
             return McpWriteResult::failure(McpErrorCode::InvalidArgument, error);
     }
 
+    bool hasRow = false;
+    int row = -1;
+    if (args.contains(QStringLiteral("row")))
+    {
+        if (!readInt(args.value(QStringLiteral("row")), -1, 1000000, &row,
+                     QStringLiteral("row"), &error))
+            return McpWriteResult::failure(McpErrorCode::InvalidArgument, error);
+        hasRow = true;
+    }
+
     if (!m_project->moveEntity(id, parent, index))
         return McpWriteResult::failure(McpErrorCode::Conflict,
                                        QStringLiteral("移动实体失败"));
+
+    if (hasRow)
+        m_project->setEntityData(id, QStringLiteral("timelineRow"), row);
 
     QJsonObject result;
     result[QStringLiteral("id")] = id;
     result[QStringLiteral("parent")] = parent;
     result[QStringLiteral("index")] = index;
+    if (hasRow)
+        result[QStringLiteral("row")] = row;
     return McpWriteResult::success(result);
 }
 
@@ -2082,13 +2111,13 @@ McpWriteResult McpCommandService::createFolder(const QJsonObject& args)
     if (parent != kInvalidEntity)
     {
         const Entity* parentEntity = m_project->entity(parent);
-        if (!parentEntity || !parentEntity->isFolder())
+        if (!parentEntity || parentEntity->isAudio())
             return McpWriteResult::failure(
                 McpErrorCode::InvalidArgument,
-                QStringLiteral("parent 必须是已存在的文件夹实体"));
+                QStringLiteral("parent 必须是已存在的非音频实体"));
         if (m_project->isEffectivelyLocked(parent))
             return McpWriteResult::failure(McpErrorCode::Conflict,
-                                           QStringLiteral("parent 文件夹已锁定"));
+                                           QStringLiteral("parent 已锁定"));
         if (!scopeAllows(parent) && !(m_allowGlobal && isGlobalObject(parent)))
             return McpWriteResult::failure(
                 McpErrorCode::PermissionDenied,

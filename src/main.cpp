@@ -10949,6 +10949,10 @@ int mcpReadonlyTest()
         const QJsonObject first = timelineEntities.first().toObject();
         failIf(!first.contains(QStringLiteral("tracks")),
                QStringLiteral("timeline.get omitted tracks"));
+        failIf(!first.contains(QStringLiteral("clipStart"))
+                   || !first.contains(QStringLiteral("clipEnd"))
+                   || !first.contains(QStringLiteral("row")),
+               QStringLiteral("timeline.get omitted clip/row fields"));
     }
 
     bool foundChild = false;
