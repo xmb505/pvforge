@@ -2,6 +2,7 @@
 
 #include "core/Commands.h"
 #include "core/Camera.h"
+#include "core/CheckpointManager.h"
 #include "core/Lang.h"
 #include "core/PerfMonitor.h"
 #include "audio/AudioEngine.h"
@@ -14,6 +15,7 @@
 #include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
 #include "media/VideoPlayer.h"
+#include "mcp/McpCommandService.h"
 #include "mcp/McpServer.h"
 #include "render/CameraRenderer.h"
 #include "render/VideoExporter.h"
@@ -45,6 +47,7 @@
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QInputDialog>
+#include <QJsonDocument>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -356,14 +359,19 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_mcpLog->hide();
     connect(m_mcpServer, &McpServer::toolInvoked, m_mcpLog,
             &McpLogPanel::addToolInvocation);
+    connect(m_mcpServer, &McpServer::notificationReceived, this,
+            [this](const QString& method, const QString& paramsJson) {
+                if (!m_mcpLog)
+                    return;
+                m_mcpLog->addSystemEvent(
+                    QStringLiteral("通知：%1").arg(method),
+                    paramsJson.isEmpty() ? QStringLiteral("—") : paramsJson);
+            });
     connect(m_mcpLog, &McpLogPanel::entityActivated, this,
             &MainWindow::setSelectedEntity);
     connect(m_mcpLog, &McpLogPanel::frameRequested, this, &MainWindow::setFrame);
-    connect(m_mcpLog, &McpLogPanel::stopAiRequested, this, [this] {
-        statusBar()->showMessage(
-            QStringLiteral("已请求停止 AI：当前只有只读工具，写工具接入后执行急停"),
-            5000);
-    });
+    connect(m_mcpLog, &McpLogPanel::stopAiRequested, this,
+            &MainWindow::stopMcpWrites);
 
     // One headless browser is shared by every HTML layer; renderers are
     // created lazily per layer and never outlive the browser.
@@ -666,6 +674,13 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    // Stop MCP before the HTTP server and log panel children are destroyed;
+    // this also removes the endpoint file if the window bypassed closeEvent.
+    if (m_mcpServer)
+    {
+        disarmMcpWrites();
+        m_mcpServer->stop();
+    }
     if (m_exporter)
     {
         m_exporter->disconnect();
@@ -2211,6 +2226,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     }
     // Remember the playhead even when the project itself is unchanged.
     Settings::setProjectFrame(m_project->filePath, m_frame);
+    disarmMcpWrites();
     if (m_mcpServer)
         m_mcpServer->stop();
     event->accept();
@@ -3121,12 +3137,172 @@ void MainWindow::updatePerfLabel()
 void MainWindow::wireMcpDialog(SettingsDialog* dialog)
 {
     connect(dialog, &SettingsDialog::mcpStateChanged, this,
-            [this](bool running, quint16 port, const QString& error) {
+            [this, dialog](bool running, quint16 port, const QString& error) {
                 m_mcpLastError = error;
+                if (!running)
+                    disarmMcpWrites();
                 if (m_mcpLog)
                     m_mcpLog->setServerState(running, port, error);
+                dialog->setMcpPermissionState(
+                    m_mcpCommands && m_mcpCommands->isArmed(),
+                    m_mcpCommands ? m_mcpCommands->sceneName() : QString());
                 updateMcpStatus();
             });
+
+    connect(dialog, &SettingsDialog::mcpPermissionArmRequested, this,
+            [this, dialog] {
+                QString error;
+                if (!armMcpWrites(&error))
+                {
+                    dialog->setMcpPermissionState(false, QString(), error);
+                    updateMcpStatus();
+                    return;
+                }
+                const QString sceneName = m_mcpCommands->sceneName();
+                dialog->setMcpPermissionState(true, sceneName, QString());
+                if (m_mcpLog)
+                {
+                    m_mcpLog->setPermissionState(true, sceneName);
+                    m_mcpLog->addSystemEvent(
+                        QStringLiteral("已武装：场景 %1").arg(sceneName),
+                        m_mcpCheckpointId.isEmpty()
+                            ? QString()
+                            : QStringLiteral("检查点 %1").arg(m_mcpCheckpointId));
+                    if (m_mcpLog->loggingEnabled() && !m_mcpLog->isVisible())
+                        m_mcpLog->showFromMenu();
+                }
+                updateMcpStatus();
+            });
+
+    connect(dialog, &SettingsDialog::mcpPermissionDisarmRequested, this,
+            [this, dialog] {
+                disarmMcpWrites();
+                dialog->setMcpPermissionState(false, QString());
+                updateMcpStatus();
+            });
+
+    dialog->setMcpPermissionState(
+        m_mcpCommands && m_mcpCommands->isArmed(),
+        m_mcpCommands ? m_mcpCommands->sceneName() : QString());
+}
+
+bool MainWindow::armMcpWrites(QString* error)
+{
+    const auto fail = [error](const QString& message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+
+    if (!m_mcpServer || !m_mcpServer->isRunning())
+        return fail(QStringLiteral("请先在“设置 → MCP”启用 MCP 服务。"));
+
+    if (m_project->filePath.isEmpty()
+        || !QFileInfo(m_project->filePath).isFile())
+        return fail(QStringLiteral("请先保存工程：检查点需要工程的磁盘路径。"));
+
+    if (m_project->modified)
+    {
+        QString saveError;
+        if (!m_project->save(m_project->filePath, &saveError))
+            return fail(QStringLiteral("保存工程失败，保持只读：%1").arg(saveError));
+        updateWindowTitle();
+    }
+
+    const Scene* scene = m_project->sceneAt(m_frame);
+    const EntityId sceneFolderId = m_project->sceneFolderAt(m_frame);
+    if (!scene || sceneFolderId == kInvalidEntity)
+        return fail(QStringLiteral("请先创建/选择场景：当前帧 %1 不在任何场景内。")
+                        .arg(m_frame));
+
+    const Entity* root = m_project->entity(sceneFolderId);
+    if (!root || !root->isFolder())
+        return fail(QStringLiteral("当前场景根文件夹不存在，保持只读。"));
+
+    // The checkpoint must exist before the write service is created. A failed
+    // checkpoint leaves the server read-only; there is no "continue without a
+    // checkpoint" path in v1.
+    if (!m_mcpCheckpoints)
+        m_mcpCheckpoints = std::make_unique<CheckpointManager>();
+
+    QFile saved(m_project->filePath);
+    if (!saved.open(QIODevice::ReadOnly))
+        return fail(QStringLiteral("无法读取工程文件，保持只读：%1")
+                        .arg(saved.errorString()));
+    const QByteArray projectJson = saved.readAll();
+    saved.close();
+
+    QString checkpointError;
+    QString checkpointId;
+    if (!m_mcpCheckpoints->createCheckpoint(
+            m_project->filePath, projectJson,
+            QStringLiteral("AI 解锁：%1").arg(scene->name), &checkpointError,
+            &checkpointId))
+        return fail(QStringLiteral("创建检查点失败，保持只读：%1")
+                        .arg(checkpointError));
+
+    m_mcpCommands = std::make_unique<McpCommandService>(
+        m_project, m_history, sceneFolderId, true);
+    // Global objects (active camera, audio, root logos) remain locked until a
+    // separate human confirmation sets setAllowGlobal(true).
+    m_mcpCheckpointId = checkpointId;
+    m_mcpServer->setCommandService(m_mcpCommands.get());
+    m_mcpLastError.clear();
+    return true;
+}
+
+void MainWindow::disarmMcpWrites()
+{
+    if (!m_mcpCommands)
+    {
+        if (m_mcpServer)
+            m_mcpServer->setCommandService(nullptr);
+        if (m_mcpLog)
+            m_mcpLog->setPermissionState(false, QString());
+        m_mcpCheckpointId.clear();
+        return;
+    }
+
+    m_mcpCommands->disarm();
+    m_mcpCommands.reset();
+    if (m_mcpServer)
+        m_mcpServer->setCommandService(nullptr);
+    if (m_mcpLog)
+    {
+        m_mcpLog->setPermissionState(false, QString());
+        m_mcpLog->addSystemEvent(QStringLiteral("已切回只读"));
+    }
+    m_mcpCheckpointId.clear();
+}
+
+void MainWindow::stopMcpWrites()
+{
+    if (!m_mcpCommands)
+    {
+        statusBar()->showMessage(
+            QStringLiteral("没有正在武装的 AI 写权限"), 3000);
+        return;
+    }
+
+    m_mcpCommands->stop();
+    // Keep the stopped service attached so any in-flight or later write call
+    // receives stopped_by_human instead of a generic permission error.
+    if (m_mcpServer)
+        m_mcpServer->setCommandService(m_mcpCommands.get());
+    if (m_mcpLog)
+    {
+        m_mcpLog->setPermissionState(false, QString(), true);
+        m_mcpLog->addSystemEvent(
+            QStringLiteral("已急停，写操作拒绝"),
+            QStringLiteral("人类重新选择“允许修改”后才能再次武装。"));
+    }
+    // Reset an open settings page so "允许修改" is selectable again; a combo
+    // already showing that item would not emit currentIndexChanged.
+    for (SettingsDialog* dialog : findChildren<SettingsDialog*>())
+        dialog->setMcpPermissionState(false, QString());
+    statusBar()->showMessage(
+        QStringLiteral("已急停：AI 写操作被拒绝，读操作仍可用"), 5000);
+    updateMcpStatus();
 }
 
 SettingsDialog* MainWindow::openSettingsDialogForTest()
@@ -3145,17 +3321,41 @@ void MainWindow::updateMcpStatus()
         return;
 
     const bool running = m_mcpServer && m_mcpServer->isRunning();
+    const bool armed = m_mcpCommands && m_mcpCommands->isArmed();
+    const bool stopped = m_mcpCommands && m_mcpCommands->isStopped();
+
     if (running)
-        m_mcpStatusButton->setText(QStringLiteral("MCP 已启用 · 日志"));
+    {
+        if (armed)
+            m_mcpStatusButton->setText(QStringLiteral("MCP 已武装 · 日志"));
+        else if (stopped)
+            m_mcpStatusButton->setText(QStringLiteral("MCP 已急停 · 日志"));
+        else
+            m_mcpStatusButton->setText(QStringLiteral("MCP 已启用 · 只读 · 日志"));
+    }
     else if (!m_mcpLastError.isEmpty())
         m_mcpStatusButton->setText(QStringLiteral("MCP 错误 · 日志"));
     else
         m_mcpStatusButton->setText(QStringLiteral("MCP 关闭 · 日志"));
 
-    if (running)
+    if (running && armed)
     {
         m_mcpStatusButton->setToolTip(
-            QStringLiteral("监听中：%1\n点击打开 MCP 日志")
+            QStringLiteral("监听中：%1\n已武装：场景 %2\n点击打开 MCP 日志")
+                .arg(m_mcpServer->endpointUrl(),
+                     m_mcpCommands->sceneName()));
+    }
+    else if (running && stopped)
+    {
+        m_mcpStatusButton->setToolTip(
+            QStringLiteral("监听中：%1\n人类已急停，写操作返回 stopped_by_human\n"
+                           "点击打开 MCP 日志")
+                .arg(m_mcpServer->endpointUrl()));
+    }
+    else if (running)
+    {
+        m_mcpStatusButton->setToolTip(
+            QStringLiteral("监听中：%1\n只读模式\n点击打开 MCP 日志")
                 .arg(m_mcpServer->endpointUrl()));
     }
     else if (!m_mcpLastError.isEmpty())
@@ -3173,6 +3373,8 @@ void MainWindow::updateMcpStatus()
     QPalette palette = QApplication::palette();
     if (!running && !m_mcpLastError.isEmpty())
         palette.setColor(QPalette::WindowText, QColor(220, 80, 70));
+    else if (running && stopped)
+        palette.setColor(QPalette::WindowText, QColor(220, 140, 60));
     m_mcpStatusButton->setPalette(palette);
 }
 

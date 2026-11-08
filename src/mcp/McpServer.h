@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -11,6 +12,7 @@ class QTcpSocket;
 
 namespace pvf {
 
+class McpCommandService;
 class Project;
 
 // Minimal Streamable HTTP MCP server for the read-only stage. It speaks
@@ -44,6 +46,26 @@ public:
     void setToken(const QByteArray& token);
     QByteArray token() const { return m_token; }
 
+    // Human-armed write service. The server never owns it and never interprets
+    // write arguments: every write tool is forwarded to
+    // McpCommandService::execute(). While the service is not armed, tools/list
+    // stays read-only and direct write calls are forwarded so a stopped
+    // service can still answer stopped_by_human. A null service means the
+    // server is permanently read-only for this launch.
+    void setCommandService(McpCommandService* service);
+    McpCommandService* commandService() const { return m_commandService; }
+    bool writeToolsAvailable() const;
+
+    // Names added to tools/list while a human has armed the command service.
+    static QStringList writeToolNames();
+
+    // Endpoint discovery file read by the pvforge-mcp stdio bridge. An empty
+    // override (the default) uses $XDG_CONFIG_HOME/PVForge/mcp-endpoint.json.
+    // Must be set before start(); the file is removed by stop().
+    static QString defaultEndpointPath();
+    void setEndpointFilePath(const QString& path);
+    QString endpointFilePath() const;
+
     void setMaxBodyBytes(qint64 bytes);
     qint64 maxBodyBytes() const { return m_limits.maxBodyBytes; }
     void setHttpLimits(const HttpLimits& limits);
@@ -67,6 +89,9 @@ public:
 signals:
     void toolInvoked(const QString& name, const QString& argsJson,
                      const QString& resultJson, qint64 durationMs, bool ok);
+    // Forwarded notifications (for example notifications/cancelled) so the
+    // UI can record them. The server never blocks a call on a notification.
+    void notificationReceived(const QString& method, const QString& paramsJson);
 
 private:
     void acceptConnections();
@@ -81,10 +106,15 @@ private:
 
     QJsonObject executeTool(const QString& name, const QJsonObject& args, bool* ok);
 
+    bool writeEndpointFile(QString* error);
+    void removeEndpointFile();
+
     static QByteArray generateToken();
 
     const Project* m_project = nullptr;
+    McpCommandService* m_commandService = nullptr;
     QByteArray m_token;
+    QString m_endpointFilePath;
     HttpLimits m_limits;
     QSet<QTcpSocket*> m_connections;
     QTcpServer* m_server = nullptr;

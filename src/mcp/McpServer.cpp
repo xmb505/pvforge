@@ -2,9 +2,16 @@
 
 #include "core/Easing.h"
 #include "core/Project.h"
+#include "mcp/McpCommandService.h"
+#include "mcp/StdioBridge.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDebug>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QHostAddress>
 #include <QJsonArray>
@@ -20,6 +27,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 
@@ -373,7 +381,61 @@ QJsonObject pageProperty(const QString& name, const QString& description, int fa
     return property;
 }
 
-QJsonArray toolDefinitions()
+// Write tools are intentionally described loosely: the HTTP layer forwards
+// arguments untouched and McpCommandService performs strict per-tool
+// validation. Advertising a loose schema keeps that single source of truth.
+QJsonObject makeWriteTool(const QString& name, const QString& description)
+{
+    QJsonObject schema;
+    schema[QStringLiteral("type")] = QStringLiteral("object");
+    schema[QStringLiteral("additionalProperties")] = true;
+
+    QJsonObject tool;
+    tool[QStringLiteral("name")] = name;
+    tool[QStringLiteral("description")] = description;
+    tool[QStringLiteral("inputSchema")] = schema;
+    return tool;
+}
+
+QJsonArray writeToolDefinitions()
+{
+    QJsonArray tools;
+    tools.append(makeWriteTool(
+        QStringLiteral("entity.create"),
+        QStringLiteral("在当前解锁场景内创建实体。参数由 McpCommandService 校验："
+                       "type、name、parent、data、transform、frame。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("entity.update"),
+        QStringLiteral("修改当前解锁场景内的实体。参数：id、name、data、transform、"
+                       "tracks、frame、keyframe。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("keyframes.set"),
+        QStringLiteral("替换实体某属性的关键帧。参数：id、property、keys 或 "
+                       "frame/value、ease。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("easing.set"),
+        QStringLiteral("修改已有到达关键帧的缓动。参数：id、property、frame、ease。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("entity.move"),
+        QStringLiteral("在解锁场景根文件夹内移动实体。参数：id、parent、index。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("folder.create"),
+        QStringLiteral("在解锁场景根文件夹内创建文件夹。参数：name、parent。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("entities.retire"),
+        QStringLiteral("退休实体：透明度 0、移入 _retired、锁定，永不删除。参数：id。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("scene.create"),
+        QStringLiteral("把新场景追加到时间轴末尾；不会扩大当前写入范围。参数：name、"
+                       "startFrame、endFrame、color、note。")));
+    tools.append(makeWriteTool(
+        QStringLiteral("batch.run"),
+        QStringLiteral("原子执行一组写操作，最多 200 个。参数：operations "
+                       "[{op,args}]；整批一个检查点/一条撤销。")));
+    return tools;
+}
+
+QJsonArray toolDefinitions(bool includeWrites)
 {
     QJsonArray tools;
 
@@ -448,6 +510,13 @@ QJsonArray toolDefinitions()
         QStringLiteral("全局标记与关键帧备注；注释数据层尚未合并，当前返回 "
                        "not_available。")));
 
+    if (includeWrites)
+    {
+        const QJsonArray writes = writeToolDefinitions();
+        for (const QJsonValue& tool : writes)
+            tools.append(tool);
+    }
+
     return tools;
 }
 
@@ -470,6 +539,93 @@ QJsonArray resourceDefinitions()
     schema[QStringLiteral("mimeType")] = QStringLiteral("text/markdown");
     resources.append(schema);
     return resources;
+}
+
+QFileDevice::Permissions privateFilePermissions()
+{
+    return QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+}
+
+QFileDevice::Permissions privateDirectoryPermissions()
+{
+    return QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+}
+
+// Writes a secret file atomically: private temp file in the target directory,
+// fsync via QFile::flush, then rename over the destination. The parent
+// directory is forced to 0700 and the file to 0600.
+bool writePrivateFile(const QString& path, const QByteArray& data, QString* error)
+{
+    const QFileInfo info(path);
+    const QString directory = info.absolutePath();
+    if (!QDir().mkpath(directory))
+    {
+        if (error)
+            *error = QStringLiteral("无法创建目录 %1").arg(directory);
+        return false;
+    }
+    if (!QFile::setPermissions(directory, privateDirectoryPermissions()))
+    {
+        if (error)
+            *error = QStringLiteral("无法设置目录权限 %1").arg(directory);
+        return false;
+    }
+
+    const QString tempPath =
+        path + QStringLiteral(".tmp-%1").arg(QCoreApplication::applicationPid());
+    QFile::remove(tempPath);
+    QFile file(tempPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    if (!file.setPermissions(privateFilePermissions()))
+    {
+        if (error)
+            *error = QStringLiteral("无法设置临时文件权限");
+        file.close();
+        QFile::remove(tempPath);
+        return false;
+    }
+    if (file.write(data) != data.size() || !file.flush())
+    {
+        if (error)
+            *error = file.errorString();
+        file.close();
+        QFile::remove(tempPath);
+        return false;
+    }
+    file.close();
+
+#if defined(Q_OS_UNIX)
+    if (std::rename(QFile::encodeName(tempPath).constData(),
+                    QFile::encodeName(path).constData())
+        != 0)
+    {
+        if (error)
+            *error = QStringLiteral("无法替换端点文件");
+        QFile::remove(tempPath);
+        return false;
+    }
+#else
+    QFile::remove(path);
+    if (!QFile::rename(tempPath, path))
+    {
+        if (error)
+            *error = QStringLiteral("无法替换端点文件");
+        QFile::remove(tempPath);
+        return false;
+    }
+#endif
+    if (!QFile::setPermissions(path, privateFilePermissions()))
+    {
+        if (error)
+            *error = QStringLiteral("无法设置端点文件权限");
+        return false;
+    }
+    return true;
 }
 
 QByteArray reasonPhrase(int status)
@@ -730,6 +886,85 @@ McpServer::~McpServer()
 void McpServer::setToken(const QByteArray& token)
 {
     m_token = token.isEmpty() ? generateToken() : token;
+    if (isRunning())
+    {
+        QString error;
+        if (!writeEndpointFile(&error))
+            qWarning("mcpserver: cannot refresh endpoint file: %s",
+                     qPrintable(error));
+    }
+}
+
+void McpServer::setCommandService(McpCommandService* service)
+{
+    m_commandService = service;
+}
+
+bool McpServer::writeToolsAvailable() const
+{
+    return m_commandService && m_commandService->isArmed();
+}
+
+QStringList McpServer::writeToolNames()
+{
+    return McpCommandService::operationNames();
+}
+
+QString McpServer::defaultEndpointPath()
+{
+    return defaultMcpEndpointPath();
+}
+
+void McpServer::setEndpointFilePath(const QString& path)
+{
+    m_endpointFilePath = path;
+}
+
+QString McpServer::endpointFilePath() const
+{
+    return m_endpointFilePath.isEmpty() ? defaultMcpEndpointPath()
+                                        : m_endpointFilePath;
+}
+
+bool McpServer::writeEndpointFile(QString* error)
+{
+    if (!isRunning())
+    {
+        if (error)
+            *error = QStringLiteral("MCP 服务未运行");
+        return false;
+    }
+
+    QJsonObject root;
+    root[QStringLiteral("format")] = QStringLiteral("pvforge-mcp-endpoint");
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("url")] = endpointUrl();
+    root[QStringLiteral("token")] = QString::fromLatin1(m_token);
+    root[QStringLiteral("pid")] = double(QCoreApplication::applicationPid());
+
+    const QByteArray data =
+        QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+    return writePrivateFile(endpointFilePath(), data, error);
+}
+
+void McpServer::removeEndpointFile()
+{
+    const QString path = endpointFilePath();
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+    const QByteArray data = file.read(64 * 1024);
+    file.close();
+
+    const QJsonObject root = QJsonDocument::fromJson(data).object();
+    const qint64 pid = qint64(root.value(QStringLiteral("pid")).toDouble());
+    const QString token = root.value(QStringLiteral("token")).toString();
+    // Only remove a file this process wrote; another PVForge instance may have
+    // replaced it while this one was shutting down.
+    if (pid != QCoreApplication::applicationPid()
+        || token != QString::fromLatin1(m_token))
+        return;
+    QFile::remove(path);
 }
 
 void McpServer::setMaxBodyBytes(qint64 bytes)
@@ -766,6 +1001,15 @@ quint16 McpServer::start(quint16 port, QString* error)
         return 0;
     }
     m_port = m_server->serverPort();
+
+    QString endpointError;
+    if (!writeEndpointFile(&endpointError))
+    {
+        // Endpoint discovery is a convenience for the stdio bridge; a write
+        // failure must never take down the authenticated HTTP server.
+        qWarning("mcpserver: cannot write endpoint file %s: %s",
+                 qPrintable(endpointFilePath()), qPrintable(endpointError));
+    }
     return m_port;
 }
 
@@ -785,6 +1029,7 @@ void McpServer::stop()
     }
     m_connections.clear();
     m_port = 0;
+    removeEndpointFile();
 }
 
 bool McpServer::isRunning() const
@@ -1135,7 +1380,15 @@ void McpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
     if (notification)
     {
         // Notifications, including notifications/cancelled and
-        // notifications/initialized, have no response body.
+        // notifications/initialized, have no response body. The server does
+        // not interrupt an in-flight tool call; it records the notification
+        // and lets the UI decide what to do.
+        QString paramsJson;
+        const QJsonValue params = request.value(QStringLiteral("params"));
+        if (params.isObject())
+            paramsJson = QString::fromUtf8(
+                QJsonDocument(params.toObject()).toJson(QJsonDocument::Compact));
+        emit notificationReceived(method, paramsJson);
         sendHttp(socket, 202, QByteArray());
         return;
     }
@@ -1163,8 +1416,12 @@ void McpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
         result[QStringLiteral("capabilities")] = capabilities;
         result[QStringLiteral("serverInfo")] = serverInfo;
         result[QStringLiteral("instructions")] =
-            QStringLiteral("PVForge MCP 只读阶段：可以读取工程、时间轴、实体、素材和指南；"
-                           "写工具一律返回 permission_denied。");
+            writeToolsAvailable()
+                ? QStringLiteral("PVForge MCP 已由人类解锁写权限：写工具只作用于解锁时"
+                                 "的场景根文件夹，急停后返回 stopped_by_human；参数"
+                                 "错误返回 invalid_argument。")
+                : QStringLiteral("PVForge MCP 只读：可以读取工程、时间轴、实体、素材"
+                                 "和指南；写工具一律返回 permission_denied。");
         sendRpcResult(socket, id, result);
         return;
     }
@@ -1178,7 +1435,7 @@ void McpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
     if (method == QLatin1String("tools/list"))
     {
         QJsonObject result;
-        result[QStringLiteral("tools")] = toolDefinitions();
+        result[QStringLiteral("tools")] = toolDefinitions(writeToolsAvailable());
         sendRpcResult(socket, id, result);
         return;
     }
@@ -1279,17 +1536,21 @@ QJsonObject McpServer::executeTool(const QString& name, const QJsonObject& args,
 {
     *ok = false;
 
-    static const QStringList writeTools{
-        QStringLiteral("entity.create"),       QStringLiteral("entity.update"),
-        QStringLiteral("entity.move"),         QStringLiteral("folder.create"),
-        QStringLiteral("keyframes.set"),       QStringLiteral("easing.set"),
-        QStringLiteral("entities.retire"),     QStringLiteral("html.create_layer"),
-        QStringLiteral("html.set_variables"),  QStringLiteral("variables.set_keyframes"),
-        QStringLiteral("assets.import_blob"),  QStringLiteral("scene.create"),
-        QStringLiteral("batch.run")};
-    if (writeTools.contains(name))
-        return toolError(QStringLiteral("permission_denied"),
-                         QStringLiteral("MCP 当前为只读模式，写工具未启用"));
+    if (writeToolNames().contains(name))
+    {
+        // The server deliberately does not validate write arguments. The
+        // command service owns the schema, scope and rollback semantics; its
+        // structured error codes (permission_denied, stopped_by_human, ...)
+        // travel back to the client unchanged.
+        if (!m_commandService)
+            return toolError(QStringLiteral("permission_denied"),
+                             QStringLiteral("MCP 当前为只读模式，写工具未启用"));
+        const McpWriteResult result = m_commandService->execute(name, args);
+        *ok = result.ok;
+        // Keep the service payload intact but deliver it through the standard
+        // MCP tool-result envelope so clients see structuredContent/isError.
+        return toolResult(result.toJson(), !result.ok);
+    }
 
     if (!readOnlyToolNames().contains(name))
         return toolError(QStringLiteral("not_available"),
@@ -1325,7 +1586,8 @@ QJsonObject McpServer::executeTool(const QString& name, const QJsonObject& args,
         data[QStringLiteral("modified")] = m_project->modified;
         data[QStringLiteral("entityCount")] = m_project->entities().size();
         data[QStringLiteral("templateCount")] = m_project->templateCount();
-        data[QStringLiteral("readOnly")] = true;
+        data[QStringLiteral("readOnly")] = !writeToolsAvailable();
+        data[QStringLiteral("writeEnabled")] = writeToolsAvailable();
         data[QStringLiteral("scenesAvailable")] = false;
         data[QStringLiteral("annotationsAvailable")] = false;
         data[QStringLiteral("scenes")] = QJsonArray();

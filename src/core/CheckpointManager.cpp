@@ -653,6 +653,11 @@ CheckpointManager::~CheckpointManager() = default;
 
 QString CheckpointManager::defaultCacheRoot()
 {
+    // Tests and portable runs can redirect the store without touching the
+    // user's real checkpoint history.
+    const QString override = qEnvironmentVariable("PVFORGE_CHECKPOINT_DIR").trimmed();
+    if (!override.isEmpty())
+        return override;
     return QDir::homePath() + QStringLiteral("/.cache/PVForge/checkpoints");
 }
 

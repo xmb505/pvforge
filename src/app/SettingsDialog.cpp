@@ -5,6 +5,7 @@
 #include "core/Settings.h"
 #include "media/DecoderInfo.h"
 #include "mcp/McpServer.h"
+#include "mcp/StdioBridge.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -21,6 +22,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -34,12 +36,15 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
-#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 namespace pvf {
 
 namespace {
+
+#ifndef PVFORGE_MCP_BINARY
+#define PVFORGE_MCP_BINARY "pvforge-mcp"
+#endif
 
 QIcon themeIcon(const QStringList& names)
 {
@@ -504,19 +509,26 @@ QWidget* SettingsDialog::createMcpPage()
     auto* permissionForm = new QFormLayout(permissionGroup);
     m_mcpPermission = new QComboBox(permissionGroup);
     m_mcpPermission->setObjectName(QStringLiteral("mcpPermissionCombo"));
-    m_mcpPermission->addItem(QStringLiteral("只读（当前阶段）"));
-    m_mcpPermission->addItem(QStringLiteral("允许修改（写工具尚未接入）"));
+    m_mcpPermission->addItem(QStringLiteral("只读"));
+    m_mcpPermission->addItem(QStringLiteral("允许修改"));
     m_mcpPermission->setCurrentIndex(0);
-    if (auto* model =
-            qobject_cast<QStandardItemModel*>(m_mcpPermission->model()))
-    {
-        if (QStandardItem* item = model->item(1))
-            item->setEnabled(false);
-    }
+    m_mcpPermission->setToolTip(
+        QStringLiteral("“允许修改”需要工程已保存且播放头位于一个场景内；"
+                       "解锁前会先创建检查点。"));
+    connect(m_mcpPermission, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+                if (index == 1)
+                    emit mcpPermissionArmRequested();
+                else
+                    emit mcpPermissionDisarmRequested();
+            });
     permissionForm->addRow(QStringLiteral("模式"), m_mcpPermission);
-    permissionForm->addRow(infoLabel(
-        QStringLiteral("写工具与急停事务尚未接入；接入前“允许修改”保持禁用。"),
-        permissionGroup));
+    m_mcpPermissionStatus = infoLabel(
+        QStringLiteral("只读：AI 只能读取工程，写工具返回 permission_denied。"),
+        permissionGroup);
+    m_mcpPermissionStatus->setObjectName(
+        QStringLiteral("mcpPermissionStatusLabel"));
+    permissionForm->addRow(m_mcpPermissionStatus);
     layout->addWidget(permissionGroup);
 
     auto* logGroup = new QGroupBox(QStringLiteral("日志窗"), content);
@@ -539,14 +551,21 @@ QWidget* SettingsDialog::createMcpPage()
                        "只支持 stdio 的客户端需要 pvforge-mcp 桥接进程。"),
         configGroup));
     m_mcpCopyConfig = new QPushButton(
-        QStringLiteral("复制 OpenCode / DeepSeek 配置"), configGroup);
+        QStringLiteral("复制 OpenCode / DeepSeek 远程配置"), configGroup);
     m_mcpCopyConfig->setObjectName(QStringLiteral("mcpCopyConfigButton"));
     connect(m_mcpCopyConfig, &QPushButton::clicked, this,
             &SettingsDialog::copyMcpConfig);
     configLayout->addWidget(m_mcpCopyConfig);
+    m_mcpCopyStdioConfig = new QPushButton(
+        QStringLiteral("复制 pvforge-mcp stdio 配置"), configGroup);
+    m_mcpCopyStdioConfig->setObjectName(
+        QStringLiteral("mcpCopyStdioConfigButton"));
+    connect(m_mcpCopyStdioConfig, &QPushButton::clicked, this,
+            &SettingsDialog::copyMcpStdioConfig);
+    configLayout->addWidget(m_mcpCopyStdioConfig);
     configLayout->addWidget(infoLabel(
-        QStringLiteral("未确认客户端字段时复制的是通用 mcpServers JSON；"
-                       "端口和令牌以当前服务状态为准。"),
+        QStringLiteral("远程配置使用当前 URL 与令牌；stdio 配置引用本机的 "
+                       "pvforge-mcp 桥接进程，由它读取端点文件。"),
         configGroup));
     layout->addWidget(configGroup);
 
@@ -621,6 +640,8 @@ void SettingsDialog::refreshMcpState()
     m_mcpCopyToken->setEnabled(hasServer);
     m_mcpResetToken->setEnabled(hasServer);
     m_mcpCopyConfig->setEnabled(hasServer);
+    m_mcpCopyStdioConfig->setEnabled(hasServer);
+    m_mcpPermission->setEnabled(hasServer);
 
     if (hasServer)
     {
@@ -666,6 +687,63 @@ void SettingsDialog::resetMcpToken()
         return;
     m_mcpServer->setToken(QByteArray());
     refreshMcpState();
+}
+
+void SettingsDialog::setMcpPermissionState(bool armed, const QString& sceneName,
+                                           const QString& error)
+{
+    if (m_mcpPermission)
+    {
+        const QSignalBlocker blocker(m_mcpPermission);
+        m_mcpPermission->setCurrentIndex(armed ? 1 : 0);
+    }
+    if (m_mcpPermissionStatus)
+    {
+        if (armed)
+        {
+            m_mcpPermissionStatus->setText(
+                QStringLiteral("已武装：%1。写操作仅限该场景根文件夹，急停按钮可随时"
+                               "停止。")
+                    .arg(sceneName.isEmpty() ? QStringLiteral("当前场景") : sceneName));
+        }
+        else
+        {
+            m_mcpPermissionStatus->setText(
+                QStringLiteral("只读：AI 只能读取工程，写工具返回 "
+                               "permission_denied。"));
+        }
+    }
+    if (!error.isEmpty() && m_mcpError)
+    {
+        m_mcpError->setText(QStringLiteral("解锁失败：%1").arg(error));
+        m_mcpError->show();
+    }
+    else if (error.isEmpty() && m_mcpError && m_mcpServer
+             && m_mcpServer->isRunning())
+    {
+        m_mcpError->clear();
+        m_mcpError->hide();
+    }
+}
+
+QString SettingsDialog::mcpStdioConfigJson() const
+{
+    QJsonObject server;
+    server[QStringLiteral("command")] = QStringLiteral(PVFORGE_MCP_BINARY);
+    server[QStringLiteral("args")] =
+        QJsonArray{QStringLiteral("--endpoint-file"),
+                   defaultMcpEndpointPath()};
+
+    QJsonObject root;
+    root[QStringLiteral("mcpServers")] =
+        QJsonObject{{QStringLiteral("pvforge"), server}};
+    return QString::fromUtf8(
+        QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+void SettingsDialog::copyMcpStdioConfig()
+{
+    QApplication::clipboard()->setText(mcpStdioConfigJson());
 }
 
 QString SettingsDialog::mcpConfigJson() const

@@ -10331,6 +10331,10 @@ int mcpReadonlyTest()
 
     pvf::McpServer server(project);
     server.setToken(QByteArrayLiteral("test-token"));
+    QTemporaryDir endpointTemp(QDir::tempPath()
+                               + QStringLiteral("/pvforge-mcp-endpoint-XXXXXX"));
+    server.setEndpointFilePath(endpointTemp.path()
+                               + QStringLiteral("/mcp-endpoint.json"));
 
     int signalled = 0;
     int signalledFailures = 0;
@@ -10761,6 +10765,10 @@ int mcpHttpTest()
 
     pvf::McpServer server(project);
     server.setToken(QByteArrayLiteral("http-test-token"));
+    QTemporaryDir endpointTemp(QDir::tempPath()
+                               + QStringLiteral("/pvforge-mcp-http-endpoint-XXXXXX"));
+    server.setEndpointFilePath(endpointTemp.path()
+                               + QStringLiteral("/server.json"));
 
     const QByteArray pingBody =
         QByteArrayLiteral("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
@@ -10970,6 +10978,8 @@ int mcpHttpTest()
     // Connection cap: the third concurrent connection is refused.
     pvf::McpServer limited(project);
     limited.setToken(QByteArrayLiteral("limit-token"));
+    limited.setEndpointFilePath(endpointTemp.path()
+                                + QStringLiteral("/limited.json"));
     pvf::McpServer::HttpLimits limits = limited.httpLimits();
     limits.maxConnections = 2;
     limits.headerTimeoutMs = 5000;
@@ -11014,6 +11024,7 @@ int mcpHttpTest()
     // Header and body deadlines are configurable so the test stays fast.
     pvf::McpServer slow(project);
     slow.setToken(QByteArrayLiteral("slow-token"));
+    slow.setEndpointFilePath(endpointTemp.path() + QStringLiteral("/slow.json"));
     pvf::McpServer::HttpLimits slowLimits = slow.httpLimits();
     slowLimits.headerTimeoutMs = 150;
     slowLimits.requestTimeoutMs = 150;
@@ -11544,6 +11555,11 @@ int mcpUiTest(QApplication& app)
     pvf::MainWindow window(project);
     window.resize(1200, 800);
     window.show();
+
+    QTemporaryDir endpointTemp(QDir::tempPath()
+                               + QStringLiteral("/pvforge-mcp-ui-endpoint-XXXXXX"));
+    window.mcpServerForTest()->setEndpointFilePath(
+        endpointTemp.path() + QStringLiteral("/mcp-endpoint.json"));
 
     QTimer::singleShot(
         300, &window, [&app, &window, &failures, entityId, fail, failIf] {
@@ -12627,6 +12643,558 @@ int mcpWriteTest()
     return failures == 0 ? 0 : 1;
 }
 
+int mcpIntegrationTest(QApplication& app)
+{
+    int failures = 0;
+    const auto fail = [&failures](const QString& message) {
+        qCritical() << "mcp-integration-test:" << message;
+        ++failures;
+    };
+    const auto failIf = [&fail](bool condition, const QString& message) {
+        if (condition)
+            fail(message);
+    };
+    const auto ownerOnly = [](const QString& path, bool directory) {
+        const QFileDevice::Permissions permissions = QFileInfo(path).permissions();
+        const QFileDevice::Permissions group =
+            QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup;
+        const QFileDevice::Permissions other =
+            QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+        bool ok = permissions.testFlag(QFileDevice::ReadOwner)
+                  && permissions.testFlag(QFileDevice::WriteOwner)
+                  && (permissions & (group | other)) == QFileDevice::Permissions();
+        if (directory)
+            ok = ok && permissions.testFlag(QFileDevice::ExeOwner);
+        return ok;
+    };
+
+    QTemporaryDir projectTemp(QDir::tempPath()
+                              + QStringLiteral("/pvforge-mcp-integration-XXXXXX"));
+    QTemporaryDir endpointTemp(
+        QDir::tempPath()
+        + QStringLiteral("/pvforge-mcp-integration-endpoint-XXXXXX"));
+    QTemporaryDir checkpointTemp(
+        QDir::tempPath()
+        + QStringLiteral("/pvforge-mcp-integration-checkpoints-XXXXXX"));
+    if (!projectTemp.isValid() || !endpointTemp.isValid()
+        || !checkpointTemp.isValid())
+    {
+        fail(QStringLiteral("could not create temporary directories"));
+        return 1;
+    }
+
+    qputenv("PVFORGE_CHECKPOINT_DIR", checkpointTemp.path().toUtf8());
+    const QString projectPath =
+        projectTemp.path() + QStringLiteral("/integration.pvproj");
+    const QString endpointPath =
+        endpointTemp.path() + QStringLiteral("/mcp-endpoint.json");
+
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("MCP 集成测试");
+    project->width = 640;
+    project->height = 360;
+    project->fps = 30;
+
+    pvf::Entity* holder =
+        project->addVector(0, 100, 80, QColor(120, 120, 120), Qt::white, 0);
+    if (!holder)
+    {
+        fail(QStringLiteral("could not add a scene entity"));
+        return 1;
+    }
+    holder->name = QStringLiteral("场景占位");
+    project->setValue(holder->id, QStringLiteral("x"), 0, 0.0, true);
+    project->setValue(holder->id, QStringLiteral("x"), 300, 120.0, true);
+
+    QString error;
+    pvf::Scene* scene = project->addScene(QStringLiteral("场景 A"), 0, 60,
+                                          QColor(90, 170, 255),
+                                          QStringLiteral("集成测试场景"), &error);
+    if (!scene)
+    {
+        qCritical() << "mcp-integration-test: add scene failed" << error;
+        return 1;
+    }
+    const pvf::EntityId sceneFolder = scene->folderId;
+    project->setEntityParent(holder->id, sceneFolder);
+    if (!project->save(projectPath, &error))
+    {
+        qCritical() << "mcp-integration-test: save failed" << error;
+        return 1;
+    }
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    pvf::McpServer* server = window.mcpServerForTest();
+    if (!server)
+    {
+        fail(QStringLiteral("main window has no MCP server"));
+        return 1;
+    }
+    server->setEndpointFilePath(endpointPath);
+
+    QTimer::singleShot(
+        300, &window,
+        [&app, &window, &fail, &failIf, &ownerOnly, &checkpointTemp, &failures,
+         projectPath, endpointPath, sceneFolder] {
+            auto* dialog = window.openSettingsDialogForTest();
+            if (!dialog)
+            {
+                fail(QStringLiteral("settings dialog was not created"));
+                app.exit(1);
+                return;
+            }
+            QApplication::processEvents();
+
+            auto* enable =
+                dialog->findChild<QCheckBox*>(QStringLiteral("mcpEnableCheck"));
+            auto* permission = dialog->findChild<QComboBox*>(
+                QStringLiteral("mcpPermissionCombo"));
+            auto* errorLabel = dialog->findChild<QLabel*>(
+                QStringLiteral("mcpErrorLabel"));
+            auto* statusLabel = dialog->findChild<QLabel*>(
+                QStringLiteral("mcpStatusLabel"));
+            auto* logEnabled = dialog->findChild<QCheckBox*>(
+                QStringLiteral("mcpLogEnabled"));
+            auto* stdioConfigButton = dialog->findChild<QPushButton*>(
+                QStringLiteral("mcpCopyStdioConfigButton"));
+            if (!enable || !permission || !errorLabel || !statusLabel
+                || !logEnabled || !stdioConfigButton)
+            {
+                qCritical() << "mcp-integration-test: MCP controls missing";
+                app.exit(1);
+                return;
+            }
+
+            pvf::Project* current = window.project();
+            pvf::McpServer* server = window.mcpServerForTest();
+            pvf::McpLogPanel* panel = window.mcpLogPanelForTest();
+            auto* statusButton = window.findChild<QToolButton*>(
+                QStringLiteral("mcpStatusButton"));
+            if (!current || !server || !panel || !statusButton)
+            {
+                fail(QStringLiteral("main window MCP objects missing"));
+                app.exit(1);
+                return;
+            }
+
+            const auto logText = [panel] {
+                QString text;
+                auto* tree = panel->findChild<QTreeWidget*>(
+                    QStringLiteral("mcpLogTree"));
+                if (!tree)
+                    return text;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i)
+                {
+                    QTreeWidgetItem* item = tree->topLevelItem(i);
+                    for (int column = 0; column < item->columnCount(); ++column)
+                        text += item->text(column) + QLatin1Char('\n');
+                    for (int child = 0; child < item->childCount(); ++child)
+                        for (int column = 0;
+                             column < item->child(child)->columnCount(); ++column)
+                            text += item->child(child)->text(column)
+                                    + QLatin1Char('\n');
+                }
+                return text;
+            };
+
+            // Only a human action starts the server.
+            enable->setChecked(true);
+            QApplication::processEvents();
+            if (!server->isRunning())
+            {
+                fail(QStringLiteral("MCP did not start"));
+                app.exit(1);
+                return;
+            }
+            const quint16 port = server->port();
+            const QByteArray token = server->token();
+            const QByteArray tokenText = token;
+
+            // The endpoint file follows the published contract and is private.
+            const QFileInfo endpointInfo(endpointPath);
+            failIf(!endpointInfo.exists(),
+                   QStringLiteral("endpoint file was not written"));
+            failIf(!ownerOnly(endpointPath, false),
+                   QStringLiteral("endpoint file is not 0600"));
+            failIf(!ownerOnly(endpointInfo.absolutePath(), true),
+                   QStringLiteral("endpoint directory is not 0700"));
+            QFile endpointFile(endpointPath);
+            QJsonObject endpointObject;
+            if (endpointFile.open(QIODevice::ReadOnly))
+            {
+                endpointObject =
+                    QJsonDocument::fromJson(endpointFile.readAll()).object();
+                endpointFile.close();
+            }
+            failIf(endpointObject.value(QStringLiteral("format")).toString()
+                       != QStringLiteral("pvforge-mcp-endpoint"),
+                   QStringLiteral("endpoint format mismatch"));
+            failIf(endpointObject.value(QStringLiteral("version")).toInt() != 1,
+                   QStringLiteral("endpoint version mismatch"));
+            failIf(endpointObject.value(QStringLiteral("url")).toString()
+                       != server->endpointUrl(),
+                   QStringLiteral("endpoint URL mismatch"));
+            failIf(endpointObject.value(QStringLiteral("token")).toString()
+                       != QString::fromLatin1(token),
+                   QStringLiteral("endpoint token mismatch"));
+            failIf(qint64(endpointObject.value(QStringLiteral("pid")).toDouble())
+                       != QCoreApplication::applicationPid(),
+                   QStringLiteral("endpoint pid mismatch"));
+            failIf(server->endpointUrl().contains(QString::fromLatin1(token)),
+                   QStringLiteral("endpoint URL leaks the token"));
+
+            // An unwritable endpoint file is only a warning: the authenticated
+            // HTTP server must still come up.
+            QFile endpointBlocker(projectPath + QStringLiteral(".blocker"));
+            if (endpointBlocker.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            {
+                pvf::McpServer withoutEndpoint(current);
+                withoutEndpoint.setEndpointFilePath(
+                    endpointBlocker.fileName()
+                    + QStringLiteral("/mcp-endpoint.json"));
+                QString withoutEndpointError;
+                const quint16 withoutEndpointPort =
+                    withoutEndpoint.start(0, &withoutEndpointError);
+                failIf(withoutEndpointPort == 0,
+                       QStringLiteral("server refused to start when the endpoint "
+                                      "file was unwritable: %1")
+                           .arg(withoutEndpointError));
+                withoutEndpoint.stop();
+                endpointBlocker.close();
+            }
+
+            const auto toolNames = [&] {
+                QStringList names;
+                QJsonObject request;
+                request[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+                request[QStringLiteral("id")] = 1;
+                request[QStringLiteral("method")] = QStringLiteral("tools/list");
+                const QJsonObject response = mcpRpc(port, token, request);
+                const QJsonArray tools =
+                    response.value(QStringLiteral("result"))
+                        .toObject()
+                        .value(QStringLiteral("tools"))
+                        .toArray();
+                for (const QJsonValue& value : tools)
+                    names.append(value.toObject()
+                                     .value(QStringLiteral("name"))
+                                     .toString());
+                return names;
+            };
+            const auto callTool = [&](int id, const QString& name,
+                                      const QJsonObject& args) {
+                QJsonObject params;
+                params[QStringLiteral("name")] = name;
+                params[QStringLiteral("arguments")] = args;
+                QJsonObject request;
+                request[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+                request[QStringLiteral("id")] = id;
+                request[QStringLiteral("method")] = QStringLiteral("tools/call");
+                request[QStringLiteral("params")] = params;
+                const QJsonObject response = mcpRpc(port, token, request);
+                const QJsonObject result =
+                    response.value(QStringLiteral("result")).toObject();
+                return result.value(QStringLiteral("structuredContent"))
+                    .toObject();
+            };
+            const auto errorCode = [](const QJsonObject& structured) {
+                return structured.value(QStringLiteral("error"))
+                    .toObject()
+                    .value(QStringLiteral("code"))
+                    .toString();
+            };
+
+            // Read-only: no write tool is advertised and a direct call is refused.
+            QStringList names = toolNames();
+            for (const QString& required :
+                 {QStringLiteral("project.summary"), QStringLiteral("timeline.get"),
+                  QStringLiteral("entity.get"), QStringLiteral("assets.list"),
+                  QStringLiteral("guide.get")})
+                failIf(!names.contains(required),
+                       QStringLiteral("read-only tools/list missing %1")
+                           .arg(required));
+            for (const QString& write : pvf::McpServer::writeToolNames())
+                failIf(names.contains(write),
+                       QStringLiteral("read-only tools/list advertises %1")
+                           .arg(write));
+            const QJsonObject denied = callTool(
+                2, QStringLiteral("entity.create"),
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                            {QStringLiteral("name"), QStringLiteral("只读拒绝")}});
+            failIf(errorCode(denied) != QStringLiteral("permission_denied"),
+                   QStringLiteral("read-only write call did not return "
+                                  "permission_denied"));
+
+            // A project without a saved path must not arm.
+            const QString savedPath = current->filePath;
+            current->filePath.clear();
+            permission->setCurrentIndex(1);
+            QApplication::processEvents();
+            failIf(window.mcpCommandsForTest() != nullptr,
+                   QStringLiteral("unsaved project armed writes"));
+            failIf(errorLabel->isHidden()
+                       || !errorLabel->text().contains(QStringLiteral("保存")),
+                   QStringLiteral("unsaved project did not explain the save "
+                                  "requirement"));
+            failIf(permission->currentIndex() != 0,
+                   QStringLiteral("permission combo did not revert after failure"));
+            current->filePath = savedPath;
+
+            // A playhead in a scene gap must not arm.
+            window.goToFrame(90);
+            QApplication::processEvents();
+            permission->setCurrentIndex(1);
+            QApplication::processEvents();
+            failIf(window.mcpCommandsForTest() != nullptr,
+                   QStringLiteral("scene gap armed writes"));
+            failIf(!errorLabel->text().contains(QStringLiteral("场景")),
+                   QStringLiteral("scene gap did not explain the scene requirement"));
+            failIf(permission->currentIndex() != 0,
+                   QStringLiteral("permission combo did not revert after gap "
+                                  "failure"));
+            window.goToFrame(10);
+            QApplication::processEvents();
+
+            pvf::CheckpointManager checkpoints(checkpointTemp.path());
+            failIf(!checkpoints.listCheckpoints(projectPath).isEmpty(),
+                   QStringLiteral("failed arm attempts created checkpoints"));
+
+            // With a saved project and an active scene, arming succeeds only
+            // after a durable checkpoint.
+            permission->setCurrentIndex(1);
+            QApplication::processEvents();
+            pvf::McpCommandService* commands = window.mcpCommandsForTest();
+            failIf(!commands || !commands->isArmed(),
+                   QStringLiteral("saved scene did not arm writes"));
+            if (commands)
+            {
+                failIf(commands->sceneRootId() != sceneFolder,
+                       QStringLiteral("armed scope is not the scene folder"));
+                failIf(commands->sceneName() != QStringLiteral("场景 A"),
+                       QStringLiteral("armed scope has the wrong scene name"));
+                failIf(commands->allowGlobal(),
+                       QStringLiteral("global objects unlocked without UI"));
+            }
+            failIf(!errorLabel->isHidden(),
+                   QStringLiteral("arm success left an error visible"));
+            const QVector<pvf::CheckpointInfo> firstCheckpoints =
+                checkpoints.listCheckpoints(projectPath);
+            failIf(firstCheckpoints.isEmpty(),
+                   QStringLiteral("arm did not create a checkpoint"));
+            failIf(!logText().contains(QStringLiteral("已武装")),
+                   QStringLiteral("log does not show the armed scene"));
+            failIf(!statusButton->text().contains(QStringLiteral("武装")),
+                   QStringLiteral("status bar does not show armed state"));
+
+            names = toolNames();
+            for (const QString& write : pvf::McpServer::writeToolNames())
+                failIf(!names.contains(write),
+                       QStringLiteral("armed tools/list missing %1").arg(write));
+
+            // HTTP write tools go straight to McpCommandService.
+            const QJsonObject created = callTool(
+                10, QStringLiteral("entity.create"),
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                            {QStringLiteral("name"), QStringLiteral("AI 标题")}});
+            failIf(!created.value(QStringLiteral("ok")).toBool(),
+                   QStringLiteral("entity.create failed: %1")
+                       .arg(QString::fromUtf8(
+                           QJsonDocument(created).toJson(QJsonDocument::Compact))));
+            const pvf::EntityId createdId =
+                created.value(QStringLiteral("data"))
+                    .toObject()
+                    .value(QStringLiteral("id"))
+                    .toInt();
+            const pvf::Entity* createdEntity = current->entity(createdId);
+            failIf(!createdEntity || createdEntity->parent != sceneFolder,
+                   QStringLiteral("entity.create did not land in the armed scene"));
+
+            QJsonArray keys;
+            keys.append(QJsonObject{{QStringLiteral("frame"), 0},
+                                    {QStringLiteral("value"), 0}});
+            keys.append(QJsonObject{{QStringLiteral("frame"), 30},
+                                    {QStringLiteral("value"), 120}});
+            const QJsonObject keyed = callTool(
+                11, QStringLiteral("keyframes.set"),
+                QJsonObject{{QStringLiteral("id"), createdId},
+                            {QStringLiteral("property"), QStringLiteral("x")},
+                            {QStringLiteral("keys"), keys}});
+            failIf(!keyed.value(QStringLiteral("ok")).toBool(),
+                   QStringLiteral("keyframes.set failed"));
+            if (const pvf::Entity* entity = current->entity(createdId))
+                failIf(entity->tracks.value(QStringLiteral("x")).keys.size() != 2,
+                       QStringLiteral("keyframes.set did not write two keys"));
+
+            QJsonArray operations;
+            operations.append(QJsonObject{
+                {QStringLiteral("op"), QStringLiteral("entity.update")},
+                {QStringLiteral("args"),
+                 QJsonObject{{QStringLiteral("id"), createdId},
+                             {QStringLiteral("name"),
+                              QStringLiteral("批量改名")}}}});
+            operations.append(QJsonObject{
+                {QStringLiteral("op"), QStringLiteral("keyframes.set")},
+                {QStringLiteral("args"),
+                 QJsonObject{
+                     {QStringLiteral("id"), createdId},
+                     {QStringLiteral("property"), QStringLiteral("y")},
+                     {QStringLiteral("keys"),
+                      QJsonArray{
+                          QJsonObject{{QStringLiteral("frame"), 0},
+                                      {QStringLiteral("value"), 0}},
+                          QJsonObject{{QStringLiteral("frame"), 15},
+                                      {QStringLiteral("value"), 60}}}}}}});
+            const QJsonObject batch = callTool(
+                12, QStringLiteral("batch.run"),
+                QJsonObject{{QStringLiteral("operations"), operations}});
+            failIf(!batch.value(QStringLiteral("ok")).toBool(),
+                   QStringLiteral("batch.run failed"));
+            failIf(batch.value(QStringLiteral("data"))
+                           .toObject()
+                           .value(QStringLiteral("count"))
+                           .toInt()
+                       != 2,
+                   QStringLiteral("batch.run count mismatch"));
+            if (const pvf::Entity* entity = current->entity(createdId))
+            {
+                failIf(entity->name != QStringLiteral("批量改名"),
+                       QStringLiteral("batch.run did not rename the entity"));
+                failIf(entity->tracks.value(QStringLiteral("y")).keys.size() != 2,
+                       QStringLiteral("batch.run did not set y keys"));
+            }
+
+            // Notifications are recorded without interrupting the call.
+            int notifications = 0;
+            QString lastNotification;
+            QObject::connect(server, &pvf::McpServer::notificationReceived,
+                             [&](const QString& method, const QString&) {
+                                 ++notifications;
+                                 lastNotification = method;
+                             });
+            QJsonObject notification;
+            notification[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+            notification[QStringLiteral("method")] =
+                QStringLiteral("notifications/cancelled");
+            notification[QStringLiteral("params")] =
+                QJsonObject{{QStringLiteral("requestId"), 11},
+                            {QStringLiteral("reason"), QStringLiteral("test")}};
+            const McpHttpResponse notificationResponse = mcpHttpPost(
+                port,
+                QJsonDocument(notification).toJson(QJsonDocument::Compact),
+                token);
+            failIf(notificationResponse.status != 202,
+                   QStringLiteral("notification HTTP %1 != 202")
+                       .arg(notificationResponse.status));
+            failIf(notifications != 1
+                       || lastNotification
+                              != QStringLiteral("notifications/cancelled"),
+                   QStringLiteral("cancellation notification was not forwarded"));
+
+            // Token never reaches logs, status text or errors.
+            failIf(logText().contains(QString::fromLatin1(tokenText)),
+                   QStringLiteral("token is echoed in the log"));
+            failIf(statusButton->text().contains(QString::fromLatin1(tokenText))
+                       || statusButton->toolTip().contains(
+                           QString::fromLatin1(tokenText)),
+                   QStringLiteral("token is echoed in the status entry"));
+            failIf(statusLabel->text().contains(QString::fromLatin1(tokenText)),
+                   QStringLiteral("token is echoed in the settings status"));
+            failIf(errorLabel->text().contains(QString::fromLatin1(tokenText)),
+                   QStringLiteral("token is echoed in the settings error"));
+
+            // Emergency stop: writes answer stopped_by_human and change nothing.
+            const int entityCountBeforeStop = int(current->entities().size());
+            auto* stopButton = panel->findChild<QToolButton*>(
+                QStringLiteral("mcpLogStopButton"));
+            failIf(!stopButton || !stopButton->isEnabled(),
+                   QStringLiteral("stop AI button is missing or disabled"));
+            if (stopButton)
+                stopButton->click();
+            QApplication::processEvents();
+            failIf(!commands || !commands->isStopped() || commands->isArmed(),
+                   QStringLiteral("emergency stop did not mark the service "
+                                  "stopped"));
+            auto* logStatus = panel->findChild<QLabel*>(
+                QStringLiteral("mcpLogStatusLabel"));
+            failIf(!logStatus
+                       || !logStatus->text().contains(QStringLiteral("急停")),
+                   QStringLiteral("log header does not show the emergency stop"));
+            failIf(!statusButton->text().contains(QStringLiteral("急停")),
+                   QStringLiteral("status bar does not show the emergency stop"));
+            const QJsonObject stopped = callTool(
+                20, QStringLiteral("entity.create"),
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                            {QStringLiteral("name"), QStringLiteral("急停拒绝")}});
+            failIf(errorCode(stopped) != QStringLiteral("stopped_by_human"),
+                   QStringLiteral("post-stop write did not return "
+                                  "stopped_by_human"));
+            failIf(current->entities().size() != entityCountBeforeStop,
+                   QStringLiteral("post-stop write changed the project"));
+            names = toolNames();
+            for (const QString& write : pvf::McpServer::writeToolNames())
+                failIf(names.contains(write),
+                       QStringLiteral("stopped tools/list advertises %1")
+                           .arg(write));
+
+            // Re-arm for the same scene; each arm creates a new checkpoint.
+            failIf(permission->currentIndex() != 0,
+                   QStringLiteral("emergency stop did not reset the permission "
+                                  "combo"));
+            permission->setCurrentIndex(1);
+            QApplication::processEvents();
+            failIf(!window.mcpCommandsForTest()
+                       || !window.mcpCommandsForTest()->isArmed(),
+                   QStringLiteral("re-arm after stop failed"));
+            failIf(window.mcpCommandsForTest() == commands,
+                   QStringLiteral("re-arm reused the stopped service"));
+            failIf(checkpoints.listCheckpoints(projectPath).size()
+                       <= firstCheckpoints.size(),
+                   QStringLiteral("re-arm did not create another checkpoint"));
+
+            // Stopping MCP removes the endpoint file and the write service.
+            enable->setChecked(false);
+            QApplication::processEvents();
+            failIf(server->isRunning(),
+                   QStringLiteral("disabling MCP did not stop the server"));
+            failIf(QFileInfo::exists(endpointPath),
+                   QStringLiteral("endpoint file survived MCP shutdown"));
+            failIf(window.mcpCommandsForTest() != nullptr,
+                   QStringLiteral("write service survived MCP shutdown"));
+            failIf(!statusLabel->text().contains(QStringLiteral("未启用")),
+                   QStringLiteral("settings status is not stopped"));
+
+            // The stdio configuration references the installed bridge.
+            stdioConfigButton->click();
+            QApplication::processEvents();
+            const QJsonObject stdioConfig =
+                QJsonDocument::fromJson(
+                    QApplication::clipboard()->text().toUtf8())
+                    .object();
+            const QJsonObject stdioServer =
+                stdioConfig.value(QStringLiteral("mcpServers"))
+                    .toObject()
+                    .value(QStringLiteral("pvforge"))
+                    .toObject();
+            failIf(!stdioServer.value(QStringLiteral("command"))
+                        .toString()
+                        .endsWith(QStringLiteral("pvforge-mcp")),
+                   QStringLiteral("stdio config has no pvforge-mcp command"));
+            failIf(!stdioServer.value(QStringLiteral("args"))
+                        .toArray()
+                        .contains(QJsonValue(QStringLiteral("--endpoint-file"))),
+                   QStringLiteral("stdio config has no --endpoint-file"));
+
+            dialog->close();
+            QApplication::processEvents();
+
+            qInfo() << "mcp-integration-test failures" << failures;
+            app.exit(failures == 0 ? 0 : 1);
+        });
+    return app.exec();
+}
 
 } // namespace
 
@@ -12699,6 +13267,8 @@ int main(int argc, char* argv[])
         return pvf::mcpBridgeTest();
     if (app.arguments().contains(QStringLiteral("--mcp-write-test")))
         return mcpWriteTest();
+    if (app.arguments().contains(QStringLiteral("--mcp-integration-test")))
+        return mcpIntegrationTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))

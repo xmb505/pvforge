@@ -148,7 +148,7 @@ McpLogPanel::McpLogPanel(QWidget* viewport, QWidget* parent)
     m_stopButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_stopButton->setFocusPolicy(Qt::NoFocus);
     m_stopButton->setToolTip(
-        QStringLiteral("停止 AI（当前只有只读工具；写工具接入后执行急停）"));
+        QStringLiteral("急停：停止 AI 写操作，之后的写调用返回 stopped_by_human"));
     m_stopButton->setStyleSheet(
         QStringLiteral("QToolButton { background: #b8342b; color: white; "
                        "border: 1px solid #7f221c; padding: 2px 6px; }"
@@ -188,6 +188,36 @@ void McpLogPanel::setServerState(bool running, quint16 port, const QString& erro
         m_autoShowPending = true;
     if (!running)
         m_autoShowPending = false;
+    updateHeader();
+}
+
+void McpLogPanel::setPermissionState(bool armed, const QString& sceneName,
+                                     bool stopped)
+{
+    m_armed = armed;
+    m_stopped = stopped;
+    m_sceneName = sceneName;
+    updateHeader();
+}
+
+void McpLogPanel::addSystemEvent(const QString& title, const QString& detail)
+{
+    auto* item = new QTreeWidgetItem(m_tree);
+    item->setText(0, QTime::currentTime().toString(QStringLiteral("HH:mm:ss")));
+    item->setText(1, title);
+    item->setText(2, QStringLiteral("—"));
+    item->setText(3, QStringLiteral("info"));
+    item->setText(4, detail.isEmpty() ? QStringLiteral("—") : detail);
+    if (!detail.isEmpty())
+    {
+        auto* detailItem = new QTreeWidgetItem(item);
+        detailItem->setText(0, truncateForDisplay(detail, kMaxDetailChars));
+        detailItem->setFirstColumnSpanned(true);
+    }
+    while (m_tree->topLevelItemCount() > kMaxRows)
+        delete m_tree->takeTopLevelItem(0);
+    if (isVisible())
+        m_tree->scrollToItem(item);
     updateHeader();
 }
 
@@ -307,20 +337,51 @@ void McpLogPanel::showFromMenu()
 void McpLogPanel::updateHeader()
 {
     if (m_serverRunning)
-        m_statusLabel->setText(
-            QStringLiteral("监听中 · 127.0.0.1:%1").arg(m_serverPort));
+    {
+        QString text = QStringLiteral("监听中 · 127.0.0.1:%1").arg(m_serverPort);
+        if (m_armed)
+        {
+            text += QStringLiteral(" · 已武装：%1")
+                        .arg(m_sceneName.isEmpty() ? QStringLiteral("未分场景")
+                                                   : m_sceneName);
+        }
+        else if (m_stopped)
+        {
+            text += QStringLiteral(" · 已急停");
+        }
+        else
+        {
+            text += QStringLiteral(" · 只读");
+        }
+        m_statusLabel->setText(text);
+    }
     else if (!m_serverError.isEmpty())
         m_statusLabel->setText(QStringLiteral("启动失败"));
     else
         m_statusLabel->setText(QStringLiteral("未启用"));
 
-    m_statusLabel->setToolTip(
-        m_serverRunning
-            ? QStringLiteral("MCP 正在监听 127.0.0.1:%1").arg(m_serverPort)
-            : (m_serverError.isEmpty() ? QStringLiteral("MCP 未启用")
-                                       : m_serverError));
+    QString tooltip;
+    if (m_serverRunning)
+    {
+        tooltip = QStringLiteral("MCP 正在监听 127.0.0.1:%1").arg(m_serverPort);
+        if (m_armed)
+            tooltip += QStringLiteral("\n写权限已解锁：%1").arg(m_sceneName);
+        else if (m_stopped)
+            tooltip += QStringLiteral("\n人类已急停，写操作返回 stopped_by_human");
+        else
+            tooltip += QStringLiteral("\n只读模式");
+    }
+    else
+    {
+        tooltip = m_serverError.isEmpty() ? QStringLiteral("MCP 未启用")
+                                          : m_serverError;
+    }
+    m_statusLabel->setToolTip(tooltip);
+
     QPalette statusPalette = QApplication::palette();
-    if (!m_serverError.isEmpty() && !m_serverRunning)
+    if (m_stopped && m_serverRunning)
+        statusPalette.setColor(QPalette::WindowText, QColor(220, 140, 60));
+    else if (!m_serverError.isEmpty() && !m_serverRunning)
         statusPalette.setColor(QPalette::WindowText, QColor(220, 80, 70));
     m_statusLabel->setPalette(statusPalette);
 

@@ -33,8 +33,10 @@ class HtmlRenderer;
 class AssetLibraryPanel;
 class AudioEngine;
 class CameraMonitor;
+class CheckpointManager;
 class CurveEditor;
 class EnvironmentPanel;
+class McpCommandService;
 class McpLogPanel;
 class McpServer;
 class ProjectPropertiesPanel;
@@ -82,6 +84,10 @@ public:
     int autosaveIntervalForTest() const;
     McpServer* mcpServerForTest() const { return m_mcpServer; }
     McpLogPanel* mcpLogPanelForTest() const { return m_mcpLog; }
+    McpCommandService* mcpCommandsForTest() const { return m_mcpCommands.get(); }
+    bool armMcpWritesForTest(QString* error = nullptr) { return armMcpWrites(error); }
+    void stopMcpWritesForTest() { stopMcpWrites(); }
+    void disarmMcpWritesForTest() { disarmMcpWrites(); }
     // Test entry point that uses the same dialog wiring as Edit -> Settings,
     // but shows the dialog non-modally so a test can drive its controls.
     SettingsDialog* openSettingsDialogForTest();
@@ -154,6 +160,9 @@ private:
     void updateStatus();
     void updateMcpStatus();
     void wireMcpDialog(SettingsDialog* dialog);
+    bool armMcpWrites(QString* error = nullptr);
+    void disarmMcpWrites();
+    void stopMcpWrites();
     void toggleWorkbench();
     void deleteSelectedEntity();
     void onUndo();
@@ -236,6 +245,12 @@ private:
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
+    // Created only while a human has armed writes for one scene. Global
+    // objects (active camera, audio, root-level logos) stay locked because
+    // McpCommandService::allowGlobal() is false by default; a future UI can
+    // call setAllowGlobal(true) after a separate human confirmation.
+    std::unique_ptr<McpCommandService> m_mcpCommands;
+    std::unique_ptr<CheckpointManager> m_mcpCheckpoints;
     html::HtmlBrowser* m_htmlBrowser = nullptr;
     QHash<EntityId, html::HtmlRenderer*> m_htmlRenderers;
     QHash<QString, html::HtmlAsset> m_htmlAssets;
@@ -263,6 +278,7 @@ private:
     QLabel* m_perfLabel = nullptr;
     QToolButton* m_mcpStatusButton = nullptr;
     QString m_mcpLastError;
+    QString m_mcpCheckpointId;
     QTimer* m_perfTimer = nullptr;
     QAction* m_perfAction = nullptr;
     QProgressBar* m_importProgress = nullptr;

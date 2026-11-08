@@ -30,10 +30,18 @@ public:
     // Used by Help -> About so both entry points show the same page.
     void showAboutPage();
 
+    // Reflects MainWindow's authoritative permission state. The dialog never
+    // arms writes itself: it asks MainWindow, which prepares the checkpoint,
+    // scene scope and service instance.
+    void setMcpPermissionState(bool armed, const QString& sceneName,
+                               const QString& error = QString());
+
 signals:
     // Emitted whenever the enable/start/stop controls change the live server
     // state. MainWindow uses it to update the status bar and log header.
     void mcpStateChanged(bool running, quint16 port, const QString& error);
+    void mcpPermissionArmRequested();
+    void mcpPermissionDisarmRequested();
 
 protected:
     void accept() override;
@@ -54,7 +62,9 @@ private:
     void copyMcpToken();
     void resetMcpToken();
     void copyMcpConfig();
+    void copyMcpStdioConfig();
     QString mcpConfigJson() const;
+    QString mcpStdioConfigJson() const;
 
     QListWidget* m_categories = nullptr;
     QStackedWidget* m_pages = nullptr;
@@ -87,10 +97,12 @@ private:
     QPushButton* m_mcpStart = nullptr;
     QPushButton* m_mcpStop = nullptr;
     QComboBox* m_mcpPermission = nullptr;
+    QLabel* m_mcpPermissionStatus = nullptr;
     QCheckBox* m_mcpLogEnabled = nullptr;
     QPushButton* m_mcpCopyToken = nullptr;
     QPushButton* m_mcpResetToken = nullptr;
     QPushButton* m_mcpCopyConfig = nullptr;
+    QPushButton* m_mcpCopyStdioConfig = nullptr;
     QPlainTextEdit* m_aboutText = nullptr;
 };
 
