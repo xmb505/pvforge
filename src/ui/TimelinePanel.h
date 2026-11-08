@@ -9,6 +9,12 @@
 #include <QWidget>
 
 class QKeyEvent;
+class QContextMenuEvent;
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDragLeaveEvent;
+class QDropEvent;
+class QMimeData;
 class QMouseEvent;
 class QPainter;
 class QScrollBar;
@@ -108,12 +114,21 @@ public:
     }
 
     EntityId owner() const { return m_owner; }
+    bool playheadVisibleForTest() const
+    {
+        return m_owner < 0
+               || (m_frame >= contentStart() && m_frame < contentEnd());
+    }
     QRect clipRectFor(EntityId id) const;
     // Opens (or raises) the private timeline for a clip and returns its panel.
     TimelinePanel* openPopup(EntityId ownerId);
     void closeAllPopups();
     void syncPopups();
     void removePopup(EntityId ownerId);
+    EntityId dropAssetForTest(const QMimeData& mime, int frame)
+    {
+        return dropAsset(mime, frame);
+    }
     // Popup keyframe selections are adopted by the main panel so the existing
     // Delete / easing actions see them.
     void adoptKeyframeSelection(const QVector<KeyframeSelection>& selection);
@@ -125,6 +140,7 @@ signals:
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void deleteKeyframesRequested();
+    void deleteEntityRequested(EntityId id);
     void entityRenamed(EntityId id, const QString& name);
     void audioMoved(EntityId id, double startFrame);
     void entityMoveRequested(EntityId id, EntityId parent, int index);
@@ -132,6 +148,7 @@ signals:
                                int index);
     void keyframesMoveRequested(const QVector<KeyframeRecord>& records,
                                 double delta);
+    void keyframeAddRequested(EntityId id, int frame);
     void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
     void keyframeNoteRequested(EntityId id, double frame);
@@ -160,7 +177,12 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -237,6 +259,7 @@ private:
     void selectEntity(EntityId id, bool emitSignal);
     void autoScrollTick();
     void syncPopupGeometry();
+    EntityId dropAsset(const QMimeData& mime, int frame);
 
     Project* m_project = nullptr;
     EntityId m_owner = kInvalidEntity;   // kInvalidEntity = main timeline
@@ -263,12 +286,15 @@ private:
     bool m_hasExternalPreview = false;
     bool m_dragging = false;
     bool m_moved = false;
+    bool m_dropActive = false;
+    int m_dropFrame = 0;
     int m_hoverRow = -1;
     bool m_hoverLeft = false;
     bool m_hoverRight = false;
 
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
+    QToolButton* m_unitButton = nullptr;
     QTimer* m_autoScroll = nullptr;
     int m_scrollX = 0;
     int m_scrollY = 0;

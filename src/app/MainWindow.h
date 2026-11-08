@@ -159,6 +159,7 @@ private:
     void onPlayTick();
     void updateStatus();
     void updateMcpStatus();
+    void arrangeMcpLog();
     void wireMcpDialog(SettingsDialog* dialog);
     bool armMcpWrites(QString* error = nullptr);
     void disarmMcpWrites();

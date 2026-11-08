@@ -450,12 +450,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     auto* libraryLayout = new QVBoxLayout(libraryHost);
     libraryLayout->setContentsMargins(0, 0, 0, 0);
     libraryLayout->setSpacing(0);
-    auto* librarySection =
-        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"),
-                                       QStringLiteral("素材库")),
-                               m_library, libraryHost);
-    librarySection->setExpanded(true);
-    libraryLayout->addWidget(librarySection);
+    libraryLayout->addWidget(m_library);
     libraryHost->setMinimumWidth(240);
     libraryHost->setMaximumWidth(420);
     bottom->addWidget(libraryHost);
@@ -558,7 +553,19 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             const QSignalBlocker blocker(action);
             action->setChecked(visible);
         }
+        arrangeMcpLog();
     });
+    connect(m_mcpLog, &McpLogPanel::visibilityChanged, this,
+            [this](bool visible) {
+                if (auto* action =
+                        findChild<QAction*>(QStringLiteral("mcpLogAction")))
+                {
+                    const QSignalBlocker blocker(action);
+                    action->setChecked(visible);
+                }
+                if (visible)
+                    arrangeMcpLog();
+            });
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_props, &PropertiesPanel::dataEdited, this, &MainWindow::applyEntityData);
@@ -599,6 +606,13 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onEntityFlagChanged);
     connect(m_timeline, &TimelinePanel::deleteKeyframesRequested, this,
             &MainWindow::onDeleteKeyframesRequested);
+    connect(m_timeline, &TimelinePanel::deleteEntityRequested, this,
+            [this](EntityId id) {
+                if (id == kInvalidEntity)
+                    return;
+                setSelectedEntity(id);
+                deleteSelectedEntity();
+            });
     connect(m_timeline, &TimelinePanel::keyframeEasingRequested, this,
             &MainWindow::onKeyframeEasingRequested);
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
@@ -627,6 +641,32 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
                 m_history->push(std::make_unique<EntitiesSnapshotCommand>(
                                     before, after, text),
                                 *m_project);
+            });
+    connect(m_timeline, &TimelinePanel::keyframeAddRequested, this,
+            [this](EntityId id, int frame) {
+                const Entity* entity = m_project->entity(id);
+                if (!entity || m_project->isEffectivelyLocked(id))
+                    return;
+                const bool camera = entity->isCamera();
+                const QVector<Entity> before = m_project->entities();
+                const QStringList properties = {
+                    QStringLiteral("x"),        QStringLiteral("y"),
+                    QStringLiteral("rotation"), QStringLiteral("scaleX"),
+                    QStringLiteral("scaleY"),   QStringLiteral("opacity")};
+                for (const QString& property : properties)
+                {
+                    if (camera && property == QStringLiteral("opacity"))
+                        continue;
+                    m_project->setValue(id, property, frame,
+                                        m_project->value(id, property, frame),
+                                        true);
+                }
+                m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                                    before, m_project->entities(),
+                                    QStringLiteral("打关键帧")),
+                                *m_project);
+                statusBar()->showMessage(
+                    QStringLiteral("已在第 %1 帧打关键帧").arg(frame), 2000);
             });
     connect(m_timeline, &TimelinePanel::folderCreateRequested, this,
             &MainWindow::onCreateFolderRequested);
@@ -929,6 +969,20 @@ void MainWindow::createMenus()
             m_monitor->setVisibleFromMenu(on);
     });
     viewMenu->addAction(monitorAction);
+    auto* mcpLogAction = new QAction(
+        Lang::t(QStringLiteral("action.mcpLog"), QStringLiteral("MCP 日志")), this);
+    mcpLogAction->setObjectName(QStringLiteral("mcpLogAction"));
+    mcpLogAction->setCheckable(true);
+    mcpLogAction->setChecked(m_mcpLog && m_mcpLog->isVisible());
+    connect(mcpLogAction, &QAction::toggled, this, [this](bool on) {
+        if (!m_mcpLog)
+            return;
+        if (on)
+            m_mcpLog->showFromMenu();
+        else
+            m_mcpLog->hide();
+    });
+    viewMenu->addAction(mcpLogAction);
     viewMenu->addAction(m_fitAction);
     viewMenu->addSeparator();
 
@@ -3340,6 +3394,57 @@ SettingsDialog* MainWindow::openSettingsDialogForTest()
     wireMcpDialog(dialog);
     dialog->show();
     return dialog;
+}
+
+void MainWindow::arrangeMcpLog()
+{
+    if (!m_mcpLog || !m_monitor || !m_viewport || !m_mcpLog->isVisible()
+        || m_mcpLog->isDetached())
+        return;
+
+    const QSize viewportSize = m_viewport->size();
+    QSize logSize = m_mcpLog->size();
+    if (logSize.width() < 240 || logSize.height() < 120)
+        logSize = QSize(420, 280);
+    const int gap = 8;
+    const int margin = 12;
+    QRect target;
+
+    if (m_monitor->isVisible() && !m_monitor->isDetached())
+    {
+        const QRect monitor = m_monitor->geometry();
+        if (monitor.left() - gap - logSize.width() >= margin)
+        {
+            target = QRect(monitor.left() - gap - logSize.width(), monitor.top(),
+                           logSize.width(),
+                           std::max(logSize.height(), monitor.height()));
+        }
+        else if (monitor.right() + gap + logSize.width() + margin
+                 <= viewportSize.width())
+        {
+            target = QRect(monitor.right() + gap, monitor.top(), logSize.width(),
+                           std::max(logSize.height(), monitor.height()));
+        }
+        else
+        {
+            target = QRect(monitor.left(),
+                           std::max(margin,
+                                    monitor.top() - gap - logSize.height()),
+                           logSize.width(), logSize.height());
+        }
+    }
+    else
+    {
+        target = QRect(viewportSize.width() - logSize.width() - margin, margin,
+                       logSize.width(), logSize.height());
+    }
+
+    target.moveLeft(std::clamp(target.left(), 0,
+                              std::max(0, viewportSize.width() - target.width())));
+    target.moveTop(std::clamp(target.top(), 0,
+                             std::max(0, viewportSize.height() - target.height())));
+    m_mcpLog->setGeometry(target);
+    m_mcpLog->raise();
 }
 
 void MainWindow::updateMcpStatus()

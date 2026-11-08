@@ -10,6 +10,7 @@
 #include "html/HtmlAsset.h"
 #include "media/MediaImporter.h"
 
+#include <QAbstractItemView>
 #include <QCursor>
 #include <QDialog>
 #include <QDir>
@@ -24,6 +25,7 @@
 #include <QListView>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
@@ -378,6 +380,38 @@ QIcon listIcon(const Template& tmpl)
     return QIcon(pixmap);
 }
 
+// The list must provide a custom MIME payload so the timeline can tell which
+// template (or HTML asset) was dragged, instead of receiving plain text.
+class AssetListWidget : public QListWidget
+{
+public:
+    explicit AssetListWidget(QWidget* parent = nullptr)
+        : QListWidget(parent)
+    {
+    }
+
+protected:
+    QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override
+    {
+        auto* mime = new QMimeData;
+        if (items.isEmpty())
+            return mime;
+        QListWidgetItem* item = items.first();
+        if (item->data(Qt::UserRole + 1).toInt() == 0)
+        {
+            mime->setData(QStringLiteral("application/x-pvforge-asset-template"),
+                          QByteArray::number(item->data(Qt::UserRole).toInt()));
+        }
+        else
+        {
+            mime->setData(QStringLiteral("application/x-pvforge-asset-html"),
+                          item->data(Qt::UserRole + 2).toString().toUtf8());
+        }
+        mime->setText(item->text());
+        return mime;
+    }
+};
+
 } // namespace
 
 AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
@@ -487,7 +521,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
             });
     });
 
-    m_list = new QListWidget(this);
+    m_list = new AssetListWidget(this);
     m_list->setObjectName(QStringLiteral("assetList"));
     m_list->setIconSize(QSize(40, 40));
     m_list->setAlternatingRowColors(true);
@@ -496,21 +530,25 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     m_list->setTextElideMode(Qt::ElideMiddle);
     m_list->setWordWrap(false);
     m_list->setMouseTracking(true);
+    m_list->setDragEnabled(true);
+    m_list->setDragDropMode(QAbstractItemView::DragOnly);
+    m_list->setDefaultDropAction(Qt::CopyAction);
     m_list->viewport()->installEventFilter(this);
     connect(m_list, &QListWidget::itemEntered, this,
             &AssetLibraryPanel::showHoverPreview);
     layout->addWidget(m_list, 1);
 
-    auto* buttons = new QHBoxLayout();
+    // The visible workflow is drag-to-timeline. The old buttons stay as
+    // hidden objects only so the existing self-tests can still drive them.
     m_create = new QPushButton(QStringLiteral("创建实体"), this);
     m_create->setObjectName(QStringLiteral("assetCreate"));
     m_create->setEnabled(false);
-    buttons->addWidget(m_create, 1);
+    m_create->hide();
     m_remove = new QPushButton(QStringLiteral("删除"), this);
+    m_remove->setObjectName(QStringLiteral("assetRemove"));
     m_remove->setToolTip(QStringLiteral("只删除素材模板，不影响场景中已创建的实体"));
     m_remove->setEnabled(false);
-    buttons->addWidget(m_remove);
-    layout->addLayout(buttons);
+    m_remove->hide();
 
     m_info = new QLabel(this);
     m_info->setObjectName(QStringLiteral("assetInfo"));
@@ -526,8 +564,6 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     });
     connect(m_list, &QListWidget::currentRowChanged, this,
             [this](int) { updatePreview(); });
-    connect(m_list, &QListWidget::itemDoubleClicked, this,
-            [this](QListWidgetItem*) { createSelected(); });
     connect(m_create, &QPushButton::clicked, this, &AssetLibraryPanel::createSelected);
     connect(m_remove, &QPushButton::clicked, this, &AssetLibraryPanel::removeSelected);
     connect(m_project, &Project::changed, this, &AssetLibraryPanel::refresh);

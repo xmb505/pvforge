@@ -1,10 +1,19 @@
 #include "TimelinePanel.h"
 
+#include "core/Settings.h"
+
 #include <QApplication>
+#include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -100,6 +109,15 @@ QRect plusButtonRect(const QRect& clip, int visibleRight)
     return QRect(right - 24, clip.top() + (clip.height() - 16) / 2, 16, 16);
 }
 
+bool hasAssetMime(const QMimeData* mime)
+{
+    return mime
+           && (mime->hasFormat(
+                   QStringLiteral("application/x-pvforge-asset-template"))
+               || mime->hasFormat(
+                   QStringLiteral("application/x-pvforge-asset-html")));
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- popup
@@ -159,6 +177,8 @@ public:
         m_panel->m_sourcePanel = source;
         m_panel->m_relativeTime = true;
         m_panel->m_pixelsPerFrame = source->m_pixelsPerFrame;
+        if (m_panel->m_unitButton)
+            m_panel->m_unitButton->hide();
         layout->addWidget(m_panel, 1);
 
         connect(m_timeMode, &QToolButton::toggled, this, [this](bool absolute) {
@@ -182,12 +202,16 @@ public:
                 &TimelinePanel::entitySelected);
         connect(m_panel, &TimelinePanel::deleteKeyframesRequested, m_source,
                 &TimelinePanel::deleteKeyframesRequested);
+        connect(m_panel, &TimelinePanel::deleteEntityRequested, m_source,
+                &TimelinePanel::deleteEntityRequested);
         connect(m_panel, &TimelinePanel::audioMoved, m_source,
                 &TimelinePanel::audioMoved);
         connect(m_panel, &TimelinePanel::keyframesMoveRequested, m_source,
                 &TimelinePanel::keyframesMoveRequested);
         connect(m_panel, &TimelinePanel::snapshotEditRequested, m_source,
                 &TimelinePanel::snapshotEditRequested);
+        connect(m_panel, &TimelinePanel::keyframeAddRequested, m_source,
+                &TimelinePanel::keyframeAddRequested);
         connect(m_panel, &TimelinePanel::keyframeSelectionChanged, m_source,
                 &TimelinePanel::adoptKeyframeSelection);
 
@@ -273,6 +297,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     setMinimumHeight(140);
     setFocusPolicy(Qt::ClickFocus);
     setMouseTracking(true);
+    setAcceptDrops(true);
     setObjectName(QStringLiteral("timelinePanel"));
 
     m_hScroll = new QScrollBar(Qt::Horizontal, this);
@@ -294,6 +319,21 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     m_autoScroll = new QTimer(this);
     m_autoScroll->setInterval(30);
     connect(m_autoScroll, &QTimer::timeout, this, [this] { autoScrollTick(); });
+
+    m_displayFrames = Settings::timelineDisplayFrames();
+    m_unitButton = new QToolButton(this);
+    m_unitButton->setObjectName(QStringLiteral("timelineUnitButton"));
+    m_unitButton->setText(m_displayFrames ? QStringLiteral("帧")
+                                          : QStringLiteral("秒"));
+    m_unitButton->setToolTip(QStringLiteral("切换时间轴刻度（秒 / 帧）"));
+    m_unitButton->setFixedSize(42, 20);
+    m_unitButton->setFocusPolicy(Qt::NoFocus);
+    m_unitButton->setStyleSheet(QStringLiteral(
+        "QToolButton { background: #2a2c33; color: #d8dce4;"
+        " border: 1px solid #4a4d55; border-radius: 3px; padding: 0 4px; }"
+        "QToolButton:hover { background: #3c404a; }"));
+    connect(m_unitButton, &QToolButton::clicked, this,
+            [this] { setDisplayFrames(!m_displayFrames); });
 
     if (m_project)
     {
@@ -318,7 +358,9 @@ TimelinePanel::~TimelinePanel()
 void TimelinePanel::setCurrentFrame(int frame)
 {
     m_frame = std::max(0, frame);
-    if (m_dragMode == DragMode::None)
+    const bool inRange =
+        m_owner < 0 || (frame >= contentStart() && frame < contentEnd());
+    if (m_dragMode == DragMode::None && inRange)
         ensureFrameVisible(m_frame);
     update();
     for (ClipPopup* popup : m_popups)
@@ -1313,15 +1355,25 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                 std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
                           KeyframeSelection{entity->id, double(keyFrame)})
                 != m_selectedKeyframes.end();
-            const double radius = 4.5;
+            const double radius = keySelected ? 5.5 : 4.5;
             QPolygonF diamond;
             diamond << QPointF(x, centerY - radius)
                     << QPointF(x + radius, centerY)
                     << QPointF(x, centerY + radius)
                     << QPointF(x - radius, centerY);
-            p.setPen(QPen(QColor(14, 16, 20, 210), 1.2));
-            p.setBrush(keySelected ? QColor(255, 214, 102)
-                                   : QColor(248, 250, 255));
+            if (keySelected)
+            {
+                p.setPen(Qt::NoPen);
+                p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 95));
+                p.drawEllipse(QPointF(x, centerY), 9.0, 9.0);
+                p.setPen(QPen(Qt::white, 1.5));
+                p.setBrush(accent);
+            }
+            else
+            {
+                p.setPen(QPen(QColor(14, 16, 20, 210), 1.2));
+                p.setBrush(QColor(248, 250, 255));
+            }
             p.drawPolygon(diamond);
         }
     }
@@ -1349,8 +1401,24 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                        : QStringLiteral("私有时间线 · 此片段还没有子实体"));
     }
 
+    if (m_dropActive)
+    {
+        const int dropX = xFromFrame(m_dropFrame);
+        if (dropX >= 0 && dropX <= right)
+        {
+            p.setPen(QPen(accent.lighter(120), 2));
+            p.drawLine(dropX, kRulerHeight, dropX, bottom);
+            p.setPen(accent.lighter(140));
+            p.drawText(QRect(dropX + 4, kRulerHeight + 2, 120, 18),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       QStringLiteral("放到第 %1 帧").arg(m_dropFrame));
+        }
+    }
+
+    const bool playheadInOwner =
+        m_owner < 0 || (m_frame >= contentStart() && m_frame < contentEnd());
     const int playhead = xFromFrame(m_frame);
-    if (playhead >= 0 && playhead <= right)
+    if (playheadInOwner && playhead >= 0 && playhead <= right)
     {
         p.setPen(QPen(accent, 1.5));
         p.drawLine(playhead, 0, playhead, bottom);
@@ -1408,8 +1476,6 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     const int x = int(std::lround(pos.x()));
-    const bool nearLeft = std::abs(x - clip.left()) <= kTrimGrab;
-    const bool nearRight = std::abs(x - clip.right()) <= kTrimGrab;
     m_dragEntity = id;
     m_dragRow = row;
     m_dragStartFrame = frameFromX(x);
@@ -1419,15 +1485,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     m_lastDragPos = pos;
     m_moved = false;
 
-    if (!entity->isAudio() && (nearLeft || nearRight))
-    {
-        m_dragMode = nearLeft ? DragMode::TrimStart : DragMode::TrimEnd;
-        beginDrag();
-        m_autoScroll->start(30);
-        update();
-        return;
-    }
-
+    // Keyframes win over trim grips: a key at the clip edge must still be
+    // selectable, otherwise it looks like the diamond cannot be picked.
     const int keyFrame = hitKeyframeRow(row, x);
     if (keyFrame >= 0)
     {
@@ -1449,6 +1508,17 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         m_frame = std::max(0, keyFrame);
         emit frameRequested(m_frame);
         emit keyframeSelectionChanged(m_selectedKeyframes);
+        beginDrag();
+        m_autoScroll->start(30);
+        update();
+        return;
+    }
+
+    const bool nearLeft = std::abs(x - clip.left()) <= kTrimGrab;
+    const bool nearRight = std::abs(x - clip.right()) <= kTrimGrab;
+    if (!entity->isAudio() && (nearLeft || nearRight))
+    {
+        m_dragMode = nearLeft ? DragMode::TrimStart : DragMode::TrimEnd;
         beginDrag();
         m_autoScroll->start(30);
         update();
@@ -1504,7 +1574,9 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
                           && std::abs(x - clip.left()) <= kTrimGrab;
             m_hoverRight = !entity->isAudio()
                            && std::abs(x - clip.right()) <= kTrimGrab;
-            if (m_hoverLeft || m_hoverRight)
+            if (hitKeyframeRow(row, x) >= 0)
+                setCursor(Qt::PointingHandCursor);
+            else if (m_hoverLeft || m_hoverRight)
                 setCursor(Qt::SizeHorCursor);
             else if (clip.contains(event->position().toPoint()))
                 setCursor(Qt::OpenHandCursor);
@@ -1558,11 +1630,187 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         return;
     const int row = rowAt(int(event->position().y()));
     const EntityId id = entityAtRow(row);
-    if (id == kInvalidEntity)
+    const Entity* entity = m_project->entity(id);
+    if (!entity || m_project->isEffectivelyLocked(id))
         return;
-    m_frame = std::max(0, frameFromX(int(std::lround(event->position().x()))));
+    const QRect clip = clipRect(*entity);
+    if (!clip.contains(event->position().toPoint()))
+        return;
+    const QRect plus = plusButtonRect(clip, width() - kScrollBarSize);
+    if (!plus.isEmpty() && plus.contains(event->position().toPoint()))
+        return;
+
+    const int frame =
+        std::max(0, frameFromX(int(std::lround(event->position().x()))));
+    m_frame = frame;
     emit frameRequested(m_frame);
+    selectEntity(id, true);
+    emit keyframeAddRequested(id, frame);
+    m_selectedKeyframes.clear();
+    m_selectedKeyframes.append(KeyframeSelection{id, double(frame)});
+    emit keyframeSelectionChanged(m_selectedKeyframes);
     update();
+}
+
+void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (!m_project || !hasAssetMime(event->mimeData()))
+        return;
+    m_dropActive = true;
+    m_dropFrame = std::max(contentStart(),
+                           frameFromX(int(std::lround(event->position().x()))));
+    if (m_owner >= 0)
+        m_dropFrame = std::min(m_dropFrame, contentEnd() - 1);
+    event->acceptProposedAction();
+    update();
+}
+
+void TimelinePanel::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!m_project || !hasAssetMime(event->mimeData()))
+        return;
+    m_dropActive = true;
+    m_dropFrame = std::max(contentStart(),
+                           frameFromX(int(std::lround(event->position().x()))));
+    if (m_owner >= 0)
+        m_dropFrame = std::min(m_dropFrame, contentEnd() - 1);
+    event->acceptProposedAction();
+    update();
+}
+
+void TimelinePanel::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    Q_UNUSED(event);
+    m_dropActive = false;
+    update();
+}
+
+void TimelinePanel::dropEvent(QDropEvent* event)
+{
+    if (!m_project || !hasAssetMime(event->mimeData()))
+    {
+        m_dropActive = false;
+        update();
+        return;
+    }
+    int frame = frameFromX(int(std::lround(event->position().x())));
+    frame = std::max(contentStart(), frame);
+    if (m_owner >= 0)
+        frame = std::min(frame, contentEnd() - 1);
+    const EntityId id = dropAsset(*event->mimeData(), frame);
+    m_dropActive = false;
+    update();
+    if (id == kInvalidEntity)
+        event->ignore();
+    else
+        event->acceptProposedAction();
+}
+
+EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame)
+{
+    if (!m_project || !hasAssetMime(&mime))
+        return kInvalidEntity;
+
+    frame = std::max(contentStart(), frame);
+    if (m_owner >= 0)
+        frame = std::min(frame, contentEnd() - 1);
+
+    const bool html = mime.hasFormat(
+        QStringLiteral("application/x-pvforge-asset-html"));
+    const QVector<Entity> before = m_project->entities();
+    Entity* created = nullptr;
+    if (html)
+    {
+        created = m_project->addHtmlLayer(QString::fromUtf8(
+            mime.data(QStringLiteral("application/x-pvforge-asset-html"))));
+    }
+    else
+    {
+        const int index =
+            mime.data(QStringLiteral("application/x-pvforge-asset-template"))
+                .toInt();
+        const auto& templates = m_project->templates();
+        if (index >= 0 && index < templates.size())
+            created = m_project->createFromTemplate(templates[index]);
+    }
+    if (!created)
+        return kInvalidEntity;
+
+    const EntityId id = created->id;
+    if (m_owner != kInvalidEntity)
+        m_project->setEntityParent(id, m_owner);
+    Entity* entity = m_project->entity(id);
+    if (!entity)
+        return kInvalidEntity;
+
+    const int fps = std::max(1, m_project->fps);
+    int length = fps;
+    if (entity->isAudio())
+    {
+        const double duration =
+            entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
+        if (duration > 0.0)
+            length = std::max(1, int(std::ceil(duration * fps)));
+        entity->data[QStringLiteral("startFrame")] = frame;
+    }
+    else
+    {
+        if (entity->type == EntityType::Video)
+        {
+            const double duration =
+                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
+            if (duration > 0.0)
+                length = std::max(1, int(std::ceil(duration * fps)));
+        }
+        entity->data[QStringLiteral("clipStart")] = frame;
+        entity->data[QStringLiteral("clipEnd")] = frame + length;
+    }
+
+    // A video template also creates its paired audio; keep it on the same
+    // drop frame and in the same private timeline.
+    for (Entity& other : m_project->mutableEntities())
+    {
+        if (other.id == id)
+            continue;
+        if (other.data.value(QStringLiteral("pairedVideo")).toInt() == id)
+        {
+            other.data[QStringLiteral("startFrame")] = frame;
+            if (m_owner != kInvalidEntity)
+                other.parent = m_owner;
+        }
+    }
+
+    m_project->notifyChanged();
+    selectEntity(id, true);
+    emit snapshotEditRequested(before, m_project->entities(),
+                               QStringLiteral("添加素材"));
+    return id;
+}
+
+void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
+{
+    if (!m_project)
+        return;
+    const int row = rowAt(event->pos().y());
+    const EntityId id = entityAtRow(row);
+    const Entity* entity = m_project->entity(id);
+    if (!entity)
+        return;
+    const QRect clip = clipRect(*entity);
+    if (!clip.contains(event->pos()))
+        return;
+
+    selectEntity(id, true);
+    QMenu menu(this);
+    QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
+    QAction* remove = menu.addAction(QStringLiteral("删除片段"));
+    remove->setEnabled(!m_project->isEffectivelyLocked(id));
+    QAction* chosen = menu.exec(event->globalPos());
+    if (chosen == open)
+        openPopup(id);
+    else if (chosen == remove)
+        emit deleteEntityRequested(id);
+    event->accept();
 }
 
 void TimelinePanel::wheelEvent(QWheelEvent* event)
@@ -1602,10 +1850,19 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Delete)
     {
-        emit deleteKeyframesRequested();
-        m_selectedKeyframes.clear();
-        emit keyframeSelectionChanged(m_selectedKeyframes);
-        update();
+        if (!m_selectedKeyframes.isEmpty())
+        {
+            emit deleteKeyframesRequested();
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+            update();
+            return;
+        }
+        if (m_selected != kInvalidEntity)
+        {
+            emit deleteEntityRequested(m_selected);
+            return;
+        }
         return;
     }
     if (event->key() == Qt::Key_Escape && m_dragMode != DragMode::None)
@@ -1636,6 +1893,12 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
                                kScrollBarSize,
                                std::max(0, height() - kRulerHeight
                                                - kScrollBarSize));
+    if (m_unitButton)
+    {
+        m_unitButton->setGeometry(std::max(4, width() - kScrollBarSize - 46), 3,
+                                  42, 20);
+        m_unitButton->setVisible(m_owner < 0 && width() > 120);
+    }
     clampScroll();
     update();
     syncPopups();
@@ -1727,8 +1990,13 @@ void TimelinePanel::setDisplayFrames(bool frames)
     if (m_displayFrames == frames)
         return;
     m_displayFrames = frames;
+    if (m_unitButton)
+        m_unitButton->setText(frames ? QStringLiteral("帧") : QStringLiteral("秒"));
     update();
     emit displayFramesChanged(frames);
+    for (ClipPopup* popup : m_popups)
+        if (popup && popup->panel())
+            popup->panel()->setDisplayFrames(frames);
 }
 
 void TimelinePanel::setPixelsPerFrameForTest(double pixels)
@@ -1808,7 +2076,7 @@ int TimelinePanel::hitKeyframeRow(int row, int x) const
     if (!entity)
         return -1;
     int best = -1;
-    int bestDistance = 7;
+    int bestDistance = 10;
     for (int frame : keyframeFrames(*entity))
     {
         const int distance = std::abs(x - xFromFrame(frame));

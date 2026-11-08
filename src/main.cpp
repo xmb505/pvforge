@@ -64,6 +64,7 @@
 #include <QCheckBox>
 #include <QDataStream>
 #include <QDoubleSpinBox>
+#include <QDropEvent>
 #include <QFont>
 #include <QHostAddress>
 #include <QImage>
@@ -75,6 +76,7 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QListView>
 #include <QListWidget>
@@ -9082,6 +9084,41 @@ int clipTimelineTest(QApplication& app)
                 ++failures;
             }
 
+            // Drag a selected keyframe to a new frame and verify the track
+            // data, not just the painted diamond.
+            const QPoint keyFrom(popup->frameXForTest(60),
+                                 popup->rowCenterYForTest(0));
+            const QPoint keyTo(popup->frameXForTest(75),
+                               popup->rowCenterYForTest(0));
+            send(QEvent::MouseButtonPress, keyFrom, Qt::LeftButton);
+            send(QEvent::MouseMove, keyTo, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, keyTo, Qt::NoButton);
+            QApplication::processEvents();
+            const bool keyMoved = project->keyframe(rectId, QStringLiteral("x"),
+                                                    75.0)
+                                  != nullptr
+                              && project->keyframe(rectId, QStringLiteral("x"),
+                                                   60.0)
+                                     == nullptr;
+            if (!keyMoved)
+            {
+                qCritical() << "clip-timeline-test: keyframe drag failed";
+                ++failures;
+            }
+
+            // Double-click inside a clip must create keys at that frame.
+            const QPoint dblPoint(popup->frameXForTest(90),
+                                  popup->rowCenterYForTest(0));
+            send(QEvent::MouseButtonDblClick, dblPoint, Qt::LeftButton);
+            QApplication::processEvents();
+            const bool keyAdded =
+                project->keyframe(rectId, QStringLiteral("x"), 90.0) != nullptr;
+            if (!keyAdded)
+            {
+                qCritical() << "clip-timeline-test: double-click key add failed";
+                ++failures;
+            }
+
             // Dragging the playhead past the right edge must keep scrolling
             // and keep the line inside the visible timeline.
             auto sendMain = [timeline](QEvent::Type type, const QPoint& pos,
@@ -9112,6 +9149,21 @@ int clipTimelineTest(QApplication& app)
                             << timeline->horizontalScrollForTest() << beforeFrame
                             << window.currentFrame() << playheadX
                             << timeline->width();
+                ++failures;
+            }
+
+            // The private timeline must hide the playhead when the global
+            // frame is outside the parent clip range.
+            timeline->setCurrentFrame(200);
+            QApplication::processEvents();
+            const bool popupHidden = !popup->playheadVisibleForTest();
+            timeline->setCurrentFrame(60);
+            QApplication::processEvents();
+            const bool popupShown = popup->playheadVisibleForTest();
+            if (!popupHidden || !popupShown)
+            {
+                qCritical() << "clip-timeline-test: popup playhead"
+                            << popupHidden << popupShown;
                 ++failures;
             }
             auto* assetList =
@@ -9148,6 +9200,59 @@ int clipTimelineTest(QApplication& app)
                 {
                     qCritical() << "clip-timeline-test: asset view"
                                 << iconMode << listMode << hoverVisible;
+                    ++failures;
+                }
+            }
+
+            auto* unitButton =
+                timeline->findChild<QToolButton*>(QStringLiteral("timelineUnitButton"));
+            if (unitButton)
+            {
+                unitButton->click();
+                const bool framesOn = timeline->displayFrames();
+                unitButton->click();
+                const bool framesOff = !timeline->displayFrames();
+                if (!framesOn || !framesOff)
+                {
+                    qCritical() << "clip-timeline-test: unit toggle" << framesOn
+                                << framesOff;
+                    ++failures;
+                }
+            }
+
+            // Drag a library template onto the timeline and delete the new
+            // clip with Del (right-click uses the same delete signal).
+            const int beforeCount = int(project->entities().size());
+            QMimeData dropMime;
+            dropMime.setData(QStringLiteral("application/x-pvforge-asset-template"),
+                             QByteArray::number(0));
+            const pvf::EntityId droppedId =
+                timeline->dropAssetForTest(dropMime, 30);
+            QApplication::processEvents();
+            const bool dropped =
+                int(project->entities().size()) == beforeCount + 1
+                && droppedId != pvf::kInvalidEntity
+                && project->clipStartFrame(droppedId) == 30;
+            if (!dropped)
+            {
+                qCritical() << "clip-timeline-test: asset drop"
+                            << beforeCount << project->entities().size();
+                ++failures;
+            }
+            else
+            {
+                const QPoint clipPoint(
+                    timeline->frameXForTest(45),
+                    timeline->rowCenterYForTest(timeline->rowCountForTest() - 1));
+                sendMain(QEvent::MouseButtonPress, clipPoint, Qt::LeftButton);
+                sendMain(QEvent::MouseButtonRelease, clipPoint, Qt::NoButton);
+                QKeyEvent deleteKey(QEvent::KeyPress, Qt::Key_Delete,
+                                    Qt::NoModifier);
+                QApplication::sendEvent(timeline, &deleteKey);
+                QApplication::processEvents();
+                if (project->entity(droppedId))
+                {
+                    qCritical() << "clip-timeline-test: delete clip";
                     ++failures;
                 }
             }
