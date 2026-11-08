@@ -6,6 +6,7 @@
 #include <QVector>
 
 class QDoubleSpinBox;
+class QSpinBox;
 class QPushButton;
 class QScrollArea;
 class QVBoxLayout;
@@ -63,7 +64,8 @@ private:
     QVBoxLayout* m_slotLayout = nullptr;
     QDoubleSpinBox* m_width = nullptr;
     QDoubleSpinBox* m_height = nullptr;
-    QDoubleSpinBox* m_tile = nullptr;
+    QSpinBox* m_columns = nullptr;
+    QSpinBox* m_rows = nullptr;
     QDoubleSpinBox* m_gap = nullptr;
     QDoubleSpinBox* m_opacity = nullptr;
     BrandWallPreview* m_preview = nullptr;

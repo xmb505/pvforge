@@ -379,7 +379,8 @@ Entity* Project::addBrandWall(const BrandWallParams& params)
     BrandWallParams copy = params;
     copy.width = std::max(16.0, params.width);
     copy.height = std::max(16.0, params.height);
-    copy.tile = std::max(8.0, params.tile);
+    copy.columns = std::clamp(params.columns, 1, 64);
+    copy.rows = std::clamp(params.rows, 1, 64);
     copy.gap = std::clamp(params.gap, 0.0, 64.0);
     copy.logoOpacity = std::clamp(params.logoOpacity, 0.0, 1.0);
     QVariantMap data;

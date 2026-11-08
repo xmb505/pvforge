@@ -659,7 +659,8 @@ int specialTest(QApplication& app)
         pvf::BrandWallParams wallParams;
         wallParams.width = 800;
         wallParams.height = 450;
-        wallParams.tile = 96;
+        wallParams.columns = 8;
+        wallParams.rows = 5;
         wallParams.gap = 6;
         wallParams.logoOpacity = 0.9;
         wallParams.logos = QStringList{logoA, logoB};
@@ -696,9 +697,9 @@ int specialTest(QApplication& app)
             }
             // Checkerboard: neighbouring tiles use different slots, also
             // across rows (the old row * columns indexing broke this).
-            const QColor tile00 = shot.pixelColor(88, 102);
-            const QColor tile01 = shot.pixelColor(136, 102);
-            const QColor tile10 = shot.pixelColor(88, 150);
+            const QColor tile00 = shot.pixelColor(96, 94);
+            const QColor tile01 = shot.pixelColor(146, 94);
+            const QColor tile10 = shot.pixelColor(96, 139);
             if (tile00 == tile01 || tile00 == tile10)
             {
                 qCritical() << "special-test: brand wall is not a checkerboard"
@@ -925,7 +926,8 @@ int specialTest(QApplication& app)
         pvf::BrandWallParams wallParams;
         wallParams.width = 640;
         wallParams.height = 360;
-        wallParams.tile = 80;
+        wallParams.columns = 8;
+        wallParams.rows = 5;
         wallParams.gap = 4;
         wallParams.logos = QStringList{QString(), QString()};
         wallParams.tileColors = QStringList{QColor(210, 70, 160).name(),
@@ -937,7 +939,8 @@ int specialTest(QApplication& app)
         if (!wallDialog.findChild<pvf::BrandWallPreview*>(
                 QStringLiteral("wallPreview"))
             || wallDialog.params().logos.size() != 2
-            || std::abs(wallDialog.params().tile - 80.0) > 0.01)
+            || wallDialog.params().columns != 8
+            || wallDialog.params().rows != 5)
         {
             qCritical() << "special-test: wall dialog state wrong";
             ++local;
@@ -5886,7 +5889,8 @@ int specialDemo(QApplication& app)
     pvf::BrandWallParams wallParams;
     wallParams.width = project->width;
     wallParams.height = project->height;
-    wallParams.tile = 320;
+    wallParams.columns = 6;
+    wallParams.rows = 3;
     wallParams.logoOpacity = 0.55;
     wallParams.logos = QStringList{wallLogoA, wallLogoB};
     wallParams.tileColors =

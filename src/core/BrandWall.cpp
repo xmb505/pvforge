@@ -37,7 +37,8 @@ BrandWallParams BrandWallParams::fromData(const QVariantMap& data)
     BrandWallParams params;
     params.width = std::max(16.0, data.value(QStringLiteral("width"), 1600.0).toDouble());
     params.height = std::max(16.0, data.value(QStringLiteral("height"), 900.0).toDouble());
-    params.tile = std::max(8.0, data.value(QStringLiteral("tile"), 240.0).toDouble());
+    params.columns = std::clamp(data.value(QStringLiteral("columns"), 6).toInt(), 1, 64);
+    params.rows = std::clamp(data.value(QStringLiteral("rows"), 4).toInt(), 1, 64);
     params.gap = std::clamp(data.value(QStringLiteral("gap"), 0.0).toDouble(), 0.0, 64.0);
     params.logoOpacity =
         std::clamp(data.value(QStringLiteral("logoOpacity"), 1.0).toDouble(), 0.0, 1.0);
@@ -50,7 +51,8 @@ void BrandWallParams::writeTo(QVariantMap& data) const
 {
     data[QStringLiteral("width")] = width;
     data[QStringLiteral("height")] = height;
-    data[QStringLiteral("tile")] = tile;
+    data[QStringLiteral("columns")] = columns;
+    data[QStringLiteral("rows")] = rows;
     data[QStringLiteral("gap")] = gap;
     data[QStringLiteral("logoOpacity")] = logoOpacity;
     data[QStringLiteral("logos")] = logos;
@@ -69,8 +71,10 @@ void paint(QPainter& painter, const BrandWallParams& params,
            const QVector<QImage>& logos)
 {
     const QRectF rect = bounds(params);
-    const int columns = std::max(1, int(std::ceil(params.width / params.tile)));
-    const int rows = std::max(1, int(std::ceil(params.height / params.tile)));
+    const int columns = std::max(1, params.columns);
+    const int rows = std::max(1, params.rows);
+    const double cellWidth = params.width / columns;
+    const double cellHeight = params.height / rows;
     const int slotCount = std::max(1, int(params.logos.size()));
     const double inset = params.gap / 2.0;
 
@@ -81,9 +85,8 @@ void paint(QPainter& painter, const BrandWallParams& params,
     {
         for (int column = 0; column < columns; ++column)
         {
-            QRectF tileRect(rect.left() + column * params.tile,
-                            rect.top() + row * params.tile, params.tile,
-                            params.tile);
+            QRectF tileRect(rect.left() + column * cellWidth,
+                            rect.top() + row * cellHeight, cellWidth, cellHeight);
             tileRect = tileRect.adjusted(inset, inset, -inset, -inset);
             // Checkerboard: every row is offset by one slot.
             const int slot = (row + column) % slotCount;

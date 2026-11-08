@@ -11,6 +11,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSpinBox>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -81,19 +82,25 @@ BrandWallDialog::BrandWallDialog(const BrandWallParams& params,
     form->addWidget(new QLabel(QStringLiteral("高度"), this), 0, 2);
     form->addWidget(m_height, 0, 3);
 
-    m_tile = new QDoubleSpinBox(this);
-    m_tile->setRange(8, 800);
-    m_tile->setValue(std::max(8.0, m_params.tile));
-    m_tile->setSuffix(QStringLiteral(" px"));
-    form->addWidget(new QLabel(QStringLiteral("瓷砖大小"), this), 1, 0);
-    form->addWidget(m_tile, 1, 1);
+    m_columns = new QSpinBox(this);
+    m_columns->setRange(1, 64);
+    m_columns->setValue(std::clamp(m_params.columns, 1, 64));
+    m_columns->setSuffix(QStringLiteral(" 列"));
+    form->addWidget(new QLabel(QStringLiteral("密度"), this), 1, 0);
+    form->addWidget(m_columns, 1, 1);
+
+    m_rows = new QSpinBox(this);
+    m_rows->setRange(1, 64);
+    m_rows->setValue(std::clamp(m_params.rows, 1, 64));
+    m_rows->setSuffix(QStringLiteral(" 行"));
+    form->addWidget(m_rows, 1, 2);
 
     m_gap = new QDoubleSpinBox(this);
     m_gap->setRange(0, 64);
     m_gap->setValue(m_params.gap);
     m_gap->setSuffix(QStringLiteral(" px"));
-    form->addWidget(new QLabel(QStringLiteral("间距"), this), 1, 2);
-    form->addWidget(m_gap, 1, 3);
+    form->addWidget(new QLabel(QStringLiteral("间距"), this), 1, 4);
+    form->addWidget(m_gap, 1, 5);
 
     m_opacity = new QDoubleSpinBox(this);
     m_opacity->setRange(0, 100);
@@ -154,7 +161,8 @@ BrandWallDialog::BrandWallDialog(const BrandWallParams& params,
 
     connect(m_width, &QDoubleSpinBox::valueChanged, this, [this](double) { rebuild(); });
     connect(m_height, &QDoubleSpinBox::valueChanged, this, [this](double) { rebuild(); });
-    connect(m_tile, &QDoubleSpinBox::valueChanged, this, [this](double) { rebuild(); });
+    connect(m_columns, &QSpinBox::valueChanged, this, [this](int) { rebuild(); });
+    connect(m_rows, &QSpinBox::valueChanged, this, [this](int) { rebuild(); });
     connect(m_gap, &QDoubleSpinBox::valueChanged, this, [this](double) { rebuild(); });
     connect(m_opacity, &QDoubleSpinBox::valueChanged, this, [this](double) { rebuild(); });
 
@@ -264,7 +272,8 @@ void BrandWallDialog::rebuild()
 {
     m_params.width = m_width->value();
     m_params.height = m_height->value();
-    m_params.tile = m_tile->value();
+    m_params.columns = m_columns->value();
+    m_params.rows = m_rows->value();
     m_params.gap = m_gap->value();
     m_params.logoOpacity = m_opacity->value() / 100.0;
     m_params.logos.clear();

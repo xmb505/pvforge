@@ -17,7 +17,8 @@ struct BrandWallParams
 {
     double width = 1600.0;
     double height = 900.0;
-    double tile = 240.0;
+    int columns = 6;               // tiles across, the density
+    int rows = 4;                  // tiles down
     double gap = 0.0;              // grout between the tiles
     double logoOpacity = 1.0;
     QStringList logos;             // one image path per tile slot

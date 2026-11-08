@@ -441,7 +441,8 @@ QWidget* WorkbenchPanel::buildSpecialPage()
 
     m_wallParams.width = m_project->width;
     m_wallParams.height = m_project->height;
-    m_wallParams.tile = 240;
+    m_wallParams.columns = 6;
+    m_wallParams.rows = 4;
     m_wallParams.logoOpacity = 0.9;
     m_wallParams.logos = QStringList{QString(), QString()};
     m_wallParams.tileColors = QStringList{
@@ -572,9 +573,10 @@ void WorkbenchPanel::updateWallSummary()
     if (!m_wallSummary)
         return;
     m_wallSummary->setText(
-        QStringLiteral("%1 个 Logo · 瓷砖 %2 px · %3×%4")
+        QStringLiteral("%1 个 Logo · %2×%3 瓷砖 · %4×%5 px")
             .arg(m_wallParams.logos.size())
-            .arg(int(m_wallParams.tile))
+            .arg(m_wallParams.columns)
+            .arg(m_wallParams.rows)
             .arg(int(m_wallParams.width))
             .arg(int(m_wallParams.height)));
 }

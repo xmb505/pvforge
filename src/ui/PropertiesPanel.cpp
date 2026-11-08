@@ -931,9 +931,10 @@ void PropertiesPanel::refresh()
     {
         const BrandWallParams params = BrandWallParams::fromData(e->data);
         m_wallInfo->setText(
-            QStringLiteral("%1 个 Logo · 瓷砖 %2 px · 间距 %3 px")
+            QStringLiteral("%1 个 Logo · %2×%3 瓷砖 · 间距 %4 px")
                 .arg(params.logos.size())
-                .arg(int(params.tile))
+                .arg(params.columns)
+                .arg(params.rows)
                 .arg(int(params.gap)));
     }
     if (m_linesStack)
