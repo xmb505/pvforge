@@ -98,7 +98,7 @@ void paint(QPainter& painter, const BrandWallParams& params,
     const double inset = params.gap / 2.0;
 
     painter.save();
-    painter.setClipRect(rect);
+    painter.setClipRect(rect, Qt::IntersectClip);
     const double baseOpacity = painter.opacity();
     for (int row = 0; row < rows; ++row)
     {

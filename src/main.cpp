@@ -4858,6 +4858,58 @@ int monitorFeatureTest(QApplication& app)
                         << preview.pixelColor(200, 150);
             ++failures;
         }
+
+        // A brand wall used to replace the clip with its own rect, so it
+        // painted over the monitor title bar and the letterbox area.
+        pvf::Project wallProject;
+        wallProject.width = 400;
+        wallProject.height = 300;
+        wallProject.background = QColor(20, 20, 20);
+        pvf::BrandWallParams wallParams;
+        wallParams.width = 900;
+        wallParams.height = 600;
+        wallParams.columns = 6;
+        wallParams.rows = 4;
+        QVariantMap wallData;
+        wallParams.writeTo(wallData);
+        pvf::Entity* wall = wallProject.addEntity(
+            pvf::EntityType::BrandWall, QStringLiteral("wall"), wallData);
+        wall->values.insert(QStringLiteral("x"), 0.0);
+        wall->values.insert(QStringLiteral("y"), -120.0);
+
+        QImage wallPreview(400, 300, QImage::Format_ARGB32_Premultiplied);
+        wallPreview.fill(Qt::black);
+        const QRect target(0, 40, 400, 260);
+        {
+            QPainter painter(&wallPreview);
+            QTransform view;
+            view.translate(200, 150);
+            pvf::CameraRenderer::renderWorkCamera(
+                painter, wallProject, 0, QRectF(target), view, QSize(400, 300),
+                QColor(0, 0, 0), false);
+        }
+        int leaked = 0;
+        int visible = 0;
+        for (int y = 0; y < wallPreview.height(); ++y)
+            for (int x = 0; x < wallPreview.width(); ++x)
+            {
+                const QRgb pixel = wallPreview.pixel(x, y);
+                if (!target.contains(x, y))
+                {
+                    if (pixel != qRgb(0, 0, 0))
+                        ++leaked;
+                }
+                else if (pixel != qRgb(0, 0, 0))
+                {
+                    ++visible;
+                }
+            }
+        if (leaked != 0 || visible == 0)
+        {
+            qCritical() << "monitor-feature-test: brand wall clip"
+                        << "leaked" << leaked << "visible" << visible;
+            ++failures;
+        }
     }
 
     if (!monitor->loadTraceVideo(tracePath))
