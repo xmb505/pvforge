@@ -240,7 +240,6 @@ private:
     TimelinePanel* m_timeline = nullptr;
     CurveEditor* m_curve = nullptr;
     WaveformView* m_wave = nullptr;
-    QTabWidget* m_timelineTabs = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;

@@ -136,7 +136,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     m_easeButton->setObjectName(QStringLiteral("keyframeEasingButton"));
     m_easeButton->setEnabled(false);
     m_easeButton->setToolTip(
-        QStringLiteral("修改当前帧关键帧的曲线；右键时间轴关键帧也可以设置"));
+        QStringLiteral("修改当前帧关键帧的进入段曲线"));
     keyLayout->addWidget(m_easeButton);
 
     m_keySection = new CollapsibleSection(QStringLiteral("关键帧"), keyContent, this);

@@ -1070,6 +1070,52 @@ void TimelinePanel::autoScrollTick()
 
 // ---------------------------------------------------------------- paint
 
+void TimelinePanel::drawAudioClip(QPainter& p, const Entity& entity,
+                                  const QRect& clip) const
+{
+    const int left = std::max(clip.left() + 2, 0);
+    const int right = std::min(clip.right() - 2, width() - kScrollBarSize - 1);
+    if (right <= left)
+        return;
+    const int center = clip.center().y();
+    if (!entity.audio || entity.audio->peaks.isEmpty())
+    {
+        p.setPen(QPen(QColor(18, 60, 40, 120), 1.0, Qt::DashLine));
+        p.drawLine(left, center, right, center);
+        return;
+    }
+
+    const int fps = std::max(1, m_project ? m_project->fps : 30);
+    const double trimStart =
+        entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+    const double x0 = xFromFrame(clipStartOf(entity));
+    const QVector<float>& peaks = entity.audio->peaks;
+    const int half = std::max(2, clip.height() / 2 - 4);
+
+    p.save();
+    p.setClipRect(clip.adjusted(2, 2, -2, -2));
+    p.setPen(QPen(QColor(12, 54, 32, 190), 1.0));
+    for (int x = left; x <= right; ++x)
+    {
+        const double local0 = (x - x0) / m_pixelsPerFrame;
+        const double local1 = (x + 1 - x0) / m_pixelsPerFrame;
+        const double source0 = trimStart + local0 / fps;
+        const double source1 = trimStart + local1 / fps;
+        int i0 = int(std::floor(source0 * 1000.0));
+        int i1 = int(std::ceil(source1 * 1000.0));
+        if (i1 <= 0 || i0 >= peaks.size())
+            continue;
+        i0 = std::clamp(i0, 0, int(peaks.size()) - 1);
+        i1 = std::clamp(i1, i0 + 1, int(peaks.size()));
+        float peak = 0.0f;
+        for (int i = i0; i < i1; ++i)
+            peak = std::max(peak, peaks[i]);
+        const int amplitude = int(std::lround(peak * half));
+        p.drawLine(x, center - amplitude, x, center + amplitude);
+    }
+    p.restore();
+}
+
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
     if (!m_project)
@@ -1168,6 +1214,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.drawRect(clip.adjusted(1, 1, -1, -1));
         }
 
+        if (entity->isAudio())
+            drawAudioClip(p, *entity, clip);
+
         const QRect plus = plusButtonRect(clip);
         if (!plus.isEmpty())
         {
@@ -1186,14 +1235,24 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         {
             const QColor nameColor =
                 color.lightness() > 150 ? QColor(24, 26, 30) : QColor(255, 255, 255);
-            p.setPen(nameColor);
             const QFontMetrics metrics(p.font());
             const QString name = metrics.elidedText(
                 entity->name, Qt::ElideRight,
                 std::max(0, nameRight - clip.left() - 8));
-            p.drawText(QRect(clip.left() + 8, clip.top(), nameRight - clip.left() - 8,
-                             clip.height()),
-                       Qt::AlignVCenter | Qt::AlignLeft, name);
+            const QRect nameRect(clip.left() + 8, clip.top(),
+                                 nameRight - clip.left() - 8, clip.height());
+            if (entity->isAudio())
+            {
+                p.setPen(QColor(0, 0, 0, 160));
+                p.drawText(nameRect.translated(1, 1),
+                           Qt::AlignVCenter | Qt::AlignLeft, name);
+                p.setPen(QColor(255, 255, 255));
+            }
+            else
+            {
+                p.setPen(nameColor);
+            }
+            p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, name);
         }
 
         const int centerY = clip.center().y();

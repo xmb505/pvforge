@@ -8937,6 +8937,16 @@ int clipTimelineTest(QApplication& app)
     project->entity(textId)->data[QStringLiteral("clipStart")] = 30;
     project->entity(textId)->data[QStringLiteral("clipEnd")] = 150;
 
+    auto audio = std::make_shared<pvf::AudioClip>();
+    audio->duration = 4.0;
+    audio->peaks.resize(4000);
+    for (int i = 0; i < audio->peaks.size(); ++i)
+        audio->peaks[i] =
+            0.12f + 0.88f * float(std::abs(std::sin(i * 0.006)));
+    pvf::Entity* bgm =
+        project->addAudio(QStringLiteral("bgm.wav"), audio, QStringLiteral("BGM"));
+    project->setEntityParent(bgm->id, groupId);
+
     auto* timeline = window.findChild<pvf::TimelinePanel*>();
     if (!timeline)
     {
@@ -9005,11 +9015,28 @@ int clipTimelineTest(QApplication& app)
             const int expandedEnd = project->clipEndFrame(rectId);
             const bool keyStayedGone =
                 project->keyframe(rectId, QStringLiteral("x"), 110.0) == nullptr;
+            int undoEnd1 = -1;
+            int undoEnd2 = -1;
+            bool keyRestored = false;
+            for (QAction* action : window.findChildren<QAction*>())
+            {
+                if (!action->text().contains(QStringLiteral("撤销")))
+                    continue;
+                action->trigger();
+                undoEnd1 = project->clipEndFrame(rectId);
+                action->trigger();
+                undoEnd2 = project->clipEndFrame(rectId);
+                keyRestored =
+                    project->keyframe(rectId, QStringLiteral("x"), 110.0) != nullptr;
+                break;
+            }
             if (clippedEnd >= 110 || !keyGone || expandedEnd <= clippedEnd
-                || !keyStayedGone)
+                || !keyStayedGone || undoEnd1 != clippedEnd
+                || undoEnd2 != before.width() / 8 || !keyRestored)
             {
                 qCritical() << "clip-timeline-test: trim" << before << clippedEnd
-                            << expandedEnd << keyGone << keyStayedGone;
+                            << expandedEnd << keyGone << keyStayedGone << "undo"
+                            << undoEnd1 << undoEnd2 << keyRestored;
                 ++failures;
             }
             window.grab().toImage().save(

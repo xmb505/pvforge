@@ -342,6 +342,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_timeline = new TimelinePanel(m_project, this);
     m_curve = new CurveEditor(m_project, m_history, this);
     m_wave = new WaveformView(m_project, this);
+    // No curve/waveform tabs in the clip timeline. Keep the objects for their
+    // existing signal wiring, but never let them float over the viewport.
+    m_curve->hide();
+    m_wave->hide();
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
@@ -442,13 +446,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
-    m_timelineTabs = new QTabWidget(this);
-    m_timelineTabs->setObjectName(QStringLiteral("timelineTabs"));
-    m_timelineTabs->setDocumentMode(true);
-    m_timelineTabs->addTab(m_timeline, QStringLiteral("时间轴"));
-    m_timelineTabs->addTab(m_curve, QStringLiteral("图表"));
-    m_timelineTabs->addTab(m_wave, QStringLiteral("波形"));
-    mainSplit->addWidget(m_timelineTabs);
+    // The clip timeline is the only timeline surface. The curve editor and
+    // waveform view stay constructed for their existing signal wiring, but
+    // they are no longer tabs in the main layout.
+    mainSplit->addWidget(m_timeline);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);

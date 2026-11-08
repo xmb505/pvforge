@@ -227,6 +227,8 @@ private:
     void moveKeys(QVector<Entity>& entities, const QVector<KeyframeSelection>& keys,
                   int delta);
     QRect keyRect(const Entity& entity, int frame) const;
+    void drawAudioClip(QPainter& painter, const Entity& entity,
+                       const QRect& clip) const;
 
     // Interaction.
     EntityId hitClipRow(int row, int x) const;
