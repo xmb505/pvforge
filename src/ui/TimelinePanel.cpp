@@ -91,11 +91,13 @@ QColor clipColor(EntityType type)
     return QColor(150, 150, 158);
 }
 
-QRect plusButtonRect(const QRect& clip)
+QRect plusButtonRect(const QRect& clip, int visibleRight)
 {
-    if (clip.width() < 56)
+    const int left = std::max(0, clip.left());
+    const int right = std::min(clip.right(), visibleRight);
+    if (right - left < 56)
         return QRect();
-    return QRect(clip.right() - 24, clip.top() + (clip.height() - 16) / 2, 16, 16);
+    return QRect(right - 24, clip.top() + (clip.height() - 16) / 2, 16, 16);
 }
 
 } // namespace
@@ -114,11 +116,15 @@ public:
         setObjectName(QStringLiteral("clipPopup"));
         setAttribute(Qt::WA_StyledBackground, true);
         setStyleSheet(QStringLiteral(
-            "QWidget#clipPopup { background: #1e1f24; border: 1px solid #4a4d55; }"
-            "QWidget#clipPopupHeader { background: #2a2c33; border: none; }"
+            "QWidget#clipPopup { background: #1e1f24; border: 1px solid #4a4d55;"
+            " border-radius: 6px; }"
+            "QWidget#clipPopupHeader { background: #2a2c33; border: none;"
+            " border-bottom: 1px solid #3a3d45; border-top-left-radius: 5px;"
+            " border-top-right-radius: 5px; }"
             "QWidget#clipPopup QLabel { background: transparent; color: #d8dce4; }"
             "QWidget#clipPopup QToolButton { background: #32353d; color: #e8eaf0;"
-            " border: 1px solid #4a4d55; padding: 1px 7px; }"));
+            " border: 1px solid #4a4d55; border-radius: 3px; padding: 1px 7px; }"
+            "QWidget#clipPopup QToolButton:hover { background: #3c404a; }"));
         setMinimumWidth(160);
 
         auto* layout = new QVBoxLayout(this);
@@ -127,6 +133,7 @@ public:
 
         auto* header = new QWidget(this);
         header->setObjectName(QStringLiteral("clipPopupHeader"));
+        header->setMinimumHeight(28);
         auto* headerLayout = new QHBoxLayout(header);
         headerLayout->setContentsMargins(8, 3, 4, 3);
         headerLayout->setSpacing(4);
@@ -137,7 +144,6 @@ public:
         headerLayout->addWidget(m_title, 1);
         m_timeMode = new QToolButton(header);
         m_timeMode->setCheckable(true);
-        m_timeMode->setChecked(true);
         m_timeMode->setText(QStringLiteral("相对"));
         m_timeMode->setToolTip(QStringLiteral("切换相对 / 绝对时间"));
         headerLayout->addWidget(m_timeMode);
@@ -1200,29 +1206,39 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             continue;
         QColor color = clipColor(entity->type);
         const bool selected = entity->id == m_selected;
-        if (m_project->isEffectivelyHidden(entity->id))
-            color.setAlpha(80);
-        else
-            color.setAlpha(selected ? 230 : 190);
-        p.setPen(Qt::NoPen);
-        p.setBrush(color);
-        p.drawRect(clip);
+        const bool hidden = m_project->isEffectivelyHidden(entity->id);
+        const int alpha = hidden ? 80 : (selected ? 245 : 215);
+        QColor topColor = color.lighter(112);
+        QColor bottomColor = color.darker(108);
+        topColor.setAlpha(alpha);
+        bottomColor.setAlpha(alpha);
+        QLinearGradient fill(clip.topLeft(), clip.bottomLeft());
+        fill.setColorAt(0.0, topColor);
+        fill.setColorAt(1.0, bottomColor);
+        p.setPen(QPen(color.darker(160), 1));
+        p.setBrush(fill);
+        p.drawRoundedRect(QRectF(clip).adjusted(0.5, 0.5, -0.5, -0.5), 5.0, 5.0);
+        p.setPen(QPen(QColor(255, 255, 255, 38), 1));
+        p.drawLine(clip.left() + 6, clip.top() + 1, clip.right() - 6,
+                   clip.top() + 1);
         if (selected)
         {
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(accent, 2));
-            p.drawRect(clip.adjusted(1, 1, -1, -1));
+            p.drawRoundedRect(QRectF(clip).adjusted(1.5, 1.5, -1.5, -1.5), 4.0,
+                              4.0);
         }
 
         if (entity->isAudio())
             drawAudioClip(p, *entity, clip);
 
-        const QRect plus = plusButtonRect(clip);
+        const QRect plus = plusButtonRect(clip, right);
         if (!plus.isEmpty())
         {
-            p.setPen(QPen(QColor(255, 255, 255, 110), 1));
-            p.setBrush(QColor(0, 0, 0, 55));
-            p.drawRect(plus);
+            p.setPen(QPen(QColor(255, 255, 255, 125), 1));
+            p.setBrush(QColor(0, 0, 0, 85));
+            p.drawRoundedRect(QRectF(plus).adjusted(0.5, 0.5, -0.5, -0.5), 3.0,
+                              3.0);
             p.setPen(QPen(Qt::white, 1.5));
             p.drawLine(plus.center().x() - 4, plus.center().y(),
                        plus.center().x() + 4, plus.center().y());
@@ -1273,9 +1289,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                     << QPointF(x + radius, centerY)
                     << QPointF(x, centerY + radius)
                     << QPointF(x - radius, centerY);
-            p.setPen(QPen(QColor(0, 0, 0, 130), 1));
-            p.setBrush(keySelected ? QColor(255, 255, 255)
-                                   : QColor(24, 26, 30, 220));
+            p.setPen(QPen(QColor(14, 16, 20, 210), 1.2));
+            p.setBrush(keySelected ? QColor(255, 214, 102)
+                                   : QColor(248, 250, 255));
             p.drawPolygon(diamond);
         }
     }
@@ -1354,7 +1370,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     const QRect clip = clipRect(*entity);
-    const QRect plus = plusButtonRect(clip);
+    const QRect plus = plusButtonRect(clip, width() - kScrollBarSize);
     if (!plus.isEmpty() && plus.contains(pos.toPoint()))
     {
         openPopup(id);

@@ -401,15 +401,11 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         new CollapsibleSection(Lang::t(QStringLiteral("section.projectSettings"), QStringLiteral("项目设置")), m_projectProps, projectContent);
     auto* environmentSection =
         new CollapsibleSection(Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")), m_environment, projectContent);
-    auto* librarySection =
-        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")), m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
-    librarySection->setExpanded(true);
 
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
-    projectLayout->addWidget(librarySection);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -446,14 +442,37 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
+
+    // Asset box on the left of the clip timeline, like the prototype.
+    auto* bottom = new QSplitter(Qt::Horizontal, this);
+    auto* libraryHost = new QWidget(bottom);
+    libraryHost->setObjectName(QStringLiteral("libraryHost"));
+    auto* libraryLayout = new QVBoxLayout(libraryHost);
+    libraryLayout->setContentsMargins(0, 0, 0, 0);
+    libraryLayout->setSpacing(0);
+    auto* librarySection =
+        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"),
+                                       QStringLiteral("素材库")),
+                               m_library, libraryHost);
+    librarySection->setExpanded(true);
+    libraryLayout->addWidget(librarySection);
+    libraryHost->setMinimumWidth(240);
+    libraryHost->setMaximumWidth(420);
+    bottom->addWidget(libraryHost);
+    bottom->addWidget(m_timeline);
+    bottom->setChildrenCollapsible(false);
+    bottom->setStretchFactor(0, 0);
+    bottom->setStretchFactor(1, 1);
+    bottom->setSizes({300, 1100});
+    mainSplit->addWidget(bottom);
+
     // The clip timeline is the only timeline surface. The curve editor and
     // waveform view stay constructed for their existing signal wiring, but
     // they are no longer tabs in the main layout.
-    mainSplit->addWidget(m_timeline);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
-    mainSplit->setSizes({640, 220});
+    mainSplit->setSizes({520, 380});
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);

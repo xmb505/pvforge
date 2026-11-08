@@ -883,6 +883,10 @@ Entity Project::makeBase(EntityType type, const QString& name) const
     e.values["scaleX"] = 1.0;
     e.values["scaleY"] = 1.0;
     e.values["opacity"] = 1.0;
+    // New clips default to one second, like the clip timeline's + button.
+    // Existing projects without these keys stay open-ended.
+    e.data[QStringLiteral("clipStart")] = 0;
+    e.data[QStringLiteral("clipEnd")] = std::max(1, fps);
     return e;
 }
 
@@ -1090,6 +1094,8 @@ Scene* Project::addScene(const QString& name, int startFrame, int endFrame,
     scene.folderId = folder->id;
     scene.color = color.isValid() ? color : QColor(90, 170, 255);
     scene.note = note;
+    folder->data[QStringLiteral("clipStart")] = startFrame;
+    folder->data[QStringLiteral("clipEnd")] = std::max(startFrame + 1, endFrame + 1);
 
     int index = 0;
     while (index < int(m_scenes.size())
@@ -1118,6 +1124,12 @@ bool Project::updateScene(const QString& id, const QString& name, int startFrame
             scene.name = name.trimmed();
         scene.startFrame = startFrame;
         scene.endFrame = endFrame;
+        if (Entity* folder = entity(scene.folderId))
+        {
+            folder->data[QStringLiteral("clipStart")] = startFrame;
+            folder->data[QStringLiteral("clipEnd")] =
+                std::max(startFrame + 1, endFrame + 1);
+        }
         if (color.isValid())
             scene.color = color;
         scene.note = note;
