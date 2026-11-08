@@ -240,6 +240,8 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::duplicateEntity);
     connect(m_timeline, &TimelinePanel::pasteEntityRequested, this,
             &MainWindow::pasteEntity);
+    connect(m_timeline, &TimelinePanel::groupIntoFolderRequested, this,
+            &MainWindow::groupEntitiesIntoFolder);
     connect(m_props, &PropertiesPanel::replaceSourceRequested, this,
             &MainWindow::replaceSourceFromDialog);
     connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
@@ -1220,6 +1222,77 @@ void MainWindow::pasteEntityClip(EntityClipboard& clip)
     setSelectedEntity(idMap.value(clip.rootId));
     m_history->push(std::make_unique<AddEntitiesCommand>(added, indices), *m_project);
     statusBar()->showMessage(QStringLiteral("已粘贴实体"), 2000);
+}
+
+void MainWindow::groupEntitiesIntoFolder(const QVector<EntityId>& ids)
+{
+    if (ids.isEmpty())
+        return;
+
+    // A folder and its child cannot both move into the new folder; keep the
+    // outermost selection.
+    QVector<EntityId> roots;
+    for (EntityId id : ids)
+    {
+        if (!m_project->entity(id))
+            continue;
+        bool nested = false;
+        for (EntityId other : ids)
+        {
+            if (other == id || !m_project->entity(other))
+                continue;
+            if (m_project->isDescendantOf(id, other))
+            {
+                nested = true;
+                break;
+            }
+        }
+        if (!nested)
+            roots.append(id);
+    }
+    if (roots.isEmpty())
+        return;
+
+    EntityId parent = kInvalidEntity;
+    bool first = true;
+    for (EntityId id : roots)
+    {
+        const Entity* entity = m_project->entity(id);
+        if (!entity)
+            continue;
+        if (first)
+        {
+            parent = entity->parent;
+            first = false;
+        }
+        else if (entity->parent != parent)
+        {
+            parent = kInvalidEntity;
+            break;
+        }
+    }
+
+    QVector<EntityId> ordered;
+    for (int index : m_project->entityOrder())
+    {
+        const EntityId id = m_project->entities()[index].id;
+        if (roots.contains(id))
+            ordered.append(id);
+    }
+
+    const QVector<Entity> before = m_project->entities();
+    Entity* folder = m_project->addFolder(QString(), parent);
+    if (!folder)
+        return;
+    const EntityId folderId = folder->id;
+    for (EntityId id : ordered)
+        m_project->moveEntity(id, folderId, int(m_project->entities().size()));
+
+    setSelectedEntity(folderId);
+    m_history->push(std::make_unique<GroupEntitiesCommand>(
+                        before, m_project->entities()),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已组成文件夹"), 2000);
 }
 
 void MainWindow::onPropertyKeyframeToggled(EntityId id, const QString& prop,

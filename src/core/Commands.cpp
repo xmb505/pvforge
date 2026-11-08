@@ -251,6 +251,28 @@ QString SetEntityDataCommand::text() const
     return m_text;
 }
 
+GroupEntitiesCommand::GroupEntitiesCommand(QVector<Entity> before,
+                                           QVector<Entity> after)
+    : m_before(std::move(before))
+    , m_after(std::move(after))
+{
+}
+
+void GroupEntitiesCommand::undo(Project& project)
+{
+    project.setEntities(m_before);
+}
+
+void GroupEntitiesCommand::redo(Project& project)
+{
+    project.setEntities(m_after);
+}
+
+QString GroupEntitiesCommand::text() const
+{
+    return QStringLiteral("组成文件夹");
+}
+
 ReplaceEntitySourcesCommand::ReplaceEntitySourcesCommand(QVector<Entity> before,
                                                          QVector<Entity> after)
     : m_before(std::move(before))

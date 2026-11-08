@@ -947,6 +947,13 @@ QVector<EntityId> Project::replaceEntitySource(EntityId id,
     return updated;
 }
 
+void Project::setEntities(const QVector<Entity>& entities)
+{
+    m_entities = entities;
+    modified = true;
+    emit changed();
+}
+
 void Project::replaceEntity(const Entity& entity)
 {
     for (Entity& e : m_entities)

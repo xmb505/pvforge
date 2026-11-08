@@ -58,6 +58,7 @@ public:
     void copyEntityForTest(EntityId id) { copyEntityToClipboard(id); }
     void pasteEntityForTest() { pasteEntity(); }
     void duplicateEntityForTest(EntityId id) { duplicateEntity(id); }
+    void groupEntitiesForTest(const QVector<EntityId>& ids) { groupEntitiesIntoFolder(ids); }
     void autoSaveNowForTest();
     void reloadAutosaveSettingsForTest();
     bool autosaveActiveForTest() const;
@@ -99,6 +100,7 @@ private:
     void copySelectedEntity();
     void pasteEntity();
     void duplicateEntity(EntityId id);
+    void groupEntitiesIntoFolder(const QVector<EntityId>& ids);
     void onPropertyKeyframeToggled(EntityId id, const QString& prop, double frame,
                                    bool remove);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);

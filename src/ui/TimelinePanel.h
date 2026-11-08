@@ -76,6 +76,7 @@ signals:
     void copyEntityRequested(EntityId id);
     void duplicateEntityRequested(EntityId id);
     void pasteEntityRequested();
+    void groupIntoFolderRequested(const QVector<EntityId>& ids);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -140,6 +141,8 @@ private:
     int m_dropRow = -1;
     DropMode m_dropMode = DropMode::None;
     QSet<EntityId> m_collapsedFolders;
+    QSet<EntityId> m_entitySelection;
+    EntityId m_selectionAnchor = kInvalidEntity;
     int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
     QLineEdit* m_search = nullptr;

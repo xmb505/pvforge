@@ -68,6 +68,7 @@
 - **自动保存**：默认开启、每 5 分钟一次，设置 → 常规可关闭或改间隔；QSaveFile 原子写入
 - **更换素材**：图片/视频/音频实体可右键或属性面板换源文件；位置、关键帧、配对音频保留，视频连配对音频一起换，整次替换一条撤销
 - **复制粘贴实体**：Ctrl+C / Ctrl+V 复制整棵子树（含关键帧与配对音频），Ctrl+D 原地复制；粘贴为同级实体并自动选中，一条撤销
+- **实体多选**：实体栏 Ctrl+点击切换、Shift+点击范围选择；右键「组成文件夹」把选中实体收进新文件夹（自动去掉已被其他选中项包含的子级），整次操作一条撤销
 - **播放头记忆**：每个工程文件在全局设置里记住上次的播放条帧（按路径哈希），关闭、手动保存、自动保存时写入，重新打开工程时恢复
 - **数据与撤销**：`SetEntityDataMapCommand` 多字段一条撤销；尖角拖动命令自动合并；模板实例化整表复制 `data`；颜色键按名称后缀识别
 - **素材库**：长文件名/路径中间省略，右侧栏不再被撑宽
@@ -290,9 +291,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / clipboard / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / clipboard / group / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 44 个模式，全部通过。
+共 45 个模式，全部通过。
 
 ## 已知限制
 

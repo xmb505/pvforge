@@ -166,6 +166,22 @@ private:
     QString m_text;
 };
 
+// Grouping entities under a new folder as one undo step; the whole
+// entity list is snapshotted so the tree and layer order come back exactly.
+class GroupEntitiesCommand : public UndoCommand
+{
+public:
+    GroupEntitiesCommand(QVector<Entity> before, QVector<Entity> after);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    QVector<Entity> m_before;
+    QVector<Entity> m_after;
+};
+
 // Swapping the media behind entities (video plus its paired audio) as one
 // undo step.
 class ReplaceEntitySourcesCommand : public UndoCommand

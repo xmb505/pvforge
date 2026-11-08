@@ -234,9 +234,20 @@ void TimelinePanel::setCurrentFrame(int frame)
 
 void TimelinePanel::setSelectedEntity(EntityId id)
 {
-    if (m_selected == id)
+    // A click already updated the multi selection before emitting; do not
+    // collapse it when the main window echoes the same id back.
+    if (m_selected == id && (id == kInvalidEntity || m_entitySelection.contains(id)))
+    {
+        update();
         return;
+    }
     m_selected = id;
+    m_entitySelection.clear();
+    if (id != kInvalidEntity)
+    {
+        m_entitySelection.insert(id);
+        m_selectionAnchor = id;
+    }
     update();
 }
 
@@ -962,7 +973,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             break;
 
         const QRect rowRect(0, top, width(), height);
-        if (e.id == m_selected && !e.isAudio())
+        if ((m_entitySelection.contains(e.id)
+             || (m_entitySelection.isEmpty() && e.id == m_selected))
+            && !e.isAudio())
             p.fillRect(rowRect, QColor(accentColor.red(), accentColor.green(),
                                         accentColor.blue(), 70));
         else if (row % 2)
@@ -1266,7 +1279,56 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         m_selectedKeyframes.clear();
         if (entity && !m_project->isEffectivelyLocked(id))
         {
-            emit entitySelected(id);
+            const bool ctrl = event->modifiers()
+                              & (Qt::ControlModifier | Qt::MetaModifier);
+            const bool shift = event->modifiers() & Qt::ShiftModifier;
+            if (shift && m_selectionAnchor != kInvalidEntity)
+            {
+                const QVector<int> visible = visibleEntities();
+                int anchorRow = -1;
+                for (int i = 0; i < int(visible.size()); ++i)
+                    if (m_project->entities()[visible[i]].id == m_selectionAnchor)
+                        anchorRow = i;
+                if (anchorRow >= 0)
+                {
+                    m_entitySelection.clear();
+                    const int low = std::min(anchorRow, row);
+                    const int high = std::max(anchorRow, row);
+                    for (int i = low; i <= high; ++i)
+                        m_entitySelection.insert(m_project->entities()[visible[i]].id);
+                }
+                m_selected = id;
+                emit entitySelected(id);
+            }
+            else if (ctrl)
+            {
+                if (m_entitySelection.contains(id))
+                {
+                    m_entitySelection.remove(id);
+                    if (m_selected == id)
+                    {
+                        m_selected = m_entitySelection.isEmpty()
+                                         ? kInvalidEntity
+                                         : *m_entitySelection.begin();
+                        emit entitySelected(m_selected);
+                    }
+                }
+                else
+                {
+                    m_entitySelection.insert(id);
+                    m_selected = id;
+                    m_selectionAnchor = id;
+                    emit entitySelected(id);
+                }
+            }
+            else
+            {
+                m_entitySelection.clear();
+                m_entitySelection.insert(id);
+                m_selected = id;
+                m_selectionAnchor = id;
+                emit entitySelected(id);
+            }
             m_rowDragId = id;
             m_pressPos = event->position();
             m_dropRow = -1;
@@ -1529,7 +1591,17 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     }
 
     const int row = rowAt(pos.y());
-    const Entity* entity = m_project->entity(entityAtRow(row));
+    const EntityId clickedId = entityAtRow(row);
+    const Entity* entity = m_project->entity(clickedId);
+    if (entity && !m_entitySelection.contains(clickedId))
+    {
+        m_entitySelection.clear();
+        m_entitySelection.insert(clickedId);
+        m_selected = clickedId;
+        m_selectionAnchor = clickedId;
+        emit entitySelected(clickedId);
+        update();
+    }
     QMenu menu(this);
     QAction* createInside = nullptr;
     QAction* createSibling = nullptr;
@@ -1538,6 +1610,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QAction* copyEntity = nullptr;
     QAction* duplicateEntity = nullptr;
     QAction* pasteEntity = nullptr;
+    QAction* groupFolder = nullptr;
     QAction* toWorld = nullptr;
 
     if (entity)
@@ -1565,6 +1638,8 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
             copyEntity = menu.addAction(QStringLiteral("复制实体"));
             duplicateEntity = menu.addAction(QStringLiteral("原地复制"));
         }
+        if (!m_entitySelection.isEmpty())
+            groupFolder = menu.addAction(QStringLiteral("组成文件夹"));
         if (entity->parent != kInvalidEntity && !locked)
             toWorld = menu.addAction(QStringLiteral("移到工作台"));
     }
@@ -1624,6 +1699,18 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     else if (chosen == pasteEntity)
     {
         emit pasteEntityRequested();
+    }
+    else if (chosen == groupFolder)
+    {
+        QVector<EntityId> ids;
+        for (int index : m_project->entityOrder())
+        {
+            const EntityId id = m_project->entities()[index].id;
+            if (m_entitySelection.contains(id))
+                ids.append(id);
+        }
+        if (!ids.isEmpty())
+            emit groupIntoFolderRequested(ids);
     }
     else if (chosen == replaceSource && entity)
     {

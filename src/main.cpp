@@ -327,6 +327,84 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int groupTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    QVector<pvf::EntityId> ids;
+    for (int i = 0; i < 3; ++i)
+    {
+        pvf::Entity* entity =
+            project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+        ids.append(entity->id);
+    }
+
+    pvf::MainWindow window(project);
+    window.resize(1000, 700);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, ids] {
+        int failures = 0;
+        window.groupEntitiesForTest(ids);
+        QApplication::processEvents();
+
+        pvf::EntityId folderId = pvf::kInvalidEntity;
+        int folders = 0;
+        int children = 0;
+        for (const pvf::Entity& entity : project->entities())
+        {
+            if (entity.isFolder())
+            {
+                ++folders;
+                folderId = entity.id;
+            }
+        }
+        for (const pvf::Entity& entity : project->entities())
+            if (entity.parent == folderId)
+                ++children;
+
+        if (project->entities().size() != 4 || folders != 1 || children != 3
+            || window.selectedEntityForTest() != folderId)
+        {
+            qCritical() << "group-test: grouping failed" << project->entities().size()
+                        << folders << children << window.selectedEntityForTest();
+            ++failures;
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            int foldersAfterUndo = 0;
+            for (const pvf::Entity& entity : project->entities())
+                if (entity.isFolder())
+                    ++foldersAfterUndo;
+            if (project->entities().size() != 3 || foldersAfterUndo != 0)
+            {
+                qCritical() << "group-test: undo failed"
+                            << project->entities().size() << foldersAfterUndo;
+                ++failures;
+            }
+            if (auto* redo =
+                    window.findChild<QAction*>(QStringLiteral("redoAction")))
+            {
+                redo->trigger();
+                QApplication::processEvents();
+                if (project->entities().size() != 4)
+                {
+                    qCritical() << "group-test: redo failed"
+                                << project->entities().size();
+                    ++failures;
+                }
+            }
+        }
+
+        qInfo() << "group-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int clipboardTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -6496,6 +6574,8 @@ int main(int argc, char* argv[])
         return replaceSourceTest();
     if (app.arguments().contains(QStringLiteral("--clipboard-test")))
         return clipboardTest(app);
+    if (app.arguments().contains(QStringLiteral("--group-test")))
+        return groupTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

@@ -208,6 +208,7 @@ public:
     QVector<EntityId> replaceEntitySource(EntityId id, const MediaImportResult& result,
                                           QString* error);
     void replaceEntity(const Entity& entity);
+    void setEntities(const QVector<Entity>& entities);
     void setEntityDataMap(EntityId id, const QVariantMap& data);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
