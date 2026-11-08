@@ -694,6 +694,17 @@ int specialTest(QApplication& app)
                 qCritical() << "special-test: brand wall drew nothing";
                 ++failures;
             }
+            // Checkerboard: neighbouring tiles use different slots, also
+            // across rows (the old row * columns indexing broke this).
+            const QColor tile00 = shot.pixelColor(88, 102);
+            const QColor tile01 = shot.pixelColor(136, 102);
+            const QColor tile10 = shot.pixelColor(88, 150);
+            if (tile00 == tile01 || tile00 == tile10)
+            {
+                qCritical() << "special-test: brand wall is not a checkerboard"
+                            << tile00 << tile01 << tile10;
+                ++failures;
+            }
         }
     }
 

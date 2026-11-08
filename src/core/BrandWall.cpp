@@ -85,7 +85,8 @@ void paint(QPainter& painter, const BrandWallParams& params,
                             rect.top() + row * params.tile, params.tile,
                             params.tile);
             tileRect = tileRect.adjusted(inset, inset, -inset, -inset);
-            const int slot = (row * columns + column) % slotCount;
+            // Checkerboard: every row is offset by one slot.
+            const int slot = (row + column) % slotCount;
             painter.fillRect(tileRect, slotColor(params, slot));
 
             const QImage& logo = slot < logos.size() ? logos[slot] : QImage();
