@@ -9,6 +9,7 @@
 #include "media/VideoPlayer.h"
 #include "media/VideoProxy.h"
 #include "media/DecoderInfo.h"
+#include "render/CameraRenderer.h"
 #include "render/SceneRenderer.h"
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
@@ -4826,6 +4827,37 @@ int monitorFeatureTest(QApplication& app)
     {
         qCritical() << "monitor-feature-test: monitor buttons missing";
         ++failures;
+    }
+
+    // Work camera mirrors the viewport but must clip outside-canvas objects.
+    {
+        pvf::Project clipProject;
+        clipProject.width = 800;
+        clipProject.height = 600;
+        clipProject.background = QColor(20, 40, 60);
+        pvf::Entity* outside =
+            clipProject.addVector(0, 200, 200, Qt::red, Qt::red, 0);
+        clipProject.setValue(outside->id, QStringLiteral("x"), 0, 500.0, false);
+
+        QImage preview(400, 300, QImage::Format_ARGB32_Premultiplied);
+        preview.fill(Qt::black);
+        {
+            QPainter painter(&preview);
+            QTransform view;
+            view.translate(200, 150);
+            view.scale(0.25, 0.25);
+            pvf::CameraRenderer::renderWorkCamera(
+                painter, clipProject, 0, QRectF(0, 0, 400, 300), view,
+                QSize(400, 300), QColor(90, 90, 90), false);
+        }
+        if (preview.pixelColor(325, 150) != QColor(90, 90, 90)
+            || preview.pixelColor(200, 150) != QColor(20, 40, 60))
+        {
+            qCritical() << "monitor-feature-test: work camera leaked canvas"
+                        << preview.pixelColor(325, 150)
+                        << preview.pixelColor(200, 150);
+            ++failures;
+        }
     }
 
     if (!monitor->loadTraceVideo(tracePath))

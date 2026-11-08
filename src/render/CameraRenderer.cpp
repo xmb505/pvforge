@@ -83,7 +83,14 @@ void renderWorkCamera(QPainter& painter, const Project& project, int frame,
     viewportToTarget.scale(sx, sy);
     const QTransform worldToTarget = viewportWorldToScreen * viewportToTarget;
 
-    painter.fillRect(worldToTarget.mapRect(canvasRect(project)), project.background);
+    // The work camera mirrors the viewport, but the monitor is a preview of
+    // the project: objects outside the canvas must not leak into it.
+    QPolygonF canvasPolygon = worldToTarget.map(QPolygonF(canvasRect(project)));
+    QPainterPath canvasPath;
+    canvasPath.addPolygon(canvasPolygon);
+    canvasPath.closeSubpath();
+    painter.fillPath(canvasPath, project.background);
+    painter.setClipPath(canvasPath, Qt::IntersectClip);
     SceneRenderer::drawEntities(painter, project, frame, worldToTarget, useThumbnails);
     painter.restore();
 }
