@@ -7,6 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia Network)
+# The HTML/CDP renderer only needs QtCore. Prefer the Qt WebSockets module when
+# its development package is present; otherwise WsClient implements the small
+# RFC 6455 subset CDP needs, so the build works without an extra dependency.
+find_package(Qt6 6.5 QUIET COMPONENTS WebSockets)
+if(TARGET Qt6::WebSockets)
+    message(STATUS "Qt6 WebSockets found; CDP still uses the built-in loopback client until the pipe backend lands")
+else()
+    message(STATUS "Qt6 WebSockets development files not found; using the built-in loopback RFC 6455 client (P0: pipe backend pending)")
+endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
     libavformat libavcodec libavutil libswscale libswresample)
@@ -40,6 +49,13 @@ add_executable(pvforge
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
     src/render/VideoExporter.cpp
+    src/html/HtmlAsset.cpp
+    src/html/WsClient.cpp
+    src/html/CdpTransport.cpp
+    src/html/CdpClient.cpp
+    src/html/HtmlBrowser.cpp
+    src/html/HtmlRenderer.cpp
+    src/html/HtmlCaptureTest.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp

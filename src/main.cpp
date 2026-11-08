@@ -21,6 +21,7 @@
 #include "app/SettingsDialog.h"
 #include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
+#include "html/HtmlCaptureTest.h"
 #include "core/Project.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
@@ -10832,6 +10833,8 @@ int main(int argc, char* argv[])
         return workbenchTest(app);
     if (app.arguments().contains(QStringLiteral("--layout-test")))
         return layoutTest(app);
+    if (app.arguments().contains(QStringLiteral("--html-capture-test")))
+        return pvf::html::htmlCaptureTest();
 
     pvf::WelcomeWindow welcome;
     welcome.show();
