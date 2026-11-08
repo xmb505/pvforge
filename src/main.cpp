@@ -50,6 +50,7 @@
 #include <QDialog>
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QCheckBox>
 #include <QCryptographicHash>
@@ -89,6 +90,7 @@
 #include <QWidgetAction>
 #include <QWheelEvent>
 #include <cmath>
+#include <functional>
 
 namespace {
 
@@ -9782,11 +9784,8 @@ struct McpHttpResponse
     bool timedOut = false;
 };
 
-McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
-                            const QByteArray& token,
-                            const QByteArray& contentType =
-                                QByteArrayLiteral("application/json"),
-                            qint64 declaredLength = -1)
+McpHttpResponse mcpExchange(quint16 port, const QByteArray& request,
+                            int timeoutMs = 5000)
 {
     McpHttpResponse response;
     QTcpSocket socket;
@@ -9800,18 +9799,6 @@ McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
         loop.quit();
     });
     QObject::connect(&socket, &QTcpSocket::connected, &loop, [&] {
-        QByteArray request;
-        request += "POST /mcp HTTP/1.1\r\n";
-        request += "Host: 127.0.0.1\r\n";
-        request += "Authorization: Bearer " + token + "\r\n";
-        request += "Content-Type: " + contentType + "\r\n";
-        request += "Accept: application/json\r\n";
-        request += "Content-Length: "
-                   + QByteArray::number(declaredLength >= 0 ? declaredLength
-                                                            : qint64(payload.size()))
-                   + "\r\n";
-        request += "Connection: close\r\n\r\n";
-        request += payload;
         socket.write(request);
         socket.flush();
     });
@@ -9848,7 +9835,7 @@ McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
     QObject::connect(&socket, &QTcpSocket::errorOccurred, &loop,
                      [&loop](QAbstractSocket::SocketError) { loop.quit(); });
 
-    timeout.start(5000);
+    timeout.start(timeoutMs);
     socket.connectToHost(QHostAddress::LocalHost, port);
     loop.exec();
 
@@ -9857,6 +9844,68 @@ McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
         response.body = received.mid(headerEnd + 4);
     socket.abort();
     return response;
+}
+
+QByteArray mcpPostRequest(quint16 port, const QByteArray& payload,
+                          const QByteArray& token, const QByteArray& contentType,
+                          qint64 declaredLength, const QByteArray& extraHeaders,
+                          const QByteArray& hostHeader)
+{
+    QByteArray request;
+    request += "POST /mcp HTTP/1.1\r\n";
+    request += "Host: "
+               + (hostHeader.isEmpty()
+                      ? QByteArrayLiteral("127.0.0.1:")
+                            + QByteArray::number(port)
+                      : hostHeader)
+               + "\r\n";
+    request += "Authorization: Bearer " + token + "\r\n";
+    request += "Content-Type: " + contentType + "\r\n";
+    request += "Accept: application/json\r\n";
+    request += "Content-Length: "
+               + QByteArray::number(declaredLength >= 0 ? declaredLength
+                                                        : qint64(payload.size()))
+               + "\r\n";
+    request += extraHeaders;
+    request += "Connection: close\r\n\r\n";
+    request += payload;
+    return request;
+}
+
+McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
+                            const QByteArray& token,
+                            const QByteArray& contentType =
+                                QByteArrayLiteral("application/json"),
+                            qint64 declaredLength = -1,
+                            const QByteArray& extraHeaders = QByteArray(),
+                            const QByteArray& hostHeader = QByteArray())
+{
+    return mcpExchange(port,
+                       mcpPostRequest(port, payload, token, contentType,
+                                      declaredLength, extraHeaders, hostHeader));
+}
+
+bool mcpWaitUntil(const std::function<bool()>& predicate, int timeoutMs)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!predicate() && elapsed.elapsed() < timeoutMs)
+    {
+        QEventLoop loop;
+        QTimer::singleShot(5, &loop, &QEventLoop::quit);
+        loop.exec();
+    }
+    return predicate();
+}
+
+int mcpStatusFromRaw(const QByteArray& received)
+{
+    const int headerEnd = received.indexOf("\r\n\r\n");
+    const QByteArray head =
+        headerEnd >= 0 ? received.left(headerEnd) : received;
+    const QList<QByteArray> statusLine =
+        head.split('\n').first().trimmed().split(' ');
+    return statusLine.size() >= 2 ? statusLine.at(1).toInt() : -1;
 }
 
 QJsonObject mcpRpc(quint16 port, const QByteArray& token, const QJsonObject& request,
@@ -10309,6 +10358,324 @@ int mcpReadonlyTest()
     return failures == 0 ? 0 : 1;
 }
 
+int mcpHttpTest()
+{
+    int failures = 0;
+    const auto fail = [&failures](const QString& message) {
+        qCritical() << "mcp-http-test:" << message;
+        ++failures;
+    };
+    const auto failIf = [&fail](bool condition, const QString& message) {
+        if (condition)
+            fail(message);
+    };
+
+    auto* project = new pvf::Project;
+    project->name = QStringLiteral("MCP HTTP 测试工程");
+    project->width = 640;
+    project->height = 360;
+    project->fps = 24;
+
+    pvf::McpServer server(project);
+    server.setToken(QByteArrayLiteral("http-test-token"));
+
+    const QByteArray pingBody =
+        QByteArrayLiteral("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+    QString error;
+    const quint16 port = server.start(0, &error);
+    if (port == 0)
+    {
+        qCritical() << "mcp-http-test: start failed" << error;
+        delete project;
+        return 1;
+    }
+
+    const QByteArray token = server.token();
+    const QByteArray host =
+        QByteArrayLiteral("127.0.0.1:") + QByteArray::number(port);
+    const QByteArray localhostHost =
+        QByteArrayLiteral("localhost:") + QByteArray::number(port);
+    const QByteArray allowedOrigin = QByteArrayLiteral("http://") + host;
+
+    failIf(server.endpointUrl().contains(QString::fromLatin1(token)),
+           QStringLiteral("endpointUrl leaks the token"));
+
+    // Correct Host + Bearer token works and never grants CORS.
+    const McpHttpResponse normal = mcpHttpPost(port, pingBody, token);
+    failIf(normal.status != 200,
+           QStringLiteral("normal request HTTP %1 != 200").arg(normal.status));
+    failIf(normal.headers.toLower().contains(
+               QByteArrayLiteral("access-control-allow-origin")),
+           QStringLiteral("normal response contains Access-Control-Allow-Origin"));
+
+    const McpHttpResponse localhost = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArray(), localhostHost);
+    failIf(localhost.status != 200,
+           QStringLiteral("localhost Host HTTP %1 != 200").arg(localhost.status));
+
+    const McpHttpResponse upperLocalhost = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArray(), localhostHost.toUpper());
+    failIf(upperLocalhost.status != 200,
+           QStringLiteral("uppercase localhost Host HTTP %1 != 200")
+               .arg(upperLocalhost.status));
+
+    // DNS rebinding: foreign or mismatched Host is rejected.
+    const McpHttpResponse evilHost = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArray(), QByteArrayLiteral("evil.com"));
+    failIf(evilHost.status != 403,
+           QStringLiteral("evil Host HTTP %1 != 403").arg(evilHost.status));
+    failIf(evilHost.body.contains(token),
+           QStringLiteral("rejected Host response leaks the token"));
+    failIf(evilHost.body.contains(QByteArrayLiteral("evil.com")),
+           QStringLiteral("rejected Host response echoes the Host header"));
+
+    const quint16 otherPort = port == 65535 ? quint16(port - 1)
+                                            : quint16(port + 1);
+    const McpHttpResponse wrongPortHost = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArray(),
+        QByteArrayLiteral("127.0.0.1:") + QByteArray::number(otherPort));
+    failIf(wrongPortHost.status != 403,
+           QStringLiteral("mismatched Host port HTTP %1 != 403")
+               .arg(wrongPortHost.status));
+
+    const QByteArray noHost =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nAuthorization: Bearer ")
+        + token
+        + QByteArrayLiteral("\r\nContent-Type: application/json\r\n"
+                            "Content-Length: ")
+        + QByteArray::number(pingBody.size()) + QByteArrayLiteral("\r\n\r\n")
+        + pingBody;
+    failIf(mcpExchange(port, noHost).status != 403,
+           QStringLiteral("missing Host was not rejected with 403"));
+
+    // Origin rules: foreign and opaque origins are rejected, loopback is
+    // accepted, and clients without Origin (non-browser) keep working.
+    const McpHttpResponse evilOrigin = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Origin: http://evil.com\r\n"));
+    failIf(evilOrigin.status != 403,
+           QStringLiteral("evil Origin HTTP %1 != 403").arg(evilOrigin.status));
+    failIf(evilOrigin.body.contains(QByteArrayLiteral("evil.com")),
+           QStringLiteral("rejected Origin response echoes the Origin header"));
+    failIf(evilOrigin.body.contains(token),
+           QStringLiteral("rejected Origin response leaks the token"));
+
+    const McpHttpResponse nullOrigin = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Origin: null\r\n"));
+    failIf(nullOrigin.status != 403,
+           QStringLiteral("Origin: null HTTP %1 != 403").arg(nullOrigin.status));
+
+    const McpHttpResponse httpsOrigin = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Origin: https://127.0.0.1:") + QByteArray::number(port)
+            + QByteArrayLiteral("\r\n"));
+    failIf(httpsOrigin.status != 403,
+           QStringLiteral("https Origin HTTP %1 != 403").arg(httpsOrigin.status));
+
+    const McpHttpResponse loopbackOrigin = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Origin: ") + allowedOrigin + QByteArrayLiteral("\r\n"));
+    failIf(loopbackOrigin.status != 200,
+           QStringLiteral("loopback Origin HTTP %1 != 200")
+               .arg(loopbackOrigin.status));
+
+    const McpHttpResponse localhostOrigin = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Origin: http://") + localhostHost
+            + QByteArrayLiteral("\r\n"));
+    failIf(localhostOrigin.status != 200,
+           QStringLiteral("localhost Origin HTTP %1 != 200")
+               .arg(localhostOrigin.status));
+
+    const McpHttpResponse crossSite = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"), -1,
+        QByteArrayLiteral("Sec-Fetch-Site: cross-site\r\n"));
+    failIf(crossSite.status != 403,
+           QStringLiteral("cross-site Sec-Fetch-Site HTTP %1 != 403")
+               .arg(crossSite.status));
+
+    // Preflight is refused and never answered with CORS headers.
+    const QByteArray optionsRequest =
+        QByteArrayLiteral("OPTIONS /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAccess-Control-Request-Method: POST\r\n"
+                            "Content-Length: 0\r\n\r\n");
+    const McpHttpResponse options = mcpExchange(port, optionsRequest);
+    failIf(options.status != 405,
+           QStringLiteral("OPTIONS HTTP %1 != 405").arg(options.status));
+    failIf(options.headers.toLower().contains(
+               QByteArrayLiteral("access-control-allow-origin")),
+           QStringLiteral("OPTIONS response contains Access-Control-Allow-Origin"));
+
+    // Request framing and size limits.
+    const QByteArray oversizedHeader =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAuthorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nX-Filler: ") + QByteArray(17000, 'a')
+        + QByteArrayLiteral("\r\n\r\n");
+    const McpHttpResponse bigHeader = mcpExchange(port, oversizedHeader);
+    failIf(bigHeader.status != 431,
+           QStringLiteral("oversized header HTTP %1 != 431")
+               .arg(bigHeader.status));
+
+    const QByteArray duplicateLength =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAuthorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nContent-Type: application/json\r\n"
+                            "Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}");
+    const McpHttpResponse doubleLength = mcpExchange(port, duplicateLength);
+    failIf(doubleLength.status != 400,
+           QStringLiteral("duplicate Content-Length HTTP %1 != 400")
+               .arg(doubleLength.status));
+
+    const QByteArray bothFramings =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAuthorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nContent-Type: application/json\r\n"
+                            "Transfer-Encoding: chunked\r\n"
+                            "Content-Length: 2\r\n\r\n{}");
+    const McpHttpResponse smuggling = mcpExchange(port, bothFramings);
+    failIf(smuggling.status != 400,
+           QStringLiteral("Content-Length + Transfer-Encoding HTTP %1 != 400")
+               .arg(smuggling.status));
+
+    const QByteArray chunkedOnly =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAuthorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nContent-Type: application/json\r\n"
+                            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+    failIf(mcpExchange(port, chunkedOnly).status != 400,
+           QStringLiteral("chunked body was not rejected with 400"));
+
+    const QByteArray negativeLength =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + host
+        + QByteArrayLiteral("\r\nAuthorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nContent-Type: application/json\r\n"
+                            "Content-Length: -1\r\n\r\n");
+    failIf(mcpExchange(port, negativeLength).status != 400,
+           QStringLiteral("negative Content-Length was not rejected with 400"));
+
+    const McpHttpResponse tooLarge = mcpHttpPost(
+        port, pingBody, token, QByteArrayLiteral("application/json"),
+        server.maxBodyBytes() + 1);
+    failIf(tooLarge.status != 413,
+           QStringLiteral("oversized body HTTP %1 != 413").arg(tooLarge.status));
+
+    // Authentication failures never echo either token.
+    const McpHttpResponse badToken =
+        mcpHttpPost(port, pingBody, QByteArrayLiteral("wrong-secret-token"));
+    failIf(badToken.status != 401,
+           QStringLiteral("bad token HTTP %1 != 401").arg(badToken.status));
+    failIf(badToken.body.contains(QByteArrayLiteral("wrong-secret-token")),
+           QStringLiteral("401 response echoes the submitted token"));
+    failIf(badToken.body.contains(token),
+           QStringLiteral("401 response leaks the configured token"));
+
+    // An empty token must never leave the server unauthenticated.
+    pvf::McpServer generated(project);
+    generated.setToken(QByteArray());
+    failIf(generated.token().isEmpty(),
+           QStringLiteral("empty token was not replaced with a random token"));
+    failIf(generated.token().size() < 32,
+           QStringLiteral("generated token is too short"));
+
+    // Connection cap: the third concurrent connection is refused.
+    pvf::McpServer limited(project);
+    limited.setToken(QByteArrayLiteral("limit-token"));
+    pvf::McpServer::HttpLimits limits = limited.httpLimits();
+    limits.maxConnections = 2;
+    limits.headerTimeoutMs = 5000;
+    limits.requestTimeoutMs = 5000;
+    limited.setHttpLimits(limits);
+    const quint16 limitedPort = limited.start(0, &error);
+    failIf(limitedPort == 0,
+           QStringLiteral("limited server failed to start: %1").arg(error));
+    if (limitedPort != 0)
+    {
+        QTcpSocket first;
+        QTcpSocket second;
+        first.connectToHost(QHostAddress::LocalHost, limitedPort);
+        second.connectToHost(QHostAddress::LocalHost, limitedPort);
+        failIf(!mcpWaitUntil(
+                   [&limited] { return limited.activeConnectionCount() == 2; },
+                   3000),
+               QStringLiteral("connection limit server did not accept two peers"));
+
+        QTcpSocket third;
+        third.connectToHost(QHostAddress::LocalHost, limitedPort);
+        failIf(!mcpWaitUntil(
+                   [&third] {
+                       return third.bytesAvailable() > 0
+                              || third.state() == QAbstractSocket::UnconnectedState;
+                   },
+                   3000),
+               QStringLiteral("third connection was neither refused nor answered"));
+        const int thirdStatus = mcpStatusFromRaw(third.readAll());
+        failIf(thirdStatus != 503,
+               QStringLiteral("third connection HTTP %1 != 503")
+                   .arg(thirdStatus));
+
+        first.abort();
+        second.abort();
+        third.abort();
+        limited.stop();
+        failIf(limited.activeConnectionCount() != 0,
+               QStringLiteral("connection counter is not empty after stop"));
+    }
+
+    // Header and body deadlines are configurable so the test stays fast.
+    pvf::McpServer slow(project);
+    slow.setToken(QByteArrayLiteral("slow-token"));
+    pvf::McpServer::HttpLimits slowLimits = slow.httpLimits();
+    slowLimits.headerTimeoutMs = 150;
+    slowLimits.requestTimeoutMs = 150;
+    slow.setHttpLimits(slowLimits);
+    const quint16 slowPort = slow.start(0, &error);
+    failIf(slowPort == 0,
+           QStringLiteral("timeout server failed to start: %1").arg(error));
+    if (slowPort != 0)
+    {
+        const QByteArray slowHost =
+            QByteArrayLiteral("127.0.0.1:") + QByteArray::number(slowPort);
+        const QByteArray partialHeader =
+            QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + slowHost
+            + QByteArrayLiteral("\r\nAuthorization: Bearer slow-token\r\n"
+                                "Content-Type: application/json\r\n");
+        const McpHttpResponse headerTimeout =
+            mcpExchange(slowPort, partialHeader, 3000);
+        failIf(headerTimeout.timedOut,
+               QStringLiteral("client timed out before the header deadline"));
+        failIf(headerTimeout.status != 408,
+               QStringLiteral("header timeout HTTP %1 != 408")
+                   .arg(headerTimeout.status));
+
+        const QByteArray partialBody =
+            QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: ") + slowHost
+            + QByteArrayLiteral("\r\nAuthorization: Bearer slow-token\r\n"
+                                "Content-Type: application/json\r\n"
+                                "Content-Length: 100\r\n\r\n");
+        const McpHttpResponse bodyTimeout =
+            mcpExchange(slowPort, partialBody, 3000);
+        failIf(bodyTimeout.timedOut,
+               QStringLiteral("client timed out before the body deadline"));
+        failIf(bodyTimeout.status != 408,
+               QStringLiteral("body timeout HTTP %1 != 408")
+                   .arg(bodyTimeout.status));
+
+        slow.stop();
+    }
+
+    server.stop();
+    delete project;
+    qInfo() << "mcp-http-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -10363,6 +10730,8 @@ int main(int argc, char* argv[])
         return asyncExportTest(app);
     if (app.arguments().contains(QStringLiteral("--mcp-readonly-test")))
         return mcpReadonlyTest();
+    if (app.arguments().contains(QStringLiteral("--mcp-http-test")))
+        return mcpHttpTest();
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))

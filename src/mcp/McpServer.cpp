@@ -3,6 +3,7 @@
 #include "core/Easing.h"
 #include "core/Project.h"
 
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QHostAddress>
@@ -14,6 +15,7 @@
 #include <QRandomGenerator>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 
 #include <algorithm>
 #include <climits>
@@ -29,8 +31,7 @@ namespace pvf {
 
 namespace {
 
-constexpr qint64 kDefaultMaxBodyBytes = 1024 * 1024;
-constexpr int kMaxHeaderBytes = 16 * 1024;
+constexpr int kMaxRequestLineBytes = 8 * 1024;
 constexpr int kDefaultPageSize = 100;
 constexpr int kMaxPageSize = 500;
 
@@ -487,6 +488,8 @@ QByteArray reasonPhrase(int status)
         return QByteArrayLiteral("Not Found");
     case 405:
         return QByteArrayLiteral("Method Not Allowed");
+    case 408:
+        return QByteArrayLiteral("Request Timeout");
     case 411:
         return QByteArrayLiteral("Length Required");
     case 413:
@@ -495,6 +498,8 @@ QByteArray reasonPhrase(int status)
         return QByteArrayLiteral("Unsupported Media Type");
     case 431:
         return QByteArrayLiteral("Request Header Fields Too Large");
+    case 503:
+        return QByteArrayLiteral("Service Unavailable");
     default:
         return QByteArrayLiteral("Error");
     }
@@ -562,12 +567,51 @@ void sendHttpError(QTcpSocket* socket, int status, const QString& code,
 
 bool constantTimeEquals(const QByteArray& a, const QByteArray& b)
 {
-    if (a.size() != b.size())
-        return false;
+    // Hash both sides so the comparison always runs over a fixed length and
+    // never reveals the secret length through an early return.
+    const QByteArray left =
+        QCryptographicHash::hash(a, QCryptographicHash::Sha256);
+    const QByteArray right =
+        QCryptographicHash::hash(b, QCryptographicHash::Sha256);
     unsigned char diff = 0;
-    for (int i = 0; i < a.size(); ++i)
-        diff |= static_cast<unsigned char>(a.at(i) ^ b.at(i));
+    for (int i = 0; i < left.size(); ++i)
+        diff |= static_cast<unsigned char>(left.at(i) ^ right.at(i));
     return diff == 0;
+}
+
+bool isHeaderNameToken(const QByteArray& name)
+{
+    if (name.isEmpty())
+        return false;
+    for (const char raw : name)
+    {
+        const unsigned char c = static_cast<unsigned char>(raw);
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+            || (c >= '0' && c <= '9'))
+            continue;
+        switch (c)
+        {
+        case '!':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '\'':
+        case '*':
+        case '+':
+        case '-':
+        case '.':
+        case '^':
+        case '_':
+        case '`':
+        case '|':
+        case '~':
+            continue;
+        default:
+            return false;
+        }
+    }
+    return true;
 }
 
 struct ParsedHead
@@ -579,16 +623,39 @@ struct ParsedHead
 
 bool parseHttpHead(const QByteArray& head, ParsedHead* parsed, QString* error)
 {
-    const QList<QByteArray> lines = head.split('\n');
-    if (lines.isEmpty())
+    if (head.contains('\0'))
     {
-        *error = QStringLiteral("empty request");
+        *error = QStringLiteral("malformed request");
         return false;
     }
-    const QList<QByteArray> request = lines.first().trimmed().split(' ');
-    if (request.size() < 3)
+
+    QList<QByteArray> lines = head.split('\n');
+    if (lines.isEmpty())
+    {
+        *error = QStringLiteral("malformed request");
+        return false;
+    }
+    for (QByteArray& line : lines)
+        if (line.endsWith('\r'))
+            line.chop(1);
+    while (!lines.isEmpty() && lines.last().isEmpty())
+        lines.removeLast();
+
+    const QByteArray requestLine = lines.first();
+    if (requestLine.size() > kMaxRequestLineBytes)
+    {
+        *error = QStringLiteral("request line is too long");
+        return false;
+    }
+    const QList<QByteArray> request = requestLine.split(' ');
+    if (request.size() != 3 || request.at(0).isEmpty() || request.at(1).isEmpty())
     {
         *error = QStringLiteral("malformed request line");
+        return false;
+    }
+    if (request.at(2) != QByteArrayLiteral("HTTP/1.1"))
+    {
+        *error = QStringLiteral("only HTTP/1.1 is supported");
         return false;
     }
     parsed->method = request.at(0).toUpper();
@@ -596,19 +663,39 @@ bool parseHttpHead(const QByteArray& head, ParsedHead* parsed, QString* error)
 
     for (int i = 1; i < lines.size(); ++i)
     {
-        QByteArray line = lines.at(i);
-        if (line.endsWith('\r'))
-            line.chop(1);
-        if (line.isEmpty())
-            continue;
+        const QByteArray& line = lines.at(i);
+        if (line.isEmpty() || line.startsWith(' ') || line.startsWith('\t'))
+        {
+            *error = QStringLiteral("malformed header line");
+            return false;
+        }
         const int colon = line.indexOf(':');
         if (colon <= 0)
         {
             *error = QStringLiteral("malformed header line");
             return false;
         }
-        parsed->headers.insert(line.left(colon).trimmed().toLower(),
-                               line.mid(colon + 1).trimmed());
+        const QByteArray name = line.left(colon);
+        if (!isHeaderNameToken(name))
+        {
+            *error = QStringLiteral("malformed header name");
+            return false;
+        }
+        const QByteArray value = line.mid(colon + 1).trimmed();
+        if (value.contains('\r'))
+        {
+            *error = QStringLiteral("malformed header value");
+            return false;
+        }
+        const QByteArray key = name.toLower();
+        if (parsed->headers.contains(key))
+        {
+            // Duplicate Host/Content-Length/Authorization are a smuggling
+            // and authentication-bypass vector; reject every duplicate.
+            *error = QStringLiteral("duplicate request header");
+            return false;
+        }
+        parsed->headers.insert(key, value);
     }
     return true;
 }
@@ -645,12 +732,25 @@ void McpServer::setToken(const QByteArray& token)
 
 void McpServer::setMaxBodyBytes(qint64 bytes)
 {
-    m_maxBodyBytes = std::max<qint64>(1024, bytes);
+    m_limits.maxBodyBytes = std::max<qint64>(1024, bytes);
+}
+
+void McpServer::setHttpLimits(const HttpLimits& limits)
+{
+    m_limits.maxBodyBytes = std::max<qint64>(1024, limits.maxBodyBytes);
+    m_limits.maxHeaderBytes = std::max(1024, limits.maxHeaderBytes);
+    m_limits.maxConnections = std::max(1, limits.maxConnections);
+    m_limits.headerTimeoutMs = std::max(50, limits.headerTimeoutMs);
+    m_limits.requestTimeoutMs = std::max(50, limits.requestTimeoutMs);
 }
 
 quint16 McpServer::start(quint16 port, QString* error)
 {
     stop();
+
+    // Fail closed: never expose an endpoint without a token.
+    if (m_token.isEmpty())
+        m_token = generateToken();
 
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, &McpServer::acceptConnections);
@@ -681,6 +781,7 @@ void McpServer::stop()
         socket->abort();
         socket->deleteLater();
     }
+    m_connections.clear();
     m_port = 0;
 }
 
@@ -715,17 +816,82 @@ QByteArray McpServer::generateToken()
     return token.toHex();
 }
 
+bool McpServer::isAllowedHost(const QByteArray& host) const
+{
+    const QByteArray value = host.trimmed();
+    if (value.isEmpty() || value.contains(' ') || value.contains('\t')
+        || value.contains(',') || value.contains('/'))
+        return false;
+
+    const int colon = value.lastIndexOf(':');
+    if (colon <= 0 || colon == value.size() - 1)
+        return false;
+
+    const QByteArray name = value.left(colon).toLower();
+    const QByteArray portText = value.mid(colon + 1);
+    bool digits = true;
+    for (const char c : portText)
+        digits = digits && c >= '0' && c <= '9';
+    if (!digits)
+        return false;
+
+    bool portOk = false;
+    const int port = portText.toInt(&portOk);
+    if (!portOk || port != int(m_port))
+        return false;
+
+    return name == QByteArrayLiteral("127.0.0.1")
+           || name == QByteArrayLiteral("localhost");
+}
+
+bool McpServer::isAllowedOrigin(const QByteArray& origin) const
+{
+    const QByteArray value = origin.trimmed();
+    if (value.isEmpty())
+        return false;
+    const QByteArray lower = value.toLower();
+    // Opaque origins (sandboxed pages, file://) are never allowed.
+    if (lower == QByteArrayLiteral("null"))
+        return false;
+
+    const QByteArray prefix = QByteArrayLiteral("http://");
+    if (!lower.startsWith(prefix))
+        return false;
+
+    // Reuse the Host rules: only the exact loopback authority is accepted,
+    // so a trailing slash, userinfo, another scheme or another port fails.
+    return isAllowedHost(lower.mid(prefix.size()));
+}
+
 void McpServer::acceptConnections()
 {
     if (!m_server)
         return;
     while (QTcpSocket* socket = m_server->nextPendingConnection())
+    {
+        socket->setParent(this);
+        connect(socket, &QTcpSocket::disconnected, this,
+                [this, socket] { m_connections.remove(socket); });
+        connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+
+        if (m_connections.size() >= m_limits.maxConnections)
+        {
+            sendHttpError(socket, 503, QStringLiteral("server_busy"),
+                          QStringLiteral("Too many concurrent connections"));
+            QTimer::singleShot(2000, socket, [socket] {
+                socket->abort();
+                socket->deleteLater();
+            });
+            continue;
+        }
+
+        m_connections.insert(socket);
         attachSocket(socket);
+    }
 }
 
 void McpServer::attachSocket(QTcpSocket* socket)
 {
-    socket->setParent(this);
     socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
 
     if (!socket->peerAddress().isLoopback())
@@ -736,7 +902,18 @@ void McpServer::attachSocket(QTcpSocket* socket)
     }
 
     auto state = std::make_shared<PendingRequest>();
-    connect(socket, &QTcpSocket::readyRead, this, [this, socket, state] {
+    auto* timer = new QTimer(socket);
+    timer->setSingleShot(true);
+    connect(timer, &QTimer::timeout, this, [this, socket, state] {
+        if (state->done)
+            return;
+        state->done = true;
+        sendHttpError(socket, 408, QStringLiteral("request_timeout"),
+                      QStringLiteral("Request timed out"));
+    });
+    timer->start(m_limits.headerTimeoutMs);
+
+    connect(socket, &QTcpSocket::readyRead, this, [this, socket, state, timer] {
         if (state->done)
         {
             socket->readAll();
@@ -749,7 +926,7 @@ void McpServer::attachSocket(QTcpSocket* socket)
             const int headerEnd = state->buffer.indexOf("\r\n\r\n");
             if (headerEnd < 0)
             {
-                if (state->buffer.size() > kMaxHeaderBytes)
+                if (state->buffer.size() > m_limits.maxHeaderBytes)
                 {
                     state->done = true;
                     sendHttpError(socket, 431, QStringLiteral("header_too_large"),
@@ -757,7 +934,7 @@ void McpServer::attachSocket(QTcpSocket* socket)
                 }
                 return;
             }
-            if (headerEnd > kMaxHeaderBytes)
+            if (headerEnd > m_limits.maxHeaderBytes)
             {
                 state->done = true;
                 sendHttpError(socket, 431, QStringLiteral("header_too_large"),
@@ -768,6 +945,7 @@ void McpServer::attachSocket(QTcpSocket* socket)
             const QByteArray head = state->buffer.left(headerEnd);
             state->buffer.remove(0, headerEnd + 4);
             state->headerDone = true;
+            timer->start(m_limits.requestTimeoutMs);
 
             ParsedHead parsed;
             QString error;
@@ -780,6 +958,38 @@ void McpServer::attachSocket(QTcpSocket* socket)
             state->method = parsed.method;
             state->target = parsed.target;
             state->headers = parsed.headers;
+
+            // Host is checked before anything else so a DNS-rebinding
+            // request can never reach path, auth or body handling.
+            if (!isAllowedHost(state->headers.value(QByteArrayLiteral("host"))))
+            {
+                state->done = true;
+                sendHttpError(socket, 403, QStringLiteral("bad_host"),
+                              QStringLiteral("Host must be 127.0.0.1 or localhost "
+                                             "with the server port"));
+                return;
+            }
+
+            if (state->headers.contains(QByteArrayLiteral("origin"))
+                && !isAllowedOrigin(
+                    state->headers.value(QByteArrayLiteral("origin"))))
+            {
+                state->done = true;
+                sendHttpError(socket, 403, QStringLiteral("bad_origin"),
+                              QStringLiteral("Origin is not allowed"));
+                return;
+            }
+
+            const QByteArray fetchSite =
+                state->headers.value(QByteArrayLiteral("sec-fetch-site")).toLower();
+            if (!fetchSite.isEmpty() && fetchSite != "same-origin"
+                && fetchSite != "same-site" && fetchSite != "none")
+            {
+                state->done = true;
+                sendHttpError(socket, 403, QStringLiteral("bad_origin"),
+                              QStringLiteral("Cross-site requests are not allowed"));
+                return;
+            }
 
             if (state->method != "POST")
             {
@@ -826,32 +1036,44 @@ void McpServer::attachSocket(QTcpSocket* socket)
                 return;
             }
 
+            // Never accept chunked framing: it would bypass Content-Length
+            // accounting and enables CL.TE request smuggling.
             if (state->headers.contains(QByteArrayLiteral("transfer-encoding")))
             {
                 state->done = true;
-                sendHttpError(socket, 411, QStringLiteral("length_required"),
-                              QStringLiteral("Chunked bodies are not supported; send "
-                                             "Content-Length"));
+                sendHttpError(socket, 400, QStringLiteral("bad_request"),
+                              QStringLiteral("Transfer-Encoding is not supported"));
                 return;
             }
 
-            bool lengthOk = false;
-            const qint64 length =
-                state->headers.value(QByteArrayLiteral("content-length"))
-                    .toLongLong(&lengthOk);
-            if (!lengthOk || length < 0)
+            const QByteArray contentLength =
+                state->headers.value(QByteArrayLiteral("content-length"));
+            if (contentLength.isEmpty())
             {
                 state->done = true;
                 sendHttpError(socket, 411, QStringLiteral("length_required"),
                               QStringLiteral("Content-Length is required"));
                 return;
             }
-            if (length > m_maxBodyBytes || length > INT_MAX)
+
+            bool lengthOk = true;
+            for (const char c : contentLength)
+                lengthOk = lengthOk && c >= '0' && c <= '9';
+            const qint64 length =
+                lengthOk ? contentLength.toLongLong(&lengthOk) : 0;
+            if (!lengthOk)
+            {
+                state->done = true;
+                sendHttpError(socket, 400, QStringLiteral("bad_request"),
+                              QStringLiteral("Invalid Content-Length"));
+                return;
+            }
+            if (length > m_limits.maxBodyBytes || length > INT_MAX)
             {
                 state->done = true;
                 sendHttpError(socket, 413, QStringLiteral("payload_too_large"),
                               QStringLiteral("Request body exceeds %1 bytes")
-                                  .arg(m_maxBodyBytes));
+                                  .arg(m_limits.maxBodyBytes));
                 return;
             }
             state->contentLength = length;
@@ -864,7 +1086,6 @@ void McpServer::attachSocket(QTcpSocket* socket)
         const QByteArray body = state->buffer.left(int(state->contentLength));
         handleRequest(socket, state->method, state->target, QByteArray(), body);
     });
-    connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
 }
 
 void McpServer::handleRequest(QTcpSocket* socket, const QByteArray& method,
@@ -1048,7 +1269,7 @@ void McpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
         return;
     }
 
-    sendRpcError(socket, id, -32601, QStringLiteral("Method not found: %1").arg(method));
+    sendRpcError(socket, id, -32601, QStringLiteral("Method not found"));
 }
 
 QJsonObject McpServer::executeTool(const QString& name, const QJsonObject& args,

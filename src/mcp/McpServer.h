@@ -2,10 +2,10 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
-class QJsonObject;
 class QTcpServer;
 class QTcpSocket;
 
@@ -18,11 +18,24 @@ class Project;
 // with a Bearer token and exposes the read tools plus two guide resources.
 // Everything runs on the GUI thread; a future log window can connect to
 // toolInvoked() without touching the HTTP layer.
+//
+// The HTTP boundary is fail-closed: only loopback peers, loopback Host and
+// loopback Origin headers are accepted, CORS is never granted, connections
+// and requests are bounded in size, count and time.
 class McpServer : public QObject
 {
     Q_OBJECT
 
 public:
+    struct HttpLimits
+    {
+        qint64 maxBodyBytes = 1024 * 1024;
+        int maxHeaderBytes = 16 * 1024;
+        int maxConnections = 16;
+        int headerTimeoutMs = 10 * 1000;
+        int requestTimeoutMs = 20 * 1000;
+    };
+
     explicit McpServer(const Project* project, QObject* parent = nullptr);
     ~McpServer() override;
 
@@ -32,7 +45,12 @@ public:
     QByteArray token() const { return m_token; }
 
     void setMaxBodyBytes(qint64 bytes);
-    qint64 maxBodyBytes() const { return m_maxBodyBytes; }
+    qint64 maxBodyBytes() const { return m_limits.maxBodyBytes; }
+    void setHttpLimits(const HttpLimits& limits);
+    const HttpLimits& httpLimits() const { return m_limits; }
+
+    // Number of sockets currently counted against maxConnections.
+    int activeConnectionCount() const { return m_connections.size(); }
 
     // Listens on 127.0.0.1 only. Port 0 picks a free port; the actual port is
     // returned (and also available through port()/endpointUrl()). Returns 0
@@ -58,13 +76,17 @@ private:
                        const QByteArray& body);
     void handleRpc(QTcpSocket* socket, const QJsonObject& request);
 
+    bool isAllowedHost(const QByteArray& host) const;
+    bool isAllowedOrigin(const QByteArray& origin) const;
+
     QJsonObject executeTool(const QString& name, const QJsonObject& args, bool* ok);
 
     static QByteArray generateToken();
 
     const Project* m_project = nullptr;
     QByteArray m_token;
-    qint64 m_maxBodyBytes = 1024 * 1024;
+    HttpLimits m_limits;
+    QSet<QTcpSocket*> m_connections;
     QTcpServer* m_server = nullptr;
     quint16 m_port = 0;
 };
