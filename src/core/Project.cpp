@@ -1277,6 +1277,9 @@ bool Project::setEntityParent(EntityId id, EntityId parent)
             return false;
     }
     e->parent = parent;
+    // Rows are per timeline; moving to another private timeline must not
+    // keep a row number that belonged to the old owner.
+    e->data.remove(QStringLiteral("timelineRow"));
     modified = true;
     emit changed();
     return true;
@@ -1295,11 +1298,14 @@ bool Project::moveEntity(EntityId id, EntityId parent, int index)
 
     const int oldIndex = int(it - m_entities.begin());
     Entity moved = *it;
+    const EntityId oldParent = moved.parent;
     m_entities.erase(it);
     int target = std::clamp(index, 0, int(m_entities.size()));
     if (target > oldIndex)
         --target;
     moved.parent = parent;
+    if (oldParent != parent)
+        moved.data.remove(QStringLiteral("timelineRow"));
     m_entities.insert(target, moved);
     rebuildEntityIndex();
     modified = true;
@@ -1333,7 +1339,11 @@ bool Project::moveEntities(const QVector<EntityId>& ids, EntityId parent, int in
 
     const int target = std::clamp(index, 0, int(m_entities.size()));
     for (Entity& entity : moved)
+    {
+        if (entity.parent != parent)
+            entity.data.remove(QStringLiteral("timelineRow"));
         entity.parent = parent;
+    }
     for (int i = 0; i < int(moved.size()); ++i)
         m_entities.insert(target + i, moved[i]);
     rebuildEntityIndex();
@@ -1439,6 +1449,28 @@ QVector<int> Project::entityOrder() const
 
     QVector<int> order;
     QSet<EntityId> visited;
+    auto rowOf = [this](int index) {
+        return m_entities[index].data.value(QStringLiteral("timelineRow"), -1)
+            .toInt();
+    };
+    auto rowLess = [&rowOf](int a, int b) {
+        const int rowA = rowOf(a);
+        const int rowB = rowOf(b);
+        if (rowA >= 0 && rowB >= 0)
+        {
+            if (rowA != rowB)
+                return rowA < rowB;
+            return a < b;
+        }
+        if (rowA >= 0)
+            return true;
+        if (rowB >= 0)
+            return false;
+        return a < b;
+    };
+    std::sort(roots.begin(), roots.end(), rowLess);
+    for (auto it = children.begin(); it != children.end(); ++it)
+        std::sort(it.value().begin(), it.value().end(), rowLess);
     std::function<void(int)> visit = [&](int index) {
         const Entity& e = m_entities[index];
         if (visited.contains(e.id))

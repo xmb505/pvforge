@@ -83,6 +83,7 @@ public:
     int secondsLabelStepForTest() const;
     int rowCountForTest() const { return int(rowIds().size()); }
     EntityId rowEntityForTest(int row) const;
+    int rowForEntityForTest(EntityId id) const;
     int rowDepthForTest(int row) const { return depthOf(rowEntityForTest(row)); }
     bool rowCollapsedForTest(EntityId id) const
     {
@@ -132,9 +133,9 @@ public:
     void closeAllPopups();
     void syncPopups();
     void removePopup(EntityId ownerId);
-    EntityId dropAssetForTest(const QMimeData& mime, int frame)
+    EntityId dropAssetForTest(const QMimeData& mime, int frame, int row = -1)
     {
-        return dropAsset(mime, frame);
+        return dropAsset(mime, frame, row);
     }
     // Popup keyframe selections are adopted by the main panel so the existing
     // Delete / easing actions see them.
@@ -215,6 +216,9 @@ private:
     int rowTop(int row) const;
     int rowHeight(int) const { return kRowHeight; }
     int depthOf(EntityId id) const;
+    int rowOfEntity(const Entity& entity) const;
+    void assignMissingRows();
+    void moveEntityToRow(QVector<Entity>& entities, EntityId id, int targetRow);
     int contentStart() const;
     int contentEnd() const;
     const Entity* rangeOwner() const;
@@ -266,7 +270,7 @@ private:
     void selectEntity(EntityId id, bool emitSignal);
     void autoScrollTick();
     void syncPopupGeometry();
-    EntityId dropAsset(const QMimeData& mime, int frame);
+    EntityId dropAsset(const QMimeData& mime, int frame, int row);
 
     Project* m_project = nullptr;
     EntityId m_owner = kInvalidEntity;   // kInvalidEntity = main timeline

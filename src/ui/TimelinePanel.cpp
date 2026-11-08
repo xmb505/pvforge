@@ -217,6 +217,7 @@ public:
         m_panel->m_sourcePanel = source;
         m_panel->m_relativeTime = true;
         m_panel->m_pixelsPerFrame = source->m_pixelsPerFrame;
+        m_panel->assignMissingRows();
         if (m_panel->m_unitButton)
             m_panel->m_unitButton->hide();
         layout->addWidget(m_panel, 1);
@@ -391,6 +392,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     if (m_project)
     {
         connect(m_project, &Project::changed, this, [this] {
+            assignMissingRows();
             if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
             {
                 m_selected = kInvalidEntity;
@@ -400,6 +402,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
             syncPopups();
             update();
         });
+        assignMissingRows();
     }
 }
 
@@ -507,18 +510,83 @@ int TimelinePanel::depthOf(EntityId id) const
     return depth;
 }
 
+int TimelinePanel::rowOfEntity(const Entity& entity) const
+{
+    return entity.data.value(QStringLiteral("timelineRow"), -1).toInt();
+}
+
+void TimelinePanel::assignMissingRows()
+{
+    if (!m_project)
+        return;
+    QVector<Entity>& entities = m_project->mutableEntities();
+    QSet<int> used;
+    for (const Entity& entity : entities)
+    {
+        if (entity.parent != m_owner)
+            continue;
+        const int row = rowOfEntity(entity);
+        if (row >= 0 && !used.contains(row))
+            used.insert(row);
+    }
+    int next = 0;
+    for (Entity& entity : entities)
+    {
+        if (entity.parent != m_owner)
+            continue;
+        int row = rowOfEntity(entity);
+        if (row >= 0 && used.contains(row))
+        {
+            // A row can already be owned by an earlier entity after a
+            // reparent; keep the first one and move this one out.
+            bool duplicate = false;
+            for (const Entity& other : entities)
+            {
+                if (&other == &entity)
+                    break;
+                if (other.parent == m_owner && rowOfEntity(other) == row)
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate)
+                continue;
+        }
+        while (used.contains(next))
+            ++next;
+        entity.data[QStringLiteral("timelineRow")] = next;
+        used.insert(next);
+    }
+}
+
 QVector<EntityId> TimelinePanel::rowIds() const
 {
-    QVector<EntityId> result;
+    QHash<int, EntityId> byRow;
+    int maxRow = -1;
     for (const Entity& entity : activeEntities())
     {
-        const bool dangling = entity.parent != kInvalidEntity
+        const bool dangling = m_project && entity.parent != kInvalidEntity
                               && m_project->entity(entity.parent) == nullptr;
-        if (entity.parent == m_owner
-            || (m_owner == kInvalidEntity && dangling))
-            result.append(entity.id);
+        if (entity.parent != m_owner
+            && !(m_owner == kInvalidEntity && dangling))
+            continue;
+        const int row = rowOfEntity(entity);
+        if (row < 0)
+            continue;
+        byRow.insert(row, entity.id);
+        maxRow = std::max(maxRow, row);
     }
-    return result;
+
+    const int bodyHeight = std::max(0, bodyBottom() - kRulerHeight);
+    const int pageRows =
+        std::max(1, int(std::ceil(bodyHeight / double(kRowHeight))));
+    const int count = std::max(maxRow + 1, pageRows + 3);
+    QVector<EntityId> rows(count, kInvalidEntity);
+    for (auto it = byRow.constBegin(); it != byRow.constEnd(); ++it)
+        if (it.key() >= 0 && it.key() < rows.size())
+            rows[it.key()] = it.value();
+    return rows;
 }
 
 EntityId TimelinePanel::entityAtRow(int row) const
@@ -737,10 +805,7 @@ void TimelinePanel::clampScroll()
 
     const int rows = int(rowIds().size());
     const int bodyHeight = std::max(0, bodyBottom() - kRulerHeight);
-    const int pageRows =
-        std::max(1, int(std::ceil(bodyHeight / double(kRowHeight))));
-    const int virtualRows = std::max(rows, pageRows) + pageRows;
-    const int maxY = std::max(0, virtualRows * kRowHeight - bodyHeight);
+    const int maxY = std::max(0, rows * kRowHeight - bodyHeight);
     m_scrollY = std::clamp(m_scrollY, 0, maxY);
     if (m_vScroll)
     {
@@ -989,6 +1054,33 @@ void TimelinePanel::trimEnd(QVector<Entity>& entities, EntityId id, int newEnd)
     removeEntities(entities, doomed);
 }
 
+void TimelinePanel::moveEntityToRow(QVector<Entity>& entities, EntityId id,
+                                    int targetRow)
+{
+    Entity* dragged = findEntity(entities, id);
+    if (!dragged)
+        return;
+    targetRow = std::max(0, targetRow);
+    const int owner = dragged->parent;
+    const int oldRow = rowOfEntity(*dragged);
+    if (oldRow == targetRow)
+        return;
+    Entity* occupant = nullptr;
+    for (Entity& entity : entities)
+    {
+        if (entity.id == id || entity.parent != owner)
+            continue;
+        if (rowOfEntity(entity) == targetRow)
+        {
+            occupant = &entity;
+            break;
+        }
+    }
+    if (occupant)
+        occupant->data[QStringLiteral("timelineRow")] = oldRow;
+    dragged->data[QStringLiteral("timelineRow")] = targetRow;
+}
+
 void TimelinePanel::reorderChild(QVector<Entity>& entities, EntityId owner,
                                  EntityId id, int targetRow)
 {
@@ -1094,14 +1186,14 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
     {
         const int delta = frameFromX(int(std::lround(pos.x()))) - m_dragStartFrame;
         applyShift(m_preview, m_dragEntity, delta);
-        const QVector<EntityId> rowsNow = childIds(m_preview, m_owner);
         int targetRow = rowAt(int(pos.y()));
-        if (!rowsNow.isEmpty())
+        const int rowsCount = int(rowIds().size());
+        if (rowsCount > 0)
         {
             if (targetRow < 0)
-                targetRow = pos.y() < kRulerHeight ? 0 : int(rowsNow.size()) - 1;
-            targetRow = std::clamp(targetRow, 0, int(rowsNow.size()) - 1);
-            reorderChild(m_preview, m_owner, m_dragEntity, targetRow);
+                targetRow = pos.y() < kRulerHeight ? 0 : rowsCount - 1;
+            targetRow = std::clamp(targetRow, 0, rowsCount - 1);
+            moveEntityToRow(m_preview, m_dragEntity, targetRow);
             m_moved = delta != 0 || targetRow != m_dragStartRow;
         }
         else
@@ -1311,20 +1403,20 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.setClipRect(QRect(0, kRulerHeight, right, bottom - kRulerHeight));
     for (int row = 0; row < rows.size(); ++row)
     {
-        const Entity* entity = findEntity(activeEntities(), rows[row]);
-        if (!entity)
-            continue;
         const int top = rowTop(row);
         if (top + kRowHeight < kRulerHeight || top > bottom)
             continue;
+        const Entity* entity = findEntity(activeEntities(), rows[row]);
         const QRect rowRect(0, top, right, kRowHeight);
-        if (entity->id == m_selected)
+        if (entity && entity->id == m_selected)
             p.fillRect(rowRect, QColor(accent.red(), accent.green(),
                                        accent.blue(), 45));
         else if (row % 2)
             p.fillRect(rowRect, QColor(alt.red(), alt.green(), alt.blue(), 90));
         p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 70));
         p.drawLine(0, top + kRowHeight - 1, right, top + kRowHeight - 1);
+        if (!entity)
+            continue;
 
         const QRect clip = clipRect(*entity);
         if (clip.isEmpty())
@@ -1453,14 +1545,17 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
-    if (rows.isEmpty())
+    const bool noEntities =
+        std::none_of(rows.begin(), rows.end(),
+                     [](EntityId id) { return id != kInvalidEntity; });
+    if (noEntities)
     {
         p.setPen(dim);
         p.drawText(QRect(0, kRulerHeight, right, bottom - kRulerHeight),
                    Qt::AlignCenter,
                    m_owner < 0
-                       ? QStringLiteral("主时间线 · 选中片段后点 + 打开私有时间线")
-                       : QStringLiteral("私有时间线 · 此片段还没有子实体"));
+                       ? QStringLiteral("把素材拖到这里创建 clip")
+                       : QStringLiteral("把素材拖到这里创建子 clip"));
     }
 
     if (m_dropActive)
@@ -1759,7 +1854,10 @@ void TimelinePanel::dropEvent(QDropEvent* event)
     frame = std::max(contentStart(), frame);
     if (m_owner >= 0)
         frame = std::min(frame, contentEnd() - 1);
-    const EntityId id = dropAsset(*event->mimeData(), frame);
+    int row = rowAt(int(std::lround(event->position().y())));
+    if (row < 0)
+        row = std::max(0, int(rowIds().size()) - 1);
+    const EntityId id = dropAsset(*event->mimeData(), frame, row);
     m_dropActive = false;
     update();
     if (id == kInvalidEntity)
@@ -1768,7 +1866,7 @@ void TimelinePanel::dropEvent(QDropEvent* event)
         event->acceptProposedAction();
 }
 
-EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame)
+EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 {
     if (!m_project || !hasAssetMime(&mime))
         return kInvalidEntity;
@@ -1830,6 +1928,7 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame)
 
     // A video template also creates its paired audio; keep it on the same
     // drop frame and in the same private timeline.
+    QVector<EntityId> pairedIds;
     for (Entity& other : m_project->mutableEntities())
     {
         if (other.id == id)
@@ -1839,9 +1938,41 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame)
             other.data[QStringLiteral("startFrame")] = frame;
             if (m_owner != kInvalidEntity)
                 other.parent = m_owner;
+            pairedIds.append(other.id);
         }
     }
 
+    QVector<Entity>& all = m_project->mutableEntities();
+    int maxRow = -1;
+    for (const Entity& other : all)
+        if (other.parent == m_owner)
+            maxRow = std::max(maxRow, rowOfEntity(other));
+    int targetRow = row >= 0 ? row : maxRow + 1;
+    targetRow = std::max(0, targetRow);
+
+    QSet<EntityId> createdIds;
+    createdIds.insert(id);
+    for (EntityId pairedId : pairedIds)
+        createdIds.insert(pairedId);
+    auto insertAtRow = [&](EntityId entityId, int desiredRow) {
+        Entity* target = m_project->entity(entityId);
+        if (!target)
+            return;
+        for (Entity& other : all)
+        {
+            if (createdIds.contains(other.id) || other.parent != m_owner)
+                continue;
+            const int otherRow = rowOfEntity(other);
+            if (otherRow >= desiredRow)
+                other.data[QStringLiteral("timelineRow")] = otherRow + 1;
+        }
+        target->data[QStringLiteral("timelineRow")] = desiredRow;
+    };
+    insertAtRow(id, targetRow);
+    for (int i = 0; i < pairedIds.size(); ++i)
+        insertAtRow(pairedIds[i], targetRow + 1 + i);
+
+    assignMissingRows();
     m_project->notifyChanged();
     selectEntity(id, true);
     emit snapshotEditRequested(before, m_project->entities(),
@@ -2118,6 +2249,12 @@ int TimelinePanel::secondsLabelStepForTest() const
 EntityId TimelinePanel::rowEntityForTest(int row) const
 {
     return entityAtRow(row);
+}
+
+int TimelinePanel::rowForEntityForTest(EntityId id) const
+{
+    const Entity* entity = m_project ? m_project->entity(id) : nullptr;
+    return entity ? rowOfEntity(*entity) : -1;
 }
 
 QRect TimelinePanel::rowButtonRect(int row, int index) const

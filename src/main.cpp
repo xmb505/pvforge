@@ -8948,7 +8948,8 @@ int clipTimelineTest(QApplication& app)
             0.12f + 0.88f * float(std::abs(std::sin(i * 0.006)));
     pvf::Entity* bgm =
         project->addAudio(QStringLiteral("bgm.wav"), audio, QStringLiteral("BGM"));
-    project->setEntityParent(bgm->id, groupId);
+    const pvf::EntityId bgmId = bgm->id;
+    project->setEntityParent(bgmId, groupId);
 
     auto* timeline = window.findChild<pvf::TimelinePanel*>();
     if (!timeline)
@@ -8956,12 +8957,14 @@ int clipTimelineTest(QApplication& app)
         qCritical() << "clip-timeline-test: no timeline";
         return 1;
     }
-    QTimer::singleShot(300, &window, [&app, &window, timeline, groupId, rectId] {
+    QTimer::singleShot(300, &window,
+                       [&app, &window, timeline, groupId, rectId, textId, bgmId] {
         timeline->setPixelsPerFrameForTest(8.0);
         timeline->setCurrentFrame(45);
         timeline->openPopup(groupId);
         QTimer::singleShot(400, &window,
-                           [&app, &window, timeline, groupId, rectId] {
+                           [&app, &window, timeline, groupId, rectId, textId,
+                            bgmId] {
             int failures = 0;
             pvf::TimelinePanel* popup = nullptr;
             for (pvf::TimelinePanel* panel :
@@ -9119,6 +9122,27 @@ int clipTimelineTest(QApplication& app)
                 ++failures;
             }
 
+            // Delete row 0 and verify rows 1/2 keep their positions.
+            const QPoint redBody(popup->frameXForTest(30),
+                                 popup->rowCenterYForTest(0));
+            send(QEvent::MouseButtonPress, redBody, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, redBody, Qt::NoButton);
+            QKeyEvent rowDelete(QEvent::KeyPress, Qt::Key_Delete,
+                                Qt::NoModifier);
+            QApplication::sendEvent(popup, &rowDelete);
+            QApplication::processEvents();
+            if (project->entity(rectId)
+                || popup->rowEntityForTest(0) != pvf::kInvalidEntity
+                || popup->rowEntityForTest(1) != textId
+                || popup->rowEntityForTest(2) != bgmId)
+            {
+                qCritical() << "clip-timeline-test: stable rows"
+                            << popup->rowEntityForTest(0)
+                            << popup->rowEntityForTest(1)
+                            << popup->rowEntityForTest(2) << textId << bgmId;
+                ++failures;
+            }
+
             // Dragging the playhead past the right edge must keep scrolling
             // and keep the line inside the visible timeline.
             auto sendMain = [timeline](QEvent::Type type, const QPoint& pos,
@@ -9242,32 +9266,38 @@ int clipTimelineTest(QApplication& app)
             dropMime.setData(QStringLiteral("application/x-pvforge-asset-template"),
                              QByteArray::number(0));
             const pvf::EntityId droppedId =
-                timeline->dropAssetForTest(dropMime, 30);
+                timeline->dropAssetForTest(dropMime, 30, 3);
             QApplication::processEvents();
             const bool dropped =
                 int(project->entities().size()) == beforeCount + 1
                 && droppedId != pvf::kInvalidEntity
-                && project->clipStartFrame(droppedId) == 30;
+                && project->clipStartFrame(droppedId) == 30
+                && timeline->rowForEntityForTest(droppedId) == 3
+                && timeline->rowEntityForTest(0) == groupId;
             if (!dropped)
             {
                 qCritical() << "clip-timeline-test: asset drop"
-                            << beforeCount << project->entities().size();
+                            << beforeCount << project->entities().size()
+                            << timeline->rowForEntityForTest(droppedId)
+                            << timeline->rowEntityForTest(0) << groupId;
                 ++failures;
             }
             else
             {
                 const QPoint clipPoint(
                     timeline->frameXForTest(45),
-                    timeline->rowCenterYForTest(timeline->rowCountForTest() - 1));
+                    timeline->rowCenterYForTest(3));
                 sendMain(QEvent::MouseButtonPress, clipPoint, Qt::LeftButton);
                 sendMain(QEvent::MouseButtonRelease, clipPoint, Qt::NoButton);
                 QKeyEvent deleteKey(QEvent::KeyPress, Qt::Key_Delete,
                                     Qt::NoModifier);
                 QApplication::sendEvent(timeline, &deleteKey);
                 QApplication::processEvents();
-                if (project->entity(droppedId))
+                if (project->entity(droppedId)
+                    || timeline->rowEntityForTest(0) != groupId)
                 {
-                    qCritical() << "clip-timeline-test: delete clip";
+                    qCritical() << "clip-timeline-test: delete clip"
+                                << timeline->rowEntityForTest(0) << groupId;
                     ++failures;
                 }
             }
