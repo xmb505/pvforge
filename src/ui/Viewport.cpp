@@ -319,7 +319,8 @@ QPointF Viewport::snapCameraCenter(const Camera::State& start, const QPointF& ce
     const EntityId cameraId = activeCameraEntity();
     for (const Entity& other : m_project->entities())
     {
-        if (other.id == cameraId || other.hidden || other.isCamera())
+        if (other.id == cameraId || other.hidden || other.isCamera()
+            || other.isFolder())
             continue;
         const VisualBounds bounds =
             visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
@@ -735,7 +736,7 @@ bool Viewport::gizmoHitTest(const QPointF& pos, GizmoMode* mode) const
     if (m_selected == kInvalidEntity)
         return false;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity || entity->isCamera() || entity->isFolder()
+    if (!entity || entity->isCamera()
         || m_project->isEffectivelyLocked(entity->id))
         return false;
 
@@ -888,7 +889,7 @@ Viewport::Handle Viewport::hitHandle(const QPointF& pos) const
     if (m_selected == kInvalidEntity)
         return Handle::None;
     const Entity* entity = m_project->entity(m_selected);
-    if (!entity || entity->isCamera() || entity->isFolder()
+    if (!entity || entity->isCamera()
         || m_project->isEffectivelyLocked(entity->id))
         return Handle::None;
 
@@ -1079,7 +1080,7 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
             for (const Entity& other : m_project->entities())
             {
-                if (other.id == m_dragEntity || other.hidden)
+                if (other.id == m_dragEntity || other.hidden || other.isFolder())
                     continue;
                 const double otherRotation =
                     m_project->value(other.id, "rotation", m_frame);
@@ -1167,7 +1168,7 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
             for (const Entity& other : m_project->entities())
             {
-                if (other.id == m_dragEntity || other.hidden)
+                if (other.id == m_dragEntity || other.hidden || other.isFolder())
                     continue;
                 const double otherRotation =
                     m_project->value(other.id, "rotation", m_frame);
@@ -1286,7 +1287,7 @@ void Viewport::paintEvent(QPaintEvent*)
     {
         if (const Entity* entity = m_project->entity(m_selected))
         {
-            if (!entity->isCamera() && !entity->isFolder()
+            if (!entity->isCamera()
                 && !m_project->isEffectivelyLocked(entity->id))
             {
                 drawHandles(p, *entity);
@@ -1727,7 +1728,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             bool snappedY = false;
             for (const Entity& other : m_project->entities())
             {
-                if (other.id == m_dragEntity || other.hidden || snappedX && snappedY)
+                if (other.id == m_dragEntity || other.hidden || other.isFolder()
+                    || (snappedX && snappedY))
                     continue;
 
                 const double otherRotation =

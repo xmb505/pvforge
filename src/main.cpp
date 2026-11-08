@@ -3333,6 +3333,29 @@ int folderTest(QApplication& app)
         project->setValue(secondId, QStringLiteral("x"), 0, 0.0, false);
         project->setValue(secondId, QStringLiteral("y"), 0, 0.0, false);
 
+        // Folders get a gizmo too: dragging the X axis moves the group.
+        window.setSelectedEntityForTest(folderId);
+        QApplication::processEvents();
+        const QPointF folderPivot = viewport->entityPivotForTest(folderId);
+        const double folderXBefore =
+            project->value(folderId, QStringLiteral("x"), 0);
+        sendViewport(QEvent::MouseButtonPress,
+                     folderPivot.toPoint() + QPoint(40, 0), Qt::LeftButton);
+        sendViewport(QEvent::MouseMove, folderPivot.toPoint() + QPoint(70, 0),
+                     Qt::LeftButton);
+        sendViewport(QEvent::MouseButtonRelease,
+                     folderPivot.toPoint() + QPoint(70, 0), Qt::NoButton);
+        const double folderXAfter =
+            project->value(folderId, QStringLiteral("x"), 0);
+        if (std::abs(folderXAfter - folderXBefore) < 1.0)
+        {
+            qCritical() << "folder-test: folder gizmo did not move it"
+                        << folderXBefore << folderXAfter;
+            ++failures;
+        }
+        project->setValue(folderId, QStringLiteral("x"), 0, 0.0, false);
+        project->setValue(folderId, QStringLiteral("y"), 0, 0.0, false);
+
         // Locking the folder locks and deselects its children.
         window.setSelectedEntityForTest(secondId);
         project->setEntityFlag(folderId, pvf::EntityFlag::Locked, true);
@@ -3356,6 +3379,8 @@ int folderTest(QApplication& app)
             ++failures;
         }
 
+        window.setSelectedEntityForTest(folderId);
+        QApplication::processEvents();
         window.grab().toImage().save(QStringLiteral("/tmp/pvf_folder_tree.png"));
         qInfo() << "folder-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);

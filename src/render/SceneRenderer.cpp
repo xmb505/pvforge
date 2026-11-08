@@ -149,7 +149,9 @@ QRectF entityLocalBounds(const Entity& entity)
     case EntityType::Audio:
         return QRectF();
     case EntityType::Folder:
-        return QRectF();
+        // Folders have no artwork; a fixed box gives the viewport a gizmo to
+        // move / rotate / scale the group while its children follow.
+        return QRectF(-80, -80, 160, 160);
     }
     return QRectF();
 }
