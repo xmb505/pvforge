@@ -17,6 +17,7 @@
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
+#include "ui/CurveEditor.h"
 #include "ui/EnvironmentPanel.h"
 #include "ui/ProjectPropertiesPanel.h"
 #include "ui/PropertiesPanel.h"
@@ -74,6 +75,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_projectProps = new ProjectPropertiesPanel(m_project, this);
     m_environment = new EnvironmentPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
+    m_curve = new CurveEditor(m_project, m_history, this);
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
@@ -142,7 +144,12 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
-    mainSplit->addWidget(m_timeline);
+    m_timelineTabs = new QTabWidget(this);
+    m_timelineTabs->setObjectName(QStringLiteral("timelineTabs"));
+    m_timelineTabs->setDocumentMode(true);
+    m_timelineTabs->addTab(m_timeline, QStringLiteral("时间轴"));
+    m_timelineTabs->addTab(m_curve, QStringLiteral("图表"));
+    mainSplit->addWidget(m_timelineTabs);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
@@ -230,6 +237,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_props, &PropertiesPanel::keyframeEasingEdited, this,
             &MainWindow::onKeyframeEasingEdited);
     connect(m_timeline, &TimelinePanel::frameRequested, this, &MainWindow::setFrame);
+    connect(m_curve, &CurveEditor::frameRequested, this, &MainWindow::setFrame);
+    connect(m_curve, &CurveEditor::statusMessage, this, [this](const QString& text) {
+        statusBar()->showMessage(text, 2000);
+    });
     connect(m_timeline, &TimelinePanel::scrubStarted, this, [this] {
         if (m_playing)
             togglePlayback();
@@ -1039,6 +1050,7 @@ void MainWindow::setFrame(int frame)
     m_videoPlayer.update(*m_project, m_frame);
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
+    m_curve->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
     if (m_monitor)
         m_monitor->setFrame(m_frame);
@@ -1087,6 +1099,7 @@ void MainWindow::setSelectedEntity(EntityId id)
     m_viewport->setSelectedEntity(id);
     m_props->setEntity(id);
     m_timeline->setSelectedEntity(id);
+    m_curve->setSelectedEntity(id);
 
     // Mine-imator opens an entity property tab when something is selected
     // and closes it when the selection is cleared.
@@ -1768,6 +1781,7 @@ void MainWindow::refreshAll()
     ensureProxies();
     m_viewport->update();
     m_timeline->update();
+    m_curve->refreshTracks();
     m_props->refresh();
     if (m_monitor)
         m_monitor->setProjectChanged();

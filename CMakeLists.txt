@@ -56,6 +56,7 @@ add_executable(pvforge
     src/ui/TextLayoutDialog.cpp
     src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp
+    src/ui/CurveEditor.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp

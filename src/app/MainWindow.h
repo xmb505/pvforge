@@ -24,6 +24,7 @@ namespace pvf {
 class AssetLibraryPanel;
 class AudioEngine;
 class CameraMonitor;
+class CurveEditor;
 class EnvironmentPanel;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
@@ -149,6 +150,8 @@ private:
     QWidget* m_projectTab = nullptr;
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
+    CurveEditor* m_curve = nullptr;
+    QTabWidget* m_timelineTabs = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
     AudioEngine* m_audioEngine = nullptr;

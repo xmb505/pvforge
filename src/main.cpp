@@ -37,6 +37,7 @@
 #include "ui/EasingPicker.h"
 #include "ui/CollapsibleSection.h"
 #include "ui/AssetLibraryPanel.h"
+#include "ui/CurveEditor.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
@@ -700,6 +701,227 @@ int keyframeDragTest(QApplication& app)
         }
 
         qInfo() << "keyframe-drag-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int curveEditorTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* entity = project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+    const pvf::EntityId id = entity->id;
+    project->setValue(id, QStringLiteral("x"), 10, 100.0, true);
+    project->setValue(id, QStringLiteral("x"), 20, 200.0, true);
+    project->setValue(id, QStringLiteral("y"), 10, 0.0, true);
+    project->setValue(id, QStringLiteral("y"), 20, 50.0, true);
+
+    pvf::EasingSpec bezier;
+    bezier.easing = pvf::Easing::Bezier;
+    bezier.inX = 0.8;
+    bezier.inY = 0.0;
+    bezier.outX = 0.2;
+    bezier.outY = 1.0;
+    project->setKeyframeEasing(id, QStringLiteral("x"), 20, bezier);
+
+    pvf::MainWindow window(project);
+    window.resize(1100, 800);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, id] {
+        int failures = 0;
+        auto fail = [&failures](const char* text) {
+            qCritical() << "curve-editor-test:" << text;
+            ++failures;
+        };
+
+        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("timelineTabs"));
+        auto* curve = window.findChild<pvf::CurveEditor*>();
+        if (!tabs || !curve || tabs->count() < 2)
+        {
+            qCritical() << "curve-editor-test: timeline tabs/curve editor missing";
+            app.exit(1);
+            return;
+        }
+        tabs->setCurrentWidget(curve);
+        window.setSelectedEntityForTest(id);
+        curve->setPixelsPerFrameForTest(10.0);
+        curve->setCurveVisible(0, true);
+        curve->setCurveVisible(1, true);
+        QApplication::processEvents();
+
+        auto sendMouse = [curve](QEvent::Type type, const QPointF& pos,
+                                 Qt::MouseButtons buttons,
+                                 Qt::KeyboardModifiers modifiers) {
+            QMouseEvent event(type, pos, curve->mapToGlobal(pos), Qt::LeftButton,
+                              buttons, modifiers);
+            QApplication::sendEvent(curve, &event);
+        };
+        auto sendKey = [curve](QEvent::Type type, int key,
+                               Qt::KeyboardModifiers modifiers) {
+            QKeyEvent event(type, key, modifiers);
+            QApplication::sendEvent(curve, &event);
+        };
+
+        const QPointF p10 = curve->keyframePointForTest(QStringLiteral("x"), 10.0);
+        const QPointF p20 = curve->keyframePointForTest(QStringLiteral("x"), 20.0);
+        if (p10.isNull() || p20.isNull()
+            || std::abs(p10.x() - curve->frameXForTest(10.0)) > 1.0)
+        {
+            fail("keyframe points not mapped to the time axis");
+        }
+
+        // Move the selected frame from 10 to 15. Every property at that frame
+        // travels with it, exactly like a timeline group drag.
+        sendMouse(QEvent::MouseButtonPress, p10, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, QPointF(curve->frameXForTest(15.0), p10.y()),
+                  Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease,
+                  QPointF(curve->frameXForTest(15.0), p10.y()), Qt::NoButton,
+                  Qt::NoModifier);
+        QApplication::processEvents();
+
+        const pvf::Keyframe* movedX = project->keyframe(id, QStringLiteral("x"), 15.0);
+        if (!movedX || std::abs(movedX->value - 100.0) > 1e-6
+            || !project->keyframe(id, QStringLiteral("y"), 15.0)
+            || project->keyframe(id, QStringLiteral("x"), 10.0)
+            || project->keyframe(id, QStringLiteral("y"), 10.0))
+        {
+            fail("dragging a keyframe did not move the whole frame");
+        }
+        if (window.currentFrameForTest() != 15)
+        {
+            fail("playhead did not follow the dragged keyframe");
+        }
+
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        if (!undo)
+        {
+            fail("undo action missing");
+        }
+        else
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            if (!project->keyframe(id, QStringLiteral("x"), 10.0)
+                || !project->keyframe(id, QStringLiteral("y"), 10.0)
+                || project->keyframe(id, QStringLiteral("x"), 15.0))
+            {
+                fail("undo did not restore the dragged keyframes");
+            }
+        }
+
+        // Dragging onto an occupied frame must stop one frame short instead of
+        // overwriting the existing key.
+        const QPointF again10 =
+            curve->keyframePointForTest(QStringLiteral("x"), 10.0);
+        sendMouse(QEvent::MouseButtonPress, again10, Qt::LeftButton,
+                  Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, QPointF(curve->frameXForTest(20.0), again10.y()),
+                  Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease,
+                  QPointF(curve->frameXForTest(20.0), again10.y()), Qt::NoButton,
+                  Qt::NoModifier);
+        QApplication::processEvents();
+        if (!project->keyframe(id, QStringLiteral("x"), 19.0)
+            || !project->keyframe(id, QStringLiteral("x"), 20.0)
+            || project->keyframe(id, QStringLiteral("x"), 10.0))
+        {
+            fail("keyframe drag overwrote a neighbour instead of clamping");
+        }
+        if (undo)
+        {
+            undo->trigger();
+            QApplication::processEvents();
+        }
+
+        // Bezier handle drag: select the incoming key of the segment, grab the
+        // in-handle and move it. The curve changes once, on release.
+        const QPointF key20 = curve->keyframePointForTest(QStringLiteral("x"), 20.0);
+        sendMouse(QEvent::MouseButtonPress, key20, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, key20, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+        if (curve->selectedKeyframeCount() != 1)
+            fail("clicking a graph keyframe did not select it");
+
+        const QPointF handle =
+            curve->bezierHandlePointForTest(QStringLiteral("x"), 20.0, true);
+        if (handle.isNull())
+        {
+            fail("bezier handle was not exposed for the selected keyframe");
+        }
+        else
+        {
+            sendMouse(QEvent::MouseButtonPress, handle, Qt::LeftButton,
+                      Qt::NoModifier);
+            sendMouse(QEvent::MouseMove, handle + QPointF(-15.0, 12.0),
+                      Qt::LeftButton, Qt::NoModifier);
+            sendMouse(QEvent::MouseButtonRelease, handle + QPointF(-15.0, 12.0),
+                      Qt::NoButton, Qt::NoModifier);
+            QApplication::processEvents();
+            const pvf::Keyframe* eased =
+                project->keyframe(id, QStringLiteral("x"), 20.0);
+            if (!eased || eased->ease.easing != pvf::Easing::Bezier
+                || (std::abs(eased->ease.inX - 0.8) < 1e-6
+                    && std::abs(eased->ease.inY) < 1e-6))
+            {
+                fail("dragging the bezier handle did not change the easing");
+            }
+            if (undo)
+            {
+                undo->trigger();
+                QApplication::processEvents();
+                const pvf::Keyframe* restored =
+                    project->keyframe(id, QStringLiteral("x"), 20.0);
+                if (!restored || std::abs(restored->ease.inX - 0.8) > 1e-6
+                    || std::abs(restored->ease.inY) > 1e-6)
+                {
+                    fail("undo did not restore the bezier handles");
+                }
+            }
+        }
+
+        // Rubber-band select both frames, then copy and paste them at frame 40.
+        const QRect plot = curve->plotRectForTest();
+        const QPointF boxStart(curve->frameXForTest(0.0), plot.bottom() - 2.0);
+        const QPointF boxEnd(curve->frameXForTest(30.0), plot.top() + 2.0);
+        sendMouse(QEvent::MouseButtonPress, boxStart, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, boxEnd, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, boxEnd, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+        if (curve->selectedKeyframeCount() < 2)
+            fail("rubber-band selection did not select both keyframes");
+
+        sendKey(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+        window.goToFrame(40);
+        QApplication::processEvents();
+        sendKey(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+        QApplication::processEvents();
+        const pvf::Keyframe* pastedX40 =
+            project->keyframe(id, QStringLiteral("x"), 40.0);
+        const pvf::Keyframe* pastedX50 =
+            project->keyframe(id, QStringLiteral("x"), 50.0);
+        if (!pastedX40 || !pastedX50
+            || std::abs(pastedX40->value - 100.0) > 1e-6
+            || std::abs(pastedX50->value - 200.0) > 1e-6
+            || !project->keyframe(id, QStringLiteral("y"), 50.0))
+        {
+            fail("copy/paste did not recreate the selected keyframes");
+        }
+        if (undo)
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            if (project->keyframe(id, QStringLiteral("x"), 40.0)
+                || project->keyframe(id, QStringLiteral("x"), 50.0))
+            {
+                fail("undo did not remove pasted keyframes");
+            }
+        }
+
+        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_curve_editor.png"));
+        qInfo() << "curve-editor-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -7780,6 +8002,8 @@ int main(int argc, char* argv[])
         return multiDragTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-drag-test")))
         return keyframeDragTest(app);
+    if (app.arguments().contains(QStringLiteral("--curve-editor-test")))
+        return curveEditorTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))
