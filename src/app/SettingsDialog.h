@@ -7,22 +7,33 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QLabel;
+class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
+class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 
 namespace pvf {
+
+class McpServer;
 
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(QWidget* parent = nullptr);
+    explicit SettingsDialog(QWidget* parent = nullptr,
+                            McpServer* mcpServer = nullptr);
 
     // Used by Help -> About so both entry points show the same page.
     void showAboutPage();
+
+signals:
+    // Emitted whenever the enable/start/stop controls change the live server
+    // state. MainWindow uses it to update the status bar and log header.
+    void mcpStateChanged(bool running, quint16 port, const QString& error);
 
 protected:
     void accept() override;
@@ -34,12 +45,21 @@ private:
     QWidget* createTimelinePage();
     QWidget* createAssetsPage();
     QWidget* createDecodePage();
+    QWidget* createMcpPage();
     QWidget* createAboutPage();
     int addPage(const QString& title, QWidget* page, const QStringList& iconNames);
+
+    void applyMcpEnabled(bool enabled);
+    void refreshMcpState();
+    void copyMcpToken();
+    void resetMcpToken();
+    void copyMcpConfig();
+    QString mcpConfigJson() const;
 
     QListWidget* m_categories = nullptr;
     QStackedWidget* m_pages = nullptr;
     int m_aboutIndex = 0;
+    McpServer* m_mcpServer = nullptr;
 
     QComboBox* m_language = nullptr;
     QSpinBox* m_snapPixels = nullptr;
@@ -58,6 +78,19 @@ private:
     QSpinBox* m_fps = nullptr;
     QDoubleSpinBox* m_timelineZoom = nullptr;
     QCheckBox* m_packAssets = nullptr;
+    QCheckBox* m_mcpEnabled = nullptr;
+    QCheckBox* m_mcpAutoPort = nullptr;
+    QSpinBox* m_mcpPort = nullptr;
+    QLabel* m_mcpStatus = nullptr;
+    QLabel* m_mcpError = nullptr;
+    QLineEdit* m_mcpToken = nullptr;
+    QPushButton* m_mcpStart = nullptr;
+    QPushButton* m_mcpStop = nullptr;
+    QComboBox* m_mcpPermission = nullptr;
+    QCheckBox* m_mcpLogEnabled = nullptr;
+    QPushButton* m_mcpCopyToken = nullptr;
+    QPushButton* m_mcpResetToken = nullptr;
+    QPushButton* m_mcpCopyConfig = nullptr;
     QPlainTextEdit* m_aboutText = nullptr;
 };
 

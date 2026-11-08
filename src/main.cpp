@@ -41,6 +41,7 @@
 #include "ui/CollapsibleSection.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CurveEditor.h"
+#include "ui/McpLogPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WaveformView.h"
@@ -50,6 +51,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QCryptographicHash>
+#include <QClipboard>
 #include <QDialog>
 #include <QDebug>
 #include <QDir>
@@ -57,7 +59,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCheckBox>
-#include <QCryptographicHash>
 #include <QDataStream>
 #include <QDoubleSpinBox>
 #include <QFont>
@@ -86,10 +87,12 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTabWidget>
+#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QUrl>
 #include <QWidgetAction>
 #include <QWheelEvent>
@@ -11141,6 +11144,420 @@ int checkpointTest()
     return failures == 0 ? 0 : 1;
 }
 
+int mcpUiTest(QApplication& app)
+{
+    int failures = 0;
+    const auto fail = [&failures](const QString& message) {
+        qCritical() << "mcp-ui-test:" << message;
+        ++failures;
+    };
+    const auto failIf = [&fail](bool condition, const QString& message) {
+        if (condition)
+            fail(message);
+    };
+
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* entity =
+        project->addVector(0, 100, 80, Qt::red, Qt::white, 0);
+    entity->name = QStringLiteral("MCP 测试矩形");
+    const pvf::EntityId entityId = entity->id;
+    project->setValue(entityId, QStringLiteral("x"), 0, 0.0, true);
+    project->setValue(entityId, QStringLiteral("x"), 30, 300.0, true);
+
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    QTimer::singleShot(
+        300, &window, [&app, &window, &failures, entityId, fail, failIf] {
+            auto* server = window.mcpServerForTest();
+            auto* panel = window.mcpLogPanelForTest();
+            auto* statusButton =
+                window.findChild<QToolButton*>(QStringLiteral("mcpStatusButton"));
+            if (!server || !panel || !statusButton)
+            {
+                qCritical() << "mcp-ui-test: server/log/status missing" << server
+                            << panel << statusButton;
+                app.exit(1);
+                return;
+            }
+
+            auto treeText = [panel] {
+                QString text;
+                auto* tree =
+                    panel->findChild<QTreeWidget*>(QStringLiteral("mcpLogTree"));
+                if (!tree)
+                    return text;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i)
+                {
+                    QTreeWidgetItem* item = tree->topLevelItem(i);
+                    for (int column = 0; column < item->columnCount(); ++column)
+                        text += item->text(column) + QLatin1Char('\n');
+                    for (int childIndex = 0; childIndex < item->childCount();
+                         ++childIndex)
+                        for (int column = 0;
+                             column < item->child(childIndex)->columnCount();
+                             ++column)
+                            text += item->child(childIndex)->text(column)
+                                    + QLatin1Char('\n');
+                }
+                return text;
+            };
+
+            failIf(server->isRunning(), QStringLiteral("server auto-started"));
+            failIf(panel->isVisible(),
+                   QStringLiteral("log visible before MCP was enabled"));
+            failIf(!statusButton->isVisible(),
+                   QStringLiteral("status entry is hidden at startup"));
+            failIf(!statusButton->text().contains(QStringLiteral("MCP")),
+                   QStringLiteral("status entry has no MCP text"));
+
+            auto* dialog = window.openSettingsDialogForTest();
+            if (!dialog)
+            {
+                fail(QStringLiteral("settings dialog was not created"));
+                app.exit(1);
+                return;
+            }
+            QApplication::processEvents();
+
+            auto* categories =
+                dialog->findChild<QListWidget*>(QStringLiteral("settingsCategories"));
+            bool hasMcpCategory = false;
+            if (categories)
+            {
+                for (int i = 0; i < categories->count(); ++i)
+                    if (categories->item(i)->text() == QStringLiteral("MCP"))
+                    {
+                        hasMcpCategory = true;
+                        categories->setCurrentRow(i);
+                    }
+            }
+            failIf(!hasMcpCategory, QStringLiteral("settings has no MCP page"));
+
+            auto* enabledCheck =
+                dialog->findChild<QCheckBox*>(QStringLiteral("mcpEnableCheck"));
+            auto* autoPort =
+                dialog->findChild<QCheckBox*>(QStringLiteral("mcpAutoPort"));
+            auto* portSpin =
+                dialog->findChild<QSpinBox*>(QStringLiteral("mcpPortSpin"));
+            auto* tokenEdit =
+                dialog->findChild<QLineEdit*>(QStringLiteral("mcpTokenEdit"));
+            auto* statusLabel =
+                dialog->findChild<QLabel*>(QStringLiteral("mcpStatusLabel"));
+            auto* errorLabel =
+                dialog->findChild<QLabel*>(QStringLiteral("mcpErrorLabel"));
+            auto* startButton =
+                dialog->findChild<QPushButton*>(QStringLiteral("mcpStartButton"));
+            auto* stopButton =
+                dialog->findChild<QPushButton*>(QStringLiteral("mcpStopButton"));
+            auto* logToggle =
+                dialog->findChild<QCheckBox*>(QStringLiteral("mcpLogEnabled"));
+            auto* permissionCombo =
+                dialog->findChild<QComboBox*>(QStringLiteral("mcpPermissionCombo"));
+            auto* copyConfig = dialog->findChild<QPushButton*>(
+                QStringLiteral("mcpCopyConfigButton"));
+            auto* resetToken = dialog->findChild<QPushButton*>(
+                QStringLiteral("mcpResetTokenButton"));
+            if (!enabledCheck || !autoPort || !portSpin || !tokenEdit
+                || !statusLabel || !errorLabel || !startButton || !stopButton
+                || !logToggle || !permissionCombo || !copyConfig || !resetToken)
+            {
+                qCritical() << "mcp-ui-test: MCP controls missing";
+                app.exit(1);
+                return;
+            }
+
+            failIf(enabledCheck->isChecked(),
+                   QStringLiteral("MCP enable switch defaults to on"));
+            failIf(!autoPort->isChecked(),
+                   QStringLiteral("port should default to automatic"));
+            failIf(!(portSpin->minimum() <= 1024 && portSpin->maximum() >= 65535),
+                   QStringLiteral("manual port range is too narrow"));
+            failIf(permissionCombo->currentIndex() != 0,
+                   QStringLiteral("permission mode is not read-only"));
+            failIf(!logToggle->isChecked(),
+                   QStringLiteral("log window should be enabled by default"));
+            failIf(tokenEdit->text()
+                       != QString::fromLatin1(server->token()),
+                   QStringLiteral("settings token does not match the server"));
+            failIf(statusLabel->text().contains(
+                       QString::fromLatin1(server->token())),
+                   QStringLiteral("token is echoed in the settings status"));
+            failIf(!errorLabel->isHidden(),
+                   QStringLiteral("error label is visible before an error"));
+
+            // Only a human action starts the server.
+            enabledCheck->setChecked(true);
+            QApplication::processEvents();
+            failIf(!server->isRunning(),
+                   QStringLiteral("enable switch did not start the server"));
+            failIf(server->port() == 0,
+                   QStringLiteral("enabled server has no listening port"));
+            const quint16 port = server->port();
+            const QByteArray token = server->token();
+            failIf(!statusLabel->text().contains(QStringLiteral("监听中")),
+                   QStringLiteral("settings status does not show listening"));
+            failIf(!statusLabel->text().contains(QString::number(port)),
+                   QStringLiteral("settings status does not show the actual port"));
+            failIf(statusButton->text().contains(QStringLiteral("关闭")),
+                   QStringLiteral("status bar was not updated after start"));
+            failIf(!tokenEdit->text().contains(QString::fromLatin1(token)),
+                   QStringLiteral("token field did not refresh after start"));
+
+            stopButton->click();
+            QApplication::processEvents();
+            failIf(server->isRunning(),
+                   QStringLiteral("dialog stop button did not stop the server"));
+            failIf(server->port() != 0,
+                   QStringLiteral("port not cleared after dialog stop"));
+            failIf(!statusLabel->text().contains(QStringLiteral("未启用")),
+                   QStringLiteral("settings status not reset after stop"));
+            startButton->click();
+            QApplication::processEvents();
+            failIf(!server->isRunning(),
+                   QStringLiteral("dialog start button did not start the server"));
+
+            copyConfig->click();
+            QApplication::processEvents();
+            const QJsonObject config =
+                QJsonDocument::fromJson(
+                    QApplication::clipboard()->text().toUtf8())
+                    .object();
+            const QJsonObject configuredServer =
+                config.value(QStringLiteral("mcpServers"))
+                    .toObject()
+                    .value(QStringLiteral("pvforge"))
+                    .toObject();
+            failIf(!configuredServer.value(QStringLiteral("url"))
+                        .toString()
+                        .contains(QString::number(server->port())),
+                   QStringLiteral("copied config has no live endpoint"));
+            failIf(!configuredServer.value(QStringLiteral("headers"))
+                        .toObject()
+                        .value(QStringLiteral("Authorization"))
+                        .toString()
+                        .contains(QString::fromLatin1(token)),
+                   QStringLiteral("copied config has no bearer token"));
+
+            const quint16 livePort = server->port();
+            QJsonObject summaryParams;
+            summaryParams[QStringLiteral("name")] =
+                QStringLiteral("project.summary");
+            summaryParams[QStringLiteral("arguments")] = QJsonObject();
+            QJsonObject summaryRequest;
+            summaryRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+            summaryRequest[QStringLiteral("id")] = 100;
+            summaryRequest[QStringLiteral("method")] = QStringLiteral("tools/call");
+            summaryRequest[QStringLiteral("params")] = summaryParams;
+            const QJsonObject summaryResponse =
+                mcpRpc(livePort, token, summaryRequest);
+            failIf(summaryResponse.value(QStringLiteral("result")).isUndefined(),
+                   QStringLiteral("project.summary returned no result"));
+            QApplication::processEvents();
+
+            failIf(panel->entryCountForTest() < 1,
+                   QStringLiteral("toolInvoked did not add a log row"));
+            failIf(!panel->isVisible(),
+                   QStringLiteral("first tool call did not unfold the log"));
+            failIf(!statusButton->text().contains(QStringLiteral("已启用")),
+                   QStringLiteral("status bar entry does not show MCP enabled"));
+            dialog->grab().toImage().save(
+                QStringLiteral("/tmp/pvf_mcp_settings.png"));
+            panel->grab().toImage().save(
+                QStringLiteral("/tmp/pvf_mcp_log.png"));
+
+            QJsonObject entityArgs;
+            entityArgs[QStringLiteral("id")] = entityId;
+            entityArgs[QStringLiteral("frame")] = 12;
+            QJsonObject entityParams;
+            entityParams[QStringLiteral("name")] = QStringLiteral("entity.get");
+            entityParams[QStringLiteral("arguments")] = entityArgs;
+            QJsonObject entityRequest;
+            entityRequest[QStringLiteral("jsonrpc")] = QStringLiteral("2.0");
+            entityRequest[QStringLiteral("id")] = 101;
+            entityRequest[QStringLiteral("method")] = QStringLiteral("tools/call");
+            entityRequest[QStringLiteral("params")] = entityParams;
+            const QJsonObject entityResponse =
+                mcpRpc(livePort, token, entityRequest);
+            failIf(entityResponse.value(QStringLiteral("result")).isUndefined(),
+                   QStringLiteral("entity.get returned no result"));
+            QApplication::processEvents();
+
+            failIf(panel->entryCountForTest() < 2,
+                   QStringLiteral("second tool call did not add a log row"));
+            const QString target = panel->entryTargetForTest(1);
+            failIf(!target.contains(QStringLiteral("实体 #")),
+                   QStringLiteral("log target has no entity: %1").arg(target));
+            failIf(!target.contains(QStringLiteral("帧 12")),
+                   QStringLiteral("log target has no frame: %1").arg(target));
+            const QString detail = panel->entryDetailForTest(1);
+            failIf(!detail.contains(QStringLiteral("参数")),
+                   QStringLiteral("expanded row has no args"));
+            failIf(!detail.contains(QStringLiteral("结果")),
+                   QStringLiteral("expanded row has no result"));
+
+            auto* tree =
+                panel->findChild<QTreeWidget*>(QStringLiteral("mcpLogTree"));
+            if (tree && tree->topLevelItem(1))
+            {
+                tree->topLevelItem(1)->setExpanded(true);
+                failIf(!tree->topLevelItem(1)->isExpanded(),
+                       QStringLiteral("log row cannot expand"));
+            }
+            else
+            {
+                fail(QStringLiteral("log tree row missing"));
+            }
+
+            auto* detachButton = panel->findChild<QToolButton*>(
+                QStringLiteral("mcpLogDetachButton"));
+            if (detachButton)
+            {
+                detachButton->click();
+                QApplication::processEvents();
+                failIf(!panel->isDetached(),
+                       QStringLiteral("detach button did not pop the log out"));
+                detachButton->click();
+                QApplication::processEvents();
+                failIf(panel->isDetached(),
+                       QStringLiteral("detach button did not dock the log"));
+            }
+            else
+            {
+                fail(QStringLiteral("detach button missing"));
+            }
+
+            const QString logText = treeText();
+            failIf(logText.contains(QString::fromLatin1(token)),
+                   QStringLiteral("token is echoed in the log"));
+            failIf(statusButton->text().contains(QString::fromLatin1(token))
+                       || statusButton->toolTip().contains(
+                           QString::fromLatin1(token)),
+                   QStringLiteral("token is echoed in the status entry"));
+            failIf(statusLabel->text().contains(QString::fromLatin1(token)),
+                   QStringLiteral("token is echoed in the settings status"));
+
+            panel->activateEntryForTest(1);
+            QApplication::processEvents();
+            failIf(window.selectedEntityForTest() != entityId,
+                   QStringLiteral("clicking the log row did not select the entity"));
+            failIf(window.currentFrameForTest() != 12,
+                   QStringLiteral("clicking the log row did not jump to the frame"));
+
+            bool stopSignalled = false;
+            QObject::connect(panel, &pvf::McpLogPanel::stopAiRequested,
+                             [&stopSignalled] { stopSignalled = true; });
+            auto* stopAi = panel->findChild<QToolButton*>(
+                QStringLiteral("mcpLogStopButton"));
+            failIf(!stopAi || !stopAi->isEnabled(),
+                   QStringLiteral("stop AI button is missing or disabled"));
+            if (stopAi)
+                stopAi->click();
+            QApplication::processEvents();
+            failIf(!stopSignalled,
+                   QStringLiteral("stop AI button did not emit the signal"));
+
+            const QByteArray oldToken = server->token();
+            resetToken->click();
+            QApplication::processEvents();
+            failIf(server->token().isEmpty() || server->token() == oldToken,
+                   QStringLiteral("token reset did not generate a new token"));
+            failIf(tokenEdit->text() != QString::fromLatin1(server->token()),
+                   QStringLiteral("token field did not update after reset"));
+            failIf(treeText().contains(QString::fromLatin1(server->token())),
+                   QStringLiteral("new token is echoed in the log"));
+
+            auto* clearButton = panel->findChild<QToolButton*>(
+                QStringLiteral("mcpLogClearButton"));
+            if (clearButton)
+                clearButton->click();
+            QApplication::processEvents();
+            failIf(panel->entryCountForTest() != 0,
+                   QStringLiteral("clear did not empty the log"));
+
+            enabledCheck->setChecked(false);
+            QApplication::processEvents();
+            failIf(server->isRunning(),
+                   QStringLiteral("disabling MCP did not stop the server"));
+            failIf(server->port() != 0,
+                   QStringLiteral("port not cleared after disabling MCP"));
+            failIf(statusButton->text().contains(QStringLiteral("已启用")),
+                   QStringLiteral("status bar still says MCP is enabled"));
+            failIf(!statusLabel->text().contains(QStringLiteral("未启用")),
+                   QStringLiteral("settings status is not stopped"));
+
+            // A busy manual port shows an error without leaking the token,
+            // and retrying on the same port works once it is free.
+            QTcpServer busyPortServer;
+            if (!busyPortServer.listen(QHostAddress::LocalHost, 0))
+            {
+                fail(QStringLiteral("could not reserve a busy port"));
+            }
+            else
+            {
+                const quint16 busyPort = busyPortServer.serverPort();
+                autoPort->setChecked(false);
+                portSpin->setValue(busyPort);
+                enabledCheck->setChecked(true);
+                QApplication::processEvents();
+                failIf(server->isRunning(),
+                       QStringLiteral("server started on an occupied port"));
+                failIf(errorLabel->isHidden() || errorLabel->text().isEmpty(),
+                       QStringLiteral("start failure did not show an error"));
+                failIf(errorLabel->text().contains(
+                           QString::fromLatin1(server->token())),
+                       QStringLiteral("token is echoed in the error text"));
+                failIf(!statusButton->text().contains(QStringLiteral("错误")),
+                       QStringLiteral("status bar does not show the MCP error"));
+                busyPortServer.close();
+                QApplication::processEvents();
+                startButton->click();
+                QApplication::processEvents();
+                failIf(!server->isRunning(),
+                       QStringLiteral("retry after freeing the port failed"));
+                failIf(server->port() != busyPort,
+                       QStringLiteral("manual port was not honoured: %1 != %2")
+                           .arg(server->port())
+                           .arg(busyPort));
+                failIf(!errorLabel->isHidden(),
+                       QStringLiteral("error text did not clear on success"));
+                enabledCheck->setChecked(false);
+                QApplication::processEvents();
+                failIf(server->isRunning(),
+                       QStringLiteral("manual-port server did not stop"));
+            }
+
+            panel->showFromMenu();
+            QApplication::processEvents();
+            panel->close();
+            QApplication::processEvents();
+            failIf(panel->isVisible(),
+                   QStringLiteral("closing the log window did not hide it"));
+            failIf(!statusButton->isVisible(),
+                   QStringLiteral("status entry disappeared after closing the log"));
+            failIf(!statusButton->text().contains(QStringLiteral("MCP")),
+                   QStringLiteral("status entry lost its MCP label"));
+            statusButton->click();
+            QApplication::processEvents();
+            failIf(!panel->isVisible(),
+                   QStringLiteral("status entry did not reopen the log"));
+            panel->close();
+            QApplication::processEvents();
+
+            dialog->close();
+            QApplication::processEvents();
+            failIf(server->isRunning(),
+                   QStringLiteral("closing settings started the server"));
+
+            qInfo() << "mcp-ui-test failures" << failures;
+            app.exit(failures == 0 ? 0 : 1);
+        });
+    return app.exec();
+}
+
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -11199,6 +11616,8 @@ int main(int argc, char* argv[])
         return mcpReadonlyTest();
     if (app.arguments().contains(QStringLiteral("--mcp-http-test")))
         return mcpHttpTest();
+    if (app.arguments().contains(QStringLiteral("--mcp-ui-test")))
+        return mcpUiTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))

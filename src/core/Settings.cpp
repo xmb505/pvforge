@@ -248,6 +248,61 @@ void setMonitorVisible(bool on)
     store().setValue(QStringLiteral("monitor/visible"), on);
 }
 
+bool mcpPortAuto()
+{
+    return store().value(QStringLiteral("mcp/portAuto"), true).toBool();
+}
+
+void setMcpPortAuto(bool on)
+{
+    store().setValue(QStringLiteral("mcp/portAuto"), on);
+}
+
+int mcpPort()
+{
+    return std::clamp(store().value(QStringLiteral("mcp/port"), 8765).toInt(),
+                      1024, 65535);
+}
+
+void setMcpPort(int port)
+{
+    store().setValue(QStringLiteral("mcp/port"), std::clamp(port, 1024, 65535));
+}
+
+bool mcpLogVisible()
+{
+    return store().value(QStringLiteral("mcp/logVisible"), true).toBool();
+}
+
+void setMcpLogVisible(bool on)
+{
+    store().setValue(QStringLiteral("mcp/logVisible"), on);
+}
+
+QRect mcpLogDockGeometry()
+{
+    return store()
+        .value(QStringLiteral("mcp/logDockGeometry"), QRect(-1, -1, 420, 280))
+        .toRect();
+}
+
+void setMcpLogDockGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("mcp/logDockGeometry"), geometry);
+}
+
+QRect mcpLogWindowGeometry()
+{
+    return store()
+        .value(QStringLiteral("mcp/logWindowGeometry"), QRect(100, 100, 560, 360))
+        .toRect();
+}
+
+void setMcpLogWindowGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("mcp/logWindowGeometry"), geometry);
+}
+
 QString exportDirectory()
 {
     return store().value(QStringLiteral("export/directory")).toString();

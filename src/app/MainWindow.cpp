@@ -12,6 +12,7 @@
 #include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
 #include "media/VideoPlayer.h"
+#include "mcp/McpServer.h"
 #include "render/CameraRenderer.h"
 #include "render/VideoExporter.h"
 #include "ui/AssetLibraryPanel.h"
@@ -19,6 +20,7 @@
 #include "ui/CollapsibleSection.h"
 #include "ui/CurveEditor.h"
 #include "ui/EnvironmentPanel.h"
+#include "ui/McpLogPanel.h"
 #include "ui/ProjectPropertiesPanel.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
@@ -41,6 +43,7 @@
 #include <QMenuBar>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QPalette>
 #include <QScrollArea>
 #include <QSet>
 #include <QSplitter>
@@ -84,6 +87,25 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_monitor = new CameraMonitor(m_project, m_viewport, m_viewport);
     m_monitor->setFrame(0);
     m_monitor->setVisible(Settings::monitorVisible());
+
+    m_mcpServer = new McpServer(m_project, this);
+    m_mcpServer->setObjectName(QStringLiteral("mcpServer"));
+    m_mcpLog = new McpLogPanel(m_viewport);
+    m_mcpLog->setLoggingEnabled(Settings::mcpLogVisible());
+    m_mcpLog->setServerState(false, 0);
+    // A plain child widget becomes visible with its parent; the log stays
+    // hidden until the first tool call or an explicit status-bar click.
+    m_mcpLog->hide();
+    connect(m_mcpServer, &McpServer::toolInvoked, m_mcpLog,
+            &McpLogPanel::addToolInvocation);
+    connect(m_mcpLog, &McpLogPanel::entityActivated, this,
+            &MainWindow::setSelectedEntity);
+    connect(m_mcpLog, &McpLogPanel::frameRequested, this, &MainWindow::setFrame);
+    connect(m_mcpLog, &McpLogPanel::stopAiRequested, this, [this] {
+        statusBar()->showMessage(
+            QStringLiteral("已请求停止 AI：当前只有只读工具，写工具接入后执行急停"),
+            5000);
+    });
 
     // "Project properties" tab: collapsible categories, one scroll column.
     m_projectTab = new QWidget(this);
@@ -168,6 +190,18 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("statusInfo"));
     statusBar()->addPermanentWidget(m_status);
+
+    m_mcpStatusButton = new QToolButton(this);
+    m_mcpStatusButton->setObjectName(QStringLiteral("mcpStatusButton"));
+    m_mcpStatusButton->setAutoRaise(true);
+    m_mcpStatusButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_mcpStatusButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_mcpStatusButton, &QToolButton::clicked, this, [this] {
+        if (m_mcpLog)
+            m_mcpLog->showFromMenu();
+    });
+    statusBar()->addPermanentWidget(m_mcpStatusButton);
+    updateMcpStatus();
 
     m_importProgress = new QProgressBar(this);
     m_importProgress->setObjectName(QStringLiteral("importProgress"));
@@ -483,12 +517,16 @@ void MainWindow::createMenus()
         new QAction(Lang::t(QStringLiteral("action.settings"), QStringLiteral("设置…")), this);
     settingsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+,")));
     connect(settingsAction, &QAction::triggered, this, [this] {
-        SettingsDialog dialog(this);
+        SettingsDialog dialog(this, m_mcpServer);
+        wireMcpDialog(&dialog);
         if (dialog.exec() == QDialog::Accepted)
         {
             m_viewport->setSnapPixels(Settings::snapPixels());
             m_viewport->setEdgeCenterSnap(Settings::edgeCenterSnap());
             updateAutosaveTimer();
+            if (m_mcpLog)
+                m_mcpLog->setLoggingEnabled(Settings::mcpLogVisible());
+            updateMcpStatus();
             statusBar()->showMessage(QStringLiteral("设置已保存，语言等改动重启后生效"), 3000);
         }
     });
@@ -1039,6 +1077,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
     }
     // Remember the playhead even when the project itself is unchanged.
     Settings::setProjectFrame(m_project->filePath, m_frame);
+    if (m_mcpServer)
+        m_mcpServer->stop();
     event->accept();
 }
 
@@ -1900,6 +1940,64 @@ void MainWindow::updatePerfLabel()
             .arg(perf.timelineMs, 0, 'f', 1)
             .arg(perf.videoMs, 0, 'f', 1)
             .arg(perf.entities));
+}
+
+void MainWindow::wireMcpDialog(SettingsDialog* dialog)
+{
+    connect(dialog, &SettingsDialog::mcpStateChanged, this,
+            [this](bool running, quint16 port, const QString& error) {
+                m_mcpLastError = error;
+                if (m_mcpLog)
+                    m_mcpLog->setServerState(running, port, error);
+                updateMcpStatus();
+            });
+}
+
+SettingsDialog* MainWindow::openSettingsDialogForTest()
+{
+    auto* dialog = new SettingsDialog(this, m_mcpServer);
+    dialog->setObjectName(QStringLiteral("settingsDialogTest"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    wireMcpDialog(dialog);
+    dialog->show();
+    return dialog;
+}
+
+void MainWindow::updateMcpStatus()
+{
+    if (!m_mcpStatusButton)
+        return;
+
+    const bool running = m_mcpServer && m_mcpServer->isRunning();
+    if (running)
+        m_mcpStatusButton->setText(QStringLiteral("MCP 已启用 · 日志"));
+    else if (!m_mcpLastError.isEmpty())
+        m_mcpStatusButton->setText(QStringLiteral("MCP 错误 · 日志"));
+    else
+        m_mcpStatusButton->setText(QStringLiteral("MCP 关闭 · 日志"));
+
+    if (running)
+    {
+        m_mcpStatusButton->setToolTip(
+            QStringLiteral("监听中：%1\n点击打开 MCP 日志")
+                .arg(m_mcpServer->endpointUrl()));
+    }
+    else if (!m_mcpLastError.isEmpty())
+    {
+        m_mcpStatusButton->setToolTip(
+            QStringLiteral("MCP 启动失败：%1\n点击打开 MCP 日志")
+                .arg(m_mcpLastError));
+    }
+    else
+    {
+        m_mcpStatusButton->setToolTip(
+            QStringLiteral("MCP 未启用\n点击打开 MCP 日志"));
+    }
+
+    QPalette palette = QApplication::palette();
+    if (!running && !m_mcpLastError.isEmpty())
+        palette.setColor(QPalette::WindowText, QColor(220, 80, 70));
+    m_mcpStatusButton->setPalette(palette);
 }
 
 void MainWindow::updateStatus()

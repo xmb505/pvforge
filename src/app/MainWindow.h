@@ -18,6 +18,7 @@ class QLabel;
 class QScrollArea;
 class QTabWidget;
 class QTimer;
+class QToolButton;
 
 namespace pvf {
 
@@ -26,8 +27,11 @@ class AudioEngine;
 class CameraMonitor;
 class CurveEditor;
 class EnvironmentPanel;
+class McpLogPanel;
+class McpServer;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
+class SettingsDialog;
 class TimelinePanel;
 class VideoProxyGenerator;
 class Viewport;
@@ -66,6 +70,11 @@ public:
     void reloadAutosaveSettingsForTest();
     bool autosaveActiveForTest() const;
     int autosaveIntervalForTest() const;
+    McpServer* mcpServerForTest() const { return m_mcpServer; }
+    McpLogPanel* mcpLogPanelForTest() const { return m_mcpLog; }
+    // Test entry point that uses the same dialog wiring as Edit -> Settings,
+    // but shows the dialog non-modally so a test can drive its controls.
+    SettingsDialog* openSettingsDialogForTest();
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -111,6 +120,8 @@ private:
     void ensureProxies();
     void onPlayTick();
     void updateStatus();
+    void updateMcpStatus();
+    void wireMcpDialog(SettingsDialog* dialog);
     void toggleWorkbench();
     void deleteSelectedEntity();
     void onUndo();
@@ -156,6 +167,8 @@ private:
     QTabWidget* m_timelineTabs = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
+    McpServer* m_mcpServer = nullptr;
+    McpLogPanel* m_mcpLog = nullptr;
     AudioEngine* m_audioEngine = nullptr;
     VideoPlayer m_videoPlayer;
     VideoProxyGenerator* m_proxyGenerator = nullptr;
@@ -168,6 +181,8 @@ private:
     int m_lastScrubFrame = -1;
     QLabel* m_status = nullptr;
     QLabel* m_perfLabel = nullptr;
+    QToolButton* m_mcpStatusButton = nullptr;
+    QString m_mcpLastError;
     QTimer* m_perfTimer = nullptr;
     QAction* m_perfAction = nullptr;
     QProgressBar* m_importProgress = nullptr;

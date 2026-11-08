@@ -4,6 +4,7 @@
 #include "SystemInfo.h"
 #include "core/Settings.h"
 #include "media/DecoderInfo.h"
+#include "mcp/McpServer.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -20,14 +21,20 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 namespace pvf {
@@ -68,8 +75,9 @@ QString aboutText()
 
 } // namespace
 
-SettingsDialog::SettingsDialog(QWidget* parent)
+SettingsDialog::SettingsDialog(QWidget* parent, McpServer* mcpServer)
     : QDialog(parent)
+    , m_mcpServer(mcpServer)
 {
     setWindowTitle(QStringLiteral("设置"));
     setMinimumSize(660, 460);
@@ -109,6 +117,8 @@ SettingsDialog::SettingsDialog(QWidget* parent)
             {QStringLiteral("folder")});
     addPage(QStringLiteral("解码"), createDecodePage(),
             {QStringLiteral("video-x-generic"), QStringLiteral("media-playback-start")});
+    addPage(QStringLiteral("MCP"), createMcpPage(),
+            {QStringLiteral("network-server"), QStringLiteral("network-wired")});
     m_aboutIndex = addPage(QStringLiteral("关于"), createAboutPage(),
                            {QStringLiteral("help-about")});
 
@@ -379,6 +389,317 @@ QWidget* SettingsDialog::createDecodePage()
     return page;
 }
 
+QWidget* SettingsDialog::createMcpPage()
+{
+    auto* page = new QWidget(this);
+    auto* outer = new QVBoxLayout(page);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* scroll = new QScrollArea(page);
+    scroll->setObjectName(QStringLiteral("mcpSettingsScroll"));
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto* content = new QWidget(scroll);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* service = new QGroupBox(QStringLiteral("MCP 服务"), content);
+    auto* serviceForm = new QFormLayout(service);
+    m_mcpEnabled = new QCheckBox(
+        QStringLiteral("本次启动启用 MCP（重启后不会自动开启）"), service);
+    m_mcpEnabled->setObjectName(QStringLiteral("mcpEnableCheck"));
+    m_mcpEnabled->setToolTip(
+        QStringLiteral("只有在这里手动启用后服务器才会监听；关闭设置页不会自动启动。"));
+    connect(m_mcpEnabled, &QCheckBox::toggled, this,
+            &SettingsDialog::applyMcpEnabled);
+    serviceForm->addRow(m_mcpEnabled);
+
+    auto* portRow = new QWidget(service);
+    auto* portLayout = new QHBoxLayout(portRow);
+    portLayout->setContentsMargins(0, 0, 0, 0);
+    portLayout->setSpacing(8);
+    m_mcpAutoPort = new QCheckBox(QStringLiteral("自动选择端口"), portRow);
+    m_mcpAutoPort->setObjectName(QStringLiteral("mcpAutoPort"));
+    m_mcpAutoPort->setChecked(Settings::mcpPortAuto());
+    m_mcpPort = new QSpinBox(portRow);
+    m_mcpPort->setObjectName(QStringLiteral("mcpPortSpin"));
+    m_mcpPort->setRange(1024, 65535);
+    m_mcpPort->setValue(Settings::mcpPort());
+    m_mcpPort->setEnabled(!m_mcpAutoPort->isChecked());
+    portLayout->addWidget(m_mcpAutoPort);
+    portLayout->addWidget(m_mcpPort);
+    portLayout->addStretch(1);
+    serviceForm->addRow(QStringLiteral("端口"), portRow);
+    connect(m_mcpAutoPort, &QCheckBox::toggled, this,
+            [this] { refreshMcpState(); });
+
+    m_mcpStatus = infoLabel(QStringLiteral("未启用"), service);
+    m_mcpStatus->setObjectName(QStringLiteral("mcpStatusLabel"));
+    serviceForm->addRow(QStringLiteral("状态"), m_mcpStatus);
+
+    m_mcpError = infoLabel(QString(), service);
+    m_mcpError->setObjectName(QStringLiteral("mcpErrorLabel"));
+    m_mcpError->setStyleSheet(QStringLiteral("color: #c0392b;"));
+    m_mcpError->hide();
+    serviceForm->addRow(m_mcpError);
+
+    auto* buttons = new QWidget(service);
+    auto* buttonLayout = new QHBoxLayout(buttons);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(8);
+    m_mcpStart = new QPushButton(QStringLiteral("启动"), buttons);
+    m_mcpStart->setObjectName(QStringLiteral("mcpStartButton"));
+    m_mcpStop = new QPushButton(QStringLiteral("停止"), buttons);
+    m_mcpStop->setObjectName(QStringLiteral("mcpStopButton"));
+    buttonLayout->addWidget(m_mcpStart);
+    buttonLayout->addWidget(m_mcpStop);
+    buttonLayout->addStretch(1);
+    serviceForm->addRow(buttons);
+    connect(m_mcpStart, &QPushButton::clicked, this, [this] {
+        if (m_mcpEnabled->isChecked())
+            applyMcpEnabled(true);
+        else
+            m_mcpEnabled->setChecked(true);
+    });
+    connect(m_mcpStop, &QPushButton::clicked, this, [this] {
+        if (!m_mcpEnabled->isChecked())
+            applyMcpEnabled(false);
+        else
+            m_mcpEnabled->setChecked(false);
+    });
+    layout->addWidget(service);
+
+    auto* tokenGroup = new QGroupBox(QStringLiteral("访问令牌"), content);
+    auto* tokenLayout = new QVBoxLayout(tokenGroup);
+    auto* tokenRow = new QWidget(tokenGroup);
+    auto* tokenRowLayout = new QHBoxLayout(tokenRow);
+    tokenRowLayout->setContentsMargins(0, 0, 0, 0);
+    tokenRowLayout->setSpacing(8);
+    m_mcpToken = new QLineEdit(tokenRow);
+    m_mcpToken->setObjectName(QStringLiteral("mcpTokenEdit"));
+    m_mcpToken->setReadOnly(true);
+    m_mcpToken->setPlaceholderText(QStringLiteral("服务器未配置"));
+    m_mcpCopyToken = new QPushButton(QStringLiteral("复制"), tokenRow);
+    m_mcpCopyToken->setObjectName(QStringLiteral("mcpCopyTokenButton"));
+    m_mcpResetToken = new QPushButton(QStringLiteral("重置"), tokenRow);
+    m_mcpResetToken->setObjectName(QStringLiteral("mcpResetTokenButton"));
+    m_mcpResetToken->setToolTip(QStringLiteral("生成新的随机令牌，已连接的客户端需更新配置"));
+    tokenRowLayout->addWidget(m_mcpToken, 1);
+    tokenRowLayout->addWidget(m_mcpCopyToken);
+    tokenRowLayout->addWidget(m_mcpResetToken);
+    tokenLayout->addWidget(tokenRow);
+    tokenLayout->addWidget(infoLabel(
+        QStringLiteral("令牌只保存在本次进程内；日志和状态文本不会回显令牌。"), tokenGroup));
+    connect(m_mcpCopyToken, &QPushButton::clicked, this,
+            &SettingsDialog::copyMcpToken);
+    connect(m_mcpResetToken, &QPushButton::clicked, this,
+            &SettingsDialog::resetMcpToken);
+    layout->addWidget(tokenGroup);
+
+    auto* permissionGroup = new QGroupBox(QStringLiteral("权限模式"), content);
+    auto* permissionForm = new QFormLayout(permissionGroup);
+    m_mcpPermission = new QComboBox(permissionGroup);
+    m_mcpPermission->setObjectName(QStringLiteral("mcpPermissionCombo"));
+    m_mcpPermission->addItem(QStringLiteral("只读（当前阶段）"));
+    m_mcpPermission->addItem(QStringLiteral("允许修改（写工具尚未接入）"));
+    m_mcpPermission->setCurrentIndex(0);
+    if (auto* model =
+            qobject_cast<QStandardItemModel*>(m_mcpPermission->model()))
+    {
+        if (QStandardItem* item = model->item(1))
+            item->setEnabled(false);
+    }
+    permissionForm->addRow(QStringLiteral("模式"), m_mcpPermission);
+    permissionForm->addRow(infoLabel(
+        QStringLiteral("写工具与急停事务尚未接入；接入前“允许修改”保持禁用。"),
+        permissionGroup));
+    layout->addWidget(permissionGroup);
+
+    auto* logGroup = new QGroupBox(QStringLiteral("日志窗"), content);
+    auto* logLayout = new QVBoxLayout(logGroup);
+    m_mcpLogEnabled =
+        new QCheckBox(QStringLiteral("显示 MCP 日志窗（首次 AI 调用自动展开）"),
+                      logGroup);
+    m_mcpLogEnabled->setObjectName(QStringLiteral("mcpLogEnabled"));
+    m_mcpLogEnabled->setChecked(Settings::mcpLogVisible());
+    logLayout->addWidget(m_mcpLogEnabled);
+    logLayout->addWidget(infoLabel(
+        QStringLiteral("关闭日志窗后仍可从状态栏的 MCP 入口重新打开；日志只保存在内存中。"),
+        logGroup));
+    layout->addWidget(logGroup);
+
+    auto* configGroup = new QGroupBox(QStringLiteral("客户端配置"), content);
+    auto* configLayout = new QVBoxLayout(configGroup);
+    configLayout->addWidget(infoLabel(
+        QStringLiteral("远程 Streamable HTTP + Bearer 认证，只监听 127.0.0.1。"
+                       "只支持 stdio 的客户端需要 pvforge-mcp 桥接进程。"),
+        configGroup));
+    m_mcpCopyConfig = new QPushButton(
+        QStringLiteral("复制 OpenCode / DeepSeek 配置"), configGroup);
+    m_mcpCopyConfig->setObjectName(QStringLiteral("mcpCopyConfigButton"));
+    connect(m_mcpCopyConfig, &QPushButton::clicked, this,
+            &SettingsDialog::copyMcpConfig);
+    configLayout->addWidget(m_mcpCopyConfig);
+    configLayout->addWidget(infoLabel(
+        QStringLiteral("未确认客户端字段时复制的是通用 mcpServers JSON；"
+                       "端口和令牌以当前服务状态为准。"),
+        configGroup));
+    layout->addWidget(configGroup);
+
+    layout->addStretch(1);
+    scroll->setWidget(content);
+    outer->addWidget(scroll);
+    refreshMcpState();
+    return page;
+}
+
+void SettingsDialog::applyMcpEnabled(bool enabled)
+{
+    if (!m_mcpServer)
+    {
+        refreshMcpState();
+        return;
+    }
+
+    if (enabled)
+    {
+        if (m_mcpServer->isRunning())
+        {
+            refreshMcpState();
+            return;
+        }
+        QString error;
+        const quint16 requested =
+            m_mcpAutoPort->isChecked() ? 0 : quint16(m_mcpPort->value());
+        const quint16 port = m_mcpServer->start(requested, &error);
+        if (port == 0)
+        {
+            if (error.isEmpty())
+                error = QStringLiteral("端口不可用");
+            {
+                const QSignalBlocker blocker(m_mcpEnabled);
+                m_mcpEnabled->setChecked(false);
+            }
+            m_mcpError->setText(QStringLiteral("启动失败：%1").arg(error));
+            m_mcpError->show();
+            refreshMcpState();
+            emit mcpStateChanged(false, 0, error);
+            return;
+        }
+        m_mcpError->clear();
+        m_mcpError->hide();
+        refreshMcpState();
+        emit mcpStateChanged(true, port, QString());
+        return;
+    }
+
+    m_mcpServer->stop();
+    m_mcpError->clear();
+    m_mcpError->hide();
+    refreshMcpState();
+    emit mcpStateChanged(false, 0, QString());
+}
+
+void SettingsDialog::refreshMcpState()
+{
+    const bool hasServer = m_mcpServer != nullptr;
+    const bool running = hasServer && m_mcpServer->isRunning();
+
+    {
+        const QSignalBlocker blocker(m_mcpEnabled);
+        m_mcpEnabled->setChecked(running);
+    }
+    m_mcpEnabled->setEnabled(hasServer);
+    m_mcpAutoPort->setEnabled(hasServer && !running);
+    m_mcpPort->setEnabled(hasServer && !running && !m_mcpAutoPort->isChecked());
+    m_mcpStart->setEnabled(hasServer && !running);
+    m_mcpStop->setEnabled(hasServer && running);
+    m_mcpCopyToken->setEnabled(hasServer);
+    m_mcpResetToken->setEnabled(hasServer);
+    m_mcpCopyConfig->setEnabled(hasServer);
+
+    if (hasServer)
+    {
+        m_mcpToken->setText(QString::fromLatin1(m_mcpServer->token()));
+        m_mcpToken->setEnabled(true);
+    }
+    else
+    {
+        m_mcpToken->clear();
+        m_mcpToken->setEnabled(false);
+    }
+
+    if (!hasServer)
+    {
+        m_mcpStatus->setText(QStringLiteral("未连接到主窗口"));
+    }
+    else if (running)
+    {
+        m_mcpStatus->setText(
+            QStringLiteral("监听中 · %1").arg(m_mcpServer->endpointUrl()));
+    }
+    else if (!m_mcpError->text().isEmpty())
+    {
+        m_mcpStatus->setText(QStringLiteral("启动失败"));
+    }
+    else
+    {
+        m_mcpStatus->setText(QStringLiteral("未启用"));
+    }
+}
+
+void SettingsDialog::copyMcpToken()
+{
+    if (!m_mcpServer)
+        return;
+    QApplication::clipboard()->setText(
+        QString::fromLatin1(m_mcpServer->token()));
+}
+
+void SettingsDialog::resetMcpToken()
+{
+    if (!m_mcpServer)
+        return;
+    m_mcpServer->setToken(QByteArray());
+    refreshMcpState();
+}
+
+QString SettingsDialog::mcpConfigJson() const
+{
+    QString url;
+    if (m_mcpServer && m_mcpServer->isRunning())
+        url = m_mcpServer->endpointUrl();
+    else if (m_mcpAutoPort->isChecked())
+        url = QStringLiteral("http://127.0.0.1:PORT/mcp");
+    else
+        url = QStringLiteral("http://127.0.0.1:%1/mcp").arg(m_mcpPort->value());
+
+    const QString token = m_mcpServer
+                              ? QString::fromLatin1(m_mcpServer->token())
+                              : QString();
+    QJsonObject server;
+    server[QStringLiteral("type")] = QStringLiteral("streamable-http");
+    server[QStringLiteral("url")] = url;
+    server[QStringLiteral("headers")] =
+        QJsonObject{{QStringLiteral("Authorization"),
+                     QStringLiteral("Bearer %1").arg(token)}};
+
+    QJsonObject root;
+    root[QStringLiteral("mcpServers")] =
+        QJsonObject{{QStringLiteral("pvforge"), server}};
+    return QString::fromUtf8(
+        QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+void SettingsDialog::copyMcpConfig()
+{
+    QApplication::clipboard()->setText(mcpConfigJson());
+}
+
 QWidget* SettingsDialog::createAboutPage()
 {
     auto* page = new QWidget(this);
@@ -453,6 +774,9 @@ void SettingsDialog::accept()
     Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
     Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());
     Settings::setPackAssetsDefault(m_packAssets->isChecked());
+    Settings::setMcpPortAuto(m_mcpAutoPort->isChecked());
+    Settings::setMcpPort(m_mcpPort->value());
+    Settings::setMcpLogVisible(m_mcpLogEnabled->isChecked());
     QDialog::accept();
 }
 

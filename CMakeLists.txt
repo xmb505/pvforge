@@ -71,6 +71,7 @@ add_executable(pvforge
     src/ui/CameraMonitor.cpp
     src/ui/EasingChooser.cpp
     src/ui/EasingPicker.cpp
+    src/ui/McpLogPanel.cpp
     src/ui/TextLayoutDialog.cpp
     src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp

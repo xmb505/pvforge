@@ -62,6 +62,19 @@ void setMonitorAlwaysOnTop(bool on);
 bool monitorVisible();
 void setMonitorVisible(bool on);
 
+// MCP settings. "Enabled" is deliberately not persisted: every launch starts
+// with the server off and the human has to enable it again.
+bool mcpPortAuto();
+void setMcpPortAuto(bool on);
+int mcpPort();
+void setMcpPort(int port);
+bool mcpLogVisible();
+void setMcpLogVisible(bool on);
+QRect mcpLogDockGeometry();
+void setMcpLogDockGeometry(const QRect& geometry);
+QRect mcpLogWindowGeometry();
+void setMcpLogWindowGeometry(const QRect& geometry);
+
 bool showCameraFrame();
 void setShowCameraFrame(bool on);
 
