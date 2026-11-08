@@ -11,10 +11,12 @@
 #include "media/DecoderInfo.h"
 #include "render/CameraRenderer.h"
 #include "render/SceneRenderer.h"
+#include "render/VideoExporter.h"
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
+#include "app/ExportDialog.h"
 #include "app/SettingsDialog.h"
 #include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
@@ -7332,6 +7334,270 @@ int workbenchTest(QApplication& app)
     return app.exec();
 }
 
+int exportTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    if (pvf::VideoExporter::ffmpegExecutable().isEmpty())
+    {
+        qInfo() << "export-test: ffmpeg missing, skipped";
+        return 0;
+    }
+
+    const QString path = QStringLiteral("/tmp/pvf_export_test.mp4");
+    QFile::remove(path);
+
+    pvf::Project project;
+    project.name = QStringLiteral("export");
+    project.width = 320;
+    project.height = 180;
+    project.fps = 24;
+    project.background = QColor(10, 20, 40);
+
+    // A real video source exercises the export decode path (which must skip
+    // the 960-wide preview proxy).
+    const QString videoSource = QStringLiteral("/tmp/pvf_export_source.mp4");
+    QFile::remove(videoSource);
+    {
+        QProcess generator;
+        generator.start(
+            QStringLiteral("ffmpeg"),
+            {QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+             QStringLiteral("-f"), QStringLiteral("lavfi"),
+             QStringLiteral("-i"),
+             QStringLiteral("color=c=green:s=320x180:d=0.6:r=24"),
+             QStringLiteral("-c:v"), QStringLiteral("libx264"),
+             QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+             QStringLiteral("-preset"), QStringLiteral("ultrafast"), videoSource});
+        if (!generator.waitForFinished(30000) || generator.exitCode() != 0)
+        {
+            qCritical() << "export-test: cannot generate source video"
+                        << generator.readAllStandardError();
+            ++failures;
+        }
+    }
+    QString videoError;
+    double videoDuration = 0.0;
+    const QImage videoFirst =
+        pvf::decodeVideoFirstFrame(videoSource, &videoError, &videoDuration);
+    if (videoFirst.isNull())
+    {
+        qCritical() << "export-test: source video" << videoError;
+        ++failures;
+    }
+    else
+    {
+        pvf::Entity* video = project.addVideo(videoSource, videoFirst, videoDuration,
+                                              QStringLiteral("screen"));
+        video->values.insert(QStringLiteral("x"), 0.0);
+        video->values.insert(QStringLiteral("y"), 0.0);
+    }
+
+    pvf::Entity* rect = project.addVector(0, 120, 80, QColor(230, 40, 40),
+                                          QColor(0, 0, 0, 0), 0.0);
+    project.addKeyframe(rect->id, QStringLiteral("x"), 0, -80.0);
+    project.addKeyframe(rect->id, QStringLiteral("x"), 24, 80.0);
+
+    auto clip = std::make_shared<pvf::AudioClip>();
+    clip->duration = 1.0;
+    clip->sampleRate = 48000;
+    clip->channels = 2;
+    clip->samples.resize(48000 * 2);
+    for (int i = 0; i < 48000; ++i)
+    {
+        const qint16 value =
+            qint16(8000.0 * std::sin(2.0 * M_PI * 440.0 * i / 48000.0));
+        clip->samples[i * 2] = value;
+        clip->samples[i * 2 + 1] = value;
+    }
+    clip->peaks.resize(1000);
+    project.addAudio(QStringLiteral("/tmp/pvf_export_tone.wav"), clip,
+                     QStringLiteral("tone"));
+
+    pvf::ExportOptions options;
+    options.outputPath = path;
+    options.size = QSize(320, 180);
+    options.fps = 24;
+    options.frameCount = project.timelineLength();
+    options.crf = 23;
+    options.includeAudio = true;
+
+    // The dialog must resolve the same frame count, project size and active
+    // camera that the exporter expects.
+    pvf::Entity* camera = project.addCamera(QStringLiteral("Camera"));
+    project.activeCamera = camera->id;
+    {
+        pvf::ExportDialog dialog(project);
+        const pvf::ExportOptions fromDialog = dialog.options();
+        if (fromDialog.frameCount != project.timelineLength()
+            || fromDialog.cameraId != camera->id
+            || fromDialog.size != QSize(project.width, project.height)
+            || !fromDialog.outputPath.endsWith(QStringLiteral(".mp4")))
+        {
+            qCritical() << "export-test: dialog options" << fromDialog.frameCount
+                        << fromDialog.cameraId << fromDialog.size
+                        << fromDialog.outputPath;
+            ++failures;
+        }
+        auto* width =
+            dialog.findChild<QSpinBox*>(QStringLiteral("exportWidth"));
+        auto* height =
+            dialog.findChild<QSpinBox*>(QStringLiteral("exportHeight"));
+        if (!width || !height)
+        {
+            qCritical() << "export-test: dialog size fields missing";
+            ++failures;
+        }
+        else
+        {
+            width->setValue(640);
+            if (height->value() != 360 || dialog.options().size != QSize(640, 360))
+            {
+                qCritical() << "export-test: aspect lock" << width->value()
+                            << height->value() << dialog.options().size;
+                ++failures;
+            }
+        }
+    }
+
+    pvf::VideoPlayer videoPlayer;
+    auto render = [&project, &videoPlayer](int frame) {
+        videoPlayer.update(project, frame, false);
+        pvf::Camera::State state;
+        state.scale = 1.0;
+        state.size = QSizeF(project.width, project.height);
+        return pvf::CameraRenderer::renderCameraImage(
+            project, frame, state, QSize(320, 180), false);
+    };
+    pvf::VideoExporter exporter;
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    bool exportOk = false;
+    QString exportError;
+    QObject::connect(&exporter, &pvf::VideoExporter::finished, &loop,
+                     [&](bool success, const QString& error) {
+                         exportOk = success;
+                         exportError = error;
+                         loop.quit();
+                     });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QString error;
+    if (!exporter.start(project, options, render, &error))
+    {
+        qCritical() << "export-test: start failed" << error;
+        return 1;
+    }
+    timeout.start(60000);
+    loop.exec();
+    if (!exportOk || exporter.isRunning())
+    {
+        exporter.cancel();
+        qCritical() << "export-test: export failed" << exportError;
+        return 1;
+    }
+
+    QString decodeError;
+    double duration = 0.0;
+    const QImage first = pvf::decodeVideoFirstFrame(path, &decodeError, &duration);
+    if (first.isNull() || duration < 0.9 || duration > 1.1)
+    {
+        qCritical() << "export-test: video" << decodeError << duration;
+        ++failures;
+    }
+    else
+    {
+        first.save(QStringLiteral("/tmp/pvf_export_first.png"));
+        if (first.size() != QSize(320, 180))
+        {
+            qCritical() << "export-test: size" << first.size();
+            ++failures;
+        }
+        const QColor left = first.pixelColor(80, 90);
+        if (!(left.red() > 150 && left.green() < 100))
+        {
+            qCritical() << "export-test: first frame colour" << left;
+            ++failures;
+        }
+        const QColor background = first.pixelColor(300, 20);
+        if (!(background.blue() > background.red() && background.red() < 100))
+        {
+            qCritical() << "export-test: background colour" << background;
+            ++failures;
+        }
+        const QColor videoPixel = first.pixelColor(160, 90);
+        if (!(videoPixel.green() > 120 && videoPixel.red() < 100
+              && videoPixel.blue() < 100))
+        {
+            qCritical() << "export-test: video frame colour" << videoPixel;
+            ++failures;
+        }
+    }
+
+    const pvf::AudioDecodeResult audio = pvf::decodeAudioFile(path);
+    if (!audio.clip || audio.clip->duration < 0.8)
+    {
+        qCritical() << "export-test: audio track" << audio.error;
+        ++failures;
+    }
+    else
+    {
+        float peak = 0.0f;
+        for (float value : audio.clip->peaks)
+            peak = std::max(peak, value);
+        if (peak < 0.1f)
+        {
+            qCritical() << "export-test: exported audio is silent" << peak;
+            ++failures;
+        }
+    }
+
+    // Cancelling must not leave a partial file behind.
+    const QString cancelled = QStringLiteral("/tmp/pvf_export_cancel.mp4");
+    QFile::remove(cancelled);
+    pvf::VideoExporter cancelling;
+    pvf::ExportOptions cancelOptions = options;
+    cancelOptions.outputPath = cancelled;
+    cancelOptions.frameCount = project.fps * 30;
+    QEventLoop cancelLoop;
+    QTimer cancelTimeout;
+    cancelTimeout.setSingleShot(true);
+    bool cancelReported = false;
+    bool cancelSucceeded = false;
+    QObject::connect(&cancelling, &pvf::VideoExporter::finished, &cancelLoop,
+                     [&](bool success, const QString&) {
+                         cancelReported = true;
+                         cancelSucceeded = success;
+                         cancelLoop.quit();
+                     });
+    QObject::connect(&cancelTimeout, &QTimer::timeout, &cancelLoop,
+                     &QEventLoop::quit);
+    if (!cancelling.start(project, cancelOptions, render, &error))
+    {
+        qCritical() << "export-test: cancel start failed" << error;
+        ++failures;
+    }
+    else
+    {
+        QTimer::singleShot(120, &cancelling, [&cancelling] { cancelling.cancel(); });
+        cancelTimeout.start(15000);
+        cancelLoop.exec();
+        if (!cancelReported || cancelSucceeded || QFile::exists(cancelled))
+        {
+            qCritical() << "export-test: cancel state" << cancelReported
+                        << cancelSucceeded << QFile::exists(cancelled);
+            cancelling.cancel();
+            QFile::remove(cancelled);
+            ++failures;
+        }
+    }
+
+    QFile::remove(path);
+    QFile::remove(videoSource);
+    qInfo() << "export-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -7376,6 +7642,8 @@ int main(int argc, char* argv[])
         return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--special-test")))
         return specialTest(app);
+    if (app.arguments().contains(QStringLiteral("--export-test")))
+        return exportTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))

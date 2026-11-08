@@ -75,6 +75,14 @@ void setPackAssetsDefault(bool on);
 // returns to where the user left it.
 int projectFrame(const QString& path);
 void setProjectFrame(const QString& path, int frame);
+
+// Last used MP4 export parameters.
+QString exportDirectory();
+void setExportDirectory(const QString& path);
+int exportCrf();
+void setExportCrf(int crf);
+bool exportAudio();
+void setExportAudio(bool on);
 } // namespace Settings
 
 } // namespace pvf

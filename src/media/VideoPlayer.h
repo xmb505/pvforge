@@ -23,8 +23,9 @@ public:
     VideoPlayer& operator=(const VideoPlayer&) = delete;
 
     // Updates video entity images for the project frame. Safe to call every
-    // play tick and on every playhead move.
-    void update(Project& project, int frame);
+    // play tick and on every playhead move. Set allowProxy to false when the
+    // frames are going into a final render and must come from the source.
+    void update(Project& project, int frame, bool allowProxy = true);
     void clear();
 
 private:

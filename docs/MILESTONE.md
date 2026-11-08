@@ -6,9 +6,7 @@
 
 ## 一句话状态
 
-用 Mine-imator 式工作流（对象树 + 时间轴 + 关键帧 + 相机式后处理）做 2D 音乐 PV 的编辑器核心已经可用：建项目、放图片/视频/文字/矢量、打关键帧、播放、撤销、保存/加载、素材打包。
-
-**尚不能导出视频**，这是出片闭环的最后缺口。
+用 Mine-imator 式工作流（对象树 + 时间轴 + 关键帧 + 相机式后处理）做 2D 音乐 PV 的编辑器核心已经可用：建项目、放图片/视频/文字/矢量、打关键帧、播放、撤销、保存/加载、素材打包、MP4 导出。
 
 ## 里程碑 M2：音频与波形（已完成）
 
@@ -90,11 +88,10 @@
 - `core/LineDeco`：放射线与流动线
 - `ui/TextLayoutDialog`：只编辑 `TextStyle` 副本，不接触 Project/History
 - 工作台分类：媒体 / 文字 / 文本框 / 矢量 / 特殊 / 摄像机
-- 自检：49 个模式全部通过
+- 自检：50 个模式全部通过
 
 ### 已知限制
 
-- **没有视频导出（MP4）**，出片闭环仍缺
 - 竖排暂不支持 Tate-chu-yoko（竖排中的横排小字）、竖排标点替换、逐字旋转
 - 气泡暂时只有一个尖角，尖角随实体缩放
 - 文字排版字段（字号/框宽等）仍是静态 data，没有接入关键帧
@@ -103,10 +100,31 @@
 
 ### 下一步
 
-1. MP4 导出：复用 `SceneRenderer` + 音频混音，先出无压缩/中间编码再谈编码器
-2. 关键帧曲线编辑、关键帧复制/粘贴
-3. 富文本与逐字动画
-4. 排版字段接入关键帧（可选）
+1. 关键帧曲线编辑、关键帧复制/粘贴
+2. 富文本与逐字动画
+3. 排版字段接入关键帧（可选）
+
+## 里程碑 M4：MP4 导出（已完成）
+
+记录时间：2026-11-08
+版本：0.2.0（M4）
+
+### 一句话状态
+
+出片闭环打通：文件 → 导出视频（`Ctrl+E`），整画布或任意摄像机视角，H.264 MP4 + AAC 音频，带进度与取消。
+
+### 实现
+
+- `render/VideoExporter`：UI 线程逐帧渲染 → BGRA rawvideo 管道 → ffmpeg libx264；音频预先混成 48 kHz 立体声 PCM，作为第二路输入编码 AAC 192k
+- 帧渲染由 `MainWindow` 传入回调：先 `VideoPlayer::update(frame, allowProxy=false)` 从原视频解码，再走 `CameraRenderer::renderCameraImage`，与监视器一致且不吃 960 宽预览代理
+- 先写 `<输出>.part.mp4`，成功后改名；取消/失败删除临时文件，不覆盖已有成片
+- `app/ExportDialog`：输出文件、分辨率（默认工程尺寸、自动取偶数）、视角（整画布/摄像机，默认活动摄像机）、CRF 档位、是否含音频；记住上次目录/画质/音频开关
+- 进度条显示已写帧数，编码阶段仍可取消；ffmpeg 管道积压超过 16 MB 时暂停渲染等编码器
+
+### 验证
+
+- `--export-test`：320×180 / 24 fps 工程，红色矩形从左到右移动 + 1 秒 440 Hz 音频；导出后解码首帧验证尺寸、矩形位置、背景色，解码音频验证非静音；另测一次 30 秒导出并在 120 ms 时取消，确认无残留文件
+- 50 个离屏自检全部通过
 
 ## 已实现
 
@@ -275,14 +293,13 @@
 src/
 ├─ core/     Project/Entity（父级/文件夹）/Track/Keyframe、History+Commands、Settings、Lang、VectorShape、Camera、Easing
 ├─ anim/     （预留）
-├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）
+├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）、VideoExporter（逐帧渲染 → ffmpeg MP4）
 ├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、VideoProxy（后台预览代理）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
 ├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
-├─ export/   （预留）
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
 │            CameraMonitor、EasingPicker、BezierEditorDialog、CollapsibleSection
-└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、SystemInfo、AppIcon
+└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、ExportDialog、SystemInfo、AppIcon
 ```
 
 关键设计：
@@ -296,19 +313,19 @@ src/
 - **异步导入**：重活在工作线程，主线程入库
 - **解码策略**：视频当前帧和音频全部走 FFmpeg 软件解码；启动时禁用 Qt Multimedia 硬件视频后端，避免 VDPAU/VAAPI 探测；硬件解码后续再评估
 - **音频主时钟**：有音频时播放头跟随 `QAudioSink` 实际播放位置；无音频才用计时器
-- **求值/渲染未分离**：渲染器仍逐帧读 Project；导出前需要抽出 FrameSnapshot（见下一步）
+- **求值/渲染未分离**：渲染器仍逐帧读 Project；导出直接复用这套路径，在 UI 线程逐帧渲染并推给 ffmpeg，暂不需要 FrameSnapshot
 
 ## 测试
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / export / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 49 个模式，全部通过。
+共 50 个模式，全部通过。
 
 ## 已知限制
 
-- 没有视频导出（MP4）
+- 导出走系统 `ffmpeg` + libx264 软件编码，长工程耗时取决于 CPU；暂不支持 GPU 编码和分段导出
 - 漫画文本框的尖角是整体相对坐标，缩放实体时尖角跟着缩放；暂时不能在画布上新增第二个尖角
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
 - 自动保存只处理已有路径的工程；未命名的新工程请先手动保存一次
@@ -347,9 +364,6 @@ self / save / autosave / special / keyframe-edit / frame-restore / layer / repla
 3. **关键帧函数（更远）**
    - 类似表达式：位置/旋转可绑定到时间、音频振幅、另一实体属性
    - 需要先抽出求值器（Project → FrameSnapshot），避免 UI 与渲染直接耦合
-4. **导出 MP4**
-   - 逐帧渲染到 FBO/QImage → FFmpeg 编码 → 音频混流
-   - 复用同一求值路径，保证所见即所得
 
 ## 运行
 

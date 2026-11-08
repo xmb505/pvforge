@@ -7,6 +7,7 @@
   "menu.help": "帮助",
   "action.save": "保存",
   "action.saveAs": "另存为…",
+  "action.exportVideo": "导出视频…",
   "action.quit": "退出",
   "action.undo": "撤销",
   "action.redo": "重做",

@@ -8,8 +8,11 @@
 #include "media/MediaImporter.h"
 #include "media/VideoProxy.h"
 #include "core/Settings.h"
+#include "ExportDialog.h"
 #include "SettingsDialog.h"
 #include "media/VideoPlayer.h"
+#include "render/CameraRenderer.h"
+#include "render/VideoExporter.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
@@ -22,9 +25,11 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -32,6 +37,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QSet>
@@ -387,6 +393,13 @@ void MainWindow::createActions()
     m_saveAsAction->setShortcut(QKeySequence::SaveAs);
     connect(m_saveAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
     addAction(m_saveAsAction);
+
+    m_exportAction = new QAction(
+        Lang::t(QStringLiteral("action.exportVideo"), QStringLiteral("导出视频…")), this);
+    m_exportAction->setObjectName(QStringLiteral("exportAction"));
+    m_exportAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
+    connect(m_exportAction, &QAction::triggered, this, &MainWindow::exportVideo);
+    addAction(m_exportAction);
 }
 
 void MainWindow::createMenus()
@@ -394,6 +407,8 @@ void MainWindow::createMenus()
     auto* fileMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.file"), QStringLiteral("文件")));
     fileMenu->addAction(m_saveAction);
     fileMenu->addAction(m_saveAsAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(m_exportAction);
     fileMenu->addSeparator();
     fileMenu->addAction(m_quitAction);
 
@@ -723,6 +738,93 @@ bool MainWindow::saveProjectAs()
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
     return true;
+}
+
+void MainWindow::exportVideo()
+{
+    if (m_playing)
+        togglePlayback();
+    m_audioEngine->stop();
+
+    ExportDialog dialog(*m_project, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const ExportOptions options = dialog.options();
+    const QSize renderSize(std::max(2, options.size.width() & ~1),
+                           std::max(2, options.size.height() & ~1));
+
+    auto* progress = new QProgressDialog(
+        QStringLiteral("正在渲染视频…"), QStringLiteral("取消"), 0,
+        options.frameCount, this);
+    progress->setWindowTitle(QStringLiteral("导出视频"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setValue(0);
+    progress->show();
+    // Let the progress dialog paint before the (synchronous) audio mix.
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    auto* exporter = new VideoExporter(this);
+    connect(exporter, &VideoExporter::progress, progress,
+            [progress](int done, int total) {
+                progress->setMaximum(total);
+                progress->setValue(done);
+                if (done >= total)
+                    progress->setLabelText(QStringLiteral("正在编码视频…"));
+            });
+    connect(progress, &QProgressDialog::canceled, exporter, &VideoExporter::cancel);
+    connect(exporter, &VideoExporter::finished, this,
+            [this, progress, exporter, options](bool success, const QString& error) {
+                progress->close();
+                progress->deleteLater();
+                exporter->deleteLater();
+
+                // The export decoded video entities from their source files;
+                // put the preview back on the proxy at the current playhead.
+                m_lastScrubFrame = m_frame;
+                m_videoPlayer.clear();
+                setFrame(m_frame);
+
+                if (success)
+                {
+                    QMessageBox::information(
+                        this, QStringLiteral("导出完成"),
+                        QStringLiteral("已导出：\n%1").arg(options.outputPath));
+                }
+                else if (!error.isEmpty())
+                {
+                    QMessageBox::warning(this, QStringLiteral("导出失败"), error);
+                }
+            });
+
+    const EntityId cameraId = options.cameraId;
+    auto renderFrame = [this, cameraId, renderSize](int frame) {
+        m_videoPlayer.update(*m_project, frame, false);
+        Camera::State state;
+        const Entity* camera = m_project->entity(cameraId);
+        if (camera && camera->isCamera())
+            state = Camera::state(*m_project, cameraId, frame);
+        if (state.size.isEmpty())
+        {
+            state.scale = 1.0;
+            state.rotation = 0.0;
+            state.center = QPointF();
+            state.size = QSizeF(m_project->width, m_project->height);
+        }
+        return CameraRenderer::renderCameraImage(*m_project, frame, state,
+                                                 renderSize, false);
+    };
+
+    QString error;
+    if (!exporter->start(*m_project, options, renderFrame, &error))
+    {
+        progress->close();
+        progress->deleteLater();
+        exporter->deleteLater();
+        QMessageBox::warning(this, QStringLiteral("导出失败"), error);
+    }
 }
 
 void MainWindow::packAllAssets()

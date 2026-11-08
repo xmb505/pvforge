@@ -124,6 +124,7 @@ private:
     void hideImportBusy();
     bool saveProject();
     bool saveProjectAs();
+    void exportVideo();
     void autoSave();
     void updateAutosaveTimer();
     void onEntityRenamed(EntityId id, const QString& name);
@@ -173,6 +174,7 @@ private:
     QAction* m_redoAction = nullptr;
     QAction* m_saveAction = nullptr;
     QAction* m_saveAsAction = nullptr;
+    QAction* m_exportAction = nullptr;
     QAction* m_homeAction = nullptr;
     QAction* m_endAction = nullptr;
     QAction* m_fitAction = nullptr;

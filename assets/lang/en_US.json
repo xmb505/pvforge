@@ -7,6 +7,7 @@
   "menu.help": "Help",
   "action.save": "Save",
   "action.saveAs": "Save As…",
+  "action.exportVideo": "Export Video…",
   "action.quit": "Quit",
   "action.undo": "Undo",
   "action.redo": "Redo",

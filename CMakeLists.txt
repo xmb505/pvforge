@@ -38,9 +38,11 @@ add_executable(pvforge
     src/audio/AudioEngine.cpp
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
+    src/render/VideoExporter.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
+    src/app/ExportDialog.cpp
     src/app/MainWindow.cpp
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp

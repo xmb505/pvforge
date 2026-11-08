@@ -248,6 +248,37 @@ void setMonitorVisible(bool on)
     store().setValue(QStringLiteral("monitor/visible"), on);
 }
 
+QString exportDirectory()
+{
+    return store().value(QStringLiteral("export/directory")).toString();
+}
+
+void setExportDirectory(const QString& path)
+{
+    if (!path.isEmpty())
+        store().setValue(QStringLiteral("export/directory"), path);
+}
+
+int exportCrf()
+{
+    return std::clamp(store().value(QStringLiteral("export/crf"), 20).toInt(), 0, 51);
+}
+
+void setExportCrf(int crf)
+{
+    store().setValue(QStringLiteral("export/crf"), std::clamp(crf, 0, 51));
+}
+
+bool exportAudio()
+{
+    return store().value(QStringLiteral("export/audio"), true).toBool();
+}
+
+void setExportAudio(bool on)
+{
+    store().setValue(QStringLiteral("export/audio"), on);
+}
+
 bool showCameraFrame()
 {
     return store().value(QStringLiteral("editor/showCameraFrame"), true).toBool();

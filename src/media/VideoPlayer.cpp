@@ -292,7 +292,7 @@ QImage VideoPlayer::frameAt(Stream& stream, double seconds, bool* changed)
     return stream.image;
 }
 
-void VideoPlayer::update(Project& project, int frame)
+void VideoPlayer::update(Project& project, int frame, bool allowProxy)
 {
     QElapsedTimer profile;
     profile.start();
@@ -318,9 +318,10 @@ void VideoPlayer::update(Project& project, int frame)
             stream = new Stream;
             m_streams.insert(entity.id, stream);
         }
-        if (stream->sourcePath != entity.sourcePath)
+        const QString decodePath =
+            allowProxy ? videoDecodePath(entity.sourcePath) : entity.sourcePath;
+        if (stream->sourcePath != entity.sourcePath || stream->path != decodePath)
         {
-            const QString decodePath = videoDecodePath(entity.sourcePath);
             if (!openStream(*stream, decodePath))
             {
                 // Remember the failed path so every play tick does not retry

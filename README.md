@@ -4,7 +4,7 @@
 
 用 Mine-imator 的工作流做 2D 音乐 PV 的桌面编辑器。纯 C++20 + Qt 6，工程格式是可读的 `.pvproj` JSON。
 
-> 当前状态：**M3 / 0.2.0**。时间轴、关键帧、素材、工作台、撤销、保存、摄像机、监视器、音频、自动保存、文字排版、文本框、特殊工具都已可用；**还没有 MP4 导出**。
+> 当前状态：**M4 / 0.2.0**。时间轴、关键帧、素材、工作台、撤销、保存、摄像机、监视器、音频、自动保存、文字排版、文本框、特殊工具、**MP4 导出**都已可用。
 
 ## 亮点
 
@@ -15,6 +15,7 @@
 - **特殊工具**：放射状线条、快速流过、漫画点阵、品牌瓷砖墙
 - **音频与视频**：FFmpeg 软件解码、视频内嵌音轨自动拆分、波形时间轴、预览代理
 - **工程体验**：自动保存、播放头记忆、更换素材、全局撤销/重做、性能监视
+- **出片**：文件 → 导出视频（`Ctrl+E`），整画布或任意摄像机视角，H.264 MP4 + AAC 音频，进度显示与取消
 - **性能**：文字/气泡/点阵按参数缓存，大量实体和 0 透明度对象不会拖慢播放
 
 ## 构建
@@ -25,7 +26,7 @@
 - C++20 编译器（Clang 或 GCC）
 - Qt 6.5+：Widgets、Concurrent、Multimedia
 - FFmpeg 开发库：libavformat、libavcodec、libavutil、libswscale、libswresample
-- `ffmpeg` 命令行：可选，用于视频预览代理和 RTP 串流
+- `ffmpeg` 命令行：导出 MP4（必需），视频预览代理和监视器串流也用它；缺少时导出会提示
 - Ninja（可选）
 
 ```bash
@@ -54,17 +55,18 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-49 个离屏自检。完整模式列表和验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)。
+50 个离屏自检。完整模式列表和验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)。
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --export-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
 ```
 
 ## 路线
 
-**音频属性撤销 → 频谱对象 → MP4 导出**。
+**音频属性撤销 → 频谱对象 → 关键帧曲线编辑**。
 
 ## 参考与致谢
 
