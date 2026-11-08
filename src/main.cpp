@@ -9039,6 +9039,29 @@ int clipTimelineTest(QApplication& app)
                             << undoEnd1 << undoEnd2 << keyRestored;
                 ++failures;
             }
+
+            // Clicking a keyframe must feed the property panel's existing
+            // easing button (the previous milestone's keyframe page).
+            project->addKeyframe(rectId, QStringLiteral("x"), 0, 0.0);
+            project->addKeyframe(rectId, QStringLiteral("x"), 60, 0.0);
+            QApplication::processEvents();
+            const QPoint keyPoint(popup->frameXForTest(60),
+                                  popup->rowCenterYForTest(0));
+            send(QEvent::MouseButtonPress, keyPoint, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, keyPoint, Qt::NoButton);
+            QApplication::processEvents();
+            auto* easeButton =
+                window.findChild<QPushButton*>(QStringLiteral("keyframeEasingButton"));
+            const bool easingReady =
+                easeButton && easeButton->isEnabled()
+                && easeButton->text().contains(QStringLiteral("缓动"));
+            if (window.currentFrame() != 60 || !easingReady)
+            {
+                qCritical() << "clip-timeline-test: easing" << window.currentFrame()
+                            << (easeButton ? easeButton->text() : QStringLiteral("none"))
+                            << (easeButton && easeButton->isEnabled());
+                ++failures;
+            }
             window.grab().toImage().save(
                 QStringLiteral("/tmp/pvforge_clip_timeline.png"));
             qInfo() << "clip-timeline-test: popup panels"
