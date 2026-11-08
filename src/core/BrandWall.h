@@ -30,6 +30,10 @@ struct BrandWallParams
 
 namespace BrandWall {
 
+// Loads a logo image. SVG files are rasterised at up to maxEdge pixels on
+// the long edge instead of the icon's intrinsic (often 24 px) size.
+QImage loadLogo(const QString& path, int maxEdge = 1024);
+
 QRectF bounds(const BrandWallParams& params);
 void paint(QPainter& painter, const BrandWallParams& params,
            const QVector<QImage>& logos);

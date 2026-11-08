@@ -155,7 +155,8 @@ BrandWallDialog::BrandWallDialog(const BrandWallParams& params,
         const QColor color = index < m_params.tileColors.size()
                                  ? QColor(m_params.tileColors[index])
                                  : QColor::fromHsv((index * 67) % 360, 120, 220);
-        const QImage image = index < m_images.size() ? m_images[index] : QImage(path);
+        const QImage image = index < m_images.size() ? m_images[index]
+                                                     : BrandWall::loadLogo(path);
         addSlot(path, color.isValid() ? color : QColor(220, 220, 226), image);
     }
 
@@ -229,11 +230,11 @@ void BrandWallDialog::addSlot(const QString& path, const QColor& color,
                 continue;
             const QString file = QFileDialog::getOpenFileName(
                 this, QStringLiteral("选择 Logo 图片"), current.path,
-                QStringLiteral("图片 (*.png *.jpg *.jpeg *.webp *.bmp)"));
+                QStringLiteral("图片 (*.png *.jpg *.jpeg *.webp *.bmp *.svg)"));
             if (file.isEmpty())
                 return;
             current.path = file;
-            current.image = QImage(file);
+            current.image = BrandWall::loadLogo(file);
             updateSlotButton(current);
             rebuild();
             return;

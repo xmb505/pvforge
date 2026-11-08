@@ -143,7 +143,7 @@ QPixmap renderTemplate(const Template& tmpl, const QSize& size)
         const BrandWallParams params = BrandWallParams::fromData(tmpl.data);
         QVector<QImage> logos;
         for (const QString& path : params.logos)
-            logos.append(QImage(path));
+            logos.append(BrandWall::loadLogo(path, 256));
         const QRectF bounds = BrandWall::bounds(params);
         const double scale =
             std::min(size.width() / std::max(1.0, bounds.width()),

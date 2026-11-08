@@ -633,7 +633,7 @@ int specialTest(QApplication& app)
         const QString logoA =
             QDir::tempPath() + QStringLiteral("/pvf_wall_logo_a.png");
         const QString logoB =
-            QDir::tempPath() + QStringLiteral("/pvf_wall_logo_b.png");
+            QDir::tempPath() + QStringLiteral("/pvf_wall_logo_b.svg");
         QImage a(96, 96, QImage::Format_ARGB32);
         a.fill(Qt::transparent);
         {
@@ -643,17 +643,27 @@ int specialTest(QApplication& app)
             p.setBrush(Qt::white);
             p.drawEllipse(10, 10, 76, 76);
         }
-        QImage b(96, 96, QImage::Format_ARGB32);
-        b.fill(Qt::transparent);
+        if (!a.save(logoA))
         {
-            QPainter p(&b);
-            p.setPen(QPen(Qt::white, 10, Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(16, 16, 80, 80);
-            p.drawLine(80, 16, 16, 80);
+            qCritical() << "special-test: wall logo not saved";
+            ++failures;
         }
-        if (!a.save(logoA) || !b.save(logoB))
+        // The second slot is an SVG at a tiny intrinsic size; it has to be
+        // rasterised at a usable resolution.
+        QFile svgFile(logoB);
+        if (svgFile.open(QIODevice::WriteOnly))
         {
-            qCritical() << "special-test: wall logos not saved";
+            svgFile.write(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' "
+                "viewBox='0 0 24 24'><path d='M4 4 L20 20 M20 4 L4 20' "
+                "stroke='white' stroke-width='3' stroke-linecap='round'/></svg>");
+            svgFile.close();
+        }
+        const QImage svgLogo = pvf::BrandWall::loadLogo(logoB);
+        if (svgLogo.isNull()
+            || std::max(svgLogo.width(), svgLogo.height()) != 1024)
+        {
+            qCritical() << "special-test: svg logo not rasterised" << svgLogo.size();
             ++failures;
         }
         pvf::BrandWallParams wallParams;

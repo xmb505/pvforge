@@ -371,7 +371,7 @@ void Project::refreshBrandWallImages(Entity& e)
 {
     e.wallLogos.clear();
     for (const QString& path : e.data.value(QStringLiteral("logos")).toStringList())
-        e.wallLogos.append(QImage(path));
+        e.wallLogos.append(BrandWall::loadLogo(path));
 }
 
 Entity* Project::addBrandWall(const BrandWallParams& params)

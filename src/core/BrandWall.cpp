@@ -1,5 +1,6 @@
 #include "BrandWall.h"
 
+#include <QImageReader>
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
@@ -60,6 +61,24 @@ void BrandWallParams::writeTo(QVariantMap& data) const
 }
 
 namespace BrandWall {
+
+QImage loadLogo(const QString& path, int maxEdge)
+{
+    if (path.isEmpty())
+        return QImage();
+    QImageReader reader(path);
+    if (!reader.canRead())
+        return QImage(path);
+    if (path.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive))
+    {
+        QSize size = reader.size();
+        if (!size.isValid())
+            size = QSize(256, 256);
+        size.scale(maxEdge, maxEdge, Qt::KeepAspectRatio);
+        reader.setScaledSize(size);
+    }
+    return reader.read();
+}
 
 QRectF bounds(const BrandWallParams& params)
 {
