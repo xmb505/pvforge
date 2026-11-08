@@ -285,17 +285,19 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         const HalftoneParams params = HalftoneParams::fromData(entity.data);
         // The dot pattern never animates; rasterise it once and reuse it as
         // a bitmap until a parameter changes.
-        if (entity.halftoneImage.isNull() || entity.halftoneData != entity.data)
+        if (entity.halftonePixmap.isNull() || entity.halftoneData != entity.data)
         {
             const int edge = int(std::clamp(params.area, 64.0, 2048.0));
-            entity.halftoneImage = LineDeco::renderHalftone(params, edge);
+            entity.halftonePixmap = QPixmap::fromImage(
+                LineDeco::renderHalftone(params, edge));
             entity.halftoneData = entity.data;
         }
-        if (!entity.halftoneImage.isNull())
+        if (!entity.halftonePixmap.isNull())
         {
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.drawImage(LineDeco::halftoneBounds(params),
-                              entity.halftoneImage);
+            painter.drawPixmap(LineDeco::halftoneBounds(params),
+                               entity.halftonePixmap,
+                               QRectF(entity.halftonePixmap.rect()));
         }
         break;
     }

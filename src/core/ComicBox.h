@@ -45,6 +45,8 @@ public:
     void paint(QPainter& painter) const;
 
 private:
+    void paintVector(QPainter& painter) const;
+
     TextStyle m_text;
     BubbleStyle m_bubble;
     QPainterPath m_path;

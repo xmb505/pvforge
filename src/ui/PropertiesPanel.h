@@ -124,12 +124,15 @@ private:
     QFontComboBox* m_textFont = nullptr;
     QSpinBox* m_textSize = nullptr;
     QPushButton* m_textColorButton = nullptr;
+    QPushButton* m_textStrokeColorButton = nullptr;
+    QDoubleSpinBox* m_textStrokeWidth = nullptr;
     QComboBox* m_textAlign = nullptr;
     QComboBox* m_textDirection = nullptr;
     QCheckBox* m_textBold = nullptr;
     QCheckBox* m_textItalic = nullptr;
     QCheckBox* m_textUnderline = nullptr;
     QColor m_textColorValue{Qt::white};
+    QColor m_textStrokeColorValue{Qt::black};
 
     QComboBox* m_vectorShape = nullptr;
     QDoubleSpinBox* m_vectorCorner = nullptr;

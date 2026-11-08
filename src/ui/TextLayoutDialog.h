@@ -53,6 +53,8 @@ private:
     QFontComboBox* m_font = nullptr;
     QSpinBox* m_size = nullptr;
     QPushButton* m_color = nullptr;
+    QDoubleSpinBox* m_strokeWidth = nullptr;
+    QPushButton* m_strokeColor = nullptr;
     QComboBox* m_align = nullptr;
     QDoubleSpinBox* m_lineHeight = nullptr;
     QDoubleSpinBox* m_letterSpacing = nullptr;

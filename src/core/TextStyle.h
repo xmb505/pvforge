@@ -15,6 +15,8 @@ struct TextStyle
     QString fontFamily;
     int pixelSize = 96;
     QColor color = Qt::white;
+    QColor strokeColor = Qt::black;
+    double strokeWidth = 0.0;   // glyph outline width in pixels
     int align = int(Qt::AlignCenter);
     double lineHeight = 1.0;   // multiplier of the font line height
     double letterSpacing = 0.0; // extra space between glyphs, pixels

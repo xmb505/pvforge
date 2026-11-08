@@ -1,8 +1,10 @@
 #include "VideoPlayer.h"
 
 #include "VideoProxy.h"
+#include "core/PerfMonitor.h"
 #include "core/Project.h"
 
+#include <QElapsedTimer>
 #include <QSet>
 
 #include <algorithm>
@@ -292,6 +294,8 @@ QImage VideoPlayer::frameAt(Stream& stream, double seconds, bool* changed)
 
 void VideoPlayer::update(Project& project, int frame)
 {
+    QElapsedTimer profile;
+    profile.start();
     const double fps = std::max(1, project.fps);
     const double seconds = std::max(0.0, frame / fps);
     QSet<int> alive;
@@ -366,6 +370,7 @@ void VideoPlayer::update(Project& project, int frame)
             ++it;
         }
     }
+    PerfMonitor::instance().recordVideo(profile.nsecsElapsed() / 1e6);
 }
 
 } // namespace pvf

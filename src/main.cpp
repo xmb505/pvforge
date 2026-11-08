@@ -19,6 +19,7 @@
 #include "app/WelcomeWindow.h"
 #include "core/Project.h"
 #include "core/ComicBox.h"
+#include "core/PerfMonitor.h"
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
@@ -1274,6 +1275,40 @@ int specialTest(QApplication& app)
         }
     }
 
+    // Glyph outline: stroke colour appears around the fill.
+    {
+        pvf::TextStyle style;
+        style.text = QStringLiteral("描边");
+        style.pixelSize = 64;
+        style.color = Qt::white;
+        style.strokeColor = QColor(220, 30, 60);
+        style.strokeWidth = 6;
+        QImage image(320, 200, QImage::Format_ARGB32);
+        image.fill(Qt::black);
+        {
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            pvf::TextBlock::measure(style).paint(painter, QPointF(160, 100));
+        }
+        image.save(QStringLiteral("/tmp/pvf_text_stroke.png"));
+        int fill = 0;
+        int outline = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+            {
+                const QColor color = image.pixelColor(x, y);
+                if (color.red() > 200 && color.green() > 200 && color.blue() > 200)
+                    ++fill;
+                else if (color.red() > 150 && color.green() < 100)
+                    ++outline;
+            }
+        if (fill == 0 || outline == 0)
+        {
+            qCritical() << "special-test: text outline missing" << fill << outline;
+            ++failures;
+        }
+    }
+
     // Radial rays.
     {
         pvf::RadialParams params;
@@ -1367,7 +1402,7 @@ int specialTest(QApplication& app)
                 other.hidden = other.id != halftone->id;
             const QImage shot = render(0);
             const QImage again = render(0);
-            if (halftone->halftoneImage.isNull()
+            if (halftone->halftonePixmap.isNull()
                 || halftone->halftoneData.value(QStringLiteral("spacing")).toDouble()
                        != 16.0)
             {
@@ -1377,16 +1412,16 @@ int specialTest(QApplication& app)
             else
             {
                 // A second frame reuses the raster; a parameter edit rebuilds it.
-                const qint64 cached = halftone->halftoneImage.cacheKey();
+                const qint64 cached = halftone->halftonePixmap.cacheKey();
                 render(0);
-                if (halftone->halftoneImage.cacheKey() != cached)
+                if (halftone->halftonePixmap.cacheKey() != cached)
                 {
                     qCritical() << "special-test: halftone cache rebuilt every frame";
                     ++failures;
                 }
                 halftone->data[QStringLiteral("spacing")] = 24.0;
                 render(0);
-                if (halftone->halftoneImage.cacheKey() == cached
+                if (halftone->halftonePixmap.cacheKey() == cached
                     || halftone->halftoneData.value(QStringLiteral("spacing"))
                                .toDouble()
                            != 24.0)
@@ -1585,6 +1620,35 @@ int specialTest(QApplication& app)
         }
     }
 
+    // Performance monitor keeps the latest rolling timings.
+    {
+        auto& perf = pvf::PerfMonitor::instance();
+        perf.setEnabled(true);
+        perf.recordScene(7.5);
+        perf.recordViewport(3.0);
+        perf.recordTimeline(2.0);
+        perf.recordVideo(1.0);
+        perf.setEntityCount(53);
+        const pvf::PerfSnapshot snapshot = perf.snapshot();
+        if (!snapshot.enabled || std::abs(snapshot.sceneMs - 7.5) > 1e-6
+            || std::abs(snapshot.viewportMs - 3.0) > 1e-6
+            || std::abs(snapshot.timelineMs - 2.0) > 1e-6
+            || std::abs(snapshot.videoMs - 1.0) > 1e-6
+            || snapshot.entities != 53)
+        {
+            qCritical() << "special-test: performance monitor values wrong"
+                        << snapshot.sceneMs << snapshot.viewportMs
+                        << snapshot.timelineMs << snapshot.videoMs;
+            ++failures;
+        }
+        perf.setEnabled(false);
+        if (perf.snapshot().enabled)
+        {
+            qCritical() << "special-test: performance monitor did not disable";
+            ++failures;
+        }
+    }
+
     // The workbench offers the special tools and the layout dialog opens.
     auto* uiProject = new pvf::Project;
     uiProject->width = 1280;
@@ -1746,6 +1810,29 @@ int specialTest(QApplication& app)
             ++local;
         }
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_text_layout.png"));
+
+        // The status bar performance monitor toggles from the view menu.
+        if (auto* perfAction =
+                uiWindow.findChild<QAction*>(QStringLiteral("perfMonitorAction")))
+        {
+            auto* perfLabel =
+                uiWindow.findChild<QLabel*>(QStringLiteral("perfInfo"));
+            perfAction->setChecked(true);
+            QApplication::processEvents();
+            if (!perfLabel || !perfLabel->isVisible()
+                || !perfLabel->text().contains(QStringLiteral("FPS")))
+            {
+                qCritical() << "special-test: performance monitor label missing";
+                ++local;
+            }
+            perfAction->setChecked(false);
+            QApplication::processEvents();
+        }
+        else
+        {
+            qCritical() << "special-test: performance monitor action missing";
+            ++local;
+        }
 
         // The wall editor opens with its slots and can add more logos.
         pvf::BrandWallParams wallParams;
@@ -6835,6 +6922,8 @@ int specialDemo(QApplication& app)
     title.text = QStringLiteral("特殊工具");
     title.pixelSize = 104;
     title.color = QColor(255, 255, 255);
+    title.strokeColor = QColor(24, 22, 28);
+    title.strokeWidth = 5;
     title.padding = 8;
     QVariantMap titleData;
     title.writeTo(titleData);

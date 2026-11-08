@@ -3,10 +3,12 @@
 #include "Viewport.h"
 
 #include "app/AppIcon.h"
+#include "core/PerfMonitor.h"
 #include "core/Settings.h"
 #include "render/SceneRenderer.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QIcon>
@@ -509,12 +511,14 @@ void Viewport::drawCameraOverlay(QPainter& painter)
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    QPainterPath outer;
-    outer.addRect(QRectF(rect()));
-    QPainterPath inner;
-    inner.addPolygon(polygon);
-    inner.closeSubpath();
-    painter.fillPath(outer.subtracted(inner), QColor(10, 10, 14, 140));
+    // Even-odd fill cuts the camera polygon out of the veil without a
+    // geometry subtraction, which was costly on every repaint.
+    QPainterPath veil;
+    veil.setFillRule(Qt::OddEvenFill);
+    veil.addRect(QRectF(rect()));
+    veil.addPolygon(polygon);
+    veil.closeSubpath();
+    painter.fillPath(veil, QColor(10, 10, 14, 140));
 
     QPen framePen(QColor(90, 210, 255, selected ? 255 : 200),
                   selected ? 2.0 : 1.2, Qt::DashLine);
@@ -1241,6 +1245,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
 void Viewport::paintEvent(QPaintEvent*)
 {
+    QElapsedTimer profile;
+    profile.start();
     QPainter p(this);
     p.fillRect(rect(), QApplication::palette().color(QPalette::Window));
 
@@ -1265,6 +1271,8 @@ void Viewport::paintEvent(QPaintEvent*)
     const QVector<int> order = m_project->entityOrder();
     for (int index = int(order.size()) - 1; index >= 0; --index)
         drawEntity(p, m_project->entities()[order[index]], canvas, s);
+    const qint64 sceneNs = profile.nsecsElapsed();
+    PerfMonitor::instance().recordScene(sceneNs / 1e6);
 
     // Camera viewfinder and the veil outside it.
     drawCameraOverlay(p);
@@ -1308,6 +1316,8 @@ void Viewport::paintEvent(QPaintEvent*)
         p.drawText(rect(), Qt::AlignCenter,
                    QStringLiteral("点击左上角工作台按钮\n创建图片 / 视频 / 文字 / 矢量"));
     }
+
+    PerfMonitor::instance().recordViewport(profile.nsecsElapsed() / 1e6);
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event)

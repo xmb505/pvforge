@@ -3,6 +3,7 @@
 #include "core/Commands.h"
 #include "core/Camera.h"
 #include "core/Lang.h"
+#include "core/PerfMonitor.h"
 #include "audio/AudioEngine.h"
 #include "media/MediaImporter.h"
 #include "media/VideoProxy.h"
@@ -23,6 +24,7 @@
 #include <QActionGroup>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -157,6 +159,24 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_importProgress->setTextVisible(false);
     m_importProgress->hide();
     statusBar()->addPermanentWidget(m_importProgress);
+
+    m_perfLabel = new QLabel(this);
+    m_perfLabel->setObjectName(QStringLiteral("perfInfo"));
+    m_perfLabel->setToolTip(QStringLiteral(
+        "播放 FPS、每帧耗时、场景/视口/时间轴/视频解码耗时；视图 → 性能监视"));
+    m_perfLabel->hide();
+    statusBar()->addPermanentWidget(m_perfLabel);
+
+    m_perfTimer = new QTimer(this);
+    m_perfTimer->setInterval(500);
+    connect(m_perfTimer, &QTimer::timeout, this,
+            &MainWindow::updatePerfLabel);
+    PerfMonitor::instance().setEnabled(Settings::perfMonitor());
+    if (Settings::perfMonitor())
+    {
+        m_perfLabel->show();
+        m_perfTimer->start();
+    }
 
     m_playTimer = new QTimer(this);
     connect(m_playTimer, &QTimer::timeout, this, &MainWindow::onPlayTick);
@@ -520,6 +540,28 @@ void MainWindow::createMenus()
             [setDisplayFrames] { setDisplayFrames(false); });
     connect(framesAction, &QAction::triggered, this,
             [setDisplayFrames] { setDisplayFrames(true); });
+
+    viewMenu->addSeparator();
+    m_perfAction = new QAction(QStringLiteral("性能监视"), this);
+    m_perfAction->setObjectName(QStringLiteral("perfMonitorAction"));
+    m_perfAction->setCheckable(true);
+    m_perfAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    m_perfAction->setChecked(Settings::perfMonitor());
+    connect(m_perfAction, &QAction::toggled, this, [this](bool on) {
+        Settings::setPerfMonitor(on);
+        PerfMonitor::instance().setEnabled(on);
+        m_perfLabel->setVisible(on);
+        if (on)
+        {
+            updatePerfLabel();
+            m_perfTimer->start();
+        }
+        else
+        {
+            m_perfTimer->stop();
+        }
+    });
+    viewMenu->addAction(m_perfAction);
 
     menuBar()->setFixedHeight(menuBar()->sizeHint().height());
 
@@ -1663,6 +1705,7 @@ void MainWindow::togglePlayback()
         m_scrubTimer->stop();
         m_audioEngine->stop();
         m_playing = false;
+        PerfMonitor::instance().setPlaying(false);
         m_lastScrubFrame = m_frame;
         if (m_monitor)
             m_monitor->setPlaying(false);
@@ -1676,6 +1719,7 @@ void MainWindow::togglePlayback()
     m_scrubTimer->stop();
     m_playStart = m_frame;
     m_playing = true;
+    PerfMonitor::instance().setPlaying(true);
     m_audioEngine->play(m_frame);
     m_playClock.restart();
     m_playTimer->start(std::max(1, 1000 / std::max(1, m_project->fps)));
@@ -1686,6 +1730,10 @@ void MainWindow::togglePlayback()
 
 void MainWindow::onPlayTick()
 {
+    PerfMonitor::instance().tick();
+    QElapsedTimer frameTimer;
+    frameTimer.start();
+
     const int fps = std::max(1, m_project->fps);
     int f = 0;
     if (m_audioEngine->isRunning())
@@ -1711,11 +1759,28 @@ void MainWindow::onPlayTick()
         else
         {
             setFrame(length);
+            PerfMonitor::instance().recordFrame(frameTimer.nsecsElapsed() / 1e6);
             togglePlayback();
             return;
         }
     }
     setFrame(f);
+    PerfMonitor::instance().recordFrame(frameTimer.nsecsElapsed() / 1e6);
+}
+
+void MainWindow::updatePerfLabel()
+{
+    PerfMonitor::instance().setEntityCount(int(m_project->entities().size()));
+    const PerfSnapshot perf = PerfMonitor::instance().snapshot();
+    m_perfLabel->setText(
+        QStringLiteral("FPS %1 · 帧 %2ms · 场景 %3 · 视口 %4 · 时间轴 %5 · 视频 %6 · %7 实体")
+            .arg(perf.fps, 0, 'f', 1)
+            .arg(perf.frameMs, 0, 'f', 1)
+            .arg(perf.sceneMs, 0, 'f', 1)
+            .arg(perf.viewportMs, 0, 'f', 1)
+            .arg(perf.timelineMs, 0, 'f', 1)
+            .arg(perf.videoMs, 0, 'f', 1)
+            .arg(perf.entities));
 }
 
 void MainWindow::updateStatus()

@@ -28,6 +28,8 @@ public:
     void paint(QPainter& painter, const QPointF& centre) const;
 
 private:
+    void paintText(QPainter& painter, const QPointF& centre) const;
+
     TextStyle m_style;
     std::shared_ptr<QTextDocument> m_document;
     QSizeF m_content;

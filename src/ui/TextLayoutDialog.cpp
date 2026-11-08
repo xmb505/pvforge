@@ -112,6 +112,34 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     });
     form->addRow(QStringLiteral("颜色"), m_color);
 
+    m_strokeWidth = new QDoubleSpinBox(this);
+    m_strokeWidth->setObjectName(QStringLiteral("layoutStrokeWidth"));
+    m_strokeWidth->setRange(0, 24);
+    m_strokeWidth->setSingleStep(0.5);
+    m_strokeWidth->setSuffix(QStringLiteral(" px"));
+    m_strokeWidth->setValue(m_style.strokeWidth);
+    connect(m_strokeWidth, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) {
+                m_style.strokeWidth = value;
+                updateStyle();
+            });
+    form->addRow(QStringLiteral("描边粗细"), m_strokeWidth);
+
+    m_strokeColor = new QPushButton(this);
+    m_strokeColor->setObjectName(QStringLiteral("layoutStrokeColor"));
+    m_strokeColor->setText(m_style.strokeColor.name(QColor::HexArgb).toUpper());
+    connect(m_strokeColor, &QPushButton::clicked, this, [this] {
+        const QColor color = QColorDialog::getColor(
+            m_style.strokeColor, this, QStringLiteral("文字描边颜色"),
+            QColorDialog::ShowAlphaChannel);
+        if (!color.isValid())
+            return;
+        m_style.strokeColor = color;
+        m_strokeColor->setText(color.name(QColor::HexArgb).toUpper());
+        updateStyle();
+    });
+    form->addRow(QStringLiteral("描边颜色"), m_strokeColor);
+
     m_align = new QComboBox(this);
     m_align->addItem(QStringLiteral("居中"), int(Qt::AlignHCenter));
     m_align->addItem(QStringLiteral("左对齐"), int(Qt::AlignLeft));

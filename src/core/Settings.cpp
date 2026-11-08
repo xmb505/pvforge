@@ -151,6 +151,16 @@ void setTimelineDisplayFrames(bool on)
     store().setValue(QStringLiteral("timeline/displayFrames"), on);
 }
 
+bool perfMonitor()
+{
+    return store().value(QStringLiteral("editor/perfMonitor"), false).toBool();
+}
+
+void setPerfMonitor(bool on)
+{
+    store().setValue(QStringLiteral("editor/perfMonitor"), on);
+}
+
 namespace {
 QString frameKey(const QString& path)
 {

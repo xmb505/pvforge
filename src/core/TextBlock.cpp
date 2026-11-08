@@ -1,7 +1,9 @@
 #include "TextBlock.h"
 
+#include <QCache>
 #include <QFont>
 #include <QHash>
+#include <QImage>
 #include <QPainter>
 #include <QTextBlock>
 #include <QTextBlockFormat>
@@ -17,11 +19,15 @@ namespace pvf {
 
 namespace {
 
+constexpr double kPi = 3.14159265358979323846;
+
 // Measurements are reused whenever the style did not change; the scene,
-// the monitor and the asset library all ask for the same blocks.
-QHash<QString, std::weak_ptr<TextBlock>>& cache()
+// the monitor and the asset library all ask for the same blocks. Strong
+// references are required: a weak-only cache expired immediately and every
+// frame re-laid out the document.
+QHash<QString, std::shared_ptr<TextBlock>>& cache()
 {
-    static QHash<QString, std::weak_ptr<TextBlock>> blocks;
+    static QHash<QString, std::shared_ptr<TextBlock>> blocks;
     return blocks;
 }
 
@@ -52,8 +58,7 @@ TextBlock TextBlock::measure(const TextStyle& style)
     const QString key = style.cacheKey();
     auto& blocks = cache();
     if (const auto found = blocks.constFind(key); found != blocks.constEnd())
-        if (const auto existing = found->lock())
-            return *existing;
+        return **found;
 
     auto block = std::make_shared<TextBlock>();
     block->m_style = style;
@@ -132,6 +137,81 @@ TextBlock TextBlock::measure(const TextStyle& style)
 }
 
 void TextBlock::paint(QPainter& painter, const QPointF& centre) const
+{
+    if (m_size.width() < 1.0 || m_size.height() < 1.0)
+        return;
+
+    const double stroke =
+        (m_style.strokeWidth > 0.0 && m_style.strokeColor.alpha() > 0)
+            ? m_style.strokeWidth
+            : 0.0;
+    const QSizeF total(m_size.width() + stroke * 2.0,
+                       m_size.height() + stroke * 2.0);
+
+    // Rasterise the glyphs once. Drawing a large halftone image can evict
+    // Qt's glyph cache, which made every comic bubble re-layout its text on
+    // every frame. The image only depends on the text style.
+    static QCache<QString, QImage> cache(64 * 1024 * 1024);
+    const QString key = m_style.cacheKey();
+
+    const auto drawRaster = [&](const QImage& image) {
+        painter.save();
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(
+            QRectF(centre.x() - total.width() / 2.0,
+                   centre.y() - total.height() / 2.0, total.width(),
+                   total.height()),
+            image);
+        painter.restore();
+    };
+    if (const QImage* cached = cache.object(key))
+    {
+        drawRaster(*cached);
+        return;
+    }
+
+    QImage fill(int(std::ceil(total.width())), int(std::ceil(total.height())),
+                QImage::Format_ARGB32_Premultiplied);
+    fill.fill(Qt::transparent);
+    {
+        QPainter imagePainter(&fill);
+        imagePainter.setRenderHint(QPainter::Antialiasing, true);
+        imagePainter.translate(stroke, stroke);
+        paintText(imagePainter,
+                  QPointF(m_size.width() / 2.0, m_size.height() / 2.0));
+    }
+
+    QImage result = fill;
+    if (stroke > 0.0)
+    {
+        QImage tint = fill;
+        {
+            QPainter tintPainter(&tint);
+            tintPainter.setCompositionMode(
+                QPainter::CompositionMode_SourceIn);
+            tintPainter.fillRect(tint.rect(), m_style.strokeColor);
+        }
+
+        result = QImage(fill.size(), QImage::Format_ARGB32_Premultiplied);
+        result.fill(Qt::transparent);
+        QPainter outlinePainter(&result);
+        const int steps =
+            std::clamp(int(std::ceil(stroke * 8.0)), 16, 64);
+        for (int step = 0; step < steps; ++step)
+        {
+            const double angle = 2.0 * kPi * step / steps;
+            outlinePainter.drawImage(
+                QPointF(std::cos(angle) * stroke, std::sin(angle) * stroke),
+                tint);
+        }
+        outlinePainter.drawImage(0, 0, fill);
+    }
+
+    cache.insert(key, new QImage(result), int(result.sizeInBytes()));
+    drawRaster(result);
+}
+
+void TextBlock::paintText(QPainter& painter, const QPointF& centre) const
 {
     const QFont font = fontOf(m_style);
     painter.save();

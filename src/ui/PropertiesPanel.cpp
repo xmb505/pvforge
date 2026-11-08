@@ -308,6 +308,32 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     });
     form->addRow(QStringLiteral("颜色"), m_textColorButton);
 
+    m_textStrokeWidth = new QDoubleSpinBox(content);
+    m_textStrokeWidth->setObjectName(QStringLiteral("textStrokeWidth"));
+    m_textStrokeWidth->setRange(0, 24);
+    m_textStrokeWidth->setDecimals(1);
+    m_textStrokeWidth->setSingleStep(0.5);
+    m_textStrokeWidth->setSuffix(QStringLiteral(" px"));
+    connect(m_textStrokeWidth, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) {
+                applyData(QStringLiteral("textStrokeWidth"), value);
+            });
+    form->addRow(QStringLiteral("描边粗细"), m_textStrokeWidth);
+
+    m_textStrokeColorButton = new QPushButton(content);
+    m_textStrokeColorButton->setObjectName(QStringLiteral("textStrokeColor"));
+    setColorButton(m_textStrokeColorButton, Qt::black);
+    connect(m_textStrokeColorButton, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_textStrokeColorValue,
+                                       QStringLiteral("文字描边颜色"));
+        if (!color.isValid())
+            return;
+        m_textStrokeColorValue = color;
+        setColorButton(m_textStrokeColorButton, color);
+        applyData(QStringLiteral("textStrokeColor"), color);
+    });
+    form->addRow(QStringLiteral("描边颜色"), m_textStrokeColorButton);
+
     m_textAlign = new QComboBox(content);
     m_textAlign->addItem(QStringLiteral("居中"), int(Qt::AlignCenter));
     m_textAlign->addItem(QStringLiteral("左对齐"), int(Qt::AlignLeft | Qt::AlignVCenter));
@@ -1218,6 +1244,15 @@ void PropertiesPanel::refresh()
         }
         m_textColorValue = e->textColor();
         setColorButton(m_textColorButton, m_textColorValue);
+        {
+            const QSignalBlocker blocker(m_textStrokeWidth);
+            m_textStrokeWidth->setValue(
+                e->data.value(QStringLiteral("textStrokeWidth"), 0.0).toDouble());
+        }
+        const QColor stroke =
+            e->data.value(QStringLiteral("textStrokeColor")).value<QColor>();
+        m_textStrokeColorValue = stroke.isValid() ? stroke : QColor(Qt::black);
+        setColorButton(m_textStrokeColorButton, m_textStrokeColorValue);
         {
             const QSignalBlocker blocker(m_textDirection);
             const bool vertical = e->data.value(QStringLiteral("vertical"), false).toBool();

@@ -17,6 +17,7 @@ add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
     src/core/History.cpp
+    src/core/PerfMonitor.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
     src/core/TextStyle.cpp

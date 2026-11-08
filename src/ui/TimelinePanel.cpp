@@ -2,10 +2,12 @@
 
 #include "app/AppIcon.h"
 #include "core/Lang.h"
+#include "core/PerfMonitor.h"
 #include "core/Settings.h"
 #include "ui/EasingChooser.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QLineEdit>
@@ -911,6 +913,8 @@ void TimelinePanel::drawAudioWaveform(QPainter& p, const Entity& entity,
 
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
+    QElapsedTimer profile;
+    profile.start();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     updateScrollBar();
@@ -1221,6 +1225,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     p.setPen(midColor);
     p.drawLine(0, bodyBottom - 1, width(), bodyBottom - 1);
+    PerfMonitor::instance().recordTimeline(profile.nsecsElapsed() / 1e6);
 }
 
 void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)

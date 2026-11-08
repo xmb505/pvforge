@@ -119,6 +119,7 @@ private:
     void onKeyframeEasingRequested(const EasingSpec& spec);
     void onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
     void updateWindowTitle();
+    void updatePerfLabel();
     void showImportBusy(int count);
     void hideImportBusy();
     bool saveProject();
@@ -160,6 +161,9 @@ private:
     QElapsedTimer m_scrubClock;
     int m_lastScrubFrame = -1;
     QLabel* m_status = nullptr;
+    QLabel* m_perfLabel = nullptr;
+    QTimer* m_perfTimer = nullptr;
+    QAction* m_perfAction = nullptr;
     QProgressBar* m_importProgress = nullptr;
 
     QAction* m_playAction = nullptr;

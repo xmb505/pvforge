@@ -44,6 +44,9 @@ void setTimelinePixelsPerFrame(double pixels);
 bool timelineDisplayFrames();           // ruler labels show frames instead of seconds
 void setTimelineDisplayFrames(bool on);
 
+bool perfMonitor();                     // show the performance overlay in the status bar
+void setPerfMonitor(bool on);
+
 bool monitorHighQuality();
 void setMonitorHighQuality(bool on);
 

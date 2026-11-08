@@ -2,9 +2,12 @@
 
 #include "TextBlock.h"
 
+#include <QCache>
+#include <QHash>
 #include <QPainter>
 #include <QVector>
 #include <cmath>
+#include <memory>
 
 namespace pvf {
 
@@ -189,11 +192,37 @@ void BubbleStyle::writeTo(QVariantMap& data) const
     data[QStringLiteral("bubbleSeed")] = seed;
 }
 
+namespace {
+
+QString comicCacheKey(const TextStyle& text, const BubbleStyle& bubble)
+{
+    return text.cacheKey()
+           + QStringLiteral("|%1|%2|%3|%4|%5|%6|%7|%8|%9")
+                 .arg(bubble.shape)
+                 .arg(bubble.tail ? 1 : 0)
+                 .arg(bubble.fill.name(QColor::HexArgb))
+                 .arg(bubble.stroke.name(QColor::HexArgb))
+                 .arg(bubble.strokeWidth)
+                 .arg(bubble.radius)
+                 .arg(bubble.tipX)
+                 .arg(bubble.tipY)
+                 .arg(bubble.seed);
+}
+
+} // namespace
+
 ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
 {
-    ComicBox box;
-    box.m_text = text;
-    box.m_bubble = bubble;
+    // Building the cloud and unioning the spike are expensive; the scene asks
+    // for the same box from both entityLocalBounds() and paint() every frame.
+    static QHash<QString, std::shared_ptr<ComicBox>> cache;
+    const QString key = comicCacheKey(text, bubble);
+    if (const auto found = cache.constFind(key); found != cache.constEnd())
+        return **found;
+
+    auto box = std::make_shared<ComicBox>();
+    box->m_text = text;
+    box->m_bubble = bubble;
 
     const TextBlock block = TextBlock::measure(text);
     const QSizeF inner = block.contentSize() +
@@ -235,10 +264,10 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
 
     // The tip position is a share of the half size, so the spike follows the
     // balloon when the entity is scaled.
-    box.m_bodySize = rect.size();
+    box->m_bodySize = rect.size();
     const QPointF tip(bubble.tipX * rect.width() / 2.0,
                       bubble.tipY * rect.height() / 2.0);
-    box.m_tip = tip;
+    box->m_tip = tip;
     const bool inside = std::fabs(bubble.tipX) < 0.55 && std::fabs(bubble.tipY) < 0.55;
     // The spike is optional; the manga rectangle and the explosion keep it
     // off by default.
@@ -247,15 +276,19 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
         const double base = std::min(rect.width(), rect.height()) * 0.34;
         path = spikePath(path, rect, bubble.shape != 1, tip, base);
     }
-    box.m_path = path;
+    box->m_path = path;
 
     const QRectF pathBounds = path.boundingRect();
     const double halfWidth =
         std::max(std::abs(pathBounds.left()), std::abs(pathBounds.right()));
     const double halfHeight =
         std::max(std::abs(pathBounds.top()), std::abs(pathBounds.bottom()));
-    box.m_bounds = QRectF(-halfWidth, -halfHeight, halfWidth * 2.0, halfHeight * 2.0);
-    return box;
+    box->m_bounds = QRectF(-halfWidth, -halfHeight, halfWidth * 2.0, halfHeight * 2.0);
+
+    if (cache.size() > 256)
+        cache.clear();
+    cache.insert(key, box);
+    return *box;
 }
 
 void ComicBox::paint(QPainter& painter) const
@@ -263,6 +296,44 @@ void ComicBox::paint(QPainter& painter) const
     if (m_path.isEmpty())
         return;
 
+    // A cloud outline with a stroked border is expensive to rasterise, and
+    // becomes much slower when a large halftone bitmap was drawn underneath.
+    // Bake the whole balloon (shape + text) into an image once and blit it.
+    static QCache<QString, QImage> rasters(64 * 1024 * 1024);
+    const QString key = comicCacheKey(m_text, m_bubble);
+    QImage* raster = rasters.object(key);
+    if (!raster)
+    {
+        const int width = std::max(1, int(std::ceil(m_bounds.width())));
+        const int height = std::max(1, int(std::ceil(m_bounds.height())));
+        auto* image = new QImage(width, height, QImage::Format_ARGB32_Premultiplied);
+        image->fill(Qt::transparent);
+        {
+            QPainter imagePainter(image);
+            imagePainter.setRenderHint(QPainter::Antialiasing, true);
+            imagePainter.translate(width / 2.0, height / 2.0);
+            paintVector(imagePainter);
+        }
+        rasters.insert(key, image, int(image->sizeInBytes()));
+        raster = rasters.object(key);
+    }
+    if (!raster)
+    {
+        paintVector(painter);
+        return;
+    }
+
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(
+        QRectF(-m_bounds.width() / 2.0, -m_bounds.height() / 2.0,
+               m_bounds.width(), m_bounds.height()),
+        *raster);
+    painter.restore();
+}
+
+void ComicBox::paintVector(QPainter& painter) const
+{
     painter.save();
     painter.setBrush(m_bubble.fill);
     if (m_bubble.strokeWidth > 0)
