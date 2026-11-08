@@ -1,0 +1,25 @@
+{
+  "format": "pvforge-html",
+  "version": 1,
+  "html": "<!doctype html>\n<html>\n<head>\n<meta charset='utf-8'>\n<style>\nhtml,body{margin:0;width:1280px;height:160px;overflow:hidden;background:transparent;font-family:sans-serif}\n.lyric{position:absolute;left:0;top:28px;width:1280px;text-align:center;font-size:64px;font-weight:700;letter-spacing:4px;white-space:nowrap}\n.base{color:rgba(255,255,255,.28)}\n.hot{color:#7ad1ff;text-shadow:0 0 18px rgba(122,209,255,.55);clip-path:inset(0 calc(100% - var(--p,0%)) 0 0)}\n</style>\n</head>\n<body>\n<div class='lyric base'>夜を越えて 君に会いに行く</div>\n<div class='lyric hot' id='hot'>夜を越えて 君に会いに行く</div>\n<script>\n(function(){\n  'use strict';\n  var hot=document.getElementById('hot');\n  var last=null;\n  function clamp(v){v=Number(v);if(!isFinite(v))v=0;return Math.max(0,Math.min(100,v));}\n  function render(){\n    var vars=pvf.vars||{};\n    var v=clamp(vars['lyrics.progress']);\n    if(v!==last){\n      last=v;\n      hot.style.setProperty('--p',v.toFixed(3)+'%');\n    }\n    pvf.rendered();\n  }\n  pvf.render=render;\n  render();\n  pvf.ready();\n})();\n</script>\n</body>\n</html>",
+  "manifest": {
+    "size": [1280, 160],
+    "transparent": true,
+    "timeDependent": false,
+    "components": [
+      {
+        "id": "lyrics",
+        "name": "歌词",
+        "variables": [
+          {
+            "name": "progress",
+            "type": "number",
+            "min": 0,
+            "max": 100,
+            "default": 0
+          }
+        ]
+      }
+    ]
+  }
+}

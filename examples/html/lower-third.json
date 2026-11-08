@@ -1,0 +1,32 @@
+{
+  "format": "pvforge-html",
+  "version": 1,
+  "html": "<!doctype html>\n<html>\n<head>\n<meta charset='utf-8'>\n<style>\nhtml,body{margin:0;width:1000px;height:220px;overflow:hidden;background:transparent;font-family:sans-serif}\n.wrap{position:absolute;left:60px;bottom:34px;width:640px;transform-origin:left bottom}\n.mark{position:absolute;left:0;top:6px;width:48px;height:48px}\n.plate{position:absolute;left:72px;top:0;width:560px}\n.name{color:#fff;font-size:54px;font-weight:700;letter-spacing:2px;line-height:1;white-space:nowrap}\n.role{margin-top:8px;color:#9fe3ff;font-size:22px;letter-spacing:4px;white-space:nowrap}\n.rule{margin-top:14px;height:4px;width:0;background:#7ad1ff}\n</style>\n</head>\n<body>\n<div class='wrap' id='wrap'>\n<img class='mark' alt='' src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 48 48%27%3E%3Cpath d=%27M24 2 46 24 24 46 2 24Z%27 fill=%27%237ad1ff%27/%3E%3C/svg%3E'>\n<div class='plate'>\n<div class='name'>MIZUKI AOI</div>\n<div class='role'>VOCAL / TOKYO</div>\n<div class='rule' id='rule'></div>\n</div>\n</div>\n<script>\n(function(){\n  'use strict';\n  var wrap=document.getElementById('wrap');\n  var rule=document.getElementById('rule');\n  var lastEnter=null;\n  var lastAccent=null;\n  function clamp(v){v=Number(v);if(!isFinite(v))v=0;return Math.max(0,Math.min(100,v));}\n  function render(){\n    var vars=pvf.vars||{};\n    var enter=clamp(vars['lowerthird.enter'])/100;\n    var accent=clamp(vars['lowerthird.accent'])/100;\n    if(enter!==lastEnter){\n      lastEnter=enter;\n      wrap.style.opacity=enter.toFixed(3);\n      wrap.style.transform='translateX('+((enter-1)*80).toFixed(2)+'px)';\n    }\n    if(accent!==lastAccent){\n      lastAccent=accent;\n      rule.style.width=(accent*560).toFixed(2)+'px';\n    }\n    pvf.rendered();\n  }\n  pvf.render=render;\n  render();\n  pvf.ready();\n})();\n</script>\n</body>\n</html>",
+  "manifest": {
+    "size": [1000, 220],
+    "transparent": true,
+    "timeDependent": false,
+    "components": [
+      {
+        "id": "lowerthird",
+        "name": "人名条",
+        "variables": [
+          {
+            "name": "enter",
+            "type": "number",
+            "min": 0,
+            "max": 100,
+            "default": 0
+          },
+          {
+            "name": "accent",
+            "type": "number",
+            "min": 0,
+            "max": 100,
+            "default": 0
+          }
+        ]
+      }
+    ]
+  }
+}

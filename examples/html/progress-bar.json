@@ -1,0 +1,26 @@
+{
+  "format": "pvforge-html",
+  "version": 1,
+  "html": "<!doctype html>\n<html>\n<head>\n<meta charset='utf-8'>\n<style>\nhtml,body{margin:0;width:800px;height:120px;overflow:hidden;background:transparent;font-family:sans-serif}\n.label{position:absolute;left:40px;top:12px;color:#eaf6ff;font-size:20px;letter-spacing:3px}\n.pct{position:absolute;right:40px;top:12px;color:#eaf6ff;font-size:20px;font-variant-numeric:tabular-nums}\n.bar{position:absolute;left:40px;top:52px;width:720px;height:36px;border:2px solid rgba(234,246,255,.7);background:rgba(234,246,255,.12);box-sizing:border-box}\n.fill{height:100%;width:0;background:#7ad1ff}\n</style>\n</head>\n<body>\n<div class='label'>PROGRESS</div>\n<div class='pct' id='pct'>0%</div>\n<div class='bar'><div class='fill' id='fill'></div></div>\n<script>\n(function(){\n  'use strict';\n  var fill=document.getElementById('fill');\n  var pct=document.getElementById('pct');\n  var last=null;\n  function clamp(v){v=Number(v);if(!isFinite(v))v=0;return Math.max(0,Math.min(100,v));}\n  function render(){\n    var vars=pvf.vars||{};\n    var v=clamp(vars['progress.value']);\n    if(v!==last){\n      last=v;\n      fill.style.width=v.toFixed(2)+'%';\n      pct.textContent=Math.round(v)+'%';\n    }\n    pvf.rendered();\n  }\n  pvf.render=render;\n  render();\n  pvf.ready();\n})();\n</script>\n</body>\n</html>",
+  "manifest": {
+    "size": [800, 120],
+    "transparent": true,
+    "timeDependent": false,
+    "components": [
+      {
+        "id": "progress",
+        "name": "进度条",
+        "variables": [
+          {
+            "name": "value",
+            "type": "number",
+            "min": 0,
+            "max": 100,
+            "default": 0,
+            "integer": true
+          }
+        ]
+      }
+    ]
+  }
+}

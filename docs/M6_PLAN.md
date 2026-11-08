@@ -3,6 +3,7 @@
 记录时间：2026-11-08
 状态：开工；M5-1/M5-2 已完成，M6 按本文档推进
 前置阅读：[MILESTONE.md](MILESTONE.md)、[FEATURES.md](FEATURES.md)、[USAGE.md](USAGE.md)
+配套：[AI_AUTHORING.md](AI_AUTHORING.md)（AI 的 2D 工作流指南）、[M6_HTML_API.md](M6_HTML_API.md)（HTML 组件契约）、[examples/html](../examples/html/)（可直接导入的示例资产）
 
 ## 一句话
 
@@ -297,6 +298,8 @@ MCP 资源 `pvforge://guide/authoring`：
 - HTML 组件契约与确定性规则。
 
 示例资源：进度条、字幕条、卡拉 OK 高亮。
+
+完整工作流指南见 [AI_AUTHORING.md](AI_AUTHORING.md)；HTML 契约、`pvf` API 与确定性规则见 [M6_HTML_API.md](M6_HTML_API.md)；可直接导入的示例资产在 [examples/html](../examples/html/)。
 
 ### 2.7 Checkpoint / git
 
