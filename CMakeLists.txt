@@ -22,6 +22,18 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 
 qt_standard_project_setup()
 
+add_executable(pvforge-mcp
+    src/mcp/main.cpp
+    src/mcp/StdioBridge.cpp
+)
+
+target_compile_definitions(pvforge-mcp PRIVATE
+    PVFORGE_VERSION="${PROJECT_VERSION}"
+)
+
+target_include_directories(pvforge-mcp PRIVATE src)
+target_link_libraries(pvforge-mcp PRIVATE Qt6::Core Qt6::Network)
+
 add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
@@ -46,6 +58,8 @@ add_executable(pvforge
     src/media/DecoderInfo.cpp
     src/media/MediaImporter.cpp
     src/mcp/McpServer.cpp
+    src/mcp/StdioBridge.cpp
+    src/mcp/StdioBridgeTest.cpp
     src/audio/AudioEngine.cpp
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
@@ -95,7 +109,10 @@ qt_add_resources(pvforge "lang"
 target_compile_definitions(pvforge PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
     PVFORGE_BUILD_TYPE="$<CONFIG>"
+    PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
 )
+
+add_dependencies(pvforge pvforge-mcp)
 
 target_include_directories(pvforge PRIVATE src)
 target_link_libraries(pvforge PRIVATE
@@ -103,4 +120,4 @@ target_link_libraries(pvforge PRIVATE
     PkgConfig::FFMPEG
 )
 
-install(TARGETS pvforge RUNTIME DESTINATION bin)
+install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)

@@ -35,6 +35,7 @@
 #include "ui/WorkbenchPanel.h"
 #include "media/VideoDecoder.h"
 #include "mcp/McpServer.h"
+#include "mcp/StdioBridgeTest.h"
 #include "ui/BezierEditorDialog.h"
 #include "ui/CameraMonitor.h"
 #include "ui/EasingPicker.h"
@@ -11998,6 +11999,8 @@ int main(int argc, char* argv[])
         return mcpHttpTest();
     if (app.arguments().contains(QStringLiteral("--mcp-ui-test")))
         return mcpUiTest(app);
+    if (app.arguments().contains(QStringLiteral("--mcp-bridge-test")))
+        return pvf::mcpBridgeTest();
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))
