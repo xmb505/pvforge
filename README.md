@@ -67,7 +67,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
 
 ## 路线
 
-**音频属性撤销 → 频谱对象 → 关键帧曲线编辑**。
+**M5：整轨关键帧曲线 → 音频编辑闭环 → 富文本与逐字动画 → 并行渲染**。详见 [docs/MILESTONE.md](docs/MILESTONE.md)。
 
 ## 参考与致谢
 
