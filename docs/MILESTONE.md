@@ -125,6 +125,7 @@
 - 父级坐标：子级的 X/Y/旋转/缩放相对父级；渲染、命中测试、手柄和拖拽使用父级世界变换
 - 时间轴支持拖拽排序、拖入文件夹、右键新建文件夹；收起状态只影响显示，不影响渲染
 - 锁定/隐藏沿父级链生效：锁定文件夹下的子对象不可选中，隐藏文件夹下的子对象不渲染
+- 透明度沿父级链相乘（`Project::effectiveOpacity`）；有效透明度为 0 的实体视为不存在：不渲染、不参与视口命中/吸附，视频不解码
 - 摄像机：时间轴对象，活动摄像机、取景比例 5%–100%、旋转、关键帧；位置限制在画布内，旋转允许越界
 - 自定义轴心（`rotPointX/Y`）：位置锚定轴心，改轴心自动补偿位置，旋转围绕轴心
 - 锁定在数据层强制：值、关键帧不可改；锁定后自动取消选择，视口和时间轴都不能再选中
@@ -296,9 +297,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 48 个模式，全部通过。
+共 49 个模式，全部通过。
 
 ## 已知限制
 

@@ -407,6 +407,78 @@ int groupTest(QApplication& app)
     return app.exec();
 }
 
+int opacityTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* transparent =
+        project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+    const pvf::EntityId transparentId = transparent->id;
+    pvf::Entity* behind = project->addVector(0, 80, 80, Qt::blue, Qt::white, 0);
+    const pvf::EntityId behindId = behind->id;
+    pvf::Entity* folder = project->addFolder(QStringLiteral("Fade"));
+    const pvf::EntityId folderId = folder->id;
+    project->setEntityParent(behindId, folderId);
+    project->setValue(transparentId, QStringLiteral("opacity"), 0, 0.0, false);
+
+    pvf::MainWindow window(project);
+    window.resize(1000, 700);
+    window.show();
+
+    QTimer::singleShot(300, &window,
+                       [&app, &window, project, transparentId, behindId, folderId] {
+        int failures = 0;
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        if (!viewport)
+        {
+            qCritical() << "opacity-test: viewport missing";
+            app.exit(1);
+            return;
+        }
+
+        const QPointF centre =
+            viewport->worldToScreenForTest().map(QPointF(0.0, 0.0));
+        if (project->effectiveOpacity(transparentId, 0) > 1e-6)
+        {
+            qCritical() << "opacity-test: transparent opacity is not zero";
+            ++failures;
+        }
+        if (viewport->hitTestForTest(centre) != behindId)
+        {
+            qCritical() << "opacity-test: transparent entity blocks the pick"
+                        << viewport->hitTestForTest(centre);
+            ++failures;
+        }
+
+        project->setValue(transparentId, QStringLiteral("opacity"), 0, 1.0, false);
+        if (viewport->hitTestForTest(centre) != transparentId)
+        {
+            qCritical() << "opacity-test: visible entity is not picked";
+            ++failures;
+        }
+
+        project->setValue(transparentId, QStringLiteral("opacity"), 0, 0.0, false);
+        project->setValue(folderId, QStringLiteral("opacity"), 0, 0.0, false);
+        if (project->effectiveOpacity(behindId, 0) > 1e-6
+            || viewport->hitTestForTest(centre) != pvf::kInvalidEntity)
+        {
+            qCritical() << "opacity-test: zero opacity folder is still visible";
+            ++failures;
+        }
+
+        project->setValue(folderId, QStringLiteral("opacity"), 0, 1.0, false);
+        if (viewport->hitTestForTest(centre) != behindId)
+        {
+            qCritical() << "opacity-test: folder child is not picked after fading in";
+            ++failures;
+        }
+
+        qInfo() << "opacity-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int multiDragTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -6987,6 +7059,8 @@ int main(int argc, char* argv[])
         return clipboardTest(app);
     if (app.arguments().contains(QStringLiteral("--group-test")))
         return groupTest(app);
+    if (app.arguments().contains(QStringLiteral("--opacity-test")))
+        return opacityTest(app);
     if (app.arguments().contains(QStringLiteral("--multidrag-test")))
         return multiDragTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-drag-test")))

@@ -37,6 +37,11 @@ public:
     void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
 
     QTransform worldToScreenForTest() const { return worldToScreenTransform(); }
+    EntityId hitTestForTest(const QPointF& pos) const
+    {
+        const Entity* entity = hitTest(pos);
+        return entity ? entity->id : kInvalidEntity;
+    }
     QPolygonF cameraFrameForTest() const { return cameraScreenPolygon(); }
     void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }

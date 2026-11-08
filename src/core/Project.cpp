@@ -560,6 +560,23 @@ bool Project::isEffectivelyHidden(EntityId id) const
     return false;
 }
 
+double Project::effectiveOpacity(EntityId id, double frame) const
+{
+    double opacity = 1.0;
+    QSet<EntityId> seen;
+    EntityId current = id;
+    while (current != kInvalidEntity && !seen.contains(current))
+    {
+        seen.insert(current);
+        const Entity* e = entity(current);
+        if (!e)
+            break;
+        opacity *= std::clamp(value(current, QStringLiteral("opacity"), frame), 0.0, 1.0);
+        current = e->parent;
+    }
+    return std::clamp(opacity, 0.0, 1.0);
+}
+
 bool Project::isEffectivelyLocked(EntityId id) const
 {
     QSet<EntityId> seen;

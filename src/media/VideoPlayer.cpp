@@ -302,6 +302,12 @@ void VideoPlayer::update(Project& project, int frame)
             continue;
         alive.insert(entity.id);
 
+        // A fully transparent video is treated as absent: no decoding and no
+        // decoder is opened until it becomes visible again.
+        if (entity.hidden || project.isEffectivelyHidden(entity.id)
+            || project.effectiveOpacity(entity.id, frame) <= 0.0)
+            continue;
+
         Stream* stream = m_streams.value(entity.id, nullptr);
         if (!stream)
         {
@@ -321,8 +327,6 @@ void VideoPlayer::update(Project& project, int frame)
             }
             stream->sourcePath = entity.sourcePath;
         }
-        if (entity.hidden || project.isEffectivelyHidden(entity.id))
-            continue;
 
         const double duration =
             entity.data.value(QStringLiteral("duration"), 0.0).toDouble();

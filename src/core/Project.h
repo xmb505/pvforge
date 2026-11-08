@@ -196,6 +196,8 @@ public:
     bool hasChildren(EntityId id) const;
     bool isEffectivelyHidden(EntityId id) const;
     bool isEffectivelyLocked(EntityId id) const;
+    // Opacity multiplied down the parent chain at the given frame.
+    double effectiveOpacity(EntityId id, double frame) const;
     // Pre-order layer order: roots in vector order, children after their parent.
     QVector<int> entityOrder() const;
 

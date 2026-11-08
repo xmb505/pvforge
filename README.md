@@ -34,6 +34,7 @@
 - **拖动多选**：按住任一已选中的行拖到文件夹上，整组实体一起移入；拖到两行之间按图层插入，一条撤销
 - **拖动关键帧**：关键帧可以左右拖动，已选中的关键帧整体平移（Shift 追加、Ctrl 取消选择），松手一条撤销
 - **文件夹 Gizmo**：文件夹也有轴心/坐标轴/旋转环/缩放手柄，移动、旋转、缩放文件夹时子级整体跟随
+- **透明度优化**：实体（含父级文件夹）有效透明度为 0 时视为不存在——不渲染、不参与视口点击/吸附，视频也不解码，播放时省 CPU
 - **文字排版**：文字和文本框共用一套排版模块（换行宽度/高度、行距、内边距、对齐、加粗/斜体/下划线、多行内容、竖排可切从右到左或从左到右）；工作台和属性面板都有「排版…」对话框，右侧实时预览与画布完全一致
 - **文本框**：工作台「文本框」分类——普通文本框（外形可切云朵 / 矩形 / 椭圆，尖角可在画布上直接拖动、指向任意点）、日式超绝硬直角（无尖角）、爆炸文本框；三者共用文字排版对话框
 - **特殊工具**：工作台「特殊」分类——放射状线条（楔形集中线，角度抖动 + 随机加粗，速度可调，手绘感）、快速流过（一组平行线按帧流动，做背景运动感）、漫画点阵（旋转网点，点径沿渐隐方向变化，可调间距/最小点比例/手绘抖动，做漫画阴影和半调背景）、品牌瓷砖墙（新闻发布会式棋盘格，可加任意多组 Logo，每组单独配色，密度按列×行设置，间距/透明度可调；Logo 支持 PNG/JPG/SVG，SVG 会按 1024px 长边栅格化避免糊）
@@ -98,6 +99,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 加文本框 | 工作台 → 文本框：普通文本框 / 日式超绝硬直角 / 爆炸文本框；普通文本框选中后拖画面小圆点改尖角 |
 | 多选实体 | 实体名 Ctrl+点击切换选择，Shift+点击连续选择；右键「组成文件夹」；拖动任一选中行可整组移动 / 拖进文件夹 |
 | 拖动关键帧 | 时间轴上拖动关键帧；Shift 追加选择，Ctrl 取消选择，整组平移后一条撤销 |
+| 透明物体 | 属性面板把透明度调到 0；画布不再绘制、点击会穿透到后面的物体，视频停止解码 |
 | 复制实体 | 选中实体 Ctrl+C，Ctrl+V 粘贴；Ctrl+D 原地复制；右键时间轴也可 |
 | 更换素材 | 右键时间轴里的图片/视频/音频实体 → 更换素材…，或属性面板「素材」区的按钮；从素材库选同类型素材，或导入新文件 |
 | 漫画点阵 | 工作台 → 特殊 → 漫画点阵：范围、点间距、最大点径、网格角度、渐隐角度、最小点比例、抖动、颜色；创建后属性面板可继续调 |
@@ -154,7 +156,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-48 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+49 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
@@ -166,6 +168,7 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --layer-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --replace-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --clipboard-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --group-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --opacity-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --multidrag-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-drag-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --library-picker-test

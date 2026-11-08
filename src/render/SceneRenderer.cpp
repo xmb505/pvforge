@@ -177,20 +177,7 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         || project.isEffectivelyHidden(entity.id))
         return;
 
-    double opacity =
-        std::clamp(project.value(entity.id, QStringLiteral("opacity"), frame), 0.0, 1.0);
-    QSet<EntityId> seen;
-    EntityId parent = entity.parent;
-    while (parent != kInvalidEntity && !seen.contains(parent))
-    {
-        seen.insert(parent);
-        const Entity* parentEntity = project.entity(parent);
-        if (!parentEntity)
-            break;
-        opacity *= std::clamp(
-            project.value(parentEntity->id, QStringLiteral("opacity"), frame), 0.0, 1.0);
-        parent = parentEntity->parent;
-    }
+    const double opacity = project.effectiveOpacity(entity.id, frame);
     if (opacity <= 0.0)
         return;
 

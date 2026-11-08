@@ -320,7 +320,8 @@ QPointF Viewport::snapCameraCenter(const Camera::State& start, const QPointF& ce
     for (const Entity& other : m_project->entities())
     {
         if (other.id == cameraId || other.hidden || other.isCamera()
-            || other.isFolder())
+            || other.isFolder()
+            || m_project->effectiveOpacity(other.id, m_frame) <= 0.0)
             continue;
         const VisualBounds bounds =
             visualBoundsOf(other, m_project->value(other.id, "x", m_frame),
@@ -570,7 +571,8 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
         const Entity& e = m_project->entities()[order[oi]];
         if (e.isFolder() || e.isCamera()
             || m_project->isEffectivelyHidden(e.id)
-            || m_project->isEffectivelyLocked(e.id))
+            || m_project->isEffectivelyLocked(e.id)
+            || m_project->effectiveOpacity(e.id, m_frame) <= 0.0)
         {
             continue;
         }
@@ -595,9 +597,7 @@ void Viewport::drawEntity(QPainter& p, const Entity& e, const QRectF&, double)
         || m_project->isEffectivelyHidden(e.id))
         return;
 
-    const double opacity =
-        std::clamp(m_project->value(e.id, QStringLiteral("opacity"), m_frame), 0.0, 1.0);
-    if (opacity <= 0.0)
+    if (m_project->effectiveOpacity(e.id, m_frame) <= 0.0)
         return;
 
     const QRectF bounds = entityLocalBounds(e);
@@ -1080,7 +1080,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
             for (const Entity& other : m_project->entities())
             {
-                if (other.id == m_dragEntity || other.hidden || other.isFolder())
+                if (other.id == m_dragEntity || other.hidden || other.isFolder()
+                    || m_project->effectiveOpacity(other.id, m_frame) <= 0.0)
                     continue;
                 const double otherRotation =
                     m_project->value(other.id, "rotation", m_frame);
@@ -1168,7 +1169,8 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
             for (const Entity& other : m_project->entities())
             {
-                if (other.id == m_dragEntity || other.hidden || other.isFolder())
+                if (other.id == m_dragEntity || other.hidden || other.isFolder()
+                    || m_project->effectiveOpacity(other.id, m_frame) <= 0.0)
                     continue;
                 const double otherRotation =
                     m_project->value(other.id, "rotation", m_frame);
@@ -1729,6 +1731,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             for (const Entity& other : m_project->entities())
             {
                 if (other.id == m_dragEntity || other.hidden || other.isFolder()
+                    || m_project->effectiveOpacity(other.id, m_frame) <= 0.0
                     || (snappedX && snappedY))
                     continue;
 
