@@ -210,6 +210,7 @@ HTML 资产是单个内容寻址 JSON：`assets/html/<sha>.json`：
 - 只接受 loopback、Bearer token、JSON-RPC；拒绝非本机、无 token、超大请求。
 - 支持 `initialize`、`tools/list`、`tools/call`、`resources/list`、`resources/read`、`notifications/cancelled`、`ping`。
 - 传输：Streamable HTTP（POST + 可选 SSE）；只支持 stdio 的客户端用 `pvforge-mcp` 桥接进程转 HTTP。
+- OpenCode / DeepSeek harness / Claude Desktop 的实测配置、传输矩阵和验证步骤见 [M6_MCP_CLIENTS.md](M6_MCP_CLIENTS.md)。
 
 ### 2.2 工具边界
 
