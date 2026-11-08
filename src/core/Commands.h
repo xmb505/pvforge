@@ -166,12 +166,14 @@ private:
     QString m_text;
 };
 
-// Grouping entities under a new folder as one undo step; the whole
-// entity list is snapshotted so the tree and layer order come back exactly.
-class GroupEntitiesCommand : public UndoCommand
+// Restructuring entities (grouping, moving several rows, moving keyframes)
+// as one undo step; the whole entity list is snapshotted so the tree, layer
+// order and keyframes come back exactly.
+class EntitiesSnapshotCommand : public UndoCommand
 {
 public:
-    GroupEntitiesCommand(QVector<Entity> before, QVector<Entity> after);
+    EntitiesSnapshotCommand(QVector<Entity> before, QVector<Entity> after,
+                            QString text);
 
     void undo(Project& project) override;
     void redo(Project& project) override;
@@ -180,6 +182,7 @@ public:
 private:
     QVector<Entity> m_before;
     QVector<Entity> m_after;
+    QString m_text;
 };
 
 // Swapping the media behind entities (video plus its paired audio) as one

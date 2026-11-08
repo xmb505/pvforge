@@ -128,6 +128,10 @@ private:
     void onAudioMoved(EntityId id, double startFrame);
     void onParentEdited(EntityId id, EntityId parent);
     void onEntityMoveRequested(EntityId id, EntityId parent, int index);
+    void onEntitiesMoveRequested(const QVector<EntityId>& ids, EntityId parent,
+                                 int index);
+    void onKeyframesMoveRequested(const QVector<KeyframeRecord>& records,
+                                  double delta);
     void onCreateFolderRequested(EntityId parent);
     void packAllAssets();
 

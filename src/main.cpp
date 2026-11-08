@@ -405,6 +405,206 @@ int groupTest(QApplication& app)
     return app.exec();
 }
 
+int multiDragTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* folder = project->addFolder(QStringLiteral("Target"));
+    const pvf::EntityId folderId = folder->id;
+    QVector<pvf::EntityId> ids;
+    for (int i = 0; i < 3; ++i)
+        ids.append(project->addVector(0, 80, 80, Qt::red, Qt::white, 0)->id);
+
+    pvf::MainWindow window(project);
+    window.resize(1000, 700);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, folderId, ids] {
+        int failures = 0;
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        if (!timeline)
+        {
+            qCritical() << "multidrag-test: timeline missing";
+            app.exit(1);
+            return;
+        }
+
+        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
+                                    Qt::MouseButtons buttons,
+                                    Qt::KeyboardModifiers modifiers) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                              buttons, modifiers);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        const QPoint first(10, timeline->rowCenterYForTest(1));
+        const QPoint second(10, timeline->rowCenterYForTest(2));
+        const QPoint folderRow(10, timeline->rowCenterYForTest(0));
+
+        sendMouse(QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, first, Qt::NoButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonPress, second, Qt::LeftButton,
+                  Qt::ControlModifier);
+        sendMouse(QEvent::MouseButtonRelease, second, Qt::NoButton,
+                  Qt::ControlModifier);
+        QApplication::processEvents();
+        if (timeline->entitySelectionCountForTest() != 2)
+        {
+            qCritical() << "multidrag-test: ctrl selection"
+                        << timeline->entitySelectionCountForTest();
+            ++failures;
+        }
+
+        // Pressing a row that is already selected keeps the whole selection,
+        // so dragging drops both rows into the folder as one block.
+        sendMouse(QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, folderRow, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, folderRow, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+
+        const pvf::Entity* a = project->entity(ids[0]);
+        const pvf::Entity* b = project->entity(ids[1]);
+        const pvf::Entity* c = project->entity(ids[2]);
+        if (!a || !b || !c || a->parent != folderId || b->parent != folderId
+            || c->parent != pvf::kInvalidEntity)
+        {
+            qCritical() << "multidrag-test: group drop"
+                        << (a ? a->parent : -1) << (b ? b->parent : -1)
+                        << (c ? c->parent : -1);
+            ++failures;
+        }
+        else
+        {
+            QVector<pvf::EntityId> order;
+            for (int index : project->entityOrder())
+            {
+                const pvf::Entity& entity = project->entities()[index];
+                if (entity.parent == folderId)
+                    order.append(entity.id);
+            }
+            if (order != QVector<pvf::EntityId>({ids[0], ids[1]}))
+            {
+                qCritical() << "multidrag-test: child order" << order;
+                ++failures;
+            }
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            const pvf::Entity* undoneA = project->entity(ids[0]);
+            const pvf::Entity* undoneB = project->entity(ids[1]);
+            if (!undoneA || !undoneB
+                || undoneA->parent != pvf::kInvalidEntity
+                || undoneB->parent != pvf::kInvalidEntity)
+            {
+                qCritical() << "multidrag-test: undo did not restore the rows";
+                ++failures;
+            }
+        }
+
+        qInfo() << "multidrag-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int keyframeDragTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* entity = project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
+    const pvf::EntityId id = entity->id;
+    project->setValue(id, QStringLiteral("x"), 10, 100.0, true);
+    project->setValue(id, QStringLiteral("x"), 20, 150.0, true);
+    project->setValue(id, QStringLiteral("y"), 10, 50.0, true);
+
+    pvf::MainWindow window(project);
+    window.resize(1000, 700);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, id] {
+        int failures = 0;
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        if (!timeline)
+        {
+            qCritical() << "keyframe-drag-test: timeline missing";
+            app.exit(1);
+            return;
+        }
+
+        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
+                                    Qt::MouseButtons buttons,
+                                    Qt::KeyboardModifiers modifiers) {
+            QMouseEvent event(type, QPointF(pos),
+                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                              buttons, modifiers);
+            QApplication::sendEvent(timeline, &event);
+        };
+
+        const int y = timeline->rowCenterYForTest(0);
+        const QPoint ten(timeline->frameXForTest(10), y);
+        const QPoint twenty(timeline->frameXForTest(20), y);
+
+        sendMouse(QEvent::MouseButtonPress, ten, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, ten, Qt::NoButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonPress, twenty, Qt::LeftButton, Qt::ShiftModifier);
+        sendMouse(QEvent::MouseButtonRelease, twenty, Qt::NoButton, Qt::ShiftModifier);
+        QApplication::processEvents();
+        if (timeline->selectedKeyframes().size() != 2)
+        {
+            qCritical() << "keyframe-drag-test: selection"
+                        << timeline->selectedKeyframes().size();
+            ++failures;
+        }
+
+        // Drag the selected keys ten frames to the right.
+        sendMouse(QEvent::MouseButtonPress, ten, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, twenty, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, twenty, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+
+        const pvf::Keyframe* x20 = project->keyframe(id, QStringLiteral("x"), 20);
+        const pvf::Keyframe* x30 = project->keyframe(id, QStringLiteral("x"), 30);
+        const pvf::Keyframe* y20 = project->keyframe(id, QStringLiteral("y"), 20);
+        if (!x20 || !x30 || !y20 || std::abs(x20->value - 100.0) > 1e-6
+            || std::abs(x30->value - 150.0) > 1e-6
+            || std::abs(y20->value - 50.0) > 1e-6
+            || project->keyframe(id, QStringLiteral("x"), 10)
+            || project->keyframe(id, QStringLiteral("y"), 10))
+        {
+            qCritical() << "keyframe-drag-test: keys did not move"
+                        << (x20 ? x20->value : -1) << (x30 ? x30->value : -1)
+                        << (y20 ? y20->value : -1);
+            ++failures;
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            const pvf::Keyframe* x10 = project->keyframe(id, QStringLiteral("x"), 10);
+            const pvf::Keyframe* x20 = project->keyframe(id, QStringLiteral("x"), 20);
+            const pvf::Keyframe* y10 = project->keyframe(id, QStringLiteral("y"), 10);
+            if (!x10 || !x20 || !y10 || std::abs(x10->value - 100.0) > 1e-6
+                || std::abs(x20->value - 150.0) > 1e-6
+                || std::abs(y10->value - 50.0) > 1e-6
+                || project->keyframe(id, QStringLiteral("x"), 30)
+                || project->keyframe(id, QStringLiteral("y"), 20))
+            {
+                qCritical() << "keyframe-drag-test: undo did not restore keys";
+                ++failures;
+            }
+        }
+
+        qInfo() << "keyframe-drag-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int clipboardTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -6601,6 +6801,10 @@ int main(int argc, char* argv[])
         return clipboardTest(app);
     if (app.arguments().contains(QStringLiteral("--group-test")))
         return groupTest(app);
+    if (app.arguments().contains(QStringLiteral("--multidrag-test")))
+        return multiDragTest(app);
+    if (app.arguments().contains(QStringLiteral("--keyframe-drag-test")))
+        return keyframeDragTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

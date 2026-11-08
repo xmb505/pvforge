@@ -455,6 +455,50 @@ QRect TimelinePanel::folderArrowRect(int row) const
     return QRect(6 + indent, top + (height - 14) / 2, 14, 14);
 }
 
+QVector<EntityId> TimelinePanel::rowDragRoots(EntityId clicked) const
+{
+    QVector<EntityId> roots;
+    if (!m_entitySelection.contains(clicked))
+    {
+        roots.append(clicked);
+        return roots;
+    }
+
+    // Drag the whole selection, keeping layer order and dropping children of
+    // selected folders (the folder carries them).
+    for (int index : m_project->entityOrder())
+    {
+        const Entity& entity = m_project->entities()[index];
+        if (!m_entitySelection.contains(entity.id) || entity.isAudio()
+            || m_project->isEffectivelyLocked(entity.id))
+            continue;
+        bool nested = false;
+        for (EntityId root : roots)
+            if (m_project->isDescendantOf(entity.id, root))
+            {
+                nested = true;
+                break;
+            }
+        if (!nested)
+            roots.append(entity.id);
+    }
+    if (roots.isEmpty())
+        roots.append(clicked);
+    return roots;
+}
+
+double TimelinePanel::dragFrame(EntityId id, double frame) const
+{
+    if (m_dragMode != DragMode::MoveKeyframe || m_kfDragDelta == 0)
+        return frame;
+    const auto selected =
+        std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                  KeyframeSelection{id, frame});
+    if (selected == m_selectedKeyframes.end())
+        return frame;
+    return std::max(0.0, frame + m_kfDragDelta);
+}
+
 void TimelinePanel::updateRowDropTarget(const QPointF& pos)
 {
     m_dropRow = -1;
@@ -487,9 +531,15 @@ void TimelinePanel::updateRowDropTarget(const QPointF& pos)
     }
 
     // Never drop a folder into itself or one of its descendants.
-    if (target->id == m_rowDragId
-        || m_project->isDescendantOf(target->id, m_rowDragId)
-        || m_project->isEffectivelyLocked(target->id))
+    bool invalidTarget = m_project->isEffectivelyLocked(target->id);
+    for (EntityId draggedId : m_rowDragIds)
+        if (target->id == draggedId
+            || m_project->isDescendantOf(target->id, draggedId))
+        {
+            invalidTarget = true;
+            break;
+        }
+    if (invalidTarget)
     {
         update();
         return;
@@ -499,10 +549,18 @@ void TimelinePanel::updateRowDropTarget(const QPointF& pos)
     const int rowHeightPx = rowHeight(row);
     const bool middle = y >= top + rowHeightPx / 4
                         && y <= top + rowHeightPx * 3 / 4;
-    const Entity* dragged = m_project->entity(m_rowDragId);
-    const bool canParent = dragged && !dragged->isAudio();
-    const bool targetCanParent =
-        target->isFolder() || (target->isCamera() && !dragged->isCamera());
+    bool canParent = !m_rowDragIds.isEmpty();
+    for (EntityId draggedId : m_rowDragIds)
+    {
+        const Entity* dragged = m_project->entity(draggedId);
+        if (!dragged || dragged->isAudio()
+            || (target->isCamera() && dragged->isCamera()))
+        {
+            canParent = false;
+            break;
+        }
+    }
+    const bool targetCanParent = target->isFolder() || target->isCamera();
     if (targetCanParent && middle && canParent
         && !m_collapsedFolders.contains(target->id))
     {
@@ -1037,7 +1095,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
         for (const double keyFrame : keyframeFrames(e.id))
         {
-            const int x = xFromFrame(int(std::lround(keyFrame)));
+            const double shownFrame = dragFrame(e.id, keyFrame);
+            const int x = xFromFrame(int(std::lround(shownFrame)));
             if (x < kNameWidth || x > right)
                 continue;
             const int cy = top + height / 2;
@@ -1323,13 +1382,19 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
             }
             else
             {
-                m_entitySelection.clear();
-                m_entitySelection.insert(id);
+                // Mine-imator keeps an existing multi selection when a
+                // selected row is pressed, so it can be dragged as a group.
+                if (!m_entitySelection.contains(id))
+                {
+                    m_entitySelection.clear();
+                    m_entitySelection.insert(id);
+                    m_selectionAnchor = id;
+                }
                 m_selected = id;
-                m_selectionAnchor = id;
                 emit entitySelected(id);
             }
             m_rowDragId = id;
+            m_rowDragIds = rowDragRoots(id);
             m_pressPos = event->position();
             m_dropRow = -1;
             m_dropMode = DropMode::None;
@@ -1347,19 +1412,46 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         const KeyframeSelection selection{keyEntity, keyFrame};
         const auto existing =
             std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(), selection);
-        if (event->modifiers() & Qt::ShiftModifier)
+        const bool ctrl =
+            event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier);
+        const bool shift = event->modifiers() & Qt::ShiftModifier;
+
+        if (existing != m_selectedKeyframes.end())
         {
-            if (existing != m_selectedKeyframes.end())
+            // Mine-imator: Ctrl removes a selected keyframe, plain press
+            // starts moving the whole selection.
+            if (ctrl)
+            {
                 m_selectedKeyframes.erase(existing);
-            else
-                m_selectedKeyframes.append(selection);
+                update();
+                return;
+            }
         }
         else
         {
-            m_selectedKeyframes.clear();
+            if (!shift)
+                m_selectedKeyframes.clear();
             m_selectedKeyframes.append(selection);
         }
         emit entitySelected(keyEntity);
+
+        m_kfDragRecords.clear();
+        for (const KeyframeSelection& selected : m_selectedKeyframes)
+        {
+            if (m_project->isEffectivelyLocked(selected.entity))
+                continue;
+            const Entity* entity = m_project->entity(selected.entity);
+            if (!entity)
+                continue;
+            for (auto it = entity->tracks.begin(); it != entity->tracks.end(); ++it)
+                for (const Keyframe& key : it->keys)
+                    if (std::abs(key.frame - selected.frame) < 1e-6)
+                        m_kfDragRecords.append({selected.entity, it.key(), key.frame,
+                                                key.value, key.ease});
+        }
+        m_kfDragStartFrame = frameFromX(x);
+        m_kfDragDelta = 0;
+        m_dragMode = DragMode::MoveKeyframe;
         update();
         return;
     }
@@ -1430,6 +1522,17 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
             return;
         m_dragMode = DragMode::MoveRow;
         setCursor(Qt::ClosedHandCursor);
+    }
+
+    if (m_dragMode == DragMode::MoveKeyframe)
+    {
+        const int delta = frameFromX(int(event->position().x())) - m_kfDragStartFrame;
+        if (delta != m_kfDragDelta)
+        {
+            m_kfDragDelta = delta;
+            update();
+        }
+        return;
     }
 
     if (m_dragMode == DragMode::MoveRow)
@@ -1830,15 +1933,29 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         }
         update();
     }
+    else if (m_dragMode == DragMode::MoveKeyframe)
+    {
+        const int delta = m_kfDragDelta;
+        m_dragMode = DragMode::None;
+        m_kfDragDelta = 0;
+        if (delta != 0 && !m_kfDragRecords.isEmpty())
+        {
+            for (KeyframeSelection& selected : m_selectedKeyframes)
+                selected.frame = std::max(0.0, selected.frame + delta);
+            emit keyframesMoveRequested(m_kfDragRecords, double(delta));
+        }
+        m_kfDragRecords.clear();
+        update();
+    }
     else if (m_dragMode == DragMode::MoveRow)
     {
-        const EntityId dragged = m_rowDragId;
         EntityId parent = kInvalidEntity;
         int index = -1;
+        bool into = false;
         if (m_dropMode != DropMode::None && m_dropRow >= 0)
         {
             const Entity* target = m_project->entity(entityAtRow(m_dropRow));
-            if (target && target->id != dragged)
+            if (target)
             {
                 const auto& entities = m_project->entities();
                 int targetIndex = -1;
@@ -1856,6 +1973,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
                     {
                         parent = target->id;
                         index = int(entities.size());
+                        into = true;
                     }
                     else if (m_dropMode == DropMode::Below)
                     {
@@ -1865,15 +1983,41 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
             }
         }
 
+        QVector<EntityId> dragged = m_rowDragIds;
+        if (dragged.isEmpty())
+            dragged.append(m_rowDragId);
+
         m_dragMode = DragMode::None;
         m_rowDragId = kInvalidEntity;
+        m_rowDragIds.clear();
         m_dropRow = -1;
         m_dropMode = DropMode::None;
         unsetCursor();
-        if (index >= 0 && parent != dragged
-            && !m_project->isDescendantOf(parent, dragged))
+
+        bool valid = index >= 0;
+        for (EntityId id : dragged)
+            if (parent == id || m_project->isDescendantOf(parent, id))
+                valid = false;
+        if (valid)
         {
-            emit entityMoveRequested(dragged, parent, index);
+            if (dragged.size() == 1)
+            {
+                emit entityMoveRequested(dragged.first(), parent, index);
+            }
+            else
+            {
+                // moveEntities() takes an index into the list with the moved
+                // entities removed; subtract the dragged rows before the
+                // target and add one for a drop below it.
+                if (!into)
+                {
+                    const auto& entities = m_project->entities();
+                    for (int i = 0; i < std::min(index, int(entities.size())); ++i)
+                        if (dragged.contains(entities[i].id))
+                            --index;
+                }
+                emit entitiesMoveRequested(dragged, parent, index);
+            }
         }
         updateHoverCursor(event->position());
     }

@@ -31,6 +31,8 @@
 - **更换素材**：图片/视频/音频实体可以换源文件，位置、关键帧、配对音频都保留，一条撤销
 - **复制粘贴实体**：Ctrl+C / Ctrl+V 复制整棵子树（含关键帧和配对音频），Ctrl+D 原地复制；右键时间轴也有，一条撤销
 - **实体多选**：实体栏 Ctrl+点击切换、Shift+点击连选；右键「组成文件夹」把选中的实体收进新文件夹，一条撤销
+- **拖动多选**：按住任一已选中的行拖到文件夹上，整组实体一起移入；拖到两行之间按图层插入，一条撤销
+- **拖动关键帧**：关键帧可以左右拖动，已选中的关键帧整体平移（Shift 追加、Ctrl 取消选择），松手一条撤销
 - **文件夹 Gizmo**：文件夹也有轴心/坐标轴/旋转环/缩放手柄，移动、旋转、缩放文件夹时子级整体跟随
 - **文字排版**：文字和文本框共用一套排版模块（换行宽度/高度、行距、内边距、对齐、加粗/斜体/下划线、多行内容、竖排可切从右到左或从左到右）；工作台和属性面板都有「排版…」对话框，右侧实时预览与画布完全一致
 - **文本框**：工作台「文本框」分类——普通文本框（外形可切云朵 / 矩形 / 椭圆，尖角可在画布上直接拖动、指向任意点）、日式超绝硬直角（无尖角）、爆炸文本框；三者共用文字排版对话框
@@ -94,7 +96,8 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 自动保存 | 设置 → 常规 → 保存；默认开启，每 5 分钟一次，只保存已有路径的工程 |
 | 改文字排版 | 工作台文字页或属性面板「文字」区点「排版…」：换行宽度/高度、行距、内边距、对齐、字形、竖排方向 |
 | 加文本框 | 工作台 → 文本框：普通文本框 / 日式超绝硬直角 / 爆炸文本框；普通文本框选中后拖画面小圆点改尖角 |
-| 多选实体 | 实体名 Ctrl+点击切换选择，Shift+点击连续选择；右键「组成文件夹」 |
+| 多选实体 | 实体名 Ctrl+点击切换选择，Shift+点击连续选择；右键「组成文件夹」；拖动任一选中行可整组移动 / 拖进文件夹 |
+| 拖动关键帧 | 时间轴上拖动关键帧；Shift 追加选择，Ctrl 取消选择，整组平移后一条撤销 |
 | 复制实体 | 选中实体 Ctrl+C，Ctrl+V 粘贴；Ctrl+D 原地复制；右键时间轴也可 |
 | 更换素材 | 右键时间轴里的图片/视频/音频实体 → 更换素材…，或属性面板「素材」区的按钮 |
 | 品牌瓷砖墙 | 工作台 → 特殊 → 品牌瓷砖墙 → 配置：任意添加 Logo 组、每组配色、密度（列×行）与间距；创建后属性面板可再次编辑 |
@@ -150,7 +153,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-45 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+47 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
@@ -162,6 +165,8 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --layer-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --replace-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --clipboard-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --group-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --multidrag-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-drag-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test

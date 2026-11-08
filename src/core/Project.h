@@ -188,6 +188,9 @@ public:
 
     bool setEntityParent(EntityId id, EntityId parent);
     bool moveEntity(EntityId id, EntityId parent, int index);
+    // Moves several entities into parent as one block. index is the target
+    // position in the list with the moved entities already removed.
+    bool moveEntities(const QVector<EntityId>& ids, EntityId parent, int index);
     bool isDescendantOf(EntityId id, EntityId ancestor) const;
     bool hasChildren(EntityId id) const;
     bool isEffectivelyHidden(EntityId id) const;
@@ -213,6 +216,8 @@ public:
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);
     void addKeyframe(EntityId id, const QString& property, const Keyframe& key);
+    // Shifts the given keyframes by delta frames, clamping at frame 0.
+    void moveKeyframes(const QVector<KeyframeRecord>& records, double delta);
     bool setKeyframeEasing(EntityId id, const QString& property, double frame,
                            const EasingSpec& ease);
     const Keyframe* keyframe(EntityId id, const QString& property, double frame) const;

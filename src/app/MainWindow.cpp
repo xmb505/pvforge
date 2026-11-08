@@ -247,6 +247,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
     connect(m_timeline, &TimelinePanel::entityMoveRequested, this,
             &MainWindow::onEntityMoveRequested);
+    connect(m_timeline, &TimelinePanel::entitiesMoveRequested, this,
+            &MainWindow::onEntitiesMoveRequested);
+    connect(m_timeline, &TimelinePanel::keyframesMoveRequested, this,
+            &MainWindow::onKeyframesMoveRequested);
     connect(m_timeline, &TimelinePanel::folderCreateRequested, this,
             &MainWindow::onCreateFolderRequested);
     connect(m_history, &History::changed, this, [this] {
@@ -799,6 +803,51 @@ void MainWindow::onEntityMoveRequested(EntityId id, EntityId parent, int index)
     statusBar()->showMessage(QStringLiteral("已调整图层顺序"), 2000);
 }
 
+void MainWindow::onEntitiesMoveRequested(const QVector<EntityId>& ids,
+                                         EntityId parent, int index)
+{
+    QVector<EntityId> roots;
+    for (EntityId id : ids)
+    {
+        const Entity* e = m_project->entity(id);
+        if (!e || e->isAudio() || m_project->isEffectivelyLocked(id))
+            continue;
+        if (parent != kInvalidEntity)
+        {
+            const Entity* newParent = m_project->entity(parent);
+            if (!newParent || newParent->isAudio()
+                || (e->isCamera() && newParent->isCamera())
+                || parent == id || m_project->isDescendantOf(parent, id))
+                continue;
+        }
+        roots.append(id);
+    }
+    if (roots.isEmpty())
+        return;
+
+    const QVector<Entity> before = m_project->entities();
+    if (!m_project->moveEntities(roots, parent, index))
+        return;
+    m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                        before, m_project->entities(), QStringLiteral("移动实体")),
+                    *m_project);
+    statusBar()->showMessage(
+        QStringLiteral("已移动 %1 个实体").arg(roots.size()), 2000);
+}
+
+void MainWindow::onKeyframesMoveRequested(const QVector<KeyframeRecord>& records,
+                                          double delta)
+{
+    if (records.isEmpty() || std::abs(delta) < 1e-9)
+        return;
+    const QVector<Entity> before = m_project->entities();
+    m_project->moveKeyframes(records, delta);
+    m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                        before, m_project->entities(), QStringLiteral("移动关键帧")),
+                    *m_project);
+    statusBar()->showMessage(QStringLiteral("已移动关键帧"), 2000);
+}
+
 void MainWindow::onCreateFolderRequested(EntityId parent)
 {
     if (parent != kInvalidEntity)
@@ -1289,8 +1338,8 @@ void MainWindow::groupEntitiesIntoFolder(const QVector<EntityId>& ids)
         m_project->moveEntity(id, folderId, int(m_project->entities().size()));
 
     setSelectedEntity(folderId);
-    m_history->push(std::make_unique<GroupEntitiesCommand>(
-                        before, m_project->entities()),
+    m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                        before, m_project->entities(), QStringLiteral("组成文件夹")),
                     *m_project);
     statusBar()->showMessage(QStringLiteral("已组成文件夹"), 2000);
 }

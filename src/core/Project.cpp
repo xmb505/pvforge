@@ -478,6 +478,40 @@ bool Project::moveEntity(EntityId id, EntityId parent, int index)
     return true;
 }
 
+bool Project::moveEntities(const QVector<EntityId>& ids, EntityId parent, int index)
+{
+    if (ids.isEmpty())
+        return false;
+    if (parent != kInvalidEntity)
+    {
+        if (!entity(parent))
+            return false;
+        for (EntityId id : ids)
+            if (parent == id || isDescendantOf(parent, id))
+                return false;
+    }
+
+    QVector<Entity> moved;
+    for (int i = int(m_entities.size()) - 1; i >= 0; --i)
+    {
+        if (!ids.contains(m_entities[i].id))
+            continue;
+        moved.prepend(m_entities[i]);
+        m_entities.removeAt(i);
+    }
+    if (moved.isEmpty())
+        return false;
+
+    const int target = std::clamp(index, 0, int(m_entities.size()));
+    for (Entity& entity : moved)
+        entity.parent = parent;
+    for (int i = 0; i < int(moved.size()); ++i)
+        m_entities.insert(target + i, moved[i]);
+    modified = true;
+    emit changed();
+    return true;
+}
+
 bool Project::isDescendantOf(EntityId id, EntityId ancestor) const
 {
     if (id == kInvalidEntity || ancestor == kInvalidEntity)
@@ -1116,6 +1150,95 @@ void Project::addKeyframe(EntityId id, const QString& property, const Keyframe& 
               [](const Keyframe& a, const Keyframe& b) { return a.frame < b.frame; });
     modified = true;
     emit changed();
+}
+
+void Project::moveKeyframes(const QVector<KeyframeRecord>& records, double delta)
+{
+    if (std::abs(delta) < 1e-9)
+        return;
+
+    struct Move
+    {
+        EntityId entity = kInvalidEntity;
+        QString property;
+        Keyframe key;
+        double target = 0.0;
+    };
+
+    // Collect first: removing and re-adding one by one would let a moved key
+    // land on a selected neighbour that has not moved yet.
+    QVector<Move> moves;
+    for (const KeyframeRecord& record : records)
+    {
+        Entity* e = entity(record.entity);
+        if (!e || e->locked)
+            continue;
+        auto track = e->tracks.find(record.property);
+        if (track == e->tracks.end())
+            continue;
+
+        const QVector<Keyframe>& keys = track->keys;
+        int index = -1;
+        for (int i = 0; i < int(keys.size()); ++i)
+            if (std::abs(keys[i].frame - record.frame) < 1e-6)
+            {
+                index = i;
+                break;
+            }
+        if (index < 0)
+            continue;
+
+        const double target = std::max(0.0, record.frame + delta);
+        if (std::abs(target - keys[index].frame) < 1e-6)
+            continue;
+        moves.append({record.entity, record.property, keys[index], target});
+    }
+
+    for (const Move& move : moves)
+    {
+        Entity* e = entity(move.entity);
+        if (!e)
+            continue;
+        auto track = e->tracks.find(move.property);
+        if (track == e->tracks.end())
+            continue;
+        QVector<Keyframe>& keys = track->keys;
+        for (int i = 0; i < int(keys.size()); ++i)
+            if (std::abs(keys[i].frame - move.key.frame) < 1e-6)
+            {
+                keys.removeAt(i);
+                break;
+            }
+    }
+
+    for (const Move& move : moves)
+    {
+        Entity* e = entity(move.entity);
+        if (!e)
+            continue;
+        auto track = e->tracks.find(move.property);
+        if (track == e->tracks.end())
+            continue;
+        QVector<Keyframe>& keys = track->keys;
+        Keyframe key = move.key;
+        key.frame = move.target;
+        int insert = 0;
+        while (insert < int(keys.size()) && keys[insert].frame < key.frame)
+            ++insert;
+        if (insert < int(keys.size())
+            && std::abs(keys[insert].frame - key.frame) < 1e-6)
+            keys[insert] = key;
+        else
+            keys.insert(insert, key);
+    }
+
+    const bool moved = !moves.isEmpty();
+
+    if (moved)
+    {
+        modified = true;
+        emit changed();
+    }
 }
 
 bool Project::setKeyframeEasing(EntityId id, const QString& property, double frame,

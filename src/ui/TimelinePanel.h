@@ -4,6 +4,7 @@
 
 #include <QSet>
 #include <QWidget>
+#include <cmath>
 
 class QKeyEvent;
 class QLineEdit;
@@ -44,6 +45,12 @@ public:
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
+    int frameXForTest(double frame) const
+    {
+        return xFromFrame(int(std::lround(frame)));
+    }
+    int rowCenterYForTest(int row) const { return rowTop(row) + rowHeight(row) / 2; }
+    int entitySelectionCountForTest() const { return int(m_entitySelection.size()); }
 
     bool displayFrames() const { return m_displayFrames; }
     void setDisplayFrames(bool frames);
@@ -70,6 +77,10 @@ signals:
     void entityRenamed(EntityId id, const QString& name);
     void audioMoved(EntityId id, double startFrame);
     void entityMoveRequested(EntityId id, EntityId parent, int index);
+    void entitiesMoveRequested(const QVector<EntityId>& ids, EntityId parent,
+                               int index);
+    void keyframesMoveRequested(const QVector<KeyframeRecord>& records,
+                                double delta);
     void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
     void replaceSourceRequested(EntityId id);
@@ -107,6 +118,8 @@ private:
     int depthOf(EntityId id) const;
     QRect folderArrowRect(int row) const;
     void updateRowDropTarget(const QPointF& pos);
+    QVector<EntityId> rowDragRoots(EntityId clicked) const;
+    double dragFrame(EntityId id, double frame) const;
     QVector<double> keyframeFrames(EntityId id) const;
     void handleRowButton(int row, int index);
     int contentWidth() const;
@@ -122,7 +135,17 @@ private:
     void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
                            int right);
 
-    enum class DragMode { None, Scrub, PendingSelect, BoxSelect, MoveAudio, PendingRowDrag, MoveRow };
+    enum class DragMode
+    {
+        None,
+        Scrub,
+        PendingSelect,
+        BoxSelect,
+        MoveAudio,
+        PendingRowDrag,
+        MoveRow,
+        MoveKeyframe
+    };
     enum class DropMode { None, Above, Below, Into };
 
     Project* m_project = nullptr;
@@ -138,6 +161,10 @@ private:
     double m_audioDragStart = 0.0;
     double m_audioDragOffset = 0.0;
     EntityId m_rowDragId = kInvalidEntity;
+    QVector<EntityId> m_rowDragIds;
+    QVector<KeyframeRecord> m_kfDragRecords;
+    int m_kfDragStartFrame = 0;
+    int m_kfDragDelta = 0;
     int m_dropRow = -1;
     DropMode m_dropMode = DropMode::None;
     QSet<EntityId> m_collapsedFolders;
