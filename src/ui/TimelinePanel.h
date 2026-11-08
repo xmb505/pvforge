@@ -50,8 +50,12 @@ public:
     explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
     ~TimelinePanel() override;
 
+    enum class EditMode { Clips, Keyframes };
+
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
+    void setEditMode(EditMode mode);
+    EditMode editMode() const { return m_editMode; }
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
     int horizontalScrollForTest() const { return m_scrollX; }
@@ -203,6 +207,8 @@ private:
     {
         None,
         Scrub,
+        PendingSelect,
+        BoxSelect,
         MoveClip,
         TrimStart,
         TrimEnd,
@@ -291,6 +297,11 @@ private:
     int m_dragClipEnd = 0;
     int m_keyDragStart = 0;
     QPointF m_lastDragPos;
+    QPointF m_pressPos;
+    QPointF m_boxStart;
+    QPointF m_boxEnd;
+    EntityId m_pressEntity = kInvalidEntity;
+    int m_pressFrame = 0;
     QVector<Entity> m_before;
     QVector<Entity> m_preview;
     QVector<Entity> m_externalPreview;
@@ -306,11 +317,13 @@ private:
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
     QToolButton* m_unitButton = nullptr;
+    QToolButton* m_modeButton = nullptr;
     QTimer* m_autoScroll = nullptr;
     int m_scrollX = 0;
     int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
+    EditMode m_editMode = EditMode::Clips;
     bool m_relativeTime = false;   // popup only
 
     QHash<EntityId, ClipPopup*> m_popups;

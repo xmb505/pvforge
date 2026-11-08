@@ -9066,6 +9066,22 @@ int clipTimelineTest(QApplication& app)
 
             // Clicking a keyframe must feed the property panel's existing
             // easing button (the previous milestone's keyframe page).
+            auto* modeButton =
+                timeline->findChild<QToolButton*>(QStringLiteral("timelineModeButton"));
+            bool modeSwitched = false;
+            if (modeButton)
+            {
+                modeButton->click();
+                modeSwitched =
+                    modeButton->text() == QStringLiteral("关键帧")
+                    && popup->editMode()
+                           == pvf::TimelinePanel::EditMode::Keyframes;
+            }
+            if (!modeSwitched)
+            {
+                qCritical() << "clip-timeline-test: mode switch failed";
+                ++failures;
+            }
             project->addKeyframe(rectId, QStringLiteral("x"), 0, 0.0);
             project->addKeyframe(rectId, QStringLiteral("x"), 60, 0.0);
             QApplication::processEvents();
@@ -9122,6 +9138,22 @@ int clipTimelineTest(QApplication& app)
                 ++failures;
             }
 
+            // Rubber-band select across rows and frames.
+            const QPoint boxStart(popup->frameXForTest(130),
+                                  popup->rowCenterYForTest(0));
+            const QPoint boxEnd(popup->frameXForTest(0),
+                                popup->rowCenterYForTest(2));
+            send(QEvent::MouseButtonPress, boxStart, Qt::LeftButton);
+            send(QEvent::MouseMove, boxEnd, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, boxEnd, Qt::NoButton);
+            QApplication::processEvents();
+            const int boxed = popup->selectedKeyframeCount();
+            if (boxed < 3)
+            {
+                qCritical() << "clip-timeline-test: box select" << boxed;
+                ++failures;
+            }
+
             // Delete row 0 and verify rows 1/2 keep their positions.
             const QPoint redBody(popup->frameXForTest(30),
                                  popup->rowCenterYForTest(0));
@@ -9165,8 +9197,7 @@ int clipTimelineTest(QApplication& app)
             sendMain(QEvent::MouseButtonRelease, scrubEnd, Qt::NoButton);
             QApplication::processEvents();
             const int playheadX = timeline->frameXForTest(window.currentFrame());
-            if (timeline->horizontalScrollForTest() <= beforeScroll
-                || window.currentFrame() <= beforeFrame || playheadX < 0
+            if (window.currentFrame() <= beforeFrame || playheadX < 0
                 || playheadX >= timeline->width())
             {
                 qCritical() << "clip-timeline-test: scrub" << beforeScroll

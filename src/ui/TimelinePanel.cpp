@@ -218,8 +218,11 @@ public:
         m_panel->m_relativeTime = true;
         m_panel->m_pixelsPerFrame = source->m_pixelsPerFrame;
         m_panel->assignMissingRows();
+        m_panel->setEditMode(source->m_editMode);
         if (m_panel->m_unitButton)
             m_panel->m_unitButton->hide();
+        if (m_panel->m_modeButton)
+            m_panel->m_modeButton->hide();
         layout->addWidget(m_panel, 1);
 
         connect(m_timeMode, &QToolButton::toggled, this, [this](bool absolute) {
@@ -388,6 +391,21 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         "QToolButton:hover { background: #3c404a; }"));
     connect(m_unitButton, &QToolButton::clicked, this,
             [this] { setDisplayFrames(!m_displayFrames); });
+
+    m_modeButton = new QToolButton(this);
+    m_modeButton->setObjectName(QStringLiteral("timelineModeButton"));
+    m_modeButton->setText(QStringLiteral("片段"));
+    m_modeButton->setToolTip(QStringLiteral("切换编辑模式：片段 / 关键帧"));
+    m_modeButton->setFixedSize(54, 20);
+    m_modeButton->setFocusPolicy(Qt::NoFocus);
+    m_modeButton->setStyleSheet(QStringLiteral(
+        "QToolButton { background: #2a2c33; color: #d8dce4;"
+        " border: 1px solid #4a4d55; border-radius: 3px; padding: 0 4px; }"
+        "QToolButton:hover { background: #3c404a; }"));
+    connect(m_modeButton, &QToolButton::clicked, this, [this] {
+        setEditMode(m_editMode == EditMode::Clips ? EditMode::Keyframes
+                                                  : EditMode::Clips);
+    });
 
     if (m_project)
     {
@@ -1408,7 +1426,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             continue;
         const Entity* entity = findEntity(activeEntities(), rows[row]);
         const QRect rowRect(0, top, right, kRowHeight);
-        if (entity && entity->id == m_selected)
+        if (entity
+            && (entity->id == m_selected
+                || m_entitySelection.contains(entity->id)))
             p.fillRect(rowRect, QColor(accent.red(), accent.green(),
                                        accent.blue(), 45));
         else if (row % 2)
@@ -1422,7 +1442,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         if (clip.isEmpty())
             continue;
         QColor color = clipColor(entity->type);
-        const bool selected = entity->id == m_selected;
+        const bool selected =
+            entity->id == m_selected
+            || m_entitySelection.contains(entity->id);
         const bool hidden = m_project->isEffectivelyHidden(entity->id);
         const int alpha = hidden ? 80 : (selected ? 245 : 215);
         QColor topColor = color.lighter(112);
@@ -1558,6 +1580,17 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                        : QStringLiteral("把素材拖到这里创建子 clip"));
     }
 
+    if (m_dragMode == DragMode::BoxSelect)
+    {
+        const QRectF box = QRectF(m_boxStart, m_boxEnd)
+                               .normalized()
+                               .intersected(QRectF(0, kRulerHeight, right,
+                                                   bottom - kRulerHeight));
+        p.setPen(QPen(accent, 1, Qt::DashLine));
+        p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 50));
+        p.drawRect(box);
+    }
+
     if (m_dropActive)
     {
         const int dropX = xFromFrame(m_dropFrame);
@@ -1614,13 +1647,16 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     const int row = rowAt(int(pos.y()));
     const EntityId id = entityAtRow(row);
     const Entity* entity = m_project->entity(id);
+    const int pressX = int(std::lround(pos.x()));
     if (!entity)
     {
-        m_dragMode = DragMode::Scrub;
-        m_lastDragPos = pos;
-        m_autoScroll->start(30);
-        emit scrubStarted();
-        setScrubFrame(pos.x());
+        m_dragMode = DragMode::PendingSelect;
+        m_pressPos = pos;
+        m_boxStart = pos;
+        m_boxEnd = pos;
+        m_pressFrame = std::max(0, frameFromX(pressX));
+        m_pressEntity = kInvalidEntity;
+        update();
         return;
     }
 
@@ -1642,9 +1678,10 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     m_lastDragPos = pos;
     m_moved = false;
 
-    // Keyframes win over trim grips: a key at the clip edge must still be
-    // selectable, otherwise it looks like the diamond cannot be picked.
-    const int keyFrame = hitKeyframeRow(row, x);
+    // Keyframes win over trim grips in keyframe mode: a key at the clip edge
+    // must still be selectable. In clip mode the diamond is display-only.
+    const int keyFrame =
+        m_editMode == EditMode::Keyframes ? hitKeyframeRow(row, x) : -1;
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
@@ -1673,7 +1710,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     const bool nearLeft = std::abs(x - clip.left()) <= kTrimGrab;
     const bool nearRight = std::abs(x - clip.right()) <= kTrimGrab;
-    if (!entity->isAudio() && (nearLeft || nearRight))
+    if (m_editMode == EditMode::Clips && !entity->isAudio()
+        && (nearLeft || nearRight))
     {
         m_dragMode = nearLeft ? DragMode::TrimStart : DragMode::TrimEnd;
         beginDrag();
@@ -1684,6 +1722,19 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     if (clip.contains(pos.toPoint()))
     {
+        if (m_editMode == EditMode::Keyframes)
+        {
+            // In keyframe mode a clip body is a safe place to start a
+            // rubber band; a click without movement still selects the row.
+            m_dragMode = DragMode::PendingSelect;
+            m_pressPos = pos;
+            m_boxStart = pos;
+            m_boxEnd = pos;
+            m_pressFrame = std::max(0, frameFromX(x));
+            m_pressEntity = id;
+            update();
+            return;
+        }
         m_selectedKeyframes.clear();
         emit keyframeSelectionChanged(m_selectedKeyframes);
         selectEntity(id, true);
@@ -1694,10 +1745,12 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    m_frame = std::max(0, frameFromX(x));
-    emit frameRequested(m_frame);
-    m_selectedKeyframes.clear();
-    emit keyframeSelectionChanged(m_selectedKeyframes);
+    m_dragMode = DragMode::PendingSelect;
+    m_pressPos = pos;
+    m_boxStart = pos;
+    m_boxEnd = pos;
+    m_pressFrame = std::max(0, frameFromX(pressX));
+    m_pressEntity = id;
     update();
 }
 
@@ -1712,6 +1765,21 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         if (event->position().x() > visibleWidth() - 12
             || event->position().x() < 12)
             m_autoScroll->start(30);
+        return;
+    }
+
+    if (m_dragMode == DragMode::PendingSelect)
+    {
+        const QPointF delta = event->position() - m_pressPos;
+        if (std::abs(delta.x()) + std::abs(delta.y()) <= 5.0)
+            return;
+        m_dragMode = DragMode::BoxSelect;
+        m_boxStart = m_pressPos;
+    }
+    if (m_dragMode == DragMode::BoxSelect)
+    {
+        m_boxEnd = event->position();
+        update();
         return;
     }
 
@@ -1731,11 +1799,14 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
                           && std::abs(x - clip.left()) <= kTrimGrab;
             m_hoverRight = !entity->isAudio()
                            && std::abs(x - clip.right()) <= kTrimGrab;
-            if (hitKeyframeRow(row, x) >= 0)
+            if (m_editMode == EditMode::Keyframes
+                && hitKeyframeRow(row, x) >= 0)
                 setCursor(Qt::PointingHandCursor);
-            else if (m_hoverLeft || m_hoverRight)
+            else if (m_editMode == EditMode::Clips
+                     && (m_hoverLeft || m_hoverRight))
                 setCursor(Qt::SizeHorCursor);
-            else if (clip.contains(event->position().toPoint()))
+            else if (m_editMode == EditMode::Clips
+                     && clip.contains(event->position().toPoint()))
                 setCursor(Qt::OpenHandCursor);
             else
                 unsetCursor();
@@ -1764,6 +1835,82 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_dragMode == DragMode::PendingSelect)
+    {
+        m_dragMode = DragMode::None;
+        m_frame = std::max(0, m_pressFrame);
+        emit frameRequested(m_frame);
+        m_selectedKeyframes.clear();
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+        if (m_pressEntity != kInvalidEntity
+            && !m_project->isEffectivelyLocked(m_pressEntity))
+            selectEntity(m_pressEntity, true);
+        update();
+        return;
+    }
+    if (m_dragMode == DragMode::BoxSelect)
+    {
+        const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
+        const QVector<EntityId> rows = rowIds();
+        if (m_editMode == EditMode::Keyframes)
+        {
+            const int firstRow = rowAt(int(box.top()));
+            const int lastRow = rowAt(int(box.bottom()));
+            const int firstFrame = std::max(0, frameFromX(int(box.left())));
+            const int lastFrame = std::max(0, frameFromX(int(box.right())));
+            const bool additive = event->modifiers() & Qt::ShiftModifier;
+            if (!additive)
+                m_selectedKeyframes.clear();
+            for (int row = std::max(0, firstRow);
+                 row <= std::min(lastRow, int(rows.size()) - 1); ++row)
+            {
+                const Entity* entity = m_project->entity(rows[row]);
+                if (!entity || m_project->isEffectivelyLocked(entity->id))
+                    continue;
+                for (int frame : keyframeFrames(*entity))
+                {
+                    if (frame < firstFrame || frame > lastFrame)
+                        continue;
+                    const KeyframeSelection selection{entity->id, double(frame)};
+                    if (std::find(m_selectedKeyframes.begin(),
+                                  m_selectedKeyframes.end(), selection)
+                        == m_selectedKeyframes.end())
+                        m_selectedKeyframes.append(selection);
+                }
+            }
+            if (lastRow >= 0 && lastRow < rows.size())
+            {
+                const Entity* last = m_project->entity(rows[lastRow]);
+                if (last && !m_project->isEffectivelyLocked(last->id))
+                    selectEntity(last->id, true);
+            }
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+        }
+        else
+        {
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+            m_entitySelection.clear();
+            EntityId lastId = kInvalidEntity;
+            for (EntityId rowId : rows)
+            {
+                const Entity* entity = m_project->entity(rowId);
+                if (!entity || m_project->isEffectivelyLocked(entity->id))
+                    continue;
+                const QRect clip = clipRect(*entity);
+                if (clip.isEmpty() || !clip.intersects(box.toRect()))
+                    continue;
+                m_entitySelection.insert(entity->id);
+                lastId = entity->id;
+            }
+            m_selected = lastId;
+            if (lastId != kInvalidEntity && m_entitySelection.size() == 1)
+                emit entitySelected(lastId);
+            update();
+        }
+        m_dragMode = DragMode::None;
+        return;
+    }
     if (m_dragMode == DragMode::Scrub)
     {
         if (m_autoScroll)
@@ -2092,6 +2239,12 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
                                   42, 20);
         m_unitButton->setVisible(m_owner < 0 && width() > 120);
     }
+    if (m_modeButton)
+    {
+        m_modeButton->setGeometry(std::max(4, width() - kScrollBarSize - 104),
+                                  3, 54, 20);
+        m_modeButton->setVisible(m_owner < 0 && width() > 220);
+    }
     clampScroll();
     update();
     syncPopups();
@@ -2198,6 +2351,25 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     clampScroll();
     update();
     syncPopups();
+}
+
+void TimelinePanel::setEditMode(EditMode mode)
+{
+    if (m_editMode == mode)
+        return;
+    m_editMode = mode;
+    if (m_modeButton)
+        m_modeButton->setText(mode == EditMode::Clips ? QStringLiteral("片段")
+                                                      : QStringLiteral("关键帧"));
+    if (mode == EditMode::Clips)
+    {
+        m_selectedKeyframes.clear();
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+    }
+    update();
+    for (ClipPopup* popup : m_popups)
+        if (popup && popup->panel())
+            popup->panel()->setEditMode(mode);
 }
 
 int TimelinePanel::rulerTickStepForTest() const
