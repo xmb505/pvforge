@@ -129,14 +129,24 @@
 - 本机 Intel VAAPI 实测通过；无硬件时自动跳过并只测软件编码
 - 50 个离屏自检全部通过
 
-## 里程碑 M5：动画深度与规模化（规划中）
+## 里程碑 M5：动画深度与规模化（进行中）
 
 记录时间：2026-11-08
-状态：规划中；M4 已出片，以下按依赖顺序推进
+状态：进行中；M5-1 与 M5-2 的编辑闭环已完成，M5-3 起待做
 
 ### 一句话状态
 
 出片已经打通，下一阶段是「能做多细的动画」和「能做多大的工程」：整轨关键帧曲线、音频编辑闭环、富文本与逐字动画、求值/渲染分离、并行渲染和导出规模化。
+
+### 本里程碑已完成
+
+- **整轨关键帧曲线编辑器**（M5-1）：时间轴区域改为「时间轴 / 图表 / 波形」三页；图表页针对当前选中实体叠加 X、Y、旋转、缩放 X/Y、透明度六条属性曲线，每条曲线按自身值域归一化，颜色按调色板明度校准，暗色主题可直接阅读
+- 曲线直接走 `Track::evaluate` 采样，预设缓动与自定义贝塞尔与最终渲染一致；拖动贝塞尔手柄时只在图表内本地预览，松手才写入工程
+- 图表上的关键帧按整帧吸附，拖动已选中的关键帧会整组平移；目标帧被占用时自动停在邻帧前一格，不覆盖已有键；松手一条撤销
+- 图表支持框选、Ctrl+C / Ctrl+V、右键批量缓动、转为贝塞尔、删除和全选；复制会带走同一帧上的所有属性，粘贴到选中实体并跳过已占用的帧
+- **音频编辑闭环**（M5-2 前半）：属性面板的音量、淡入、淡出、裁掉开头 / 结尾、时间轴开始全部接入撤销栈；同一字段的连续编辑按字段集合合并为一条撤销，不同字段不会串成一条
+- 「取」按钮的裁剪同时修改开始帧和裁剪值，也作为一条撤销；属性面板新增淡入 / 淡出字段
+- **独立大波形页**：每个音频对象一行，Ctrl+滚轮缩放，滚轮 / Shift+滚轮滚动，点击波形定位播放头；卡点标记和频谱对象留待后续
 
 ### 大活
 
@@ -248,6 +258,12 @@
 - 时间轴左侧搜索框过滤对象
 - 行内按钮（悬停）：隐藏、锁定、全选关键帧
 - 双击对象名重命名
+- 曲线编辑器（时间轴「图表」页）：
+  - 对当前选中实体叠加 X / Y / 旋转 / 缩放 X / 缩放 Y / 透明度六条属性曲线，每条按自身值域归一化，颜色按调色板明度校准；点顶部属性名显示或隐藏
+  - 曲线用 `Track::evaluate` 采样，预设缓动与自定义贝塞尔与渲染一致；拖动贝塞尔手柄时本地预览，松手写入工程
+  - 关键帧整帧吸附，拖动已选中的键整组平移；目标帧有键时自动停在前一格，不覆盖；松手一条撤销
+  - 框选、Ctrl+C / Ctrl+V、右键批量缓动、转为贝塞尔、删除、全选；复制会带走同一帧上的所有属性，粘贴跳过已占用的帧
+- 独立大波形页（时间轴「波形」页）：每个音频对象一行，Ctrl+滚轮缩放、滚轮 / Shift+滚轮滚动、点击定位播放头；卡点标记和频谱对象未做
 
 ### 视口交互
 
@@ -320,6 +336,8 @@
 ### 音频与波形
 
 - 音频是时间轴对象：时间轴开始、裁掉开头/结尾、音量、淡入淡出；字段右侧「取」按钮直接取播放头位置；在时间轴上按住波形块可直接拖动音频（整帧、可撤销）；裁掉开头/结尾时保留的波形保持原位，不会跳到第 0 帧
+- 属性面板的音量、淡入、淡出、裁掉开头 / 结尾、开始帧都走撤销栈；同一字段连续编辑合并为一条，不同字段不互相合并；「取」裁剪同时改开始帧与裁剪值，也一条撤销
+- 独立大波形页：每个音频对象一行，Ctrl+滚轮缩放、滚轮 / Shift+滚轮滚动、点击定位播放头
 - FFmpeg 系统包解码（含 FLAC/OGG/Opus 等），统一为 48kHz 立体声 int16
 - 1ms 峰值包络；时间轴音频行按波形峰值绘制，音频行高 56px
 - 工作台「媒体」和素材库支持导入音频；波形缩略图进素材库
@@ -359,7 +377,7 @@ src/
 ├─ render/   SceneRenderer（共享实体绘制）、CameraRenderer（场景/工作摄像机取景）、VideoExporter（逐帧渲染 → ffmpeg MP4）
 ├─ media/    VideoDecoder（FFmpeg 首帧）、VideoPlayer（按播放头解码当前帧）、VideoProxy（后台预览代理）、AudioDecoder/AudioClip（音频解码与波形）、MediaImporter、DecoderInfo
 ├─ audio/    AudioEngine（离线混音 + QAudioSink 播放）
-├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
+├─ ui/       Viewport、TimelinePanel、CurveEditor、WaveformView、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
 │            CameraMonitor、EasingPicker、BezierEditorDialog、CollapsibleSection
 └─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、ExportDialog、ExportProgressDialog、SystemInfo、AppIcon
@@ -382,9 +400,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / export / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / export / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / curve-editor / audio-undo / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 50 个模式，全部通过。
+共 52 个模式，全部通过。
 
 ## 已知限制
 
@@ -401,12 +419,12 @@ self / save / autosave / special / export / keyframe-edit / frame-restore / laye
 - RTP 模式使用组播地址，部分 Wi-Fi/路由器会屏蔽；默认 HTTP 模式没有这个问题
 - 临摹参考从项目第 0 帧开始同步，暂不支持单独偏移
 - 删除有子对象的父级前需要先把子对象拖到工作台或删除
-- 音频属性修改（属性面板字段）暂未接入撤销栈；时间轴拖动音频已可撤销
+- 音频属性修改（音量、淡入、淡出、裁掉开头 / 结尾、开始帧）已接入撤销栈，同一字段连续编辑合并为一条；时间轴拖动音频也一条撤销
 - 音频擦洗是短片段预览，不是变速连续擦洗
-- 音频波形目前只有 1ms 峰值、没有独立的整轨大波形页
+- 音频大波形页使用 1ms 峰值，暂未做卡点标记；没有频谱可视化对象
 - 音频工程加载时同步解码；长音频可能卡一下
-- 关键帧缓动目前是单段模板/贝塞尔，没有整轨曲线图
-- 关键帧不能拖动改时间、复制、粘贴
+- 图表页只显示当前选中实体的属性曲线，不能把多个实体的曲线叠在一起；关键帧选择以整帧为单位，同一帧的所有属性一起移动
+- 贝塞尔手柄只对已经是贝塞尔的进入段显示，预设缓动需要先右键「转为贝塞尔」
 - 旋转实体的角缩放仍围绕中心
 - 实体单选（框选只作用于关键帧）
 - 英文翻译只覆盖核心界面
@@ -415,10 +433,11 @@ self / save / autosave / special / export / keyframe-edit / frame-restore / laye
 
 ## 下一步
 
-按 M5 的依赖顺序，先做两件每天都会碰到的事：
+M5-1 与 M5-2 的编辑闭环已完成，按依赖顺序继续：
 
-1. **整轨关键帧曲线编辑器**（M5-1）：图表页、拖关键帧/贝塞尔手柄、框选与复制粘贴
-2. **音频编辑闭环**（M5-2）：属性面板撤销、独立大波形页、频谱对象
+1. **音频卡点标记与频谱对象**（M5-2 剩余）：波形页打点、按 BPM 网格对齐、频谱对象由音频包络驱动
+2. **富文本与逐字动画**（M5-3）：行内样式、逐字 / 逐行时间偏移、卡拉 OK 高亮
+3. **FrameSnapshot、并行渲染、导出规模化**（M5-4 ~ M5-6）
 
 关键帧表达式与并行渲染依赖 FrameSnapshot（M5-4），放在求值层抽出之后。
 

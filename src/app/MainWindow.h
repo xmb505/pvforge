@@ -31,6 +31,7 @@ class PropertiesPanel;
 class TimelinePanel;
 class VideoProxyGenerator;
 class Viewport;
+class WaveformView;
 class WorkbenchPanel;
 
 struct MediaImportResult;
@@ -151,6 +152,7 @@ private:
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
     CurveEditor* m_curve = nullptr;
+    WaveformView* m_wave = nullptr;
     QTabWidget* m_timelineTabs = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;

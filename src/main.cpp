@@ -40,6 +40,7 @@
 #include "ui/CurveEditor.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
+#include "ui/WaveformView.h"
 #include "ui/WorkbenchPanel.h"
 
 #include <QApplication>
@@ -51,6 +52,7 @@
 #include <QFile>
 #include <QCheckBox>
 #include <QDataStream>
+#include <QDoubleSpinBox>
 #include <QFont>
 #include <QImage>
 #include <QKeyEvent>
@@ -922,6 +924,202 @@ int curveEditorTest(QApplication& app)
 
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_curve_editor.png"));
         qInfo() << "curve-editor-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
+int audioUndoTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    auto clip = std::make_shared<pvf::AudioClip>();
+    clip->duration = 5.0;
+    clip->peaks.fill(0.5f, 5000);
+    pvf::Entity* audio = project->addAudio(QStringLiteral("/tmp/pvf_audio_undo.wav"),
+                                           clip, QStringLiteral("测试音频"));
+    const pvf::EntityId id = audio->id;
+    // Extra lanes make the waveform page vertically scrollable.
+    for (int i = 0; i < 2; ++i)
+        project->addAudio(QStringLiteral("/tmp/pvf_audio_undo.wav"), clip,
+                          QStringLiteral("测试音频 %1").arg(i + 2));
+
+    pvf::MainWindow window(project);
+    window.resize(1100, 800);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, id] {
+        int failures = 0;
+        auto fail = [&failures](const char* text) {
+            qCritical() << "audio-undo-test:" << text;
+            ++failures;
+        };
+
+        window.setSelectedEntityForTest(id);
+        QApplication::processEvents();
+
+        auto* volume = window.findChild<QSpinBox*>(QStringLiteral("audioVolume"));
+        auto* trimStart =
+            window.findChild<QDoubleSpinBox*>(QStringLiteral("audioTrimStart"));
+        auto* trimEnd =
+            window.findChild<QDoubleSpinBox*>(QStringLiteral("audioTrimEnd"));
+        auto* fadeIn =
+            window.findChild<QDoubleSpinBox*>(QStringLiteral("audioFadeIn"));
+        auto* fadeOut =
+            window.findChild<QDoubleSpinBox*>(QStringLiteral("audioFadeOut"));
+        auto* start = window.findChild<QSpinBox*>(QStringLiteral("audioStartFrame"));
+        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
+        if (!volume || !trimStart || !trimEnd || !fadeIn || !fadeOut || !start
+            || !undo)
+        {
+            qCritical() << "audio-undo-test: audio controls missing";
+            app.exit(1);
+            return;
+        }
+
+        auto data = [project, id](const QString& key) {
+            const pvf::Entity* entity = project->entity(id);
+            return entity ? entity->data.value(key, 0.0).toDouble() : -1.0;
+        };
+
+        // A spin-box drag emits several valueChanged signals; they must fold
+        // into one undo step.
+        volume->setValue(80);
+        volume->setValue(60);
+        if (std::abs(data(QStringLiteral("volume")) - 0.6) > 1e-6)
+            fail("volume edit was not applied");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("volume")) - 1.0) > 1e-6)
+            fail("one undo did not revert the whole volume drag");
+
+        trimStart->setValue(1.0);
+        if (std::abs(data(QStringLiteral("trimStart")) - 1.0) > 1e-6)
+            fail("trim start edit was not applied");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("trimStart"))) > 1e-6)
+            fail("trim start undo failed");
+
+        trimEnd->setValue(0.5);
+        if (std::abs(data(QStringLiteral("trimEnd")) - 0.5) > 1e-6)
+            fail("trim end edit was not applied");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("trimEnd"))) > 1e-6)
+            fail("trim end undo failed");
+
+        fadeIn->setValue(0.75);
+        fadeOut->setValue(1.25);
+        if (std::abs(data(QStringLiteral("fadeIn")) - 0.75) > 1e-6
+            || std::abs(data(QStringLiteral("fadeOut")) - 1.25) > 1e-6)
+            fail("fade edits were not applied");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("fadeOut"))) > 1e-6)
+            fail("fade out undo failed");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("fadeIn"))) > 1e-6)
+            fail("fade in undo failed");
+
+        start->setValue(30);
+        if (std::abs(data(QStringLiteral("startFrame")) - 30.0) > 1e-6)
+            fail("start frame edit was not applied");
+        undo->trigger();
+        QApplication::processEvents();
+        if (std::abs(data(QStringLiteral("startFrame"))) > 1e-6)
+            fail("start frame undo failed");
+
+        // The "take" button trims at the playhead and moves the clip start; the
+        // two data fields must undo together.
+        window.goToFrame(60);
+        QApplication::processEvents();
+        auto* capture =
+            window.findChild<QPushButton*>(QStringLiteral("audioTrimStartFromPlayhead"));
+        if (!capture)
+        {
+            fail("trim capture button missing");
+        }
+        else
+        {
+            capture->click();
+            QApplication::processEvents();
+            if (std::abs(data(QStringLiteral("startFrame")) - 60.0) > 1e-6
+                || std::abs(data(QStringLiteral("trimStart")) - 2.0) > 1e-6)
+            {
+                fail("trim capture did not move start and trim together");
+            }
+            undo->trigger();
+            QApplication::processEvents();
+            if (std::abs(data(QStringLiteral("startFrame"))) > 1e-6
+                || std::abs(data(QStringLiteral("trimStart"))) > 1e-6)
+            {
+                fail("trim capture undo did not restore both fields");
+            }
+        }
+
+        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("timelineTabs"));
+        auto* wave = window.findChild<pvf::WaveformView*>();
+        if (!tabs || !wave)
+        {
+            fail("waveform page missing");
+        }
+        else
+        {
+            tabs->setCurrentWidget(wave);
+            QApplication::processEvents();
+            if (wave->laneCountForTest() != 3)
+                fail("waveform page did not create one lane per audio object");
+
+            const double zoomBefore = wave->pixelsPerFrameForTest();
+            const QPointF pos(500, 80);
+            QWheelEvent zoomEvent(pos, wave->mapToGlobal(pos), QPoint(), QPoint(0, 120),
+                                  Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
+                                  false);
+            QApplication::sendEvent(wave, &zoomEvent);
+            if (!(wave->pixelsPerFrameForTest() > zoomBefore))
+                fail("ctrl+wheel did not zoom the waveform");
+
+            wave->setPixelsPerFrameForTest(6.0);
+            window.goToFrame(30);
+            QApplication::processEvents();
+            const QPoint seekPos(wave->frameXForTest(45.0),
+                                 wave->laneRectForTest(0).center().y());
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(seekPos),
+                              QPointF(wave->mapToGlobal(seekPos)), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(wave, &press);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(seekPos),
+                                QPointF(wave->mapToGlobal(seekPos)), Qt::LeftButton,
+                                Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(wave, &release);
+            QApplication::processEvents();
+            if (window.currentFrameForTest() != 45)
+                fail("clicking the waveform did not seek the playhead");
+
+            window.goToFrame(0);
+            QApplication::processEvents();
+            const int scrollBefore = wave->horizontalScrollForTest();
+            QWheelEvent scrollEvent(pos, wave->mapToGlobal(pos), QPoint(), QPoint(0, -120),
+                                    Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase,
+                                    false);
+            QApplication::sendEvent(wave, &scrollEvent);
+            if (wave->horizontalScrollForTest() == scrollBefore)
+                fail("shift+wheel did not scroll the waveform page");
+
+            const int verticalBefore = wave->verticalScrollForTest();
+            QWheelEvent verticalEvent(pos, wave->mapToGlobal(pos), QPoint(),
+                                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier,
+                                      Qt::NoScrollPhase, false);
+            QApplication::sendEvent(wave, &verticalEvent);
+            if (wave->verticalScrollForTest() == verticalBefore)
+                fail("wheel did not scroll waveform lanes");
+
+            window.grab().toImage().save(QStringLiteral("/tmp/pvforge_waveform_page.png"));
+        }
+
+        qInfo() << "audio-undo-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -8004,6 +8202,8 @@ int main(int argc, char* argv[])
         return keyframeDragTest(app);
     if (app.arguments().contains(QStringLiteral("--curve-editor-test")))
         return curveEditorTest(app);
+    if (app.arguments().contains(QStringLiteral("--audio-undo-test")))
+        return audioUndoTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

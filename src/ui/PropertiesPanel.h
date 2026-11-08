@@ -151,6 +151,8 @@ private:
     QSpinBox* m_audioStart = nullptr;
     QDoubleSpinBox* m_audioTrimStart = nullptr;
     QDoubleSpinBox* m_audioTrimEnd = nullptr;
+    QDoubleSpinBox* m_audioFadeIn = nullptr;
+    QDoubleSpinBox* m_audioFadeOut = nullptr;
     QSpinBox* m_audioVolume = nullptr;
 };
 

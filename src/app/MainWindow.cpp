@@ -23,6 +23,7 @@
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
+#include "ui/WaveformView.h"
 #include "ui/WorkbenchPanel.h"
 
 #include <QAction>
@@ -76,6 +77,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_environment = new EnvironmentPanel(m_project, this);
     m_timeline = new TimelinePanel(m_project, this);
     m_curve = new CurveEditor(m_project, m_history, this);
+    m_wave = new WaveformView(m_project, this);
     m_workbench = new WorkbenchPanel(m_project, m_viewport);
     m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
     m_workbench->hide();
@@ -149,6 +151,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_timelineTabs->setDocumentMode(true);
     m_timelineTabs->addTab(m_timeline, QStringLiteral("时间轴"));
     m_timelineTabs->addTab(m_curve, QStringLiteral("图表"));
+    m_timelineTabs->addTab(m_wave, QStringLiteral("波形"));
     mainSplit->addWidget(m_timelineTabs);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
@@ -241,6 +244,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_curve, &CurveEditor::statusMessage, this, [this](const QString& text) {
         statusBar()->showMessage(text, 2000);
     });
+    connect(m_wave, &WaveformView::frameRequested, this, &MainWindow::setFrame);
     connect(m_timeline, &TimelinePanel::scrubStarted, this, [this] {
         if (m_playing)
             togglePlayback();
@@ -1051,6 +1055,7 @@ void MainWindow::setFrame(int frame)
     m_viewport->setCurrentFrame(m_frame);
     m_timeline->setCurrentFrame(m_frame);
     m_curve->setCurrentFrame(m_frame);
+    m_wave->setCurrentFrame(m_frame);
     m_props->setFrame(m_frame);
     if (m_monitor)
         m_monitor->setFrame(m_frame);
@@ -1782,6 +1787,7 @@ void MainWindow::refreshAll()
     m_viewport->update();
     m_timeline->update();
     m_curve->refreshTracks();
+    m_wave->refresh();
     m_props->refresh();
     if (m_monitor)
         m_monitor->setProjectChanged();

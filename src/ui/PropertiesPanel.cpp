@@ -763,7 +763,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     addCaptureRow(QStringLiteral("时间轴开始"), m_audioStart,
                   QStringLiteral("audioStartFromPlayhead"),
                   QStringLiteral("把音频在时间轴上的开始位置设为播放头位置"),
-                  [this] { applyData(QStringLiteral("startFrame"), double(m_frame)); });
+                  [this] { emitDataEdit(QStringLiteral("startFrame"), double(m_frame)); });
 
     m_audioTrimStart = new QDoubleSpinBox(content);
     m_audioTrimStart->setObjectName(QStringLiteral("audioTrimStart"));
@@ -800,6 +800,24 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioVolume->setKeyboardTracking(false);
     form->addRow(QStringLiteral("音量"), m_audioVolume);
 
+    m_audioFadeIn = new QDoubleSpinBox(content);
+    m_audioFadeIn->setObjectName(QStringLiteral("audioFadeIn"));
+    m_audioFadeIn->setRange(0.0, 36000.0);
+    m_audioFadeIn->setDecimals(3);
+    m_audioFadeIn->setSuffix(QStringLiteral(" s"));
+    m_audioFadeIn->setKeyboardTracking(false);
+    m_audioFadeIn->setToolTip(QStringLiteral("从音频开头渐入的秒数"));
+    form->addRow(QStringLiteral("淡入"), m_audioFadeIn);
+
+    m_audioFadeOut = new QDoubleSpinBox(content);
+    m_audioFadeOut->setObjectName(QStringLiteral("audioFadeOut"));
+    m_audioFadeOut->setRange(0.0, 36000.0);
+    m_audioFadeOut->setDecimals(3);
+    m_audioFadeOut->setSuffix(QStringLiteral(" s"));
+    m_audioFadeOut->setKeyboardTracking(false);
+    m_audioFadeOut->setToolTip(QStringLiteral("到音频结尾前渐出的秒数"));
+    form->addRow(QStringLiteral("淡出"), m_audioFadeOut);
+
     auto* hint =
         new QLabel(QStringLiteral("直接拖动时间轴上的音频块可以整体移动；「时间轴开始」决定位置，"
                                   "「裁掉开头/结尾」会缩短音频块，但保留的波形保持原位。"
@@ -813,13 +831,17 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     layout->addWidget(m_audioSection);
 
     connect(m_audioStart, &QSpinBox::valueChanged, this,
-            [this](int value) { applyData(QStringLiteral("startFrame"), double(value)); });
+            [this](int value) { emitDataEdit(QStringLiteral("startFrame"), double(value)); });
     connect(m_audioTrimStart, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("trimStart"), value); });
+            [this](double value) { emitDataEdit(QStringLiteral("trimStart"), value); });
     connect(m_audioTrimEnd, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("trimEnd"), value); });
+            [this](double value) { emitDataEdit(QStringLiteral("trimEnd"), value); });
     connect(m_audioVolume, &QSpinBox::valueChanged, this,
-            [this](int value) { applyData(QStringLiteral("volume"), value / 100.0); });
+            [this](int value) { emitDataEdit(QStringLiteral("volume"), value / 100.0); });
+    connect(m_audioFadeIn, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { emitDataEdit(QStringLiteral("fadeIn"), value); });
+    connect(m_audioFadeOut, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { emitDataEdit(QStringLiteral("fadeOut"), value); });
 }
 
 void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
@@ -910,10 +932,10 @@ void PropertiesPanel::applyAudioTrimStart(int playheadFrame)
     if (deltaFrames <= 1e-9)
         return;
 
-    e->data[QStringLiteral("startFrame")] = startFrame + deltaFrames;
-    e->data[QStringLiteral("trimStart")] = trimStart + deltaFrames / fps;
-    m_project->modified = true;
-    m_project->notifyChanged();
+    QVariantMap data;
+    data.insert(QStringLiteral("startFrame"), startFrame + deltaFrames);
+    data.insert(QStringLiteral("trimStart"), trimStart + deltaFrames / fps);
+    emit dataEdited(m_entity, data);
 }
 
 void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
@@ -944,9 +966,9 @@ void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
     if (std::abs(value - trimEnd) < 1e-9)
         return;
 
-    e->data[QStringLiteral("trimEnd")] = value;
-    m_project->modified = true;
-    m_project->notifyChanged();
+    QVariantMap data;
+    data.insert(QStringLiteral("trimEnd"), value);
+    emit dataEdited(m_entity, data);
 }
 
 void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
@@ -1201,6 +1223,14 @@ void PropertiesPanel::refresh()
             m_audioVolume->setValue(int(
                 std::lround(e->data.value(QStringLiteral("volume"), 1.0).toDouble()
                             * 100.0)));
+        }
+        {
+            const QSignalBlocker blockerIn(m_audioFadeIn);
+            const QSignalBlocker blockerOut(m_audioFadeOut);
+            m_audioFadeIn->setValue(
+                e->data.value(QStringLiteral("fadeIn"), 0.0).toDouble());
+            m_audioFadeOut->setValue(
+                e->data.value(QStringLiteral("fadeOut"), 0.0).toDouble());
         }
     }
 

@@ -56,7 +56,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-50 个离屏自检。完整模式列表和验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)。
+52 个离屏自检。完整模式列表和验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)。
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test

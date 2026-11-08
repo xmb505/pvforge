@@ -360,7 +360,9 @@ QString SetEntityDataMapCommand::text() const
 bool SetEntityDataMapCommand::canMergeWith(const UndoCommand* other) const
 {
     const auto* command = dynamic_cast<const SetEntityDataMapCommand*>(other);
-    return command && command->m_id == m_id;
+    // Only fold consecutive edits of the same fields into one undo step.
+    // Changing volume and then trim should stay two separate undos.
+    return command && command->m_id == m_id && command->m_after.keys() == m_after.keys();
 }
 
 void SetEntityDataMapCommand::mergeWith(const UndoCommand* other)

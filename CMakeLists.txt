@@ -61,6 +61,7 @@ add_executable(pvforge
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp
+    src/ui/WaveformView.cpp
     src/ui/WorkbenchPanel.cpp
 )
 
