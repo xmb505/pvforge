@@ -601,6 +601,13 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             &MainWindow::onEntitiesMoveRequested);
     connect(m_timeline, &TimelinePanel::keyframesMoveRequested, this,
             &MainWindow::onKeyframesMoveRequested);
+    connect(m_timeline, &TimelinePanel::snapshotEditRequested, this,
+            [this](const QVector<Entity>& before, const QVector<Entity>& after,
+                   const QString& text) {
+                m_history->push(std::make_unique<EntitiesSnapshotCommand>(
+                                    before, after, text),
+                                *m_project);
+            });
     connect(m_timeline, &TimelinePanel::folderCreateRequested, this,
             &MainWindow::onCreateFolderRequested);
     connect(m_timeline, &TimelinePanel::sceneCreateRequested, this,

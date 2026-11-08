@@ -188,7 +188,8 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
                 const QTransform& worldToScreen, bool useThumbnail)
 {
     if (entity.isFolder() || entity.isCamera() || entity.isAudio()
-        || project.isEffectivelyHidden(entity.id))
+        || project.isEffectivelyHidden(entity.id)
+        || !project.isEntityActiveAt(entity.id, frame))
         return;
 
     const double opacity = project.effectiveOpacity(entity.id, frame);

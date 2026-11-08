@@ -8909,6 +8909,121 @@ int timelineZoomTest(QApplication& app)
     return app.exec();
 }
 
+int clipTimelineTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::MainWindow window(project);
+    window.resize(1200, 800);
+    window.show();
+
+    pvf::Entity* group = project->addFolder(QStringLiteral("场景组"));
+    const pvf::EntityId groupId = group->id;
+    pvf::Entity* rect =
+        project->addVector(0, 120, 80, QColor(235, 87, 87), Qt::white, 0);
+    rect->name = QStringLiteral("红色矩形");
+    const pvf::EntityId rectId = rect->id;
+    pvf::Entity* text = project->addText(QStringLiteral("标题文字"),
+                                         QStringLiteral("Sans"), 64, Qt::white,
+                                         Qt::AlignCenter);
+    text->name = QStringLiteral("标题文字");
+    const pvf::EntityId textId = text->id;
+    project->setEntityParent(rectId, groupId);
+    project->setEntityParent(textId, groupId);
+    project->entity(groupId)->data[QStringLiteral("clipStart")] = 0;
+    project->entity(groupId)->data[QStringLiteral("clipEnd")] = 150;
+    project->entity(rectId)->data[QStringLiteral("clipStart")] = 0;
+    project->entity(rectId)->data[QStringLiteral("clipEnd")] = 120;
+    project->entity(textId)->data[QStringLiteral("clipStart")] = 30;
+    project->entity(textId)->data[QStringLiteral("clipEnd")] = 150;
+
+    auto* timeline = window.findChild<pvf::TimelinePanel*>();
+    if (!timeline)
+    {
+        qCritical() << "clip-timeline-test: no timeline";
+        return 1;
+    }
+    QTimer::singleShot(300, &window, [&app, &window, timeline, groupId, rectId] {
+        timeline->setPixelsPerFrameForTest(8.0);
+        timeline->setCurrentFrame(45);
+        timeline->openPopup(groupId);
+        QTimer::singleShot(400, &window,
+                           [&app, &window, groupId, rectId] {
+            int failures = 0;
+            pvf::TimelinePanel* popup = nullptr;
+            for (pvf::TimelinePanel* panel :
+                 window.findChildren<pvf::TimelinePanel*>())
+            {
+                if (panel->owner() == groupId)
+                {
+                    popup = panel;
+                    break;
+                }
+            }
+            if (!popup)
+            {
+                qCritical() << "clip-timeline-test: popup missing";
+                app.exit(1);
+                return;
+            }
+            pvf::Project* project = window.project();
+            if (!project)
+            {
+                qCritical() << "clip-timeline-test: project missing";
+                app.exit(1);
+                return;
+            }
+            project->addKeyframe(rectId, QStringLiteral("x"), 110, 0.0);
+            const QRect before = popup->clipRectFor(rectId);
+            const int row = 0;
+            auto send = [popup](QEvent::Type type, const QPoint& pos,
+                                Qt::MouseButtons buttons) {
+                QMouseEvent event(type, QPointF(pos),
+                                  QPointF(popup->mapToGlobal(pos)),
+                                  Qt::LeftButton, buttons, Qt::NoModifier);
+                QApplication::sendEvent(popup, &event);
+            };
+            const QPoint from(before.right() - 3,
+                              popup->rowCenterYForTest(row));
+            const QPoint to(from.x() - 30 * 8, from.y());
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton);
+            send(QEvent::MouseMove, to, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, to, Qt::NoButton);
+            QApplication::processEvents();
+            const int clippedEnd = project->clipEndFrame(rectId);
+            const bool keyGone = project->keyframe(rectId, QStringLiteral("x"),
+                                                   110.0)
+                                 == nullptr;
+            const QRect clipped = popup->clipRectFor(rectId);
+            const QPoint expandFrom(clipped.right() - 3,
+                                    popup->rowCenterYForTest(row));
+            const QPoint expandTo(expandFrom.x() + 30 * 8, expandFrom.y());
+            send(QEvent::MouseButtonPress, expandFrom, Qt::LeftButton);
+            send(QEvent::MouseMove, expandTo, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, expandTo, Qt::NoButton);
+            QApplication::processEvents();
+            const int expandedEnd = project->clipEndFrame(rectId);
+            const bool keyStayedGone =
+                project->keyframe(rectId, QStringLiteral("x"), 110.0) == nullptr;
+            if (clippedEnd >= 110 || !keyGone || expandedEnd <= clippedEnd
+                || !keyStayedGone)
+            {
+                qCritical() << "clip-timeline-test: trim" << before << clippedEnd
+                            << expandedEnd << keyGone << keyStayedGone;
+                ++failures;
+            }
+            window.grab().toImage().save(
+                QStringLiteral("/tmp/pvforge_clip_timeline.png"));
+            qInfo() << "clip-timeline-test: popup panels"
+                    << window.findChildren<pvf::TimelinePanel*>().size()
+                    << "trim" << clippedEnd << "expand" << expandedEnd
+                    << "key gone" << keyGone << "failures" << failures;
+            app.exit(failures == 0 ? 0 : 1);
+        });
+    });
+    return app.exec();
+}
+
 int openTimelineTest(QApplication& app){
     auto* project = new pvf::Project;
     project->fps = 60;
@@ -13301,6 +13416,8 @@ int main(int argc, char* argv[])
         return libraryTest(app);
     if (app.arguments().contains(QStringLiteral("--open-timeline-test")))
         return openTimelineTest(app);
+    if (app.arguments().contains(QStringLiteral("--clip-timeline-test")))
+        return clipTimelineTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-zoom-test")))
         return timelineZoomTest(app);
     if (app.arguments().contains(QStringLiteral("--delete-test")))

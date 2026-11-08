@@ -219,6 +219,13 @@ public:
     // Length follows content: last keyframe + one second of tail, minimum 2s.
     int timelineLength() const;
 
+    // Timeline clip range. Audio derives from its media start/trim fields;
+    // other entities store clipStart/clipEnd in data. clipEnd <= clipStart
+    // means open-ended. isEntityActiveAt drives preview and export culling.
+    int clipStartFrame(EntityId id) const;
+    int clipEndFrame(EntityId id) const;
+    bool isEntityActiveAt(EntityId id, double frame) const;
+
     static double defaultValue(const QString& prop);
 
     Entity* addImage(const QString& path, const QString& displayName = QString());

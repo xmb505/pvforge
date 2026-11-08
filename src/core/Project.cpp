@@ -729,8 +729,55 @@ int Project::timelineLength() const
         for (auto it = e.tracks.constBegin(); it != e.tracks.constEnd(); ++it)
             if (!it->keys.isEmpty())
                 last = std::max(last, it->keys.last().frame);
+        const int clipEnd = e.data.value(QStringLiteral("clipEnd"), 0).toInt();
+        if (clipEnd > 0)
+            last = std::max(last, double(clipEnd));
     }
     return std::max(0, int(std::ceil(last)));
+}
+
+int Project::clipStartFrame(EntityId id) const
+{
+    const Entity* e = entity(id);
+    if (!e)
+        return 0;
+    if (e->isAudio())
+        return int(std::floor(e->data.value(QStringLiteral("startFrame"), 0.0).toDouble()));
+    return std::max(0, e->data.value(QStringLiteral("clipStart"), 0).toInt());
+}
+
+int Project::clipEndFrame(EntityId id) const
+{
+    const Entity* e = entity(id);
+    if (!e)
+        return 0;
+    const int start = clipStartFrame(id);
+    if (e->isAudio() && e->data.contains(QStringLiteral("duration")))
+    {
+        const double media = e->data.value(QStringLiteral("duration"), 0.0).toDouble();
+        const double trimStart =
+            e->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
+        const double trimEnd = e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
+        const double frames =
+            std::max(0.0, (media - trimStart - trimEnd) * std::max(1, fps));
+        return start + std::max(1, int(std::ceil(frames)));
+    }
+    const int stored = e->data.value(QStringLiteral("clipEnd"), 0).toInt();
+    if (stored > start)
+        return stored;
+    return std::max(start + 1, std::max(180, timelineLength()));
+}
+
+bool Project::isEntityActiveAt(EntityId id, double frame) const
+{
+    const Entity* e = entity(id);
+    if (!e)
+        return false;
+    // Groups and cameras do not render pixels; keep them available so their
+    // children still evaluate with the normal parent transform.
+    if (e->isFolder() || e->isCamera())
+        return true;
+    return frame >= clipStartFrame(id) && frame < clipEndFrame(id);
 }
 
 double Track::evaluate(double frame, double fallback) const

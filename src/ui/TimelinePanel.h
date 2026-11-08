@@ -2,12 +2,14 @@
 
 #include "core/Project.h"
 
+#include <QHash>
+#include <QRect>
 #include <QSet>
+#include <QVector>
 #include <QWidget>
-#include <cmath>
 
 class QKeyEvent;
-class QLineEdit;
+class QMouseEvent;
 class QPainter;
 class QScrollBar;
 class QTimer;
@@ -28,12 +30,19 @@ struct KeyframeSelection
     }
 };
 
+class ClipPopup;
+
+// Clip-based timeline. Every entity is a clip inside its parent timeline;
+// the main panel owns root entities and each clip can open a private
+// timeline for its children. This replaces the old track-style panel; the
+// public surface is kept so MainWindow keeps working unchanged.
 class TimelinePanel : public QWidget
 {
     Q_OBJECT
 
 public:
     explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
+    ~TimelinePanel() override;
 
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
@@ -59,36 +68,59 @@ public:
     int rulerLabelStepForTest() const;
     int secondsCellStepForTest() const;
     int secondsLabelStepForTest() const;
-    int rowCountForTest() const { return int(visibleEntities().size()); }
-    EntityId rowEntityForTest(int row) const { return entityAtRow(row); }
-    int rowDepthForTest(int row) const { return depthOf(entityAtRow(row)); }
+    int rowCountForTest() const { return int(rowIds().size()); }
+    EntityId rowEntityForTest(int row) const;
+    int rowDepthForTest(int row) const { return depthOf(rowEntityForTest(row)); }
     bool rowCollapsedForTest(EntityId id) const
     {
-        return m_collapsedFolders.contains(id);
+        Q_UNUSED(id);
+        return false;
     }
-    QRect folderArrowRectForTest(int row) const { return folderArrowRect(row); }
-
-    // Scene band and annotation lane used by the UI tests.
-    QString selectedSceneForTest() const { return m_selectedScene; }
-    QRect sceneBandRectForTest(const QString& id) const;
-    QRect annotationRectForTest(const QString& id) const;
-    int sceneBandCenterYForTest() const { return kHeaderHeight + kSceneBandHeight / 2; }
-    int annotationLaneCenterYForTest() const
+    QRect folderArrowRectForTest(int row) const
     {
-        return kHeaderHeight + kSceneBandHeight + kAnnotationLaneHeight / 2;
+        Q_UNUSED(row);
+        return QRect();
     }
+
+    // Scenes and annotations are not drawn by the clip timeline yet. The
+    // accessors stay so the existing UI self-tests keep compiling.
+    QString selectedSceneForTest() const { return QString(); }
+    QRect sceneBandRectForTest(const QString& id) const
+    {
+        Q_UNUSED(id);
+        return QRect();
+    }
+    QRect annotationRectForTest(const QString& id) const
+    {
+        Q_UNUSED(id);
+        return QRect();
+    }
+    int sceneBandCenterYForTest() const { return 0; }
+    int annotationLaneCenterYForTest() const { return 0; }
     bool sceneActiveForTest(const QString& id) const
     {
-        const Scene* scene = m_project->sceneAt(m_frame);
-        return scene && scene->id == id;
+        Q_UNUSED(id);
+        return false;
     }
     bool keyframeHasNoteForTest(EntityId id, double frame) const
     {
         return keyframeHasNote(id, frame);
     }
+
+    EntityId owner() const { return m_owner; }
+    QRect clipRectFor(EntityId id) const;
+    // Opens (or raises) the private timeline for a clip and returns its panel.
+    TimelinePanel* openPopup(EntityId ownerId);
+    void closeAllPopups();
+    void syncPopups();
+    void removePopup(EntityId ownerId);
+    // Popup keyframe selections are adopted by the main panel so the existing
+    // Delete / easing actions see them.
+    void adoptKeyframeSelection(const QVector<KeyframeSelection>& selection);
+
 signals:
     void frameRequested(int frame);
-    void scrubStarted();   // the user takes manual control of the playhead
+    void scrubStarted();
     void displayFramesChanged(bool frames);
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
@@ -115,130 +147,139 @@ signals:
     void annotationCreateRequested(int frame);
     void annotationEditRequested(const QString& id);
     void annotationDeleteRequested(const QString& id);
+    void keyframeSelectionChanged(const QVector<KeyframeSelection>& selection);
+
+    // One undoable whole-project edit produced by a clip/keyframe drag.
+    void snapshotEditRequested(const QVector<Entity>& before,
+                               const QVector<Entity>& after,
+                               const QString& text);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
-    void leaveEvent(QEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
-    void keyReleaseEvent(QKeyEvent* event) override;
-    void focusOutEvent(QFocusEvent* event) override;
-    void contextMenuEvent(QContextMenuEvent* event) override;
-    void mouseDoubleClickEvent(QMouseEvent* event) override;
-    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    int xFromFrame(int frame) const;
-    int frameFromX(int x) const;
-    int rowAt(int y) const;
-    int rowTop(int row) const;
-    int rowHeight(int row) const;
-    EntityId entityAtRow(int row) const;
-    bool hitKeyframe(int row, int x, EntityId* outId, double* outFrame) const;
-    bool audioClipRange(const Entity& entity, double* left, double* right) const;
-    EntityId audioClipAt(int x, int y) const;
-    void updateHoverCursor(const QPointF& pos);
-    int depthOf(EntityId id) const;
-    QRect folderArrowRect(int row) const;
-    void updateRowDropTarget(const QPointF& pos);
-    QVector<EntityId> rowDragRoots(EntityId clicked) const;
-    double dragFrame(EntityId id, double frame) const;
-    QVector<double> keyframeFrames(EntityId id) const;
-    void handleRowButton(int row, int index);
-    int contentWidth() const;
-    int visibleWidth() const;
-    QVector<int> visibleEntities() const;
-    void updateScrollBar();
-    void zoomAt(double factor, int anchorX);
-    void commitRename();
-    void stepFrame(int delta);
-    void stopHold();
-    EasingSpec keyframeEasingAt(EntityId id, double frame) const;
-    void showKeyframeMenu(const QPoint& globalPos, EntityId id, double frame);
-    void drawAudioWaveform(QPainter& painter, const Entity& entity, const QRect& row,
-                           int right);
-    int annotationTop() const { return kHeaderHeight + kSceneBandHeight; }
-    QRect sceneBandRect(const Scene& scene) const;
-    const Scene* sceneAtX(int x) const;
-    const Annotation* annotationAtX(int x) const;
-    QString keyframeNoteAt(EntityId id, double frame) const;
-    bool keyframeHasNote(EntityId id, double frame) const;
-    void drawSceneBand(QPainter& painter);
-    void drawAnnotations(QPainter& painter);
-    QString sceneTooltip(const Scene& scene) const;
-    QString annotationTooltip(const Annotation& annotation) const;
-    void showSceneMenu(const QPoint& globalPos, const Scene* scene);
-    void showAnnotationMenu(const QPoint& globalPos, const Annotation* annotation,
-                            int frame);
+    friend class ClipPopup;
 
     enum class DragMode
     {
         None,
         Scrub,
-        PendingSelect,
-        BoxSelect,
-        MoveAudio,
-        PendingRowDrag,
-        MoveRow,
+        MoveClip,
+        TrimStart,
+        TrimEnd,
         MoveKeyframe
     };
-    enum class DropMode { None, Above, Below, Into };
+
+    // Row and range helpers.
+    QVector<EntityId> rowIds() const;
+    EntityId entityAtRow(int row) const;
+    int rowAt(int y) const;
+    int rowTop(int row) const;
+    int rowHeight(int) const { return kRowHeight; }
+    int depthOf(EntityId id) const;
+    int contentStart() const;
+    int contentEnd() const;
+    const Entity* rangeOwner() const;
+    int clipStartOf(const Entity& entity) const;
+    int clipEndOf(const Entity& entity) const;
+    QRect clipRect(const Entity& entity) const;
+    QVector<int> keyframeFrames(const Entity& entity) const;
+    QVector<KeyframeRecord> keyframeRecords(EntityId id, int frame) const;
+    bool keyframeHasNote(EntityId id, double frame) const;
+
+    // Scroll and coordinates.
+    int visibleWidth() const;
+    int bodyBottom() const;
+    int xFromFrame(int frame) const;
+    int frameFromX(int x) const;
+    void clampScroll();
+    void updateScrollBars();
+    void ensureFrameVisible(int frame);
+
+    // Live preview during a drag.
+    const QVector<Entity>& activeEntities() const;
+    Entity* activeEntity(EntityId id);
+    void beginDrag();
+    void endDrag(const QString& text);
+    void resetPreview();
+    void updateDragPreview(const QPointF& pos);
+    void applyShift(QVector<Entity>& entities, EntityId id, int delta);
+    void setClipRange(Entity& entity, int start, int end);
+    void cleanKeys(Entity& entity);
+    void trimStart(QVector<Entity>& entities, EntityId id, int newStart);
+    void trimEnd(QVector<Entity>& entities, EntityId id, int newEnd);
+    void trimStartRec(QVector<Entity>& entities, EntityId parentId, int limit,
+                      QSet<EntityId>& doomed);
+    void trimEndRec(QVector<Entity>& entities, EntityId parentId, int limit,
+                    QSet<EntityId>& doomed);
+    void removeEntities(QVector<Entity>& entities, const QSet<EntityId>& doomed);
+    void reorderChild(QVector<Entity>& entities, EntityId owner, EntityId id,
+                      int targetRow);
+    void moveKeys(QVector<Entity>& entities, const QVector<KeyframeSelection>& keys,
+                  int delta);
+    QRect keyRect(const Entity& entity, int frame) const;
+
+    // Interaction.
+    EntityId hitClipRow(int row, int x) const;
+    int hitKeyframeRow(int row, int x) const;
+    void selectEntity(EntityId id, bool emitSignal);
+    void autoScrollTick();
+    void syncPopupGeometry();
 
     Project* m_project = nullptr;
+    EntityId m_owner = kInvalidEntity;   // kInvalidEntity = main timeline
+    bool m_popup = false;
+    TimelinePanel* m_sourcePanel = nullptr;  // popup only
+
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
-    DragMode m_dragMode = DragMode::None;
-    QPointF m_pressPos;
-    QPointF m_boxStart;
-    QPointF m_boxEnd;
-    int m_pressFrame = 0;
-    EntityId m_pressEntity = kInvalidEntity;
-    EntityId m_audioDragId = kInvalidEntity;
-    double m_audioDragStart = 0.0;
-    double m_audioDragOffset = 0.0;
-    EntityId m_rowDragId = kInvalidEntity;
-    QVector<EntityId> m_rowDragIds;
-    QVector<KeyframeRecord> m_kfDragRecords;
-    double m_kfFocusFrame = 0.0;
-    int m_kfDragStartFrame = 0;
-    int m_kfDragDelta = 0;
-    int m_dropRow = -1;
-    DropMode m_dropMode = DropMode::None;
-    QSet<EntityId> m_collapsedFolders;
     QSet<EntityId> m_entitySelection;
-    EntityId m_selectionAnchor = kInvalidEntity;
-    int m_hoverRow = -1;
     QVector<KeyframeSelection> m_selectedKeyframes;
-    QLineEdit* m_search = nullptr;
-    QToolButton* m_unitButton = nullptr;
-    QLineEdit* m_renameEdit = nullptr;
-    EntityId m_renameEntity = kInvalidEntity;
+
+    DragMode m_dragMode = DragMode::None;
+    EntityId m_dragEntity = kInvalidEntity;
+    int m_dragRow = -1;
+    int m_dragStartFrame = 0;
+    int m_dragStartRow = -1;
+    int m_dragClipStart = 0;
+    int m_dragClipEnd = 0;
+    int m_keyDragStart = 0;
+    QPointF m_lastDragPos;
+    QVector<Entity> m_before;
+    QVector<Entity> m_preview;
+    QVector<Entity> m_externalPreview;
+    bool m_hasExternalPreview = false;
+    bool m_dragging = false;
+    bool m_moved = false;
+    int m_hoverRow = -1;
+    bool m_hoverLeft = false;
+    bool m_hoverRight = false;
+
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
+    QTimer* m_autoScroll = nullptr;
     int m_scrollX = 0;
     int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
-    QString m_selectedScene;
-    QTimer* m_holdTimer = nullptr;
-    QTimer* m_holdDelay = nullptr;
-    int m_holdDirection = 0;
+    bool m_relativeTime = false;   // popup only
 
-    static constexpr int kNameWidth = 180;
-    static constexpr int kHeaderHeight = 28;
-    static constexpr int kSceneBandHeight = 18;
-    static constexpr int kAnnotationLaneHeight = 16;
-    static constexpr int kRowsTop =
-        kHeaderHeight + kSceneBandHeight + kAnnotationLaneHeight;
-    static constexpr int kRowHeight = 24;
-    static constexpr int kAudioRowHeight = 56;
-    static constexpr int kRightPad = 16;
-    static constexpr int kScrollBarHeight = 14;
-    static constexpr int kButtonSize = 16;
+    QHash<EntityId, ClipPopup*> m_popups;
+
+    static constexpr int kRowHeight = 30;
+    static constexpr int kRulerHeight = 26;
+    static constexpr int kScrollBarSize = 14;
+    static constexpr int kPlusWidth = 30;
+    static constexpr int kTrimGrab = 6;
 };
 
 } // namespace pvf

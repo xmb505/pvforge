@@ -576,6 +576,7 @@ const Entity* Viewport::hitTest(const QPointF& pos) const
         if (e.isFolder() || e.isCamera()
             || m_project->isEffectivelyHidden(e.id)
             || m_project->isEffectivelyLocked(e.id)
+            || !m_project->isEntityActiveAt(e.id, m_frame)
             || m_project->effectiveOpacity(e.id, m_frame) <= 0.0)
         {
             continue;
