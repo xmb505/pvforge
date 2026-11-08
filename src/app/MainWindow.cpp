@@ -848,6 +848,11 @@ void MainWindow::createActions()
 
 void MainWindow::createMenus()
 {
+    // KDE's native menu proxy injects its own "search" entry into the menu
+    // bar. PVForge has no menu search, so keep the menu Qt-drawn and avoid
+    // the extra system item.
+    menuBar()->setNativeMenuBar(false);
+
     auto* fileMenu = menuBar()->addMenu(Lang::t(QStringLiteral("menu.file"), QStringLiteral("文件")));
     fileMenu->addAction(m_saveAction);
     fileMenu->addAction(m_saveAsAction);
