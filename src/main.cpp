@@ -22,6 +22,7 @@
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
+#include "ui/BrandWallDialog.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TextLayoutDialog.h"
 #include "ui/WorkbenchPanel.h"
@@ -627,6 +628,75 @@ int specialTest(QApplication& app)
         }
     }
 
+    // Brand tile wall: a checkerboard of two logos.
+    {
+        const QString logoA =
+            QDir::tempPath() + QStringLiteral("/pvf_wall_logo_a.png");
+        const QString logoB =
+            QDir::tempPath() + QStringLiteral("/pvf_wall_logo_b.png");
+        QImage a(96, 96, QImage::Format_ARGB32);
+        a.fill(Qt::transparent);
+        {
+            QPainter p(&a);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setPen(Qt::NoPen);
+            p.setBrush(Qt::white);
+            p.drawEllipse(10, 10, 76, 76);
+        }
+        QImage b(96, 96, QImage::Format_ARGB32);
+        b.fill(Qt::transparent);
+        {
+            QPainter p(&b);
+            p.setPen(QPen(Qt::white, 10, Qt::SolidLine, Qt::RoundCap));
+            p.drawLine(16, 16, 80, 80);
+            p.drawLine(80, 16, 16, 80);
+        }
+        if (!a.save(logoA) || !b.save(logoB))
+        {
+            qCritical() << "special-test: wall logos not saved";
+            ++failures;
+        }
+        pvf::BrandWallParams wallParams;
+        wallParams.width = 800;
+        wallParams.height = 450;
+        wallParams.tile = 96;
+        wallParams.gap = 6;
+        wallParams.logoOpacity = 0.9;
+        wallParams.logos = QStringList{logoA, logoB};
+        wallParams.tileColors =
+            QStringList{QColor(210, 70, 160).name(QColor::HexArgb),
+                        QColor(232, 232, 238).name(QColor::HexArgb)};
+        pvf::Entity* wall = project->addBrandWall(wallParams);
+        if (!wall)
+        {
+            qCritical() << "special-test: brand wall creation failed";
+            ++failures;
+        }
+        else if (std::abs(pvf::SceneRenderer::entityLocalBounds(*wall).width() - 800.0)
+                     > 0.01
+                 || wall->wallLogos.size() != 2 || wall->wallLogos[0].isNull()
+                 || wall->wallLogos[1].isNull())
+        {
+            qCritical() << "special-test: brand wall bounds or logos wrong"
+                        << pvf::SceneRenderer::entityLocalBounds(*wall);
+            ++failures;
+        }
+        else
+        {
+            for (pvf::Entity& other : project->mutableEntities())
+                other.hidden = other.id != wall->id;
+            const QImage shot = render(0);
+            shot.save(QStringLiteral("/tmp/pvforge_brandwall.png"));
+            for (pvf::Entity& other : project->mutableEntities())
+                other.hidden = false;
+            if (ink(shot) <= 0)
+            {
+                qCritical() << "special-test: brand wall drew nothing";
+                ++failures;
+            }
+        }
+    }
+
     // Japanese vertical text: columns run right to left.
     {
         pvf::TextStyle style;
@@ -668,6 +738,7 @@ int specialTest(QApplication& app)
                 int comic = 0;
                 int radial = 0;
                 int flow = 0;
+                int wall = 0;
                 for (const pvf::Entity& entity : loaded.entities())
                 {
                     if (entity.type == pvf::EntityType::ComicText)
@@ -676,11 +747,13 @@ int specialTest(QApplication& app)
                         ++radial;
                     else if (entity.type == pvf::EntityType::FlowLines)
                         ++flow;
+                    else if (entity.type == pvf::EntityType::BrandWall)
+                        ++wall;
                 }
-                if (comic != 4 || radial != 1 || flow != 1)
+                if (comic != 4 || radial != 1 || flow != 1 || wall != 1)
                 {
                     qCritical() << "special-test: types lost on reload" << comic
-                                << radial << flow;
+                                << radial << flow << wall;
                     ++failures;
                 }
             }
@@ -752,6 +825,10 @@ int specialTest(QApplication& app)
                     ++local;
                 }
             }
+            special->setCurrentRow(2);   // brand wall, for the shot
+            QApplication::processEvents();
+            workbench->grab().toImage().save(
+                QStringLiteral("/tmp/pvforge_wall_workbench.png"));
         }
 
         // The comic spike can be dragged to a new tip position.
@@ -832,6 +909,30 @@ int specialTest(QApplication& app)
             ++local;
         }
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_text_layout.png"));
+
+        // The wall editor opens with its slots and can add more logos.
+        pvf::BrandWallParams wallParams;
+        wallParams.width = 640;
+        wallParams.height = 360;
+        wallParams.tile = 80;
+        wallParams.gap = 4;
+        wallParams.logos = QStringList{QString(), QString()};
+        wallParams.tileColors = QStringList{QColor(210, 70, 160).name(),
+                                            QColor(232, 232, 238).name()};
+        pvf::BrandWallDialog wallDialog(wallParams,
+                                        QVector<QImage>{QImage(), QImage()});
+        wallDialog.show();
+        QApplication::processEvents();
+        if (!wallDialog.findChild<pvf::BrandWallPreview*>(
+                QStringLiteral("wallPreview"))
+            || wallDialog.params().logos.size() != 2
+            || std::abs(wallDialog.params().tile - 80.0) > 0.01)
+        {
+            qCritical() << "special-test: wall dialog state wrong";
+            ++local;
+        }
+        wallDialog.grab().toImage().save(
+            QStringLiteral("/tmp/pvforge_wall_dialog.png"));
 
         // A clean scene shot: only the selected comic balloon.
         for (pvf::Entity& entity : uiProject->mutableEntities())
@@ -5731,6 +5832,56 @@ int specialDemo(QApplication& app)
         entity->values[QStringLiteral("x")] = x;
         entity->values[QStringLiteral("y")] = y;
     };
+
+    // Press conference brand wall backdrop.
+    const QString wallLogoA =
+        QDir::tempPath() + QStringLiteral("/pvf_demo_wall_a.png");
+    const QString wallLogoB =
+        QDir::tempPath() + QStringLiteral("/pvf_demo_wall_b.png");
+    {
+        QImage a(128, 128, QImage::Format_ARGB32);
+        a.fill(Qt::transparent);
+        {
+            QPainter p(&a);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            QFont font = p.font();
+            font.setPixelSize(66);
+            font.setBold(true);
+            p.setFont(font);
+            p.setPen(QColor(96, 96, 108));
+            p.drawText(a.rect(), Qt::AlignCenter, QStringLiteral("PV"));
+        }
+        a.save(wallLogoA);
+
+        QImage b(128, 128, QImage::Format_ARGB32);
+        b.fill(Qt::transparent);
+        {
+            QPainter p(&b);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            QPolygonF star;
+            for (int i = 0; i < 10; ++i)
+            {
+                const double angle = -M_PI / 2 + i * M_PI / 5;
+                const double radius = (i % 2 == 0) ? 52.0 : 22.0;
+                star << QPointF(64 + std::cos(angle) * radius,
+                                64 + std::sin(angle) * radius);
+            }
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(96, 96, 108));
+            p.drawPolygon(star);
+        }
+        b.save(wallLogoB);
+    }
+    pvf::BrandWallParams wallParams;
+    wallParams.width = project->width;
+    wallParams.height = project->height;
+    wallParams.tile = 320;
+    wallParams.logoOpacity = 0.55;
+    wallParams.logos = QStringList{wallLogoA, wallLogoB};
+    wallParams.tileColors =
+        QStringList{QColor(248, 248, 250).name(QColor::HexArgb),
+                    QColor(232, 232, 238).name(QColor::HexArgb)};
+    project->addBrandWall(wallParams);
 
     // Background motion streaks.
     pvf::FlowParams flow;

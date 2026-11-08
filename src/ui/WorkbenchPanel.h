@@ -110,6 +110,14 @@ private:
     QSpinBox* m_flowCount = nullptr;
     QDoubleSpinBox* m_flowSpeed = nullptr;
     QDoubleSpinBox* m_flowAngle = nullptr;
+    BrandWallParams m_wallParams;
+    QVector<QImage> m_wallImages;
+    QLabel* m_wallSummary = nullptr;
+    void updateWallSummary();
+    QString m_wallLogoAPath;
+    QString m_wallLogoBPath;
+    QImage m_wallImageA;
+    QImage m_wallImageB;
     QPushButton* m_flowColor = nullptr;
     QColor m_flowColorValue{Qt::white};
 

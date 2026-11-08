@@ -2,10 +2,12 @@
 
 #include "CollapsibleSection.h"
 #include "ui/EasingChooser.h"
+#include "ui/BrandWallDialog.h"
 #include "ui/TextLayoutDialog.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QFileDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
@@ -52,6 +54,8 @@ QString typeName(EntityType type)
         return QStringLiteral("放射状线条");
     case EntityType::FlowLines:
         return QStringLiteral("快速流过");
+    case EntityType::BrandWall:
+        return QStringLiteral("品牌瓷砖墙");
     }
     return QString();
 }
@@ -129,6 +133,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildTextSection(layout);
     buildComicSection(layout);
     buildLinesSection(layout);
+    buildBrandWallSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
     buildAudioSection(layout);
@@ -508,6 +513,42 @@ void PropertiesPanel::buildLinesSection(QVBoxLayout* layout)
     layout->addWidget(m_linesSection);
 }
 
+void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    m_wallInfo = new QLabel(content);
+    m_wallInfo->setWordWrap(true);
+    m_wallInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_wallInfo->setMinimumWidth(0);
+    form->addRow(m_wallInfo);
+
+    auto* edit = new QPushButton(QStringLiteral("编辑瓷砖墙…"), content);
+    edit->setObjectName(QStringLiteral("wallEditButton"));
+    connect(edit, &QPushButton::clicked, this, [this] {
+        if (m_entity == kInvalidEntity)
+            return;
+        const Entity* entity = m_project->entity(m_entity);
+        if (!entity || entity->type != EntityType::BrandWall)
+            return;
+        const BrandWallParams params = BrandWallParams::fromData(entity->data);
+        BrandWallDialog dialog(params, entity->wallLogos, this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        QVariantMap data;
+        dialog.params().writeTo(data);
+        emit dataEdited(m_entity, data);
+    });
+    form->addRow(edit);
+
+    m_wallSection = new CollapsibleSection(QStringLiteral("品牌瓷砖墙"), content, this);
+    m_wallSection->setExpanded(true);
+    layout->addWidget(m_wallSection);
+}
+
 void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
@@ -885,6 +926,16 @@ void PropertiesPanel::refresh()
     m_textSection->setVisible(valid && (e->type == EntityType::Text || comic));
     m_comicSection->setVisible(comic);
     m_linesSection->setVisible(radial || flow);
+    m_wallSection->setVisible(valid && e->type == EntityType::BrandWall);
+    if (valid && e->type == EntityType::BrandWall && m_wallInfo)
+    {
+        const BrandWallParams params = BrandWallParams::fromData(e->data);
+        m_wallInfo->setText(
+            QStringLiteral("%1 个 Logo · 瓷砖 %2 px · 间距 %3 px")
+                .arg(params.logos.size())
+                .arg(int(params.tile))
+                .arg(int(params.gap)));
+    }
     if (m_linesStack)
         m_linesStack->setCurrentIndex(flow ? 1 : 0);
     m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
@@ -903,6 +954,7 @@ void PropertiesPanel::refresh()
     m_textSection->setEnabled(editable);
     m_comicSection->setEnabled(editable);
     m_linesSection->setEnabled(editable);
+    m_wallSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
     m_keyButton->setEnabled(editable);

@@ -48,6 +48,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("radialLines");
     case EntityType::FlowLines:
         return QStringLiteral("flowLines");
+    case EntityType::BrandWall:
+        return QStringLiteral("brandWall");
     }
     return QStringLiteral("image");
 }
@@ -72,6 +74,8 @@ EntityType typeFromString(const QString& text)
         return EntityType::RadialLines;
     if (text == QLatin1String("flowLines"))
         return EntityType::FlowLines;
+    if (text == QLatin1String("brandWall"))
+        return EntityType::BrandWall;
     return EntityType::Image;
 }
 
@@ -356,9 +360,31 @@ Entity* Project::addEntity(EntityType type, const QString& name,
 {
     Entity e = makeBase(type, name);
     e.data = data;
+    if (type == EntityType::BrandWall)
+        refreshBrandWallImages(e);
     if (Template* tmpl = addTemplate(e))
         e.templateId = tmpl->id;
     return append(std::move(e));
+}
+
+void Project::refreshBrandWallImages(Entity& e)
+{
+    e.wallLogos.clear();
+    for (const QString& path : e.data.value(QStringLiteral("logos")).toStringList())
+        e.wallLogos.append(QImage(path));
+}
+
+Entity* Project::addBrandWall(const BrandWallParams& params)
+{
+    BrandWallParams copy = params;
+    copy.width = std::max(16.0, params.width);
+    copy.height = std::max(16.0, params.height);
+    copy.tile = std::max(8.0, params.tile);
+    copy.gap = std::clamp(params.gap, 0.0, 64.0);
+    copy.logoOpacity = std::clamp(params.logoOpacity, 0.0, 1.0);
+    QVariantMap data;
+    copy.writeTo(data);
+    return addEntity(EntityType::BrandWall, QStringLiteral("品牌瓷砖墙"), data);
 }
 
 Entity* Project::addText(const TextStyle& style, const QString& name)
@@ -729,6 +755,7 @@ Entity* Project::createFromTemplate(const Template& tmpl){
     case EntityType::ComicText:
     case EntityType::RadialLines:
     case EntityType::FlowLines:
+    case EntityType::BrandWall:
     case EntityType::Vector:
         // Templates keep every parameter they were created with.
         return addEntity(tmpl.type, tmpl.name, tmpl.data);
@@ -860,6 +887,8 @@ void Project::setEntityDataMap(EntityId id, const QVariantMap& data)
     }
     if (!updated)
         return;
+    if (e->type == EntityType::BrandWall)
+        refreshBrandWallImages(*e);
     modified = true;
     emit changed();
 }
@@ -1099,6 +1128,14 @@ QJsonObject Project::toJson() const
         {
             if (isColorKey(it.key()))
                 data[it.key()] = it.value().value<QColor>().name(QColor::HexArgb);
+            else if (e.type == EntityType::BrandWall
+                     && it.key() == QStringLiteral("logos"))
+            {
+                QJsonArray array;
+                for (const QString& path : it.value().toStringList())
+                    array.append(storeAssetPath(path));
+                data[it.key()] = array;
+            }
             else
                 data[it.key()] = QJsonValue::fromVariant(it.value());
         }
@@ -1154,6 +1191,14 @@ QJsonObject Project::toJson() const
         {
             if (isColorKey(it.key()))
                 data[it.key()] = it.value().value<QColor>().name(QColor::HexArgb);
+            else if (t.type == EntityType::BrandWall
+                     && it.key() == QStringLiteral("logos"))
+            {
+                QJsonArray array;
+                for (const QString& path : it.value().toStringList())
+                    array.append(storeAssetPath(path));
+                data[it.key()] = array;
+            }
             else
                 data[it.key()] = QJsonValue::fromVariant(it.value());
         }
@@ -1253,9 +1298,19 @@ bool Project::load(const QString& path, QString* error)
         {
             if (isColorKey(it.key()))
                 e.data[it.key()] = QColor(it.value().toString());
+            else if (e.type == EntityType::BrandWall
+                     && it.key() == QStringLiteral("logos"))
+            {
+                QStringList paths;
+                for (const QJsonValue& path : it.value().toArray())
+                    paths.append(resolveAssetPath(path.toString()));
+                e.data[it.key()] = paths;
+            }
             else
                 e.data[it.key()] = it.value().toVariant();
         }
+        if (e.type == EntityType::BrandWall)
+            refreshBrandWallImages(e);
 
         const QJsonObject values = object.value(QStringLiteral("values")).toObject();
         for (auto it = values.constBegin(); it != values.constEnd(); ++it)

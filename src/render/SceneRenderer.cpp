@@ -1,6 +1,7 @@
 #include "SceneRenderer.h"
 
 #include "core/Camera.h"
+#include "core/BrandWall.h"
 #include "core/ComicBox.h"
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
@@ -140,6 +141,9 @@ QRectF entityLocalBounds(const Entity& entity)
     case EntityType::FlowLines:
         return LineDeco::flowBounds(FlowParams::fromData(entity.data));
 
+    case EntityType::BrandWall:
+        return BrandWall::bounds(BrandWallParams::fromData(entity.data));
+
     case EntityType::Camera:
         return QRectF();
     case EntityType::Audio:
@@ -277,6 +281,11 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
     case EntityType::FlowLines:
         LineDeco::paintFlow(painter, FlowParams::fromData(entity.data),
                             frame / double(std::max(1, project.fps)));
+        break;
+
+    case EntityType::BrandWall:
+        BrandWall::paint(painter, BrandWallParams::fromData(entity.data),
+                         entity.wallLogos);
         break;
 
     case EntityType::Camera:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Easing.h"
+#include "core/BrandWall.h"
 #include "core/TextStyle.h"
 #include "media/AudioClip.h"
 
@@ -35,7 +36,8 @@ enum class EntityType
     Folder,
     ComicText,     // comic balloon with a shaped border and a tail
     RadialLines,   // hand drawn rays bursting from a point
-    FlowLines      // parallel streaks flowing across the scene
+    FlowLines,     // parallel streaks flowing across the scene
+    BrandWall      // checkerboard tile wall with brand logos
 };
 
 struct Keyframe
@@ -67,6 +69,7 @@ struct Entity
     QString name;
     QString sourcePath;        // image/video file on disk
     QImage image;              // image or decoded video frame, runtime cache
+    QVector<QImage> wallLogos; // brand wall tile logos, runtime cache
     mutable QImage thumbnail;  // downscaled cache for draft previews
     mutable QPixmap pixmap;    // painter cache, built on first draw
     std::shared_ptr<AudioClip> audio;   // decoded PCM/waveform, runtime cache
@@ -169,6 +172,8 @@ public:
                      const QString& displayName = QString());
     Entity* addEntity(EntityType type, const QString& name,
                        const QVariantMap& data);
+    Entity* addBrandWall(const BrandWallParams& params);
+    void refreshBrandWallImages(Entity& entity);
     Entity* addText(const TextStyle& style,
                      const QString& name = QStringLiteral("文字"));
     Entity* addText(const QString& text, const QString& family, int pixelSize,

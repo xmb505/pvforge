@@ -23,6 +23,7 @@ add_executable(pvforge
     src/core/TextBlock.cpp
     src/core/ComicBox.cpp
     src/core/LineDeco.cpp
+    src/core/BrandWall.cpp
     src/core/VectorShape.cpp
     src/core/Camera.cpp
     src/core/Easing.cpp
@@ -49,6 +50,7 @@ add_executable(pvforge
     src/ui/EasingChooser.cpp
     src/ui/EasingPicker.cpp
     src/ui/TextLayoutDialog.cpp
+    src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp

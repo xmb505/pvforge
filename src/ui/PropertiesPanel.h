@@ -43,6 +43,7 @@ signals:
     void dataEdited(EntityId id, const QVariantMap& data);
     void keyframeToggled(EntityId id, const QString& prop, double frame, bool remove);
 
+
 private:
     struct Row
     {
@@ -67,6 +68,7 @@ private:
     void buildTextSection(QVBoxLayout* layout);
     void buildComicSection(QVBoxLayout* layout);
     void buildLinesSection(QVBoxLayout* layout);
+    void buildBrandWallSection(QVBoxLayout* layout);
     void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
                     double hi, int decimals, double step);
     void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
@@ -104,6 +106,8 @@ private:
     CollapsibleSection* m_pivotSection = nullptr;
     CollapsibleSection* m_comicSection = nullptr;
     CollapsibleSection* m_linesSection = nullptr;
+    CollapsibleSection* m_wallSection = nullptr;
+    QLabel* m_wallInfo = nullptr;
     QVector<DataRow> m_dataRows;
     QHash<QString, QColor> m_dataColors;
     QComboBox* m_comicShape = nullptr;

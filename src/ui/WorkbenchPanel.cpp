@@ -2,6 +2,8 @@
 
 #include "app/AppIcon.h"
 #include "app/MainWindow.h"
+#include "core/BrandWall.h"
+#include "ui/BrandWallDialog.h"
 #include "core/ComicBox.h"
 #include "core/Lang.h"
 #include "core/LineDeco.h"
@@ -437,11 +439,21 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(10);
 
+    m_wallParams.width = m_project->width;
+    m_wallParams.height = m_project->height;
+    m_wallParams.tile = 240;
+    m_wallParams.logoOpacity = 0.9;
+    m_wallParams.logos = QStringList{QString(), QString()};
+    m_wallParams.tileColors = QStringList{
+        QColor(210, 70, 160).name(QColor::HexArgb),
+        QColor(232, 232, 238).name(QColor::HexArgb)};
+
     m_specialTypes = new QListWidget(page);
     m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
     const QStringList names = {
         QStringLiteral("放射状线条"),
         QStringLiteral("快速流过"),
+        QStringLiteral("品牌瓷砖墙"),
     };
     for (const QString& name : names)
         m_specialTypes->addItem(name);
@@ -521,16 +533,50 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     flowForm->addRow(QStringLiteral("颜色"), m_flowColor);
     m_specialForms->addWidget(flow);
 
+    auto* wall = new QWidget(m_specialForms);
+    auto* wallLayout = new QFormLayout(wall);
+    wallLayout->setContentsMargins(0, 0, 0, 0);
+    wallLayout->setVerticalSpacing(8);
+    m_wallSummary = new QLabel(wall);
+    m_wallSummary->setWordWrap(true);
+    wallLayout->addRow(m_wallSummary);
+    auto* editWall = new QPushButton(QStringLiteral("配置瓷砖墙…"), wall);
+    editWall->setObjectName(QStringLiteral("wallEditButton"));
+    connect(editWall, &QPushButton::clicked, this, [this] {
+        BrandWallDialog dialog(m_wallParams, m_wallImages, this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        m_wallParams = dialog.params();
+        m_wallImages = dialog.images();
+        updateWallSummary();
+        updateSpecialPreview();
+    });
+    wallLayout->addRow(editWall);
+    m_specialForms->addWidget(wall);
+
     layout->addWidget(m_specialForms, 1);
 
     connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_specialForms)
-            m_specialForms->setCurrentIndex(row == 0 ? 0 : 1);
+            m_specialForms->setCurrentIndex(std::clamp(row, 0, 2));
         updateSpecialPreview();
     });
 
+    updateWallSummary();
     m_specialTypes->setCurrentRow(0);
     return page;
+}
+
+void WorkbenchPanel::updateWallSummary()
+{
+    if (!m_wallSummary)
+        return;
+    m_wallSummary->setText(
+        QStringLiteral("%1 个 Logo · 瓷砖 %2 px · %3×%4")
+            .arg(m_wallParams.logos.size())
+            .arg(int(m_wallParams.tile))
+            .arg(int(m_wallParams.width))
+            .arg(int(m_wallParams.height)));
 }
 
 QWidget* WorkbenchPanel::buildVectorPage(){
@@ -880,7 +926,7 @@ void WorkbenchPanel::updateSpecialPreview()
         LineDeco::paintRadial(painter, params, 0.0);
         painter.restore();
     }
-    else
+    else if (row == 1)
     {
         FlowParams params;
         params.count = m_flowCount->value();
@@ -892,6 +938,15 @@ void WorkbenchPanel::updateSpecialPreview()
         painter.scale(fit(LineDeco::flowBounds(params)),
                       fit(LineDeco::flowBounds(params)));
         LineDeco::paintFlow(painter, params, 0.0);
+        painter.restore();
+    }
+    else
+    {
+        painter.save();
+        painter.translate(centre);
+        painter.scale(fit(BrandWall::bounds(m_wallParams)),
+                      fit(BrandWall::bounds(m_wallParams)));
+        BrandWall::paint(painter, m_wallParams, m_wallImages);
         painter.restore();
     }
     m_specialPreview->setPixmap(QPixmap::fromImage(image));
@@ -955,7 +1010,7 @@ EntityId WorkbenchPanel::createSpecial()
         entity = m_project->addEntity(EntityType::RadialLines,
                                       QStringLiteral("放射状线条"), data);
     }
-    else
+    else if (row == 1)
     {
         FlowParams params;
         params.count = m_flowCount->value();
@@ -966,6 +1021,10 @@ EntityId WorkbenchPanel::createSpecial()
         params.writeTo(data);
         entity = m_project->addEntity(EntityType::FlowLines,
                                       QStringLiteral("快速流过"), data);
+    }
+    else
+    {
+        entity = m_project->addBrandWall(m_wallParams);
     }
     return entity ? entity->id : kInvalidEntity;
 }

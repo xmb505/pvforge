@@ -1,6 +1,7 @@
 #include "AssetLibraryPanel.h"
 
 #include "app/MainWindow.h"
+#include "core/BrandWall.h"
 #include "core/ComicBox.h"
 #include "core/Lang.h"
 #include "core/LineDeco.h"
@@ -50,6 +51,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("放射状线条");
     case EntityType::FlowLines:
         return QStringLiteral("快速流过");
+    case EntityType::BrandWall:
+        return QStringLiteral("品牌瓷砖墙");
     }
     return QString();
 }
@@ -133,6 +136,22 @@ QPixmap renderTemplate(const Template& tmpl, const QSize& size)
         p.translate(size.width() / 2.0, size.height() / 2.0);
         p.scale(scale, scale);
         LineDeco::paintFlow(p, params, 0.0);
+        p.restore();
+    }
+    else if (tmpl.type == EntityType::BrandWall)
+    {
+        const BrandWallParams params = BrandWallParams::fromData(tmpl.data);
+        QVector<QImage> logos;
+        for (const QString& path : params.logos)
+            logos.append(QImage(path));
+        const QRectF bounds = BrandWall::bounds(params);
+        const double scale =
+            std::min(size.width() / std::max(1.0, bounds.width()),
+                     size.height() / std::max(1.0, bounds.height())) * 0.9;
+        p.save();
+        p.translate(size.width() / 2.0, size.height() / 2.0);
+        p.scale(scale, scale);
+        BrandWall::paint(p, params, logos);
         p.restore();
     }
     else if (tmpl.type == EntityType::Vector)
@@ -229,6 +248,17 @@ QIcon listIcon(const Template& tmpl)
             const double offset = 8 + index * 8;
             p.drawLine(QPointF(4, offset + 12), QPointF(36, offset - 4));
         }
+    }
+    else if (tmpl.type == EntityType::BrandWall)
+    {
+        p.setPen(Qt::NoPen);
+        for (int row = 0; row < 2; ++row)
+            for (int column = 0; column < 2; ++column)
+            {
+                p.setBrush((row + column) % 2 ? QColor(120, 130, 200)
+                                              : QColor(220, 220, 230));
+                p.drawRect(QRectF(4 + column * 16, 4 + row * 16, 16, 16));
+            }
     }
     return QIcon(pixmap);
 }
