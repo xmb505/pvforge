@@ -252,7 +252,9 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     createToolBar();
 
     m_lastScrubFrame = 0;   // don't preview audio just from opening a project
-    setFrame(0);
+    setFrame(m_project->filePath.isEmpty()
+                 ? 0
+                 : Settings::projectFrame(m_project->filePath));
     updateWindowTitle();
 
     m_proxyGenerator = new VideoProxyGenerator(this);
@@ -571,6 +573,7 @@ bool MainWindow::saveProject()
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
         return false;
     }
+    Settings::setProjectFrame(m_project->filePath, m_frame);
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存"), 2000);
     return true;
@@ -589,6 +592,7 @@ void MainWindow::autoSave()
             QStringLiteral("自动保存失败：%1").arg(error), 5000);
         return;
     }
+    Settings::setProjectFrame(m_project->filePath, m_frame);
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已自动保存"), 2000);
 }
@@ -641,6 +645,7 @@ bool MainWindow::saveProjectAs()
         QMessageBox::warning(this, QStringLiteral("保存失败"), error);
         return false;
     }
+    Settings::setProjectFrame(m_project->filePath, m_frame);
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
     return true;
@@ -800,6 +805,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
             return;
         }
     }
+    // Remember the playhead even when the project itself is unchanged.
+    Settings::setProjectFrame(m_project->filePath, m_frame);
     event->accept();
 }
 

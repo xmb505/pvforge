@@ -1,5 +1,6 @@
 #include "Settings.h"
 
+#include <QCryptographicHash>
 #include <QSettings>
 
 #include <algorithm>
@@ -148,6 +149,29 @@ bool timelineDisplayFrames()
 void setTimelineDisplayFrames(bool on)
 {
     store().setValue(QStringLiteral("timeline/displayFrames"), on);
+}
+
+namespace {
+QString frameKey(const QString& path)
+{
+    const QByteArray hash = QCryptographicHash::hash(path.toUtf8(),
+                                                     QCryptographicHash::Sha1);
+    return QStringLiteral("playhead/") + QString::fromLatin1(hash.toHex());
+}
+} // namespace
+
+int projectFrame(const QString& path)
+{
+    if (path.isEmpty())
+        return 0;
+    return std::max(0, store().value(frameKey(path), 0).toInt());
+}
+
+void setProjectFrame(const QString& path, int frame)
+{
+    if (path.isEmpty())
+        return;
+    store().setValue(frameKey(path), std::max(0, frame));
 }
 
 bool packAssetsDefault()

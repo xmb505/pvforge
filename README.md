@@ -27,6 +27,7 @@
 - **关于页**：设置→关于显示系统、CPU、内存、显卡、显示器和 Qt/FFmpeg 版本，可一键复制；帮助菜单的「关于 PVForge」也打开此页
 - **素材库**：异步导入、内容寻址去重、搜索、预览、复用；长文件名/长路径中间省略，悬停看完整内容
 - **自动保存**：默认每 5 分钟自动保存一次已有路径的工程；设置 → 常规可关闭或修改间隔
+- **播放头记忆**：退出或保存工程时记住当前帧，重新打开工程自动回到上次的播放条位置
 - **文字排版**：文字和文本框共用一套排版模块（换行宽度/高度、行距、内边距、对齐、加粗/斜体/下划线、多行内容、竖排可切从右到左或从左到右）；工作台和属性面板都有「排版…」对话框，右侧实时预览与画布完全一致
 - **文本框**：工作台「文本框」分类——普通文本框（外形可切云朵 / 矩形 / 椭圆，尖角可在画布上直接拖动、指向任意点）、日式超绝硬直角（无尖角）、爆炸文本框；三者共用文字排版对话框
 - **特殊工具**：工作台「特殊」分类——放射状线条（楔形集中线，角度抖动 + 随机加粗，速度可调，手绘感）、快速流过（一组平行线按帧流动，做背景运动感）、品牌瓷砖墙（新闻发布会式棋盘格，可加任意多组 Logo，每组单独配色，密度按列×行设置，间距/透明度可调；Logo 支持 PNG/JPG/SVG，SVG 会按 1024px 长边栅格化避免糊）
@@ -142,13 +143,14 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-40 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+41 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --autosave-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-edit-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --frame-restore-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test

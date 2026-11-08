@@ -67,6 +67,11 @@ void setAudioScrub(bool on);
 
 bool packAssetsDefault();
 void setPackAssetsDefault(bool on);
+
+// Playhead position remembered per project file, so reopening a project
+// returns to where the user left it.
+int projectFrame(const QString& path);
+void setProjectFrame(const QString& path, int frame);
 } // namespace Settings
 
 } // namespace pvf

@@ -327,6 +327,56 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int frameRestoreTest(QApplication& app)
+{
+    const QString path =
+        QDir::tempPath() + QStringLiteral("/pvforge_frame_test.pvproj");
+    auto* seed = new pvf::Project;
+    pvf::Entity* entity = seed->addVector(0, 100, 100, Qt::red, Qt::white, 0);
+    seed->setValue(entity->id, QStringLiteral("x"), 120, 50.0, true);
+    QString error;
+    if (!seed->save(path, &error))
+    {
+        qCritical() << "frame-restore-test: save failed" << error;
+        return 1;
+    }
+
+    auto* first = new pvf::Project;
+    if (!first->load(path, &error))
+    {
+        qCritical() << "frame-restore-test: first load failed" << error;
+        return 1;
+    }
+    auto* firstWindow = new pvf::MainWindow(first);
+    firstWindow->resize(1000, 700);
+    firstWindow->show();
+
+    QTimer::singleShot(400, firstWindow, [&app, firstWindow, path] {
+        firstWindow->goToFrame(42);
+        firstWindow->close();
+
+        auto* second = new pvf::Project;
+        QString err;
+        if (!second->load(path, &err))
+        {
+            qCritical() << "frame-restore-test: second load failed" << err;
+            app.exit(1);
+            return;
+        }
+        auto* secondWindow = new pvf::MainWindow(second);
+        secondWindow->resize(1000, 700);
+        secondWindow->show();
+        QTimer::singleShot(300, secondWindow,
+                           [&app, secondWindow, firstWindow, path] {
+                               const int frame = secondWindow->currentFrame();
+                               qInfo() << "frame-restore-test: restored frame" << frame;
+                               QFile::remove(path);
+                               app.exit(frame == 42 ? 0 : 1);
+                           });
+    });
+    return app.exec();
+}
+
 int keyframeEditTest(QApplication& app)
 {
     auto* project = new pvf::Project;
@@ -6270,6 +6320,8 @@ int main(int argc, char* argv[])
         return specialTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
+    if (app.arguments().contains(QStringLiteral("--frame-restore-test")))
+        return frameRestoreTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))
