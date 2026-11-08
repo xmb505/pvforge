@@ -305,7 +305,9 @@ Entity Project::makeBase(EntityType type, const QString& name) const
 Entity* Project::append(Entity e)
 {
     ++m_nextId;
+    const EntityId id = e.id;
     m_entities.append(std::move(e));
+    m_entityIndex.insert(id, int(m_entities.size()) - 1);
     modified = true;
     emit changed();
     return &m_entities.last();
@@ -477,6 +479,7 @@ bool Project::moveEntity(EntityId id, EntityId parent, int index)
         --target;
     moved.parent = parent;
     m_entities.insert(target, moved);
+    rebuildEntityIndex();
     modified = true;
     emit changed();
     return true;
@@ -511,6 +514,7 @@ bool Project::moveEntities(const QVector<EntityId>& ids, EntityId parent, int in
         entity.parent = parent;
     for (int i = 0; i < int(moved.size()); ++i)
         m_entities.insert(target + i, moved[i]);
+    rebuildEntityIndex();
     modified = true;
     emit changed();
     return true;
@@ -543,13 +547,19 @@ bool Project::hasChildren(EntityId id) const
     return false;
 }
 
+namespace {
+// The parent chain is kept acyclic by setEntityParent/moveEntity and the
+// loader; the depth cap only guards against a corrupt file. Avoiding a QSet
+// keeps the render loop allocation-free for scenes with many entities.
+constexpr int kMaxParentDepth = 64;
+} // namespace
+
 bool Project::isEffectivelyHidden(EntityId id) const
 {
-    QSet<EntityId> seen;
     EntityId current = id;
-    while (current != kInvalidEntity && !seen.contains(current))
+    for (int depth = 0; depth < kMaxParentDepth && current != kInvalidEntity;
+         ++depth)
     {
-        seen.insert(current);
         const Entity* e = entity(current);
         if (!e)
             break;
@@ -563,11 +573,10 @@ bool Project::isEffectivelyHidden(EntityId id) const
 double Project::effectiveOpacity(EntityId id, double frame) const
 {
     double opacity = 1.0;
-    QSet<EntityId> seen;
     EntityId current = id;
-    while (current != kInvalidEntity && !seen.contains(current))
+    for (int depth = 0; depth < kMaxParentDepth && current != kInvalidEntity;
+         ++depth)
     {
-        seen.insert(current);
         const Entity* e = entity(current);
         if (!e)
             break;
@@ -579,11 +588,10 @@ double Project::effectiveOpacity(EntityId id, double frame) const
 
 bool Project::isEffectivelyLocked(EntityId id) const
 {
-    QSet<EntityId> seen;
     EntityId current = id;
-    while (current != kInvalidEntity && !seen.contains(current))
+    for (int depth = 0; depth < kMaxParentDepth && current != kInvalidEntity;
+         ++depth)
     {
-        seen.insert(current);
         const Entity* e = entity(current);
         if (!e)
             break;
@@ -845,12 +853,21 @@ void Project::removeTemplate(int index)
     emit changed();
 }
 
+void Project::rebuildEntityIndex()
+{
+    m_entityIndex.clear();
+    m_entityIndex.reserve(m_entities.size());
+    for (int index = 0; index < int(m_entities.size()); ++index)
+        m_entityIndex.insert(m_entities[index].id, index);
+}
+
 Entity* Project::entity(EntityId id)
 {
-    for (Entity& e : m_entities)
-        if (e.id == id)
-            return &e;
-    return nullptr;
+    const int index = m_entityIndex.value(id, -1);
+    if (index < 0 || index >= int(m_entities.size())
+        || m_entities[index].id != id)
+        return nullptr;
+    return &m_entities[index];
 }
 
 int Project::removeEntity(EntityId id)
@@ -861,6 +878,7 @@ int Project::removeEntity(EntityId id)
         return -1;
     const int index = int(it - m_entities.begin());
     m_entities.erase(it);
+    rebuildEntityIndex();
     if (activeCamera == id || monitorView == id)
     {
         EntityId fallback = kInvalidEntity;
@@ -886,6 +904,7 @@ void Project::insertEntity(const Entity& entity, int index)
 {
     const int position = std::clamp(index, 0, int(m_entities.size()));
     m_entities.insert(position, entity);
+    rebuildEntityIndex();
     m_nextId = std::max(m_nextId, entity.id + 1);
     modified = true;
     emit changed();
@@ -1006,6 +1025,7 @@ QVector<EntityId> Project::replaceEntitySource(EntityId id,
 void Project::setEntities(const QVector<Entity>& entities)
 {
     m_entities = entities;
+    rebuildEntityIndex();
     modified = true;
     emit changed();
 }
@@ -1322,10 +1342,11 @@ double Project::previousKeyframeFrame(EntityId id, double frame) const
 
 const Entity* Project::entity(EntityId id) const
 {
-    for (const Entity& e : m_entities)
-        if (e.id == id)
-            return &e;
-    return nullptr;
+    const int index = m_entityIndex.value(id, -1);
+    if (index < 0 || index >= int(m_entities.size())
+        || m_entities[index].id != id)
+        return nullptr;
+    return &m_entities[index];
 }
 
 double Project::value(EntityId id, const QString& prop, double frame) const
@@ -1544,6 +1565,7 @@ bool Project::load(const QString& path, QString* error)
     monitorView = root.value(QStringLiteral("monitorView")).toInt(kWorkCameraView);
 
     m_entities.clear();
+    m_entityIndex.clear();
     m_nextId = 1;
 
     const QJsonArray entities = root.value(QStringLiteral("entities")).toArray();
@@ -1649,6 +1671,7 @@ bool Project::load(const QString& path, QString* error)
 
         m_nextId = std::max(m_nextId, e.id + 1);
         m_entities.append(e);
+        m_entityIndex.insert(e.id, int(m_entities.size()) - 1);
     }
 
     // Validate parent references now that every entity has been loaded.

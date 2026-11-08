@@ -226,6 +226,8 @@ public:
     const Keyframe* keyframe(EntityId id, const QString& property, double frame) const;
     double previousKeyframeFrame(EntityId id, double frame) const;
     const QVector<Entity>& entities() const { return m_entities; }
+    // Field mutation only; structural edits must go through the Project
+    // methods so the id index stays valid.
     QVector<Entity>& mutableEntities() { return m_entities; }
     EntityId nextId() const { return m_nextId; }
 
@@ -266,8 +268,10 @@ private:
     Entity makeBase(EntityType type, const QString& name) const;
     Entity* append(Entity e);
     QJsonObject toJson() const;
+    void rebuildEntityIndex();
 
     QVector<Entity> m_entities;
+    QHash<EntityId, int> m_entityIndex;
     QVector<Template> m_templates;
     EntityId m_nextId = 1;
 };
