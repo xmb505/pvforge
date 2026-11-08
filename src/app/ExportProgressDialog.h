@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QImage>
 
 class QLabel;
@@ -41,6 +42,10 @@ private:
     QLabel* m_status = nullptr;
     QPushButton* m_cancel = nullptr;
     QImage m_image;
+    QElapsedTimer m_clock;
+    qint64 m_lastSampleMs = -1;
+    int m_lastDone = 0;
+    double m_rate = 0.0;
     bool m_finished = false;
     bool m_cancelling = false;
 };

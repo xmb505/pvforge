@@ -7581,21 +7581,34 @@ int exportTest(QApplication& app)
         ++failures;
     }
 
-    // The preview window must show the rendered frame and its progress.
+    // The preview window must show the rendered frame, progress, speed and a
+    // remaining-time estimate.
     {
         pvf::ExportProgressDialog previewDialog;
         previewDialog.resize(600, 420);
         previewDialog.setPreview(first);
-        previewDialog.setProgress(12, 24);
+        previewDialog.setProgress(6, 24);
         previewDialog.show();
+        QApplication::processEvents();
+        QElapsedTimer wait;
+        wait.start();
+        while (wait.elapsed() < 300)
+            QApplication::processEvents();
+        previewDialog.setProgress(12, 24);
         QApplication::processEvents();
         previewDialog.grab().toImage().save(
             QStringLiteral("/tmp/pvf_export_progress.png"));
         auto* label =
             previewDialog.findChild<QLabel*>(QStringLiteral("exportPreview"));
-        if (!label || label->pixmap().isNull())
+        auto* status =
+            previewDialog.findChild<QLabel*>(QStringLiteral("exportStatus"));
+        if (!label || label->pixmap().isNull() || !status
+            || !status->text().contains(QStringLiteral("fps"))
+            || !status->text().contains(QStringLiteral("剩余")))
         {
-            qCritical() << "export-test: preview dialog has no frame";
+            qCritical() << "export-test: preview dialog"
+                        << (label ? !label->pixmap().isNull() : false)
+                        << (status ? status->text() : QString());
             ++failures;
         }
         previewDialog.finish();

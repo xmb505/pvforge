@@ -19,7 +19,7 @@ namespace {
 
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 2;
-constexpr qint64 kMaxPipeBacklog = 16 * 1024 * 1024;
+constexpr int kMaxBufferedFrames = 3;
 
 QString errorTail(const QString& text)
 {
@@ -289,8 +289,13 @@ void VideoExporter::tick()
         return;
     }
     // Give ffmpeg time to drain the pipe instead of buffering the whole video
-    // in memory when encoding is slower than rendering.
-    if (m_process->bytesToWrite() > kMaxPipeBacklog)
+    // in memory when encoding is slower than rendering. Three frames keep the
+    // progress and time estimate close to the actual encoder position.
+    const qint64 bytesPerFrame =
+        qint64(m_options.size.width()) * m_options.size.height() * 4;
+    const qint64 backlogLimit =
+        std::max<qint64>(1 << 20, bytesPerFrame * kMaxBufferedFrames);
+    if (m_process->bytesToWrite() > backlogLimit)
         return;
 
     QImage image = m_render(m_nextFrame);

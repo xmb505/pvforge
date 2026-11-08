@@ -118,7 +118,7 @@
 - `render/VideoExporter`：UI 线程逐帧渲染 → BGRA rawvideo 管道 → ffmpeg；音频预先分块混成 48 kHz 立体声 PCM，作为第二路输入编码 AAC 192k
 - 编码器可选 `libx264`（CPU 多线程）或 `h264_vaapi`（检测到 `/dev/dri/renderD128` 与编码器时显示）；VAAPI 用 `format=nv12,hwupload` 上传帧，画质档位映射为 CQP
 - 帧渲染由 `MainWindow` 传入回调：先 `VideoPlayer::update(frame, allowProxy=false)` 从原视频解码，再走 `CameraRenderer::renderCameraImage`，与监视器一致且不吃 960 宽预览代理
-- `app/ExportProgressDialog`：导出期间实时显示最后一帧（约 12 fps 刷新）、帧进度和状态；关窗等同取消
+- `app/ExportProgressDialog`：导出期间实时显示最后一帧（约 12 fps 刷新）、帧进度、渲染吞吐（fps）和剩余时间（250 ms 滑动窗口平滑）；关窗等同取消
 - 先写 `<输出>.part.mp4`，成功后改名；取消/失败删除临时文件，不覆盖已有成片
 - `app/ExportDialog`：输出文件、分辨率（默认工程尺寸、锁定工程比例、自动取偶数）、视角（整画布/摄像机，默认活动摄像机）、CRF 档位、编码器、是否含音频；记住上次目录/画质/编码器/音频开关
 - 渲染与编码通过管道重叠：渲染一帧就交给 ffmpeg，管道积压超过 16 MB 时暂停渲染等编码器
