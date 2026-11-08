@@ -380,7 +380,24 @@ MCP 资源 `pvforge://guide/authoring`：
 
 总计约 7–8 周单人；Stage 1 和 Stage 3 可拆给不同人并行。
 
-## 6. 风险与对策
+## 6. 安全基线（P0）
+
+完整威胁清单见 [M6_SECURITY.md](M6_SECURITY.md)。上线前必须满足：
+
+- **CDP 传输**：生产用 `--remote-debugging-pipe`（fd 3/4，null 分隔 JSON），不用 `--remote-debugging-port`、不用 `--remote-allow-origins=*`；端口方案只允许出现在本地 spike。
+- **HTML 隔离**：组件跑在 sandbox iframe/隔离世界；CSP `connect-src 'none'`，img/font 只允许 data:，禁 media/frame/worker/下载/弹窗/剪贴板。
+- **断网多层**：CDP 拦截 + CSP + 禁 WebSocket/WebRTC/代理环境变量；fetch/WebSocket/图片 canary 必须失败，探针失败则禁用 HTML。
+- **WebGL/file 探针**：`--disable-3d-apis`；页面 `getContext('webgl')===null`；`file://` 必须失败。
+- **MCP HTTP**：Host/Origin/CORS 校验，Bearer 常量时间比较，header/body/连接/超时限额，拒绝 Content-Length+Transfer-Encoding。
+- **工程加载**：文件 64 MiB、实体 5000、关键帧 200k、字符串 1 MiB 上限；版本 >4 拒绝；未知类型拒绝；相对路径不得逃逸工程目录；资产哈希与内容一致。
+- **场景边界**：执行时按目标实体根祖先复核解锁时快照的 sceneRootId，播放头移动不能扩大 AI 范围。
+- **急停**：epoch + 每 op/commit 前检查；禁止事务中嵌套事件循环；提交前回滚、提交后明确 `stopped_after_commit`。
+- **checkpoint**：写入前 checkpoint 必须成功；project UUID + sidecar SHA-256；git plumbing-only、禁 hook、隔离全局配置。
+- **资源看门狗**：Chrome 进程组、CDP/页面/截图超时、CPU/RSS/像素总预算、并发 page 上限。
+
+安全验收测试：`--html-canary-test`、`--mcp-http-test`、`--mcp-scope-test`、`--mcp-stop-race-test`、`--project-limit-test`、`--untrusted-project-test`。
+
+## 7. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
@@ -424,8 +441,8 @@ MCP 资源 `pvforge://guide/authoring`：
 
 ## 9. 依赖变化
 
-- 生产实现新增 Qt6::WebSockets（CDP 的 WebSocket 传输）；运行库已装，开发包 `qt6-websockets-dev` 需要安装。
-- Stage 0 spike 可先用 Node.js + `ws` 验证，不阻塞主程序依赖。
+- 生产 CDP 走 `--remote-debugging-pipe`，不依赖 Qt WebSockets；如果后续必须用 loopback WebSocket，再单独评估。
+- Stage 0 spike 可先用 Node.js + 内置 WebSocket 验证抓帧延迟，不阻塞主程序依赖。
 - 外部 Chrome/Edge 是运行依赖，不随应用分发。
 
 ## 10. 非目标
