@@ -20,7 +20,7 @@
 | 代码契约 | 一层一个完整 HTML 文档 + manifest；宿主不拼 snippet |
 | 变量 | `组件名.变量名` 命名空间；double + schema；复用 Track/Easing |
 | 确定性 | 纯函数；禁用 CSS 动画/自由时间；同一帧两次逐像素一致 |
-| 预览 | headless 浏览器 + CDP 截图 + 位图合成；播放时 15/30fps 节流 |
+| 预览 | headless 浏览器 + CDP 截图 + 位图合成；按显示尺寸抓，播放时 15fps 上限 |
 | 导出 | 异步帧供应器，逐帧等待抓图，不节流 |
 | MCP 客户端 | 优先 OpenCode / DeepSeek harness；Streamable HTTP 为主，stdio 桥按需 |
 | MCP 权限 | 默认只读；显式“允许修改”；AI 只写当前场景 + 全局对象；禁止删除/文件/命令/导出/改设置 |
@@ -165,7 +165,7 @@ HTML 资产是单个内容寻址 JSON：`assets/html/<sha>.json`：
 - `Page.captureScreenshot` 抓这一层（PNG/base64）；
 - 解码 QImage，按实体变换合成；
 - 只保留一张在途请求，新帧覆盖旧帧；
-- 播放时 15/30fps 节流；暂停时全质量；隐藏/透明 0 跳过。
+- 播放时按显示尺寸抓，15fps 上限；暂停时全质量；隐藏/透明 0 跳过。
 
 导出：
 
@@ -183,7 +183,7 @@ HTML 资产是单个内容寻址 JSON：`assets/html/<sha>.json`：
 
 - 断网：Chrome 启动参数 + CDP 拦截所有非 data:/内联请求；所有资源内联。
 - 禁止 `file://`、本地路径、外部进程、下载、媒体、WebGL。
-- v1 限额：单层 HTML ≤ 2MB；单资产 ≤ 5MB；单层组件 ≤ 16；同时 ≤ 4 个 HTML 层；抓帧边长 ≤ 4096；每层最多 1 个在途抓帧。
+- v1 限额：单层 HTML ≤ 2MB；单资产 ≤ 5MB；单层组件 ≤ 16；同时 ≤ 2 个 HTML 层；抓帧边长 ≤ 4096；每层最多 1 个在途抓帧。
 - 浏览器崩溃：占位 + 日志；自动重启一次；连续失败禁用该层并提示。
 - 导出失败不写占位图，宁可报错。
 
@@ -341,10 +341,15 @@ MCP 资源 `pvforge://guide/authoring`：
 
 粗估按单人全职。
 
-### Stage 0：浏览器/CDP spike（2–3 天）
+### Stage 0：浏览器/CDP spike（已完成，NO-GO at 25ms）
 
 - 外部 Chrome/Edge headless：1280×720 / 1920×1080 连续 100 帧；变量注入 → rendered → 截图 → 解码；透明背景、字体、内联图片；多页面、内存、崩溃重启；断网、无 file 访问；同一帧两次像素哈希。
-- 门槛：1080p 单帧截图 ≤ 25ms（达不到则预览降 15fps/低分辨率，导出仍可接受）；无空白帧；同帧像素一致；浏览器缺失有清晰降级。
+- 结果（Chrome 157，100 帧中位）：720p 总 61.23ms（截图 43.10ms，等效 16.3fps）；1080p 总 86.97ms（截图 53.51ms，等效 11.5fps）；双页面 720p 每轮 150ms、1080p 188ms；2 页 Chrome 进程树 RSS 约 1.6–1.7GiB。
+- 门槛 25ms **未达到**。按降级策略执行：
+  - 预览按显示尺寸抓（通常 960 宽以内），15fps 上限；1080p 不承诺 30fps。
+  - 导出不节流、全分辨率逐帧等待；1080p HTML 层本身约 11–16fps，长工程会比实时慢，属于可接受成本。
+  - 多 HTML 层串行 `bringToFront` 抓帧；RSS 高，v1 最多 2 层。
+- 关键实现发现：headless 只为前台标签页合成，每次截图前必须 `Page.bringToFront`/`Target.activateTarget`；`Page.addScriptToEvaluateOnNewDocument` 对 `Page.setDocumentContent` 不生效，确定性 stub 必须内联到文档第一个 `<script>`。
 - 产出：`docs/M6_SPIKE.md` 测量报告 + go/no-go；spike 不集成进主程序。
 
 ### Stage 1：HTML 层核心（约 2 周）
@@ -402,7 +407,7 @@ MCP 资源 `pvforge://guide/authoring`：
 | 风险 | 对策 |
 |---|---|
 | 用户机器没有 Chrome/Edge | 自动探测 + 手动路径 + 禁用提示；文档说明依赖 |
-| CDP 截图慢，预览掉帧 | 预览按显示尺寸抓 + 15/30fps 节流 + 单在途请求；导出不节流 |
+| CDP 截图慢，预览掉帧 | 预览按显示尺寸抓 + 15fps 上限 + 单在途请求；导出不节流 |
 | Chrome 更新/CDP 变化 | 只用稳定域（Page/Runtime/Emulation）；同时支持 Edge |
 | 字体/资源导致不确定性 | 全部内联 + `document.fonts.ready` + 确定性时钟/随机 |
 | HTML 组件写死动画 | 注入禁用 CSS 动画/transition；超时失败；同帧哈希测试 |
@@ -431,9 +436,9 @@ MCP 资源 `pvforge://guide/authoring`：
 
 ## 8. 计划默认（可改，不阻塞）
 
-- 预览默认 30fps，spike 达不到就降 15fps。
+- 预览默认 15fps（1080p 全质量抓帧只有约 11.5fps，30fps 不现实）。
 - HTML 资产用单个 JSON（html + manifest），不是两个文件。
-- 最多 4 个 HTML 层、16 个组件、2MB HTML、5MB 资产、4096 边长。
+- 最多 2 个 HTML 层、16 个组件、2MB HTML、5MB 资产、4096 边长。
 - AI 可以 `scene.create`，但只能追加到末尾；恢复场景只能人类做。
 - checkpoint 放 `~/.cache/PVForge/checkpoints/`，不碰工程目录和用户仓库。
 - 日志只存内存，可选导出 JSONL。
