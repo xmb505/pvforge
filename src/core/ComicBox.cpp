@@ -199,8 +199,20 @@ ComicBox ComicBox::build(const TextStyle& text, const BubbleStyle& bubble)
     const QSizeF inner = block.contentSize() +
                          QSizeF(text.padding * 2.0, text.padding * 2.0);
     const double margin = bubble.strokeWidth + 4.0;
-    const QRectF rect(-inner.width() / 2.0 - margin, -inner.height() / 2.0 - margin,
-                       inner.width() + margin * 2.0, inner.height() + margin * 2.0);
+
+    // A curved balloon only contains the rectangle inscribed in it. Without
+    // growing the body by 1 / containment, the corners of a full text block
+    // poke through the ellipse or cloud outline.
+    double containment = 1.0;
+    if (bubble.shape == 0)
+        containment = std::sqrt(0.5);          // ellipse
+    else if (bubble.shape == 2)
+        containment = std::pow(2.0, -1.0 / 2.62);   // superellipse cloud
+    const double grow = 1.0 / containment;
+    const double bodyHalfWidth = inner.width() / 2.0 * grow + margin;
+    const double bodyHalfHeight = inner.height() / 2.0 * grow + margin;
+    const QRectF rect(-bodyHalfWidth, -bodyHalfHeight, bodyHalfWidth * 2.0,
+                       bodyHalfHeight * 2.0);
 
     QPainterPath path;
     switch (bubble.shape)

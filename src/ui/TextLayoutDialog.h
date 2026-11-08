@@ -55,6 +55,7 @@ private:
     QPushButton* m_color = nullptr;
     QComboBox* m_align = nullptr;
     QDoubleSpinBox* m_lineHeight = nullptr;
+    QDoubleSpinBox* m_letterSpacing = nullptr;
     QDoubleSpinBox* m_padding = nullptr;
     QDoubleSpinBox* m_boxWidth = nullptr;
     QDoubleSpinBox* m_boxHeight = nullptr;

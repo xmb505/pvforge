@@ -1226,6 +1226,54 @@ int specialTest(QApplication& app)
             other.hidden = false;
     }
 
+    // Vertical tategaki inside an ellipse: the whole text block has to fit,
+    // not just its centre line.
+    {
+        pvf::TextStyle style;
+        style.text = QStringLiteral("我看旁边的小日子\n过得不错的\n霓虹酱");
+        style.pixelSize = 48;
+        style.color = QColor(30, 30, 36);
+        style.padding = 18;
+        style.vertical = true;
+        pvf::BubbleStyle bubble;
+        bubble.shape = 0;
+        bubble.tail = true;
+
+        const pvf::ComicBox box = pvf::ComicBox::build(style, bubble);
+        const pvf::TextBlock block = pvf::TextBlock::measure(style);
+        if (box.bodySize().width() < block.contentSize().width() * 1.35
+            || box.bodySize().height() < block.contentSize().height() * 1.35)
+        {
+            qCritical() << "special-test: ellipse too tight for vertical text"
+                        << box.bodySize() << block.contentSize();
+            ++failures;
+        }
+
+        pvf::TextStyle spacedStyle = style;
+        spacedStyle.letterSpacing = 12;
+        if (pvf::TextBlock::measure(spacedStyle).contentSize().height()
+            <= block.contentSize().height() + 1.0)
+        {
+            qCritical() << "special-test: vertical letter spacing did not expand";
+            ++failures;
+        }
+
+        QImage image(420, 800, QImage::Format_ARGB32);
+        image.fill(Qt::black);
+        {
+            QPainter painter(&image);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.translate(image.width() / 2.0, image.height() / 2.0);
+            box.paint(painter);
+        }
+        image.save(QStringLiteral("/tmp/pvf_comic_vertical.png"));
+        if (ink(image) <= 0)
+        {
+            qCritical() << "special-test: vertical balloon drew nothing";
+            ++failures;
+        }
+    }
+
     // Radial rays.
     {
         pvf::RadialParams params;
@@ -1674,6 +1722,8 @@ int specialTest(QApplication& app)
         pvf::TextStyle style;
         style.text = QStringLiteral("排版预览\n第二行");
         style.pixelSize = 48;
+        style.color = QColor(30, 30, 36);
+        style.letterSpacing = 8;
         style.boxWidth = 260;
         pvf::TextLayoutDialog dialog(style);
         dialog.show();
@@ -1681,6 +1731,13 @@ int specialTest(QApplication& app)
         if (!dialog.findChild<pvf::TextPreview*>(QStringLiteral("layoutPreview")))
         {
             qCritical() << "special-test: layout preview missing";
+            ++local;
+        }
+        auto* letterSpacing =
+            dialog.findChild<QDoubleSpinBox*>(QStringLiteral("layoutLetterSpacing"));
+        if (!letterSpacing || std::abs(letterSpacing->value() - 8.0) > 1e-6)
+        {
+            qCritical() << "special-test: layout letter spacing missing";
             ++local;
         }
         if (dialog.style().text != style.text || dialog.style().boxWidth != style.boxWidth)

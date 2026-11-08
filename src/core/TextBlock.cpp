@@ -10,6 +10,7 @@
 #include <QTextDocument>
 #include <QTextLayout>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace pvf {
@@ -39,6 +40,8 @@ QFont fontOf(const TextStyle& style)
     font.setBold(style.bold);
     font.setItalic(style.italic);
     font.setUnderline(style.underline);
+    if (std::abs(style.letterSpacing) > 1e-6)
+        font.setLetterSpacing(QFont::AbsoluteSpacing, style.letterSpacing);
     return font;
 }
 
@@ -61,8 +64,10 @@ TextBlock TextBlock::measure(const TextStyle& style)
     {
         // Tategaki: characters run downwards, columns run right to left.
         const QFontMetricsF metrics(font);
-        block->m_charStep = metrics.lineSpacing() * std::max(0.5, style.lineHeight);
-        block->m_columnStep = block->m_charStep;
+        const double baseStep =
+            metrics.lineSpacing() * std::max(0.5, style.lineHeight);
+        block->m_columnStep = baseStep;
+        block->m_charStep = std::max(1.0, baseStep + style.letterSpacing);
         const int perColumn = style.boxHeight > 0
                                   ? std::max(1, int(style.boxHeight / block->m_charStep))
                                   : std::numeric_limits<int>::max();

@@ -36,7 +36,12 @@ void TextPreview::setStyle(const TextStyle& style)
 void TextPreview::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(30, 30, 36));
+    // Dark text on the dark preview background used to disappear entirely;
+    // pick a paper colour that contrasts with the chosen text colour.
+    const QColor text = m_style.color;
+    const int luma = (text.red() * 299 + text.green() * 587 + text.blue() * 114) / 1000;
+    painter.fillRect(rect(), luma < 110 ? QColor(244, 244, 248)
+                                        : QColor(30, 30, 36));
     const TextBlock block = TextBlock::measure(m_style);
     const QSizeF size = block.size();
     if (size.width() < 1 || size.height() < 1)
@@ -134,11 +139,26 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     m_lineHeight->setRange(0.5, 4.0);
     m_lineHeight->setSingleStep(0.1);
     m_lineHeight->setValue(m_style.lineHeight);
+    m_lineHeight->setToolTip(QStringLiteral("字体行高的倍数；竖排时控制列间距"));
     connect(m_lineHeight, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         m_style.lineHeight = value;
         updateStyle();
     });
     form->addRow(QStringLiteral("行距"), m_lineHeight);
+
+    m_letterSpacing = new QDoubleSpinBox(this);
+    m_letterSpacing->setObjectName(QStringLiteral("layoutLetterSpacing"));
+    m_letterSpacing->setRange(-50, 200);
+    m_letterSpacing->setSingleStep(1);
+    m_letterSpacing->setSuffix(QStringLiteral(" px"));
+    m_letterSpacing->setValue(m_style.letterSpacing);
+    m_letterSpacing->setToolTip(QStringLiteral("字与字之间的额外间距"));
+    connect(m_letterSpacing, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) {
+                m_style.letterSpacing = value;
+                updateStyle();
+            });
+    form->addRow(QStringLiteral("字距"), m_letterSpacing);
 
     m_padding = new QDoubleSpinBox(this);
     m_padding->setRange(0, 200);
