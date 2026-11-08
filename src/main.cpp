@@ -7755,6 +7755,326 @@ int workbenchTest(QApplication& app)
     return app.exec();
 }
 
+int asyncExportTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    if (pvf::VideoExporter::ffmpegExecutable().isEmpty())
+    {
+        qInfo() << "async-export-test: ffmpeg missing, skipped";
+        return 0;
+    }
+
+    pvf::Project project;
+    project.name = QStringLiteral("async-export");
+    project.width = 320;
+    project.height = 180;
+    project.fps = 24;
+    project.background = QColor(10, 20, 40);
+    project.addVector(0, 80, 80, QColor(230, 40, 40), QColor(0, 0, 0, 0),
+                      0.0);
+
+    auto clip = std::make_shared<pvf::AudioClip>();
+    clip->duration = 0.5;
+    clip->sampleRate = 48000;
+    clip->channels = 2;
+    clip->samples.resize(24000 * 2);
+    for (int i = 0; i < 24000; ++i)
+    {
+        const qint16 value =
+            qint16(8000.0 * std::sin(2.0 * M_PI * 440.0 * i / 48000.0));
+        clip->samples[i * 2] = value;
+        clip->samples[i * 2 + 1] = value;
+    }
+    clip->peaks.resize(500);
+    project.addAudio(QStringLiteral("/tmp/pvf_async_export_tone.wav"), clip,
+                     QStringLiteral("tone"));
+
+    const int frameCount = 12;
+    auto render = [&project](int frame) {
+        pvf::Camera::State state;
+        state.scale = 1.0;
+        state.size = QSizeF(project.width, project.height);
+        return pvf::CameraRenderer::renderCameraImage(
+            project, frame, state, QSize(320, 180), false);
+    };
+
+    struct Result
+    {
+        bool reported = false;
+        bool success = false;
+        QString error;
+        QVector<int> progress;
+        int previews = 0;
+        int heartbeats = 0;
+    };
+
+    auto runExport = [&project](pvf::VideoExporter& exporter,
+                                const pvf::ExportOptions& options,
+                                pvf::VideoExporter::FrameProvider provider,
+                                Result& result, int timeoutMs,
+                                int cancelAfterMs = -1) {
+        QEventLoop loop;
+        QTimer timeout;
+        QTimer heartbeat;
+        timeout.setSingleShot(true);
+        QObject::connect(&exporter, &pvf::VideoExporter::finished, &loop,
+                         [&](bool success, const QString& error) {
+                             result.reported = true;
+                             result.success = success;
+                             result.error = error;
+                             loop.quit();
+                         });
+        QObject::connect(&exporter, &pvf::VideoExporter::progress, &loop,
+                         [&](int done, int) { result.progress.append(done); });
+        QObject::connect(&exporter, &pvf::VideoExporter::previewFrame, &loop,
+                         [&](const QImage&) { ++result.previews; });
+        QObject::connect(&heartbeat, &QTimer::timeout, &loop,
+                         [&] { ++result.heartbeats; });
+        heartbeat.start(10);
+        QObject::connect(&timeout, &QTimer::timeout, &loop,
+                         &QEventLoop::quit);
+
+        QString error;
+        if (!exporter.start(project, options, provider, &error))
+        {
+            result.reported = true;
+            result.error = error;
+            return false;
+        }
+        if (cancelAfterMs >= 0)
+        {
+            QTimer::singleShot(cancelAfterMs, &exporter,
+                               [&exporter] { exporter.cancel(); });
+        }
+        timeout.start(timeoutMs);
+        loop.exec();
+        return result.reported && result.success;
+    };
+
+    auto pump = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+
+    pvf::ExportOptions baseOptions;
+    baseOptions.size = QSize(320, 180);
+    baseOptions.fps = 24;
+    baseOptions.frameCount = frameCount;
+    baseOptions.crf = 23;
+    baseOptions.includeAudio = true;
+
+    // 1. A provider that answers synchronously must produce a normal MP4 with
+    //    the expected first frame and audio track.
+    const QString syncPath = QStringLiteral("/tmp/pvf_async_export_sync.mp4");
+    QFile::remove(syncPath);
+    {
+        pvf::ExportOptions options = baseOptions;
+        options.outputPath = syncPath;
+        pvf::VideoExporter exporter;
+        Result result;
+        int inFlight = 0;
+        bool concurrent = false;
+        auto provider = [&](int frame, pvf::VideoExporter::FrameDone done) {
+            if (++inFlight > 1)
+                concurrent = true;
+            done(render(frame));
+            --inFlight;
+        };
+        const bool ok = runExport(exporter, options, provider, result, 60000);
+        if (!ok || exporter.isRunning() || concurrent
+            || result.progress.size() != frameCount
+            || result.progress.last() != frameCount || result.previews <= 0)
+        {
+            qCritical() << "async-export-test: sync provider" << ok
+                        << exporter.isRunning() << concurrent
+                        << result.progress.size() << result.error;
+            ++failures;
+        }
+
+        QString decodeError;
+        double duration = 0.0;
+        const QImage first =
+            pvf::decodeVideoFirstFrame(syncPath, &decodeError, &duration);
+        if (first.isNull() || first.size() != QSize(320, 180)
+            || duration < 0.35 || duration > 0.65)
+        {
+            qCritical() << "async-export-test: sync video" << decodeError
+                        << first.size() << duration;
+            ++failures;
+        }
+        else
+        {
+            const QColor center = first.pixelColor(160, 90);
+            const QColor background = first.pixelColor(10, 10);
+            if (!(center.red() > 150 && center.green() < 100)
+                || !(background.blue() > background.red()
+                     && background.red() < 100))
+            {
+                qCritical() << "async-export-test: sync colours" << center
+                            << background;
+                ++failures;
+            }
+        }
+
+        const pvf::AudioDecodeResult audio = pvf::decodeAudioFile(syncPath);
+        if (!audio.clip || audio.clip->duration < 0.4)
+        {
+            qCritical() << "async-export-test: sync audio" << audio.error;
+            ++failures;
+        }
+        else
+        {
+            float peak = 0.0f;
+            for (float value : audio.clip->peaks)
+                peak = std::max(peak, value);
+            if (peak < 0.1f)
+            {
+                qCritical() << "async-export-test: sync audio silent" << peak;
+                ++failures;
+            }
+        }
+    }
+
+    // 2. A provider that answers 50 ms later must still export successfully,
+    //    one frame at a time, without blocking progress or the event loop.
+    const QString delayedPath =
+        QStringLiteral("/tmp/pvf_async_export_delayed.mp4");
+    QFile::remove(delayedPath);
+    {
+        pvf::ExportOptions options = baseOptions;
+        options.outputPath = delayedPath;
+        pvf::VideoExporter exporter;
+        Result result;
+        int inFlight = 0;
+        int maxInFlight = 0;
+        int requests = 0;
+        auto provider = [&](int frame, pvf::VideoExporter::FrameDone done) {
+            ++inFlight;
+            ++requests;
+            maxInFlight = std::max(maxInFlight, inFlight);
+            QTimer::singleShot(50, [&render, &inFlight, frame, done] {
+                --inFlight;
+                done(render(frame));
+            });
+        };
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const bool ok = runExport(exporter, options, provider, result, 60000);
+        if (!ok || exporter.isRunning() || requests != frameCount
+            || maxInFlight != 1
+            || result.progress.size() != frameCount
+            || result.progress.last() != frameCount
+            || result.heartbeats <= 5 || elapsed.elapsed() < 400)
+        {
+            qCritical() << "async-export-test: delayed provider" << ok
+                        << exporter.isRunning() << requests << maxInFlight
+                        << result.progress.size() << result.heartbeats
+                        << elapsed.elapsed() << result.error;
+            ++failures;
+        }
+        QString decodeError;
+        const QImage first =
+            pvf::decodeVideoFirstFrame(delayedPath, &decodeError);
+        if (first.isNull() || first.size() != QSize(320, 180))
+        {
+            qCritical() << "async-export-test: delayed video" << decodeError
+                        << first.size();
+            ++failures;
+        }
+    }
+
+    // 3. A provider that never answers must fail on the per-frame timeout and
+    //    leave no output or .part.mp4 behind.
+    const QString timeoutPath =
+        QStringLiteral("/tmp/pvf_async_export_timeout.mp4");
+    QFile::remove(timeoutPath);
+    {
+        pvf::ExportOptions options = baseOptions;
+        options.outputPath = timeoutPath;
+        options.frameCount = 6;
+        options.includeAudio = false;
+        options.frameTimeoutMs = 200;
+        pvf::VideoExporter exporter;
+        Result result;
+        int requests = 0;
+        auto provider = [&](int, pvf::VideoExporter::FrameDone) { ++requests; };
+        const bool ok = runExport(exporter, options, provider, result, 10000);
+        if (ok || !result.reported || exporter.isRunning()
+            || result.error.isEmpty()
+            || !result.error.contains(QStringLiteral("超时"))
+            || requests != 1 || !result.progress.isEmpty()
+            || QFile::exists(timeoutPath)
+            || QFile::exists(timeoutPath + QStringLiteral(".part.mp4")))
+        {
+            qCritical() << "async-export-test: timeout" << ok
+                        << result.reported << exporter.isRunning()
+                        << result.error << requests << result.progress.size()
+                        << QFile::exists(timeoutPath)
+                        << QFile::exists(timeoutPath
+                                         + QStringLiteral(".part.mp4"));
+            ++failures;
+        }
+    }
+
+    // 4. Cancelling while a request is in flight must report cancellation and
+    //    ignore the provider's late answer.
+    const QString cancelPath =
+        QStringLiteral("/tmp/pvf_async_export_cancel.mp4");
+    QFile::remove(cancelPath);
+    {
+        pvf::ExportOptions options = baseOptions;
+        options.outputPath = cancelPath;
+        options.frameCount = 60;
+        options.includeAudio = false;
+        pvf::VideoExporter exporter;
+        Result result;
+        int requests = 0;
+        auto provider = [&](int frame, pvf::VideoExporter::FrameDone done) {
+            ++requests;
+            QTimer::singleShot(400, [&render, frame, done] {
+                done(render(frame));
+            });
+        };
+        const bool ok =
+            runExport(exporter, options, provider, result, 10000, 120);
+        const int progressAfterCancel = result.progress.size();
+        if (ok || !result.reported || result.success
+            || !result.error.isEmpty() || exporter.isRunning()
+            || requests != 1 || QFile::exists(cancelPath)
+            || QFile::exists(cancelPath + QStringLiteral(".part.mp4")))
+        {
+            qCritical() << "async-export-test: cancel" << ok
+                        << result.reported << result.success << result.error
+                        << exporter.isRunning() << requests
+                        << QFile::exists(cancelPath)
+                        << QFile::exists(cancelPath
+                                         + QStringLiteral(".part.mp4"));
+            ++failures;
+        }
+        // Let the in-flight callback fire after the cancellation.
+        pump(700);
+        if (exporter.isRunning()
+            || result.progress.size() != progressAfterCancel
+            || QFile::exists(cancelPath)
+            || QFile::exists(cancelPath + QStringLiteral(".part.mp4")))
+        {
+            qCritical() << "async-export-test: late callback"
+                        << exporter.isRunning() << result.progress.size()
+                        << progressAfterCancel << QFile::exists(cancelPath);
+            ++failures;
+        }
+    }
+
+    QFile::remove(syncPath);
+    QFile::remove(delayedPath);
+    QFile::remove(timeoutPath);
+    QFile::remove(cancelPath);
+    qInfo() << "async-export-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int exportTest(QApplication& app)
 {
     Q_UNUSED(app);
@@ -7905,6 +8225,9 @@ int exportTest(QApplication& app)
         return pvf::CameraRenderer::renderCameraImage(
             project, frame, state, QSize(320, 180), false);
     };
+    auto provider = [&render](int frame, pvf::VideoExporter::FrameDone done) {
+        done(render(frame));
+    };
     pvf::VideoExporter exporter;
     QEventLoop loop;
     QTimer timeout;
@@ -7926,7 +8249,7 @@ int exportTest(QApplication& app)
                      });
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
     QString error;
-    if (!exporter.start(project, options, render, &error))
+    if (!exporter.start(project, options, provider, &error))
     {
         qCritical() << "export-test: start failed" << error;
         return 1;
@@ -8059,7 +8382,7 @@ int exportTest(QApplication& app)
                          });
         QObject::connect(&vaapiTimeout, &QTimer::timeout, &vaapiLoop,
                          &QEventLoop::quit);
-        if (!vaapi.start(project, vaapiOptions, render, &error))
+        if (!vaapi.start(project, vaapiOptions, provider, &error))
         {
             qCritical() << "export-test: vaapi start failed" << error;
             ++failures;
@@ -8108,7 +8431,7 @@ int exportTest(QApplication& app)
                      });
     QObject::connect(&cancelTimeout, &QTimer::timeout, &cancelLoop,
                      &QEventLoop::quit);
-    if (!cancelling.start(project, cancelOptions, render, &error))
+    if (!cancelling.start(project, cancelOptions, provider, &error))
     {
         qCritical() << "export-test: cancel start failed" << error;
         ++failures;
@@ -8180,6 +8503,8 @@ int main(int argc, char* argv[])
         return specialTest(app);
     if (app.arguments().contains(QStringLiteral("--export-test")))
         return exportTest(app);
+    if (app.arguments().contains(QStringLiteral("--async-export-test")))
+        return asyncExportTest(app);
     if (app.arguments().contains(QStringLiteral("--keyframe-edit-test")))
         return keyframeEditTest(app);
     if (app.arguments().contains(QStringLiteral("--frame-restore-test")))

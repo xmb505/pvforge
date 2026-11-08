@@ -806,7 +806,12 @@ void MainWindow::exportVideo()
             });
 
     const EntityId cameraId = options.cameraId;
-    auto renderFrame = [this, cameraId, renderSize](int frame) {
+    // The exporter requests one frame at a time. The current scene renderer is
+    // synchronous, so render immediately and hand the frame back; an async
+    // HTML capture provider can replace this later without touching the
+    // exporter state machine.
+    auto frameProvider = [this, cameraId, renderSize](
+                             int frame, VideoExporter::FrameDone done) {
         m_videoPlayer.update(*m_project, frame, false);
         Camera::State state;
         const Entity* camera = m_project->entity(cameraId);
@@ -819,12 +824,12 @@ void MainWindow::exportVideo()
             state.center = QPointF();
             state.size = QSizeF(m_project->width, m_project->height);
         }
-        return CameraRenderer::renderCameraImage(*m_project, frame, state,
-                                                 renderSize, false);
+        done(CameraRenderer::renderCameraImage(*m_project, frame, state,
+                                               renderSize, false));
     };
 
     QString error;
-    if (!exporter->start(*m_project, options, renderFrame, &error))
+    if (!exporter->start(*m_project, options, frameProvider, &error))
     {
         progress->finish();
         progress->deleteLater();

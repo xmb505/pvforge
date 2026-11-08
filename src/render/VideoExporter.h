@@ -32,17 +32,23 @@ struct ExportOptions
     int crf = 20;
     bool includeAudio = true;
     ExportEncoder encoder = ExportEncoder::H264Software;
+    // Abort the export when a single frame takes longer than this. The
+    // provider may still answer later; that answer is ignored.
+    int frameTimeoutMs = 5000;
 };
 
-// Renders the project frame by frame on the UI thread and streams raw frames
-// to an ffmpeg process. Frames are produced by the caller so the exporter does
-// not need to know about the monitor view or the video decoder.
+// Streams raw frames to an ffmpeg process. Frames are produced by the caller
+// through an asynchronous provider: the exporter requests one frame at a
+// time, waits for its callback, writes it to ffmpeg and only then asks for the
+// next frame. This lets a future HTML/CDP capture finish before the encoder
+// moves on, and makes cancellation and per-frame timeouts deterministic.
 class VideoExporter : public QObject
 {
     Q_OBJECT
 
 public:
-    using FrameRenderer = std::function<QImage(int frame)>;
+    using FrameDone = std::function<void(const QImage& image)>;
+    using FrameProvider = std::function<void(int frame, FrameDone done)>;
 
     explicit VideoExporter(QObject* parent = nullptr);
     ~VideoExporter() override;
@@ -51,10 +57,12 @@ public:
     // True when a VAAPI render node and the h264_vaapi encoder are available.
     static bool vaapiAvailable();
 
-    // Mixes the project audio, starts ffmpeg and asks renderFrame for each
-    // frame. Returns false with an error before any frame is rendered.
+    // Mixes the project audio, starts ffmpeg and asks the provider for each
+    // frame. The provider is called on the exporter's thread and must call
+    // done exactly once; it may do so synchronously or later. Returns false
+    // with an error before any frame is requested.
     bool start(const Project& project, const ExportOptions& options,
-               FrameRenderer renderFrame, QString* error = nullptr);
+               FrameProvider provider, QString* error = nullptr);
     void cancel();
     bool isRunning() const { return m_running; }
 
@@ -67,6 +75,10 @@ signals:
 
 private:
     void tick();
+    void requestFrame();
+    void onFrame(quint64 token, int frame, const QImage& image);
+    void onFrameTimeout();
+    void abandonFrame();
     void fail(const QString& error);
     void finish(bool success);
     void stopProcess();
@@ -74,12 +86,18 @@ private:
     QTemporaryDir* m_temp = nullptr;
     QProcess* m_process = nullptr;
     QTimer* m_timer = nullptr;
-    FrameRenderer m_render;
+    QTimer* m_frameTimer = nullptr;
+    FrameProvider m_provider;
     ExportOptions m_options;
     QString m_stderr;
     QString m_partialPath;
     QElapsedTimer m_previewClock;
+    // Identifies the current export so late callbacks from a previous or
+    // cancelled export cannot write frames.
+    quint64 m_generation = 0;
     int m_nextFrame = 0;
+    int m_requestedFrame = -1;
+    bool m_waiting = false;
     bool m_running = false;
 };
 

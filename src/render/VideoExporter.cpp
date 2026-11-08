@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -50,6 +51,9 @@ VideoExporter::~VideoExporter()
 {
     const bool wasRunning = m_running;
     m_running = false;
+    abandonFrame();
+    if (m_timer)
+        m_timer->stop();
     stopProcess();
     if (wasRunning)
         QFile::remove(m_partialPath);
@@ -80,7 +84,7 @@ bool VideoExporter::vaapiAvailable()
 }
 
 bool VideoExporter::start(const Project& project, const ExportOptions& options,
-                          FrameRenderer renderFrame, QString* error)
+                          FrameProvider provider, QString* error)
 {
     auto bail = [error](const QString& message) {
         if (error)
@@ -90,7 +94,7 @@ bool VideoExporter::start(const Project& project, const ExportOptions& options,
 
     if (m_running)
         return bail(QStringLiteral("已经在导出中"));
-    if (!renderFrame)
+    if (!provider)
         return bail(QStringLiteral("没有可用的渲染回调"));
     if (options.outputPath.trimmed().isEmpty())
         return bail(QStringLiteral("请选择输出文件"));
@@ -109,10 +113,14 @@ bool VideoExporter::start(const Project& project, const ExportOptions& options,
     m_options.size = QSize(std::max(2, options.size.width() & ~1),
                            std::max(2, options.size.height() & ~1));
     m_options.crf = std::clamp(options.crf, 0, 51);
+    m_options.frameTimeoutMs = std::max(1, options.frameTimeoutMs);
     if (m_options.encoder == ExportEncoder::H264Vaapi && !vaapiAvailable())
         m_options.encoder = ExportEncoder::H264Software;
-    m_render = std::move(renderFrame);
+    m_provider = std::move(provider);
+    ++m_generation;
     m_nextFrame = 0;
+    m_requestedFrame = -1;
+    m_waiting = false;
     m_previewClock.invalidate();
     m_stderr.clear();
 
@@ -282,6 +290,11 @@ void VideoExporter::tick()
     if (m_process->state() != QProcess::Running)
         return;   // the finished handler reports the result
 
+    // A provider callback is outstanding; the requestFrame() completion
+    // restarts the tick timer.
+    if (m_waiting)
+        return;
+
     if (m_nextFrame >= m_options.frameCount)
     {
         m_timer->stop();
@@ -298,34 +311,92 @@ void VideoExporter::tick()
     if (m_process->bytesToWrite() > backlogLimit)
         return;
 
-    QImage image = m_render(m_nextFrame);
-    if (image.isNull())
+    requestFrame();
+}
+
+void VideoExporter::requestFrame()
+{
+    const int frame = m_nextFrame;
+    m_waiting = true;
+    m_requestedFrame = frame;
+
+    if (!m_frameTimer)
     {
-        fail(QStringLiteral("渲染第 %1 帧失败").arg(m_nextFrame));
+        m_frameTimer = new QTimer(this);
+        m_frameTimer->setSingleShot(true);
+        connect(m_frameTimer, &QTimer::timeout, this,
+                &VideoExporter::onFrameTimeout);
+    }
+    m_frameTimer->start(m_options.frameTimeoutMs);
+
+    // Stop polling while the provider works; onFrame() restarts the timer so
+    // a slow provider never spins the event loop.
+    m_timer->stop();
+
+    // Queue the completion even for a synchronous provider. This keeps the
+    // exporter state machine single-threaded and prevents a callback that
+    // arrives from another thread from touching QProcess directly. The
+    // QPointer guard makes a provider that answers after the exporter was
+    // destroyed a no-op instead of a dangling call.
+    const quint64 token = m_generation;
+    const QPointer<VideoExporter> guard(this);
+    m_provider(frame, [guard, token, frame](const QImage& image) {
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, token, frame, image] {
+                if (guard)
+                    guard->onFrame(token, frame, image);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void VideoExporter::onFrame(quint64 token, int frame, const QImage& image)
+{
+    // Ignore callbacks from a cancelled, failed or restarted export, and
+    // duplicate answers to a request that was already handled.
+    if (!m_running || token != m_generation || !m_waiting
+        || frame != m_requestedFrame)
+    {
         return;
     }
-    if (image.size() != m_options.size)
-        image = image.scaled(m_options.size, Qt::IgnoreAspectRatio,
-                             Qt::SmoothTransformation);
-    if (image.format() != QImage::Format_ARGB32_Premultiplied)
-        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    m_waiting = false;
+    m_requestedFrame = -1;
+    if (m_frameTimer)
+        m_frameTimer->stop();
+
+    if (image.isNull())
+    {
+        fail(QStringLiteral("渲染第 %1 帧失败").arg(frame));
+        return;
+    }
+
+    QImage output = image;
+    if (output.size() != m_options.size)
+        output = output.scaled(m_options.size, Qt::IgnoreAspectRatio,
+                               Qt::SmoothTransformation);
+    if (output.format() != QImage::Format_ARGB32_Premultiplied)
+        output = output.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
     // Little-endian ARGB32 is BGRA in memory, which matches ffmpeg's bgra.
     const int rowBytes = m_options.size.width() * 4;
     const qint64 frameBytes = qint64(rowBytes) * m_options.size.height();
     qint64 written = 0;
-    if (image.bytesPerLine() == rowBytes)
+    if (output.bytesPerLine() == rowBytes)
     {
         written = m_process->write(
-            reinterpret_cast<const char*>(image.constBits()), frameBytes);
+            reinterpret_cast<const char*>(output.constBits()), frameBytes);
     }
     else
     {
         QByteArray rows;
         rows.reserve(int(frameBytes));
-        for (int y = 0; y < image.height(); ++y)
-            rows.append(reinterpret_cast<const char*>(image.constScanLine(y)),
-                        rowBytes);
+        for (int y = 0; y < output.height(); ++y)
+            rows.append(
+                reinterpret_cast<const char*>(output.constScanLine(y)),
+                rowBytes);
         written = m_process->write(rows);
     }
     if (written != frameBytes)
@@ -338,9 +409,31 @@ void VideoExporter::tick()
     if (!m_previewClock.isValid() || m_previewClock.elapsed() >= 80)
     {
         m_previewClock.start();
-        emit previewFrame(image);
+        emit previewFrame(output);
     }
     emit progress(m_nextFrame, m_options.frameCount);
+
+    if (m_running && m_timer)
+        m_timer->start();
+}
+
+void VideoExporter::onFrameTimeout()
+{
+    if (!m_running || !m_waiting)
+        return;
+    fail(QStringLiteral("第 %1 帧渲染超时（%2 毫秒）")
+             .arg(m_requestedFrame)
+             .arg(m_options.frameTimeoutMs));
+}
+
+void VideoExporter::abandonFrame()
+{
+    m_waiting = false;
+    m_requestedFrame = -1;
+    if (m_frameTimer)
+        m_frameTimer->stop();
+    // Invalidate every callback captured for this export.
+    ++m_generation;
 }
 
 void VideoExporter::cancel()
@@ -348,6 +441,7 @@ void VideoExporter::cancel()
     if (!m_running)
         return;
     m_running = false;
+    abandonFrame();
     if (m_timer)
         m_timer->stop();
     stopProcess();
@@ -362,6 +456,7 @@ void VideoExporter::fail(const QString& error)
     if (!m_running)
         return;
     m_running = false;
+    abandonFrame();
     if (m_timer)
         m_timer->stop();
     stopProcess();
@@ -374,6 +469,7 @@ void VideoExporter::fail(const QString& error)
 void VideoExporter::finish(bool success)
 {
     m_running = false;
+    abandonFrame();
     if (m_timer)
         m_timer->stop();
     if (m_process)
