@@ -74,6 +74,10 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
 - [Blender](https://www.blender.org/)：资源打包（Pack Resources）流程、对象/摄像机心智模型
 - [OBS Studio](https://obsproject.com/)：监视器弹出/停靠的窗口交互
 - [After Effects](https://www.adobe.com/products/aftereffects.html)：单属性轨道的精细关键帧交互参考
+- [LibreOffice](https://www.libreoffice.org/)：文本框/气泡/属性对话框的布局与交互
+- [Krita](https://krita.org/)：文字排版与画布属性对话框的布局参考
+- [qBittorrent](https://www.qbittorrent.org/)：设置页的左侧分类 + 右侧分页结构
+- [FFmpeg](https://ffmpeg.org/)：视频/音频解码、预览代理、监视器串流编码后端
 
 ## 许可
 
