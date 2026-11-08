@@ -327,6 +327,79 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int clipboardTest(QApplication& app)
+{
+    auto* project = new pvf::Project;
+    project->fps = 30;
+    pvf::Entity* folder = project->addFolder(QStringLiteral("Group"));
+    const pvf::EntityId folderId = folder->id;
+    pvf::Entity* child = project->addVector(0, 100, 100, Qt::red, Qt::white, 0);
+    const pvf::EntityId childId = child->id;
+    project->setEntityParent(childId, folderId);
+    project->setValue(childId, QStringLiteral("x"), 0, 50.0, true);
+    project->setValue(childId, QStringLiteral("x"), 50, 150.0, true);
+
+    pvf::MainWindow window(project);
+    window.resize(1000, 700);
+    window.show();
+
+    QTimer::singleShot(300, &window, [&app, &window, project, folderId, childId] {
+        int failures = 0;
+        const int before = project->entities().size();
+        window.copyEntityForTest(folderId);
+        window.pasteEntityForTest();
+        QApplication::processEvents();
+
+        const pvf::EntityId newRoot = window.selectedEntityForTest();
+        const pvf::Entity* root = project->entity(newRoot);
+        if (project->entities().size() != before + 2 || !root || !root->isFolder())
+        {
+            qCritical() << "clipboard-test: paste did not copy the subtree"
+                        << project->entities().size() << before
+                        << (root ? root->name : QString());
+            ++failures;
+        }
+        else
+        {
+            const pvf::Entity* copiedChild = nullptr;
+            for (const pvf::Entity& entity : project->entities())
+                if (entity.parent == newRoot
+                    && entity.type == pvf::EntityType::Vector)
+                    copiedChild = &entity;
+            if (!copiedChild || copiedChild->id == childId
+                || std::abs(project->value(copiedChild->id, QStringLiteral("x"), 25)
+                            - 100.0) > 1e-6)
+            {
+                qCritical() << "clipboard-test: child or keyframes lost";
+                ++failures;
+            }
+        }
+
+        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+        {
+            undo->trigger();
+            QApplication::processEvents();
+            if (project->entities().size() != before)
+            {
+                qCritical() << "clipboard-test: undo did not remove the paste";
+                ++failures;
+            }
+        }
+
+        window.duplicateEntityForTest(folderId);
+        QApplication::processEvents();
+        if (project->entities().size() != before + 2)
+        {
+            qCritical() << "clipboard-test: duplicate failed";
+            ++failures;
+        }
+
+        qInfo() << "clipboard-test failures" << failures;
+        app.exit(failures == 0 ? 0 : 1);
+    });
+    return app.exec();
+}
+
 int replaceSourceTest()
 {
     const QString firstPath =
@@ -6421,6 +6494,8 @@ int main(int argc, char* argv[])
         return layerTest();
     if (app.arguments().contains(QStringLiteral("--replace-test")))
         return replaceSourceTest();
+    if (app.arguments().contains(QStringLiteral("--clipboard-test")))
+        return clipboardTest(app);
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

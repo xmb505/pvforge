@@ -8,6 +8,7 @@
 #include <QMainWindow>
 
 #include <functional>
+#include <memory>
 
 class QAction;
 class QCloseEvent;
@@ -54,6 +55,9 @@ public:
         applyCamera(id, x, y, scale, rotation);
     }
     EntityId selectedEntityForTest() const { return m_selected; }
+    void copyEntityForTest(EntityId id) { copyEntityToClipboard(id); }
+    void pasteEntityForTest() { pasteEntity(); }
+    void duplicateEntityForTest(EntityId id) { duplicateEntity(id); }
     void autoSaveNowForTest();
     void reloadAutosaveSettingsForTest();
     bool autosaveActiveForTest() const;
@@ -76,6 +80,25 @@ private:
     void applyEntityData(EntityId id, const QVariantMap& data);
     void applyComicTip(EntityId id, double tipX, double tipY);
     void replaceSourceFromDialog(EntityId id);
+
+    struct EntityClipboardEntry
+    {
+        Entity entity;
+        EntityId parent = kInvalidEntity;
+    };
+    struct EntityClipboard
+    {
+        QVector<EntityClipboardEntry> entries;   // subtree, root first
+        EntityId rootId = kInvalidEntity;
+        bool hasPairedAudio = false;
+        Entity pairedAudio;
+    };
+    EntityClipboard buildEntityClip(EntityId id) const;
+    void copyEntityToClipboard(EntityId id);
+    void pasteEntityClip(EntityClipboard& clip);
+    void copySelectedEntity();
+    void pasteEntity();
+    void duplicateEntity(EntityId id);
     void onPropertyKeyframeToggled(EntityId id, const QString& prop, double frame,
                                    bool remove);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);
@@ -148,6 +171,7 @@ private:
     int m_playStart = 0;
     bool m_playing = false;
     EntityId m_selected = kInvalidEntity;
+    std::unique_ptr<EntityClipboard> m_entityClip;
 };
 
 } // namespace pvf

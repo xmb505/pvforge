@@ -32,6 +32,7 @@
 #include <QProgressBar>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QSet>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -233,6 +234,12 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
     connect(m_timeline, &TimelinePanel::replaceSourceRequested, this,
             &MainWindow::replaceSourceFromDialog);
+    connect(m_timeline, &TimelinePanel::copyEntityRequested, this,
+            &MainWindow::copyEntityToClipboard);
+    connect(m_timeline, &TimelinePanel::duplicateEntityRequested, this,
+            &MainWindow::duplicateEntity);
+    connect(m_timeline, &TimelinePanel::pasteEntityRequested, this,
+            &MainWindow::pasteEntity);
     connect(m_props, &PropertiesPanel::replaceSourceRequested, this,
             &MainWindow::replaceSourceFromDialog);
     connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
@@ -400,6 +407,20 @@ void MainWindow::createMenus()
     auto* deleteAction = new QAction(Lang::t(QStringLiteral("action.deleteEntity"), QStringLiteral("删除实体")), this);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteSelectedEntity);
     editMenu->addAction(deleteAction);
+    editMenu->addSeparator();
+    auto* copyEntityAction = new QAction(QStringLiteral("复制实体"), this);
+    copyEntityAction->setShortcut(QKeySequence::Copy);
+    connect(copyEntityAction, &QAction::triggered, this, &MainWindow::copySelectedEntity);
+    editMenu->addAction(copyEntityAction);
+    auto* pasteEntityAction = new QAction(QStringLiteral("粘贴实体"), this);
+    pasteEntityAction->setShortcut(QKeySequence::Paste);
+    connect(pasteEntityAction, &QAction::triggered, this, &MainWindow::pasteEntity);
+    editMenu->addAction(pasteEntityAction);
+    auto* duplicateEntityAction = new QAction(QStringLiteral("原地复制"), this);
+    duplicateEntityAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+D")));
+    connect(duplicateEntityAction, &QAction::triggered, this,
+            [this] { duplicateEntity(m_selected); });
+    editMenu->addAction(duplicateEntityAction);
     editMenu->addSeparator();
     auto* settingsAction =
         new QAction(Lang::t(QStringLiteral("action.settings"), QStringLiteral("设置…")), this);
@@ -1078,6 +1099,127 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
     showImportBusy(1);
     watcher->setFuture(QtConcurrent::run(
         [file, directory] { return processMediaFile(file, directory); }));
+}
+
+MainWindow::EntityClipboard MainWindow::buildEntityClip(EntityId id) const
+{
+    EntityClipboard clip;
+    const Entity* root = m_project->entity(id);
+    if (!root)
+        return clip;
+
+    clip.rootId = id;
+    QSet<EntityId> seen;
+    std::function<void(EntityId)> add = [&](EntityId current) {
+        if (seen.contains(current))
+            return;
+        seen.insert(current);
+        const Entity* entity = m_project->entity(current);
+        if (!entity)
+            return;
+        clip.entries.append({*entity, entity->parent});
+        for (const Entity& child : m_project->entities())
+            if (child.parent == current)
+                add(child.id);
+    };
+    add(id);
+
+    if (root->type == EntityType::Video)
+    {
+        for (const Entity& other : m_project->entities())
+            if (other.type == EntityType::Audio
+                && other.data.value(QStringLiteral("pairedVideo")).toInt() == id)
+            {
+                clip.hasPairedAudio = true;
+                clip.pairedAudio = other;
+                break;
+            }
+    }
+    return clip;
+}
+
+void MainWindow::copyEntityToClipboard(EntityId id)
+{
+    if (!m_project->entity(id))
+        return;
+    m_entityClip = std::make_unique<EntityClipboard>(buildEntityClip(id));
+    statusBar()->showMessage(QStringLiteral("已复制实体"), 2000);
+}
+
+void MainWindow::pasteEntity()
+{
+    if (!m_entityClip || m_entityClip->entries.isEmpty())
+    {
+        statusBar()->showMessage(QStringLiteral("剪贴板里没有实体"), 2000);
+        return;
+    }
+    pasteEntityClip(*m_entityClip);
+}
+
+void MainWindow::copySelectedEntity()
+{
+    if (m_selected != kInvalidEntity)
+        copyEntityToClipboard(m_selected);
+}
+
+void MainWindow::duplicateEntity(EntityId id)
+{
+    if (!m_project->entity(id))
+        return;
+    EntityClipboard clip = buildEntityClip(id);
+    pasteEntityClip(clip);
+}
+
+void MainWindow::pasteEntityClip(EntityClipboard& clip)
+{
+    if (clip.entries.isEmpty())
+        return;
+
+    QHash<EntityId, EntityId> idMap;
+    EntityId next = m_project->nextId();
+    for (const EntityClipboardEntry& entry : clip.entries)
+        idMap.insert(entry.entity.id, next++);
+
+    EntityId rootParent = clip.entries.first().parent;
+    if (rootParent != kInvalidEntity && !m_project->entity(rootParent))
+        rootParent = kInvalidEntity;
+
+    int insertAt = int(m_project->entities().size());
+    for (int i = 0; i < int(m_project->entities().size()); ++i)
+        if (m_project->entities()[i].id == clip.rootId)
+        {
+            insertAt = i + 1;
+            break;
+        }
+
+    QVector<Entity> added;
+    QVector<int> indices;
+    for (int i = 0; i < int(clip.entries.size()); ++i)
+    {
+        Entity copy = clip.entries[i].entity;
+        copy.id = idMap.value(copy.id);
+        copy.parent = i == 0
+                          ? rootParent
+                          : idMap.value(clip.entries[i].parent, kInvalidEntity);
+        added.append(copy);
+        indices.append(insertAt + i);
+        m_project->insertEntity(copy, insertAt + i);
+    }
+
+    if (clip.hasPairedAudio)
+    {
+        Entity audio = clip.pairedAudio;
+        audio.id = m_project->nextId();
+        audio.parent = kInvalidEntity;
+        audio.data[QStringLiteral("pairedVideo")] = idMap.value(clip.rootId);
+        added.append(audio);
+        indices.append(insertAt + int(clip.entries.size()));
+        m_project->insertEntity(audio, insertAt + int(clip.entries.size()));
+    }
+
+    setSelectedEntity(idMap.value(clip.rootId));
+    m_history->push(std::make_unique<AddEntitiesCommand>(added, indices), *m_project);
+    statusBar()->showMessage(QStringLiteral("已粘贴实体"), 2000);
 }
 
 void MainWindow::onPropertyKeyframeToggled(EntityId id, const QString& prop,

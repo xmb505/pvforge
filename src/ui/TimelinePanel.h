@@ -73,6 +73,9 @@ signals:
     void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
     void replaceSourceRequested(EntityId id);
+    void copyEntityRequested(EntityId id);
+    void duplicateEntityRequested(EntityId id);
+    void pasteEntityRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;

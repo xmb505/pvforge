@@ -1535,6 +1535,9 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QAction* createSibling = nullptr;
     QAction* rename = nullptr;
     QAction* replaceSource = nullptr;
+    QAction* copyEntity = nullptr;
+    QAction* duplicateEntity = nullptr;
+    QAction* pasteEntity = nullptr;
     QAction* toWorld = nullptr;
 
     if (entity)
@@ -1557,6 +1560,11 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
                 || entity->type == EntityType::Video
                 || entity->type == EntityType::Audio))
             replaceSource = menu.addAction(QStringLiteral("更换素材…"));
+        if (!locked)
+        {
+            copyEntity = menu.addAction(QStringLiteral("复制实体"));
+            duplicateEntity = menu.addAction(QStringLiteral("原地复制"));
+        }
         if (entity->parent != kInvalidEntity && !locked)
             toWorld = menu.addAction(QStringLiteral("移到工作台"));
     }
@@ -1564,6 +1572,8 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     {
         createInside = menu.addAction(QStringLiteral("新建文件夹"));
     }
+    menu.addSeparator();
+    pasteEntity = menu.addAction(QStringLiteral("粘贴实体"));
 
     QAction* chosen = menu.exec(event->globalPos());
     if (!chosen)
@@ -1602,6 +1612,18 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         m_renameEdit->show();
         m_renameEdit->selectAll();
         m_renameEdit->setFocus();
+    }
+    else if (chosen == copyEntity && entity)
+    {
+        emit copyEntityRequested(entity->id);
+    }
+    else if (chosen == duplicateEntity && entity)
+    {
+        emit duplicateEntityRequested(entity->id);
+    }
+    else if (chosen == pasteEntity)
+    {
+        emit pasteEntityRequested();
     }
     else if (chosen == replaceSource && entity)
     {
