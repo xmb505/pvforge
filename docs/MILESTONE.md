@@ -183,7 +183,8 @@
 - 摄像机也可以作为子级挂到文件夹/实体下跟随移动；`Camera::state` 组合父级位移/旋转/缩放；挂父级后暂停画框直接拖动，改属性 X/Y/旋转/取景比例
 - 摄像机不能作为另一个摄像机的子级；父级非均匀缩放时取景框用平均缩放近似
 - **临摹参考**：监视器标题栏「临摹」菜单导入视频；独立临时 Project + VideoPlayer 按项目帧解码，叠在监视器画面上，透明度 0–100%，支持清除；参考视频使用同一代理缓存
-- **时间轴滚动**：实体多时右侧出现垂直滚动条，滚轮上下滚动实体列表，Shift+滚轮左右滚动时间轴，Ctrl+滚轮以鼠标为锚点缩放；垂直滚动会同步行位置与时间轴刻度
+- **时间轴滚动**：实体多时右侧出现垂直滚动条，滚轮上下滚动实体列表（每格 4 行），Shift+滚轮左右滚动时间轴（每格 120px），Ctrl+滚轮以鼠标为锚点缩放（0.25–32 px/帧）；垂直滚动会同步行位置与时间轴刻度
+- **单属性关键帧**：属性面板每行右侧有 ◇ / ◆ 按钮，点一下只给该属性在当前帧打关键帧（◆ 表示已有关键帧，再点删除）；添加/删除都进撤销栈，避免“以为给透明度打了帧其实没有”的情况
 - **HTTP 串流（默认）**：监视器标题栏「串流」菜单启动 ffmpeg 原始帧管道，编码后输出 MPEG-TS 到 stdout；`QTcpServer` 在 8080–8089 选择端口并用 `http://<本机IP>:<port>/stream.ts` 提供流，手机 VLC 直接打开本机 IP；菜单可复制地址、列出所有本机 IPv4
 - **画质/编码**：流畅 640/2.5M、标准 960/5M（默认）、高清 1280/8M；H.264/H.265 软件编码，检测到 `/dev/dri/renderD128` 时提供 H.264/H.265 VAAPI 硬件编码。H.265 需要手机 VLC 支持 HEVC
 - **RTP 串流**：同一管道可切换为 RTP/MPEG-TS 组播到 `239.255.42.99:5004`；手机 VLC 打开 `rtp://@239.255.42.99:5004`；组播地址不是本机 IP
@@ -285,9 +286,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 39 个模式，全部通过。
+共 40 个模式，全部通过。
 
 ## 已知限制
 

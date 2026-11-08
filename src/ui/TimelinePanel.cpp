@@ -651,11 +651,11 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
     if ((event->modifiers() & Qt::ShiftModifier) || hsteps != 0.0)
     {
         const double amount = hsteps != 0.0 ? hsteps : vsteps;
-        m_scrollX -= int(std::lround(amount * 80));
+        m_scrollX -= int(std::lround(amount * 120));
     }
     else
     {
-        m_scrollY -= int(std::lround(vsteps * kRowHeight * 3));
+        m_scrollY -= int(std::lround(vsteps * kRowHeight * 4));
     }
     updateScrollBar();
     update();

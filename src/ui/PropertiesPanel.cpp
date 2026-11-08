@@ -197,21 +197,52 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
 void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QString& prop,
                              double lo, double hi, int decimals, double step, double factor)
 {
-    auto* spin = new QDoubleSpinBox(form->parentWidget());
+    auto* rowWidget = new QWidget(form->parentWidget());
+    auto* rowLayout = new QHBoxLayout(rowWidget);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(4);
+    auto* spin = new QDoubleSpinBox(rowWidget);
     spin->setObjectName(QStringLiteral("row_") + prop);
     spin->setRange(lo, hi);
     spin->setDecimals(decimals);
     spin->setSingleStep(step);
     spin->setKeyboardTracking(false);
     spin->setEnabled(false);
+    rowLayout->addWidget(spin, 1);
+    auto* key = new QToolButton(rowWidget);
+    key->setObjectName(QStringLiteral("key_") + prop);
+    key->setFixedSize(18, 18);
+    key->setAutoRaise(true);
+    key->setText(QStringLiteral("◇"));
+    key->setToolTip(QStringLiteral("在当前帧打关键帧"));
+    key->setCursor(Qt::PointingHandCursor);
+    connect(key, &QToolButton::clicked, this, [this, prop] {
+        if (m_entity == kInvalidEntity)
+            return;
+        const Entity* entity = m_project->entity(m_entity);
+        if (!entity || m_project->isEffectivelyLocked(m_entity))
+            return;
+        bool hasKey = false;
+        const auto track = entity->tracks.constFind(prop);
+        if (track != entity->tracks.constEnd())
+            for (const Keyframe& frame : track->keys)
+                if (std::abs(frame.frame - m_frame) < 1e-6)
+                {
+                    hasKey = true;
+                    break;
+                }
+        emit keyframeToggled(m_entity, prop, m_frame, hasKey);
+    });
+    rowLayout->addWidget(key);
     auto* labelWidget = new QLabel(label, form->parentWidget());
-    form->addRow(labelWidget, spin);
+    form->addRow(labelWidget, rowWidget);
 
     Row row;
     row.prop = prop;
     row.baseLabel = label;
     row.label = labelWidget;
     row.spin = spin;
+    row.key = key;
     row.factor = factor;
     m_rows.append(row);
 
@@ -1056,6 +1087,22 @@ void PropertiesPanel::refresh()
     {
         const QSignalBlocker blocker(r.spin);
         r.spin->setValue(m_project->value(m_entity, r.prop, m_frame) / r.factor);
+        if (r.key)
+        {
+            bool hasKey = false;
+            const auto track = e->tracks.constFind(r.prop);
+            if (track != e->tracks.constEnd())
+                for (const Keyframe& key : track->keys)
+                    if (std::abs(key.frame - m_frame) < 1e-6)
+                    {
+                        hasKey = true;
+                        break;
+                    }
+            r.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
+            r.key->setToolTip(hasKey ? QStringLiteral("删除当前帧的关键帧")
+                                     : QStringLiteral("在当前帧打关键帧"));
+            r.key->setEnabled(editable);
+        }
     }
 
     if (e->type == EntityType::Text || e->type == EntityType::ComicText)

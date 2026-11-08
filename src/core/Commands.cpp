@@ -251,6 +251,39 @@ QString SetEntityDataCommand::text() const
     return m_text;
 }
 
+SetKeyframeCommand::SetKeyframeCommand(EntityId id, const QString& property, double frame,
+                                       double value, bool add)
+    : m_id(id)
+    , m_property(property)
+    , m_frame(frame)
+    , m_value(value)
+    , m_add(add)
+{
+}
+
+void SetKeyframeCommand::apply(Project& project, bool add)
+{
+    if (add)
+        project.setValue(m_id, m_property, m_frame, m_value, true);
+    else
+        project.removeKeyframe(m_id, m_property, m_frame);
+}
+
+void SetKeyframeCommand::undo(Project& project)
+{
+    apply(project, !m_add);
+}
+
+void SetKeyframeCommand::redo(Project& project)
+{
+    apply(project, m_add);
+}
+
+QString SetKeyframeCommand::text() const
+{
+    return m_add ? QStringLiteral("打关键帧") : QStringLiteral("删除关键帧");
+}
+
 SetEntityDataMapCommand::SetEntityDataMapCommand(EntityId id, const QVariantMap& before,
                                                  const QVariantMap& after,
                                                  const QString& text)

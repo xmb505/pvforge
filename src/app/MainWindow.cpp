@@ -196,6 +196,8 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_props, &PropertiesPanel::valueEdited, this, &MainWindow::applyValue);
     connect(m_props, &PropertiesPanel::pivotEdited, this, &MainWindow::applyPivot);
     connect(m_props, &PropertiesPanel::dataEdited, this, &MainWindow::applyEntityData);
+    connect(m_props, &PropertiesPanel::keyframeToggled, this,
+            &MainWindow::onPropertyKeyframeToggled);
     connect(m_props, &PropertiesPanel::parentEdited, this, &MainWindow::onParentEdited);
     connect(m_props, &PropertiesPanel::keyframeEasingEdited, this,
             &MainWindow::onKeyframeEasingEdited);
@@ -985,6 +987,18 @@ void MainWindow::applyComicTip(EntityId id, double tipX, double tipY)
     data.insert(QStringLiteral("bubbleTipX"), tipX);
     data.insert(QStringLiteral("bubbleTipY"), tipY);
     applyEntityData(id, data);
+}
+
+void MainWindow::onPropertyKeyframeToggled(EntityId id, const QString& prop,
+                                           double frame, bool remove)
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity || m_project->isEffectivelyLocked(id))
+        return;
+    const double value = m_project->value(id, prop, frame);
+    m_history->push(std::make_unique<SetKeyframeCommand>(id, prop, frame, value,
+                                                         !remove),
+                    *m_project);
 }
 
 void MainWindow::applyEntityData(EntityId id, const QVariantMap& data)

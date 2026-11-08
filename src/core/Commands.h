@@ -166,6 +166,27 @@ private:
     QString m_text;
 };
 
+// Adding or removing one keyframe of one property.
+class SetKeyframeCommand : public UndoCommand
+{
+public:
+    SetKeyframeCommand(EntityId id, const QString& property, double frame, double value,
+                       bool add);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    void apply(Project& project, bool add);
+
+    EntityId m_id = kInvalidEntity;
+    QString m_property;
+    double m_frame = 0.0;
+    double m_value = 0.0;
+    bool m_add = true;
+};
+
 // Writing several data fields of an entity as one undo step, used by the
 // layout dialogs and the special tool panels.
 class SetEntityDataMapCommand : public UndoCommand

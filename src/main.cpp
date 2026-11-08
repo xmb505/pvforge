@@ -393,6 +393,66 @@ int keyframeEditTest(QApplication& app)
             ++failures;
         }
 
+        // The diamond next to a property adds and removes a single key.
+        if (auto* keyOpacity =
+                window.findChild<QToolButton*>(QStringLiteral("key_opacity")))
+        {
+            const auto keyCountAt = [&](double frame) {
+                const pvf::Entity* entity = project->entity(id);
+                const auto track = entity->tracks.constFind(QStringLiteral("opacity"));
+                if (track == entity->tracks.constEnd())
+                    return 0;
+                int count = 0;
+                for (const pvf::Keyframe& key : track->keys)
+                    if (std::abs(key.frame - frame) < 1e-6)
+                        ++count;
+                return count;
+            };
+            window.goToFrame(7);
+            QApplication::processEvents();
+            keyOpacity->click();
+            QApplication::processEvents();
+            if (keyCountAt(7) != 1)
+            {
+                qCritical() << "keyframe-edit-test: diamond did not add a key";
+                ++failures;
+            }
+            if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            {
+                undo->trigger();
+                QApplication::processEvents();
+                if (keyCountAt(7) != 0)
+                {
+                    qCritical() << "keyframe-edit-test: undo did not remove the key";
+                    ++failures;
+                }
+            }
+            window.goToFrame(5);
+            QApplication::processEvents();
+            keyOpacity->click();
+            QApplication::processEvents();
+            if (keyCountAt(5) != 0)
+            {
+                qCritical() << "keyframe-edit-test: diamond did not remove the key";
+                ++failures;
+            }
+            if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
+            {
+                undo->trigger();
+                QApplication::processEvents();
+                if (keyCountAt(5) != 1)
+                {
+                    qCritical() << "keyframe-edit-test: undo did not restore the key";
+                    ++failures;
+                }
+            }
+        }
+        else
+        {
+            qCritical() << "keyframe-edit-test: key diamond missing";
+            ++failures;
+        }
+
         const pvf::Entity* check = project->entity(id);
         const auto it = check->tracks.constFind(QStringLiteral("opacity"));
         if (it == check->tracks.constEnd())
@@ -406,6 +466,10 @@ int keyframeEditTest(QApplication& app)
             for (const pvf::Keyframe& key : it->keys)
                 qInfo() << "   key frame" << key.frame << "value" << key.value;
         }
+        window.goToFrame(5);
+        QApplication::processEvents();
+        window.grab().toImage().save(
+            QStringLiteral("/tmp/pvforge_keyframes.png"));
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();

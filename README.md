@@ -91,6 +91,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 | 加文本框 | 工作台 → 文本框：普通文本框 / 日式超绝硬直角 / 爆炸文本框；普通文本框选中后拖画面小圆点改尖角 |
 | 跳转播放头 | 点击轨道空白处 |
 | 选关键帧 | 点击关键帧菱形（不移动播放头） |
+| 给单个属性打关键帧 | 属性面板每行右侧的 ◇ 按钮；当前帧已有关键帧时显示 ◆，再点删除 |
 | 改关键帧缓动 | 右键关键帧，或选中实体后在属性面板「关键帧」里点「缓动：…」；选「自定义」拖贝塞尔手柄 |
 | 框选关键帧 | 在轨道区拖动出选框 |
 | 悬停对象行 | 行尾出现隐藏 / 锁定 / 全选关键帧按钮 |
@@ -140,12 +141,13 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-39 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
+40 个自检模式，详见 [docs/MILESTONE.md](docs/MILESTONE.md)。例如：
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --autosave-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge --keyframe-edit-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --camera-parent-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test

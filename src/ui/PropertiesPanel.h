@@ -14,6 +14,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QToolButton;
 class QStackedWidget;
 class QVBoxLayout;
 
@@ -40,6 +41,7 @@ signals:
     // Data fields that are not part of the animated tracks; written as one
     // undo step by the main window.
     void dataEdited(EntityId id, const QVariantMap& data);
+    void keyframeToggled(EntityId id, const QString& prop, double frame, bool remove);
 
 private:
     struct Row
@@ -48,6 +50,7 @@ private:
         QString baseLabel;
         QLabel* label = nullptr;
         QDoubleSpinBox* spin = nullptr;
+        QToolButton* key = nullptr;
         double factor = 1.0;   // display value * factor = stored value
     };
 

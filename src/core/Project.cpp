@@ -817,6 +817,24 @@ void Project::setEntityName(EntityId id, const QString& name)
     emit changed();
 }
 
+void Project::removeKeyframe(EntityId id, const QString& prop, double frame)
+{
+    Entity* e = entity(id);
+    if (!e)
+        return;
+    auto it = e->tracks.find(prop);
+    if (it == e->tracks.end())
+        return;
+    const int before = it->keys.size();
+    it->removeKey(frame);
+    if (it->keys.size() == before)
+        return;
+    if (it->keys.isEmpty())
+        e->tracks.erase(it);
+    modified = true;
+    emit changed();
+}
+
 void Project::setEntityData(EntityId id, const QString& key, const QVariant& value)
 {
     Entity* e = entity(id);
