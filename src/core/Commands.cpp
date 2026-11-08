@@ -251,6 +251,30 @@ QString SetEntityDataCommand::text() const
     return m_text;
 }
 
+ReplaceEntitySourcesCommand::ReplaceEntitySourcesCommand(QVector<Entity> before,
+                                                         QVector<Entity> after)
+    : m_before(std::move(before))
+    , m_after(std::move(after))
+{
+}
+
+void ReplaceEntitySourcesCommand::undo(Project& project)
+{
+    for (const Entity& entity : m_before)
+        project.replaceEntity(entity);
+}
+
+void ReplaceEntitySourcesCommand::redo(Project& project)
+{
+    for (const Entity& entity : m_after)
+        project.replaceEntity(entity);
+}
+
+QString ReplaceEntitySourcesCommand::text() const
+{
+    return QStringLiteral("更换素材");
+}
+
 SetKeyframeCommand::SetKeyframeCommand(EntityId id, const QString& property, double frame,
                                        double value, bool add)
     : m_id(id)

@@ -42,6 +42,7 @@ signals:
     // undo step by the main window.
     void dataEdited(EntityId id, const QVariantMap& data);
     void keyframeToggled(EntityId id, const QString& prop, double frame, bool remove);
+    void replaceSourceRequested(EntityId id);
 
 
 private:
@@ -141,6 +142,7 @@ private:
     QColor m_strokeValue{Qt::white};
 
     QLabel* m_mediaInfo = nullptr;
+    QPushButton* m_replaceSource = nullptr;
     QSpinBox* m_audioStart = nullptr;
     QDoubleSpinBox* m_audioTrimStart = nullptr;
     QDoubleSpinBox* m_audioTrimEnd = nullptr;

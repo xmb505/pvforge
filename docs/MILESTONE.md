@@ -66,6 +66,7 @@
   - 放射状线条：楔形集中线，中心收尖外缘宽，角度/长度随机抖动，约 60% 的线条随机加粗 1.4×；随机速度（Hz）和整体旋转（°/s）可调
   - 快速流过：成组平行线按帧流动，方向/速度/间距/长度可调，用作背景运动感
 - **自动保存**：默认开启、每 5 分钟一次，设置 → 常规可关闭或改间隔；QSaveFile 原子写入
+- **更换素材**：图片/视频/音频实体可右键或属性面板换源文件；位置、关键帧、配对音频保留，视频连配对音频一起换，整次替换一条撤销
 - **播放头记忆**：每个工程文件在全局设置里记住上次的播放条帧（按路径哈希），关闭、手动保存、自动保存时写入，重新打开工程时恢复
 - **数据与撤销**：`SetEntityDataMapCommand` 多字段一条撤销；尖角拖动命令自动合并；模板实例化整表复制 `data`；颜色键按名称后缀识别
 - **素材库**：长文件名/路径中间省略，右侧栏不再被撑宽
@@ -288,9 +289,9 @@ src/
 
 每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
 
-self / save / autosave / special / keyframe-edit / frame-restore / layer / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+self / save / autosave / special / keyframe-edit / frame-restore / layer / replace / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
-共 42 个模式，全部通过。
+共 43 个模式，全部通过。
 
 ## 已知限制
 

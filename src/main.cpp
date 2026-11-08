@@ -327,6 +327,68 @@ int autoSaveTest()
     return failures == 0 ? 0 : 1;
 }
 
+int replaceSourceTest()
+{
+    const QString firstPath =
+        QDir::tempPath() + QStringLiteral("/pvf_replace_a.png");
+    const QString secondPath =
+        QDir::tempPath() + QStringLiteral("/pvf_replace_b.png");
+    QImage image(64, 64, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    if (!image.save(firstPath))
+        return 1;
+    image.fill(Qt::blue);
+    if (!image.save(secondPath))
+        return 1;
+
+    auto* project = new pvf::Project;
+    pvf::Entity* entity = project->addImage(firstPath);
+    const pvf::EntityId id = entity->id;
+    project->setValue(id, QStringLiteral("x"), 0, 123.0, true);
+    const pvf::Entity before = *project->entity(id);
+
+    const pvf::MediaImportResult result = pvf::processMediaFile(secondPath, QString());
+    QString error;
+    const QVector<pvf::EntityId> changed =
+        project->replaceEntitySource(id, result, &error);
+    const pvf::Entity* replaced = project->entity(id);
+    int failures = 0;
+    if (!error.isEmpty() || changed.size() != 1 || !replaced
+        || replaced->sourcePath != secondPath
+        || replaced->image.pixelColor(32, 32) != QColor(Qt::blue)
+        || std::abs(project->value(id, QStringLiteral("x"), 0) - 123.0) > 1e-6)
+    {
+        qCritical() << "replace-test: swap failed" << error
+                    << (replaced ? replaced->sourcePath : QString());
+        ++failures;
+    }
+    else
+    {
+        const pvf::Entity after = *replaced;
+        pvf::ReplaceEntitySourcesCommand command({before}, {after});
+        command.undo(*project);
+        const pvf::Entity* undone = project->entity(id);
+        if (!undone || undone->sourcePath != firstPath
+            || undone->image.pixelColor(32, 32) != QColor(Qt::red))
+        {
+            qCritical() << "replace-test: undo failed";
+            ++failures;
+        }
+        command.redo(*project);
+        const pvf::Entity* redone = project->entity(id);
+        if (!redone || redone->sourcePath != secondPath)
+        {
+            qCritical() << "replace-test: redo failed";
+            ++failures;
+        }
+    }
+
+    QFile::remove(firstPath);
+    QFile::remove(secondPath);
+    qInfo() << "replace-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int layerTest()
 {
     auto* project = new pvf::Project;
@@ -6357,6 +6419,8 @@ int main(int argc, char* argv[])
         return frameRestoreTest(app);
     if (app.arguments().contains(QStringLiteral("--layer-test")))
         return layerTest();
+    if (app.arguments().contains(QStringLiteral("--replace-test")))
+        return replaceSourceTest();
     if (app.arguments().contains(QStringLiteral("--special-demo")))
         return specialDemo(app);
     if (app.arguments().contains(QStringLiteral("--welcome-test")))

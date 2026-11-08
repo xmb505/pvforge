@@ -72,6 +72,7 @@ signals:
     void entityMoveRequested(EntityId id, EntityId parent, int index);
     void folderCreateRequested(EntityId parent);
     void keyframeEasingRequested(const EasingSpec& spec);
+    void replaceSourceRequested(EntityId id);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

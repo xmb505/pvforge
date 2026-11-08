@@ -203,6 +203,11 @@ public:
     void setEntityName(EntityId id, const QString& name);
     void setEntityData(EntityId id, const QString& key, const QVariant& value);
     void removeKeyframe(EntityId id, const QString& prop, double frame);
+    // Swaps the media file behind an image/video/audio entity, keeping its
+    // animation. Returns every entity that changed (video plus paired audio).
+    QVector<EntityId> replaceEntitySource(EntityId id, const MediaImportResult& result,
+                                          QString* error);
+    void replaceEntity(const Entity& entity);
     void setEntityDataMap(EntityId id, const QVariantMap& data);
     QVector<KeyframeRecord> removeKeyframesAt(EntityId id, double frame);
     void addKeyframe(EntityId id, const QString& property, double frame, double value);

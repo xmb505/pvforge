@@ -231,6 +231,10 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     connect(m_timeline, &TimelinePanel::keyframeEasingRequested, this,
             &MainWindow::onKeyframeEasingRequested);
     connect(m_timeline, &TimelinePanel::entityRenamed, this, &MainWindow::onEntityRenamed);
+    connect(m_timeline, &TimelinePanel::replaceSourceRequested, this,
+            &MainWindow::replaceSourceFromDialog);
+    connect(m_props, &PropertiesPanel::replaceSourceRequested, this,
+            &MainWindow::replaceSourceFromDialog);
     connect(m_timeline, &TimelinePanel::audioMoved, this, &MainWindow::onAudioMoved);
     connect(m_timeline, &TimelinePanel::entityMoveRequested, this,
             &MainWindow::onEntityMoveRequested);
@@ -994,6 +998,86 @@ void MainWindow::applyComicTip(EntityId id, double tipX, double tipY)
     data.insert(QStringLiteral("bubbleTipX"), tipX);
     data.insert(QStringLiteral("bubbleTipY"), tipY);
     applyEntityData(id, data);
+}
+
+void MainWindow::replaceSourceFromDialog(EntityId id)
+{
+    const Entity* entity = m_project->entity(id);
+    if (!entity || m_project->isEffectivelyLocked(id))
+        return;
+
+    QString filter;
+    switch (entity->type)
+    {
+    case EntityType::Image:
+        filter = QStringLiteral("图片 (*.png *.jpg *.jpeg *.webp *.bmp *.svg)");
+        break;
+    case EntityType::Video:
+        filter = QStringLiteral("视频 (*.mp4 *.mov *.mkv *.webm *.avi *.m4v)");
+        break;
+    case EntityType::Audio:
+        filter = QStringLiteral("音频 (*.wav *.mp3 *.flac *.ogg *.opus *.m4a *.aac)");
+        break;
+    default:
+        return;
+    }
+
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("更换素材"), QString(), filter);
+    if (file.isEmpty())
+        return;
+
+    const EntityType expected = entity->type;
+    const QString directory = m_project->assetDirectory();
+    auto* watcher = new QFutureWatcher<MediaImportResult>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this,
+            [this, watcher, id, expected] {
+                const MediaImportResult result = watcher->result();
+                watcher->deleteLater();
+                hideImportBusy();
+                if (!result.error.isEmpty())
+                {
+                    QMessageBox::warning(this, QStringLiteral("更换素材失败"),
+                                         result.error);
+                    return;
+                }
+                if (result.type != expected)
+                {
+                    QMessageBox::warning(this, QStringLiteral("更换素材失败"),
+                                         QStringLiteral("素材类型不匹配"));
+                    return;
+                }
+                const Entity* before = m_project->entity(id);
+                if (!before)
+                    return;
+
+                QVector<Entity> beforeEntities;
+                beforeEntities.append(*before);
+                for (const Entity& other : m_project->entities())
+                    if (other.type == EntityType::Audio
+                        && other.data.value(QStringLiteral("pairedVideo")).toInt() == id)
+                        beforeEntities.append(other);
+
+                QString error;
+                const QVector<EntityId> changed =
+                    m_project->replaceEntitySource(id, result, &error);
+                if (!error.isEmpty())
+                {
+                    QMessageBox::warning(this, QStringLiteral("更换素材失败"), error);
+                    return;
+                }
+                QVector<Entity> afterEntities;
+                for (EntityId changedId : changed)
+                    if (const Entity* current = m_project->entity(changedId))
+                        afterEntities.append(*current);
+                m_history->push(std::make_unique<ReplaceEntitySourcesCommand>(
+                                    beforeEntities, afterEntities),
+                                *m_project);
+                statusBar()->showMessage(QStringLiteral("已更换素材"), 2000);
+            });
+    showImportBusy(1);
+    watcher->setFuture(QtConcurrent::run(
+        [file, directory] { return processMediaFile(file, directory); }));
 }
 
 void MainWindow::onPropertyKeyframeToggled(EntityId id, const QString& prop,

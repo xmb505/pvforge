@@ -657,6 +657,13 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     m_mediaInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_mediaInfo->setMinimumWidth(0);
     mediaLayout->addWidget(m_mediaInfo);
+    m_replaceSource = new QPushButton(QStringLiteral("更换素材…"), content);
+    m_replaceSource->setObjectName(QStringLiteral("replaceSourceButton"));
+    connect(m_replaceSource, &QPushButton::clicked, this, [this] {
+        if (m_entity != kInvalidEntity)
+            emit replaceSourceRequested(m_entity);
+    });
+    mediaLayout->addWidget(m_replaceSource);
     m_mediaSection = new CollapsibleSection(QStringLiteral("素材"), content, this);
     m_mediaSection->setExpanded(true);
     layout->addWidget(m_mediaSection);
@@ -958,6 +965,8 @@ void PropertiesPanel::refresh()
     m_wallSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
+    if (m_replaceSource)
+        m_replaceSource->setEnabled(editable);
     m_keyButton->setEnabled(editable);
 
     {

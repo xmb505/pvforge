@@ -166,6 +166,22 @@ private:
     QString m_text;
 };
 
+// Swapping the media behind entities (video plus its paired audio) as one
+// undo step.
+class ReplaceEntitySourcesCommand : public UndoCommand
+{
+public:
+    ReplaceEntitySourcesCommand(QVector<Entity> before, QVector<Entity> after);
+
+    void undo(Project& project) override;
+    void redo(Project& project) override;
+    QString text() const override;
+
+private:
+    QVector<Entity> m_before;
+    QVector<Entity> m_after;
+};
+
 // Adding or removing one keyframe of one property.
 class SetKeyframeCommand : public UndoCommand
 {

@@ -1534,6 +1534,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QAction* createInside = nullptr;
     QAction* createSibling = nullptr;
     QAction* rename = nullptr;
+    QAction* replaceSource = nullptr;
     QAction* toWorld = nullptr;
 
     if (entity)
@@ -1551,6 +1552,11 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         }
         if (!locked)
             rename = menu.addAction(QStringLiteral("重命名"));
+        if (!locked
+            && (entity->type == EntityType::Image
+                || entity->type == EntityType::Video
+                || entity->type == EntityType::Audio))
+            replaceSource = menu.addAction(QStringLiteral("更换素材…"));
         if (entity->parent != kInvalidEntity && !locked)
             toWorld = menu.addAction(QStringLiteral("移到工作台"));
     }
@@ -1596,6 +1602,10 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         m_renameEdit->show();
         m_renameEdit->selectAll();
         m_renameEdit->setFocus();
+    }
+    else if (chosen == replaceSource && entity)
+    {
+        emit replaceSourceRequested(entity->id);
     }
     else if (chosen == toWorld && entity)
     {

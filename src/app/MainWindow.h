@@ -75,6 +75,7 @@ private:
     void applyPivot(EntityId id, double ax, double ay);
     void applyEntityData(EntityId id, const QVariantMap& data);
     void applyComicTip(EntityId id, double tipX, double tipY);
+    void replaceSourceFromDialog(EntityId id);
     void onPropertyKeyframeToggled(EntityId id, const QString& prop, double frame,
                                    bool remove);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);

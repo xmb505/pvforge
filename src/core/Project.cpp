@@ -845,6 +845,121 @@ void Project::setEntityName(EntityId id, const QString& name)
     emit changed();
 }
 
+QVector<EntityId> Project::replaceEntitySource(EntityId id,
+                                               const MediaImportResult& result,
+                                               QString* error)
+{
+    QVector<EntityId> updated;
+    Entity* e = entity(id);
+    if (!e)
+    {
+        if (error)
+            *error = QStringLiteral("实体不存在");
+        return updated;
+    }
+    if (e->type != result.type)
+    {
+        if (error)
+            *error = QStringLiteral("素材类型不匹配");
+        return updated;
+    }
+    if (e->locked)
+    {
+        if (error)
+            *error = QStringLiteral("实体已锁定");
+        return updated;
+    }
+
+    switch (e->type)
+    {
+    case EntityType::Image:
+    {
+        const QImage image(result.importedPath);
+        if (image.isNull())
+        {
+            if (error)
+                *error = QStringLiteral("无法读取图片");
+            return updated;
+        }
+        e->sourcePath = result.importedPath;
+        e->image = image;
+        e->thumbnail = QImage();
+        e->pixmap = QPixmap();
+        updated.append(id);
+        break;
+    }
+    case EntityType::Video:
+    {
+        QString decodeError;
+        double duration = 0.0;
+        const QImage frame =
+            decodeVideoFirstFrame(result.importedPath, &decodeError, &duration);
+        if (frame.isNull())
+        {
+            if (error)
+                *error = decodeError;
+            return updated;
+        }
+        e->sourcePath = result.importedPath;
+        e->image = frame;
+        e->thumbnail = QImage();
+        e->pixmap = QPixmap();
+        e->data[QStringLiteral("duration")] = duration;
+        e->data[QStringLiteral("sourceWidth")] = frame.width();
+        e->data[QStringLiteral("sourceHeight")] = frame.height();
+        updated.append(id);
+        // The paired audio entity uses the same file; swap it too.
+        for (Entity& other : m_entities)
+        {
+            if (other.type != EntityType::Audio
+                || other.data.value(QStringLiteral("pairedVideo")).toInt() != id)
+                continue;
+            other.sourcePath = result.importedPath;
+            other.audio = result.audio;
+            other.data[QStringLiteral("duration")] =
+                result.audio ? result.audio->duration : 0.0;
+            updated.append(other.id);
+        }
+        break;
+    }
+    case EntityType::Audio:
+    {
+        if (!result.audio)
+        {
+            if (error)
+                *error = QStringLiteral("无法解码音频");
+            return updated;
+        }
+        e->sourcePath = result.importedPath;
+        e->audio = result.audio;
+        e->data[QStringLiteral("duration")] = result.audio->duration;
+        updated.append(id);
+        break;
+    }
+    default:
+        if (error)
+            *error = QStringLiteral("这个实体没有可更换的素材");
+        return updated;
+    }
+
+    modified = true;
+    emit changed();
+    return updated;
+}
+
+void Project::replaceEntity(const Entity& entity)
+{
+    for (Entity& e : m_entities)
+    {
+        if (e.id != entity.id)
+            continue;
+        e = entity;
+        modified = true;
+        emit changed();
+        return;
+    }
+}
+
 void Project::removeKeyframe(EntityId id, const QString& prop, double frame)
 {
     Entity* e = entity(id);
