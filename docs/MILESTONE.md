@@ -199,6 +199,21 @@
 
 - 3D、Minecraft 资产、节点式合成、视频剪辑多轨时间线
 
+## 里程碑 M6：HTML 组件与 MCP（已开工）
+
+记录时间：2026-11-08
+状态：Stage 0（Chrome/CDP spike）
+
+目标：让 PVForge 渲染 AI 写的前端组件，并让 AI 通过 MCP 安全操作工程。完整方案、已定决策、阶段拆分和验收清单见 [M6_PLAN.md](M6_PLAN.md)。
+
+关键约束：
+
+- 外部 Chrome/Edge headless + CDP，不内置 QtWebEngine
+- HTML 层共享一个页面，变量走现有 Track/Easing，严格确定性
+- 预览异步截图合成，导出改异步帧供应器
+- MCP 默认只读，AI 只写当前场景，禁止删除，急停回滚 + 批次 checkpoint
+- 场景一等公民、全局标记 + 关键帧备注、AI 只读注释
+
 ## 已实现
 
 ### 工程

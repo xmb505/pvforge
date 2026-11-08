@@ -51,6 +51,7 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 - [功能详情](docs/FEATURES.md)：完整功能清单、实体类型、工程格式
 - [操作手册](docs/USAGE.md)：所有快捷键和日常操作
+- [M6 计划](docs/M6_PLAN.md)：HTML 组件与 MCP
 - [里程碑与已知限制](docs/MILESTONE.md)
 - [设计文档](docs/DESIGN.md)
 
