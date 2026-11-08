@@ -56,31 +56,328 @@ QString typeToString(EntityType type)
     return QStringLiteral("image");
 }
 
-EntityType typeFromString(const QString& text)
+// Load limits for untrusted project files. See docs/M6_SECURITY.md A1/A2.
+constexpr qint64 kMaxProjectFileBytes = 64LL * 1024 * 1024;
+constexpr int kMaxEntityCount = 5000;
+constexpr int kMaxTemplateCount = 1000;
+constexpr int kMaxSceneCount = 1000;
+constexpr int kMaxAnnotationCount = 10000;
+constexpr int kMaxTracksPerEntity = 128;
+constexpr int kMaxKeysPerTrack = 10000;
+constexpr int kMaxTotalKeyframes = 200000;
+constexpr int kMaxStringLength = 1024 * 1024;
+constexpr int kMaxJsonDepth = 64;
+constexpr int kMaxLogoCount = 64;
+
+bool typeFromString(const QString& text, EntityType* type)
 {
-    if (text == QLatin1String("video"))
-        return EntityType::Video;
-    if (text == QLatin1String("text"))
-        return EntityType::Text;
-    if (text == QLatin1String("vector"))
-        return EntityType::Vector;
-    if (text == QLatin1String("camera"))
-        return EntityType::Camera;
-    if (text == QLatin1String("audio"))
-        return EntityType::Audio;
-    if (text == QLatin1String("folder"))
-        return EntityType::Folder;
-    if (text == QLatin1String("comicText"))
-        return EntityType::ComicText;
-    if (text == QLatin1String("radialLines"))
-        return EntityType::RadialLines;
-    if (text == QLatin1String("flowLines"))
-        return EntityType::FlowLines;
-    if (text == QLatin1String("brandWall"))
-        return EntityType::BrandWall;
-    if (text == QLatin1String("halftoneDots"))
-        return EntityType::HalftoneDots;
-    return EntityType::Image;
+    if (text == QLatin1String("image"))
+        *type = EntityType::Image;
+    else if (text == QLatin1String("video"))
+        *type = EntityType::Video;
+    else if (text == QLatin1String("text"))
+        *type = EntityType::Text;
+    else if (text == QLatin1String("vector"))
+        *type = EntityType::Vector;
+    else if (text == QLatin1String("camera"))
+        *type = EntityType::Camera;
+    else if (text == QLatin1String("audio"))
+        *type = EntityType::Audio;
+    else if (text == QLatin1String("folder"))
+        *type = EntityType::Folder;
+    else if (text == QLatin1String("comicText"))
+        *type = EntityType::ComicText;
+    else if (text == QLatin1String("radialLines"))
+        *type = EntityType::RadialLines;
+    else if (text == QLatin1String("flowLines"))
+        *type = EntityType::FlowLines;
+    else if (text == QLatin1String("brandWall"))
+        *type = EntityType::BrandWall;
+    else if (text == QLatin1String("halftoneDots"))
+        *type = EntityType::HalftoneDots;
+    else
+        return false;
+    return true;
+}
+
+struct AssetPathContext
+{
+    QString projectDir;
+    QString canonicalProjectDir;
+};
+
+// Relative paths must stay inside the project directory, including after
+// resolving symlinks. Absolute paths stay supported as external user assets.
+bool validateAssetPath(const QString& stored, const AssetPathContext& context,
+                       QString* error)
+{
+    if (stored.isEmpty())
+        return true;
+    if (stored.contains(QChar(0)))
+    {
+        if (error)
+            *error = QStringLiteral("资产路径包含空字符");
+        return false;
+    }
+    if (QFileInfo(stored).isAbsolute())
+        return true;
+
+    const QString cleaned = QDir::cleanPath(stored);
+    if (cleaned == QLatin1String("..") || cleaned.startsWith(QLatin1String("../")))
+    {
+        if (error)
+            *error = QStringLiteral("资产路径 \"%1\" 超出工程目录").arg(stored);
+        return false;
+    }
+
+    const QString resolved = QDir(context.projectDir).absoluteFilePath(cleaned);
+    if (resolved != context.projectDir
+        && !resolved.startsWith(context.projectDir + QLatin1Char('/')))
+    {
+        if (error)
+            *error = QStringLiteral("资产路径 \"%1\" 超出工程目录").arg(stored);
+        return false;
+    }
+
+    const QFileInfo resolvedInfo(resolved);
+    if (resolvedInfo.exists())
+    {
+        const QString canonical = resolvedInfo.canonicalFilePath();
+        if (canonical.isEmpty()
+            || (canonical != context.canonicalProjectDir
+                && !canonical.startsWith(context.canonicalProjectDir
+                                          + QLatin1Char('/'))))
+        {
+            if (error)
+                *error = QStringLiteral("资产路径 \"%1\" 通过符号链接逃逸出工程目录")
+                             .arg(stored);
+            return false;
+        }
+    }
+    else if (resolvedInfo.isSymLink())
+    {
+        // A broken symlink cannot be verified, so fail closed.
+        if (error)
+            *error = QStringLiteral("资产路径 \"%1\" 是指向不存在目标的符号链接")
+                         .arg(stored);
+        return false;
+    }
+    return true;
+}
+
+bool validateLogoPaths(const QJsonObject& data, const AssetPathContext& context,
+                       const QString& owner, QString* error)
+{
+    const QJsonValue logosValue = data.value(QStringLiteral("logos"));
+    if (!logosValue.isArray())
+        return true;
+
+    const QJsonArray logos = logosValue.toArray();
+    if (logos.size() > kMaxLogoCount)
+    {
+        if (error)
+            *error = QStringLiteral("%1 的徽标数量 %2 超过上限 %3")
+                         .arg(owner)
+                         .arg(logos.size())
+                         .arg(kMaxLogoCount);
+        return false;
+    }
+    for (const QJsonValue& logo : logos)
+    {
+        if (!validateAssetPath(logo.toString(), context, error))
+            return false;
+    }
+    return true;
+}
+
+bool validateJsonStrings(const QJsonValue& value, int depth, QString* error)
+{
+    if (depth > kMaxJsonDepth)
+    {
+        if (error)
+            *error = QStringLiteral("JSON 嵌套深度超过上限 %1").arg(kMaxJsonDepth);
+        return false;
+    }
+    if (value.isString())
+    {
+        if (value.toString().size() > kMaxStringLength)
+        {
+            if (error)
+                *error = QStringLiteral("字符串长度 %1 超过上限 %2")
+                             .arg(value.toString().size())
+                             .arg(kMaxStringLength);
+            return false;
+        }
+        return true;
+    }
+    if (value.isArray())
+    {
+        for (const QJsonValue& item : value.toArray())
+        {
+            if (!validateJsonStrings(item, depth + 1, error))
+                return false;
+        }
+    }
+    else if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+        {
+            if (it.key().size() > kMaxStringLength)
+            {
+                if (error)
+                    *error = QStringLiteral("字符串长度 %1 超过上限 %2")
+                                 .arg(it.key().size())
+                                 .arg(kMaxStringLength);
+                return false;
+            }
+            if (!validateJsonStrings(it.value(), depth + 1, error))
+                return false;
+        }
+    }
+    return true;
+}
+
+// Validates the whole document before Project::load mutates any member, so a
+// rejected file leaves the current project untouched.
+bool validateProjectDocument(const QJsonObject& root, const QString& projectPath,
+                             QString* error)
+{
+    AssetPathContext context;
+    context.projectDir = QDir::cleanPath(QFileInfo(projectPath).absolutePath());
+    context.canonicalProjectDir = QFileInfo(context.projectDir).canonicalFilePath();
+    if (context.canonicalProjectDir.isEmpty())
+        context.canonicalProjectDir = context.projectDir;
+
+    const QJsonArray entities = root.value(QStringLiteral("entities")).toArray();
+    if (entities.size() > kMaxEntityCount)
+    {
+        if (error)
+            *error = QStringLiteral("实体数量 %1 超过上限 %2")
+                         .arg(entities.size())
+                         .arg(kMaxEntityCount);
+        return false;
+    }
+
+    QSet<int> entityIds;
+    qint64 totalKeyframes = 0;
+    for (int i = 0; i < entities.size(); ++i)
+    {
+        const QJsonObject object = entities.at(i).toObject();
+        const QString typeName = object.value(QStringLiteral("type")).toString();
+        EntityType type = EntityType::Image;
+        if (!typeFromString(typeName, &type))
+        {
+            if (error)
+                *error = QStringLiteral("实体 #%1 使用未知类型 \"%2\"")
+                             .arg(i + 1)
+                             .arg(typeName);
+            return false;
+        }
+
+        const int id = object.value(QStringLiteral("id")).toInt();
+        if (id <= 0)
+        {
+            if (error)
+                *error = QStringLiteral("实体 #%1 的 id %2 无效").arg(i + 1).arg(id);
+            return false;
+        }
+        if (entityIds.contains(id))
+        {
+            if (error)
+                *error = QStringLiteral("实体 id %1 重复").arg(id);
+            return false;
+        }
+        entityIds.insert(id);
+
+        if (!validateAssetPath(object.value(QStringLiteral("sourcePath")).toString(),
+                               context, error))
+            return false;
+
+        const QJsonObject tracks = object.value(QStringLiteral("tracks")).toObject();
+        if (tracks.size() > kMaxTracksPerEntity)
+        {
+            if (error)
+                *error = QStringLiteral("实体 id %1 的轨道数量 %2 超过上限 %3")
+                             .arg(id)
+                             .arg(tracks.size())
+                             .arg(kMaxTracksPerEntity);
+            return false;
+        }
+        for (auto it = tracks.constBegin(); it != tracks.constEnd(); ++it)
+        {
+            const int keyCount = it.value().toArray().size();
+            if (keyCount > kMaxKeysPerTrack)
+            {
+                if (error)
+                    *error = QStringLiteral("实体 id %1 的轨道 \"%2\" 关键帧数量 %3 超过上限 %4")
+                                 .arg(id)
+                                 .arg(it.key())
+                                 .arg(keyCount)
+                                 .arg(kMaxKeysPerTrack);
+                return false;
+            }
+            totalKeyframes += keyCount;
+            if (totalKeyframes > kMaxTotalKeyframes)
+            {
+                if (error)
+                    *error = QStringLiteral("关键帧总数 %1 超过上限 %2")
+                                 .arg(totalKeyframes)
+                                 .arg(kMaxTotalKeyframes);
+                return false;
+            }
+        }
+
+        if (!validateLogoPaths(object.value(QStringLiteral("data")).toObject(), context,
+                               QStringLiteral("实体 id %1").arg(id), error))
+            return false;
+    }
+
+    const QJsonArray templates = root.value(QStringLiteral("templates")).toArray();
+    if (templates.size() > kMaxTemplateCount)
+    {
+        if (error)
+            *error = QStringLiteral("模板数量 %1 超过上限 %2")
+                         .arg(templates.size())
+                         .arg(kMaxTemplateCount);
+        return false;
+    }
+    for (int i = 0; i < templates.size(); ++i)
+    {
+        const QJsonObject object = templates.at(i).toObject();
+        const QString typeName = object.value(QStringLiteral("type")).toString();
+        EntityType type = EntityType::Image;
+        if (!typeFromString(typeName, &type))
+        {
+            if (error)
+                *error = QStringLiteral("模板 #%1 使用未知类型 \"%2\"")
+                             .arg(i + 1)
+                             .arg(typeName);
+            return false;
+        }
+        if (!validateAssetPath(object.value(QStringLiteral("path")).toString(),
+                               context, error))
+            return false;
+        if (!validateLogoPaths(object.value(QStringLiteral("data")).toObject(), context,
+                               QStringLiteral("模板 #%1").arg(i + 1), error))
+            return false;
+    }
+
+    if (root.value(QStringLiteral("scenes")).toArray().size() > kMaxSceneCount)
+    {
+        if (error)
+            *error = QStringLiteral("场景数量超过上限 %1").arg(kMaxSceneCount);
+        return false;
+    }
+    if (root.value(QStringLiteral("annotations")).toArray().size()
+        > kMaxAnnotationCount)
+    {
+        if (error)
+            *error = QStringLiteral("注释数量超过上限 %1").arg(kMaxAnnotationCount);
+        return false;
+    }
+
+    return validateJsonStrings(QJsonValue(root), 0, error);
 }
 
 bool filesIdentical(const QString& a, const QString& b)
@@ -128,11 +425,22 @@ QString Project::resolveAssetPath(const QString& stored) const
 {
     if (stored.isEmpty())
         return stored;
+    if (stored.contains(QChar(0)))
+        return QString();
     if (QFileInfo(stored).isAbsolute())
         return stored;
     if (filePath.isEmpty())
         return stored;
-    return QDir(QFileInfo(filePath).absolutePath()).absoluteFilePath(stored);
+
+    const QString projectDir = QDir::cleanPath(QFileInfo(filePath).absolutePath());
+    const QString cleaned = QDir::cleanPath(stored);
+    if (cleaned == QLatin1String("..") || cleaned.startsWith(QLatin1String("../")))
+        return QString();
+    const QString resolved = QDir(projectDir).absoluteFilePath(cleaned);
+    if (resolved != projectDir
+        && !resolved.startsWith(projectDir + QLatin1Char('/')))
+        return QString();
+    return resolved;
 }
 
 QString Project::storeAssetPath(const QString& absolute) const
@@ -1814,6 +2122,27 @@ bool Project::save(const QString& path, QString* error)
 
 bool Project::load(const QString& path, QString* error)
 {
+    const QFileInfo fileInfo(path);
+    if (!fileInfo.exists())
+    {
+        if (error)
+            *error = QStringLiteral("工程文件不存在");
+        return false;
+    }
+    if (!fileInfo.isFile())
+    {
+        if (error)
+            *error = QStringLiteral("工程文件不是普通文件");
+        return false;
+    }
+    if (fileInfo.size() > kMaxProjectFileBytes)
+    {
+        if (error)
+            *error = QStringLiteral("工程文件过大（%1 MiB，上限 64 MiB）")
+                         .arg(fileInfo.size() / (1024.0 * 1024.0), 0, 'f', 1);
+        return false;
+    }
+
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
     {
@@ -1822,12 +2151,34 @@ bool Project::load(const QString& path, QString* error)
         return false;
     }
 
+    // Read one byte past the limit as a second check in case the file grew
+    // between the size check and the read.
+    const QByteArray data = file.read(kMaxProjectFileBytes + 1);
+    if (data.size() > kMaxProjectFileBytes)
+    {
+        if (error)
+            *error = QStringLiteral("工程文件过大（上限 64 MiB）");
+        return false;
+    }
+    if (data.isEmpty())
+    {
+        if (error)
+            *error = QStringLiteral("工程文件为空");
+        return false;
+    }
+
     QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError)
     {
         if (error)
             *error = parseError.errorString();
+        return false;
+    }
+    if (!document.isObject())
+    {
+        if (error)
+            *error = QStringLiteral("工程文件根节点不是 JSON 对象");
         return false;
     }
 
@@ -1855,6 +2206,10 @@ bool Project::load(const QString& path, QString* error)
         return false;
     }
 
+    // Validate every limit and path before touching the current project.
+    if (!validateProjectDocument(root, path, error))
+        return false;
+
     // Set the project path first so relative asset paths can be resolved.
     filePath = path;
 
@@ -1881,7 +2236,14 @@ bool Project::load(const QString& path, QString* error)
         const QJsonObject object = value.toObject();
         Entity e;
         e.id = object.value(QStringLiteral("id")).toInt();
-        e.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        EntityType type = EntityType::Image;
+        if (!typeFromString(object.value(QStringLiteral("type")).toString(), &type))
+        {
+            if (error)
+                *error = QStringLiteral("实体 id %1 使用未知类型").arg(e.id);
+            return false;
+        }
+        e.type = type;
         e.parent = object.value(QStringLiteral("parent")).toInt(kInvalidEntity);
         e.templateId = object.value(QStringLiteral("templateId")).toString();
         e.hidden = object.value(QStringLiteral("hidden")).toBool();
@@ -2017,7 +2379,14 @@ bool Project::load(const QString& path, QString* error)
         tmpl.id = object.value(QStringLiteral("id")).toString();
         if (tmpl.id.isEmpty())
             tmpl.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        tmpl.type = typeFromString(object.value(QStringLiteral("type")).toString());
+        EntityType type = EntityType::Image;
+        if (!typeFromString(object.value(QStringLiteral("type")).toString(), &type))
+        {
+            if (error)
+                *error = QStringLiteral("模板 \"%1\" 使用未知类型").arg(tmpl.id);
+            return false;
+        }
+        tmpl.type = type;
         tmpl.name = object.value(QStringLiteral("name")).toString();
         tmpl.path = resolveAssetPath(object.value(QStringLiteral("path")).toString());
         tmpl.duration = object.value(QStringLiteral("duration")).toDouble();

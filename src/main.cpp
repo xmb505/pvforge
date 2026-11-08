@@ -52,6 +52,7 @@
 #include <QDir>
 #include <QFile>
 #include <QCheckBox>
+#include <QCryptographicHash>
 #include <QDataStream>
 #include <QDoubleSpinBox>
 #include <QFont>
@@ -81,6 +82,7 @@
 #include <QScrollBar>
 #include <QTabWidget>
 #include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -7752,6 +7754,448 @@ int packTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+int projectLimitTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+
+    QTemporaryDir tempDir;
+    QTemporaryDir outsideDir;
+    if (!tempDir.isValid() || !outsideDir.isValid())
+    {
+        qCritical() << "project-limit-test: cannot create temp directories";
+        return 1;
+    }
+
+    const QString projectRoot = tempDir.path();
+    const QString projectPath = QDir(projectRoot).filePath(QStringLiteral("limit.pvproj"));
+
+    auto makeProject = [](int version) {
+        QJsonObject root;
+        root[QStringLiteral("format")] = QStringLiteral("pvforge");
+        root[QStringLiteral("version")] = version;
+        root[QStringLiteral("name")] = QStringLiteral("limit test");
+        root[QStringLiteral("entities")] = QJsonArray();
+        root[QStringLiteral("templates")] = QJsonArray();
+        root[QStringLiteral("scenes")] = QJsonArray();
+        root[QStringLiteral("annotations")] = QJsonArray();
+        return root;
+    };
+    auto makeEntity = [](int id, const QString& type) {
+        QJsonObject entity;
+        entity[QStringLiteral("id")] = id;
+        entity[QStringLiteral("type")] = type;
+        entity[QStringLiteral("parent")] = -1;
+        entity[QStringLiteral("name")] = QStringLiteral("entity %1").arg(id);
+        entity[QStringLiteral("sourcePath")] = QString();
+        entity[QStringLiteral("data")] = QJsonObject();
+        entity[QStringLiteral("values")] = QJsonObject();
+        entity[QStringLiteral("tracks")] = QJsonObject();
+        return entity;
+    };
+    auto writeProject = [](const QString& path, const QJsonObject& root) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return false;
+        const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
+        return file.write(data) == data.size();
+    };
+    auto writeRaw = [](const QString& path, const QByteArray& data) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return false;
+        return file.write(data) == data.size();
+    };
+    auto rejected = [&](const QString& label, const QJsonObject& root,
+                        const QString& expectedFragment) {
+        if (!writeProject(projectPath, root))
+        {
+            qCritical() << "project-limit-test:" << label << "write failed";
+            ++failures;
+            return;
+        }
+        pvf::Project project;
+        QString error;
+        if (project.load(projectPath, &error))
+        {
+            qCritical() << "project-limit-test:" << label << "was accepted";
+            ++failures;
+        }
+        else if (!expectedFragment.isEmpty() && !error.contains(expectedFragment))
+        {
+            qCritical() << "project-limit-test:" << label << "unexpected error" << error;
+            ++failures;
+        }
+    };
+
+    // A safe relative path inside the project directory still loads.
+    QImage image(16, 16, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    const QString assetsDir = QDir(projectRoot).filePath(QStringLiteral("assets"));
+    QDir().mkpath(assetsDir);
+    const QString packedImage = QDir(assetsDir).filePath(QStringLiteral("pic.png"));
+    if (!image.save(packedImage))
+        return 1;
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("image"));
+        entity[QStringLiteral("sourcePath")] = QStringLiteral("assets/pic.png");
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        if (!writeProject(projectPath, root))
+            return 1;
+
+        pvf::Project project;
+        QString error;
+        if (!project.load(projectPath, &error))
+        {
+            qCritical() << "project-limit-test: safe relative path rejected" << error;
+            ++failures;
+        }
+        else if (project.entities().size() != 1
+                 || project.entities().first().sourcePath != packedImage
+                 || project.entities().first().image.isNull())
+        {
+            qCritical() << "project-limit-test: safe relative path not resolved";
+            ++failures;
+        }
+    }
+
+    // Empty, malformed and non-object files are reported clearly.
+    {
+        const QString emptyPath = QDir(projectRoot).filePath(QStringLiteral("empty.pvproj"));
+        if (!writeRaw(emptyPath, QByteArray()))
+            return 1;
+        pvf::Project project;
+        QString error;
+        if (project.load(emptyPath, &error) || !error.contains(QStringLiteral("为空")))
+        {
+            qCritical() << "project-limit-test: empty file accepted" << error;
+            ++failures;
+        }
+    }
+    {
+        const QString badPath = QDir(projectRoot).filePath(QStringLiteral("bad.pvproj"));
+        if (!writeRaw(badPath, QByteArrayLiteral("{not json")))
+            return 1;
+        pvf::Project project;
+        QString error;
+        if (project.load(badPath, &error) || error.isEmpty())
+        {
+            qCritical() << "project-limit-test: invalid JSON accepted";
+            ++failures;
+        }
+    }
+    {
+        const QString arrayPath = QDir(projectRoot).filePath(QStringLiteral("array.pvproj"));
+        if (!writeRaw(arrayPath, QByteArrayLiteral("[]")))
+            return 1;
+        pvf::Project project;
+        QString error;
+        if (project.load(arrayPath, &error) || !error.contains(QStringLiteral("根节点")))
+        {
+            qCritical() << "project-limit-test: non-object root accepted" << error;
+            ++failures;
+        }
+    }
+
+    // Files larger than 64 MiB are rejected before parsing.
+    {
+        const QString bigPath = QDir(projectRoot).filePath(QStringLiteral("big.pvproj"));
+        QFile bigFile(bigPath);
+        if (!bigFile.open(QIODevice::WriteOnly)
+            || !bigFile.resize(64LL * 1024 * 1024 + 1))
+        {
+            qCritical() << "project-limit-test: cannot create oversized file";
+            return 1;
+        }
+        bigFile.close();
+        pvf::Project project;
+        QString error;
+        if (project.load(bigPath, &error)
+            || !error.contains(QStringLiteral("过大")))
+        {
+            qCritical() << "project-limit-test: oversized file accepted" << error;
+            ++failures;
+        }
+        QFile::remove(bigPath);
+    }
+
+    // Entity count limit.
+    {
+        QJsonObject root = makeProject(4);
+        QJsonArray entities;
+        for (int i = 1; i <= 5001; ++i)
+            entities.append(makeEntity(i, QStringLiteral("folder")));
+        root[QStringLiteral("entities")] = entities;
+        rejected(QStringLiteral("5001 entities"), root, QStringLiteral("实体数量"));
+    }
+
+    // Total keyframe limit (20 full tracks plus one extra key).
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("folder"));
+        QJsonObject tracks;
+        for (int track = 0; track < 20; ++track)
+        {
+            QJsonArray keys;
+            for (int key = 0; key < 10000; ++key)
+            {
+                QJsonObject keyframe;
+                keyframe[QStringLiteral("f")] = key;
+                keyframe[QStringLiteral("v")] = 0;
+                keys.append(keyframe);
+            }
+            tracks[QStringLiteral("p%1").arg(track)] = keys;
+        }
+        QJsonArray extra;
+        QJsonObject extraKey;
+        extraKey[QStringLiteral("f")] = 0;
+        extraKey[QStringLiteral("v")] = 0;
+        extra.append(extraKey);
+        tracks[QStringLiteral("extra")] = extra;
+        entity[QStringLiteral("tracks")] = tracks;
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        rejected(QStringLiteral("200001 keyframes"), root, QStringLiteral("关键帧总数"));
+    }
+
+    // Per-track keyframe and template count limits.
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("folder"));
+        QJsonArray keys;
+        for (int key = 0; key < 10001; ++key)
+        {
+            QJsonObject keyframe;
+            keyframe[QStringLiteral("f")] = key;
+            keyframe[QStringLiteral("v")] = 0;
+            keys.append(keyframe);
+        }
+        QJsonObject tracks;
+        tracks[QStringLiteral("x")] = keys;
+        entity[QStringLiteral("tracks")] = tracks;
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        rejected(QStringLiteral("10001 keys per track"), root,
+                 QStringLiteral("关键帧数量"));
+    }
+    {
+        QJsonObject root = makeProject(4);
+        QJsonArray templates;
+        for (int i = 0; i < 1001; ++i)
+        {
+            QJsonObject tmpl;
+            tmpl[QStringLiteral("id")] = QStringLiteral("t%1").arg(i);
+            tmpl[QStringLiteral("type")] = QStringLiteral("folder");
+            templates.append(tmpl);
+        }
+        root[QStringLiteral("templates")] = templates;
+        rejected(QStringLiteral("1001 templates"), root,
+                 QStringLiteral("模板数量"));
+    }
+
+    // Single string limit.
+    {
+        QJsonObject root = makeProject(4);
+        root[QStringLiteral("description")] =
+            QString(1024 * 1024 + 1, QLatin1Char('x'));
+        rejected(QStringLiteral("oversized string"), root, QStringLiteral("字符串长度"));
+    }
+
+    // Version 5 and unknown entity types are rejected, not coerced.
+    {
+        QJsonObject root = makeProject(5);
+        rejected(QStringLiteral("version 5"), root, QStringLiteral("过新"));
+    }
+    {
+        QJsonObject root = makeProject(4);
+        QJsonArray entities;
+        entities.append(makeEntity(1, QStringLiteral("hologram")));
+        root[QStringLiteral("entities")] = entities;
+        rejected(QStringLiteral("unknown entity type"), root,
+                 QStringLiteral("未知类型"));
+    }
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject tmpl;
+        tmpl[QStringLiteral("id")] = QStringLiteral("t1");
+        tmpl[QStringLiteral("type")] = QStringLiteral("hologram");
+        QJsonArray templates;
+        templates.append(tmpl);
+        root[QStringLiteral("templates")] = templates;
+        rejected(QStringLiteral("unknown template type"), root,
+                 QStringLiteral("未知类型"));
+    }
+
+    // Relative paths may not escape the project directory.
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("image"));
+        entity[QStringLiteral("sourcePath")] = QStringLiteral("../outside.png");
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        rejected(QStringLiteral("../ escape"), root, QStringLiteral("超出工程目录"));
+    }
+
+    // A symlink inside the project pointing outside is rejected.
+    // Absolute paths stay supported for the user's own external media.
+    const QString outsideImage =
+        QDir(outsideDir.path()).filePath(QStringLiteral("outside.png"));
+    if (!image.save(outsideImage))
+        return 1;
+    {
+        const QString linkPath = QDir(assetsDir).filePath(QStringLiteral("escape.png"));
+        QFile::remove(linkPath);
+        if (QFile::link(outsideImage, linkPath)
+            && QFileInfo(linkPath).isSymLink())
+        {
+            QJsonObject root = makeProject(4);
+            QJsonObject entity = makeEntity(1, QStringLiteral("image"));
+            entity[QStringLiteral("sourcePath")] = QStringLiteral("assets/escape.png");
+            QJsonArray entities;
+            entities.append(entity);
+            root[QStringLiteral("entities")] = entities;
+            rejected(QStringLiteral("symlink escape"), root,
+                     QStringLiteral("符号链接"));
+        }
+        QFile::remove(linkPath);
+    }
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("image"));
+        entity[QStringLiteral("sourcePath")] = outsideImage;
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        if (!writeProject(projectPath, root))
+            return 1;
+        pvf::Project project;
+        QString error;
+        if (!project.load(projectPath, &error))
+        {
+            qCritical() << "project-limit-test: absolute path rejected" << error;
+            ++failures;
+        }
+        else if (project.entities().size() != 1
+                 || project.entities().first().sourcePath != outsideImage
+                 || project.entities().first().image.isNull())
+        {
+            qCritical() << "project-limit-test: absolute path not kept";
+            ++failures;
+        }
+    }
+
+    // A rejected load must not partially replace the current project.
+    {
+        QJsonObject root = makeProject(4);
+        QJsonObject entity = makeEntity(1, QStringLiteral("folder"));
+        entity[QStringLiteral("name")] = QStringLiteral("original");
+        QJsonArray entities;
+        entities.append(entity);
+        root[QStringLiteral("entities")] = entities;
+        if (!writeProject(projectPath, root))
+            return 1;
+
+        pvf::Project project;
+        QString error;
+        if (!project.load(projectPath, &error))
+        {
+            qCritical() << "project-limit-test: baseline load failed" << error;
+            ++failures;
+        }
+        else
+        {
+            QJsonObject bad = makeProject(4);
+            QJsonArray badEntities;
+            badEntities.append(makeEntity(1, QStringLiteral("hologram")));
+            bad[QStringLiteral("entities")] = badEntities;
+            if (!writeProject(projectPath, bad))
+                return 1;
+            if (project.load(projectPath, &error))
+            {
+                qCritical() << "project-limit-test: invalid load accepted";
+                ++failures;
+            }
+            else if (project.entities().size() != 1
+                     || project.entities().first().name != QStringLiteral("original"))
+            {
+                qCritical() << "project-limit-test: failed load partially applied";
+                ++failures;
+            }
+        }
+    }
+
+    // v1 projects still migrate (default scene is created).
+    {
+        QJsonObject root = makeProject(1);
+        QJsonArray entities;
+        entities.append(makeEntity(1, QStringLiteral("folder")));
+        root[QStringLiteral("entities")] = entities;
+        if (!writeProject(projectPath, root))
+            return 1;
+        pvf::Project project;
+        QString error;
+        if (!project.load(projectPath, &error)
+            || project.scenes().size() != 1)
+        {
+            qCritical() << "project-limit-test: v1 migration failed" << error;
+            ++failures;
+        }
+    }
+
+    // Content-addressed copy: the file name must match the copied bytes, and
+    // a tampered target is repaired instead of being trusted.
+    {
+        const QString hashDir = QDir(projectRoot).filePath(QStringLiteral("hash-assets"));
+        const QString sourcePath = QDir(projectRoot).filePath(QStringLiteral("payload.bin"));
+        const QByteArray payload = QByteArrayLiteral("pvforge hash integrity payload");
+        if (!writeRaw(sourcePath, payload))
+            return 1;
+
+        QCryptographicHash hasher(QCryptographicHash::Sha256);
+        hasher.addData(payload);
+        const QString expected = QString::fromLatin1(hasher.result().toHex());
+        auto fileHash = [](const QString& path) {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly))
+                return QString();
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            hash.addData(&file);
+            return QString::fromLatin1(hash.result().toHex());
+        };
+
+        const QString copied = pvf::copyIntoAssetDirectory(sourcePath, hashDir);
+        if (QFileInfo(copied).completeBaseName() != expected
+            || fileHash(copied) != expected)
+        {
+            qCritical() << "project-limit-test: copied asset hash mismatch" << copied;
+            ++failures;
+        }
+        if (pvf::copyIntoAssetDirectory(sourcePath, hashDir) != copied)
+        {
+            qCritical() << "project-limit-test: identical asset not deduplicated";
+            ++failures;
+        }
+
+        if (!writeRaw(copied, QByteArrayLiteral("tampered")))
+            return 1;
+        if (pvf::copyIntoAssetDirectory(sourcePath, hashDir) != copied
+            || fileHash(copied) != expected)
+        {
+            qCritical() << "project-limit-test: tampered asset not repaired";
+            ++failures;
+        }
+    }
+
+    qInfo() << "project-limit-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int renameTest(QApplication& app)
 {
     const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.png");
@@ -9961,6 +10405,8 @@ int main(int argc, char* argv[])
         return renameTest(app);
     if (app.arguments().contains(QStringLiteral("--pack-test")))
         return packTest(app);
+    if (app.arguments().contains(QStringLiteral("--project-limit-test")))
+        return projectLimitTest(app);
     if (app.arguments().contains(QStringLiteral("--lock-test")))
         return lockTest(app);
     if (app.arguments().contains(QStringLiteral("--gizmo-test")))

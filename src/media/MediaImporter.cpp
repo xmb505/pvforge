@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QUuid>
 
 namespace pvf {
 
@@ -68,20 +69,84 @@ QString copyIntoAssetDirectory(const QString& sourcePath, const QString& directo
     if (absoluteSource.startsWith(absoluteDirectory + QLatin1Char('/')))
         return sourcePath;
 
-    QDir().mkpath(directory);
-
-    const QString hash = sha256File(sourcePath);
-    if (hash.isEmpty())
+    // Reject an asset directory that is itself a symlink: writing through it
+    // could place files outside the project.
+    if (QFileInfo(directory).isSymLink())
+        return sourcePath;
+    if (!QDir().mkpath(directory))
         return sourcePath;
 
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly))
+        return sourcePath;
+
+    const QString tempPath = QDir(directory).filePath(
+        QStringLiteral(".pvforge-import-%1.part")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    QFile temp(tempPath);
+    if (!temp.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+        return sourcePath;
+
+    // Copy and hash the same bytes in one pass so the final name always
+    // describes the content that was actually written.
+    QCryptographicHash hasher(QCryptographicHash::Sha256);
+    constexpr qint64 chunkSize = 1 << 20;
+    bool copied = true;
+    while (!source.atEnd())
+    {
+        const QByteArray chunk = source.read(chunkSize);
+        if (chunk.isEmpty())
+        {
+            copied = source.error() == QFileDevice::NoError;
+            break;
+        }
+        hasher.addData(chunk);
+        if (temp.write(chunk) != chunk.size())
+        {
+            copied = false;
+            break;
+        }
+    }
+    if (copied)
+        copied = temp.flush();
+    temp.close();
+    source.close();
+    if (!copied)
+    {
+        QFile::remove(tempPath);
+        return sourcePath;
+    }
+
+    const QString hash = QString::fromLatin1(hasher.result().toHex());
     const QString suffix = info.suffix();
     const QString target = QDir(directory).filePath(
         suffix.isEmpty() ? hash : hash + QLatin1Char('.') + suffix);
 
-    if (QFile::exists(target))
-        return target;
-    if (!QFile::copy(sourcePath, target))
+    // Never trust an existing entry, and never follow a symlink planted at
+    // the content-addressed name.
+    if (QFileInfo(target).isSymLink() && !QFile::remove(target))
+    {
+        QFile::remove(tempPath);
         return sourcePath;
+    }
+    if (QFile::exists(target))
+    {
+        if (sha256File(target) == hash)
+        {
+            QFile::remove(tempPath);
+            return target;
+        }
+        if (!QFile::remove(target))
+        {
+            QFile::remove(tempPath);
+            return sourcePath;
+        }
+    }
+    if (!QFile::rename(tempPath, target))
+    {
+        QFile::remove(tempPath);
+        return sourcePath;
+    }
     return target;
 }
 
