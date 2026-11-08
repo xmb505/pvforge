@@ -1,5 +1,6 @@
 #include "Project.h"
 
+#include "html/HtmlAsset.h"
 #include "media/AudioDecoder.h"
 #include "media/MediaImporter.h"
 #include "media/VideoDecoder.h"
@@ -52,6 +53,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("brandWall");
     case EntityType::HalftoneDots:
         return QStringLiteral("halftoneDots");
+    case EntityType::HtmlLayer:
+        return QStringLiteral("htmlLayer");
     }
     return QStringLiteral("image");
 }
@@ -95,6 +98,8 @@ bool typeFromString(const QString& text, EntityType* type)
         *type = EntityType::BrandWall;
     else if (text == QLatin1String("halftoneDots"))
         *type = EntityType::HalftoneDots;
+    else if (text == QLatin1String("htmlLayer"))
+        *type = EntityType::HtmlLayer;
     else
         return false;
     return true;
@@ -261,6 +266,7 @@ bool validateProjectDocument(const QJsonObject& root, const QString& projectPath
 
     QSet<int> entityIds;
     qint64 totalKeyframes = 0;
+    int htmlLayerCount = 0;
     for (int i = 0; i < entities.size(); ++i)
     {
         const QJsonObject object = entities.at(i).toObject();
@@ -272,6 +278,12 @@ bool validateProjectDocument(const QJsonObject& root, const QString& projectPath
                 *error = QStringLiteral("实体 #%1 使用未知类型 \"%2\"")
                              .arg(i + 1)
                              .arg(typeName);
+            return false;
+        }
+        if (type == EntityType::HtmlLayer && ++htmlLayerCount > 2)
+        {
+            if (error)
+                *error = QStringLiteral("HTML 层超过 2 个");
             return false;
         }
 
@@ -292,6 +304,12 @@ bool validateProjectDocument(const QJsonObject& root, const QString& projectPath
 
         if (!validateAssetPath(object.value(QStringLiteral("sourcePath")).toString(),
                                context, error))
+            return false;
+
+        const QJsonObject data = object.value(QStringLiteral("data")).toObject();
+        if (type == EntityType::HtmlLayer
+            && !validateAssetPath(
+                data.value(QStringLiteral("htmlAsset")).toString(), context, error))
             return false;
 
         const QJsonObject tracks = object.value(QStringLiteral("tracks")).toObject();
@@ -412,6 +430,52 @@ bool isColorKey(const QString& key)
            || lower.endsWith(QLatin1String("stroke"));
 }
 
+QString htmlVariableProperty(const QString& key)
+{
+    return QStringLiteral("var.") + key;
+}
+
+// Writes a manifest default only when the entity has no static value yet.
+// Existing keyframes are always kept: an asset swap must not destroy author
+// animation, even when the new manifest declares the same variable.
+void applyHtmlVariableDefaults(const html::HtmlAsset& asset, Entity& entity)
+{
+    for (const html::HtmlComponent& component : asset.components)
+        for (const html::HtmlVariable& variable : component.variables)
+        {
+            const QString prop =
+                htmlVariableProperty(component.id + QLatin1Char('.') + variable.name);
+            const auto track = entity.tracks.constFind(prop);
+            const bool animated = track != entity.tracks.constEnd()
+                                  && !track->isEmpty();
+            if (!entity.values.contains(prop) && !animated)
+                entity.values[prop] = variable.defaultValue;
+        }
+}
+
+QString writeHtmlAssetBytes(const QString& directory, const QByteArray& data)
+{
+    if (directory.isEmpty() || data.isEmpty()
+        || data.size() > html::Limits::kMaxAssetBytes)
+        return QString();
+    if (QFileInfo(directory).isSymLink() || !QDir().mkpath(directory))
+        return QString();
+
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
+    const QString target =
+        QDir(directory).filePath(hash + QStringLiteral(".json"));
+    if (QFileInfo::exists(target))
+        return target;
+
+    QSaveFile output(target);
+    if (!output.open(QIODevice::WriteOnly))
+        return QString();
+    if (output.write(data) != data.size() || !output.commit())
+        return QString();
+    return target;
+}
+
 } // namespace
 
 QString Project::assetDirectory() const
@@ -464,6 +528,171 @@ QString Project::importAsset(const QString& sourcePath) const
     if (!packAssets)
         return sourcePath;
     return copyIntoProject(sourcePath);
+}
+
+QString Project::htmlAssetDirectory() const
+{
+    const QString assets = assetDirectory();
+    if (assets.isEmpty())
+        return QString();
+    return QDir(assets).filePath(QStringLiteral("html"));
+}
+
+QString Project::packHtmlAsset(const QString& sourcePath) const
+{
+    if (sourcePath.isEmpty())
+        return sourcePath;
+    const QString directory = htmlAssetDirectory();
+    if (directory.isEmpty())
+        return sourcePath;
+
+    const QFileInfo sourceInfo(sourcePath);
+    const QString absoluteSource = sourceInfo.absoluteFilePath();
+    const QString absoluteDirectory = QFileInfo(directory).absoluteFilePath();
+    if (absoluteSource.startsWith(absoluteDirectory + QLatin1Char('/')))
+        return sourcePath;
+
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly))
+        return sourcePath;
+    if (source.size() > html::Limits::kMaxAssetBytes)
+        return sourcePath;
+    const QByteArray data = source.readAll();
+    source.close();
+    if (data.isEmpty() || data.size() > html::Limits::kMaxAssetBytes)
+        return sourcePath;
+
+    const QString target = writeHtmlAssetBytes(directory, data);
+    return target.isEmpty() ? sourcePath : target;
+}
+
+QString Project::importHtmlAssetData(const QByteArray& json, QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error)
+            *error = message;
+        return QString();
+    };
+    QString parseError;
+    const html::HtmlAsset asset = html::HtmlAsset::parse(json, &parseError);
+    if (!parseError.isEmpty())
+        return fail(parseError);
+    if (asset.html.isEmpty())
+        return fail(QStringLiteral("HTML 资产没有文档"));
+
+    const QString directory = htmlAssetDirectory();
+    if (directory.isEmpty())
+        return fail(QStringLiteral("请先保存工程，再导入 HTML 字符串"));
+    const QString target = writeHtmlAssetBytes(directory, json);
+    if (target.isEmpty())
+        return fail(QStringLiteral("无法写入 HTML 资产"));
+    if (error)
+        error->clear();
+    return target;
+}
+
+QString Project::importHtmlAsset(const QString& sourcePath, QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error)
+            *error = message;
+        return QString();
+    };
+    if (sourcePath.isEmpty())
+        return fail(QStringLiteral("没有选择 HTML 资产"));
+    if (error)
+        error->clear();
+
+    QString parseError;
+    const html::HtmlAsset asset = html::HtmlAsset::parseFile(sourcePath, &parseError);
+    if (!parseError.isEmpty())
+        return fail(parseError);
+    if (asset.html.isEmpty())
+        return fail(QStringLiteral("HTML 资产没有文档"));
+
+    if (!packAssets)
+        return sourcePath;
+    const QString directory = htmlAssetDirectory();
+    if (directory.isEmpty())
+        return sourcePath;   // unsaved project: keep the source path
+
+    const QString packed = packHtmlAsset(sourcePath);
+    const QString absoluteDirectory = QFileInfo(directory).absoluteFilePath();
+    if (!QFileInfo(packed).absoluteFilePath().startsWith(
+            absoluteDirectory + QLatin1Char('/')))
+        return fail(QStringLiteral("无法把 HTML 资产复制进工程"));
+    return packed;
+}
+
+Entity* Project::addHtmlLayer(const QString& assetPath, const QString& displayName)
+{
+    if (assetPath.isEmpty())
+        return nullptr;
+    int htmlLayers = 0;
+    for (const Entity& existing : m_entities)
+        if (existing.type == EntityType::HtmlLayer)
+            ++htmlLayers;
+    if (htmlLayers >= 2)
+        return nullptr;   // M6 v1 keeps at most two HTML layers per project
+
+    QString parseError;
+    const html::HtmlAsset asset = html::HtmlAsset::parseFile(assetPath, &parseError);
+    if (!parseError.isEmpty())
+        return nullptr;
+
+    Entity e = makeBase(EntityType::HtmlLayer,
+                        displayName.isEmpty()
+                            ? (asset.components.isEmpty()
+                                   ? QStringLiteral("HTML 层")
+                                   : (asset.components.first().name.isEmpty()
+                                          ? asset.components.first().id
+                                          : asset.components.first().name))
+                            : displayName);
+    e.data[QStringLiteral("htmlAsset")] = assetPath;
+    e.data[QStringLiteral("htmlWidth")] = asset.logicalSize.width();
+    e.data[QStringLiteral("htmlHeight")] = asset.logicalSize.height();
+    e.data[QStringLiteral("htmlTimeDependent")] = asset.timeDependent;
+    applyHtmlVariableDefaults(asset, e);
+    return append(std::move(e));
+}
+
+bool Project::replaceHtmlAsset(EntityId id, const QString& assetPath, QString* error)
+{
+    Entity* entity = this->entity(id);
+    if (!entity || entity->type != EntityType::HtmlLayer)
+    {
+        if (error)
+            *error = QStringLiteral("实体不是 HTML 层");
+        return false;
+    }
+    if (assetPath.isEmpty())
+    {
+        if (error)
+            *error = QStringLiteral("没有选择 HTML 资产");
+        return false;
+    }
+
+    QString parseError;
+    const html::HtmlAsset asset = html::HtmlAsset::parseFile(assetPath, &parseError);
+    if (!parseError.isEmpty())
+    {
+        if (error)
+            *error = parseError;
+        return false;
+    }
+
+    entity->data[QStringLiteral("htmlAsset")] = assetPath;
+    entity->data[QStringLiteral("htmlWidth")] = asset.logicalSize.width();
+    entity->data[QStringLiteral("htmlHeight")] = asset.logicalSize.height();
+    entity->data[QStringLiteral("htmlTimeDependent")] = asset.timeDependent;
+    applyHtmlVariableDefaults(asset, *entity);
+    entity->htmlImage = QImage();
+    entity->htmlError.clear();
+    entity->pixmap = QPixmap();
+    entity->thumbnail = QImage();
+    modified = true;
+    emit changed();
+    return true;
 }
 
 Template* Project::templateAt(int index)
@@ -1349,6 +1578,8 @@ Entity* Project::createFromTemplate(const Template& tmpl){
         }
         return entity(videoId);
     }
+    case EntityType::HtmlLayer:
+        return addHtmlLayer(tmpl.path, tmpl.name);
     case EntityType::Text:
     case EntityType::ComicText:
     case EntityType::RadialLines:
@@ -1989,6 +2220,11 @@ QJsonObject Project::toJson() const
                     array.append(storeAssetPath(path));
                 data[it.key()] = array;
             }
+            else if (e.type == EntityType::HtmlLayer
+                     && it.key() == QStringLiteral("htmlAsset"))
+            {
+                data[it.key()] = storeAssetPath(it.value().toString());
+            }
             else
                 data[it.key()] = QJsonValue::fromVariant(it.value());
         }
@@ -2244,8 +2480,7 @@ bool Project::load(const QString& path, QString* error)
             return false;
         }
         e.type = type;
-        e.parent = object.value(QStringLiteral("parent")).toInt(kInvalidEntity);
-        e.templateId = object.value(QStringLiteral("templateId")).toString();
+        e.parent = object.value(QStringLiteral("parent")).toInt(kInvalidEntity);        e.templateId = object.value(QStringLiteral("templateId")).toString();
         e.hidden = object.value(QStringLiteral("hidden")).toBool();
         e.locked = object.value(QStringLiteral("locked")).toBool();
         e.name = object.value(QStringLiteral("name")).toString();
@@ -2264,11 +2499,31 @@ bool Project::load(const QString& path, QString* error)
                     paths.append(resolveAssetPath(path.toString()));
                 e.data[it.key()] = paths;
             }
+            else if (e.type == EntityType::HtmlLayer
+                     && it.key() == QStringLiteral("htmlAsset"))
+            {
+                e.data[it.key()] = resolveAssetPath(it.value().toString());
+            }
             else
                 e.data[it.key()] = it.value().toVariant();
         }
         if (e.type == EntityType::BrandWall)
             refreshBrandWallImages(e);
+        if (e.type == EntityType::HtmlLayer)
+        {
+            // Refresh the cached logical size and time flag from the asset.
+            // A missing asset is not fatal: the layer draws a placeholder.
+            QString assetError;
+            const html::HtmlAsset asset =
+                html::HtmlAsset::parseFile(e.htmlAssetPath(), &assetError);
+            if (assetError.isEmpty() && !asset.html.isEmpty())
+            {
+                e.data[QStringLiteral("htmlWidth")] = asset.logicalSize.width();
+                e.data[QStringLiteral("htmlHeight")] = asset.logicalSize.height();
+                e.data[QStringLiteral("htmlTimeDependent")] = asset.timeDependent;
+                applyHtmlVariableDefaults(asset, e);
+            }
+        }
 
         const QJsonObject values = object.value(QStringLiteral("values")).toObject();
         for (auto it = values.constBegin(); it != values.constEnd(); ++it)

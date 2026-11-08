@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Project.h"
+#include "html/HtmlAsset.h"
 
 #include <QColor>
 #include <QWidget>
@@ -56,6 +57,14 @@ private:
         double factor = 1.0;   // display value * factor = stored value
     };
 
+    struct HtmlRow
+    {
+        QString prop;
+        QLabel* label = nullptr;
+        QDoubleSpinBox* spin = nullptr;
+        QToolButton* key = nullptr;
+    };
+
     void addRow(QFormLayout* form, const QString& label, const QString& prop, double lo,
                 double hi, int decimals, double step, double factor = 1.0);
     struct DataRow
@@ -71,6 +80,10 @@ private:
     void buildLinesSection(QVBoxLayout* layout);
     void buildBrandWallSection(QVBoxLayout* layout);
     void buildHalftoneSection(QVBoxLayout* layout);
+    void buildHtmlSection(QVBoxLayout* layout);
+    void rebuildHtmlRows(const html::HtmlAsset& asset);
+    void addHtmlVariableRow(QFormLayout* form, const html::HtmlComponent& component,
+                            const html::HtmlVariable& variable);
     void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
                     double hi, int decimals, double step);
     void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
@@ -110,6 +123,21 @@ private:
     CollapsibleSection* m_linesSection = nullptr;
     CollapsibleSection* m_wallSection = nullptr;
     CollapsibleSection* m_halftoneSection = nullptr;
+    CollapsibleSection* m_htmlSection = nullptr;
+    QLabel* m_htmlInfo = nullptr;
+    QLabel* m_htmlWarning = nullptr;
+    QWidget* m_htmlVariables = nullptr;
+    QVBoxLayout* m_htmlVariablesLayout = nullptr;
+    QPushButton* m_htmlReplace = nullptr;
+    QVector<HtmlRow> m_htmlRows;
+    QString m_htmlAssetPath;
+    EntityId m_htmlRowsEntity = kInvalidEntity;
+    QString m_htmlRowsStamp;
+    html::HtmlAsset m_htmlAssetCache;
+    QString m_htmlAssetCachePath;
+    QString m_htmlAssetCacheError;
+    QString m_htmlAssetCacheStamp;
+    bool m_htmlAssetCacheValid = false;
     QLabel* m_wallInfo = nullptr;
     QVector<DataRow> m_dataRows;
     QHash<QString, QColor> m_dataColors;

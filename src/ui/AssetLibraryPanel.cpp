@@ -7,9 +7,11 @@
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
+#include "html/HtmlAsset.h"
 #include "media/MediaImporter.h"
 
 #include <QDialog>
+#include <QDir>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QFileDialog>
@@ -57,6 +59,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("品牌瓷砖墙");
     case EntityType::HalftoneDots:
         return QStringLiteral("漫画点阵");
+    case EntityType::HtmlLayer:
+        return QStringLiteral("HTML 组件");
     }
     return QString();
 }
@@ -67,6 +71,81 @@ QString elidedPath(const QString& path)
     // carry the full value. The label itself is width-ignored so a long path
     // can never widen the whole right sidebar.
     return QFontMetrics(QFont()).elidedText(path, Qt::ElideMiddle, 240);
+}
+
+QStringList htmlAssetPaths(const Project& project)
+{
+    QStringList paths;
+    const QString directory = project.htmlAssetDirectory();
+    if (!directory.isEmpty())
+    {
+        const QFileInfoList files =
+            QDir(directory).entryInfoList({QStringLiteral("*.json")}, QDir::Files);
+        for (const QFileInfo& file : files)
+            paths.append(file.absoluteFilePath());
+    }
+    for (const Entity& entity : project.entities())
+    {
+        if (entity.type != EntityType::HtmlLayer)
+            continue;
+        const QString path = QFileInfo(entity.htmlAssetPath()).absoluteFilePath();
+        if (!path.isEmpty() && !paths.contains(path))
+            paths.append(path);
+    }
+    paths.sort();
+    return paths;
+}
+
+QString htmlAssetLabel(const QString& path)
+{
+    QString error;
+    const html::HtmlAsset asset = html::HtmlAsset::parseFile(path, &error);
+    if (error.isEmpty())
+    {
+        QString name = QFileInfo(path).completeBaseName();
+        if (!asset.components.isEmpty())
+        {
+            const html::HtmlComponent& component = asset.components.first();
+            name = component.name.isEmpty() ? component.id : component.name;
+        }
+        return QStringLiteral("%1 (%2×%3)")
+            .arg(name)
+            .arg(asset.logicalSize.width())
+            .arg(asset.logicalSize.height());
+    }
+    return QFileInfo(path).completeBaseName();
+}
+
+QImage htmlAssetThumbnail(const Project& project, const QString& path, const QSize& size)
+{
+    const QString absolute = QFileInfo(path).absoluteFilePath();
+    for (const Entity& entity : project.entities())
+    {
+        if (entity.type != EntityType::HtmlLayer || entity.htmlImage.isNull())
+            continue;
+        if (QFileInfo(entity.htmlAssetPath()).absoluteFilePath() != absolute)
+            continue;
+        return entity.htmlImage.scaled(size, Qt::KeepAspectRatio,
+                                       Qt::SmoothTransformation);
+    }
+    return QImage();
+}
+
+QPixmap htmlPlaceholder(const QSize& size, const QString& text)
+{
+    QPixmap pixmap(size);
+    pixmap.fill(QColor(24, 30, 42));
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(QColor(120, 180, 255), 1, Qt::DashLine));
+    p.drawRect(pixmap.rect().adjusted(1, 1, -2, -2));
+    QFont font = p.font();
+    font.setBold(true);
+    font.setPixelSize(std::max(9, std::min(size.width(), size.height()) / 4));
+    p.setFont(font);
+    p.setPen(QColor(205, 222, 255));
+    p.drawText(pixmap.rect(), Qt::AlignCenter, text);
+    return pixmap;
 }
 
 QPixmap renderTemplate(const Template& tmpl, const QSize& size)
@@ -328,7 +407,16 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     importButton->setToolTip(QStringLiteral("导入素材文件（图片 / 视频 / 音频）"));
     importButton->setFixedSize(26, 26);
     searchRow->addWidget(importButton);
+    auto* htmlImportButton = new QToolButton(this);
+    htmlImportButton->setObjectName(QStringLiteral("assetImportHtml"));
+    htmlImportButton->setText(QStringLiteral("H"));
+    htmlImportButton->setToolTip(QStringLiteral("导入 HTML 组件（pvforge-html JSON）"));
+    htmlImportButton->setFixedSize(26, 26);
+    searchRow->addWidget(htmlImportButton);
     layout->addLayout(searchRow);
+
+    connect(htmlImportButton, &QToolButton::clicked, this,
+            &AssetLibraryPanel::importHtmlAsset);
 
     connect(importButton, &QToolButton::clicked, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
@@ -417,6 +505,8 @@ void AssetLibraryPanel::refresh()
     QStringList signature;
     for (const Template& tmpl : m_project->templates())
         signature << QStringLiteral("%1|%2|%3").arg(int(tmpl.type)).arg(tmpl.name, tmpl.path);
+    for (const QString& path : htmlAssetPaths(*m_project))
+        signature << QStringLiteral("html|%1").arg(path);
 
     if (signature == m_signature)
     {
@@ -430,7 +520,8 @@ void AssetLibraryPanel::refresh()
 
 void AssetLibraryPanel::rebuild()
 {
-    const int previous = selectedIndex();
+    const int previousTemplate = selectedIndex();
+    const QString previousHtml = selectedHtmlAsset();
     const QSignalBlocker blocker(m_list);
     m_list->clear();
 
@@ -443,14 +534,41 @@ void AssetLibraryPanel::rebuild()
             continue;
         auto* item = new QListWidgetItem(tmpl.name, m_list);
         item->setData(Qt::UserRole, i);
+        item->setData(Qt::UserRole + 1, 0);
         item->setIcon(listIcon(tmpl));
         item->setToolTip(QStringLiteral("%1 · %2").arg(templateTypeName(tmpl.type), tmpl.path));
     }
 
+    // TODO(M6): drag-to-create from the library; the HTML list currently
+    // creates a layer with the button or a double click.
+    const QStringList htmlPaths = htmlAssetPaths(*m_project);
+    for (const QString& path : htmlPaths)
+    {
+        const QString label = htmlAssetLabel(path);
+        if (!filter.isEmpty() && !label.contains(filter, Qt::CaseInsensitive))
+            continue;
+        auto* item = new QListWidgetItem(label, m_list);
+        item->setData(Qt::UserRole, -1);
+        item->setData(Qt::UserRole + 1, 1);
+        item->setData(Qt::UserRole + 2, path);
+        const QImage image = htmlAssetThumbnail(*m_project, path, QSize(40, 40));
+        item->setIcon(image.isNull() ? QIcon(htmlPlaceholder(QSize(40, 40), QStringLiteral("H")))
+                                     : QIcon(QPixmap::fromImage(image)));
+        item->setToolTip(QStringLiteral("%1 · %2").arg(templateTypeName(EntityType::HtmlLayer),
+                                                       path));
+    }
+
     int restore = m_list->count() > 0 ? 0 : -1;
     for (int row = 0; row < m_list->count(); ++row)
-        if (m_list->item(row)->data(Qt::UserRole).toInt() == previous)
+    {
+        const QListWidgetItem* item = m_list->item(row);
+        if (item->data(Qt::UserRole + 1).toInt() == 0
+            && item->data(Qt::UserRole).toInt() == previousTemplate)
             restore = row;
+        else if (item->data(Qt::UserRole + 1).toInt() == 1
+                 && item->data(Qt::UserRole + 2).toString() == previousHtml)
+            restore = row;
+    }
     m_list->setCurrentRow(restore);
 
     updatePreview();
@@ -459,24 +577,62 @@ void AssetLibraryPanel::rebuild()
 int AssetLibraryPanel::selectedIndex() const
 {
     const QListWidgetItem* item = m_list->currentItem();
-    return item ? item->data(Qt::UserRole).toInt() : -1;
+    if (!item || item->data(Qt::UserRole + 1).toInt() != 0)
+        return -1;
+    return item->data(Qt::UserRole).toInt();
+}
+
+QString AssetLibraryPanel::selectedHtmlAsset() const
+{
+    const QListWidgetItem* item = m_list->currentItem();
+    if (!item || item->data(Qt::UserRole + 1).toInt() != 1)
+        return QString();
+    return item->data(Qt::UserRole + 2).toString();
 }
 
 void AssetLibraryPanel::updatePreview()
 {
     const int index = selectedIndex();
+    const QString htmlPath = selectedHtmlAsset();
     const auto& templates = m_project->templates();
-    const bool valid = index >= 0 && index < templates.size();
+    const bool validTemplate = index >= 0 && index < templates.size();
+    const bool validHtml = !htmlPath.isEmpty();
 
-    m_create->setEnabled(valid);
-    m_remove->setEnabled(valid);
+    m_create->setEnabled(validTemplate || validHtml);
+    m_remove->setEnabled(validTemplate);
 
-    if (!valid)
+    if (!validTemplate && !validHtml)
     {
         m_preview->setPixmap(QPixmap());
         m_preview->setText(QStringLiteral("素材库为空"));
         m_info->clear();
         m_info->setToolTip(QString());
+        return;
+    }
+
+    if (validHtml)
+    {
+        QString error;
+        const html::HtmlAsset asset = html::HtmlAsset::parseFile(htmlPath, &error);
+        const QImage image = htmlAssetThumbnail(*m_project, htmlPath, QSize(240, 150));
+        m_preview->setText(QString());
+        if (!image.isNull())
+            m_preview->setPixmap(QPixmap::fromImage(image));
+        else
+            m_preview->setPixmap(
+                htmlPlaceholder(QSize(240, 150), QStringLiteral("HTML")));
+
+        QString info = templateTypeName(EntityType::HtmlLayer);
+        if (error.isEmpty())
+            info += QStringLiteral(" · %1×%2 · %3 个变量")
+                        .arg(asset.logicalSize.width())
+                        .arg(asset.logicalSize.height())
+                        .arg(asset.variableKeys().size());
+        else
+            info += QStringLiteral(" · 无法解析：%1").arg(error);
+        info += QStringLiteral("\n") + elidedPath(htmlPath);
+        m_info->setText(info);
+        m_info->setToolTip(htmlPath);
         return;
     }
 
@@ -496,6 +652,21 @@ void AssetLibraryPanel::updatePreview()
 
 void AssetLibraryPanel::createSelected()
 {
+    const QString htmlPath = selectedHtmlAsset();
+    if (!htmlPath.isEmpty())
+    {
+        Entity* entity = m_project->addHtmlLayer(htmlPath);
+        if (!entity)
+        {
+            QMessageBox::warning(
+                this, QStringLiteral("无法创建 HTML 层"),
+                QStringLiteral("工程里最多只能有两个 HTML 层，或资产无法解析。"));
+            return;
+        }
+        emit entityCreated(entity->id);
+        return;
+    }
+
     const int index = selectedIndex();
     const auto& templates = m_project->templates();
     if (index < 0 || index >= templates.size())
@@ -503,6 +674,33 @@ void AssetLibraryPanel::createSelected()
 
     if (Entity* e = m_project->createFromTemplate(templates[index]))
         emit entityCreated(e->id);
+}
+
+void AssetLibraryPanel::importHtmlAsset()
+{
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("导入 HTML 组件"), QString(),
+        QStringLiteral("PVForge HTML (*.json);;所有文件 (*)"));
+    if (file.isEmpty())
+        return;
+
+    QString error;
+    const QString imported = m_project->importHtmlAsset(file, &error);
+    if (imported.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("导入 HTML 失败"), error);
+        return;
+    }
+
+    Entity* entity = m_project->addHtmlLayer(imported);
+    if (!entity)
+    {
+        QMessageBox::warning(
+            this, QStringLiteral("无法创建 HTML 层"),
+            QStringLiteral("工程里最多只能有两个 HTML 层，或资产无法解析。"));
+        return;
+    }
+    emit entityCreated(entity->id);
 }
 
 QVector<int> AssetLibraryPanel::mediaTemplateIndices(const Project& project,
@@ -594,6 +792,9 @@ QString AssetLibraryPanel::pickMedia(QWidget* parent, Project* project,
 
 void AssetLibraryPanel::removeSelected()
 {
+    if (!selectedHtmlAsset().isEmpty())
+        return;   // content-addressed HTML assets are shared; leave them on disk
+
     const int index = selectedIndex();
     const auto& templates = m_project->templates();
     if (index < 0 || index >= templates.size())

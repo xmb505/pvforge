@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
@@ -58,8 +59,18 @@ QString typeName(EntityType type)
         return QStringLiteral("品牌瓷砖墙");
     case EntityType::HalftoneDots:
         return QStringLiteral("漫画点阵");
+    case EntityType::HtmlLayer:
+        return QStringLiteral("HTML 层");
     }
     return QString();
+}
+
+QString htmlFileStamp(const QString& path)
+{
+    const QFileInfo info(path);
+    return QStringLiteral("%1|%2")
+        .arg(info.size())
+        .arg(info.lastModified().toMSecsSinceEpoch());
 }
 
 } // namespace
@@ -137,6 +148,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildLinesSection(layout);
     buildBrandWallSection(layout);
     buildHalftoneSection(layout);
+    buildHtmlSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
     buildAudioSection(layout);
@@ -605,6 +617,150 @@ void PropertiesPanel::buildHalftoneSection(QVBoxLayout* layout)
     layout->addWidget(m_halftoneSection);
 }
 
+void PropertiesPanel::buildHtmlSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* htmlLayout = new QVBoxLayout(content);
+    htmlLayout->setContentsMargins(10, 8, 10, 8);
+    htmlLayout->setSpacing(6);
+
+    m_htmlInfo = new QLabel(content);
+    m_htmlInfo->setWordWrap(true);
+    m_htmlInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_htmlInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_htmlInfo->setMinimumWidth(0);
+    htmlLayout->addWidget(m_htmlInfo);
+
+    m_htmlVariables = new QWidget(content);
+    m_htmlVariablesLayout = new QVBoxLayout(m_htmlVariables);
+    m_htmlVariablesLayout->setContentsMargins(0, 0, 0, 0);
+    m_htmlVariablesLayout->setSpacing(4);
+    htmlLayout->addWidget(m_htmlVariables);
+
+    m_htmlWarning = new QLabel(content);
+    m_htmlWarning->setObjectName(QStringLiteral("htmlWarning"));
+    m_htmlWarning->setWordWrap(true);
+    m_htmlWarning->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_htmlWarning->setMinimumWidth(0);
+    m_htmlWarning->setStyleSheet(QStringLiteral("color:#e0a050;"));
+    m_htmlWarning->hide();
+    htmlLayout->addWidget(m_htmlWarning);
+
+    m_htmlReplace = new QPushButton(QStringLiteral("整份替换 HTML 资产…"), content);
+    m_htmlReplace->setObjectName(QStringLiteral("htmlReplaceButton"));
+    m_htmlReplace->setToolTip(
+        QStringLiteral("换掉文档，按变量名保留同名 var.* 轨道，孤立轨会保留并标记"));
+    connect(m_htmlReplace, &QPushButton::clicked, this, [this] {
+        if (m_entity != kInvalidEntity)
+            emit replaceSourceRequested(m_entity);
+    });
+    htmlLayout->addWidget(m_htmlReplace);
+
+    m_htmlSection = new CollapsibleSection(QStringLiteral("HTML"), content, this);
+    m_htmlSection->setExpanded(true);
+    layout->addWidget(m_htmlSection);
+}
+
+void PropertiesPanel::rebuildHtmlRows(const html::HtmlAsset& asset)
+{
+    m_htmlRows.clear();
+    if (!m_htmlVariablesLayout)
+        return;
+
+    while (QLayoutItem* item = m_htmlVariablesLayout->takeAt(0))
+    {
+        if (QWidget* widget = item->widget())
+        {
+            widget->hide();
+            widget->deleteLater();
+        }
+        delete item;
+    }
+
+    for (const html::HtmlComponent& component : asset.components)
+    {
+        auto* header = new QLabel(
+            component.name.isEmpty() ? component.id : component.name, m_htmlVariables);
+        header->setToolTip(component.id);
+        QFont font = header->font();
+        font.setBold(true);
+        header->setFont(font);
+        m_htmlVariablesLayout->addWidget(header);
+
+        auto* form = new QFormLayout();
+        form->setContentsMargins(0, 0, 0, 4);
+        form->setVerticalSpacing(4);
+        for (const html::HtmlVariable& variable : component.variables)
+            addHtmlVariableRow(form, component, variable);
+        m_htmlVariablesLayout->addLayout(form);
+    }
+}
+
+void PropertiesPanel::addHtmlVariableRow(QFormLayout* form,
+                                         const html::HtmlComponent& component,
+                                         const html::HtmlVariable& variable)
+{
+    const QString prop =
+        QStringLiteral("var.") + component.id + QLatin1Char('.') + variable.name;
+    auto* rowWidget = new QWidget(m_htmlVariables);
+    auto* rowLayout = new QHBoxLayout(rowWidget);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(4);
+
+    auto* spin = new QDoubleSpinBox(rowWidget);
+    spin->setObjectName(QStringLiteral("htmlVar_") + prop);
+    spin->setRange(variable.min, variable.max);
+    spin->setDecimals(variable.integer ? 0 : 3);
+    spin->setSingleStep(variable.integer
+                            ? 1.0
+                            : std::max(0.001, (variable.max - variable.min) / 100.0));
+    spin->setKeyboardTracking(false);
+    rowLayout->addWidget(spin, 1);
+
+    auto* key = new QToolButton(rowWidget);
+    key->setObjectName(QStringLiteral("htmlKey_") + prop);
+    key->setFixedSize(18, 18);
+    key->setAutoRaise(true);
+    key->setText(QStringLiteral("◇"));
+    key->setToolTip(QStringLiteral("在当前帧打关键帧"));
+    key->setCursor(Qt::PointingHandCursor);
+    connect(key, &QToolButton::clicked, this, [this, prop] {
+        if (m_entity == kInvalidEntity)
+            return;
+        const Entity* entity = m_project->entity(m_entity);
+        if (!entity || m_project->isEffectivelyLocked(m_entity))
+            return;
+        bool hasKey = false;
+        const auto track = entity->tracks.constFind(prop);
+        if (track != entity->tracks.constEnd())
+            for (const Keyframe& frame : track->keys)
+                if (std::abs(frame.frame - m_frame) < 1e-6)
+                {
+                    hasKey = true;
+                    break;
+                }
+        emit keyframeToggled(m_entity, prop, m_frame, hasKey);
+    });
+    rowLayout->addWidget(key);
+
+    auto* labelWidget = new QLabel(variable.name, m_htmlVariables);
+    labelWidget->setToolTip(prop);
+    form->addRow(labelWidget, rowWidget);
+
+    connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop](double value) {
+        if (m_entity == kInvalidEntity)
+            return;
+        emit valueEdited(m_entity, prop, value);
+    });
+
+    HtmlRow row;
+    row.prop = prop;
+    row.label = labelWidget;
+    row.spin = spin;
+    row.key = key;
+    m_htmlRows.append(row);
+}
+
 void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
@@ -1009,11 +1165,13 @@ void PropertiesPanel::refresh()
     const bool radial = valid && e->type == EntityType::RadialLines;
     const bool flow = valid && e->type == EntityType::FlowLines;
     const bool halftone = valid && e->type == EntityType::HalftoneDots;
+    const bool htmlLayer = valid && e->type == EntityType::HtmlLayer;
     m_textSection->setVisible(valid && (e->type == EntityType::Text || comic));
     m_comicSection->setVisible(comic);
     m_linesSection->setVisible(radial || flow);
     m_wallSection->setVisible(valid && e->type == EntityType::BrandWall);
     m_halftoneSection->setVisible(halftone);
+    m_htmlSection->setVisible(htmlLayer);
     if (valid && e->type == EntityType::BrandWall && m_wallInfo)
     {
         const BrandWallParams params = BrandWallParams::fromData(e->data);
@@ -1023,6 +1181,90 @@ void PropertiesPanel::refresh()
                 .arg(params.columns)
                 .arg(params.rows)
                 .arg(int(params.gap)));
+    }
+    if (htmlLayer)
+    {
+        const QString assetPath = e->htmlAssetPath();
+        const QString assetStamp = htmlFileStamp(assetPath);
+        if (!m_htmlAssetCacheValid || m_htmlAssetCachePath != assetPath
+            || m_htmlAssetCacheStamp != assetStamp)
+        {
+            m_htmlAssetCachePath = assetPath;
+            m_htmlAssetCacheStamp = assetStamp;
+            m_htmlAssetCacheError.clear();
+            m_htmlAssetCache = html::HtmlAsset{};
+            if (!assetPath.isEmpty())
+                m_htmlAssetCache = html::HtmlAsset::parseFile(
+                    assetPath, &m_htmlAssetCacheError);
+            else
+                m_htmlAssetCacheError = QStringLiteral("没有 HTML 资产");
+            m_htmlAssetCacheValid = true;
+        }
+        const html::HtmlAsset& asset = m_htmlAssetCache;
+        const QString assetError = m_htmlAssetCacheError;
+
+        if (m_htmlRowsEntity != e->id || m_htmlAssetPath != assetPath
+            || m_htmlRowsStamp != assetStamp)
+        {
+            m_htmlRowsEntity = e->id;
+            m_htmlAssetPath = assetPath;
+            m_htmlRowsStamp = assetStamp;
+            rebuildHtmlRows(asset);
+        }
+
+        m_htmlInfo->setText(
+            QStringLiteral("%1\n逻辑尺寸 %2×%3 · %4")
+                .arg(assetError.isEmpty()
+                         ? QFileInfo(assetPath).fileName()
+                         : QStringLiteral("资产不可用：%1").arg(assetError))
+                .arg(e->htmlLogicalSize().width())
+                .arg(e->htmlLogicalSize().height())
+                .arg(e->htmlTimeDependent() ? QStringLiteral("时间相关")
+                                            : QStringLiteral("静态")));
+        m_htmlInfo->setToolTip(assetPath);
+
+        QStringList warnings;
+        if (!assetError.isEmpty())
+            warnings << assetError;
+        QSet<QString> declared;
+        QStringList missing;
+        for (const QString& key : asset.variableKeys())
+        {
+            const QString prop = QStringLiteral("var.") + key;
+            declared.insert(prop);
+            const auto track = e->tracks.constFind(prop);
+            const bool animated = track != e->tracks.constEnd()
+                                  && !track->isEmpty();
+            if (!e->values.contains(prop) && !animated)
+                missing << key;
+        }
+        if (!missing.isEmpty())
+            warnings << QStringLiteral("变量缺少当前值，使用清单默认值：%1")
+                            .arg(missing.join(QStringLiteral(", ")));
+        QStringList orphans;
+        for (auto it = e->tracks.constBegin(); it != e->tracks.constEnd(); ++it)
+        {
+            if (it.key().startsWith(QStringLiteral("var."))
+                && !declared.contains(it.key()) && !it->isEmpty())
+                orphans << it.key().mid(4);
+        }
+        for (auto it = e->values.constBegin(); it != e->values.constEnd(); ++it)
+        {
+            if (it.key().startsWith(QStringLiteral("var."))
+                && !declared.contains(it.key()) && !orphans.contains(it.key().mid(4)))
+                orphans << it.key().mid(4);
+        }
+        if (!orphans.isEmpty())
+            warnings << QStringLiteral("未使用的变量轨：%1")
+                            .arg(orphans.join(QStringLiteral(", ")));
+        m_htmlWarning->setText(warnings.join(QStringLiteral("\n")));
+        m_htmlWarning->setVisible(!warnings.isEmpty());
+        if (m_htmlReplace)
+            m_htmlReplace->setEnabled(!m_project->isEffectivelyLocked(e->id));
+    }
+    else if (m_htmlWarning)
+    {
+        m_htmlWarning->hide();
     }
     if (m_linesStack)
         m_linesStack->setCurrentIndex(flow ? 1 : 0);
@@ -1044,6 +1286,7 @@ void PropertiesPanel::refresh()
     m_linesSection->setEnabled(editable);
     m_wallSection->setEnabled(editable);
     m_halftoneSection->setEnabled(editable);
+    m_htmlSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
     if (m_replaceSource)
@@ -1254,6 +1497,28 @@ void PropertiesPanel::refresh()
                                      : QStringLiteral("在当前帧打关键帧"));
             r.key->setEnabled(editable);
         }
+    }
+
+    for (HtmlRow& r : m_htmlRows)
+    {
+        const QSignalBlocker blocker(r.spin);
+        r.spin->setValue(m_project->value(m_entity, r.prop, m_frame));
+        r.spin->setEnabled(editable);
+        if (r.label)
+            r.label->setEnabled(editable);
+        bool hasKey = false;
+        const auto track = e->tracks.constFind(r.prop);
+        if (track != e->tracks.constEnd())
+            for (const Keyframe& key : track->keys)
+                if (std::abs(key.frame - m_frame) < 1e-6)
+                {
+                    hasKey = true;
+                    break;
+                }
+        r.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
+        r.key->setToolTip(hasKey ? QStringLiteral("删除当前帧的关键帧")
+                                 : QStringLiteral("在当前帧打关键帧"));
+        r.key->setEnabled(editable);
     }
 
     if (e->type == EntityType::Text || e->type == EntityType::ComicText)

@@ -22,6 +22,7 @@
 #include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
 #include "html/HtmlCaptureTest.h"
+#include "html/HtmlLayerTest.h"
 #include "core/Project.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
@@ -12800,6 +12801,10 @@ int main(int argc, char* argv[])
         return layoutTest(app);
     if (app.arguments().contains(QStringLiteral("--html-capture-test")))
         return pvf::html::htmlCaptureTest();
+    if (app.arguments().contains(QStringLiteral("--html-layer-test")))
+        return pvf::html::htmlLayerTest();
+    if (app.arguments().contains(QStringLiteral("--html-export-test")))
+        return pvf::html::htmlExportTest();
 
     pvf::WelcomeWindow welcome;
     welcome.show();

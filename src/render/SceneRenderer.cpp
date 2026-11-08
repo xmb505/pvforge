@@ -147,6 +147,15 @@ QRectF entityLocalBounds(const Entity& entity)
     case EntityType::HalftoneDots:
         return LineDeco::halftoneBounds(HalftoneParams::fromData(entity.data));
 
+    case EntityType::HtmlLayer:
+    {
+        const QSize size = entity.htmlLogicalSize();
+        if (size.width() > 0 && size.height() > 0)
+            return QRectF(-size.width() / 2.0, -size.height() / 2.0, size.width(),
+                          size.height());
+        return QRectF(-400, -60, 800, 120);
+    }
+
     case EntityType::Camera:
         return QRectF();
     case EntityType::Audio:
@@ -161,11 +170,16 @@ QRectF entityLocalBounds(const Entity& entity)
 
 const QImage& thumbnail(const Entity& entity)
 {
-    if (entity.thumbnail.isNull() && !entity.image.isNull())
+    if (entity.thumbnail.isNull())
     {
-        entity.thumbnail =
-            entity.image.scaled(kThumbnailEdge, kThumbnailEdge, Qt::KeepAspectRatio,
-                                Qt::SmoothTransformation);
+        const QImage& source =
+            entity.image.isNull() ? entity.htmlImage : entity.image;
+        if (!source.isNull())
+        {
+            entity.thumbnail =
+                source.scaled(kThumbnailEdge, kThumbnailEdge, Qt::KeepAspectRatio,
+                              Qt::SmoothTransformation);
+        }
     }
     return entity.thumbnail;
 }
@@ -301,6 +315,49 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         }
         break;
     }
+
+    case EntityType::HtmlLayer:
+        if (!entity.htmlImage.isNull())
+        {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            if (useThumbnail)
+            {
+                const QImage& image = thumbnail(entity);
+                if (!image.isNull())
+                    painter.drawImage(bounds, image, QRectF(image.rect()));
+            }
+            else
+            {
+                if (entity.pixmap.isNull())
+                    entity.pixmap = QPixmap::fromImage(entity.htmlImage);
+                painter.drawPixmap(bounds, entity.pixmap, QRectF(entity.pixmap.rect()));
+            }
+        }
+        else
+        {
+            // Browser missing, capture pending or failed: keep the layer
+            // selectable and obvious instead of drawing a broken frame.
+            const QRectF rect = entityLocalBounds(entity);
+            QPen pen(QColor(120, 180, 255, 190));
+            pen.setWidthF(std::max(1.0, rect.height() / 120.0));
+            pen.setStyle(Qt::DashLine);
+            painter.setPen(pen);
+            painter.setBrush(QColor(18, 24, 36, 190));
+            painter.drawRect(rect);
+
+            QFont font = painter.font();
+            font.setPixelSize(int(std::clamp(rect.height() / 6.0, 8.0, 48.0)));
+            painter.setFont(font);
+            painter.setPen(QColor(205, 222, 255));
+            QString text = entity.htmlError.isEmpty()
+                               ? QStringLiteral("HTML 预览未就绪")
+                               : QStringLiteral("HTML: %1").arg(entity.htmlError);
+            if (text.size() > 90)
+                text = text.left(87) + QStringLiteral("...");
+            painter.drawText(rect.adjusted(8, 8, -8, -8),
+                             Qt::AlignCenter | Qt::TextWordWrap, text);
+        }
+        break;
 
     case EntityType::Camera:
         break;

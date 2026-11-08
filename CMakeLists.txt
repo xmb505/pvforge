@@ -73,6 +73,7 @@ add_executable(pvforge
     src/html/HtmlBrowser.cpp
     src/html/HtmlRenderer.cpp
     src/html/HtmlCaptureTest.cpp
+    src/html/HtmlLayerTest.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp

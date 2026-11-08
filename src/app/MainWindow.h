@@ -2,10 +2,13 @@
 
 #include "core/History.h"
 #include "core/Project.h"
+#include "html/HtmlAsset.h"
 #include "media/VideoPlayer.h"
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QMainWindow>
+#include <QSet>
 
 #include <functional>
 #include <memory>
@@ -22,6 +25,11 @@ class QToolButton;
 
 namespace pvf {
 
+namespace html {
+class HtmlBrowser;
+class HtmlRenderer;
+} // namespace html
+
 class AssetLibraryPanel;
 class AudioEngine;
 class CameraMonitor;
@@ -33,6 +41,7 @@ class ProjectPropertiesPanel;
 class PropertiesPanel;
 class SettingsDialog;
 class TimelinePanel;
+class VideoExporter;
 class VideoProxyGenerator;
 class Viewport;
 class WaveformView;
@@ -46,6 +55,7 @@ class MainWindow : public QMainWindow
 
 public:
     explicit MainWindow(Project* project, QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     Project* project() const { return m_project; }
     EntityId importImageFile(const QString& path);
@@ -197,6 +207,17 @@ private:
     bool commitKeyframeNote(EntityId id, double frame, const QString& note);
     void applyActiveSceneParent(EntityId id);
 
+    // ---- HTML layers ----------------------------------------------------
+    void scheduleHtmlPreview(bool immediate = false);
+    void requestHtmlPreviews();
+    void cleanupHtmlRenderers();
+    QVector<EntityId> htmlLayersForFrame(int frame) const;
+    QSize htmlPreviewSize() const;
+    html::HtmlAsset htmlAssetFor(const Entity& entity, QString* error);
+    html::HtmlRenderer* htmlRendererFor(EntityId id);
+    void applyHtmlFrame(EntityId id, quint64 token, const QString& cacheKey,
+                        const QImage& image, const QString& error);
+
     Project* m_project = nullptr;
     History* m_history = nullptr;
     Viewport* m_viewport = nullptr;
@@ -215,6 +236,19 @@ private:
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
+    html::HtmlBrowser* m_htmlBrowser = nullptr;
+    QHash<EntityId, html::HtmlRenderer*> m_htmlRenderers;
+    QHash<QString, html::HtmlAsset> m_htmlAssets;
+    QHash<QString, QString> m_htmlAssetStamps;
+    QHash<EntityId, quint64> m_htmlTokens;
+    QHash<EntityId, QString> m_htmlCacheKeys;
+    QSet<EntityId> m_htmlInFlight;
+    QTimer* m_htmlPreviewTimer = nullptr;
+    QElapsedTimer m_htmlPreviewClock;
+    QElapsedTimer m_htmlBrowserRetryClock;
+    bool m_htmlExporting = false;
+    QString m_htmlExportError;
+    VideoExporter* m_exporter = nullptr;
     AudioEngine* m_audioEngine = nullptr;
     VideoPlayer m_videoPlayer;
     VideoProxyGenerator* m_proxyGenerator = nullptr;

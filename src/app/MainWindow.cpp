@@ -8,6 +8,8 @@
 #include "media/MediaImporter.h"
 #include "media/VideoProxy.h"
 #include "core/Settings.h"
+#include "html/HtmlBrowser.h"
+#include "html/HtmlRenderer.h"
 #include "ExportDialog.h"
 #include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
@@ -302,6 +304,17 @@ private:
     QColor m_color;
 };
 
+// Content-addressed assets never change, but packAssets can be off and the
+// user may edit the source file in place. The stamp keeps the parse cache and
+// preview cache key honest without hashing the document every frame.
+QString htmlFileStamp(const QString& path)
+{
+    const QFileInfo info(path);
+    return QStringLiteral("%1|%2")
+        .arg(info.size())
+        .arg(info.lastModified().toMSecsSinceEpoch());
+}
+
 } // namespace
 
 MainWindow::MainWindow(Project* project, QWidget* parent)
@@ -351,6 +364,14 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             QStringLiteral("已请求停止 AI：当前只有只读工具，写工具接入后执行急停"),
             5000);
     });
+
+    // One headless browser is shared by every HTML layer; renderers are
+    // created lazily per layer and never outlive the browser.
+    m_htmlBrowser = new html::HtmlBrowser(this);
+    m_htmlPreviewTimer = new QTimer(this);
+    m_htmlPreviewTimer->setSingleShot(true);
+    connect(m_htmlPreviewTimer, &QTimer::timeout, this,
+            &MainWindow::requestHtmlPreviews);
 
     // "Project properties" tab: collapsible categories, one scroll column.
     m_projectTab = new QWidget(this);
@@ -641,6 +662,35 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
                 }
             });
     ensureProxies();
+}
+
+MainWindow::~MainWindow()
+{
+    if (m_exporter)
+    {
+        m_exporter->disconnect();
+        m_exporter->cancel();
+    }
+    // Renderers hold a raw pointer to the shared browser, so destroy them
+    // before it. Deleting the browser closes the headless process and its
+    // pages.
+    if (m_htmlPreviewTimer)
+        m_htmlPreviewTimer->stop();
+    for (html::HtmlRenderer* renderer : m_htmlRenderers)
+    {
+        if (renderer)
+        {
+            renderer->cancel(QStringLiteral("window closed"));
+            delete renderer;
+        }
+    }
+    m_htmlRenderers.clear();
+    if (m_htmlBrowser)
+    {
+        m_htmlBrowser->stop();
+        delete m_htmlBrowser;
+        m_htmlBrowser = nullptr;
+    }
 }
 
 void MainWindow::createActions()
@@ -1056,6 +1106,259 @@ bool MainWindow::saveProjectAs()
     return true;
 }
 
+void MainWindow::scheduleHtmlPreview(bool immediate)
+{
+    if (!m_htmlPreviewTimer || m_htmlExporting)
+        return;
+    if (htmlLayersForFrame(m_frame).isEmpty())
+        return;
+
+    int delay = 0;
+    if (m_playing && !immediate && m_htmlPreviewClock.isValid())
+        delay = std::max(0, 66 - int(m_htmlPreviewClock.elapsed()));
+    m_htmlPreviewTimer->start(delay);
+}
+
+void MainWindow::requestHtmlPreviews()
+{
+    if (m_htmlExporting)
+        return;
+
+    const QVector<EntityId> layers = htmlLayersForFrame(m_frame);
+    if (layers.isEmpty())
+        return;
+
+    m_htmlPreviewClock.start();
+    if (!m_htmlBrowser->isRunning())
+    {
+        const QString executable = html::HtmlBrowser::detectExecutable(
+            m_htmlBrowser->requestedExecutable());
+        if (executable.isEmpty())
+        {
+            for (EntityId id : layers)
+                if (Entity* entity = m_project->entity(id))
+                {
+                    entity->htmlImage = QImage();
+                    entity->htmlError = QStringLiteral(
+                        "未找到 Chrome/Edge/Chromium；请安装浏览器后重启预览");
+                    entity->pixmap = QPixmap();
+                    entity->thumbnail = QImage();
+                }
+            m_viewport->update();
+            if (m_monitor)
+                m_monitor->update();
+            return;
+        }
+        if (m_htmlBrowserRetryClock.isValid()
+            && m_htmlBrowserRetryClock.elapsed() < 3000)
+            return;
+    }
+
+    const QSize size = htmlPreviewSize();
+    for (EntityId id : layers)
+    {
+        Entity* entity = m_project->entity(id);
+        if (!entity || entity->type != EntityType::HtmlLayer)
+            continue;
+
+        html::HtmlRenderer* renderer = htmlRendererFor(id);
+        if (!renderer)
+            continue;
+
+        QString assetError;
+        const html::HtmlAsset asset = htmlAssetFor(*entity, &assetError);
+        if (!assetError.isEmpty())
+        {
+            applyHtmlFrame(id, ++m_htmlTokens[id], QString(), QImage(), assetError);
+            continue;
+        }
+
+        QHash<QString, double> vars;
+        for (const html::HtmlComponent& component : asset.components)
+            for (const html::HtmlVariable& variable : component.variables)
+            {
+                const QString key =
+                    component.id + QLatin1Char('.') + variable.name;
+                vars.insert(key, m_project->value(
+                                     id, QStringLiteral("var.") + key, m_frame));
+            }
+
+        const bool timeDependent = entity->htmlTimeDependent();
+        QString cacheKey = QStringLiteral("%1|%2|%3x%4|%5")
+                               .arg(entity->htmlAssetPath())
+                               .arg(htmlFileStamp(entity->htmlAssetPath()))
+                               .arg(size.width())
+                               .arg(size.height())
+                               .arg(timeDependent ? m_frame : 0);
+        QList<QString> varNames = vars.keys();
+        std::sort(varNames.begin(), varNames.end());
+        for (const QString& key : varNames)
+            cacheKey += QStringLiteral("|%1=%2").arg(key).arg(vars.value(key), 0, 'g', 17);
+        if (!entity->htmlImage.isNull()
+            && m_htmlCacheKeys.value(id) == cacheKey)
+            continue;
+        // One capture per layer at a time. During playback a slower browser
+        // must finish the current frame instead of being superseded every
+        // tick; the next tick will pick up the newest playhead.
+        if (m_htmlInFlight.contains(id))
+            continue;
+
+        html::FrameRequest request;
+        request.asset = asset;
+        request.pageSize = size;
+        request.vars = vars;
+        request.frame = m_frame;
+        request.time = m_frame / double(std::max(1, m_project->fps));
+        request.deterministic = true;
+        request.timeoutMs = 1200;
+
+        const quint64 token = ++m_htmlTokens[id];
+        m_htmlInFlight.insert(id);
+        renderer->requestFrame(
+            request, [this, id, token, cacheKey](const QImage& image,
+                                                 const QString& error) {
+                applyHtmlFrame(id, token, cacheKey, image, error);
+            });
+    }
+}
+
+void MainWindow::cleanupHtmlRenderers()
+{
+    for (auto it = m_htmlRenderers.begin(); it != m_htmlRenderers.end();)
+    {
+        Entity* entity = m_project->entity(it.key());
+        if (entity && entity->type == EntityType::HtmlLayer)
+        {
+            ++it;
+            continue;
+        }
+        html::HtmlRenderer* renderer = it.value();
+        if (renderer)
+        {
+            renderer->cancel(QStringLiteral("HTML layer removed"));
+            delete renderer;
+        }
+        m_htmlCacheKeys.remove(it.key());
+        m_htmlTokens.remove(it.key());
+        m_htmlInFlight.remove(it.key());
+        it = m_htmlRenderers.erase(it);
+    }
+}
+
+QVector<EntityId> MainWindow::htmlLayersForFrame(int frame) const
+{
+    QVector<EntityId> layers;
+    for (const Entity& entity : m_project->entities())
+    {
+        if (entity.type != EntityType::HtmlLayer)
+            continue;
+        if (m_project->isEffectivelyHidden(entity.id))
+            continue;
+        if (m_project->effectiveOpacity(entity.id, frame) <= 0.0)
+            continue;
+        layers.append(entity.id);
+        if (layers.size() >= html::HtmlBrowser::kMaxLayers)
+            break;
+    }
+    return layers;
+}
+
+QSize MainWindow::htmlPreviewSize() const
+{
+    QSize size(std::max(1, m_project->width), std::max(1, m_project->height));
+    const Entity* selected = m_project->entity(m_selected);
+    const bool selectedHtml =
+        selected && selected->type == EntityType::HtmlLayer;
+    if (m_playing && !selectedHtml && m_viewport)
+    {
+        const QSize view = m_viewport->size();
+        size.setWidth(std::min(size.width(), std::max(1, view.width())));
+        size.setHeight(std::min(size.height(), std::max(1, view.height())));
+    }
+    return QSize(std::clamp(size.width(), 1, html::Limits::kMaxEdge),
+                 std::clamp(size.height(), 1, html::Limits::kMaxEdge));
+}
+
+html::HtmlAsset MainWindow::htmlAssetFor(const Entity& entity, QString* error)
+{
+    const QString path = entity.htmlAssetPath();
+    if (path.isEmpty())
+    {
+        if (error)
+            *error = QStringLiteral("HTML 层没有资产");
+        return {};
+    }
+    const auto cached = m_htmlAssets.constFind(path);
+    const QString stamp = htmlFileStamp(path);
+    if (cached != m_htmlAssets.constEnd()
+        && m_htmlAssetStamps.value(path) == stamp)
+    {
+        if (error)
+            error->clear();
+        return cached.value();
+    }
+
+    QString parseError;
+    const html::HtmlAsset asset = html::HtmlAsset::parseFile(path, &parseError);
+    if (!parseError.isEmpty())
+    {
+        if (error)
+            *error = parseError;
+        return {};
+    }
+    m_htmlAssets.insert(path, asset);
+    m_htmlAssetStamps.insert(path, stamp);
+    if (error)
+        error->clear();
+    return asset;
+}
+
+html::HtmlRenderer* MainWindow::htmlRendererFor(EntityId id)
+{
+    if (html::HtmlRenderer* existing = m_htmlRenderers.value(id, nullptr))
+        return existing;
+    if (!m_htmlBrowser)
+        return nullptr;
+    auto* renderer = new html::HtmlRenderer(m_htmlBrowser, this);
+    m_htmlRenderers.insert(id, renderer);
+    return renderer;
+}
+
+void MainWindow::applyHtmlFrame(EntityId id, quint64 token, const QString& cacheKey,
+                                const QImage& image, const QString& error)
+{
+    m_htmlInFlight.remove(id);
+    if (m_htmlTokens.value(id, 0) != token)
+        return;   // superseded request; never let an old frame overwrite a new one
+    Entity* entity = m_project->entity(id);
+    if (!entity || entity->type != EntityType::HtmlLayer)
+        return;
+
+    if (image.isNull())
+    {
+        entity->htmlImage = QImage();
+        entity->htmlError = error.isEmpty() ? QStringLiteral("HTML 抓帧失败") : error;
+        entity->pixmap = QPixmap();
+        entity->thumbnail = QImage();
+        m_htmlCacheKeys.remove(id);
+        if (m_htmlBrowser && !m_htmlBrowser->isRunning())
+            m_htmlBrowserRetryClock.start();
+    }
+    else
+    {
+        entity->htmlImage = image;
+        entity->htmlError.clear();
+        entity->pixmap = QPixmap();
+        entity->thumbnail = QImage();
+        m_htmlCacheKeys.insert(id, cacheKey);
+    }
+    m_viewport->update();
+    if (m_monitor)
+        m_monitor->update();
+    if (!image.isNull() && !m_htmlExporting)
+        scheduleHtmlPreview(!m_playing);
+}
+
 void MainWindow::exportVideo()
 {
     if (m_playing)
@@ -1076,6 +1379,7 @@ void MainWindow::exportVideo()
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
     auto* exporter = new VideoExporter(this);
+    m_exporter = exporter;
     connect(exporter, &VideoExporter::progress, progress,
             &ExportProgressDialog::setProgress);
     connect(exporter, &VideoExporter::previewFrame, progress,
@@ -1087,6 +1391,9 @@ void MainWindow::exportVideo()
                 progress->finish();
                 progress->deleteLater();
                 exporter->deleteLater();
+                if (m_exporter == exporter)
+                    m_exporter = nullptr;
+                m_htmlExporting = false;
 
                 // The export decoded video entities from their source files;
                 // put the preview back on the proxy at the current playhead.
@@ -1102,15 +1409,21 @@ void MainWindow::exportVideo()
                 }
                 else if (!error.isEmpty())
                 {
-                    QMessageBox::warning(this, QStringLiteral("导出失败"), error);
+                    const QString detail = m_htmlExportError.isEmpty()
+                                               ? error
+                                               : m_htmlExportError;
+                    m_htmlExportError.clear();
+                    QMessageBox::warning(this, QStringLiteral("导出失败"), detail);
                 }
             });
 
     const EntityId cameraId = options.cameraId;
-    // The exporter requests one frame at a time. The current scene renderer is
-    // synchronous, so render immediately and hand the frame back; an async
-    // HTML capture provider can replace this later without touching the
-    // exporter state machine.
+    m_htmlExporting = true;
+    m_htmlExportError.clear();
+    // The exporter requests one frame at a time. HTML layers are captured
+    // serially first (at output resolution), then the whole scene is
+    // composited and handed back. A failed capture answers with a null image
+    // so the exporter aborts instead of writing a placeholder.
     auto frameProvider = [this, cameraId, renderSize](
                              int frame, VideoExporter::FrameDone done) {
         m_videoPlayer.update(*m_project, frame, false);
@@ -1125,13 +1438,118 @@ void MainWindow::exportVideo()
             state.center = QPointF();
             state.size = QSizeF(m_project->width, m_project->height);
         }
-        done(CameraRenderer::renderCameraImage(*m_project, frame, state,
-                                               renderSize, false));
+
+        const QVector<EntityId> layers = htmlLayersForFrame(frame);
+        auto index = std::make_shared<int>(0);
+        auto next = std::make_shared<std::function<void()>>();
+
+        *next = [this, frame, layers, state, renderSize, index, next, done]() {
+            if (*index >= layers.size())
+            {
+                done(CameraRenderer::renderCameraImage(*m_project, frame, state,
+                                                       renderSize, false));
+                return;
+            }
+
+            const EntityId id = layers[(*index)++];
+            Entity* entity = m_project->entity(id);
+            if (!entity || entity->type != EntityType::HtmlLayer)
+            {
+                (*next)();
+                return;
+            }
+
+            QString assetError;
+            const html::HtmlAsset asset = htmlAssetFor(*entity, &assetError);
+            if (!assetError.isEmpty())
+            {
+                qWarning() << "HTML export failed:" << assetError;
+                m_htmlExportError =
+                    QStringLiteral("HTML 层素材无法读取：%1").arg(assetError);
+                done(QImage());
+                return;
+            }
+
+            html::HtmlRenderer* renderer = htmlRendererFor(id);
+            if (!renderer)
+            {
+                qWarning() << "HTML export failed: no renderer for layer" << id;
+                m_htmlExportError = QStringLiteral("HTML 层无法创建渲染器");
+                done(QImage());
+                return;
+            }
+
+            const QSize logical = entity->htmlLogicalSize();
+            const double scaleX =
+                renderSize.width() / std::max(1.0, state.size.width());
+            const double scaleY =
+                renderSize.height() / std::max(1.0, state.size.height());
+            QSize captureSize(qRound(logical.width() * scaleX),
+                              qRound(logical.height() * scaleY));
+            captureSize.setWidth(
+                std::clamp(captureSize.width(), 1, html::Limits::kMaxEdge));
+            captureSize.setHeight(
+                std::clamp(captureSize.height(), 1, html::Limits::kMaxEdge));
+
+            QHash<QString, double> vars;
+            for (const html::HtmlComponent& component : asset.components)
+                for (const html::HtmlVariable& variable : component.variables)
+                {
+                    const QString key =
+                        component.id + QLatin1Char('.') + variable.name;
+                    vars.insert(key, m_project->value(
+                                         id, QStringLiteral("var.") + key, frame));
+                }
+
+            html::FrameRequest request;
+            request.asset = asset;
+            request.pageSize = captureSize;
+            request.vars = vars;
+            request.frame = frame;
+            request.time = frame / double(std::max(1, m_project->fps));
+            request.deterministic = true;
+            request.timeoutMs = 2000;
+
+            const quint64 token = ++m_htmlTokens[id];
+            renderer->requestFrame(
+                request, [this, id, token, next, done](const QImage& image,
+                                                       const QString& error) {
+                    if (m_htmlTokens.value(id, 0) != token)
+                        return;   // superseded or cancelled export
+                    Entity* current = m_project->entity(id);
+                    if (!current || current->type != EntityType::HtmlLayer)
+                    {
+                        m_htmlExportError = QStringLiteral("HTML 层已被删除");
+                        done(QImage());
+                        return;
+                    }
+                    if (image.isNull())
+                    {
+                        qWarning() << "HTML export frame failed:" << error;
+                        current->htmlError = error;
+                        m_htmlExportError =
+                            QStringLiteral("HTML 层抓帧失败：%1").arg(error);
+                        done(QImage());
+                        return;
+                    }
+                    current->htmlImage = image;
+                    current->htmlError.clear();
+                    current->pixmap = QPixmap();
+                    current->thumbnail = QImage();
+                    // Export captures happen at output resolution; make the
+                    // preview recapture at its own size on the next tick.
+                    m_htmlCacheKeys.remove(id);
+                    (*next)();
+                });
+        };
+        (*next)();
     };
 
     QString error;
     if (!exporter->start(*m_project, options, frameProvider, &error))
     {
+        m_htmlExporting = false;
+        m_exporter = nullptr;
         progress->finish();
         progress->deleteLater();
         exporter->deleteLater();
@@ -1151,6 +1569,19 @@ void MainWindow::packAllAssets()
     int packed = 0;
     for (Entity& entity : m_project->mutableEntities())
     {
+        if (entity.type == EntityType::HtmlLayer)
+        {
+            const QString path = entity.htmlAssetPath();
+            if (path.isEmpty())
+                continue;
+            const QString target = m_project->packHtmlAsset(path);
+            if (target != path)
+            {
+                entity.data[QStringLiteral("htmlAsset")] = target;
+                ++packed;
+            }
+            continue;
+        }
         if (entity.sourcePath.isEmpty())
             continue;
         const QString target = m_project->copyIntoProject(entity.sourcePath);
@@ -1824,6 +2255,8 @@ void MainWindow::setFrame(int frame)
             m_scrubTimer->start(int(60 - elapsed));
         }
     }
+
+    scheduleHtmlPreview(!m_playing);
 }
 
 void MainWindow::setSelectedEntity(EntityId id)
@@ -1876,6 +2309,10 @@ void MainWindow::setSelectedEntity(EntityId id)
             m_rightTabs->setCurrentWidget(m_projectTab);
         }
     }
+
+    // A newly selected HTML layer gets a full-quality capture even while
+    // playback is running.
+    scheduleHtmlPreview(true);
 }
 
 void MainWindow::applyValue(EntityId id, const QString& prop, double value)
@@ -1981,6 +2418,38 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
         return;
 
     const EntityType expected = entity->type;
+    if (expected == EntityType::HtmlLayer)
+    {
+        const QString file = QFileDialog::getOpenFileName(
+            this, QStringLiteral("更换 HTML 资产"), QString(),
+            QStringLiteral("PVForge HTML (*.json);;所有文件 (*)"));
+        if (file.isEmpty())
+            return;
+
+        QString importError;
+        const QString imported = m_project->importHtmlAsset(file, &importError);
+        if (imported.isEmpty())
+        {
+            QMessageBox::warning(this, QStringLiteral("更换 HTML 失败"), importError);
+            return;
+        }
+
+        const Entity before = *entity;
+        QString error;
+        if (!m_project->replaceHtmlAsset(id, imported, &error))
+        {
+            QMessageBox::warning(this, QStringLiteral("更换 HTML 失败"), error);
+            return;
+        }
+        if (const Entity* after = m_project->entity(id))
+            m_history->push(std::make_unique<ReplaceEntitySourcesCommand>(
+                                QVector<Entity>{before}, QVector<Entity>{*after}),
+                            *m_project);
+        m_htmlCacheKeys.remove(id);
+        scheduleHtmlPreview(true);
+        return;
+    }
+
     QString filter;
     switch (expected)
     {
@@ -2526,6 +2995,7 @@ void MainWindow::onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec
 
 void MainWindow::refreshAll()
 {
+    cleanupHtmlRenderers();
     if (m_selected != kInvalidEntity)
     {
         const Entity* selected = m_project->entity(m_selected);
@@ -2543,6 +3013,7 @@ void MainWindow::refreshAll()
         m_monitor->setProjectChanged();
     updateStatus();
     updateWindowTitle();
+    scheduleHtmlPreview(!m_playing);
 }
 
 void MainWindow::ensureProxies()

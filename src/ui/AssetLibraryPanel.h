@@ -36,8 +36,10 @@ private:
     void rebuild();
     void updatePreview();
     int selectedIndex() const;
+    QString selectedHtmlAsset() const;
     void createSelected();
     void removeSelected();
+    void importHtmlAsset();
 
     Project* m_project = nullptr;
     QLineEdit* m_search = nullptr;

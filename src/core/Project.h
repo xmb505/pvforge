@@ -6,6 +6,7 @@
 #include "media/AudioClip.h"
 
 #include <QColor>
+#include <QByteArray>
 #include <QHash>
 #include <QImage>
 #include <QObject>
@@ -43,7 +44,8 @@ enum class EntityType
     RadialLines,   // hand drawn rays bursting from a point
     FlowLines,     // parallel streaks flowing across the scene
     BrandWall,     // checkerboard tile wall with brand logos
-    HalftoneDots   // manga screentone with a fading dot grid
+    HalftoneDots,  // manga screentone with a fading dot grid
+    HtmlLayer      // one HTML component captured by the CDP browser
 };
 
 struct Keyframe
@@ -79,6 +81,8 @@ struct Entity
     QVector<QImage> wallLogos; // brand wall tile logos, runtime cache
     mutable QImage thumbnail;  // downscaled cache for draft previews
     mutable QPixmap pixmap;    // painter cache, built on first draw
+    QImage htmlImage;          // last captured HTML frame, runtime cache
+    QString htmlError;         // last HTML capture error, runtime only
     mutable QPixmap halftonePixmap;  // rasterised halftone pattern cache
     mutable QVariantMap halftoneData; // halftone params used for that cache
     std::shared_ptr<AudioClip> audio;   // decoded PCM/waveform, runtime cache
@@ -113,6 +117,19 @@ struct Entity
     }
     double vectorWidth() const { return data.value(QStringLiteral("width"), 400.0).toDouble(); }
     double vectorHeight() const { return data.value(QStringLiteral("height"), 300.0).toDouble(); }
+    QSize htmlLogicalSize() const
+    {
+        return QSize(data.value(QStringLiteral("htmlWidth"), 800).toInt(),
+                     data.value(QStringLiteral("htmlHeight"), 120).toInt());
+    }
+    bool htmlTimeDependent() const
+    {
+        return data.value(QStringLiteral("htmlTimeDependent"), false).toBool();
+    }
+    QString htmlAssetPath() const
+    {
+        return data.value(QStringLiteral("htmlAsset")).toString();
+    }
     QColor fillColor() const;
     QColor strokeColor() const;
     double strokeWidth() const { return data.value(QStringLiteral("strokeWidth"), 0.0).toDouble(); }
@@ -225,6 +242,11 @@ public:
                      const QString& displayName = QString());
     Entity* addFolder(const QString& name = QString(),
                       EntityId parent = kInvalidEntity);
+    // One HTML component asset per layer, at most two layers per project.
+    // Variable tracks use `var.<component>.<name>` keys; manifest defaults are
+    // written into Entity::values so Project::value already returns them.
+    Entity* addHtmlLayer(const QString& assetPath,
+                         const QString& displayName = QString());
 
     bool setEntityParent(EntityId id, EntityId parent);
     bool moveEntity(EntityId id, EntityId parent, int index);
@@ -341,6 +363,22 @@ public:
     QString storeAssetPath(const QString& absolute) const;
     QString copyIntoProject(const QString& sourcePath) const;
     QString importAsset(const QString& sourcePath) const;
+
+    // HTML assets live in assets/html/<sha>.json and are content addressed.
+    // importHtmlAsset validates the document and copies it into the project
+    // when asset packing is on; with packing off the source path is kept.
+    QString htmlAssetDirectory() const;
+    // Copies an HTML document into assets/html as <sha256>.json. Returns the
+    // source path when the project has no folder yet or the copy failed.
+    QString packHtmlAsset(const QString& sourcePath) const;
+    QString importHtmlAsset(const QString& sourcePath, QString* error = nullptr);
+    // Stores an in-memory pvforge-html document as a content-addressed asset.
+    // Requires a saved project folder (assets/html lives next to the project).
+    QString importHtmlAssetData(const QByteArray& json, QString* error = nullptr);
+    // Swaps one layer's HTML asset, keeping every existing var.* track. New
+    // manifest variables get their default value; orphan tracks stay put.
+    bool replaceHtmlAsset(EntityId id, const QString& assetPath,
+                          QString* error = nullptr);
 
     bool save(const QString& path, QString* error = nullptr);
     bool load(const QString& path, QString* error = nullptr);

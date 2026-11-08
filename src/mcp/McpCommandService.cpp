@@ -33,6 +33,8 @@ QString entityTypeName(EntityType type)
         return QStringLiteral("text");
     case EntityType::Vector:
         return QStringLiteral("vector");
+    case EntityType::HtmlLayer:
+        return QStringLiteral("htmlLayer");
     case EntityType::Camera:
         return QStringLiteral("camera");
     case EntityType::Audio:
