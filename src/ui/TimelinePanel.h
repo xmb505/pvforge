@@ -163,6 +163,7 @@ private:
     EntityId m_rowDragId = kInvalidEntity;
     QVector<EntityId> m_rowDragIds;
     QVector<KeyframeRecord> m_kfDragRecords;
+    double m_kfFocusFrame = 0.0;
     int m_kfDragStartFrame = 0;
     int m_kfDragDelta = 0;
     int m_dropRow = -1;

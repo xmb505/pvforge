@@ -1435,6 +1435,12 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         }
         emit entitySelected(keyEntity);
 
+        // Like Mine-imator, selecting a keyframe moves the playhead there so
+        // the property panel shows the values stored in that keyframe.
+        m_kfFocusFrame = keyFrame;
+        emit scrubStarted();
+        emit frameRequested(int(std::lround(m_kfFocusFrame)));
+
         m_kfDragRecords.clear();
         for (const KeyframeSelection& selected : m_selectedKeyframes)
         {
@@ -1943,6 +1949,8 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
             for (KeyframeSelection& selected : m_selectedKeyframes)
                 selected.frame = std::max(0.0, selected.frame + delta);
             emit keyframesMoveRequested(m_kfDragRecords, double(delta));
+            emit frameRequested(
+                int(std::lround(std::max(0.0, m_kfFocusFrame + delta))));
         }
         m_kfDragRecords.clear();
         update();

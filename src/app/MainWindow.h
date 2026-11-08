@@ -55,6 +55,7 @@ public:
         applyCamera(id, x, y, scale, rotation);
     }
     EntityId selectedEntityForTest() const { return m_selected; }
+    int currentFrameForTest() const { return m_frame; }
     void copyEntityForTest(EntityId id) { copyEntityToClipboard(id); }
     void pasteEntityForTest() { pasteEntity(); }
     void duplicateEntityForTest(EntityId id) { duplicateEntity(id); }

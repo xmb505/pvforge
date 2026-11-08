@@ -454,11 +454,12 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     const QStringList names = {
         QStringLiteral("放射状线条"),
         QStringLiteral("快速流过"),
+        QStringLiteral("漫画点阵"),
         QStringLiteral("品牌瓷砖墙"),
     };
     for (const QString& name : names)
         m_specialTypes->addItem(name);
-    m_specialTypes->setMaximumHeight(80);
+    m_specialTypes->setMaximumHeight(100);
     layout->addWidget(m_specialTypes);
 
     m_specialPreview = new QLabel(page);
@@ -534,6 +535,63 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     flowForm->addRow(QStringLiteral("颜色"), m_flowColor);
     m_specialForms->addWidget(flow);
 
+    auto* halftone = new QWidget(m_specialForms);
+    auto* halftoneForm = new QFormLayout(halftone);
+    halftoneForm->setContentsMargins(0, 0, 0, 0);
+    halftoneForm->setVerticalSpacing(8);
+    m_halftoneArea = new QDoubleSpinBox(halftone);
+    m_halftoneArea->setRange(100, 4000);
+    m_halftoneArea->setDecimals(0);
+    m_halftoneArea->setSingleStep(50);
+    m_halftoneArea->setValue(900);
+    m_halftoneArea->setSuffix(QStringLiteral(" px"));
+    halftoneForm->addRow(QStringLiteral("范围"), m_halftoneArea);
+    m_halftoneSpacing = new QDoubleSpinBox(halftone);
+    m_halftoneSpacing->setRange(4, 200);
+    m_halftoneSpacing->setDecimals(1);
+    m_halftoneSpacing->setValue(18);
+    halftoneForm->addRow(QStringLiteral("点间距"), m_halftoneSpacing);
+    m_halftoneSize = new QDoubleSpinBox(halftone);
+    m_halftoneSize->setRange(0.5, 60);
+    m_halftoneSize->setDecimals(1);
+    m_halftoneSize->setValue(7);
+    halftoneForm->addRow(QStringLiteral("最大点径"), m_halftoneSize);
+    m_halftoneAngle = new QDoubleSpinBox(halftone);
+    m_halftoneAngle->setRange(-180, 180);
+    m_halftoneAngle->setValue(45);
+    m_halftoneAngle->setSuffix(QStringLiteral("°"));
+    halftoneForm->addRow(QStringLiteral("网格角度"), m_halftoneAngle);
+    m_halftoneGradient = new QDoubleSpinBox(halftone);
+    m_halftoneGradient->setRange(-180, 180);
+    m_halftoneGradient->setValue(90);
+    m_halftoneGradient->setSuffix(QStringLiteral("°"));
+    halftoneForm->addRow(QStringLiteral("渐隐角度"), m_halftoneGradient);
+    m_halftoneMin = new QDoubleSpinBox(halftone);
+    m_halftoneMin->setRange(0, 1);
+    m_halftoneMin->setDecimals(2);
+    m_halftoneMin->setSingleStep(0.05);
+    m_halftoneMin->setValue(0);
+    halftoneForm->addRow(QStringLiteral("最小点比例"), m_halftoneMin);
+    m_halftoneJitter = new QDoubleSpinBox(halftone);
+    m_halftoneJitter->setRange(0, 1);
+    m_halftoneJitter->setDecimals(2);
+    m_halftoneJitter->setSingleStep(0.05);
+    m_halftoneJitter->setValue(0.12);
+    halftoneForm->addRow(QStringLiteral("手绘抖动"), m_halftoneJitter);
+    m_halftoneColor = new QPushButton(halftone);
+    setColorButton(m_halftoneColor, m_halftoneColorValue);
+    connect(m_halftoneColor, &QPushButton::clicked, this, [this] {
+        const QColor color = pickColor(m_halftoneColorValue, QStringLiteral("点阵颜色"));
+        if (color.isValid())
+        {
+            m_halftoneColorValue = color;
+            setColorButton(m_halftoneColor, color);
+            updateSpecialPreview();
+        }
+    });
+    halftoneForm->addRow(QStringLiteral("颜色"), m_halftoneColor);
+    m_specialForms->addWidget(halftone);
+
     auto* wall = new QWidget(m_specialForms);
     auto* wallLayout = new QFormLayout(wall);
     wallLayout->setContentsMargins(0, 0, 0, 0);
@@ -559,7 +617,7 @@ QWidget* WorkbenchPanel::buildSpecialPage()
 
     connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int row) {
         if (m_specialForms)
-            m_specialForms->setCurrentIndex(std::clamp(row, 0, 2));
+            m_specialForms->setCurrentIndex(std::clamp(row, 0, 3));
         updateSpecialPreview();
     });
 
@@ -942,6 +1000,24 @@ void WorkbenchPanel::updateSpecialPreview()
         LineDeco::paintFlow(painter, params, 0.0);
         painter.restore();
     }
+    else if (row == 2)
+    {
+        HalftoneParams params;
+        params.area = m_halftoneArea->value();
+        params.spacing = m_halftoneSpacing->value();
+        params.dotSize = m_halftoneSize->value();
+        params.angle = m_halftoneAngle->value();
+        params.gradientAngle = m_halftoneGradient->value();
+        params.minRatio = m_halftoneMin->value();
+        params.jitter = m_halftoneJitter->value();
+        params.color = m_halftoneColorValue;
+        painter.save();
+        painter.translate(centre);
+        painter.scale(fit(LineDeco::halftoneBounds(params)),
+                      fit(LineDeco::halftoneBounds(params)));
+        LineDeco::paintHalftone(painter, params);
+        painter.restore();
+    }
     else
     {
         painter.save();
@@ -1023,6 +1099,22 @@ EntityId WorkbenchPanel::createSpecial()
         params.writeTo(data);
         entity = m_project->addEntity(EntityType::FlowLines,
                                       QStringLiteral("快速流过"), data);
+    }
+    else if (row == 2)
+    {
+        HalftoneParams params;
+        params.area = m_halftoneArea->value();
+        params.spacing = m_halftoneSpacing->value();
+        params.dotSize = m_halftoneSize->value();
+        params.angle = m_halftoneAngle->value();
+        params.gradientAngle = m_halftoneGradient->value();
+        params.minRatio = m_halftoneMin->value();
+        params.jitter = m_halftoneJitter->value();
+        params.color = m_halftoneColorValue;
+        QVariantMap data;
+        params.writeTo(data);
+        entity = m_project->addEntity(EntityType::HalftoneDots,
+                                      QStringLiteral("漫画点阵"), data);
     }
     else
     {

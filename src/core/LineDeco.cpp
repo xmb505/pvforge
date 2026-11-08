@@ -69,6 +69,36 @@ void FlowParams::writeTo(QVariantMap& data) const
     data[QStringLiteral("seed")] = seed;
 }
 
+HalftoneParams HalftoneParams::fromData(const QVariantMap& data)
+{
+    HalftoneParams params;
+    params.area = data.value(QStringLiteral("area"), 900.0).toDouble();
+    params.spacing = data.value(QStringLiteral("spacing"), 18.0).toDouble();
+    params.dotSize = data.value(QStringLiteral("dotSize"), 7.0).toDouble();
+    params.angle = data.value(QStringLiteral("angle"), 45.0).toDouble();
+    params.gradientAngle = data.value(QStringLiteral("gradientAngle"), 90.0).toDouble();
+    params.minRatio = data.value(QStringLiteral("minRatio"), 0.0).toDouble();
+    params.jitter = data.value(QStringLiteral("jitter"), 0.12).toDouble();
+    const QColor color = data.value(QStringLiteral("color")).value<QColor>();
+    if (color.isValid())
+        params.color = color;
+    params.seed = data.value(QStringLiteral("seed"), 1).toInt();
+    return params;
+}
+
+void HalftoneParams::writeTo(QVariantMap& data) const
+{
+    data[QStringLiteral("area")] = area;
+    data[QStringLiteral("spacing")] = spacing;
+    data[QStringLiteral("dotSize")] = dotSize;
+    data[QStringLiteral("angle")] = angle;
+    data[QStringLiteral("gradientAngle")] = gradientAngle;
+    data[QStringLiteral("minRatio")] = minRatio;
+    data[QStringLiteral("jitter")] = jitter;
+    data[QStringLiteral("color")] = color;
+    data[QStringLiteral("seed")] = seed;
+}
+
 namespace LineDeco {
 
 double hash1(double n)
@@ -154,6 +184,74 @@ void paintFlow(QPainter& painter, const FlowParams& params, double seconds)
     painter.restore();
 }
 
+void paintHalftone(QPainter& painter, const HalftoneParams& params)
+{
+    if (params.spacing <= 0 || params.dotSize <= 0 || params.area <= 0)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(params.color);
+
+    const double half = params.area / 2.0;
+    const QRectF clip(-half, -half, params.area, params.area);
+    painter.setClipRect(clip, Qt::IntersectClip);
+
+    const double gridAngle = params.angle * kPi / 180.0;
+    const double fadeAngle = params.gradientAngle * kPi / 180.0;
+    const QPointF fade(std::cos(fadeAngle), std::sin(fadeAngle));
+    const double cosA = std::cos(gridAngle);
+    const double sinA = std::sin(gridAngle);
+
+    // A rotated grid needs to reach past the square's corners.
+    const int count = int(std::ceil(half * 1.5 / params.spacing)) + 1;
+    const double reach = std::max(1.0, params.area);
+    const double minRatio = std::clamp(params.minRatio, 0.0, 1.0);
+    const double jitter = std::clamp(params.jitter, 0.0, 1.0);
+
+    for (int row = -count; row <= count; ++row)
+    {
+        for (int column = -count; column <= count; ++column)
+        {
+            const double baseX = column * params.spacing;
+            const double baseY = row * params.spacing;
+            const double wobbleX =
+                (hash1(column * 11.3 + row * 3.7 + params.seed * 4000.0) - 0.5)
+                * params.spacing * jitter * 0.6;
+            const double wobbleY =
+                (hash1(column * 7.1 + row * 13.9 + params.seed * 5000.0) - 0.5)
+                * params.spacing * jitter * 0.6;
+            const double gridX = baseX + wobbleX;
+            const double gridY = baseY + wobbleY;
+            const QPointF pos(gridX * cosA - gridY * sinA,
+                              gridX * sinA + gridY * cosA);
+            if (pos.x() < -half - params.dotSize
+                || pos.x() > half + params.dotSize
+                || pos.y() < -half - params.dotSize
+                || pos.y() > half + params.dotSize)
+                continue;
+
+            // Dots are full sized at one edge and shrink toward the other.
+            const double projection = pos.x() * fade.x() + pos.y() * fade.y();
+            const double strength =
+                std::clamp(0.5 - projection / reach, 0.0, 1.0);
+            const double ratio = minRatio + (1.0 - minRatio) * strength;
+            if (ratio <= 0.001)
+                continue;
+
+            double radius = params.dotSize * ratio;
+            radius *= 1.0
+                      + (hash1(column * 5.3 + row * 9.7 + params.seed * 3000.0) - 0.5)
+                            * jitter;
+            if (radius <= 0.2)
+                continue;
+            painter.drawEllipse(pos, radius, radius);
+        }
+    }
+    painter.restore();
+}
+
 QRectF radialBounds(const RadialParams& params)
 {
     const double radius = std::max(1.0, params.radius);
@@ -161,6 +259,12 @@ QRectF radialBounds(const RadialParams& params)
 }
 
 QRectF flowBounds(const FlowParams& params)
+{
+    const double area = std::max(1.0, params.area);
+    return QRectF(-area / 2.0, -area / 2.0, area, area);
+}
+
+QRectF halftoneBounds(const HalftoneParams& params)
 {
     const double area = std::max(1.0, params.area);
     return QRectF(-area / 2.0, -area / 2.0, area, area);

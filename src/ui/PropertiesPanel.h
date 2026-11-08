@@ -70,6 +70,7 @@ private:
     void buildComicSection(QVBoxLayout* layout);
     void buildLinesSection(QVBoxLayout* layout);
     void buildBrandWallSection(QVBoxLayout* layout);
+    void buildHalftoneSection(QVBoxLayout* layout);
     void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
                     double hi, int decimals, double step);
     void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
@@ -108,6 +109,7 @@ private:
     CollapsibleSection* m_comicSection = nullptr;
     CollapsibleSection* m_linesSection = nullptr;
     CollapsibleSection* m_wallSection = nullptr;
+    CollapsibleSection* m_halftoneSection = nullptr;
     QLabel* m_wallInfo = nullptr;
     QVector<DataRow> m_dataRows;
     QHash<QString, QColor> m_dataColors;

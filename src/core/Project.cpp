@@ -50,6 +50,8 @@ QString typeToString(EntityType type)
         return QStringLiteral("flowLines");
     case EntityType::BrandWall:
         return QStringLiteral("brandWall");
+    case EntityType::HalftoneDots:
+        return QStringLiteral("halftoneDots");
     }
     return QStringLiteral("image");
 }
@@ -76,6 +78,8 @@ EntityType typeFromString(const QString& text)
         return EntityType::FlowLines;
     if (text == QLatin1String("brandWall"))
         return EntityType::BrandWall;
+    if (text == QLatin1String("halftoneDots"))
+        return EntityType::HalftoneDots;
     return EntityType::Image;
 }
 
@@ -791,6 +795,7 @@ Entity* Project::createFromTemplate(const Template& tmpl){
     case EntityType::RadialLines:
     case EntityType::FlowLines:
     case EntityType::BrandWall:
+    case EntityType::HalftoneDots:
     case EntityType::Vector:
         // Templates keep every parameter they were created with.
         return addEntity(tmpl.type, tmpl.name, tmpl.data);

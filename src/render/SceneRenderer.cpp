@@ -144,6 +144,9 @@ QRectF entityLocalBounds(const Entity& entity)
     case EntityType::BrandWall:
         return BrandWall::bounds(BrandWallParams::fromData(entity.data));
 
+    case EntityType::HalftoneDots:
+        return LineDeco::halftoneBounds(HalftoneParams::fromData(entity.data));
+
     case EntityType::Camera:
         return QRectF();
     case EntityType::Audio:
@@ -288,6 +291,10 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
     case EntityType::BrandWall:
         BrandWall::paint(painter, BrandWallParams::fromData(entity.data),
                          entity.wallLogos);
+        break;
+
+    case EntityType::HalftoneDots:
+        LineDeco::paintHalftone(painter, HalftoneParams::fromData(entity.data));
         break;
 
     case EntityType::Camera:

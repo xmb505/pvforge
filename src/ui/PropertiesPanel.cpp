@@ -56,6 +56,8 @@ QString typeName(EntityType type)
         return QStringLiteral("快速流过");
     case EntityType::BrandWall:
         return QStringLiteral("品牌瓷砖墙");
+    case EntityType::HalftoneDots:
+        return QStringLiteral("漫画点阵");
     }
     return QString();
 }
@@ -134,6 +136,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildComicSection(layout);
     buildLinesSection(layout);
     buildBrandWallSection(layout);
+    buildHalftoneSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
     buildAudioSection(layout);
@@ -549,6 +552,33 @@ void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
     layout->addWidget(m_wallSection);
 }
 
+void PropertiesPanel::buildHalftoneSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    addDataRow(form, QStringLiteral("范围"), QStringLiteral("area"), 100, 4000, 0, 50);
+    addDataRow(form, QStringLiteral("点间距"), QStringLiteral("spacing"), 4, 200, 1, 1);
+    addDataRow(form, QStringLiteral("最大点径"), QStringLiteral("dotSize"), 0.5, 60, 1,
+               0.5);
+    addDataRow(form, QStringLiteral("网格角度"), QStringLiteral("angle"), -180, 180, 1,
+               5);
+    addDataRow(form, QStringLiteral("渐隐角度"), QStringLiteral("gradientAngle"), -180,
+               180, 1, 5);
+    addDataRow(form, QStringLiteral("最小点比例"), QStringLiteral("minRatio"), 0, 1, 2,
+               0.05);
+    addDataRow(form, QStringLiteral("手绘抖动"), QStringLiteral("jitter"), 0, 1, 2, 0.05);
+    addDataRow(form, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
+    addDataColor(form, QStringLiteral("颜色"), QStringLiteral("color"), Qt::white);
+
+    m_halftoneSection =
+        new CollapsibleSection(QStringLiteral("漫画点阵"), content, this);
+    m_halftoneSection->setExpanded(true);
+    layout->addWidget(m_halftoneSection);
+}
+
 void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
@@ -930,10 +960,12 @@ void PropertiesPanel::refresh()
     const bool comic = valid && e->type == EntityType::ComicText;
     const bool radial = valid && e->type == EntityType::RadialLines;
     const bool flow = valid && e->type == EntityType::FlowLines;
+    const bool halftone = valid && e->type == EntityType::HalftoneDots;
     m_textSection->setVisible(valid && (e->type == EntityType::Text || comic));
     m_comicSection->setVisible(comic);
     m_linesSection->setVisible(radial || flow);
     m_wallSection->setVisible(valid && e->type == EntityType::BrandWall);
+    m_halftoneSection->setVisible(halftone);
     if (valid && e->type == EntityType::BrandWall && m_wallInfo)
     {
         const BrandWallParams params = BrandWallParams::fromData(e->data);
@@ -963,6 +995,7 @@ void PropertiesPanel::refresh()
     m_comicSection->setEnabled(editable);
     m_linesSection->setEnabled(editable);
     m_wallSection->setEnabled(editable);
+    m_halftoneSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_audioSection->setEnabled(editable);
     if (m_replaceSource)

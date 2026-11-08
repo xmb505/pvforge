@@ -55,6 +55,8 @@ QString templateTypeName(EntityType type)
         return QStringLiteral("快速流过");
     case EntityType::BrandWall:
         return QStringLiteral("品牌瓷砖墙");
+    case EntityType::HalftoneDots:
+        return QStringLiteral("漫画点阵");
     }
     return QString();
 }
@@ -154,6 +156,19 @@ QPixmap renderTemplate(const Template& tmpl, const QSize& size)
         p.translate(size.width() / 2.0, size.height() / 2.0);
         p.scale(scale, scale);
         BrandWall::paint(p, params, logos);
+        p.restore();
+    }
+    else if (tmpl.type == EntityType::HalftoneDots)
+    {
+        const HalftoneParams params = HalftoneParams::fromData(tmpl.data);
+        const QRectF bounds = LineDeco::halftoneBounds(params);
+        const double scale =
+            std::min(size.width() / std::max(1.0, bounds.width()),
+                     size.height() / std::max(1.0, bounds.height())) * 0.9;
+        p.save();
+        p.translate(size.width() / 2.0, size.height() / 2.0);
+        p.scale(scale, scale);
+        LineDeco::paintHalftone(p, params);
         p.restore();
     }
     else if (tmpl.type == EntityType::Vector)
@@ -260,6 +275,19 @@ QIcon listIcon(const Template& tmpl)
                 p.setBrush((row + column) % 2 ? QColor(120, 130, 200)
                                               : QColor(220, 220, 230));
                 p.drawRect(QRectF(4 + column * 16, 4 + row * 16, 16, 16));
+            }
+    }
+    else if (tmpl.type == EntityType::HalftoneDots)
+    {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(220, 220, 228));
+        for (int row = 0; row < 5; ++row)
+            for (int column = 0; column < 5; ++column)
+            {
+                const double radius =
+                    1.2 + 2.2 * (1.0 - (row + column) / 8.0);
+                p.drawEllipse(
+                    QPointF(8 + column * 6, 8 + row * 6), radius, radius);
             }
     }
     return QIcon(pixmap);

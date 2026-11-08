@@ -37,7 +37,8 @@ enum class EntityType
     ComicText,     // comic balloon with a shaped border and a tail
     RadialLines,   // hand drawn rays bursting from a point
     FlowLines,     // parallel streaks flowing across the scene
-    BrandWall      // checkerboard tile wall with brand logos
+    BrandWall,     // checkerboard tile wall with brand logos
+    HalftoneDots   // manga screentone with a fading dot grid
 };
 
 struct Keyframe

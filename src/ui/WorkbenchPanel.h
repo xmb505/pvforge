@@ -120,6 +120,15 @@ private:
     QImage m_wallImageB;
     QPushButton* m_flowColor = nullptr;
     QColor m_flowColorValue{Qt::white};
+    QDoubleSpinBox* m_halftoneArea = nullptr;
+    QDoubleSpinBox* m_halftoneSpacing = nullptr;
+    QDoubleSpinBox* m_halftoneSize = nullptr;
+    QDoubleSpinBox* m_halftoneAngle = nullptr;
+    QDoubleSpinBox* m_halftoneGradient = nullptr;
+    QDoubleSpinBox* m_halftoneMin = nullptr;
+    QDoubleSpinBox* m_halftoneJitter = nullptr;
+    QPushButton* m_halftoneColor = nullptr;
+    QColor m_halftoneColorValue{Qt::white};
 
     QListWidget* m_vectorShapes = nullptr;
     QDoubleSpinBox* m_vectorCorner = nullptr;

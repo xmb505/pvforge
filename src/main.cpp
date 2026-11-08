@@ -561,12 +561,33 @@ int keyframeDragTest(QApplication& app)
                         << timeline->selectedKeyframes().size();
             ++failures;
         }
+        // Selecting a keyframe moves the playhead there, so the property
+        // panel shows the keyframe's values.
+        if (window.currentFrameForTest() != 20)
+        {
+            qCritical() << "keyframe-drag-test: playhead did not follow the keyframe"
+                        << window.currentFrameForTest();
+            ++failures;
+        }
 
         // Drag the selected keys ten frames to the right.
         sendMouse(QEvent::MouseButtonPress, ten, Qt::LeftButton, Qt::NoModifier);
+        QApplication::processEvents();
+        if (window.currentFrameForTest() != 10)
+        {
+            qCritical() << "keyframe-drag-test: press did not focus the keyframe"
+                        << window.currentFrameForTest();
+            ++failures;
+        }
         sendMouse(QEvent::MouseMove, twenty, Qt::LeftButton, Qt::NoModifier);
         sendMouse(QEvent::MouseButtonRelease, twenty, Qt::NoButton, Qt::NoModifier);
         QApplication::processEvents();
+        if (window.currentFrameForTest() != 20)
+        {
+            qCritical() << "keyframe-drag-test: playhead did not follow the move"
+                        << window.currentFrameForTest();
+            ++failures;
+        }
 
         const pvf::Keyframe* x20 = project->keyframe(id, QStringLiteral("x"), 20);
         const pvf::Keyframe* x30 = project->keyframe(id, QStringLiteral("x"), 30);
@@ -1205,6 +1226,58 @@ int specialTest(QApplication& app)
         }
     }
 
+    // Halftone screentone: a dot grid that fades along the gradient angle.
+    {
+        pvf::HalftoneParams params;
+        params.area = 600;
+        params.spacing = 16;
+        params.dotSize = 8;
+        QVariantMap data;
+        params.writeTo(data);
+        pvf::Entity* halftone = project->addEntity(pvf::EntityType::HalftoneDots,
+                                                   QStringLiteral("漫画点阵"), data);
+        if (!halftone)
+        {
+            qCritical() << "special-test: halftone creation failed";
+            ++failures;
+        }
+        else
+        {
+            for (pvf::Entity& other : project->mutableEntities())
+                other.hidden = other.id != halftone->id;
+            const QImage shot = render(0);
+            const QImage again = render(0);
+            for (pvf::Entity& other : project->mutableEntities())
+                other.hidden = false;
+            shot.save(QStringLiteral("/tmp/pvf_halftone.png"));
+
+            const auto density = [&](int top, int bottom) {
+                int count = 0;
+                for (int y = top; y < bottom; ++y)
+                    for (int x = 0; x < shot.width(); ++x)
+                        if (qGray(shot.pixel(x, y)) > 40)
+                            ++count;
+                return count;
+            };
+            if (ink(shot) <= 0)
+            {
+                qCritical() << "special-test: halftone drew nothing";
+                ++failures;
+            }
+            else if (density(0, shot.height() / 2)
+                     <= density(shot.height() / 2, shot.height()))
+            {
+                qCritical() << "special-test: halftone gradient does not fade";
+                ++failures;
+            }
+            if (shot != again)
+            {
+                qCritical() << "special-test: halftone is not deterministic";
+                ++failures;
+            }
+        }
+    }
+
     // Brand tile wall: a checkerboard of two logos.
     {
         const QString logoA =
@@ -1337,6 +1410,7 @@ int specialTest(QApplication& app)
                 int comic = 0;
                 int radial = 0;
                 int flow = 0;
+                int halftone = 0;
                 int wall = 0;
                 for (const pvf::Entity& entity : loaded.entities())
                 {
@@ -1346,13 +1420,16 @@ int specialTest(QApplication& app)
                         ++radial;
                     else if (entity.type == pvf::EntityType::FlowLines)
                         ++flow;
+                    else if (entity.type == pvf::EntityType::HalftoneDots)
+                        ++halftone;
                     else if (entity.type == pvf::EntityType::BrandWall)
                         ++wall;
                 }
-                if (comic != 4 || radial != 1 || flow != 1 || wall != 1)
+                if (comic != 4 || radial != 1 || flow != 1 || halftone != 1
+                    || wall != 1)
                 {
                     qCritical() << "special-test: types lost on reload" << comic
-                                << radial << flow << wall;
+                                << radial << flow << halftone << wall;
                     ++failures;
                 }
             }
@@ -1424,7 +1501,11 @@ int specialTest(QApplication& app)
                     ++local;
                 }
             }
-            special->setCurrentRow(2);   // brand wall, for the shot
+            special->setCurrentRow(2);   // halftone, for the shot
+            QApplication::processEvents();
+            workbench->grab().toImage().save(
+                QStringLiteral("/tmp/pvforge_halftone_workbench.png"));
+            special->setCurrentRow(3);   // brand wall, for the shot
             QApplication::processEvents();
             workbench->grab().toImage().save(
                 QStringLiteral("/tmp/pvforge_wall_workbench.png"));
@@ -1734,15 +1815,16 @@ int timelineInteractionTest(QApplication& app)
             ++failures;
         }
 
-        // Keyframe click selects without moving the playhead.
+        // Keyframe click selects it and moves the playhead to the keyframe,
+        // so the property panel shows the values stored in that keyframe.
         const int beforeKey = window.currentFrame();
         send(QEvent::MouseButtonPress, QPoint(540, 40), Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, QPoint(540, 40), Qt::LeftButton, Qt::NoButton);
         const int afterKey = window.currentFrame();
-        if (afterKey != beforeKey)
+        if (afterKey != 60)
         {
-            qCritical() << "timeline-interaction-test: keyframe moved playhead" << beforeKey
-                        << afterKey;
+            qCritical() << "timeline-interaction-test: keyframe did not focus"
+                        << beforeKey << afterKey;
             ++failures;
         }
         if (timeline->selectedKeyframeCount() != 1)
@@ -1764,7 +1846,7 @@ int timelineInteractionTest(QApplication& app)
         send(QEvent::MouseButtonPress, QPoint(250, 40), Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseMove, QPoint(320, 68), Qt::NoButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, QPoint(320, 68), Qt::LeftButton, Qt::NoButton);
-        if (window.currentFrame() != afterKey)
+        if (window.currentFrame() != emptyFrame)
         {
             qCritical() << "timeline-interaction-test: drag moved playhead";
             ++failures;
@@ -6525,6 +6607,22 @@ int specialDemo(QApplication& app)
     place(project->addEntity(pvf::EntityType::FlowLines,
                              QStringLiteral("快速流过"), flowData),
           0, 0);
+
+    // Manga screentone shading over the wall.
+    pvf::HalftoneParams halftone;
+    halftone.area = 760;
+    halftone.spacing = 18;
+    halftone.dotSize = 8;
+    halftone.angle = 45;
+    halftone.gradientAngle = 135;
+    halftone.minRatio = 0.0;
+    halftone.jitter = 0.12;
+    halftone.color = QColor(24, 24, 32, 170);
+    QVariantMap halftoneData;
+    halftone.writeTo(halftoneData);
+    place(project->addEntity(pvf::EntityType::HalftoneDots,
+                             QStringLiteral("漫画点阵"), halftoneData),
+          600, 330);
 
     // Focus rays behind the balloons.
     pvf::RadialParams radial;
