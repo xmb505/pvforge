@@ -10,6 +10,7 @@
 #include <QDropEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
@@ -118,6 +119,33 @@ bool hasAssetMime(const QMimeData* mime)
                    QStringLiteral("application/x-pvforge-asset-html")));
 }
 
+QPixmap themedGlyph(const QStringList& names, int size, const QColor& color)
+{
+    for (const QString& name : names)
+    {
+        const QIcon icon = QIcon::fromTheme(name);
+        if (icon.isNull())
+            continue;
+        QPixmap pixmap = icon.pixmap(QSize(size, size));
+        if (pixmap.isNull())
+            continue;
+        QPainter painter(&pixmap);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(pixmap.rect(), color);
+        return pixmap;
+    }
+    return QPixmap();
+}
+
+const QPixmap& plusGlyphPixmap()
+{
+    static const QPixmap pixmap =
+        themedGlyph({QStringLiteral("list-add"),
+                     QStringLiteral("list-add-symbolic")},
+                    16, Qt::white);
+    return pixmap;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- popup
@@ -166,7 +194,19 @@ public:
         m_timeMode->setToolTip(QStringLiteral("切换相对 / 绝对时间"));
         headerLayout->addWidget(m_timeMode);
         auto* close = new QToolButton(header);
-        close->setText(QStringLiteral("×"));
+        const QPixmap closeGlyph =
+            themedGlyph({QStringLiteral("window-close"),
+                         QStringLiteral("window-close-symbolic")},
+                        16, QColor(232, 234, 240));
+        if (!closeGlyph.isNull())
+        {
+            close->setIcon(QIcon(closeGlyph));
+            close->setIconSize(QSize(16, 16));
+        }
+        else
+        {
+            close->setText(QStringLiteral("×"));
+        }
         close->setToolTip(QStringLiteral("关闭私有时间线"));
         headerLayout->addWidget(close);
         layout->addWidget(header);
@@ -1325,10 +1365,19 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.drawRoundedRect(QRectF(plus).adjusted(0.5, 0.5, -0.5, -0.5), 3.0,
                               3.0);
             p.setPen(QPen(Qt::white, 1.5));
-            p.drawLine(plus.center().x() - 4, plus.center().y(),
-                       plus.center().x() + 4, plus.center().y());
-            p.drawLine(plus.center().x(), plus.center().y() - 4,
-                       plus.center().x(), plus.center().y() + 4);
+            const QPixmap& glyph = plusGlyphPixmap();
+            if (!glyph.isNull())
+            {
+                p.drawPixmap(plus.topLeft(), glyph);
+            }
+            else
+            {
+                const QPointF plusCenter = QRectF(plus).center();
+                p.drawLine(QPointF(plusCenter.x() - 4.0, plusCenter.y()),
+                           QPointF(plusCenter.x() + 4.0, plusCenter.y()));
+                p.drawLine(QPointF(plusCenter.x(), plusCenter.y() - 4.0),
+                           QPointF(plusCenter.x(), plusCenter.y() + 4.0));
+            }
         }
 
         const int nameRight = plus.isEmpty() ? clip.right() - 8 : plus.left() - 6;
