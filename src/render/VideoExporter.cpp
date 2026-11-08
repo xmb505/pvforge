@@ -2,6 +2,7 @@
 
 #include "audio/AudioEngine.h"
 
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
@@ -60,6 +61,24 @@ QString VideoExporter::ffmpegExecutable()
     return QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
 }
 
+bool VideoExporter::vaapiAvailable()
+{
+    static const bool available = [] {
+        if (!QFileInfo(QStringLiteral("/dev/dri/renderD128")).isReadable())
+            return false;
+        const QString ffmpeg = ffmpegExecutable();
+        if (ffmpeg.isEmpty())
+            return false;
+        QProcess probe;
+        probe.start(ffmpeg, {QStringLiteral("-hide_banner"),
+                             QStringLiteral("-encoders")});
+        if (!probe.waitForFinished(3000) || probe.exitCode() != 0)
+            return false;
+        return probe.readAllStandardOutput().contains("h264_vaapi");
+    }();
+    return available;
+}
+
 bool VideoExporter::start(const Project& project, const ExportOptions& options,
                           FrameRenderer renderFrame, QString* error)
 {
@@ -90,8 +109,11 @@ bool VideoExporter::start(const Project& project, const ExportOptions& options,
     m_options.size = QSize(std::max(2, options.size.width() & ~1),
                            std::max(2, options.size.height() & ~1));
     m_options.crf = std::clamp(options.crf, 0, 51);
+    if (m_options.encoder == ExportEncoder::H264Vaapi && !vaapiAvailable())
+        m_options.encoder = ExportEncoder::H264Software;
     m_render = std::move(renderFrame);
     m_nextFrame = 0;
+    m_previewClock.invalidate();
     m_stderr.clear();
 
     delete m_temp;
@@ -170,10 +192,26 @@ bool VideoExporter::start(const Project& project, const ExportOptions& options,
     arguments << QStringLiteral("-map") << QStringLiteral("0:v:0");
     if (!audioPath.isEmpty())
         arguments << QStringLiteral("-map") << QStringLiteral("1:a:0");
-    arguments << QStringLiteral("-c:v") << QStringLiteral("libx264")
-              << QStringLiteral("-preset") << QStringLiteral("medium")
-              << QStringLiteral("-crf") << QString::number(m_options.crf)
-              << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+    if (m_options.encoder == ExportEncoder::H264Vaapi)
+    {
+        // VAAPI takes raw BGRA, converts to NV12 on the GPU and encodes with
+        // constant QP; CRF presets map to a comparable QP range.
+        arguments << QStringLiteral("-vaapi_device")
+                  << QStringLiteral("/dev/dri/renderD128")
+                  << QStringLiteral("-vf") << QStringLiteral("format=nv12,hwupload")
+                  << QStringLiteral("-c:v") << QStringLiteral("h264_vaapi")
+                  << QStringLiteral("-rc_mode") << QStringLiteral("CQP")
+                  << QStringLiteral("-qp")
+                  << QString::number(std::clamp(m_options.crf + 3, 0, 51))
+                  << QStringLiteral("-bf") << QStringLiteral("0");
+    }
+    else
+    {
+        arguments << QStringLiteral("-c:v") << QStringLiteral("libx264")
+                  << QStringLiteral("-preset") << QStringLiteral("medium")
+                  << QStringLiteral("-crf") << QString::number(m_options.crf)
+                  << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p");
+    }
     if (!audioPath.isEmpty())
         arguments << QStringLiteral("-c:a") << QStringLiteral("aac")
                   << QStringLiteral("-b:a") << QStringLiteral("192k");
@@ -292,6 +330,11 @@ void VideoExporter::tick()
     }
 
     ++m_nextFrame;
+    if (!m_previewClock.isValid() || m_previewClock.elapsed() >= 80)
+    {
+        m_previewClock.start();
+        emit previewFrame(image);
+    }
     emit progress(m_nextFrame, m_options.frameCount);
 }
 

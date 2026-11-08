@@ -40,6 +40,7 @@ private:
     QSpinBox* m_height = nullptr;
     QComboBox* m_view = nullptr;
     QComboBox* m_quality = nullptr;
+    QComboBox* m_encoder = nullptr;
     QCheckBox* m_audio = nullptr;
     QLabel* m_summary = nullptr;
 };

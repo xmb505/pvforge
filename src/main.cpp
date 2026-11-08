@@ -17,6 +17,7 @@
 #include "app/MainWindow.h"
 #include "app/NewProjectDialog.h"
 #include "app/ExportDialog.h"
+#include "app/ExportProgressDialog.h"
 #include "app/SettingsDialog.h"
 #include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
@@ -7458,6 +7459,21 @@ int exportTest(QApplication& app)
                 ++failures;
             }
         }
+        auto* encoder =
+            dialog.findChild<QComboBox*>(QStringLiteral("exportEncoder"));
+        if (!encoder || encoder->count() < 1
+            || (pvf::VideoExporter::vaapiAvailable()
+                && encoder->findData(1) < 0))
+        {
+            qCritical() << "export-test: encoder choices"
+                        << (encoder ? encoder->count() : 0);
+            ++failures;
+        }
+        dialog.show();
+        QApplication::processEvents();
+        dialog.grab().toImage().save(
+            QStringLiteral("/tmp/pvf_export_dialog.png"));
+        dialog.hide();
     }
 
     pvf::VideoPlayer videoPlayer;
@@ -7475,6 +7491,13 @@ int exportTest(QApplication& app)
     timeout.setSingleShot(true);
     bool exportOk = false;
     QString exportError;
+    int previews = 0;
+    QSize previewSize;
+    QObject::connect(&exporter, &pvf::VideoExporter::previewFrame, &loop,
+                     [&](const QImage& image) {
+                         ++previews;
+                         previewSize = image.size();
+                     });
     QObject::connect(&exporter, &pvf::VideoExporter::finished, &loop,
                      [&](bool success, const QString& error) {
                          exportOk = success;
@@ -7550,6 +7573,86 @@ int exportTest(QApplication& app)
             qCritical() << "export-test: exported audio is silent" << peak;
             ++failures;
         }
+    }
+
+    if (previews <= 0 || previewSize != QSize(320, 180))
+    {
+        qCritical() << "export-test: preview frames" << previews << previewSize;
+        ++failures;
+    }
+
+    // The preview window must show the rendered frame and its progress.
+    {
+        pvf::ExportProgressDialog previewDialog;
+        previewDialog.resize(600, 420);
+        previewDialog.setPreview(first);
+        previewDialog.setProgress(12, 24);
+        previewDialog.show();
+        QApplication::processEvents();
+        previewDialog.grab().toImage().save(
+            QStringLiteral("/tmp/pvf_export_progress.png"));
+        auto* label =
+            previewDialog.findChild<QLabel*>(QStringLiteral("exportPreview"));
+        if (!label || label->pixmap().isNull())
+        {
+            qCritical() << "export-test: preview dialog has no frame";
+            ++failures;
+        }
+        previewDialog.finish();
+    }
+
+    // VAAPI runs on the GPU when the machine exposes a render node.
+    if (pvf::VideoExporter::vaapiAvailable())
+    {
+        const QString vaapiPath = QStringLiteral("/tmp/pvf_export_vaapi.mp4");
+        QFile::remove(vaapiPath);
+        pvf::VideoExporter vaapi;
+        pvf::ExportOptions vaapiOptions = options;
+        vaapiOptions.outputPath = vaapiPath;
+        vaapiOptions.includeAudio = false;
+        vaapiOptions.encoder = pvf::ExportEncoder::H264Vaapi;
+        vaapiOptions.frameCount = 8;
+
+        QEventLoop vaapiLoop;
+        QTimer vaapiTimeout;
+        vaapiTimeout.setSingleShot(true);
+        bool vaapiOk = false;
+        QString vaapiError;
+        QObject::connect(&vaapi, &pvf::VideoExporter::finished, &vaapiLoop,
+                         [&](bool success, const QString& message) {
+                             vaapiOk = success;
+                             vaapiError = message;
+                             vaapiLoop.quit();
+                         });
+        QObject::connect(&vaapiTimeout, &QTimer::timeout, &vaapiLoop,
+                         &QEventLoop::quit);
+        if (!vaapi.start(project, vaapiOptions, render, &error))
+        {
+            qCritical() << "export-test: vaapi start failed" << error;
+            ++failures;
+        }
+        else
+        {
+            vaapiTimeout.start(60000);
+            vaapiLoop.exec();
+            QString vaapiDecodeError;
+            const QImage vaapiFirst =
+                pvf::decodeVideoFirstFrame(vaapiPath, &vaapiDecodeError);
+            if (!vaapiOk || vaapi.isRunning() || vaapiFirst.isNull()
+                || vaapiFirst.size() != QSize(320, 180))
+            {
+                qCritical() << "export-test: vaapi" << vaapiOk << vaapiError
+                            << vaapiDecodeError << vaapiFirst.size();
+                ++failures;
+            }
+            vaapi.cancel();
+            QFile::remove(vaapiPath);
+        }
+        qInfo() << "export-test: vaapi export checked";
+    }
+    else
+    {
+        qInfo() << "export-test: vaapi unavailable, skipped";
     }
 
     // Cancelling must not leave a partial file behind.

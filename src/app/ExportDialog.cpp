@@ -139,6 +139,20 @@ ExportDialog::ExportDialog(const Project& project, QWidget* parent)
     m_quality->setCurrentIndex(crfIndex >= 0 ? crfIndex : 1);
     form->addRow(QStringLiteral("画质"), m_quality);
 
+    m_encoder = new QComboBox(this);
+    m_encoder->setObjectName(QStringLiteral("exportEncoder"));
+    m_encoder->addItem(QStringLiteral("H.264 软件（libx264，兼容）"), 0);
+    if (VideoExporter::vaapiAvailable())
+    {
+        m_encoder->addItem(QStringLiteral("H.264 硬件（VAAPI，占用 GPU）"), 1);
+        m_encoder->setToolTip(
+            QStringLiteral("硬件编码更快，同档位用 QP 近似 CRF，画质略有差异"));
+    }
+    const int encoderIndex = m_encoder->findData(Settings::exportEncoder());
+    if (encoderIndex > 0)
+        m_encoder->setCurrentIndex(encoderIndex);
+    form->addRow(QStringLiteral("编码器"), m_encoder);
+
     m_audio = new QCheckBox(QStringLiteral("包含工程音频"), this);
     m_audio->setChecked(Settings::exportAudio());
     form->addRow(QString(), m_audio);
@@ -186,6 +200,9 @@ ExportOptions ExportDialog::options() const
     options.cameraId = m_view->currentData().toInt();
     options.crf = m_quality->currentData().toInt();
     options.includeAudio = m_audio->isChecked();
+    options.encoder = m_encoder->currentData().toInt() == 1
+                          ? ExportEncoder::H264Vaapi
+                          : ExportEncoder::H264Software;
     return options;
 }
 
@@ -222,6 +239,7 @@ void ExportDialog::accept()
     Settings::setExportDirectory(QFileInfo(target).absolutePath());
     Settings::setExportCrf(m_quality->currentData().toInt());
     Settings::setExportAudio(m_audio->isChecked());
+    Settings::setExportEncoder(m_encoder->currentData().toInt());
     m_path->setText(target);
     QDialog::accept();
 }

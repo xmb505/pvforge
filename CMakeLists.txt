@@ -43,6 +43,7 @@ add_executable(pvforge
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
     src/app/ExportDialog.cpp
+    src/app/ExportProgressDialog.cpp
     src/app/MainWindow.cpp
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp

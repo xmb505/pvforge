@@ -279,6 +279,16 @@ void setExportAudio(bool on)
     store().setValue(QStringLiteral("export/audio"), on);
 }
 
+int exportEncoder()
+{
+    return store().value(QStringLiteral("export/encoder"), 0).toInt() == 1 ? 1 : 0;
+}
+
+void setExportEncoder(int encoder)
+{
+    store().setValue(QStringLiteral("export/encoder"), encoder == 1 ? 1 : 0);
+}
+
 bool showCameraFrame()
 {
     return store().value(QStringLiteral("editor/showCameraFrame"), true).toBool();

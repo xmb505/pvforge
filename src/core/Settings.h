@@ -83,6 +83,8 @@ int exportCrf();
 void setExportCrf(int crf);
 bool exportAudio();
 void setExportAudio(bool on);
+int exportEncoder();                    // 0 = libx264, 1 = VAAPI
+void setExportEncoder(int encoder);
 } // namespace Settings
 
 } // namespace pvf

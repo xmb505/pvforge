@@ -15,7 +15,7 @@
 - **特殊工具**：放射状线条、快速流过、漫画点阵、品牌瓷砖墙
 - **音频与视频**：FFmpeg 软件解码、视频内嵌音轨自动拆分、波形时间轴、预览代理
 - **工程体验**：自动保存、播放头记忆、更换素材、全局撤销/重做、性能监视
-- **出片**：文件 → 导出视频（`Ctrl+E`），整画布或任意摄像机视角，H.264 MP4 + AAC 音频，进度显示与取消
+- **出片**：文件 → 导出视频（`Ctrl+E`），实时预览窗、整画布或任意摄像机视角，H.264 MP4 + AAC 音频，软件/VAAPI 硬件编码，进度显示与取消
 - **性能**：文字/气泡/点阵按参数缓存，大量实体和 0 透明度对象不会拖慢播放
 
 ## 构建
@@ -27,6 +27,7 @@
 - Qt 6.5+：Widgets、Concurrent、Multimedia
 - FFmpeg 开发库：libavformat、libavcodec、libavutil、libswscale、libswresample
 - `ffmpeg` 命令行：导出 MP4（必需），视频预览代理和监视器串流也用它；缺少时导出会提示
+- 可选：VAAPI 硬件编码（Intel/AMD GPU，`/dev/dri/renderD128` 可读且 ffmpeg 带 `h264_vaapi`）
 - Ninja（可选）
 
 ```bash

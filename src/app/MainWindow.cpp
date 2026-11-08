@@ -9,6 +9,7 @@
 #include "media/VideoProxy.h"
 #include "core/Settings.h"
 #include "ExportDialog.h"
+#include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
 #include "media/VideoPlayer.h"
 #include "render/CameraRenderer.h"
@@ -37,7 +38,6 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QProgressBar>
-#include <QProgressDialog>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QSet>
@@ -753,31 +753,22 @@ void MainWindow::exportVideo()
     const QSize renderSize(std::max(2, options.size.width() & ~1),
                            std::max(2, options.size.height() & ~1));
 
-    auto* progress = new QProgressDialog(
-        QStringLiteral("正在渲染视频…"), QStringLiteral("取消"), 0,
-        options.frameCount, this);
-    progress->setWindowTitle(QStringLiteral("导出视频"));
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setMinimumDuration(0);
-    progress->setAutoClose(false);
-    progress->setAutoReset(false);
-    progress->setValue(0);
+    auto* progress = new ExportProgressDialog(this);
+    progress->setProgress(0, options.frameCount);
     progress->show();
-    // Let the progress dialog paint before the (synchronous) audio mix.
+    // Let the preview window paint before the (synchronous) audio mix.
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
     auto* exporter = new VideoExporter(this);
     connect(exporter, &VideoExporter::progress, progress,
-            [progress](int done, int total) {
-                progress->setMaximum(total);
-                progress->setValue(done);
-                if (done >= total)
-                    progress->setLabelText(QStringLiteral("正在编码视频…"));
-            });
-    connect(progress, &QProgressDialog::canceled, exporter, &VideoExporter::cancel);
+            &ExportProgressDialog::setProgress);
+    connect(exporter, &VideoExporter::previewFrame, progress,
+            &ExportProgressDialog::setPreview);
+    connect(progress, &ExportProgressDialog::cancelRequested, exporter,
+            &VideoExporter::cancel);
     connect(exporter, &VideoExporter::finished, this,
             [this, progress, exporter, options](bool success, const QString& error) {
-                progress->close();
+                progress->finish();
                 progress->deleteLater();
                 exporter->deleteLater();
 
@@ -820,7 +811,7 @@ void MainWindow::exportVideo()
     QString error;
     if (!exporter->start(*m_project, options, renderFrame, &error))
     {
-        progress->close();
+        progress->finish();
         progress->deleteLater();
         exporter->deleteLater();
         QMessageBox::warning(this, QStringLiteral("导出失败"), error);

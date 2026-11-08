@@ -111,19 +111,22 @@
 
 ### 一句话状态
 
-出片闭环打通：文件 → 导出视频（`Ctrl+E`），整画布或任意摄像机视角，H.264 MP4 + AAC 音频，带进度与取消。
+出片闭环打通：文件 → 导出视频（`Ctrl+E`），整画布或任意摄像机视角，H.264 MP4 + AAC 音频，实时预览窗，软件/VAAPI 硬件编码，带进度与取消。
 
 ### 实现
 
-- `render/VideoExporter`：UI 线程逐帧渲染 → BGRA rawvideo 管道 → ffmpeg libx264；音频预先混成 48 kHz 立体声 PCM，作为第二路输入编码 AAC 192k
+- `render/VideoExporter`：UI 线程逐帧渲染 → BGRA rawvideo 管道 → ffmpeg；音频预先分块混成 48 kHz 立体声 PCM，作为第二路输入编码 AAC 192k
+- 编码器可选 `libx264`（CPU 多线程）或 `h264_vaapi`（检测到 `/dev/dri/renderD128` 与编码器时显示）；VAAPI 用 `format=nv12,hwupload` 上传帧，画质档位映射为 CQP
 - 帧渲染由 `MainWindow` 传入回调：先 `VideoPlayer::update(frame, allowProxy=false)` 从原视频解码，再走 `CameraRenderer::renderCameraImage`，与监视器一致且不吃 960 宽预览代理
+- `app/ExportProgressDialog`：导出期间实时显示最后一帧（约 12 fps 刷新）、帧进度和状态；关窗等同取消
 - 先写 `<输出>.part.mp4`，成功后改名；取消/失败删除临时文件，不覆盖已有成片
-- `app/ExportDialog`：输出文件、分辨率（默认工程尺寸、自动取偶数）、视角（整画布/摄像机，默认活动摄像机）、CRF 档位、是否含音频；记住上次目录/画质/音频开关
-- 进度条显示已写帧数，编码阶段仍可取消；ffmpeg 管道积压超过 16 MB 时暂停渲染等编码器
+- `app/ExportDialog`：输出文件、分辨率（默认工程尺寸、锁定工程比例、自动取偶数）、视角（整画布/摄像机，默认活动摄像机）、CRF 档位、编码器、是否含音频；记住上次目录/画质/编码器/音频开关
+- 渲染与编码通过管道重叠：渲染一帧就交给 ffmpeg，管道积压超过 16 MB 时暂停渲染等编码器
 
 ### 验证
 
-- `--export-test`：320×180 / 24 fps 工程，红色矩形从左到右移动 + 1 秒 440 Hz 音频；导出后解码首帧验证尺寸、矩形位置、背景色，解码音频验证非静音；另测一次 30 秒导出并在 120 ms 时取消，确认无残留文件
+- `--export-test`：320×180 / 24 fps 工程，红色矩形从左到右移动 + 绿色视频源 + 1 秒 440 Hz 音频；导出后解码首帧验证尺寸、矩形位置、视频颜色、背景色，解码音频验证非静音；检查预览信号和预览窗绘制；VAAPI 可用时再跑一次硬件编码并解码首帧；另测一次 30 秒导出并在 120 ms 时取消，确认无残留文件
+- 本机 Intel VAAPI 实测通过；无硬件时自动跳过并只测软件编码
 - 50 个离屏自检全部通过
 
 ## 已实现
@@ -299,7 +302,7 @@ src/
 ├─ ui/       Viewport、TimelinePanel、PropertiesPanel、AssetLibraryPanel、
 │            ProjectPropertiesPanel、EnvironmentPanel、WorkbenchPanel、
 │            CameraMonitor、EasingPicker、BezierEditorDialog、CollapsibleSection
-└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、ExportDialog、SystemInfo、AppIcon
+└─ app/      MainWindow、WelcomeWindow、NewProjectDialog、SettingsDialog、ExportDialog、ExportProgressDialog、SystemInfo、AppIcon
 ```
 
 关键设计：
@@ -325,7 +328,8 @@ self / save / autosave / special / export / keyframe-edit / frame-restore / laye
 
 ## 已知限制
 
-- 导出走系统 `ffmpeg` + libx264 软件编码，长工程耗时取决于 CPU；暂不支持 GPU 编码和分段导出
+- 导出可用 `libx264` 软件编码或 VAAPI 硬件编码；VAAPI 需要 Intel/AMD GPU 与可读的 `/dev/dri/renderD128`，硬件档位用 QP 近似 CRF，画质与软件编码不是逐像素等价
+- 暂不支持分段导出
 - 漫画文本框的尖角是整体相对坐标，缩放实体时尖角跟着缩放；暂时不能在画布上新增第二个尖角
 - 视频内嵌音轨按默认音轨自动提取；多音轨、字幕轨暂不处理
 - 自动保存只处理已有路径的工程；未命名的新工程请先手动保存一次
