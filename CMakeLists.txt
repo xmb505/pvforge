@@ -25,6 +25,7 @@ qt_standard_project_setup()
 add_executable(pvforge
     src/main.cpp
     src/core/Project.cpp
+    src/core/CheckpointManager.cpp
     src/core/History.cpp
     src/core/PerfMonitor.cpp
     src/core/Settings.cpp

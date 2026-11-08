@@ -23,6 +23,7 @@
 #include "app/WelcomeWindow.h"
 #include "html/HtmlCaptureTest.h"
 #include "core/Project.h"
+#include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
 #include "core/LineDeco.h"
@@ -48,11 +49,13 @@
 #include <QApplication>
 #include <QAction>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDialog>
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QCheckBox>
 #include <QCryptographicHash>
 #include <QDataStream>
@@ -10677,6 +10680,467 @@ int mcpHttpTest()
     return failures == 0 ? 0 : 1;
 }
 
+int checkpointTest()
+{
+    int failures = 0;
+    const auto fail = [&failures](const QString& message) {
+        qCritical() << "checkpoint-test:" << message;
+        ++failures;
+    };
+    const auto expect = [&fail](bool condition, const QString& message) {
+        if (!condition)
+            fail(message);
+        return condition;
+    };
+    const auto sha256 = [](const QByteArray& data) {
+        return QString::fromLatin1(
+            QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
+    };
+    const auto readAll = [](const QString& path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const auto isObjectId = [](const QString& value) {
+        if (value.size() != 40 && value.size() != 64)
+            return false;
+        for (const QChar character : value)
+        {
+            const ushort code = character.unicode();
+            if (!((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f')))
+                return false;
+        }
+        return true;
+    };
+    const auto ownerOnly = [](const QString& path, bool directory) {
+        const QFileDevice::Permissions permissions = QFileInfo(path).permissions();
+        const QFileDevice::Permissions group =
+            QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup;
+        const QFileDevice::Permissions other =
+            QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+        bool ok = permissions.testFlag(QFileDevice::ReadOwner)
+                  && permissions.testFlag(QFileDevice::WriteOwner)
+                  && (permissions & (group | other)) == QFileDevice::Permissions();
+        if (directory)
+            ok = ok && permissions.testFlag(QFileDevice::ExeOwner);
+        return ok;
+    };
+    const auto runGit = [](const QString& directory, const QStringList& arguments,
+                           QByteArray* output, int* status) {
+        QProcess process;
+        process.setWorkingDirectory(directory);
+        process.start(QStringLiteral("git"), arguments);
+        if (!process.waitForStarted(5000))
+            return false;
+        process.closeWriteChannel();
+        if (!process.waitForFinished(20000))
+        {
+            process.kill();
+            process.waitForFinished(2000);
+            return false;
+        }
+        if (output)
+            *output = process.readAllStandardOutput();
+        if (status)
+            *status = process.exitCode();
+        return process.exitStatus() == QProcess::NormalExit
+               && process.exitCode() == 0;
+    };
+
+    QTemporaryDir projectTemp(QDir::tempPath()
+                              + QStringLiteral("/pvforge-checkpoint-project-XXXXXX"));
+    QTemporaryDir cacheTemp(QDir::tempPath()
+                            + QStringLiteral("/pvforge-checkpoint-cache-XXXXXX"));
+    QTemporaryDir corruptCache(QDir::tempPath()
+                               + QStringLiteral("/pvforge-checkpoint-corrupt-XXXXXX"));
+    QTemporaryDir fallbackCache(QDir::tempPath()
+                                + QStringLiteral("/pvforge-checkpoint-fallback-XXXXXX"));
+    if (!projectTemp.isValid() || !cacheTemp.isValid() || !corruptCache.isValid()
+        || !fallbackCache.isValid())
+    {
+        fail(QStringLiteral("could not create temporary directories"));
+        return 1;
+    }
+
+    const QString projectDirectory = projectTemp.path();
+    const QString projectPath = projectDirectory + QStringLiteral("/checkpoint.pvproj");
+    const QString imagePath = projectDirectory + QStringLiteral("/still.png");
+    const QString missingPath = projectDirectory + QStringLiteral("/missing.png");
+
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    if (!image.save(imagePath))
+    {
+        fail(QStringLiteral("could not write test image"));
+        return 1;
+    }
+
+    pvf::Project project;
+    project.name = QStringLiteral("检查点测试");
+    project.width = 640;
+    project.height = 360;
+    project.fps = 30;
+    pvf::Entity* entity = project.addImage(imagePath, QStringLiteral("still"));
+    if (!entity)
+    {
+        fail(QStringLiteral("could not add test entity"));
+        return 1;
+    }
+    const pvf::EntityId entityId = entity->id;
+    project.setValue(entityId, QStringLiteral("x"), 0, 0.0, true);
+    project.setValue(entityId, QStringLiteral("x"), 60, 100.0, true);
+    QString error;
+    if (!project.addScene(QStringLiteral("Intro"), 0, 60, QColor(90, 170, 255),
+                          QString(), &error))
+    {
+        fail(QStringLiteral("scene setup failed: %1").arg(error));
+        return 1;
+    }
+    if (!project.save(projectPath, &error))
+    {
+        fail(QStringLiteral("project save failed: %1").arg(error));
+        return 1;
+    }
+
+    const QByteArray json1 = readAll(projectPath);
+    QJsonObject root1 = QJsonDocument::fromJson(json1).object();
+    if (root1.isEmpty())
+    {
+        fail(QStringLiteral("saved project JSON is invalid"));
+        return 1;
+    }
+    QJsonObject root2 = root1;
+    root2[QStringLiteral("name")] = QStringLiteral("second");
+    const QByteArray json2 = QJsonDocument(root2).toJson(QJsonDocument::Indented);
+    QJsonObject root3 = root1;
+    root3[QStringLiteral("name")] = QStringLiteral("third");
+    QJsonArray entities = root3.value(QStringLiteral("entities")).toArray();
+    if (!entities.isEmpty())
+    {
+        QJsonObject first = entities.at(0).toObject();
+        first[QStringLiteral("sourcePath")] = missingPath;
+        entities.replace(0, first);
+        root3[QStringLiteral("entities")] = entities;
+    }
+    const QByteArray json3 = QJsonDocument(root3).toJson(QJsonDocument::Indented);
+
+    // A real repository in the project folder proves that checkpoints never
+    // touch or pollute the user's own git state.
+    const bool systemGit =
+        !QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty();
+    QByteArray projectRepoStatus;
+    QByteArray projectRepoHead;
+    bool projectRepoReady = false;
+    if (systemGit
+        && runGit(projectDirectory,
+                  {QStringLiteral("init"), QStringLiteral("-q")}, nullptr, nullptr)
+        && runGit(projectDirectory,
+                  {QStringLiteral("add"), QStringLiteral("-A")}, nullptr, nullptr)
+        && runGit(projectDirectory,
+                  {QStringLiteral("-c"), QStringLiteral("user.name=Checkpoint Test"),
+                   QStringLiteral("-c"),
+                   QStringLiteral("user.email=test@example.invalid"),
+                   QStringLiteral("-c"), QStringLiteral("commit.gpgsign=false"),
+                   QStringLiteral("commit"), QStringLiteral("-q"),
+                   QStringLiteral("-m"), QStringLiteral("baseline")},
+                  nullptr, nullptr))
+    {
+        projectRepoReady = true;
+        runGit(projectDirectory, {QStringLiteral("status"), QStringLiteral("--porcelain")},
+               &projectRepoStatus, nullptr);
+        runGit(projectDirectory, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")},
+               &projectRepoHead, nullptr);
+    }
+    const QByteArray projectFileBefore = readAll(projectPath);
+
+    pvf::CheckpointManager manager(cacheTemp.path());
+    expect(manager.isAvailable(), QStringLiteral("checkpoint manager is not available"));
+    const bool gitBackend = manager.gitAvailable();
+    qInfo() << "checkpoint-test:" << (gitBackend ? "git" : "snapshot") << "backend";
+    if (!systemGit)
+        expect(!gitBackend, QStringLiteral("git should be unavailable without git"));
+
+    QString id1;
+    if (!manager.createCheckpoint(projectPath, json1, QStringLiteral("first"),
+                                  &error, &id1))
+    {
+        fail(QStringLiteral("create first checkpoint failed: %1").arg(error));
+        return 1;
+    }
+    expect(!id1.isEmpty(), QStringLiteral("first checkpoint id is empty"));
+    expect(ownerOnly(cacheTemp.path(), true),
+           QStringLiteral("cache root permissions are not 0700"));
+
+    QVector<pvf::CheckpointInfo> listed = manager.listCheckpoints(projectPath);
+    bool usedGitBackend = false;
+    QString hookMarker;
+    if (!expect(listed.size() == 1, QStringLiteral("expected 1 checkpoint after first")))
+        qCritical() << "checkpoint-test: listed" << listed.size();
+    else
+    {
+        usedGitBackend = listed.first().gitBacked;
+        expect(listed.first().id == id1, QStringLiteral("listed id differs"));
+        expect(listed.first().summary == QStringLiteral("first"),
+               QStringLiteral("summary was not stored"));
+        expect(listed.first().fileSha256 == sha256(json1),
+               QStringLiteral("sidecar SHA-256 differs"));
+        expect(listed.first().fileSize == json1.size(),
+               QStringLiteral("sidecar size differs"));
+        expect(!listed.first().projectUuid.isEmpty(),
+               QStringLiteral("project UUID is empty"));
+        expect(listed.first().scenes.contains(QStringLiteral("Intro")),
+               QStringLiteral("scene list was not stored"));
+        expect(listed.first().assets.size() == 1,
+               QStringLiteral("asset reference list size is %1")
+                   .arg(listed.first().assets.size()));
+        expect(listed.first().missingAssets.isEmpty(),
+               QStringLiteral("existing asset was flagged missing"));
+        if (usedGitBackend)
+        {
+            const QString repo = cacheTemp.path() + QLatin1Char('/')
+                                 + pvf::CheckpointManager::projectPathHash(projectPath)
+                                 + QStringLiteral(".git");
+            expect(ownerOnly(repo, true),
+                   QStringLiteral("checkpoint repo permissions are not 0700"));
+        }
+        else
+        {
+            const QString directory = cacheTemp.path() + QLatin1Char('/')
+                                      + pvf::CheckpointManager::projectPathHash(projectPath)
+                                      + QStringLiteral(".snapshots");
+            expect(ownerOnly(directory, true),
+                   QStringLiteral("snapshot directory permissions are not 0700"));
+            expect(ownerOnly(directory + QLatin1Char('/') + id1
+                                 + QStringLiteral(".json"),
+                             false),
+                   QStringLiteral("snapshot sidecar permissions are not 0600"));
+        }
+
+        // A hostile hook placed in the bare repository must never run.
+        if (usedGitBackend)
+        {
+            const QString repo = cacheTemp.path() + QLatin1Char('/')
+                                 + pvf::CheckpointManager::projectPathHash(projectPath)
+                                 + QStringLiteral(".git");
+            const QString hooks = repo + QStringLiteral("/hooks");
+            QDir().mkpath(hooks);
+            hookMarker = cacheTemp.path() + QStringLiteral("/hook-ran");
+            QFile hook(hooks + QStringLiteral("/pre-commit"));
+            if (hook.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            {
+                hook.write(
+                    QStringLiteral("#!/bin/sh\ntouch '%1'\n").arg(hookMarker).toUtf8());
+                hook.close();
+                QFile::setPermissions(hooks + QStringLiteral("/pre-commit"),
+                                      QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                          | QFileDevice::ExeOwner);
+            }
+        }
+    }
+
+    QString id2;
+    if (!manager.createCheckpoint(projectPath, json2, QStringLiteral("second"),
+                                  &error, &id2))
+    {
+        fail(QStringLiteral("create second checkpoint failed: %1").arg(error));
+        return 1;
+    }
+    if (usedGitBackend)
+        expect(!QFileInfo::exists(hookMarker),
+               QStringLiteral("git hook executed during checkpoint"));
+    QString id3;
+    if (!manager.createCheckpoint(projectPath, json3, QStringLiteral("third"),
+                                  &error, &id3))
+    {
+        fail(QStringLiteral("create third checkpoint failed: %1").arg(error));
+        return 1;
+    }
+    expect(id1 != id2 && id2 != id3 && id1 != id3,
+           QStringLiteral("checkpoint ids are not unique"));
+
+    listed = manager.listCheckpoints(projectPath);
+    expect(listed.size() == 3,
+           QStringLiteral("expected 3 checkpoints, got %1").arg(listed.size()));
+    if (!listed.isEmpty())
+    {
+        const pvf::CheckpointInfo& newest = listed.first();
+        expect(newest.id == id3, QStringLiteral("newest checkpoint is not the third"));
+        expect(newest.missingAssets.contains(missingPath),
+               QStringLiteral("missing asset was not recorded"));
+    }
+
+    QByteArray restored;
+    if (!expect(manager.restoreCheckpoint(projectPath, id2, &restored, &error),
+                QStringLiteral("restore middle checkpoint failed: %1").arg(error)))
+        qCritical() << "checkpoint-test: restore error" << error;
+    else
+        expect(restored == json2,
+               QStringLiteral("middle checkpoint content differs"));
+
+    restored.clear();
+    if (expect(manager.restoreCheckpoint(projectPath, id1, &restored, &error),
+               QStringLiteral("restore first checkpoint failed: %1").arg(error)))
+        expect(restored == json1, QStringLiteral("first checkpoint content differs"));
+
+    // Keep the newest two; the oldest disappears from the list.
+    manager.prune(projectPath, 2);
+    listed = manager.listCheckpoints(projectPath);
+    expect(listed.size() == 2,
+           QStringLiteral("after prune expected 2 checkpoints, got %1")
+               .arg(listed.size()));
+    bool hasSecond = false;
+    bool hasThird = false;
+    for (const pvf::CheckpointInfo& info : listed)
+    {
+        hasSecond = hasSecond || info.id == id2;
+        hasThird = hasThird || info.id == id3;
+    }
+    expect(hasSecond && hasThird,
+           QStringLiteral("prune removed the wrong checkpoints"));
+
+    // Corrupting or deleting the repository must not crash listing, and a
+    // damaged payload must be refused by restore.
+    pvf::CheckpointManager corruptManager(corruptCache.path());
+    QString corruptId;
+    if (!corruptManager.createCheckpoint(projectPath, json1,
+                                         QStringLiteral("corrupt me"), &error,
+                                         &corruptId))
+    {
+        fail(QStringLiteral("corrupt-backend checkpoint failed: %1").arg(error));
+    }
+    else
+    {
+        QVector<pvf::CheckpointInfo> corruptList =
+            corruptManager.listCheckpoints(projectPath);
+        const bool usedGit = !corruptList.isEmpty() && corruptList.first().gitBacked;
+        if (usedGit)
+        {
+            const QString repo = corruptCache.path() + QLatin1Char('/')
+                                 + pvf::CheckpointManager::projectPathHash(projectPath)
+                                 + QStringLiteral(".git");
+            QByteArray blob;
+            if (runGit(corruptCache.path(),
+                       {QStringLiteral("--git-dir=") + repo,
+                        QStringLiteral("rev-parse"), corruptId
+                            + QStringLiteral(":project.pvproj")},
+                       &blob, nullptr))
+            {
+                const QString hash = QString::fromLatin1(blob).trimmed();
+                if (isObjectId(hash))
+                {
+                    const QString object =
+                        repo + QStringLiteral("/objects/") + hash.left(2)
+                        + QLatin1Char('/') + hash.mid(2);
+                    expect(QFile::remove(object),
+                           QStringLiteral("could not corrupt git object"));
+                    QByteArray broken;
+                    expect(!corruptManager.restoreCheckpoint(projectPath, corruptId,
+                                                             &broken, &error),
+                           QStringLiteral("restore accepted a deleted git object"));
+                }
+            }
+            QDir(repo).removeRecursively();
+        }
+        else
+        {
+            const QString directory = corruptCache.path() + QLatin1Char('/')
+                                      + pvf::CheckpointManager::projectPathHash(projectPath)
+                                      + QStringLiteral(".snapshots");
+            QFile payload(directory + QLatin1Char('/') + corruptId
+                          + QStringLiteral(".pvproj"));
+            if (payload.open(QIODevice::ReadWrite))
+            {
+                payload.seek(0);
+                payload.write("X");
+                payload.close();
+            }
+            QByteArray broken;
+            expect(!corruptManager.restoreCheckpoint(projectPath, corruptId, &broken,
+                                                     &error),
+                   QStringLiteral("restore accepted a tampered snapshot"));
+            QDir(directory).removeRecursively();
+        }
+
+        corruptList = corruptManager.listCheckpoints(projectPath);
+        expect(corruptList.isEmpty(),
+               QStringLiteral("listing a deleted store returned %1 entries")
+                   .arg(corruptList.size()));
+        QString newId;
+        expect(corruptManager.createCheckpoint(projectPath, json2,
+                                               QStringLiteral("after damage"),
+                                               &error, &newId),
+               QStringLiteral("checkpoint after damage failed: %1").arg(error));
+        expect(corruptManager.listCheckpoints(projectPath).size() == 1,
+               QStringLiteral("store did not recover after damage"));
+    }
+
+    // Missing git must transparently use the snapshot backend.
+    pvf::CheckpointManager fallbackManager(fallbackCache.path(),
+                                           QStringLiteral("/nonexistent/pvforge-git"));
+    expect(!fallbackManager.gitAvailable(),
+           QStringLiteral("fake git path reported git available"));
+    expect(fallbackManager.isAvailable(),
+           QStringLiteral("snapshot backend reported unavailable"));
+    QString snapshotId;
+    if (!expect(fallbackManager.createCheckpoint(projectPath, json1,
+                                                 QStringLiteral("snapshot"),
+                                                 &error, &snapshotId),
+                QStringLiteral("snapshot fallback create failed: %1").arg(error)))
+        qCritical() << "checkpoint-test: snapshot error" << error;
+    else
+    {
+        const QVector<pvf::CheckpointInfo> snapshots =
+            fallbackManager.listCheckpoints(projectPath);
+        expect(snapshots.size() == 1,
+               QStringLiteral("snapshot fallback list size %1").arg(snapshots.size()));
+        if (!snapshots.isEmpty())
+            expect(!snapshots.first().gitBacked,
+                   QStringLiteral("fallback checkpoint claims git backend"));
+        QByteArray snapshotJson;
+        if (expect(fallbackManager.restoreCheckpoint(projectPath, snapshotId,
+                                                     &snapshotJson, &error),
+                   QStringLiteral("snapshot restore failed: %1").arg(error)))
+            expect(snapshotJson == json1,
+                   QStringLiteral("snapshot fallback content differs"));
+        expect(QDir(fallbackCache.path() + QLatin1Char('/')
+                    + pvf::CheckpointManager::projectPathHash(projectPath)
+                    + QStringLiteral(".snapshots"))
+                   .exists(),
+               QStringLiteral("snapshot directory does not exist"));
+    }
+
+    if (gitBackend)
+    {
+        pvf::CheckpointManager mixedManager(fallbackCache.path());
+        QString mixedId;
+        expect(mixedManager.createCheckpoint(projectPath, json2,
+                                             QStringLiteral("git and snapshot"),
+                                             &error, &mixedId),
+               QStringLiteral("mixed backend create failed: %1").arg(error));
+        expect(mixedManager.listCheckpoints(projectPath).size() == 2,
+               QStringLiteral("list did not merge git and snapshot checkpoints"));
+    }
+
+    // The user's own repository and project file must be byte-identical.
+    if (projectRepoReady)
+    {
+        QByteArray statusAfter;
+        QByteArray headAfter;
+        runGit(projectDirectory, {QStringLiteral("status"), QStringLiteral("--porcelain")},
+               &statusAfter, nullptr);
+        runGit(projectDirectory, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")},
+               &headAfter, nullptr);
+        expect(statusAfter == projectRepoStatus,
+               QStringLiteral("user repository status changed"));
+        expect(headAfter == projectRepoHead,
+               QStringLiteral("user repository HEAD changed"));
+        expect(readAll(projectPath) == projectFileBefore,
+               QStringLiteral("project file was modified by checkpointing"));
+    }
+
+    qInfo() << "checkpoint-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -10721,6 +11185,8 @@ int main(int argc, char* argv[])
         return sceneTest();
     if (app.arguments().contains(QStringLiteral("--annotation-test")))
         return annotationTest();
+    if (app.arguments().contains(QStringLiteral("--checkpoint-test")))
+        return checkpointTest();
     if (app.arguments().contains(QStringLiteral("--autosave-test")))
         return autoSaveTest();
     if (app.arguments().contains(QStringLiteral("--special-test")))
