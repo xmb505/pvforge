@@ -66,6 +66,15 @@ QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
 
 **音频属性撤销 → 频谱对象 → MP4 导出**。
 
+## 参考与致谢
+
+交互和工作流参考了这些软件（仓库不包含它们的代码或资产）：
+
+- [Mine-imator](https://www.mineimator.com/)：对象树、时间轴、关键帧、工作台、素材库、缓动曲线
+- [Blender](https://www.blender.org/)：资源打包（Pack Resources）流程、对象/摄像机心智模型
+- [OBS Studio](https://obsproject.com/)：监视器弹出/停靠的窗口交互
+- [After Effects](https://www.adobe.com/products/aftereffects.html)：单属性轨道的精细关键帧交互参考
+
 ## 许可
 
 源码采用 **MIT License**，见 [LICENSE](LICENSE)。
