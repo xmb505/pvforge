@@ -252,6 +252,22 @@ void paintHalftone(QPainter& painter, const HalftoneParams& params)
     painter.restore();
 }
 
+QImage renderHalftone(const HalftoneParams& params, int edge)
+{
+    edge = std::clamp(edge, 16, 4096);
+    QImage image(edge, edge, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    if (params.area <= 0 || params.spacing <= 0 || params.dotSize <= 0)
+        return image;
+
+    QPainter painter(&image);
+    const double scale = edge / params.area;
+    painter.scale(scale, scale);
+    painter.translate(params.area / 2.0, params.area / 2.0);
+    paintHalftone(painter, params);
+    return image;
+}
+
 QRectF radialBounds(const RadialParams& params)
 {
     const double radius = std::max(1.0, params.radius);

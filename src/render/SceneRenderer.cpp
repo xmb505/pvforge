@@ -281,8 +281,24 @@ void drawEntity(QPainter& painter, const Project& project, const Entity& entity,
         break;
 
     case EntityType::HalftoneDots:
-        LineDeco::paintHalftone(painter, HalftoneParams::fromData(entity.data));
+    {
+        const HalftoneParams params = HalftoneParams::fromData(entity.data);
+        // The dot pattern never animates; rasterise it once and reuse it as
+        // a bitmap until a parameter changes.
+        if (entity.halftoneImage.isNull() || entity.halftoneData != entity.data)
+        {
+            const int edge = int(std::clamp(params.area, 64.0, 2048.0));
+            entity.halftoneImage = LineDeco::renderHalftone(params, edge);
+            entity.halftoneData = entity.data;
+        }
+        if (!entity.halftoneImage.isNull())
+        {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(LineDeco::halftoneBounds(params),
+                              entity.halftoneImage);
+        }
         break;
+    }
 
     case EntityType::Camera:
         break;

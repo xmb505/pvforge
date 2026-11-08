@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QImage>
 #include <QRectF>
 #include <QVariantMap>
 
@@ -70,6 +71,10 @@ double hash1(double n);
 void paintRadial(QPainter& painter, const RadialParams& params, double seconds);
 void paintFlow(QPainter& painter, const FlowParams& params, double seconds);
 void paintHalftone(QPainter& painter, const HalftoneParams& params);
+// Rasterises the pattern once to an edge x edge transparent image. The dots
+// do not animate, so renderers cache this instead of drawing every dot each
+// frame.
+QImage renderHalftone(const HalftoneParams& params, int edge);
 
 QRectF radialBounds(const RadialParams& params);
 QRectF flowBounds(const FlowParams& params);

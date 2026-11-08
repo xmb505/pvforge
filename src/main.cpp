@@ -1319,6 +1319,34 @@ int specialTest(QApplication& app)
                 other.hidden = other.id != halftone->id;
             const QImage shot = render(0);
             const QImage again = render(0);
+            if (halftone->halftoneImage.isNull()
+                || halftone->halftoneData.value(QStringLiteral("spacing")).toDouble()
+                       != 16.0)
+            {
+                qCritical() << "special-test: halftone pattern was not cached";
+                ++failures;
+            }
+            else
+            {
+                // A second frame reuses the raster; a parameter edit rebuilds it.
+                const qint64 cached = halftone->halftoneImage.cacheKey();
+                render(0);
+                if (halftone->halftoneImage.cacheKey() != cached)
+                {
+                    qCritical() << "special-test: halftone cache rebuilt every frame";
+                    ++failures;
+                }
+                halftone->data[QStringLiteral("spacing")] = 24.0;
+                render(0);
+                if (halftone->halftoneImage.cacheKey() == cached
+                    || halftone->halftoneData.value(QStringLiteral("spacing"))
+                               .toDouble()
+                           != 24.0)
+                {
+                    qCritical() << "special-test: halftone cache not invalidated";
+                    ++failures;
+                }
+            }
             for (pvf::Entity& other : project->mutableEntities())
                 other.hidden = false;
             shot.save(QStringLiteral("/tmp/pvf_halftone.png"));

@@ -73,6 +73,8 @@ struct Entity
     QVector<QImage> wallLogos; // brand wall tile logos, runtime cache
     mutable QImage thumbnail;  // downscaled cache for draft previews
     mutable QPixmap pixmap;    // painter cache, built on first draw
+    mutable QImage halftoneImage;    // rasterised halftone pattern cache
+    mutable QVariantMap halftoneData; // halftone params used for that cache
     std::shared_ptr<AudioClip> audio;   // decoded PCM/waveform, runtime cache
     QVariantMap data;          // type-specific static data (text, font, shape, ...)
     QHash<QString, Track> tracks;
