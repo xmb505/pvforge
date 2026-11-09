@@ -248,10 +248,17 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     rebuildCameras();
 }
 
-NextWindow::~NextWindow() = default;
+NextWindow::~NextWindow()
+{
+    closeAllPrivateTimelines();
+}
 
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
+    // Private overlay timelines hold the old Document*; drop them before the
+    // old document and its panels die.
+    closeAllPrivateTimelines();
+
     // Remove the old panels before the old document is destroyed: every panel
     // holds a raw Document*.
     if (QWidget* old = takeCentralWidget()) {
@@ -456,6 +463,9 @@ void NextWindow::buildEditor()
     vertical->setStretchFactor(1, 0);
     vertical->setSizes({700, 260});
 
+    connect(m_timeline, &TimelineWidget::privateTimelineRequested, this,
+            &NextWindow::openPrivateTimeline);
+
     replaceCentralWidget(vertical);
 
     if (m_gizmoCheck)
@@ -558,6 +568,7 @@ void NextWindow::refreshAll()
     if (m_viewport)
         m_viewport->refresh();
 
+    closeOrphanedPrivateTimelines();
     rebuildCameras();
     updateActions();
     updateStatus();
@@ -727,6 +738,109 @@ QAction* NextWindow::createEntityActionForTest(ContentKind kind) const
         break;
     }
     return nullptr;
+}
+
+void NextWindow::openPrivateTimelineForTest(const Uuid& parentUuid)
+{
+    openPrivateTimeline(parentUuid);
+}
+
+QDialog* NextWindow::privateTimelineDialogForTest(const Uuid& parentUuid) const
+{
+    return m_privateTimelines.value(parentUuid, nullptr);
+}
+
+void NextWindow::openPrivateTimeline(const Uuid& parentUuid)
+{
+    if (!m_document)
+        return;
+
+    const auto owner =
+        m_document->project().entities.constFind(parentUuid);
+    if (owner == m_document->project().entities.constEnd()) {
+        showError(tr("私有时间线"), tr("父实体不存在或已被删除。"));
+        return;
+    }
+
+    if (QDialog* existing = m_privateTimelines.value(parentUuid)) {
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+
+    const QString ownerName = owner->name.trimmed().isEmpty()
+                                  ? tr("未命名实体")
+                                  : owner->name;
+
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("privateTimelineDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setModal(false);
+    dialog->setWindowTitle(tr("私有时间线 - %1").arg(ownerName));
+    dialog->resize(900, 300);
+
+    auto* layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto* timeline = new TimelineWidget(m_document, dialog);
+    timeline->setObjectName(QStringLiteral("privateTimelineWidget"));
+    timeline->setParentUuid(parentUuid);
+    layout->addWidget(timeline);
+
+    m_privateTimelines.insert(parentUuid, dialog);
+    connect(dialog, &QDialog::destroyed, this, [this, parentUuid] {
+        m_privateTimelines.remove(parentUuid);
+    });
+    connect(timeline, &TimelineWidget::privateTimelineRequested, this,
+            &NextWindow::openPrivateTimeline);
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void NextWindow::closeOrphanedPrivateTimelines()
+{
+    if (m_privateTimelines.isEmpty())
+        return;
+    if (!m_document) {
+        closeAllPrivateTimelines();
+        return;
+    }
+
+    QVector<Uuid> stale;
+    const auto& entities = m_document->project().entities;
+    for (auto it = m_privateTimelines.constBegin();
+         it != m_privateTimelines.constEnd(); ++it) {
+        if (!entities.contains(it.key()))
+            stale.append(it.key());
+    }
+
+    for (const Uuid& uuid : stale) {
+        QDialog* dialog = m_privateTimelines.take(uuid);
+        if (dialog) {
+            // The destroyed handler would touch m_privateTimelines; detach it
+            // before WA_DeleteOnClose eventually destroys the dialog.
+            disconnect(dialog, nullptr, this, nullptr);
+            dialog->close();
+        }
+    }
+}
+
+void NextWindow::closeAllPrivateTimelines()
+{
+    if (m_privateTimelines.isEmpty())
+        return;
+
+    const auto dialogs = m_privateTimelines.values();
+    m_privateTimelines.clear();
+    for (QDialog* dialog : dialogs) {
+        if (dialog) {
+            disconnect(dialog, nullptr, this, nullptr);
+            dialog->close();
+        }
+    }
 }
 
 void NextWindow::updateActions()

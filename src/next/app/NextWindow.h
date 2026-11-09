@@ -2,6 +2,7 @@
 
 #include "common/Types.h"
 
+#include <QHash>
 #include <QMainWindow>
 
 #include <memory>
@@ -9,6 +10,7 @@
 class QAction;
 class QCheckBox;
 class QComboBox;
+class QDialog;
 class QLabel;
 class QSpinBox;
 
@@ -57,7 +59,14 @@ public:
     QAction* redoActionForTest() const { return m_redoAction; }
     QAction* createEntityActionForTest(ContentKind kind) const;
 
+    // Opens the private timeline overlay for a parent entity.  Exposed as a
+    // test-friendly wrapper around the same slot the timeline signal uses.
+    void openPrivateTimelineForTest(const Uuid& parentUuid);
+    QDialog* privateTimelineDialogForTest(const Uuid& parentUuid) const;
+    int privateTimelineCountForTest() const { return m_privateTimelines.size(); }
+
 private slots:
+    void openPrivateTimeline(const Uuid& parentUuid);
     void chooseNewProject();
     void chooseOpenProject();
     void undo();
@@ -71,6 +80,8 @@ private:
     void updateActions();
     void updateStatus();
     void rebuildCameras();
+    void closeOrphanedPrivateTimelines();
+    void closeAllPrivateTimelines();
     void replaceCentralWidget(QWidget* widget);
     void showError(const QString& title, const QString& error);
 
@@ -102,6 +113,8 @@ private:
     QLabel* m_statusDir = nullptr;
     QLabel* m_statusFrame = nullptr;
     QLabel* m_statusFps = nullptr;
+
+    QHash<Uuid, QDialog*> m_privateTimelines;
 
     QString m_lastBrowseDir;
 };

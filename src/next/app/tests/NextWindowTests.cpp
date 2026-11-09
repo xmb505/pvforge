@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QMessageBox>
@@ -368,6 +369,76 @@ private slots:
             QVERIFY(action != nullptr);
             QVERIFY(!action->isEnabled());
         }
+    }
+
+    void privateTimelineOverlayOpensAndCloses()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+
+        Entity parent;
+        parent.uuid = model::newUuid();
+        parent.name = QStringLiteral("父");
+        parent.start = 0;
+        parent.end = 24;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        QVERIFY2(document->commitEntity(parent.uuid, QStringLiteral("pvf: create parent"),
+                                        &error),
+                 qPrintable(error));
+
+        Entity child;
+        child.uuid = model::newUuid();
+        child.name = QStringLiteral("子");
+        child.parentUuid = parent.uuid;
+        child.start = 0;
+        child.end = 24;
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntity(child.uuid, QStringLiteral("pvf: create child"),
+                                        &error),
+                 qPrintable(error));
+
+        QVERIFY(window->timelineForTest()->parentUuid().isEmpty());
+
+        window->openPrivateTimelineForTest(parent.uuid);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(window->privateTimelineCountForTest(), 1);
+        QDialog* dialog = window->privateTimelineDialogForTest(parent.uuid);
+        QVERIFY(dialog != nullptr);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->windowTitle().contains(QStringLiteral("私有时间线")));
+        QVERIFY(dialog->windowTitle().contains(QStringLiteral("父")));
+
+        auto* overlay = dialog->findChild<TimelineWidget*>();
+        QVERIFY(overlay != nullptr);
+        QCOMPARE(overlay->parentUuid(), parent.uuid);
+        QVERIFY(window->timelineForTest()->parentUuid().isEmpty());
+
+        window->openPrivateTimelineForTest(parent.uuid);
+        QCOMPARE(window->privateTimelineCountForTest(), 1);
+        QCOMPARE(window->privateTimelineDialogForTest(parent.uuid), dialog);
+
+        QVERIFY(overlay->visibleEntities().contains(child.uuid));
+        const QRect childBar = overlay->entityBarRect(child.uuid);
+        QVERIFY(childBar.isValid());
+        QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier, childBar.center());
+        QCOMPARE(document->selection(), child.uuid);
+
+        QVERIFY2(document->store()->deleteEntity(parent.uuid, &error), qPrintable(error));
+        QVERIFY2(document->commitProject(QStringLiteral("pvf: delete parent"), &error),
+                 qPrintable(error));
+        QVERIFY(!dialog->isVisible());
+        QTRY_COMPARE(window->privateTimelineCountForTest(), 0);
+        QVERIFY(window->privateTimelineDialogForTest(parent.uuid) == nullptr);
+        QVERIFY(window->timelineForTest()->parentUuid().isEmpty());
     }
 
     void undoRedoActionsDoNotCrash()
