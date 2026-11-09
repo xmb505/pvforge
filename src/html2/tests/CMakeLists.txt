@@ -12,6 +12,11 @@ set(PVF_HTML2_TEST_CASES
     serverServesAndRejects
     renderFrameColors
     timeoutDoesNotHang
+    frameCacheHits
+    staticFramesShareCache
+    prefetchFillsCache
+    finalFrameUncached
+    frameKeyVaries
 )
 
 foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)

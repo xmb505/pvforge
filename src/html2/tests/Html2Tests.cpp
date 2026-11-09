@@ -1,7 +1,9 @@
+#include "html2/HtmlFrameService.h"
 #include "html2/LocalBundleServer.h"
 #include "html2/PvhtmlRenderer.h"
 
 #include "html/HtmlBrowser.h"
+#include "htmlcache/FrameKey.h"
 
 #include <QColor>
 #include <QDir>
@@ -471,6 +473,320 @@ void timeoutDoesNotHang()
     CHECK(!renderer.isRunning());
 }
 
+int cachedWebpCount(const QString& directory)
+{
+    return QDir(directory)
+        .entryList(QStringList{QStringLiteral("*.webp")}, QDir::Files)
+        .size();
+}
+
+pvf::html2::FrameRequest lowResRequest(const QString& bundle, const QString& assetHash,
+                                      int localFrame = 0)
+{
+    pvf::html2::FrameRequest request;
+    request.assetHash = assetHash;
+    request.bundleDir = bundle;
+    request.size = QSize(160, 90);
+    request.timeoutMs = 5000;
+    request.localFrame = localFrame;
+    request.time = localFrame / 30.0;
+    request.vars.insert(QStringLiteral("color"), QStringLiteral("#ff0000"));
+    return request;
+}
+
+void frameCacheHits()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    CHECK(service.isRunning());
+    CHECK(!service.chromeVersion().isEmpty());
+    if (!service.isRunning())
+        return;
+
+    const pvf::html2::FrameRequest request =
+        lowResRequest(bundle, QStringLiteral("frame-cache-asset"));
+
+    error.clear();
+    const QImage first = service.frame(request, &error);
+    CHECK_DETAIL(!first.isNull(), error);
+    const pvf::html2::Stats firstStats = service.stats();
+    CHECK(firstStats.renders == 1);
+    CHECK(firstStats.memoryHits + firstStats.diskHits == 0);
+
+    error.clear();
+    const QImage second = service.frame(request, &error);
+    CHECK_DETAIL(!second.isNull(), error);
+    CHECK(second.size() == QSize(160, 90));
+
+    const pvf::html2::Stats secondStats = service.stats();
+    CHECK(secondStats.renders == firstStats.renders);
+    CHECK(secondStats.memoryHits + secondStats.diskHits
+          > firstStats.memoryHits + firstStats.diskHits);
+
+    // A different variable value is a different key and must render again.
+    pvf::html2::FrameRequest other = request;
+    other.vars.insert(QStringLiteral("color"), QStringLiteral("#00ff00"));
+    error.clear();
+    const QImage different = service.frame(other, &error);
+    CHECK_DETAIL(!different.isNull(), error);
+    if (!different.isNull())
+        CHECK(colorNear(different, 80, 45, QColor(0, 255, 0)));
+    CHECK(service.stats().renders == firstStats.renders + 1);
+
+    service.stop();
+    CHECK(!service.isRunning());
+}
+
+void staticFramesShareCache()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    pvf::html2::FrameRequest request =
+        lowResRequest(bundle, QStringLiteral("static-asset"), 0);
+    request.timeDependent = false;
+
+    error.clear();
+    const QImage first = service.frame(request, &error);
+    CHECK_DETAIL(!first.isNull(), error);
+    CHECK(service.stats().renders == 1);
+
+    // Even though the parity marker would turn black on frame 7, a static
+    // bundle is normalised to frame 0 and served from the same cache entry.
+    request.localFrame = 7;
+    request.time = 7.0 / 30.0;
+    error.clear();
+    const QImage second = service.frame(request, &error);
+    CHECK_DETAIL(!second.isNull(), error);
+    if (!second.isNull())
+        CHECK(colorNear(second, 5, 5, QColor(255, 255, 255)));
+
+    const pvf::html2::Stats stats = service.stats();
+    CHECK(stats.renders == 1);
+    CHECK(stats.memoryHits + stats.diskHits >= 1);
+
+    service.stop();
+}
+
+void prefetchFillsCache()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    const pvf::html2::FrameRequest first =
+        lowResRequest(bundle, QStringLiteral("prefetch-asset"), 0);
+    const pvf::html2::FrameRequest second =
+        lowResRequest(bundle, QStringLiteral("prefetch-asset"), 1);
+
+    int prefetched = 0;
+    QString prefetchError;
+    QEventLoop loop;
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::prefetchedFrame, &loop,
+                     [&prefetched, &loop](const pvf::AssetHash&, int) {
+                         ++prefetched;
+                         if (prefetched >= 2)
+                             loop.quit();
+                     });
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::prefetchError, &loop,
+                     [&prefetchError, &loop](const QString& message) {
+                         prefetchError = message;
+                         loop.quit();
+                     });
+    QTimer::singleShot(60000, &loop, &QEventLoop::quit);
+
+    service.prefetch(QVector<pvf::html2::FrameRequest>{first, second});
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+
+    CHECK_DETAIL(prefetchError.isEmpty(), prefetchError);
+    CHECK(prefetched == 2);
+    const pvf::html2::Stats prefetchedStats = service.stats();
+    CHECK(prefetchedStats.prefetched == 2);
+    CHECK(prefetchedStats.renders == 2);
+
+    // The cache thread filled both entries; the frontend must hit one.
+    error.clear();
+    const QImage image = service.frame(first, &error);
+    CHECK_DETAIL(!image.isNull(), error);
+    const pvf::html2::Stats hitStats = service.stats();
+    CHECK(hitStats.renders == prefetchedStats.renders);
+    CHECK(hitStats.memoryHits + hitStats.diskHits >= 1);
+
+    // Prefetching the same frames again reports them but must not re-render.
+    prefetched = 0;
+    prefetchError.clear();
+    service.prefetch(QVector<pvf::html2::FrameRequest>{first, second});
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    CHECK_DETAIL(prefetchError.isEmpty(), prefetchError);
+    CHECK(prefetched == 2);
+    const pvf::html2::Stats repeatStats = service.stats();
+    CHECK(repeatStats.renders == prefetchedStats.renders);
+    CHECK(repeatStats.prefetched == prefetchedStats.prefetched);
+
+    service.stop();
+}
+
+void finalFrameUncached()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    const QString cacheRoot = temporary.path() + QStringLiteral("/cache");
+    pvf::html2::HtmlFrameService service(cacheRoot);
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    const pvf::html2::FrameRequest low =
+        lowResRequest(bundle, QStringLiteral("final-asset"));
+    error.clear();
+    const QImage lowImage = service.frame(low, &error);
+    CHECK_DETAIL(!lowImage.isNull(), error);
+    const int entriesBefore = cachedWebpCount(cacheRoot);
+    const pvf::html2::Stats lowStats = service.stats();
+    CHECK(lowStats.renders == 1);
+    CHECK(entriesBefore == 1);
+
+    pvf::html2::FrameRequest high = low;
+    high.size = QSize(640, 360);
+    error.clear();
+    const QImage highImage = service.finalFrame(high, &error);
+    CHECK_DETAIL(!highImage.isNull(), error);
+    if (!highImage.isNull())
+        CHECK(highImage.size() == QSize(640, 360));
+
+    const pvf::html2::Stats finalStats = service.stats();
+    CHECK(finalStats.renders == lowStats.renders + 1);
+    CHECK(cachedWebpCount(cacheRoot) == entriesBefore);
+
+    // The low-resolution cache is untouched and still hits.
+    error.clear();
+    const QImage cachedAgain = service.frame(low, &error);
+    CHECK_DETAIL(!cachedAgain.isNull(), error);
+    CHECK(service.stats().renders == finalStats.renders);
+    CHECK(service.stats().memoryHits + service.stats().diskHits >= 1);
+
+    service.stop();
+}
+
+void frameKeyVaries()
+{
+    using pvf::htmlcache::FrameKey;
+    using pvf::htmlcache::canonicalKey;
+
+    FrameKey base;
+    base.assetHash = QStringLiteral("asset-a");
+    base.localFrame = 3;
+    base.size = QSize(320, 180);
+    base.chromeVersion = QStringLiteral("Chrome/140.0.0.0");
+    base.entryHash = QStringLiteral("entry-a");
+    base.variables.insert(QStringLiteral("speed"), 1.5);
+    base.variables.insert(QStringLiteral("label"), QStringLiteral("hello"));
+
+    const QString baseline = canonicalKey(base);
+    CHECK(canonicalKey(base) == baseline);
+
+    FrameKey variant = base;
+    variant.chromeVersion = QStringLiteral("Chrome/141.0.0.0");
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.variables.insert(QStringLiteral("speed"), 1.6);
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.variables.insert(QStringLiteral("speed"), 1.5000004);
+    CHECK(canonicalKey(variant) == baseline); // six-decimal normalisation
+
+    variant = base;
+    variant.variables.insert(QStringLiteral("extra"), 1);
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.assetHash = QStringLiteral("asset-b");
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.localFrame = 4;
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.size = QSize(321, 180);
+    CHECK(canonicalKey(variant) != baseline);
+
+    variant = base;
+    variant.entryHash = QStringLiteral("entry-b");
+    CHECK(canonicalKey(variant) != baseline);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -485,7 +801,9 @@ int main(int argc, char** argv)
     {
         QTextStream(stderr) << "usage: pvf_html2_tests <test-case>\n"
                             << "cases: serverServesAndRejects renderFrameColors "
-                               "timeoutDoesNotHang\n";
+                               "timeoutDoesNotHang frameCacheHits "
+                               "staticFramesShareCache prefetchFillsCache "
+                               "finalFrameUncached frameKeyVaries\n";
         return 2;
     }
 
@@ -496,6 +814,16 @@ int main(int argc, char** argv)
         renderFrameColors();
     else if (name == QStringLiteral("timeoutDoesNotHang"))
         timeoutDoesNotHang();
+    else if (name == QStringLiteral("frameCacheHits"))
+        frameCacheHits();
+    else if (name == QStringLiteral("staticFramesShareCache"))
+        staticFramesShareCache();
+    else if (name == QStringLiteral("prefetchFillsCache"))
+        prefetchFillsCache();
+    else if (name == QStringLiteral("finalFrameUncached"))
+        finalFrameUncached();
+    else if (name == QStringLiteral("frameKeyVaries"))
+        frameKeyVaries();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';

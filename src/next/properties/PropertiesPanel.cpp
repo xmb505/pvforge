@@ -1,5 +1,7 @@
 #include "PropertiesPanel.h"
 
+#include "SolverPreviewWidget.h"
+
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -1611,12 +1613,12 @@ void PropertiesPanel::updateSolverCards(const model::Entity& entity)
 
     if (!sameStructure)
     {
-        rebuildSolverCards(solvers);
+        rebuildSolverCards(entity.uuid, solvers);
     }
     else
     {
         for (int i = 0; i < solvers.size(); ++i)
-            fillSolverCard(m_solverCards[i], solvers.at(i));
+            fillSolverCard(m_solverCards[i], entity.uuid, solvers.at(i));
     }
 
     reloadSolverCreate(entity);
@@ -1624,7 +1626,8 @@ void PropertiesPanel::updateSolverCards(const model::Entity& entity)
     m_solverEmpty->setVisible(solvers.isEmpty());
 }
 
-void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& solvers)
+void PropertiesPanel::rebuildSolverCards(
+    const Uuid& entityUuid, const QVector<model::SolverSegment>& solvers)
 {
     for (SolverCard& card : m_solverCards)
         delete card.box;
@@ -1646,6 +1649,11 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
         auto* effectLabel = new QLabel(solverEffectName(solver.effect), card.box);
         effectLabel->setObjectName(QStringLiteral("solverEffect%1").arg(index));
         form->addRow(QStringLiteral("效果"), effectLabel);
+
+        card.preview = new SolverPreviewWidget(m_document, card.box);
+        card.preview->setObjectName(QStringLiteral("solverPreview%1").arg(index));
+        card.preview->setMinimumHeight(180);
+        form->addRow(card.preview);
 
         card.start = new QSpinBox(card.box);
         card.start->setObjectName(QStringLiteral("solverStart%1").arg(index));
@@ -1692,63 +1700,69 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
 
         connect(card.start, &QSpinBox::editingFinished, this, [this, solverId, card] {
             const int value = card.start->value();
-            commitEdit(QStringLiteral("solver startFrame"), [solverId, value](model::Entity& entity) {
-                for (model::SolverSegment& segment : entity.solvers)
-                {
-                    if (segment.id == solverId)
+            commitSolverEdit(
+                solverId, QStringLiteral("solver startFrame"),
+                [solverId, value](model::Entity& entity) {
+                    for (model::SolverSegment& segment : entity.solvers)
                     {
-                        segment.startFrame = value;
-                        return true;
+                        if (segment.id == solverId)
+                        {
+                            segment.startFrame = value;
+                            return true;
+                        }
                     }
-                }
-                return false;
-            });
+                    return false;
+                });
         });
         connect(card.end, &QSpinBox::editingFinished, this, [this, solverId, card] {
             const int value = card.end->value();
-            commitEdit(QStringLiteral("solver endFrame"), [solverId, value](model::Entity& entity) {
-                for (model::SolverSegment& segment : entity.solvers)
-                {
-                    if (segment.id == solverId)
+            commitSolverEdit(
+                solverId, QStringLiteral("solver endFrame"),
+                [solverId, value](model::Entity& entity) {
+                    for (model::SolverSegment& segment : entity.solvers)
                     {
-                        segment.endFrame = value;
-                        return true;
+                        if (segment.id == solverId)
+                        {
+                            segment.endFrame = value;
+                            return true;
+                        }
                     }
-                }
-                return false;
-            });
+                    return false;
+                });
         });
         connect(card.velocityX, &QDoubleSpinBox::editingFinished, this,
                 [this, solverId, card] {
                     const double value = card.velocityX->value();
-                    commitEdit(QStringLiteral("solver initialVelocity.x"),
-                               [solverId, value](model::Entity& entity) {
-                                   for (model::SolverSegment& segment : entity.solvers)
-                                   {
-                                       if (segment.id == solverId)
-                                       {
-                                           segment.initialVelocity.setX(value);
-                                           return true;
-                                       }
-                                   }
-                                   return false;
-                               });
+                    commitSolverEdit(
+                        solverId, QStringLiteral("solver initialVelocity.x"),
+                        [solverId, value](model::Entity& entity) {
+                            for (model::SolverSegment& segment : entity.solvers)
+                            {
+                                if (segment.id == solverId)
+                                {
+                                    segment.initialVelocity.setX(value);
+                                    return true;
+                                }
+                            }
+                            return false;
+                        });
                 });
         connect(card.velocityY, &QDoubleSpinBox::editingFinished, this,
                 [this, solverId, card] {
                     const double value = card.velocityY->value();
-                    commitEdit(QStringLiteral("solver initialVelocity.y"),
-                               [solverId, value](model::Entity& entity) {
-                                   for (model::SolverSegment& segment : entity.solvers)
-                                   {
-                                       if (segment.id == solverId)
-                                       {
-                                           segment.initialVelocity.setY(value);
-                                           return true;
-                                       }
-                                   }
-                                   return false;
-                               });
+                    commitSolverEdit(
+                        solverId, QStringLiteral("solver initialVelocity.y"),
+                        [solverId, value](model::Entity& entity) {
+                            for (model::SolverSegment& segment : entity.solvers)
+                            {
+                                if (segment.id == solverId)
+                                {
+                                    segment.initialVelocity.setY(value);
+                                    return true;
+                                }
+                            }
+                            return false;
+                        });
                 });
 
         const QVector<ParamSpec> specs = solverParams(solver.effect);
@@ -1761,7 +1775,8 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
                 edit->setObjectName(
                     QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
                 editor = edit;
-                connect(edit, &QLineEdit::editingFinished, this, [this, solverId, spec, edit] {
+                connect(edit, &QLineEdit::editingFinished, this,
+                        [this, solverId, spec, edit] {
                     const QString value = edit->text().trimmed();
                     if (value.isEmpty())
                     {
@@ -1775,18 +1790,19 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
                         refresh();
                         return;
                     }
-                    commitEdit(QStringLiteral("solver %1").arg(spec.key),
-                               [solverId, spec, value](model::Entity& entity) {
-                                   for (model::SolverSegment& segment : entity.solvers)
-                                   {
-                                       if (segment.id == solverId)
-                                       {
-                                           segment.params.insert(spec.key, value);
-                                           return true;
-                                       }
-                                   }
-                                   return false;
-                               });
+                    commitSolverEdit(
+                        solverId, QStringLiteral("solver %1").arg(spec.key),
+                        [solverId, spec, value](model::Entity& entity) {
+                            for (model::SolverSegment& segment : entity.solvers)
+                            {
+                                if (segment.id == solverId)
+                                {
+                                    segment.params.insert(spec.key, value);
+                                    return true;
+                                }
+                            }
+                            return false;
+                        });
                 });
             }
             else if (spec.kind == ParamKind::Direction)
@@ -1800,18 +1816,20 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
                 connect(combo, &QComboBox::currentIndexChanged, this,
                         [this, solverId, spec, combo](int) {
                             const int value = combo->currentData().toInt();
-                            commitEdit(QStringLiteral("solver %1").arg(spec.key),
-                                       [solverId, spec, value](model::Entity& entity) {
-                                           for (model::SolverSegment& segment : entity.solvers)
-                                           {
-                                               if (segment.id == solverId)
-                                               {
-                                                   segment.params.insert(spec.key, value);
-                                                   return true;
-                                               }
-                                           }
-                                           return false;
-                                       });
+                            commitSolverEdit(
+                                solverId,
+                                QStringLiteral("solver %1").arg(spec.key),
+                                [solverId, spec, value](model::Entity& entity) {
+                                    for (model::SolverSegment& segment : entity.solvers)
+                                    {
+                                        if (segment.id == solverId)
+                                        {
+                                            segment.params.insert(spec.key, value);
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                });
                         });
             }
             else
@@ -1829,18 +1847,20 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
                 connect(spin, &QDoubleSpinBox::editingFinished, this,
                         [this, solverId, spec, spin] {
                             const double value = spin->value();
-                            commitEdit(QStringLiteral("solver %1").arg(spec.key),
-                                       [solverId, spec, value](model::Entity& entity) {
-                                           for (model::SolverSegment& segment : entity.solvers)
-                                           {
-                                               if (segment.id == solverId)
-                                               {
-                                                   segment.params.insert(spec.key, value);
-                                                   return true;
-                                               }
-                                           }
-                                           return false;
-                                       });
+                            commitSolverEdit(
+                                solverId,
+                                QStringLiteral("solver %1").arg(spec.key),
+                                [solverId, spec, value](model::Entity& entity) {
+                                    for (model::SolverSegment& segment : entity.solvers)
+                                    {
+                                        if (segment.id == solverId)
+                                        {
+                                            segment.params.insert(spec.key, value);
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                });
                         });
             }
 
@@ -1858,17 +1878,20 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
         }
 
         m_solverCardsLayout->addWidget(card.box);
-        fillSolverCard(card, solver);
+        fillSolverCard(card, entityUuid, solver);
         m_solverCards.append(card);
     }
 
     applySolverEnabledState();
 }
 
-void PropertiesPanel::fillSolverCard(SolverCard& card, const model::SolverSegment& solver)
+void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
+                                     const model::SolverSegment& solver)
 {
     card.box->setTitle(
         QStringLiteral("%1 · %2").arg(solverEffectName(solver.effect), solverRangeText(solver)));
+    if (card.preview)
+        card.preview->setSolver(entityUuid, solver.id);
     card.start->setValue(solver.startFrame);
     card.end->setValue(solver.endFrame);
     card.velocityX->setValue(solver.initialVelocity.x());
@@ -1962,6 +1985,26 @@ void PropertiesPanel::applySolverCardSelection()
     }
     if (!found)
         m_selectedSolverId.clear();
+}
+
+SolverPreviewWidget* PropertiesPanel::solverPreview(const Uuid& solverId) const
+{
+    for (const SolverCard& card : m_solverCards)
+    {
+        if (card.id == solverId)
+            return card.preview;
+    }
+    return nullptr;
+}
+
+void PropertiesPanel::commitSolverEdit(
+    const Uuid& solverId, const QString& what,
+    const std::function<bool(model::Entity&)>& mutate)
+{
+    if (!commitEdit(what, mutate))
+        return;
+    if (SolverPreviewWidget* preview = solverPreview(solverId))
+        preview->refreshPreview();
 }
 
 SolverEffect PropertiesPanel::selectedSolverEffect() const

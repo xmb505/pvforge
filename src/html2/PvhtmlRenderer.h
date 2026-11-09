@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/Types.h"
+
 #include <QImage>
 #include <QObject>
 #include <QSize>
@@ -21,12 +23,15 @@ class LocalBundleServer;
 // pvhtml.json (the renderer does not clamp or rename values).
 struct FrameRequest
 {
+    AssetHash assetHash;    // .pvhtml content hash; part of the cache key
     QString bundleDir;      // .pvhtml directory (contains index.html)
     QString entry = QStringLiteral("index.html");
     int localFrame = 0;
     double time = 0.0;
     QVariantMap vars;
     QSize size{1280, 720};
+    bool timeDependent = true; // false: render/cache only localFrame=0, time=0
+    bool final = false;        // true: high-resolution final render, never cached
     int timeoutMs = 3000;
 };
 

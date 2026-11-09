@@ -23,6 +23,8 @@ class QVBoxLayout;
 
 namespace pvf::next {
 
+class SolverPreviewWidget;
+
 // Right side panel for one selected entity.  It only mutates the model through
 // Document::mutableProject() and then calls commitEntity() once per finished
 // edit (Enter, focus out, checkbox toggle, combo selection, color dialog).
@@ -69,6 +71,7 @@ private:
         QSpinBox* end = nullptr;
         QDoubleSpinBox* velocityX = nullptr;
         QDoubleSpinBox* velocityY = nullptr;
+        SolverPreviewWidget* preview = nullptr;
         QPushButton* remove = nullptr;
         QHash<QString, QWidget*> params;
     };
@@ -86,10 +89,15 @@ private:
     void rebuildKeyframeRows(const model::Entity& entity);
     void reloadContent(const model::Entity& entity);
     void updateSolverCards(const model::Entity& entity);
-    void rebuildSolverCards(const QVector<model::SolverSegment>& solvers);
-    void fillSolverCard(SolverCard& card, const model::SolverSegment& solver);
+    void rebuildSolverCards(const Uuid& entityUuid,
+                            const QVector<model::SolverSegment>& solvers);
+    void fillSolverCard(SolverCard& card, const Uuid& entityUuid,
+                        const model::SolverSegment& solver);
     void reloadSolverCreate(const model::Entity& entity);
     void applySolverCardSelection();
+    SolverPreviewWidget* solverPreview(const Uuid& solverId) const;
+    void commitSolverEdit(const Uuid& solverId, const QString& what,
+                          const std::function<bool(model::Entity&)>& mutate);
 
     void createSolverFromPlayhead();
     void deleteSolverSegment(const Uuid& solverId);
