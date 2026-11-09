@@ -2,6 +2,7 @@
 
 #include "common/Types.h"
 
+#include <QImage>
 #include <QJsonObject>
 #include <QRect>
 #include <QString>
@@ -59,6 +60,12 @@ public:
     // yields ViewState defaults.
     void setViewStateProvider(ViewStateProvider provider);
 
+    // Optional media providers used by preview.render_frame.  Empty providers
+    // keep render2's placeholders.  Signatures match render2::FrameProvider.
+    using FrameProvider = std::function<QImage(const Uuid&, double)>;
+    void setVideoFrameProvider(FrameProvider provider);
+    void setHtmlFrameProvider(FrameProvider provider);
+
     // Executes one tool. Unknown tools and malformed arguments return a
     // structured failure envelope; the method never throws.
     QJsonObject execute(const QString& tool, const QJsonObject& args);
@@ -89,6 +96,8 @@ private:
     store::ProjectStore* m_store = nullptr;
     assets::AssetStore* m_assets = nullptr;
     ViewStateProvider m_viewStateProvider;
+    FrameProvider m_videoFrameProvider;
+    FrameProvider m_htmlFrameProvider;
     BatchCheckpoint m_batchCheckpoint;
     std::atomic<bool> m_stopped{false};
 };

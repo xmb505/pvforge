@@ -765,6 +765,14 @@ QFuture<QImage> HtmlFrameService::requestLowRes(const FrameRequest& request)
     return submitLowRes(request, nullptr);
 }
 
+QImage HtmlFrameService::cachedLowRes(const FrameRequest& request)
+{
+    QImage image;
+    const FrameRequest normalized = normalizedRequest(request);
+    lookupCached(keyFor(normalized), &image);
+    return image;
+}
+
 QImage HtmlFrameService::lowResWait(const FrameRequest& request, int maxWaitMs, QString* error)
 {
     QSharedPointer<LowResOutcome> outcome;

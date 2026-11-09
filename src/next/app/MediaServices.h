@@ -69,7 +69,16 @@ public:
     // render2::FrameProvider implementations.  Both return a null image when
     // the entity, its asset or the decode result is missing.
     QImage videoFrame(const Uuid& entityUuid, double projectFrame);
+    // Cache-only: never waits inside paintEvent().  A miss queues a background
+    // render and returns a null image; htmlFrameReady follows.
     QImage htmlFrame(const Uuid& entityUuid, double projectFrame);
+    // Blocks up to maxWaitMs for the HTML entities under the current playhead
+    // (the documented 300 ms miss budget).  Must be called outside paintEvent().
+    void prepareHtmlPreview(int maxWaitMs = 300);
+    // Single-entity blocking render for MCP preview.render_frame; safe on the
+    // UI thread because it never runs inside paintEvent().
+    QImage htmlFrameBlocking(const Uuid& entityUuid, double projectFrame,
+                             int maxWaitMs = 300);
 
     // Export providers (src/export2).  Unlike the viewport providers they
     // never use the proxy/WebP sequence or the low-resolution HTML browsers.
@@ -139,8 +148,9 @@ private:
     std::map<AssetHash, std::unique_ptr<video2::VideoSequenceService>> m_sequences;
     std::unique_ptr<html2::HtmlFrameService> m_html;
     // Guards against a queued update() re-entering htmlFrame() while
-    // lowResWait() pumps a nested event loop inside paintEvent().
+    // prepareHtmlPreview() pumps a nested event loop.
     bool m_htmlInFlight = false;
+    bool m_preparingHtml = false;
     // Set by a missed htmlFrame() request, cleared by htmlFrameReady.
     bool m_htmlPending = false;
 };

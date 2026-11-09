@@ -117,6 +117,16 @@ void Service::setViewStateProvider(ViewStateProvider provider)
     m_viewStateProvider = std::move(provider);
 }
 
+void Service::setVideoFrameProvider(FrameProvider provider)
+{
+    m_videoFrameProvider = std::move(provider);
+}
+
+void Service::setHtmlFrameProvider(FrameProvider provider)
+{
+    m_htmlFrameProvider = std::move(provider);
+}
+
 void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
 {
     m_batchCheckpoint = std::move(checkpoint);
@@ -194,6 +204,8 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
         detail::Tx tx(m_store);
         if (m_viewStateProvider)
             tx.viewState = m_viewStateProvider();
+        tx.videoFrameProvider = m_videoFrameProvider;
+        tx.htmlFrameProvider = m_htmlFrameProvider;
         tx.stopCheck = [this] {
             if (m_batchCheckpoint)
                 m_batchCheckpoint();

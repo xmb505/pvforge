@@ -120,6 +120,10 @@ public:
     // cancels the previously queued (not yet running) miss.
     QFuture<QImage> requestLowRes(const FrameRequest& request);
 
+    // Cache-only lookup; never renders, waits, or runs an event loop. Safe to
+    // call from paintEvent(). Returns a null image on a miss.
+    QImage cachedLowRes(const FrameRequest& request);
+
     // requestLowRes() plus at most maxWaitMs of waiting (negative waits
     // forever). A timeout returns a null image with error="timeout" while the
     // background request keeps running; it is not cancelled.

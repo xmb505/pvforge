@@ -880,6 +880,10 @@ void NextWindow::connectDocument()
         }
         if (m_timeline)
             m_timeline->refresh();
+        // Give the current HTML frame its 300 ms miss budget outside
+        // paintEvent(); the subsequent paint is cache-only.
+        if (m_media)
+            m_media->prepareHtmlPreview(300);
         if (m_viewport)
             m_viewport->refresh();
         updateStatus();
@@ -902,6 +906,8 @@ void NextWindow::refreshAll()
         m_propertiesPanel->refresh();
     if (m_timeline)
         m_timeline->refresh();
+    if (m_media)
+        m_media->prepareHtmlPreview(300);
     if (m_viewport)
         m_viewport->refresh();
 
@@ -1208,6 +1214,16 @@ void NextWindow::startMcpServer()
                 state.cameraUuid = m_viewport->cameraUuid();
         }
         return state;
+    });
+    m_mcpService->setVideoFrameProvider([this](const Uuid& uuid, double frame) {
+        if (!m_media)
+            ensureMediaServices();
+        return m_media ? m_media->videoFrame(uuid, frame) : QImage();
+    });
+    m_mcpService->setHtmlFrameProvider([this](const Uuid& uuid, double frame) {
+        if (!m_media)
+            ensureMediaServices();
+        return m_media ? m_media->htmlFrameBlocking(uuid, frame) : QImage();
     });
     // Long batch tools run on the UI thread.  Pumping events at each batch
     // checkpoint keeps the emergency-stop button and the AI lock indicator

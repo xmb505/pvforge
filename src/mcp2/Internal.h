@@ -6,6 +6,7 @@
 #include "model/Model.h"
 #include "store/Store.h"
 
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QSet>
@@ -30,6 +31,11 @@ struct Tx
     QSet<Uuid> dirty;
     QSet<Uuid> deleted;
     bool projectDirty = false;
+    // Set by Service::execute. Previews use the editor's media providers so
+    // HTML and video layers match the viewport instead of render2 placeholders.
+    std::function<QImage(const Uuid&, double)> videoFrameProvider;
+    std::function<QImage(const Uuid&, double)> htmlFrameProvider;
+
     // Set by Service::execute. Batch loops call stopRequested(tx) between
     // items; a landing human stop drops the whole transaction.
     std::function<bool()> stopCheck;

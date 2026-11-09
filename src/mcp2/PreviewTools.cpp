@@ -141,6 +141,8 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
     options.cameraUuid = cameraUuid;
     options.outputSize = QSize(width, height);
     options.background = background;
+    options.videoFrame = tx.videoFrameProvider;
+    options.htmlFrame = tx.htmlFrameProvider;
 
     const QImage image =
         render2::renderFrame(project, tx.store->assets(), options, world, cache);

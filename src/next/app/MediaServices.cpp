@@ -9,6 +9,7 @@
 #include "video2/VideoSequenceService.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -24,7 +25,6 @@ namespace pvf::next {
 
 namespace {
 
-constexpr int kHtmlLowResWaitMs = 300;
 constexpr qint64 kVideoDiskBudgetBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDefaultVideoProxyWidth = 960;
 constexpr int kDefaultVideoMemoryFrames = 64;
@@ -300,22 +300,81 @@ QImage MediaServices::htmlFrame(const Uuid& entityUuid, double projectFrame)
     if (!asset)
         return {};
 
-    if (!htmlRunning() && !startHtml(nullptr))
-    {
-        // Nothing is rendering in the background, so do not hold playback.
-        m_htmlPending = false;
-        return {};
-    }
-
     const html2::FrameRequest request =
         makeHtmlRequest(*entity, *asset, projectFrame);
 
+    // paintEvent() must never wait: a cache hit draws now, a miss queues the
+    // frontend worker and the frameReady signal refreshes the viewport.
+    QImage image = m_html->cachedLowRes(request);
+    if (!image.isNull())
+    {
+        m_htmlPending = false;
+        return image;
+    }
+
+    m_html->requestLowRes(request);
+    m_htmlPending = true;
+    return {};
+}
+
+void MediaServices::prepareHtmlPreview(int maxWaitMs){
+    if (!m_html || !m_document || m_preparingHtml || m_htmlInFlight)
+        return;
+
+    const int playhead = m_document->playhead();
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    const model::Project& project = m_document->project();
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (entity.content.kind != ContentKind::Asset
+            || entity.content.asset.type != AssetType::Html)
+            continue;
+        if (playhead < entity.start || playhead >= entity.end)
+            continue;
+
+        const auto asset = m_document->assets().get(entity.content.asset.hash);
+        if (!asset)
+            continue;
+
+        const html2::FrameRequest request =
+            makeHtmlRequest(entity, *asset, double(playhead));
+        if (!m_html->cachedLowRes(request).isNull())
+            continue;
+
+        const int remaining = maxWaitMs - int(elapsed.elapsed());
+        if (remaining <= 0)
+            break;
+
+        m_preparingHtml = true;
+        const QImage image = m_html->lowResWait(request, remaining);
+        m_preparingHtml = false;
+        if (!image.isNull())
+            m_htmlPending = false;
+    }
+}
+
+QImage MediaServices::htmlFrameBlocking(const Uuid& entityUuid,
+                                        double projectFrame, int maxWaitMs)
+{
+    if (!m_html || m_htmlInFlight)
+        return {};
+
+    const model::Entity* entity = findAssetEntity(entityUuid, AssetType::Html);
+    if (!entity)
+        return {};
+    const auto asset = m_document->assets().get(entity->content.asset.hash);
+    if (!asset)
+        return {};
+
+    const html2::FrameRequest request =
+        makeHtmlRequest(*entity, *asset, projectFrame);
     m_htmlInFlight = true;
-    QImage image = m_html->lowResWait(request, kHtmlLowResWaitMs);
+    const QImage image = m_html->lowResWait(request, maxWaitMs);
     m_htmlInFlight = false;
-    // Null means cache miss or the 300 ms timeout: the frontend keeps
-    // rendering in the background and htmlFrameReady will clear the flag.
-    m_htmlPending = image.isNull();
     return image;
 }
 
