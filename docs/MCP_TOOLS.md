@@ -73,24 +73,24 @@
 
 ### 0.4 提交、撤销与原子性
 
-- **一次工具调用 = 一个逻辑操作 = 一个 commit。**
-- 批量工具（`entity.createTree`、`entity.createMany`、`entity.updateMany`、`entity.deleteMany`、`keyframes.setMany`）在一次调用里只产生**一个** commit。
+- **写文本的工具调用 = 一个逻辑操作 = 一个 commit。**素材文件不进 git；纯 `asset.import` 没有文本 diff 时可能**没有 commit**。
+- 批量工具（`entity.createTree`、`entity.createMany`、`entity.updateMany`、`entity.deleteMany`、`keyframes.setMany`）在一次调用里只产生**一个** commit（如果有文本变更）。
 - 批量工具**全成功或全回滚**：任何一个元素校验失败，整次调用不写文件、不产生 commit，返回第一个错误（带 `details.index`）。
 - 失败和回滚不会留下部分实体、部分关键帧或半个素材。
 - 只读工具不产生 commit：`*.get`、`*.list`、`solver.evaluate`、`preview.render_frame`、`view.state`、`schema.get`、`guide.get`、`history.log`。
-- `history.undo` / `history.redo` 本身也会产生 commit：undo 是 `git revert`，redo 是 revert 那次 revert。
+- `history.undo` / `history.redo` 是**内存快照撤销/重做**，不产生 git commit；git 历史是冷恢复。
 - commit 消息自动生成，例如：
   - `pvf: create entity "标题"`
   - `pvf: create tree "标题" (4 entities)`
   - `pvf: set keyframes "标题" x`
   - `pvf: create solver "小球" gravity`
-  - `pvf: import asset "opening.mp4"`
   - `pvf: delete 3 entities`
-- 写工具成功返回 `commit: {hash, shortHash, message}`；客户端可以用 `history.log` 查完整历史。
+- 写文本成功可能返回 `commit: {hash, shortHash, message}`；纯素材导入时 `commit` 为空/省略。
+
 
 ### 0.5 权限、锁定与 confirm
 
-- MCP 默认可以读全工程；写工具需要人类在编辑器里开启“允许 AI 修改”。未开启时写工具返回 `permission_denied`。
+- MCP 默认可以读全工程，默认也可写；删除父级、批量删除、删除素材等危险操作要求 `confirm: true`。
 - 人类急停后，所有写工具返回 `stopped_by_human`，读工具仍可用；急停后不要自动重试。
 - **锁定实体写入会失败。** `locked` 会沿父链生效：实体自己锁定，或任一祖先锁定，都算锁定。
   - 读取、预览、复制不受影响。
@@ -355,7 +355,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 
 | 家族 | 工具 | 数量 | 写 | commit | confirm |
 |---|---|---|---|---|---|
-| `project` | `project.get`、`project.summary`、`project.update` | 3 | 部分 | `update` 有 | 改 fps 且工程非空时 |
+| `project` | `project.get`、`project.summary`、`project.update` | 3 | 部分 | `update` 有 | fps/分辨率锁定，传了拒绝 |
 | `entity` | `create`、`createTree`、`createMany`、`get`、`list`、`update`、`updateMany`、`move`、`trim`、`reparent`、`duplicate`、`delete`、`deleteMany` | 13 | 部分 | 写工具各 1 个 | `delete`、`deleteMany`；`trim` 级联删子实体时 |
 | `keyframes` | `get`、`set`、`setMany`、`remove`、`move`、`clear`、`setEasing` | 7 | 部分 | 写工具各 1 个 | 否 |
 | `solver` | `create`、`update`、`delete`、`list`、`evaluate` | 5 | 部分 | 写工具各 1 个 | 否 |
@@ -483,15 +483,14 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `name` | string | 否 | — | 工程名，1..256 字符 |
-| `width` | integer | 否 | — | 16..16384 |
-| `height` | integer | 否 | — | 16..16384 |
-| `fps` | integer | 否 | — | 1..240；工程非空时必须 `confirm: true` |
+| `width` | integer | 否 | — | **创建后锁定，传了会被拒绝** |
+| `height` | integer | 否 | — | **创建后锁定，传了会被拒绝** |
+| `fps` | integer | 否 | — | **创建后锁定，传了会被拒绝** |
 | `background` | string | 否 | — | CSS hex 颜色 |
-| `confirm` | boolean | 否 | false | 改 fps 且工程非空时必填 |
 
 **返回 `data`**：`{settings, changed:[...]}`。
 
-**错误**：`invalid_argument`、`confirm_required`、`permission_denied`、`conflict`（git 提交失败）。
+**错误**：`invalid_argument`、`conflict`（fps/分辨率锁定、git 提交失败）、`permission_denied`。
 
 **示例**：
 
@@ -499,7 +498,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 { "background": "#0b1020", "name": "片头 90 帧" }
 ```
 
-**注意**：修改 `width`/`height` **不会**缩放已有实体坐标；它们仍是绝对像素。需要重新构图时用摄像机或显式移动实体。修改 `fps` 会改变按帧存储的动画速度和物理步长，所以非空工程要求确认。
+**注意**：fps 和分辨率在创建工程时锁定，之后不能改；需要新参数请新建工程。渲染页可以另设输出 fps（2x/4x）和分辨率（1x/2x/4x），但不改工程数据。
 
 ---
 
@@ -1744,12 +1743,13 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 **规则**：
 
 - 只接受本地路径，不接受 URL、`~`、相对路径。
-- 视频设置 `extractAudio: true` 时，在同一个 commit 里同时写入视频素材和 WAV 音频素材；返回两个 hash。
+- 素材文件进工程 `assets/`，但**不进 git**；纯素材导入没有文本 diff 时可能没有 commit。
+- 视频设置 `extractAudio: true` 时同时写入视频素材和 WAV 音频素材；返回两个 hash。
 - `ffmpeg` 缺失且 `extractAudio: true` → `not_available`，整次导入回滚，不留半个素材。
 - 同一 sha256 已存在时返回已有素材，`deduplicated: true`；不会改已有素材的名字。
 - HTML 素材是 `.pvhtml` 目录包或 zip；包内必须有 `index.html`。
 - 音频素材使用同一个内容寻址；视频拆出的 WAV 也参与去重。
-- 一次调用一个 commit。
+- 导入视频后宿主可以后台抽 WebP 图片序列，抽图不属于 MCP 调用/commit。
 
 **返回**：
 
@@ -2165,69 +2165,57 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 
 ## 10. history
 
-撤销不是内存命令栈，而是 git：
+撤销分两层：
 
-- `history.undo` = `git revert` 最近一个操作 commit；
-- `history.redo` = revert 那次 revert；
-- 一次操作一个 commit，所以一次 undo 回退一个完整操作；
-- 批量工具是一个 commit，所以一次 undo 回退整个批量操作。
+- **内存 undo/redo（热）**：文本数据快照，Ctrl+Z/Ctrl+Shift+Z 直接恢复，不产生 git commit。
+- **git 历史（冷）**：AI 每次写工具调用立即 commit；人类停手 1 秒/保存时合并 commit。跨会话只能靠 git 历史恢复。
+- 素材文件不在 undo 范围；素材不进 git，靠用户备份。
 
-### 10.1 `history.undo` — 写（产生 revert commit）
+### 10.1 `history.undo` — 写（内存撤销）
 
 **参数**：
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `steps` | integer | 否 | 1 | 1..10，回退最近几个操作 commit |
+| `steps` | integer | 否 | 1 | 1..10，回退最近几步内存操作 |
 
 **规则**：
 
-- 工作区必须干净；有未提交文件时返回 `conflict`，`details.dirtyPaths` 列出文件。不要静默提交人类未保存的修改。
-- 没有可回退的 commit → `conflict`。
-- revert 冲突 → `conflict`，工程保持原状，需要人类处理。
-- 成功后返回被回退的 commit 和新的 revert commit。
+- 直接应用内存 before 快照；不调用 git revert、不产生 commit。
+- 覆盖实体、工程设置、关键帧、求解段、markers 等文本数据。
+- 素材文件不改。
+- 无记录 → `conflict`。
+- 成功后返回当前 undo/redo 深度和 HEAD（HEAD 不变）。
 
 **返回 `data`**：
 
 ```json
 {
-  "reverted": [{ "hash": "...", "shortHash": "...", "message": "pvf: set keyframes \"标题\" x" }],
-  "newCommit": { "hash": "...", "shortHash": "...", "message": "pvf: undo a1b2c3d" },
-  "head": "..."
+  "steps": 1,
+  "undoDepth": 4,
+  "redoDepth": 1,
+  "head": "a1b2c3d..."
 }
 ```
 
-**错误**：`conflict`（无可撤销、工作区不干净、revert 冲突）、`not_available`（git 缺失）、`internal_error`。
+**错误**：`conflict`（无可撤销）、`permission_denied`、`internal_error`。
 
-**示例**：
-
-```json
-{ "steps": 1 }
-```
-
-### 10.2 `history.redo` — 写（产生 revert commit）
+### 10.2 `history.redo` — 写（内存重做）
 
 **参数**：
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `steps` | integer | 否 | 1 | 1..10，重做最近几个 undo |
+| `steps` | integer | 否 | 1 | 1..10，重做最近几步 |
 
 **规则**：
 
-- 最近一个 commit 必须是 undo/revert；否则 `conflict`。
-- 工作区必须干净。
-- `steps > 1` 时按 undo 栈逆序重做。
+- 直接应用内存 after 快照；不产生 commit。
+- 无记录 → `conflict`。
 
-**返回 `data`**：同 `history.undo`，字段为 `redone`、`newCommit`、`head`。
+**返回 `data`**：同 `history.undo`，字段为 `redoDepth` 等。
 
 **错误**：同 `history.undo`。
-
-**示例**：
-
-```json
-{ "steps": 1 }
-```
 
 ### 10.3 `history.log` — 只读
 
@@ -2740,7 +2728,7 @@ AI 在提交写操作前按顺序自查：
 3. 确认目标实体和祖先没有锁定；锁定就停下来报告人类。
 4. 关键帧帧号是相对实体 `start` 的整数，且都在 `0..duration-1`。
 5. 求解段开始帧已有 `x`/`y` 或 `rotation` 关键帧；段与段不重叠；段内没有普通关键帧。
-6. 危险操作（删除、删素材、级联裁剪、非空工程改 fps）带 `confirm: true`。
+6. 危险操作（删除、删素材、级联裁剪）带 `confirm: true`。
 7. 批量操作的元素数量不超过 200；工程实体不超过 5000。
 8. 写完用 `preview.render_frame` 抽查起始、中间、结束帧；失败就停，不叠加修改。
 9. 收到 `stopped_by_human` 立即停止，绝不重试。
