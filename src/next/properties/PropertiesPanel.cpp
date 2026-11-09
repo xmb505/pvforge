@@ -15,6 +15,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -235,6 +236,45 @@ QString solverRangeText(const model::SolverSegment& solver)
     if (solver.endFrame < 0)
         return QStringLiteral("%1 帧 – 片段末帧").arg(solver.startFrame);
     return QStringLiteral("%1 – %2 帧").arg(solver.startFrame).arg(solver.endFrame);
+}
+
+bool solverNeedsTarget(SolverEffect effect)
+{
+    return effect != SolverEffect::Spin;
+}
+
+QStringList solverDrivenTracks(SolverEffect effect)
+{
+    if (effect == SolverEffect::Spin)
+        return {QStringLiteral("rotation")};
+    return {QStringLiteral("x"), QStringLiteral("y")};
+}
+
+bool hasKeyAt(const model::Entity& entity, const QString& trackName, int frame)
+{
+    const auto track = entity.tracks.constFind(trackName);
+    if (track == entity.tracks.constEnd())
+        return false;
+    for (const model::Keyframe& keyframe : track.value().keys)
+    {
+        if (keyframe.frame == frame)
+            return true;
+    }
+    return false;
+}
+
+int solverEffectiveEnd(const model::SolverSegment& solver, int duration)
+{
+    return solver.endFrame < 0 ? duration - 1 : solver.endFrame;
+}
+
+QString solverConflictText(const model::SolverSegment& solver, int duration)
+{
+    return QStringLiteral("%1–%2（%3，%4）")
+        .arg(solver.startFrame)
+        .arg(solverEffectiveEnd(solver, duration))
+        .arg(solverEffectName(solver.effect))
+        .arg(solver.id.left(8));
 }
 
 QFormLayout* addSectionForm(QVBoxLayout* layout, QWidget* parent, const QString& title,
@@ -812,6 +852,45 @@ void PropertiesPanel::buildSolverSection()
     layout->setContentsMargins(10, 8, 10, 8);
     layout->setSpacing(6);
 
+    auto* createBox = new QGroupBox(QStringLiteral("新建求解段"), group);
+    auto* createForm = new QFormLayout(createBox);
+    createForm->setContentsMargins(8, 6, 8, 6);
+    createForm->setVerticalSpacing(4);
+    createForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    m_solverEffectCombo = new QComboBox(createBox);
+    m_solverEffectCombo->setObjectName(QStringLiteral("solverEffectCombo"));
+    m_solverEffectCombo->addItem(QStringLiteral("重力"), int(SolverEffect::Gravity));
+    m_solverEffectCombo->addItem(QStringLiteral("公转"), int(SolverEffect::Orbit));
+    m_solverEffectCombo->addItem(QStringLiteral("自转"), int(SolverEffect::Spin));
+    m_solverEffectCombo->addItem(QStringLiteral("黑洞"), int(SolverEffect::BlackHole));
+    createForm->addRow(QStringLiteral("效果"), m_solverEffectCombo);
+
+    m_solverTargetCombo = new QComboBox(createBox);
+    m_solverTargetCombo->setObjectName(QStringLiteral("solverTargetCombo"));
+    m_solverTargetCombo->setToolTip(
+        QStringLiteral("重力地面、公转中心或黑洞实体；不能是当前实体自己。自转不需要目标。"));
+    createForm->addRow(QStringLiteral("目标实体"), m_solverTargetCombo);
+
+    m_solverEndSpin = new QSpinBox(createBox);
+    m_solverEndSpin->setObjectName(QStringLiteral("solverCreateEnd"));
+    m_solverEndSpin->setRange(-1, 1000000);
+    m_solverEndSpin->setSpecialValueText(QStringLiteral("片段末帧"));
+    m_solverEndSpin->setValue(-1);
+    m_solverEndSpin->setKeyboardTracking(false);
+    m_solverEndSpin->setToolTip(
+        QStringLiteral("求解结束帧是停止标记，不存值；-1 表示一直解到片段最后一帧。"));
+    createForm->addRow(QStringLiteral("结束帧"), m_solverEndSpin);
+
+    m_solverCreateButton = new QPushButton(
+        QStringLiteral("将当前关键帧转换为求解开始帧"), createBox);
+    m_solverCreateButton->setObjectName(QStringLiteral("solverCreateButton"));
+    m_solverCreateButton->setToolTip(
+        QStringLiteral("开始帧取播放头相对实体 start 的帧号；该帧必须已有普通关键帧。"));
+    createForm->addRow(m_solverCreateButton);
+
+    layout->addWidget(createBox);
+
     m_solverEmpty = new QLabel(QStringLiteral("（没有求解段）"), group);
     m_solverEmpty->setObjectName(QStringLiteral("solverEmptyLabel"));
     layout->addWidget(m_solverEmpty);
@@ -823,6 +902,12 @@ void PropertiesPanel::buildSolverSection()
     layout->addWidget(m_solverHost);
 
     m_contentLayout->addWidget(group);
+
+    connect(m_solverEffectCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        applySolverEnabledState();
+    });
+    connect(m_solverCreateButton, &QPushButton::clicked, this,
+            &PropertiesPanel::createSolverFromPlayhead);
 }
 
 void PropertiesPanel::reloadBasic(const model::Entity& entity)
@@ -919,6 +1004,8 @@ void PropertiesPanel::updateSolverCards(const model::Entity& entity)
             fillSolverCard(m_solverCards[i], solvers.at(i));
     }
 
+    reloadSolverCreate(entity);
+    applySolverCardSelection();
     m_solverEmpty->setVisible(solvers.isEmpty());
 }
 
@@ -979,6 +1066,15 @@ void PropertiesPanel::rebuildSolverCards(const QVector<model::SolverSegment>& so
         form->addRow(QStringLiteral("初速度 Y"), card.velocityY);
 
         const Uuid solverId = solver.id;
+        card.remove = new QPushButton(QStringLiteral("删除求解段"), card.box);
+        card.remove->setObjectName(QStringLiteral("solverDelete%1").arg(index));
+        card.remove->setToolTip(
+            QStringLiteral("删除这个求解段；开始帧的普通关键帧会保留。"));
+        form->addRow(card.remove);
+        connect(card.remove, &QPushButton::clicked, this, [this, solverId] {
+            deleteSolverSegment(solverId);
+        });
+
         connect(card.start, &QSpinBox::editingFinished, this, [this, solverId, card] {
             const int value = card.start->value();
             commitEdit(QStringLiteral("solver startFrame"), [solverId, value](model::Entity& entity) {
@@ -1196,6 +1292,304 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const model::SolverSegmen
     }
 }
 
+void PropertiesPanel::reloadSolverCreate(const model::Entity& entity)
+{
+    const Uuid previous = m_solverTargetCombo->currentData().toString();
+    QSignalBlocker blocker(m_solverTargetCombo);
+    m_solverTargetCombo->clear();
+    m_solverTargetCombo->addItem(QStringLiteral("（选择目标实体）"), QString());
+
+    QVector<const model::Entity*> others;
+    for (auto it = m_document->project().entities.constBegin();
+         it != m_document->project().entities.constEnd(); ++it)
+    {
+        if (it.key() != entity.uuid)
+            others.append(&it.value());
+    }
+    std::sort(others.begin(), others.end(),
+              [](const model::Entity* a, const model::Entity* b) {
+                  if (a->name != b->name)
+                      return a->name < b->name;
+                  return a->uuid < b->uuid;
+              });
+    for (const model::Entity* other : others)
+    {
+        const QString label = other->name.isEmpty()
+            ? other->uuid.left(8)
+            : QStringLiteral("%1 (%2)").arg(other->name, other->uuid.left(8));
+        m_solverTargetCombo->addItem(label, other->uuid);
+    }
+
+    const int previousIndex = m_solverTargetCombo->findData(previous);
+    m_solverTargetCombo->setCurrentIndex(previousIndex >= 0 ? previousIndex : 0);
+
+    const int duration = entity.duration();
+    m_solverEndSpin->setRange(-1, qMax(0, duration - 1));
+    if (m_solverEndSpin->value() > duration - 1)
+        m_solverEndSpin->setValue(duration - 1);
+}
+
+void PropertiesPanel::applySolverCardSelection()
+{
+    bool found = false;
+    for (SolverCard& card : m_solverCards)
+    {
+        const bool selected = !m_selectedSolverId.isEmpty()
+            && card.id == m_selectedSolverId;
+        card.box->setStyleSheet(selected
+                                    ? QStringLiteral("QGroupBox { border: 2px solid #ffbe3c; }")
+                                    : QString());
+        if (selected)
+        {
+            found = true;
+            m_scroll->ensureWidgetVisible(card.box);
+        }
+    }
+    if (!found)
+        m_selectedSolverId.clear();
+}
+
+SolverEffect PropertiesPanel::selectedSolverEffect() const
+{
+    return SolverEffect(m_solverEffectCombo->currentData().toInt());
+}
+
+void PropertiesPanel::createSolverFromPlayhead()
+{
+    if (m_loading || !m_document)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity)
+        return;
+    if (entity->locked)
+    {
+        setStatus(QStringLiteral("实体已锁定，不能创建求解段"));
+        return;
+    }
+
+    const int relativeFrame = m_document->playhead() - entity->start;
+    const int duration = entity->duration();
+    if (relativeFrame < 0 || relativeFrame >= duration)
+    {
+        setStatus(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
+                      .arg(relativeFrame)
+                      .arg(duration - 1));
+        return;
+    }
+
+    const SolverEffect effect = selectedSolverEffect();
+    const QStringList drivenTracks = solverDrivenTracks(effect);
+    bool hasStartKey = true;
+    for (const QString& trackName : drivenTracks)
+        hasStartKey = hasStartKey && hasKeyAt(*entity, trackName, relativeFrame);
+    if (!hasStartKey)
+    {
+        setStatus(QStringLiteral("请先在播放头处给 X/Y（或旋转）打普通关键帧"));
+        return;
+    }
+
+    const Uuid self = entity->uuid;
+    Uuid target;
+    if (solverNeedsTarget(effect))
+    {
+        target = m_solverTargetCombo->currentData().toString();
+        if (target.isEmpty())
+        {
+            setStatus(QStringLiteral("请先选择目标实体"));
+            return;
+        }
+        if (target == self)
+        {
+            setStatus(QStringLiteral("目标实体不能是自己"));
+            return;
+        }
+        if (!m_document->project().entities.contains(target))
+        {
+            setStatus(QStringLiteral("目标实体不存在：%1").arg(target));
+            return;
+        }
+    }
+
+    const int endFrame = m_solverEndSpin->value();
+    if (endFrame != -1 && (endFrame < relativeFrame || endFrame >= duration))
+    {
+        setStatus(QStringLiteral("结束帧必须为 -1 或位于 %1..%2")
+                      .arg(relativeFrame)
+                      .arg(duration - 1));
+        return;
+    }
+    const int effectiveEnd = endFrame < 0 ? duration - 1 : endFrame;
+
+    QStringList conflicts;
+    for (const model::SolverSegment& existing : entity->solvers)
+    {
+        const int existingEnd = solverEffectiveEnd(existing, duration);
+        if (relativeFrame <= existingEnd && existing.startFrame <= effectiveEnd)
+            conflicts.append(solverConflictText(existing, duration));
+    }
+    if (!conflicts.isEmpty())
+    {
+        setStatus(QStringLiteral("新求解段与已有求解段重叠：%1")
+                      .arg(conflicts.join(QStringLiteral("、"))));
+        return;
+    }
+
+    QStringList innerKeys;
+    for (const QString& trackName : drivenTracks)
+    {
+        const auto track = entity->tracks.constFind(trackName);
+        if (track == entity->tracks.constEnd())
+            continue;
+        for (const model::Keyframe& keyframe : track.value().keys)
+        {
+            if (keyframe.frame > relativeFrame && keyframe.frame <= effectiveEnd)
+            {
+                innerKeys.append(
+                    QStringLiteral("%1@%2").arg(trackName).arg(keyframe.frame));
+            }
+        }
+    }
+    if (!innerKeys.isEmpty())
+    {
+        setStatus(QStringLiteral("求解段内不能有普通关键帧：%1")
+                      .arg(innerKeys.join(QStringLiteral("、"))));
+        return;
+    }
+
+    model::SolverSegment segment;
+    segment.id = model::newUuid();
+    segment.effect = effect;
+    segment.startFrame = relativeFrame;
+    segment.endFrame = endFrame;
+    segment.version = 1;
+    segment.initialVelocity = QPointF(0.0, 0.0);
+
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        break;
+    case SolverEffect::Orbit:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("aspect"), 1.0);
+        segment.params.insert(QStringLiteral("angle"), 0.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        segment.params.insert(QStringLiteral("periodFrames"), 60);
+        break;
+    case SolverEffect::Spin:
+        segment.params.insert(QStringLiteral("angularVelocity"), 6.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        break;
+    case SolverEffect::BlackHole:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("simulationSpeed"), 1.0);
+        segment.params.insert(QStringLiteral("mass"), 1000.0);
+        segment.params.insert(QStringLiteral("angularMomentum"), 0.0);
+        segment.params.insert(QStringLiteral("eventHorizonRadius"), 80.0);
+        segment.params.insert(QStringLiteral("objectRadius"), 40.0);
+        segment.params.insert(QStringLiteral("softening"), 60.0);
+        segment.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+        break;
+    }
+
+    const Uuid solverId = segment.id;
+    entity->solvers.append(segment);
+
+    QString error;
+    m_committing = true;
+    const bool ok = m_document->commitEntity(
+        self, QStringLiteral("pvf: convert keyframe to solver start"), &error);
+    m_committing = false;
+
+    if (!ok)
+    {
+        auto it = m_document->mutableProject().entities.find(self);
+        if (it != m_document->mutableProject().entities.end())
+        {
+            QVector<model::SolverSegment>& solvers = it.value().solvers;
+            for (int i = 0; i < solvers.size(); ++i)
+            {
+                if (solvers.at(i).id == solverId)
+                {
+                    solvers.removeAt(i);
+                    break;
+                }
+            }
+        }
+        setStatus(QStringLiteral("创建求解段失败：%1")
+                      .arg(error.isEmpty() ? QStringLiteral("保存失败") : error));
+        refresh();
+        return;
+    }
+
+    m_selectedSolverId = solverId;
+    setStatus(QStringLiteral("已创建求解段：%1（%2–%3）")
+                  .arg(solverEffectName(effect))
+                  .arg(relativeFrame)
+                  .arg(effectiveEnd));
+    refresh();
+}
+
+void PropertiesPanel::deleteSolverSegment(const Uuid& solverId)
+{
+    if (m_loading || !m_document)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity)
+        return;
+    if (entity->locked)
+    {
+        setStatus(QStringLiteral("实体已锁定，不能删除求解段"));
+        return;
+    }
+
+    int index = -1;
+    for (int i = 0; i < entity->solvers.size(); ++i)
+    {
+        if (entity->solvers.at(i).id == solverId)
+        {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0)
+        return;
+
+    const Uuid self = entity->uuid;
+    const model::SolverSegment removed = entity->solvers.at(index);
+    entity->solvers.removeAt(index);
+
+    QString error;
+    m_committing = true;
+    const bool ok = m_document->commitEntity(
+        self,
+        QStringLiteral("pvf: delete solver \"%1\" %2")
+            .arg(entity->name, solverEffectName(removed.effect)),
+        &error);
+    m_committing = false;
+
+    if (!ok)
+    {
+        auto it = m_document->mutableProject().entities.find(self);
+        if (it != m_document->mutableProject().entities.end())
+        {
+            QVector<model::SolverSegment>& solvers = it.value().solvers;
+            solvers.insert(qMin(index, solvers.size()), removed);
+        }
+        setStatus(QStringLiteral("删除求解段失败：%1")
+                      .arg(error.isEmpty() ? QStringLiteral("保存失败") : error));
+        refresh();
+        return;
+    }
+
+    if (m_selectedSolverId == solverId)
+        m_selectedSolverId.clear();
+    setStatus(QStringLiteral("已删除求解段"));
+    refresh();
+}
+
 void PropertiesPanel::applyEditingState()
 {
     const bool canEdit = editable();
@@ -1209,6 +1603,12 @@ void PropertiesPanel::applyEditingState()
 void PropertiesPanel::applySolverEnabledState()
 {
     const bool canEdit = editable();
+    const bool needsTarget = solverNeedsTarget(selectedSolverEffect());
+    m_solverEffectCombo->setEnabled(canEdit);
+    m_solverTargetCombo->setEnabled(canEdit && needsTarget);
+    m_solverEndSpin->setEnabled(canEdit);
+    m_solverCreateButton->setEnabled(canEdit);
+
     for (SolverCard& card : m_solverCards)
     {
         card.start->setEnabled(canEdit);
@@ -1217,6 +1617,7 @@ void PropertiesPanel::applySolverEnabledState()
             card.effect == SolverEffect::Gravity || card.effect == SolverEffect::BlackHole;
         card.velocityX->setEnabled(canEdit && usesVelocity);
         card.velocityY->setEnabled(canEdit && usesVelocity);
+        card.remove->setEnabled(canEdit);
         for (QWidget* editor : card.params)
             editor->setEnabled(canEdit);
     }

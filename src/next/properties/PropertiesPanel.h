@@ -47,6 +47,7 @@ private:
         QSpinBox* end = nullptr;
         QDoubleSpinBox* velocityX = nullptr;
         QDoubleSpinBox* velocityY = nullptr;
+        QPushButton* remove = nullptr;
         QHash<QString, QWidget*> params;
     };
 
@@ -62,6 +63,12 @@ private:
     void updateSolverCards(const model::Entity& entity);
     void rebuildSolverCards(const QVector<model::SolverSegment>& solvers);
     void fillSolverCard(SolverCard& card, const model::SolverSegment& solver);
+    void reloadSolverCreate(const model::Entity& entity);
+    void applySolverCardSelection();
+
+    void createSolverFromPlayhead();
+    void deleteSolverSegment(const Uuid& solverId);
+    SolverEffect selectedSolverEffect() const;
 
     void applyEditingState();
     void applySolverEnabledState();
@@ -150,6 +157,11 @@ private:
     QLabel* m_solverEmpty = nullptr;
     QWidget* m_solverHost = nullptr;
     QVBoxLayout* m_solverCardsLayout = nullptr;
+    QComboBox* m_solverEffectCombo = nullptr;
+    QComboBox* m_solverTargetCombo = nullptr;
+    QSpinBox* m_solverEndSpin = nullptr;
+    QPushButton* m_solverCreateButton = nullptr;
+    Uuid m_selectedSolverId;
     QVector<SolverCard> m_solverCards;
 
     QVector<QWidget*> m_editable;

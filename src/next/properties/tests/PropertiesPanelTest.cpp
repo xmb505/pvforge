@@ -3,8 +3,10 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -98,6 +100,14 @@ public:
 
     model::Entity& entity(const Uuid& uuid) { return m_project.entities[uuid]; }
 
+    void addKey(const Uuid& uuid, const QString& trackName, int frame, double value)
+    {
+        model::Keyframe keyframe;
+        keyframe.frame = frame;
+        keyframe.value = value;
+        m_project.entities[uuid].tracks[trackName].keys.append(keyframe);
+    }
+
     void setFailCommit(bool fail) { m_failCommit = fail; }
     int entityCommits() const { return m_entityCommits; }
     int projectCommits() const { return m_projectCommits; }
@@ -137,6 +147,15 @@ private slots:
     void checkboxesWriteBack();
     void textEntityShowsTextControls();
     void solverSectionShowsEffectAndParams();
+    void createGravitySolverFromPlayhead();
+    void rejectSolverWithoutXYKeys();
+    void createSpinSolverFromRotationKey();
+    void createSolverFailureRollsBack();
+    void rejectOverlappingSolver();
+    void rejectEmptyOrSelfTarget();
+    void deleteSolverKeepsStartKey();
+    void deleteSolverFailureRestoresSegment();
+    void lockedEntityDisablesSolverControls();
     void switchingSelectionDoesNotLeak();
     void invalidRangeIsRejected();
 };
@@ -309,6 +328,310 @@ void PropertiesPanelTest::solverSectionShowsEffectAndParams()
     QVERIFY(fireEditingFinished(start));
     QCOMPARE(document.entity(ball).solvers.at(0).startFrame, 10);
     QCOMPARE(document.entityCommits(), 3);
+}
+
+void PropertiesPanelTest::createGravitySolverFromPlayhead()
+{
+    FakeDocument document;
+    const Uuid ground = document.addEntity(QStringLiteral("地面"), 0, 120);
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 10, 80);
+    document.addKey(ball, QStringLiteral("x"), 15, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 15, 0.0);
+    document.setPlayhead(25);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* effect = findWidget<QComboBox>(panel, "solverEffectCombo");
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* end = findWidget<QSpinBox>(panel, "solverCreateEnd");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(effect);
+    QVERIFY(target);
+    QVERIFY(end);
+    QVERIFY(create);
+    QVERIFY(status);
+
+    QCOMPARE(effect->currentData().toInt(), int(SolverEffect::Gravity));
+    QCOMPARE(end->value(), -1);
+    QVERIFY(target->isEnabled());
+    const int groundIndex = target->findData(ground);
+    QVERIFY(groundIndex >= 0);
+    QVERIFY(target->itemText(groundIndex).contains(QStringLiteral("地面")));
+    QVERIFY(target->itemText(groundIndex).contains(ground.left(8)));
+    QCOMPARE(target->findData(ball), -1);
+
+    target->setCurrentIndex(groundIndex);
+    create->click();
+
+    QCOMPARE(document.entity(ball).solvers.size(), 1);
+    QCOMPARE(document.entityCommits(), 1);
+    const model::SolverSegment& solver = document.entity(ball).solvers.at(0);
+    QVERIFY(model::isValidUuid(solver.id));
+    QCOMPARE(solver.effect, SolverEffect::Gravity);
+    QCOMPARE(solver.startFrame, 15);
+    QCOMPARE(solver.endFrame, -1);
+    QCOMPARE(solver.version, 1);
+    QCOMPARE(solver.initialVelocity, QPointF(0.0, 0.0));
+    QCOMPARE(solver.params.value(QStringLiteral("targetUuid")).toString(), ground);
+    QVERIFY(status->text().contains(QStringLiteral("已创建求解段")));
+
+    auto* card = findWidget<QGroupBox>(panel, "solverCard0");
+    QVERIFY(card);
+    QVERIFY(card->styleSheet().contains(QStringLiteral("border")));
+}
+
+void PropertiesPanelTest::rejectSolverWithoutXYKeys()
+{
+    for (const QString& present : {QStringLiteral("x"), QStringLiteral("y")})
+    {
+        FakeDocument document;
+        const Uuid ground = document.addEntity(QStringLiteral("地面"), 0, 60);
+        const Uuid ball = document.addEntity(QStringLiteral("小球"), 10, 70);
+        document.addKey(ball, present, 5, 0.0);
+        document.setPlayhead(15);
+
+        PropertiesPanel panel(&document);
+        document.setSelection(ball);
+
+        auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+        auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+        auto* status = findWidget<QLabel>(panel, "statusLabel");
+        QVERIFY(target);
+        QVERIFY(create);
+        QVERIFY(status);
+        target->setCurrentIndex(target->findData(ground));
+        create->click();
+
+        QVERIFY(document.entity(ball).solvers.isEmpty());
+        QCOMPARE(document.entityCommits(), 0);
+        QVERIFY(status->text().contains(
+            QStringLiteral("请先在播放头处给 X/Y（或旋转）打普通关键帧")));
+    }
+}
+
+void PropertiesPanelTest::createSpinSolverFromRotationKey()
+{
+    FakeDocument document;
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("rotation"), 20, 45.0);
+    document.setPlayhead(20);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* effect = findWidget<QComboBox>(panel, "solverEffectCombo");
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    QVERIFY(effect);
+    QVERIFY(target);
+    QVERIFY(create);
+
+    effect->setCurrentIndex(effect->findData(int(SolverEffect::Spin)));
+    QVERIFY(!target->isEnabled());
+    create->click();
+
+    QCOMPARE(document.entity(ball).solvers.size(), 1);
+    QCOMPARE(document.entityCommits(), 1);
+    const model::SolverSegment& solver = document.entity(ball).solvers.at(0);
+    QCOMPARE(solver.effect, SolverEffect::Spin);
+    QCOMPARE(solver.startFrame, 20);
+    QCOMPARE(solver.endFrame, -1);
+    QCOMPARE(solver.params.value(QStringLiteral("angularVelocity")).toDouble(), 6.0);
+    QCOMPARE(solver.params.value(QStringLiteral("direction")).toInt(), 1);
+    QVERIFY(!solver.params.contains(QStringLiteral("targetUuid")));
+}
+
+void PropertiesPanelTest::createSolverFailureRollsBack()
+{
+    FakeDocument document;
+    const Uuid ground = document.addEntity(QStringLiteral("地面"), 0, 60);
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("x"), 0, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 0, 0.0);
+    document.setFailCommit(true);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(target);
+    QVERIFY(create);
+    QVERIFY(status);
+    target->setCurrentIndex(target->findData(ground));
+    create->click();
+
+    QVERIFY(document.entity(ball).solvers.isEmpty());
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("创建求解段失败")));
+}
+
+void PropertiesPanelTest::rejectOverlappingSolver()
+{
+    FakeDocument document;
+    const Uuid ground = document.addEntity(QStringLiteral("地面"), 0, 60);
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("x"), 15, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 15, 0.0);
+
+    model::SolverSegment existing;
+    existing.id = model::newUuid();
+    existing.effect = SolverEffect::Gravity;
+    existing.startFrame = 10;
+    existing.endFrame = 20;
+    document.entity(ball).solvers.append(existing);
+    document.setPlayhead(15);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(target);
+    QVERIFY(create);
+    QVERIFY(status);
+    target->setCurrentIndex(target->findData(ground));
+    create->click();
+
+    QCOMPARE(document.entity(ball).solvers.size(), 1);
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("重叠")));
+    QVERIFY(status->text().contains(QStringLiteral("10–20")));
+}
+
+void PropertiesPanelTest::rejectEmptyOrSelfTarget()
+{
+    FakeDocument document;
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("x"), 10, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 10, 0.0);
+    document.setPlayhead(10);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(target);
+    QVERIFY(create);
+    QVERIFY(status);
+
+    QCOMPARE(target->currentIndex(), 0);
+    QCOMPARE(target->findData(ball), -1);
+    create->click();
+    QVERIFY(document.entity(ball).solvers.isEmpty());
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("目标实体")));
+
+    // The combo normally lists only other entities; force the self value to
+    // check the guard as well.
+    target->addItem(QStringLiteral("自己"), ball);
+    target->setCurrentIndex(target->count() - 1);
+    create->click();
+    QVERIFY(document.entity(ball).solvers.isEmpty());
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("不能是自己")));
+}
+
+void PropertiesPanelTest::deleteSolverKeepsStartKey()
+{
+    FakeDocument document;
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("x"), 0, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 0, 0.0);
+
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 0;
+    solver.endFrame = 30;
+    document.entity(ball).solvers.append(solver);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* remove = findWidget<QPushButton>(panel, "solverDelete0");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(remove);
+    QVERIFY(status);
+    remove->click();
+
+    QVERIFY(document.entity(ball).solvers.isEmpty());
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(document.entity(ball).tracks.value(QStringLiteral("x")).keys.size(), 1);
+    QCOMPARE(document.entity(ball).tracks.value(QStringLiteral("y")).keys.size(), 1);
+    QCOMPARE(document.entity(ball).tracks.value(QStringLiteral("x")).keys.at(0).frame, 0);
+    QVERIFY(status->text().contains(QStringLiteral("已删除求解段")));
+}
+
+void PropertiesPanelTest::deleteSolverFailureRestoresSegment()
+{
+    FakeDocument document;
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.addKey(ball, QStringLiteral("x"), 0, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 0, 0.0);
+
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 0;
+    solver.endFrame = 30;
+    document.entity(ball).solvers.append(solver);
+    document.setFailCommit(true);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* remove = findWidget<QPushButton>(panel, "solverDelete0");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(remove);
+    QVERIFY(status);
+    remove->click();
+
+    QCOMPARE(document.entity(ball).solvers.size(), 1);
+    QCOMPARE(document.entity(ball).solvers.at(0).id, solver.id);
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("删除求解段失败")));
+}
+
+void PropertiesPanelTest::lockedEntityDisablesSolverControls()
+{
+    FakeDocument document;
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 0, 60);
+    document.entity(ball).locked = true;
+    document.addKey(ball, QStringLiteral("x"), 0, 0.0);
+    document.addKey(ball, QStringLiteral("y"), 0, 0.0);
+
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 0;
+    solver.endFrame = 30;
+    document.entity(ball).solvers.append(solver);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* effect = findWidget<QComboBox>(panel, "solverEffectCombo");
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* end = findWidget<QSpinBox>(panel, "solverCreateEnd");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    auto* remove = findWidget<QPushButton>(panel, "solverDelete0");
+    QVERIFY(effect);
+    QVERIFY(target);
+    QVERIFY(end);
+    QVERIFY(create);
+    QVERIFY(remove);
+    QVERIFY(!effect->isEnabled());
+    QVERIFY(!target->isEnabled());
+    QVERIFY(!end->isEnabled());
+    QVERIFY(!create->isEnabled());
+    QVERIFY(!remove->isEnabled());
 }
 
 void PropertiesPanelTest::switchingSelectionDoesNotLeak()
