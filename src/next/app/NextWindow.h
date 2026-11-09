@@ -148,7 +148,8 @@ private:
     bool mcpToolRunning() const { return m_activeToolCalls > 0; }
     void updateSettingsDialogContext();
     void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
-                     const QString& outputPath, bool includeAudio);
+                     const QString& outputPath, bool includeAudio,
+                     int outputFps = 0, int resolutionScale = 1);
     QVector<Uuid> collectDeletionSet(QString* error) const;
     bool deleteEntitySet(const QVector<Uuid>& uuids, QString* error);
     void closeOrphanedPrivateTimelines();
@@ -163,6 +164,9 @@ private:
     std::unique_ptr<PlaybackController> m_playback;
     std::unique_ptr<MediaServices> m_media;
     bool m_mediaProvidersAttached = false;
+    // Keeps the window open and the document/media services alive while the
+    // export worker holds raw providers into them.
+    bool m_exportRunning = false;
     QString m_mcpConfigPath;
     QString m_mcpStatus;
     QString m_mcpError;

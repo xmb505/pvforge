@@ -24,7 +24,7 @@ namespace pvf::export2 {
 // export fails instead of silently clamping.
 //
 // An empty `outputSize` means the project canvas size.  The size must be
-// within 1..4096 on both axes; odd dimensions are rounded down to even because
+// within 1..8192 on both axes; odd dimensions are rounded down to even because
 // H.264 yuv420p needs even width/height.  When the requested aspect ratio does
 // not match the project, the project canvas is scaled to fit and centered
 // (letterbox/pillarbox), with the project background colour filling the bars.

@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSize>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -79,8 +80,27 @@ ExportDialog::ExportDialog(const model::Project& project, const Uuid& preferredC
 
     m_rangeLabel = new QLabel(this);
     m_rangeLabel->setObjectName(QStringLiteral("exportRangeLabel"));
-    m_resolutionLabel = new QLabel(this);
-    m_fpsLabel = new QLabel(this);
+
+    const QSize projectSize(std::max(1, m_project.settings.width),
+                            std::max(1, m_project.settings.height));
+    m_resolutionCombo = new QComboBox(this);
+    m_resolutionCombo->setObjectName(QStringLiteral("exportResolutionCombo"));
+    for (const int scale : {1, 2, 4}) {
+        const QSize size(projectSize.width() * scale, projectSize.height() * scale);
+        m_resolutionCombo->addItem(
+            tr("%1 × %2（%3x）").arg(size.width()).arg(size.height()).arg(scale),
+            scale);
+    }
+    m_resolutionCombo->setCurrentIndex(0);
+
+    const int projectFps = std::max(1, m_project.settings.fps);
+    m_fpsCombo = new QComboBox(this);
+    m_fpsCombo->setObjectName(QStringLiteral("exportFpsCombo"));
+    for (const int scale : {1, 2, 4}) {
+        m_fpsCombo->addItem(
+            tr("%1（%2x）").arg(projectFps * scale).arg(scale), scale);
+    }
+    m_fpsCombo->setCurrentIndex(0);
 
     m_outputEdit = new QLineEdit(this);
     m_outputEdit->setObjectName(QStringLiteral("exportOutputPath"));
@@ -96,8 +116,8 @@ ExportDialog::ExportDialog(const model::Project& project, const Uuid& preferredC
 
     form->addRow(tr("摄像机"), m_cameraCombo);
     form->addRow(tr("范围"), m_rangeLabel);
-    form->addRow(tr("分辨率"), m_resolutionLabel);
-    form->addRow(tr("fps"), m_fpsLabel);
+    form->addRow(tr("分辨率"), m_resolutionCombo);
+    form->addRow(tr("fps"), m_fpsCombo);
     form->addRow(tr("输出文件"), outputRow);
     form->addRow(QString(), m_audioCheck);
     root->addLayout(form);
@@ -155,6 +175,18 @@ bool ExportDialog::includeAudio() const
     return m_audioCheck && m_audioCheck->isChecked();
 }
 
+int ExportDialog::outputFps() const
+{
+    const int scale = m_fpsCombo ? m_fpsCombo->currentData().toInt() : 1;
+    return std::max(1, m_project.settings.fps) * std::max(1, scale);
+}
+
+int ExportDialog::resolutionScale() const
+{
+    const int scale = m_resolutionCombo ? m_resolutionCombo->currentData().toInt() : 1;
+    return scale == 2 || scale == 4 ? scale : 1;
+}
+
 void ExportDialog::updateCameraInfo()
 {
     const Uuid uuid = cameraUuid();
@@ -171,10 +203,6 @@ void ExportDialog::updateCameraInfo()
                                   .arg(m_endFrame)
                                   .arg(std::max(0, m_endFrame - m_startFrame)));
     }
-
-    m_resolutionLabel->setText(
-        tr("%1 × %2").arg(m_project.settings.width).arg(m_project.settings.height));
-    m_fpsLabel->setText(QString::number(m_project.settings.fps));
 }
 
 void ExportDialog::chooseOutputPath()

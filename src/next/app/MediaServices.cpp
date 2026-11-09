@@ -14,6 +14,8 @@
 #include <QJsonValue>
 #include <QVariantMap>
 
+#include <QDebug>
+
 #include <algorithm>
 #include <cmath>
 #include <optional>
@@ -91,6 +93,7 @@ void MediaServices::stop()
     m_sequences.clear();
     if (m_videoFrames)
         m_videoFrames->clear();
+    m_exportVideoFrames.reset();
     if (m_html)
         m_html->stop();
     m_htmlInFlight = false;
@@ -307,6 +310,77 @@ QImage MediaServices::htmlFrame(const Uuid& entityUuid, double projectFrame)
     // Null means cache miss or the 300 ms timeout: the frontend keeps
     // rendering in the background and htmlFrameReady will clear the flag.
     m_htmlPending = image.isNull();
+    return image;
+}
+
+QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
+                                       double projectFrame)
+{
+    const model::Entity* entity = findAssetEntity(entityUuid, AssetType::Video);
+    if (!entity || !m_document)
+        return {};
+
+    const auto asset =
+        m_document->assets().get(entity->content.asset.hash);
+    if (!asset)
+        return {};
+
+    const QString path = contentFilePath(*asset);
+    if (path.isEmpty())
+        return {};
+
+    if (!m_exportVideoFrames)
+    {
+        // A couple of entries are enough: 2x/4x output fps samples the same
+        // project frame several times in a row.  Full-resolution images are
+        // large, so keep this cache tiny.
+        m_exportVideoFrames = std::make_unique<video2::VideoFrames>(0, 2);
+    }
+
+    const int localFrame = floorFrame(projectFrame - entity->start);
+    video2::Request request;
+    request.path = path;
+    request.sourceFrame = entity->content.asset.sourceIn + localFrame;
+    request.fps = projectFps();
+    request.size = QSize();
+    request.proxy = false;
+
+    QString error;
+    const QImage image = m_exportVideoFrames->frame(request, &error);
+    if (!error.isEmpty())
+        qWarning().noquote() << "export video frame failed:" << error;
+    return image;
+}
+
+QImage MediaServices::exportHtmlFrame(const Uuid& entityUuid,
+                                      double projectFrame,
+                                      const QSize& outputSize)
+{
+    if (!m_html || !m_document)
+        return {};
+    if (!outputSize.isValid() || outputSize.isEmpty())
+        return {};
+
+    const model::Entity* entity = findAssetEntity(entityUuid, AssetType::Html);
+    if (!entity)
+        return {};
+
+    const auto asset =
+        m_document->assets().get(entity->content.asset.hash);
+    if (!asset)
+        return {};
+
+    // The renderer/service is started lazily by finalFrame(); NextWindow
+    // normally pre-starts it on the main thread before launching the worker.
+    html2::FrameRequest request =
+        makeHtmlRequest(*entity, *asset, projectFrame);
+    request.size = outputSize;
+
+    QString error;
+    const QImage image = m_html->finalFrame(request, &error);
+    if (image.isNull())
+        qWarning().noquote() << "export HTML frame failed:"
+                             << (error.isEmpty() ? m_htmlError : error);
     return image;
 }
 

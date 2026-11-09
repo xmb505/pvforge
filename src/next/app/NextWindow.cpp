@@ -42,6 +42,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSet>
@@ -59,6 +60,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 
 namespace pvf::next {
@@ -324,6 +326,13 @@ NextWindow::~NextWindow()
 
 void NextWindow::closeEvent(QCloseEvent* event)
 {
+    if (m_exportRunning)
+    {
+        statusBar()->showMessage(tr("视频导出中，暂不能关闭"), 5000);
+        event->ignore();
+        return;
+    }
+
     if (mcpToolRunning())
     {
         statusBar()->showMessage(tr("AI 正在操作工程，暂不能关闭"), 5000);
@@ -347,6 +356,14 @@ void NextWindow::closeEvent(QCloseEvent* event)
 
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
+    // The export worker holds raw providers into the current document and its
+    // media services.
+    if (m_exportRunning)
+    {
+        statusBar()->showMessage(tr("视频导出中，暂不能切换工程"), 5000);
+        return;
+    }
+
     // A running tool call may pump events at its batch checkpoints; destroying
     // the service under it would be a use-after-free.  The log panel's stop
     // button remains available to cancel the call first.
@@ -1596,29 +1613,70 @@ void NextWindow::exportVideo()
         return;
 
     startExport(dialog.cameraUuid(), dialog.startFrame(), dialog.endFrame(),
-                dialog.outputPath(), dialog.includeAudio());
+                dialog.outputPath(), dialog.includeAudio(), dialog.outputFps(),
+                dialog.resolutionScale());
 }
 
 void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
-                             const QString& outputPath, bool includeAudio)
+                             const QString& outputPath, bool includeAudio,
+                             int outputFps, int resolutionScale)
 {
-    if (!m_document || outputPath.isEmpty())
+    if (!m_document || outputPath.isEmpty() || m_exportRunning)
         return;
+
+    // The export worker captures the media services; make sure they exist and
+    // that the HTML browsers were started by this (the owning) thread.
+    ensureMediaServices();
+    if (!m_media)
+        return;
+    QString htmlError;
+    m_media->start(&htmlError);
+    if (!htmlError.isEmpty())
+        qWarning().noquote() << "export HTML service:" << htmlError;
+    QPointer<MediaServices> media(m_media.get());
 
     auto project = std::make_shared<model::Project>(m_document->project());
     auto assets = std::make_shared<assets::AssetStore>(m_document->assets());
+
+    const int projectFps = std::max(1, project->settings.fps);
+    const int selectedFps = outputFps > 0 ? outputFps : projectFps;
+    const int scale = resolutionScale == 2 || resolutionScale == 4
+                          ? resolutionScale
+                          : 1;
+    // H.264 needs even dimensions; mirror export2's rounding so the HTML final
+    // frames are rendered at exactly the encoded size.
+    const QSize exportSize(
+        std::max(2, (project->settings.width * scale) & ~1),
+        std::max(2, (project->settings.height * scale) & ~1));
 
     export2::Options options;
     options.outputPath = outputPath;
     options.cameraUuid = cameraUuid;
     options.startFrame = startFrame;
     options.endFrame = endFrame;
-    options.outputSize = QSize(project->settings.width, project->settings.height);
-    options.fps = project->settings.fps;
+    options.outputSize = QSize(); // empty: project size * resolutionScale
+    options.fps = selectedFps;
+    options.outputFps = selectedFps;
+    options.resolutionScale = scale;
     options.includeAudio = includeAudio;
     options.crf = 18;
+    options.videoFrame = [media](const Uuid& entityUuid, double projectFrame) {
+        return media ? media->exportVideoFrame(entityUuid, projectFrame)
+                     : QImage();
+    };
+    options.htmlFrame = [media, exportSize](const Uuid& entityUuid,
+                                            double projectFrame) {
+        return media ? media->exportHtmlFrame(entityUuid, projectFrame,
+                                              exportSize)
+                     : QImage();
+    };
 
-    const int totalFrames = std::max(1, endFrame - startFrame);
+    // Progress counts output frames, not project frames: 2x/4x fps exports
+    // have two/four times as many.
+    const double durationSeconds =
+        double(std::max(0, endFrame - startFrame)) / double(projectFps);
+    const int totalFrames =
+        std::max(1, int(std::llround(durationSeconds * double(selectedFps))));
     auto progressValue = std::make_shared<std::atomic_int>(0);
     auto cancelled = std::make_shared<std::atomic_bool>(false);
 
@@ -1654,6 +1712,7 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
 
     connect(watcher, &QFutureWatcher<export2::Result>::finished, this,
             [this, watcher, progress, timer, outputPath] {
+                m_exportRunning = false;
                 timer->stop();
                 const export2::Result result = watcher->result();
                 progress->close();
@@ -1675,6 +1734,7 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
             });
 
     progress->show();
+    m_exportRunning = true;
     watcher->setFuture(QtConcurrent::run(
         [project, assets, options, progressValue, cancelled] {
             return export2::exportVideo(

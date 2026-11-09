@@ -127,7 +127,9 @@ class MediaServicesTests : public QObject
 private slots:
     void videoProviderMapsProjectFrames();
     void videoProviderWithoutAssetIsEmpty();
+    void exportVideoFrameUsesFullResolution();
     void htmlProviderRendersBundle();
+    void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
     void switchingProjectsUsesNewAssets();
 };
@@ -217,6 +219,50 @@ void MediaServicesTests::videoProviderWithoutAssetIsEmpty()
     QVERIFY(media.videoFrame(entity.uuid, 0.0).isNull());
 }
 
+void MediaServicesTests::exportVideoFrameUsesFullResolution()
+{
+    if (!gitLfsAvailable())
+        QSKIP("store creation is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/export.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString source = makeVideo(temp.path() + QStringLiteral("/clip.mp4"));
+    if (source.isEmpty())
+        QSKIP("ffmpeg is unavailable");
+
+    const auto stored = document->assets().importFile(source, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    // The test source is 96x54; the preview proxy is capped at 64 px so a full
+    // resolution frame is visibly different.
+    const Entity entity =
+        makeAssetEntity(AssetType::Video, stored->hash, 10, 5);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    AppSettings settings;
+    settings.videoProxyWidth = 64;
+    settings.videoMemoryFrames = 8;
+    MediaServices media(document.get(), settings);
+
+    const QImage preview = media.videoFrame(entity.uuid, 12.5);
+    QVERIFY(!preview.isNull());
+    QCOMPARE(preview.width(), 64);
+
+    // projectFrame 12.5 -> local 2 -> source 5 + 2 = 7, decoded from the
+    // original file at its own size.
+    const QImage full = media.exportVideoFrame(entity.uuid, 12.5);
+    QVERIFY(!full.isNull());
+    QCOMPARE(full.size(), QSize(96, 54));
+
+    QVERIFY(media.exportVideoFrame(QStringLiteral("missing-entity"), 12.5).isNull());
+}
+
 void MediaServicesTests::htmlProviderRendersBundle()
 {
     if (!gitLfsAvailable())
@@ -256,6 +302,51 @@ void MediaServicesTests::htmlProviderRendersBundle()
                              120000);
     QCOMPARE(image.size(), media.htmlRequestSizeForTest());
     QCOMPARE(image.size(), QSize(320, 180));
+
+    const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
+    QVERIFY2(center.red() > 200 && center.green() < 60 && center.blue() < 60,
+             qPrintable(center.name()));
+}
+
+void MediaServicesTests::exportHtmlFrameUsesRequestedSize()
+{
+    if (!gitLfsAvailable())
+        QSKIP("store creation is unavailable");
+    if (!chromeAvailable())
+        QSKIP("Chrome/Chromium is not installed");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/html-export.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    const Entity entity =
+        makeAssetEntity(AssetType::Html, stored->hash, 10, 0);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    // The preview request is deliberately much smaller than the export size.
+    AppSettings settings;
+    settings.htmlScale = 0.25;
+    settings.htmlMaxWidth = 1280;
+
+    MediaServices media(document.get(), settings);
+    QString startError;
+    if (!media.start(&startError))
+        QSKIP("the HTML service could not start");
+
+    const QImage image =
+        media.exportHtmlFrame(entity.uuid, 12.5, QSize(480, 270));
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), QSize(480, 270));
 
     const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
     QVERIFY2(center.red() > 200 && center.green() < 60 && center.blue() < 60,

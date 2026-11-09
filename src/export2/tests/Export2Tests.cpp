@@ -337,12 +337,12 @@ void testOversizedOutput()
     const QString path = directory.path() + QStringLiteral("/too-big.mp4");
 
     export2::Options options = makeOptions(path);
-    options.outputSize = QSize(4097, 90);
+    options.outputSize = QSize(8193, 90);
     const export2::Result result =
         export2::exportVideo(project, store, options);
 
     CHECK(!result.ok);
-    CHECK(result.error.contains(QStringLiteral("4096")));
+    CHECK(result.error.contains(QStringLiteral("8192")));
     CHECK(!QFileInfo::exists(path));
 }
 
@@ -591,6 +591,39 @@ void testResolutionScale()
     }
 }
 
+void testResolutionScale4()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject(); // 160x90
+    const QString path = directory.path() + QStringLiteral("/scale4.mp4");
+
+    // 4x is the maximum supported multiplier; 160x90 -> 640x360 keeps the test
+    // cheap while exercising the same option path as 1080p -> 7680x4320.
+    export2::Options options = makeOptions(path);
+    options.outputSize = QSize();
+    options.resolutionScale = 4;
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 10);
+    AVFormatContext* input = openInput(path);
+    CHECK(input != nullptr);
+    if (input)
+    {
+        CHECK(input->nb_streams == 1);
+        if (input->nb_streams >= 1)
+        {
+            CHECK(input->streams[0]->codecpar->width == 640);
+            CHECK(input->streams[0]->codecpar->height == 360);
+        }
+        CHECK(std::abs(inputDuration(input) - 10.0 / 30.0) < 0.05);
+        avformat_close_input(&input);
+    }
+}
+
 void testInvalidResolutionScale()
 {
     QTemporaryDir directory;
@@ -753,6 +786,7 @@ int main(int argc, char** argv)
         {QStringLiteral("outputFpsMultipliers"), testOutputFpsMultipliers},
         {QStringLiteral("invalidOutputFps"), testInvalidOutputFps},
         {QStringLiteral("resolutionScale"), testResolutionScale},
+        {QStringLiteral("resolutionScale4"), testResolutionScale4},
         {QStringLiteral("invalidResolutionScale"), testInvalidResolutionScale},
         {QStringLiteral("audioDurationAtDoubleFps"),
          testAudioDurationAtDoubleFps},

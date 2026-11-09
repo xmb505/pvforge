@@ -31,7 +31,14 @@ public:
     QString outputPath() const;
     bool includeAudio() const;
 
+    // Absolute output frame rate (project fps * 1/2/4) and the integer
+    // resolution multiplier (1/2/4).  Both default to 1x.
+    int outputFps() const;
+    int resolutionScale() const;
+
     QComboBox* cameraComboBoxForTest() const { return m_cameraCombo; }
+    QComboBox* resolutionComboBoxForTest() const { return m_resolutionCombo; }
+    QComboBox* fpsComboBoxForTest() const { return m_fpsCombo; }
 
 private:
     void updateCameraInfo();
@@ -44,8 +51,8 @@ private:
 
     QComboBox* m_cameraCombo = nullptr;
     QLabel* m_rangeLabel = nullptr;
-    QLabel* m_resolutionLabel = nullptr;
-    QLabel* m_fpsLabel = nullptr;
+    QComboBox* m_resolutionCombo = nullptr;
+    QComboBox* m_fpsCombo = nullptr;
     QLineEdit* m_outputEdit = nullptr;
     QCheckBox* m_audioCheck = nullptr;
     QPushButton* m_startButton = nullptr;

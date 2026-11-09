@@ -19,6 +19,7 @@ set(PVF_EXPORT2_TEST_CASES
     oversizedOutput
     frameProviders
     noFrameProviderPlaceholder
+    resolutionScale4
 )
 
 foreach(test_case IN LISTS PVF_EXPORT2_TEST_CASES)

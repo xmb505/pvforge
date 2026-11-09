@@ -489,6 +489,27 @@ private slots:
         QVERIFY(dialog.includeAudio());
         QVERIFY(dialog.cameraComboBoxForTest() != nullptr);
         QCOMPARE(dialog.cameraComboBoxForTest()->count(), 1);
+
+        QComboBox* resolution = dialog.resolutionComboBoxForTest();
+        QVERIFY(resolution != nullptr);
+        QCOMPARE(resolution->count(), 3);
+        QCOMPARE(dialog.resolutionScale(), 1);
+        QCOMPARE(resolution->currentText(), QStringLiteral("640 × 360（1x）"));
+        resolution->setCurrentIndex(2);
+        QCOMPARE(dialog.resolutionScale(), 4);
+        QCOMPARE(resolution->currentText(), QStringLiteral("2560 × 1440（4x）"));
+
+        QComboBox* fps = dialog.fpsComboBoxForTest();
+        QVERIFY(fps != nullptr);
+        QCOMPARE(fps->count(), 3);
+        QCOMPARE(dialog.outputFps(), 24);
+        QCOMPARE(fps->currentText(), QStringLiteral("24（1x）"));
+        fps->setCurrentIndex(1);
+        QCOMPARE(dialog.outputFps(), 48);
+        QCOMPARE(fps->currentText(), QStringLiteral("48（2x）"));
+        fps->setCurrentIndex(2);
+        QCOMPARE(dialog.outputFps(), 96);
+        QCOMPARE(fps->currentText(), QStringLiteral("96（4x）"));
     }
 
     void mcpServerStartsAndReportsViewState()

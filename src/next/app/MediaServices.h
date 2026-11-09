@@ -71,6 +71,21 @@ public:
     QImage videoFrame(const Uuid& entityUuid, double projectFrame);
     QImage htmlFrame(const Uuid& entityUuid, double projectFrame);
 
+    // Export providers (src/export2).  Unlike the viewport providers they
+    // never use the proxy/WebP sequence or the low-resolution HTML browsers.
+    //
+    // exportVideoFrame decodes the original asset file at full resolution with
+    // its own VideoFrames instance, so it can be called from the single export
+    // worker thread without disturbing preview playback.
+    //
+    // exportHtmlFrame renders through the final (third) browser at outputSize.
+    // The caller must only use it from one export worker thread; MediaServices
+    // never calls finalFrame() itself, so the service starts lazily on the
+    // first export request.
+    QImage exportVideoFrame(const Uuid& entityUuid, double projectFrame);
+    QImage exportHtmlFrame(const Uuid& entityUuid, double projectFrame,
+                           const QSize& outputSize);
+
     QString cacheRoot() const { return m_cacheRoot; }
     bool htmlRunning() const;
     // True while the latest htmlFrame() missed the cache and timed out: the
@@ -114,6 +129,9 @@ private:
     bool m_htmlStartFailed = false;
 
     std::unique_ptr<video2::VideoFrames> m_videoFrames;
+    // Full-resolution decoder reserved for the export worker; not shared with
+    // the preview/proxy decoder above.
+    std::unique_ptr<video2::VideoFrames> m_exportVideoFrames;
     std::map<AssetHash, std::unique_ptr<video2::VideoSequenceService>> m_sequences;
     std::unique_ptr<html2::HtmlFrameService> m_html;
     // Guards against a queued update() re-entering htmlFrame() while

@@ -28,7 +28,7 @@ extern "C" {
 namespace pvf::export2 {
 namespace {
 
-constexpr int kMaxDimension = 4096;
+constexpr int kMaxDimension = 8192;
 
 #if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
 // QImage ARGB32_Premultiplied stores B, G, R, A in memory on little endian.
@@ -487,7 +487,7 @@ Result exportVideo(const model::Project& project,
     if (requested.width() < 1 || requested.height() < 1)
         return fail(QStringLiteral("输出尺寸无效"));
     if (requested.width() > kMaxDimension || requested.height() > kMaxDimension)
-        return fail(QStringLiteral("输出尺寸超过 4096 像素"));
+        return fail(QStringLiteral("输出尺寸超过 8192 像素"));
 
     const QSize outputSize = evenSize(requested);
     const QSize contentSize = contentSizeFor(outputSize, projectSize);
