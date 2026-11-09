@@ -50,7 +50,7 @@ if(BUILD_TESTING)
         dragLeftEdgeTrimsStart
         solverBandPaints
         privateTimelineShowsOnlyChildren
-        doubleClickAndBreadcrumb
+        doubleClickRequestsPrivateTimeline
         dropAssetCreatesEntity
         dropOntoOccupiedRowUsesNextRow
         dropVideoCreatesAudioEntity

@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QMimeData>
 #include <QPainter>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -211,7 +212,7 @@ private slots:
     void dragLeftEdgeTrimsStart();
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
-    void doubleClickAndBreadcrumb();
+    void doubleClickRequestsPrivateTimeline();
     void dropAssetCreatesEntity();
     void dropOntoOccupiedRowUsesNextRow();
     void dropVideoCreatesAudioEntity();
@@ -434,6 +435,7 @@ void TimelineWidgetTest::privateTimelineShowsOnlyChildren()
     QVERIFY(widget.entityBarRect(parent).isValid());
     QVERIFY(widget.entityBarRect(other).isValid());
     QVERIFY(!widget.entityBarRect(child).isValid());
+    QVERIFY(widget.breadcrumbRect().isEmpty());
 
     widget.setParentUuid(parent);
     QCOMPARE(widget.parentUuid(), parent);
@@ -441,9 +443,17 @@ void TimelineWidgetTest::privateTimelineShowsOnlyChildren()
     QVERIFY(!widget.entityBarRect(parent).isValid());
     QVERIFY(!widget.entityBarRect(other).isValid());
     QVERIFY(widget.visibleEntities() == QVector<Uuid>{child});
+    QVERIFY(!widget.breadcrumbRect().isEmpty());
+
+    // The overlay's widget can still return to the root timeline.
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      widget.breadcrumbRect().center());
+    QVERIFY(widget.parentUuid().isEmpty());
+    QVERIFY(widget.entityBarRect(parent).isValid());
+    QVERIFY(!widget.entityBarRect(child).isValid());
 }
 
-void TimelineWidgetTest::doubleClickAndBreadcrumb()
+void TimelineWidgetTest::doubleClickRequestsPrivateTimeline()
 {
     FakeDocument document;
     const Uuid parent = addEntity(document, QStringLiteral("parent"), 0, 90, 0);
@@ -454,15 +464,18 @@ void TimelineWidgetTest::doubleClickAndBreadcrumb()
     widget.resize(800, 300);
     const QRect bar = widget.entityBarRect(parent);
     QVERIFY(bar.isValid());
+    QVERIFY(widget.breadcrumbRect().isEmpty());
 
+    QSignalSpy spy(&widget, &TimelineWidget::privateTimelineRequested);
     QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier, bar.center());
-    QCOMPARE(widget.parentUuid(), parent);
-    QVERIFY(widget.entityBarRect(child).isValid());
 
-    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
-                      widget.breadcrumbRect().center());
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), parent);
     QVERIFY(widget.parentUuid().isEmpty());
+    QCOMPARE(document.selection(), parent);
     QVERIFY(widget.entityBarRect(parent).isValid());
+    QVERIFY(!widget.entityBarRect(child).isValid());
+    QVERIFY(widget.breadcrumbRect().isEmpty());
 }
 
 void TimelineWidgetTest::dropAssetCreatesEntity()

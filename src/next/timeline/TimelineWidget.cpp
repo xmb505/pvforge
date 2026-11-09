@@ -271,11 +271,14 @@ int TimelineWidget::frameFromX(int x) const
 
 QRect TimelineWidget::rulerRect() const
 {
-    return QRect(0, kToolbarHeight, width(), kRulerHeight);
+    const int top = m_parentUuid.isEmpty() ? 0 : kToolbarHeight;
+    return QRect(0, top, width(), kRulerHeight);
 }
 
 QRect TimelineWidget::breadcrumbRect() const
 {
+    if (m_parentUuid.isEmpty())
+        return QRect();
     return QRect(0, 0, std::min(width(), 440), kToolbarHeight);
 }
 
@@ -313,13 +316,15 @@ int TimelineWidget::rowTop(int row) const
 
 QRect TimelineWidget::bodyRect() const
 {
-    const int top = kToolbarHeight + kRulerHeight;
+    const int top = rulerRect().top() + kRulerHeight;
     const int bottom = height() - kScrollBarHeight;
     return QRect(0, top, width(), std::max(0, bottom - top));
 }
 
 QRect TimelineWidget::toolbarRect() const
 {
+    if (m_parentUuid.isEmpty())
+        return QRect();
     return QRect(0, 0, width(), kToolbarHeight);
 }
 
@@ -422,6 +427,9 @@ void TimelineWidget::paintEvent(QPaintEvent*)
 void TimelineWidget::paintToolbar(QPainter& painter)
 {
     const QRect bar = toolbarRect();
+    if (bar.isEmpty())
+        return;
+
     const QPalette pal = palette();
     painter.fillRect(bar, pal.color(QPalette::AlternateBase).darker(105));
     painter.setPen(QPen(pal.color(QPalette::Mid), 1));
@@ -1057,7 +1065,7 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
     m_dragOriginalRanges.clear();
     m_dragChanged = false;
     m_document->setSelection(hit.uuid);
-    setParentUuid(hit.uuid);
+    emit privateTimelineRequested(hit.uuid);
     event->accept();
 }
 

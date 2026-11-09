@@ -39,9 +39,10 @@ class Document;
 //
 // The widget edits the Document in place while dragging and commits one
 // entity operation on mouse release (“pvf: move entity ...” / “pvf: trim
-// entity ...”). Assets can be dropped from the asset panel; multi-select,
-// rubber-band selection and keyframe dragging are intentionally left to a
-// later pass.
+// entity ...”). Assets can be dropped from the asset panel. Double-clicking an
+// entity emits privateTimelineRequested() for the shell to open an overlay;
+// this widget never switches its own parent. Multi-select, rubber-band
+// selection and keyframe dragging are intentionally left to a later pass.
 class TimelineWidget : public QWidget
 {
     Q_OBJECT
@@ -71,6 +72,9 @@ public:
     QVector<Uuid> visibleEntities() const;
 
 signals:
+    // Double-clicking an entity asks the shell to open its private timeline
+    // in an overlay. The main timeline itself never changes parent.
+    void privateTimelineRequested(const Uuid& parentUuid);
     // Emitted for drop problems that should surface in the shell status bar.
     void statusMessage(const QString& message);
 
