@@ -496,6 +496,40 @@ Result assetRename(Tx& tx, const QJsonObject& args)
     return tx.finish(data, QStringLiteral("pvf: rename asset \"%1\"").arg(name));
 }
 
+Result assetSetTags(Tx& tx, const QJsonObject& args)
+{
+    Result error;
+    QString hash;
+    if (!readString(args, "hash", &hash, &error, true))
+        return error;
+
+    const auto asset = tx.store->assets().get(hash);
+    if (!asset)
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("素材不存在：%1").arg(hash));
+
+    const QJsonValue tagsValue = args.value(QStringLiteral("tags"));
+    if (!tagsValue.isArray())
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("tags 必须是字符串数组"));
+    QStringList tags;
+    for (const QJsonValue& value : tagsValue.toArray())
+    {
+        if (!value.isString())
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("tags 必须是字符串数组"));
+        tags.append(value.toString());
+    }
+
+    QString tagError;
+    if (!tx.store->assets().setTags(hash, tags, &tagError))
+        return failure(QStringLiteral("invalid_argument"), tagError);
+
+    const auto refreshed = tx.store->assets().get(hash);
+    return tx.finish(assetJson(tx.store->assets(), tx.p(), *refreshed),
+                     QStringLiteral("pvf: set asset tags \"%1\"").arg(refreshed->name));
+}
+
 Result assetDelete(Tx& tx, const QJsonObject& args)
 {
     Result error;

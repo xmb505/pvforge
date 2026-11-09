@@ -1137,7 +1137,7 @@ void Mcp2Tests::listToolsAndSchema()
 
     const QJsonObject tools = fixture.service->listTools();
     const QJsonArray array = tools.value(QStringLiteral("tools")).toArray();
-    QCOMPARE(array.size(), 45);
+    QCOMPARE(array.size(), 46);
 
     QStringList names;
     for (const QJsonValue& value : array)

@@ -162,6 +162,7 @@ Result assetGet(Tx& tx, const QJsonObject& args);
 Result assetAssign(Tx& tx, const QJsonObject& args);
 Result assetUnassign(Tx& tx, const QJsonObject& args);
 Result assetRename(Tx& tx, const QJsonObject& args);
+Result assetSetTags(Tx& tx, const QJsonObject& args);
 Result assetDelete(Tx& tx, const QJsonObject& args);
 
 Result markersList(Tx& tx, const QJsonObject& args);

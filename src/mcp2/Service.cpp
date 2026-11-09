@@ -89,6 +89,7 @@ const ToolEntry kTools[] = {
     {"asset.assign", &detail::assetAssign},
     {"asset.unassign", &detail::assetUnassign},
     {"asset.rename", &detail::assetRename},
+    {"asset.setTags", &detail::assetSetTags},
     {"asset.delete", &detail::assetDelete},
 
     {"markers.list", &detail::markersList},
