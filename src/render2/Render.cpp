@@ -240,7 +240,8 @@ void paintText(QPainter& painter, const model::TextContent& text)
 }
 
 void paintContent(QPainter& painter, const model::Entity& entity,
-                  const assets::AssetStore& store)
+                  const assets::AssetStore& store, const Options& options,
+                  int projectFrame)
 {
     switch (entity.content.kind)
     {
@@ -285,14 +286,44 @@ void paintContent(QPainter& painter, const model::Entity& entity,
     }
 
     case AssetType::Video:
-        paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                         QStringLiteral("视频"));
+    {
+        const QImage frame = options.videoFrame
+                ? options.videoFrame(entity.uuid, projectFrame)
+                : QImage();
+        if (!frame.isNull())
+        {
+            const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
+                                frame.width(), frame.height());
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(bounds, frame);
+        }
+        else
+        {
+            paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
+                             QStringLiteral("视频"));
+        }
         return;
+    }
 
     case AssetType::Html:
-        paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                         QStringLiteral("HTML"));
+    {
+        const QImage frame = options.htmlFrame
+                ? options.htmlFrame(entity.uuid, projectFrame)
+                : QImage();
+        if (!frame.isNull())
+        {
+            const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
+                                frame.width(), frame.height());
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(bounds, frame);
+        }
+        else
+        {
+            paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
+                             QStringLiteral("HTML"));
+        }
         return;
+    }
     }
 }
 
@@ -413,7 +444,7 @@ QTransform cameraView(const model::Project& project, const Options& options,
 void drawChildren(QPainter& painter, const model::Project& project,
                   const assets::AssetStore& store, const Uuid& parentUuid,
                   int projectFrame, anim::World& world, anim::Cache& cache,
-                  QSet<Uuid>& visited)
+                  QSet<Uuid>& visited, const Options& options)
 {
     const QVector<Uuid> children = model::childrenOf(project, parentUuid);
     for (const Uuid& uuid : children)
@@ -436,13 +467,13 @@ void drawChildren(QPainter& painter, const model::Project& project,
                 painter.save();
                 painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
                 painter.setTransform(pose.world, true);
-                paintContent(painter, entity, store);
+                paintContent(painter, entity, store, options, projectFrame);
                 painter.restore();
             }
         }
 
         drawChildren(painter, project, store, uuid, projectFrame, world, cache,
-                     visited);
+                     visited, options);
     }
 }
 
@@ -534,7 +565,7 @@ QImage renderFrame(const model::Project& project,
 
     QSet<Uuid> visited;
     drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
-                 cache, visited);
+                 cache, visited, options);
     painter.end();
     return image;
 }

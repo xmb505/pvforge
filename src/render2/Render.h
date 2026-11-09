@@ -10,7 +10,13 @@
 #include <QSize>
 #include <QVector>
 
+#include <functional>
+
 namespace pvf::render2 {
+
+// Returns the decoded frame for one asset-backed entity at a project frame.
+// HTML and video services supply these; an empty image keeps the placeholder.
+using FrameProvider = std::function<QImage(const Uuid& entityUuid, int projectFrame)>;
 
 // One rendered frame request.  An empty outputSize means the project canvas
 // size; an invalid background means project.settings.background.  An empty
@@ -21,6 +27,8 @@ struct Options
     Uuid cameraUuid;
     QSize outputSize;
     QColor background;
+    FrameProvider videoFrame;
+    FrameProvider htmlFrame;
 };
 
 // anim::World backed by a model project and an asset store.  Poses and shapes
