@@ -21,17 +21,21 @@
   project.json
   entities/
     <uuid>.json
-  assets/
+  assets/                # 源素材；本地保存，gitignore
     <sha256>/
       asset.json
       content.<ext>      # 图片/视频/音频
       bundle/            # .pvhtml 目录包
+  .cache/                # 缓存；gitignore
+    video/<assetHash>/<fps>/...
+    html/...
   .git/
-  .gitattributes
   .gitignore
 ```
 
 - 工程目录本身是 git 仓库；新建工程时自动 `git init`。
+- **git 只跟踪文本**：`project.json`、`entities/*.json`、markers 等；`assets/`、`.cache/` 全部 gitignore，不使用 Git LFS。
+- 源素材不进 git，需要用户自己备份/拷贝工程目录里的 `assets/`；丢了就显示“素材缺失”。
 - 不维护实体索引文件；打开工程时扫描 `entities/*.json`，按 `parentUuid` 组树。
 - 实体文件名只由 UUID 决定，改名不移动文件。
 - 旧 `.pvproj` 单文件工程不再支持；打开时直接提示“旧工程格式已废弃”。
@@ -61,6 +65,9 @@
 ```
 
 - 新建工程时询问 fps、分辨率、背景色，并记住上次选择。
+- **fps 和分辨率创建后锁定**，时间轴/关键帧不因改 fps 重算；渲染页可以另设输出帧率和分辨率：
+  - 输出 fps 可 2x/4x 工程 fps，按时间采样关键帧和视频，音频重采样；工程数据不变。
+  - 输出分辨率可 1x/2x/4x 工程分辨率，内容按整数倍缩放；素材不足会糊。
 - markers 是全局标注，不占行、不渲染、不限制写权限。
 - 没有场景对象，没有场景文件夹，没有场景写权限。
 
@@ -497,6 +504,16 @@ solver.evaluate(entityUuid, solverId?, frames[])
 - 音频实体只用于视频原声、BGM、配音；没有隐式配对关系。
 - 音频混合按实体 `volume` 轨道/静态值。
 
+**视频帧图片序列：**
+
+- 导入后后台把整段视频按**项目 fps** 抽成 WebP 80 图片序列，放工程内 `.cache/video/<assetHash>/<fps>/`；不放进 git。
+- 抽帧时按像素内容 hash 全局去重：低帧率源按高帧率项目 fps 抽出的重复帧共享同一张 WebP/QImage。
+- 抽帧未完成或某一帧被 LRU 淘汰时，回退到原片解码；抽帧线程后台继续补。
+- 磁盘上限用 LRU；超限淘汰最久未用帧，需要时从原片重抽。
+- 项目 fps 改变则缓存键变化，重新抽。
+- 导出永远用原片解码，不用图片序列。
+- 透明视频用 WebP（支持 alpha）；JPEG 不支持 alpha。
+
 ### 6.4 HTML
 
 - HTML 素材是 `.pvhtml` **目录包**：`index.html` 在根，CSS/JS/图片等资源在包内；可导入 zip 并自动解包成目录。
@@ -592,6 +609,9 @@ window.__PVFORGE_READY__ = true;      // 或 Promise
 - 所有帧号参数都是整数帧；关键帧帧号是相对实体的。
 - MCP 的监听端口和 Bearer token **固定持久化**，重启应用不随机更换；默认端口固定，token 首次生成后复用。端口被占用时明确报错，不静默换端口。
 - 新模型默认全工程可写；删除父级、批量删除、删除素材等危险操作要求 `confirm: true`。不设置旧版“人类手动解锁”开关。
+- **AI 写操作执行期间锁住人类编辑**；只读/预览/查询不锁。MCP 日志显示“AI 修改中”。
+- MCP 日志放在底部 dock（和旧版一样），显示工具名、参数摘要、耗时、结果、commit；有急停按钮。
+- 急停：取消当前工具调用，并暂停 AI 写入，直到人类在日志里点“恢复 AI”；已提交的 commit 保留。AI 会收到“人类按下急停，此次操作未实现”的结果。
 
 ### 7.2 工具面
 
@@ -667,40 +687,45 @@ history.log
 
 ## 8. Git
 
-### 8.1 依赖
+### 8.1 依赖与范围
 
-- `git` 和 `git-lfs` 是**硬依赖**：启动时查找；找不到就阻止新建/打开/保存，并提示安装。
-- 新建工程自动 `git init`，自动写 `.gitattributes` 让图片/视频/音频走 Git LFS。
+- `git` 是硬依赖：启动时查找；找不到就阻止新建/打开/保存，并提示安装。
+- 不再依赖 `git-lfs`；`assets/`、`.cache/` 全部 gitignore。
+- git 只跟踪文本：`project.json`、`entities/*.json`、markers 等。
+- 新建工程自动 `git init`，写 `.gitignore`（`assets/`、`.cache/`、预览临时文件）。
 - 工程目录是独立仓库；不自动 push，不自动切分支。
 
 ### 8.2 提交粒度
 
-- 人类的一次操作 = 一个 commit：鼠标释放、输入框失焦、按钮点击、一次拖拽。
-- 一次 MCP 工具调用 = 一个 commit。
-- 批量工具一次调用只 commit 一次。
+- 一次 MCP 工具调用 = 一个 commit，立即写入；这是防止 AI 改炸工程的冷备。
+- 人类操作走内存 undo；停手 **1 秒**或手动保存时后台合并成一个 commit（不是每个鼠标移动/字符都提交）。
+- 批量 MCP 工具一次调用只 commit 一次。
 - 提交消息自动生成，例如：
   - `pvf: create entity "标题"`
   - `pvf: create tree "标题" (4 entities)`
   - `pvf: set keyframes "标题" x`
   - `pvf: delete 3 entities`
-  - `pvf: import asset "bg.png"`
-  - `pvf: save`
-- 只提交本应用写过的工程路径，不把用户手动改的其他文件卷进 commit。
+  - `pvf: human edit` / `pvf: save`
+- 只提交文本工程路径；素材文件不进 commit。
 - commit 失败时报告错误，不静默继续；工程文件保留，允许重试。
 - 人类 UI 和 MCP 写入走**同一个串行命令队列**：同一时刻只有一个写事务，避免两边同时改同一实体或抢 git index 锁。MCP 连接断开时取消未完成事务。
 
-### 8.3 撤销
+### 8.3 撤销（内存热 + git 冷）
 
-- 不做内存命令栈；`Ctrl+Z` = `git revert` 最近一个操作 commit。
-- `Ctrl+Shift+Z` = revert 那次 revert。
-- 一次操作一个 commit，所以一次 undo 回退一个完整操作。
-- 批量工具是一个 commit，所以一次 undo 回退整个批量操作。
-- 提供 git 历史面板，可查看/回退到任意提交。
+- 人类和 AI 的文本数据改动都进入**内存 undo/redo 栈**；Ctrl+Z/Ctrl+Shift+Z 直接应用反向 diff，不调用 `git revert`。
+- 覆盖范围：实体、工程设置、关键帧、求解段、markers 等文本数据。
+- 素材文件（导入/删除/替换）不进内存 undo；靠用户备份或 git 之外的拷贝。
+- AI 每次工具调用的前后 diff 自动进栈；AI commit 仍是冷备。应用关闭后内存栈丢失，只能靠 git 历史面板恢复。
+- undo 本身不立即 commit；下一次人类操作/停手 1 秒/手动保存时再提交 restored 状态。
+- 内存栈默认最多 200 步或 512MB 快照，超出从最旧开始丢。
+- 提供 git 历史面板，可查看/回退到任意提交（这是跨会话的冷恢复）。
 
 ## 9. 渲染与导出
 
 - 导出范围 = 渲染时选定的摄像机实体的 `[start, end)`。
 - 没有摄像机时导出报错，提示先创建/选择摄像机。
+- 输出帧率默认工程 fps，可选 2x/4x；关键帧/视频按时间采样，音频按目标采样率重采样。
+- 输出分辨率默认工程分辨率，可选 1x/2x/4x；内容按整数倍缩放，不改变工程坐标。
 - 渲染顺序：root 按 row 升序；每个实体先画自身内容，再按 row 升序画子实体。
 - 变换：父世界矩阵 × 子局部矩阵；pivot 按 MI 语义；opacity 沿父链相乘。
 - 可见性：`hidden`、`visible` 轨道、`inheritVisibility` 共同决定；父级不可见时子级按继承规则隐藏。
@@ -716,7 +741,9 @@ history.log
 - 场景对象、场景文件夹、场景写权限。
 - 素材 UUID。
 - 视频与音频的自动配对联动（只在导入时拆出，之后独立）。
-- 内存命令栈撤销（用 git revert）。
+- 素材进 git / Git LFS；git 只管理文本。
+- 每个鼠标移动/字符级 human commit（人类停手 1 秒或保存时合并提交）。
+- Redis / cache-cat / MySQL 帧缓存；HTML/视频缓存用进程内 LRU + 本地磁盘 LRU。
 - 关键帧颜色/字体/枚举插值（第一版只做数字和布尔轨道）。
 - 求解轨迹烘焙成普通关键帧（运行时实时解算）。
 - 自动 push、自动切分支。
