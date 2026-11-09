@@ -52,6 +52,11 @@ public:
     void flush(QString* error = nullptr) override;
     bool hasPendingCommit() const override;
 
+    // Debounce for coalescing human edits into one commit.  The production
+    // default is 1 s; the settings dialog may change it at runtime.
+    void setHumanCommitDelayMs(int ms);
+    int humanCommitDelayMs() const;
+
     store::ProjectStore* store() { return m_store.get(); }
     const store::ProjectStore* store() const { return m_store.get(); }
 

@@ -1,5 +1,7 @@
 #include "next/app/ProjectDocument.h"
 
+#include <algorithm>
+
 namespace pvf::next {
 
 namespace {
@@ -195,6 +197,21 @@ void ProjectDocument::flush(QString* error)
 bool ProjectDocument::hasPendingCommit() const
 {
     return m_pendingCommit;
+}
+
+void ProjectDocument::setHumanCommitDelayMs(int ms)
+{
+    const int delay = std::max(0, ms);
+    if (m_commitTimer.interval() == delay)
+        return;
+    // QTimer::setInterval restarts a running single-shot timer, so a pending
+    // edit commits with the new debounce instead of keeping the old deadline.
+    m_commitTimer.setInterval(delay);
+}
+
+int ProjectDocument::humanCommitDelayMs() const
+{
+    return m_commitTimer.interval();
 }
 
 bool ProjectDocument::undo(QString* error)

@@ -54,6 +54,21 @@ if(NOT TARGET pvf_audio2)
                      ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
 endif()
 
+if(NOT TARGET pvf_next_settings)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../settings
+                     ${CMAKE_CURRENT_BINARY_DIR}/settings_dep)
+endif()
+
+if(NOT TARGET pvf_next_mcp_log)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mcp
+                     ${CMAKE_CURRENT_BINARY_DIR}/mcp_log_dep)
+endif()
+
+if(NOT TARGET pvf_html2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../html2
+                     ${CMAKE_CURRENT_BINARY_DIR}/html2_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
@@ -80,6 +95,9 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_mcp2
     pvf_export2
     pvf_audio2
+    pvf_next_settings
+    pvf_next_mcp_log
+    pvf_html2
     Qt6::Core
     Qt6::Widgets
     Qt6::Concurrent
@@ -101,6 +119,9 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_mcp2
     pvf_export2
     pvf_audio2
+    pvf_next_settings
+    pvf_next_mcp_log
+    pvf_html2
     Qt6::Widgets
     Qt6::Concurrent
 )
@@ -116,6 +137,8 @@ if(BUILD_TESTING)
 
     add_executable(pvf_next_window_tests tests/NextWindowTests.cpp)
     target_link_libraries(pvf_next_window_tests PRIVATE pvf_next_app Qt6::Test)
+    target_compile_definitions(pvf_next_window_tests PRIVATE
+        PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
     set_tests_properties(next.window_shell PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")

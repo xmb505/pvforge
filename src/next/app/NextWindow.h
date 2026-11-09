@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
+#include "next/settings/SettingsStore.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -13,6 +14,7 @@ class QCheckBox;
 class QCloseEvent;
 class QComboBox;
 class QDialog;
+class QDockWidget;
 class QLabel;
 class QSpinBox;
 
@@ -24,9 +26,11 @@ class Service;
 namespace pvf::next {
 
 class AssetPanel;
+class McpLogPanel;
 class PlaybackController;
 class ProjectDocument;
 class PropertiesPanel;
+class SettingsDialog;
 class TimelineWidget;
 class ViewportWidget;
 
@@ -62,6 +66,17 @@ public:
 
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
+
+    // Settings are loaded from QSettings at construction.  The test accessor
+    // returns the currently applied snapshot, not the store's next load().
+    AppSettings settingsForTest() const { return m_settings; }
+    QAction* settingsActionForTest() const { return m_settingsAction; }
+    SettingsDialog* settingsDialogForTest() const { return m_settingsDialog; }
+    void openSettingsForTest() { openSettings(); }
+
+    McpLogPanel* mcpLogPanelForTest() const { return m_mcpLogPanel; }
+    QDockWidget* mcpLogDockForTest() const { return m_mcpLogDock; }
+    QAction* mcpLogActionForTest() const { return m_mcpLogAction; }
 
     // Playback test hooks: the same path as the Space shortcut.
     void togglePlaybackForTest();
@@ -100,6 +115,12 @@ private slots:
     void deleteSelectedEntity();
     void undo();
     void redo();
+    void openSettings();
+    void reloadSettingsFromStore();
+    void clearHtmlCache();
+    void resetMcpToken();
+    void detectChrome();
+    void showMcpLog();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -115,6 +136,12 @@ private:
     void rebuildCameras();
     void startMcpServer();
     void stopMcpServer();
+    void applyHumanCommitDelay();
+    void applySettings(const AppSettings& previous);
+    void refreshAiLock();
+    void resetAiLock();
+    bool mcpToolRunning() const { return m_activeToolCalls > 0; }
+    void updateSettingsDialogContext();
     void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
                      const QString& outputPath, bool includeAudio);
     QVector<Uuid> collectDeletionSet(QString* error) const;
@@ -131,6 +158,21 @@ private:
     std::unique_ptr<PlaybackController> m_playback;
     QString m_mcpConfigPath;
     QString m_mcpStatus;
+    QString m_mcpError;
+
+    std::unique_ptr<SettingsStore> m_settingsStore;
+    AppSettings m_settings;
+    SettingsDialog* m_settingsDialog = nullptr;
+
+    McpLogPanel* m_mcpLogPanel = nullptr;
+    QDockWidget* m_mcpLogDock = nullptr;
+    QAction* m_mcpLogAction = nullptr;
+    bool m_mcpAutoShown = false;
+    bool m_aiStopped = false;
+    int m_activeToolCalls = 0;
+    int m_aiBusyWrites = 0;
+    QHash<QString, QString> m_runningToolArgs;
+    QHash<QString, int> m_runningWrites;
 
     AssetPanel* m_assetPanel = nullptr;
     ViewportWidget* m_viewport = nullptr;
@@ -139,6 +181,7 @@ private:
 
     QAction* m_newAction = nullptr;
     QAction* m_openAction = nullptr;
+    QAction* m_settingsAction = nullptr;
     QAction* m_quitAction = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
@@ -167,6 +210,7 @@ private:
     QLabel* m_statusFps = nullptr;
     QLabel* m_statusMcp = nullptr;
     QLabel* m_statusCommit = nullptr;
+    QLabel* m_statusAi = nullptr;
 
     QHash<Uuid, QDialog*> m_privateTimelines;
 

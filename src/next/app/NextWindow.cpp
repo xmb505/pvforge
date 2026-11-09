@@ -1,13 +1,16 @@
 #include "next/app/NextWindow.h"
 
 #include "export2/Export.h"
+#include "html/HtmlBrowser.h"
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 #include "next/app/ExportDialog.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
+#include "next/mcp/McpLogPanel.h"
 #include "next/properties/PropertiesPanel.h"
+#include "next/settings/SettingsDialog.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
 
@@ -17,10 +20,13 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDirIterator>
+#include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -42,6 +48,7 @@
 #include <QSize>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
@@ -109,7 +116,8 @@ public:
         root->addLayout(form);
 
         auto* hint = new QLabel(
-            tr("工程会创建为 <工程名>.pvproj 目录，并自动初始化 git 与 Git LFS。"),
+            tr("工程会创建为 <工程名>.pvproj 目录，并自动初始化 Git"
+               "（只管理文本，素材不进 git）。"),
             this);
         hint->setWordWrap(true);
         root->addWidget(hint);
@@ -236,6 +244,17 @@ QString defaultEntityName(ContentKind kind)
     return {};
 }
 
+QString formatBytes(qint64 bytes)
+{
+    if (bytes >= 1024LL * 1024 * 1024)
+        return QStringLiteral("%1 GB").arg(double(bytes) / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
+    if (bytes >= 1024LL * 1024)
+        return QStringLiteral("%1 MB").arg(double(bytes) / (1024.0 * 1024.0), 0, 'f', 1);
+    if (bytes >= 1024)
+        return QStringLiteral("%1 KB").arg(double(bytes) / 1024.0, 0, 'f', 1);
+    return QStringLiteral("%1 B").arg(bytes);
+}
+
 void collectSubtree(const model::Project& project, const Uuid& uuid,
                     QSet<Uuid>& visited, QVector<Uuid>& out)
 {
@@ -261,6 +280,9 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     m_lastBrowseDir = QDir::homePath();
     m_playback = std::make_unique<PlaybackController>(this);
 
+    m_settingsStore = std::make_unique<SettingsStore>();
+    m_settings = m_settingsStore->load();
+
     buildUi();
     connect(m_playback.get(), &PlaybackController::playbackStateChanged, this,
             [this](bool) {
@@ -276,6 +298,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     }
 
     m_playback->setDocument(m_document);
+    applyHumanCommitDelay();
     updateActions();
     updateStatus();
     rebuildCameras();
@@ -292,6 +315,13 @@ NextWindow::~NextWindow()
 
 void NextWindow::closeEvent(QCloseEvent* event)
 {
+    if (mcpToolRunning())
+    {
+        statusBar()->showMessage(tr("AI 正在操作工程，暂不能关闭"), 5000);
+        event->ignore();
+        return;
+    }
+
     if (m_document)
     {
         QString error;
@@ -308,6 +338,15 @@ void NextWindow::closeEvent(QCloseEvent* event)
 
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
+    // A running tool call may pump events at its batch checkpoints; destroying
+    // the service under it would be a use-after-free.  The log panel's stop
+    // button remains available to cancel the call first.
+    if (mcpToolRunning())
+    {
+        statusBar()->showMessage(tr("AI 正在操作工程，暂不能切换"), 5000);
+        return;
+    }
+
     // Commit any debounced human edit before the old document goes away.
     if (m_document)
     {
@@ -351,10 +390,12 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 
     if (m_playback)
         m_playback->setDocument(m_document);
+    applyHumanCommitDelay();
     updateActions();
     updateStatus();
     rebuildCameras();
     startMcpServer();
+    updateSettingsDialogContext();
 }
 
 void NextWindow::buildUi()
@@ -376,6 +417,13 @@ void NextWindow::buildUi()
     m_exportAction->setObjectName(QStringLiteral("exportVideoAction"));
     connect(m_exportAction, &QAction::triggered, this, &NextWindow::exportVideo);
     fileMenu->addAction(m_exportAction);
+
+    fileMenu->addSeparator();
+    m_settingsAction = new QAction(tr("设置…"), this);
+    m_settingsAction->setObjectName(QStringLiteral("settingsAction"));
+    m_settingsAction->setShortcut(QKeySequence::Preferences);
+    connect(m_settingsAction, &QAction::triggered, this, &NextWindow::openSettings);
+    fileMenu->addAction(m_settingsAction);
 
     fileMenu->addSeparator();
     m_quitAction = new QAction(tr("退出"), this);
@@ -492,6 +540,57 @@ void NextWindow::buildUi()
     });
     viewMenu->addAction(m_gizmoAction);
 
+    viewMenu->addSeparator();
+    m_mcpLogAction = new QAction(tr("MCP 日志"), this);
+    m_mcpLogAction->setObjectName(QStringLiteral("showMcpLogAction"));
+    m_mcpLogAction->setCheckable(true);
+    connect(m_mcpLogAction, &QAction::toggled, this, [this](bool checked) {
+        if (checked)
+            showMcpLog();
+        else if (m_mcpLogDock)
+            m_mcpLogDock->hide();
+    });
+    viewMenu->addAction(m_mcpLogAction);
+
+    m_mcpLogPanel = new McpLogPanel(this);
+    m_mcpLogDock = new QDockWidget(tr("MCP 日志"), this);
+    m_mcpLogDock->setObjectName(QStringLiteral("mcpLogDock"));
+    m_mcpLogDock->setAllowedAreas(Qt::BottomDockWidgetArea
+                                  | Qt::TopDockWidgetArea);
+    m_mcpLogDock->setFeatures(QDockWidget::DockWidgetClosable
+                              | QDockWidget::DockWidgetMovable
+                              | QDockWidget::DockWidgetFloatable);
+    m_mcpLogDock->setWidget(m_mcpLogPanel);
+    addDockWidget(Qt::BottomDockWidgetArea, m_mcpLogDock);
+    m_mcpLogDock->hide();
+
+    connect(m_mcpLogPanel, &McpLogPanel::visibilityChanged, this,
+            [this](bool visible) {
+                // Hiding the main window also hides its children; that must
+                // not be mistaken for the user closing the log panel.
+                if (!isVisible())
+                    return;
+                if (m_mcpLogAction
+                    && m_mcpLogAction->isChecked() != visible) {
+                    QSignalBlocker blocker(m_mcpLogAction);
+                    m_mcpLogAction->setChecked(visible);
+                }
+                if (!visible && m_mcpLogDock && m_mcpLogDock->isVisible())
+                    m_mcpLogDock->hide();
+            });
+    connect(m_mcpLogPanel, &McpLogPanel::stopAiRequested, this, [this] {
+        if (m_mcpServer)
+            m_mcpServer->stopAi();
+        else
+            statusBar()->showMessage(tr("MCP 未启动，无法执行急停"), 4000);
+    });
+    connect(m_mcpLogPanel, &McpLogPanel::resumeAiRequested, this, [this] {
+        if (m_mcpServer)
+            m_mcpServer->resumeAi();
+        else
+            statusBar()->showMessage(tr("MCP 未启动，无需恢复"), 4000);
+    });
+
     QToolBar* toolbar = addToolBar(tr("主工具栏"));
     toolbar->setObjectName(QStringLiteral("mainToolBar"));
     toolbar->setMovable(false);
@@ -582,6 +681,11 @@ void NextWindow::buildUi()
     m_statusCommit = new QLabel(QString(), this);
     m_statusCommit->setObjectName(QStringLiteral("statusCommit"));
     statusBar()->addPermanentWidget(m_statusCommit);
+
+    m_statusAi = new QLabel(this);
+    m_statusAi->setObjectName(QStringLiteral("statusAi"));
+    m_statusAi->hide();
+    statusBar()->addPermanentWidget(m_statusAi);
 
     m_statusMcp = new QLabel(tr("MCP 未启动"), this);
     m_statusMcp->setObjectName(QStringLiteral("statusMcp"));
@@ -952,6 +1056,8 @@ void NextWindow::startMcpServer()
     stopMcpServer();
 
     if (!m_document || !m_document->store()) {
+        if (m_mcpLogPanel)
+            m_mcpLogPanel->setServerState(false, 0, {});
         updateStatus();
         return;
     }
@@ -970,6 +1076,12 @@ void NextWindow::startMcpServer()
         }
         return state;
     });
+    // Long batch tools run on the UI thread.  Pumping events at each batch
+    // checkpoint keeps the emergency-stop button and the AI lock indicator
+    // responsive while a transaction is in flight.
+    m_mcpService->setBatchCheckpoint([] {
+        QCoreApplication::processEvents();
+    });
 
     auto server = std::make_unique<mcp2::HttpServer>(m_mcpService.get());
     if (!m_mcpConfigPath.isEmpty()) {
@@ -980,17 +1092,94 @@ void NextWindow::startMcpServer()
                                     + QStringLiteral(".endpoint.json"));
     }
 
+    mcp2::HttpServer* rawServer = server.get();
+
+    connect(rawServer, &mcp2::HttpServer::toolCallStarted, this,
+            [this](const QString& name, const QString& argsJson, bool write) {
+                ++m_activeToolCalls;
+                m_runningToolArgs.insert(name, argsJson);
+                if (write) {
+                    ++m_runningWrites[name];
+                    ++m_aiBusyWrites;
+                }
+
+                if (!m_mcpAutoShown) {
+                    m_mcpAutoShown = true;
+                    if (m_mcpLogAction) {
+                        QSignalBlocker blocker(m_mcpLogAction);
+                        m_mcpLogAction->setChecked(true);
+                    }
+                    showMcpLog();
+                }
+                if (m_mcpLogPanel)
+                    m_mcpLogPanel->addSystemEvent(tr("开始：%1").arg(name),
+                                                  argsJson);
+                refreshAiLock();
+            });
+
+    connect(rawServer, &mcp2::HttpServer::toolCallFinished, this,
+            [this](const QString& name, const QString& resultJson, qint64 ms,
+                   bool ok) {
+                if (m_activeToolCalls > 0)
+                    --m_activeToolCalls;
+                const QString argsJson = m_runningToolArgs.take(name);
+                auto writeIt = m_runningWrites.find(name);
+                if (writeIt != m_runningWrites.end()) {
+                    if (m_aiBusyWrites > 0)
+                        --m_aiBusyWrites;
+                    if (--writeIt.value() <= 0)
+                        m_runningWrites.erase(writeIt);
+                }
+
+                if (m_mcpLogPanel)
+                    m_mcpLogPanel->addToolInvocation(name, argsJson, resultJson,
+                                                     ms, ok);
+                refreshAiLock();
+                statusBar()->showMessage(
+                    ok ? tr("AI %1 完成（%2 ms）").arg(name).arg(ms)
+                       : tr("AI %1 失败（%2 ms）").arg(name).arg(ms),
+                    5000);
+            });
+
+    connect(rawServer, &mcp2::HttpServer::stoppedChanged, this,
+            [this](bool stopped) {
+                m_aiStopped = stopped;
+                if (m_mcpLogPanel)
+                    m_mcpLogPanel->addSystemEvent(
+                        stopped ? tr("AI 已急停")
+                                : tr("AI 写入已恢复"));
+                refreshAiLock();
+                statusBar()->showMessage(
+                    stopped ? tr("AI 已急停：写入暂停，直到点“恢复 AI”")
+                            : tr("AI 写入已恢复"),
+                    5000);
+            });
+
+    // The test transport config supplies its own port (usually 0 for an
+    // ephemeral one); production follows the persisted settings.
+    const quint16 requestedPort =
+        m_mcpConfigPath.isEmpty() ? m_settings.mcpPort : 0;
     QString error;
-    const quint16 port = server->start(0, &error);
+    const quint16 port = rawServer->start(requestedPort, &error);
     if (port == 0) {
-        const QString detail = error.isEmpty() ? tr("未知错误") : error;
-        m_mcpStatus = tr("MCP 未启动: %1").arg(detail);
-        qWarning().noquote() << QStringLiteral("PVForge MCP:") << detail;
+        m_mcpError = error.isEmpty() ? tr("未知错误") : error;
+        m_mcpStatus = tr("MCP 未启动: %1").arg(m_mcpError);
+        qWarning().noquote() << QStringLiteral("PVForge MCP:") << m_mcpError;
     } else {
+        m_mcpError.clear();
         m_mcpStatus = tr("MCP 127.0.0.1:%1").arg(port);
     }
 
     m_mcpServer = std::move(server);
+    m_aiStopped = rawServer->aiStopped();
+    if (m_mcpLogPanel) {
+        m_mcpLogPanel->setServerState(port != 0, port, m_mcpError);
+        m_mcpLogPanel->setAiState(m_aiStopped, false);
+        m_mcpLogPanel->addSystemEvent(port != 0 ? tr("MCP 已启动")
+                                                : tr("MCP 启动失败"),
+                                      port != 0 ? m_mcpStatus : m_mcpError);
+    }
+    refreshAiLock();
     updateStatus();
 }
 
@@ -1002,6 +1191,294 @@ void NextWindow::stopMcpServer()
     }
     m_mcpService.reset();
     m_mcpStatus.clear();
+    m_mcpError.clear();
+    resetAiLock();
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->setServerState(false, 0, {});
+}
+
+void NextWindow::refreshAiLock()
+{
+    const bool writing = m_aiBusyWrites > 0;
+    const bool locked = m_aiStopped || writing;
+
+    for (QWidget* panel : {static_cast<QWidget*>(m_assetPanel),
+                           static_cast<QWidget*>(m_viewport),
+                           static_cast<QWidget*>(m_propertiesPanel),
+                           static_cast<QWidget*>(m_timeline)}) {
+        if (panel)
+            panel->setEnabled(!locked);
+    }
+
+    if (m_statusAi) {
+        if (m_aiStopped) {
+            m_statusAi->setText(tr("AI 已急停"));
+            m_statusAi->setStyleSheet(QStringLiteral("color: #e08a3c;"));
+            m_statusAi->show();
+        } else if (writing) {
+            m_statusAi->setText(tr("AI 修改中…"));
+            m_statusAi->setStyleSheet(QStringLiteral("color: #5aa9e6;"));
+            m_statusAi->show();
+        } else {
+            m_statusAi->clear();
+            m_statusAi->hide();
+        }
+    }
+
+    // The log panel itself must stay usable so the human can press stop or
+    // resume while the editor is locked.
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->setAiState(m_aiStopped, writing);
+}
+
+void NextWindow::resetAiLock()
+{
+    m_aiStopped = false;
+    m_activeToolCalls = 0;
+    m_aiBusyWrites = 0;
+    m_runningWrites.clear();
+    m_runningToolArgs.clear();
+    refreshAiLock();
+}
+
+void NextWindow::applyHumanCommitDelay()
+{
+    if (m_document)
+        m_document->setHumanCommitDelayMs(m_settings.humanCommitDelayMs);
+}
+
+void NextWindow::applySettings(const AppSettings& previous)
+{
+    applyHumanCommitDelay();
+
+    const bool portChanged = previous.mcpPort != m_settings.mcpPort;
+    if (portChanged && !m_document) {
+        statusBar()->showMessage(
+            tr("MCP 端口已保存为 %1，下次启动 MCP 时生效").arg(m_settings.mcpPort),
+            6000);
+    } else if (portChanged && mcpToolRunning()) {
+        statusBar()->showMessage(
+            tr("MCP 端口已保存为 %1，当前 AI 操作结束后重启应用生效")
+                .arg(m_settings.mcpPort),
+            8000);
+    } else if (portChanged) {
+        // Rebind immediately instead of leaving the status bar claiming the
+        // old port.  startMcpServer() stops the previous listener first.
+        const bool wasStopped = m_aiStopped;
+        startMcpServer();
+        if (wasStopped && m_mcpServer)
+            m_mcpServer->stopAi();
+        statusBar()->showMessage(
+            m_mcpServer && m_mcpServer->isRunning()
+                ? tr("MCP 端口已切换为 %1").arg(m_mcpServer->port())
+                : tr("MCP 端口已改为 %1，但启动失败：%2")
+                      .arg(m_settings.mcpPort)
+                      .arg(m_mcpError),
+            8000);
+    }
+
+    if (m_mcpLogPanel && portChanged)
+        m_mcpLogPanel->addSystemEvent(tr("设置已更新"),
+                                      tr("MCP 端口：%1").arg(m_settings.mcpPort));
+    updateStatus();
+}
+
+void NextWindow::openSettings()
+{
+    if (m_settingsDialog) {
+        m_settingsDialog->raise();
+        m_settingsDialog->activateWindow();
+        return;
+    }
+
+    auto* dialog = new SettingsDialog(m_settingsStore.get(), this);
+    dialog->setObjectName(QStringLiteral("settingsDialog"));
+    // Non-modal so the rest of the shell and the dock stay observable (and
+    // testable) while the dialog is open.
+    dialog->setModal(false);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setSettings(m_settingsStore->load());
+    m_settingsDialog = dialog;
+    updateSettingsDialogContext();
+
+    connect(dialog, &SettingsDialog::clearHtmlCacheRequested, this,
+            &NextWindow::clearHtmlCache);
+    connect(dialog, &SettingsDialog::resetMcpTokenRequested, this,
+            &NextWindow::resetMcpToken);
+    connect(dialog, &SettingsDialog::chromeDetectRequested, this,
+            &NextWindow::detectChrome);
+    connect(dialog, &QDialog::accepted, this,
+            &NextWindow::reloadSettingsFromStore);
+    if (auto* apply =
+            dialog->findChild<QPushButton*>(QStringLiteral("applyButton"))) {
+        connect(apply, &QPushButton::clicked, this,
+                &NextWindow::reloadSettingsFromStore);
+    }
+    connect(dialog, &QObject::destroyed, this, [this] {
+        m_settingsDialog = nullptr;
+    });
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void NextWindow::reloadSettingsFromStore()
+{
+    if (!m_settingsStore)
+        return;
+    const AppSettings previous = m_settings;
+    m_settings = m_settingsStore->load();
+    applySettings(previous);
+}
+
+void NextWindow::updateSettingsDialogContext()
+{
+    if (!m_settingsDialog)
+        return;
+
+    QString repositoryPath;
+    QString recentCommit;
+    if (m_document) {
+        repositoryPath = m_document->root();
+        if (m_document->store()) {
+            QString error;
+            const QVector<store::GitCommit> history =
+                m_document->store()->history(1, &error);
+            if (!history.isEmpty()) {
+                const store::GitCommit& commit = history.first();
+                recentCommit = QStringLiteral("%1 %2")
+                                   .arg(commit.hash.left(7), commit.message);
+            }
+        }
+    }
+    m_settingsDialog->setGitInfo(repositoryPath, recentCommit);
+    m_settingsDialog->setEndpointPath(
+        m_mcpServer ? m_mcpServer->endpointFilePath()
+                    : SettingsDialog::defaultEndpointPath());
+}
+
+void NextWindow::clearHtmlCache()
+{
+    QStringList targets;
+    const QString appCache =
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (!appCache.isEmpty())
+        targets.append(QDir(appCache).filePath(QStringLiteral("html")));
+    if (m_document)
+        targets.append(
+            QDir(m_document->root()).filePath(QStringLiteral(".cache/html")));
+
+    int files = 0;
+    qint64 bytes = 0;
+    QStringList removed;
+    QStringList failed;
+    for (const QString& path : targets) {
+        if (!QFileInfo::exists(path))
+            continue;
+
+        QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            ++files;
+            bytes += it.fileInfo().size();
+        }
+
+        if (QDir(path).removeRecursively())
+            removed.append(QDir::toNativeSeparators(path));
+        else
+            failed.append(QDir::toNativeSeparators(path));
+    }
+
+    QString message;
+    if (removed.isEmpty() && failed.isEmpty()) {
+        message = tr("没有可清理的 HTML 缓存");
+    } else {
+        message = tr("已清理 HTML 缓存：%1 个文件，%2")
+                      .arg(files)
+                      .arg(formatBytes(bytes));
+        if (!failed.isEmpty())
+            message += tr("；%1 个目录清理失败：%2")
+                           .arg(failed.size())
+                           .arg(failed.join(QStringLiteral("、")));
+    }
+
+    statusBar()->showMessage(message, 10000);
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->addSystemEvent(tr("清空 HTML 缓存"), message);
+}
+
+void NextWindow::resetMcpToken()
+{
+    if (m_mcpServer) {
+        m_mcpServer->resetCredentials();
+    } else {
+        // No project is open, but the persisted credential still lives in the
+        // MCP config file.  Rotate it without starting a listener.
+        mcp2::HttpServer server(nullptr);
+        if (!m_mcpConfigPath.isEmpty())
+            server.setConfigFilePath(m_mcpConfigPath);
+        server.resetCredentials();
+    }
+
+    const QString message =
+        tr("MCP token 已重置；客户端需要重新读取 endpoint 文件");
+    statusBar()->showMessage(message, 8000);
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->addSystemEvent(tr("重置 MCP token"), message);
+}
+
+void NextWindow::detectChrome()
+{
+    QString requested = m_settings.chromeExecutable;
+    if (m_settingsDialog) {
+        if (auto* edit = m_settingsDialog->findChild<QLineEdit*>(
+                QStringLiteral("chromeExecutable")))
+            requested = edit->text().trimmed();
+    }
+
+    QString found = html::HtmlBrowser::detectExecutable(requested);
+    if (found.isEmpty() && !requested.isEmpty())
+        found = html::HtmlBrowser::detectExecutable();
+
+    if (found.isEmpty()) {
+        const QString message =
+            tr("未找到 Chrome/Chromium。请安装 Chrome/Chromium，"
+               "或在设置里手动指定可执行文件路径。");
+        statusBar()->showMessage(message, 10000);
+        if (m_mcpLogPanel)
+            m_mcpLogPanel->addSystemEvent(tr("Chrome 检测失败"), message);
+
+        auto* box = new QMessageBox(QMessageBox::Warning, tr("Chrome 检测"),
+                                    message, QMessageBox::Ok, this);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->open();
+        return;
+    }
+
+    if (m_settingsDialog) {
+        AppSettings updated = m_settingsDialog->settings();
+        updated.chromeExecutable = found;
+        m_settingsDialog->setSettings(updated);
+    }
+
+    const QString message = tr("已检测到 Chrome：%1")
+                                .arg(QDir::toNativeSeparators(found));
+    statusBar()->showMessage(message, 8000);
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->addSystemEvent(tr("Chrome 检测成功"), message);
+}
+
+void NextWindow::showMcpLog()
+{
+    if (!m_mcpLogDock)
+        return;
+    m_mcpLogDock->show();
+    if (m_mcpLogPanel) {
+        m_mcpLogPanel->show();
+        m_mcpLogPanel->raise();
+    }
 }
 
 void NextWindow::exportVideo()
@@ -1363,6 +1840,11 @@ void NextWindow::updateStatus()
 
 void NextWindow::chooseNewProject()
 {
+    if (mcpToolRunning()) {
+        statusBar()->showMessage(tr("AI 正在操作工程，暂不能新建工程"), 5000);
+        return;
+    }
+
     NewProjectDialog dialog(m_lastBrowseDir, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
@@ -1403,6 +1885,9 @@ bool NextWindow::openProject(const QString& path, QString* error)
             *error = message;
         return false;
     };
+
+    if (mcpToolRunning())
+        return fail(tr("AI 正在操作工程，请稍后再打开工程"));
 
     const QFileInfo info(path);
     if (!info.exists())

@@ -4,7 +4,10 @@
 #include "mcp2/Service.h"
 #include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
+#include "next/assets/AssetPanel.h"
+#include "next/mcp/McpLogPanel.h"
 #include "next/properties/PropertiesPanel.h"
+#include "next/settings/SettingsDialog.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
 
@@ -15,12 +18,15 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QDockWidget>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
 #include <QProcess>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -871,6 +877,153 @@ private slots:
         QVERIFY(!window.openProject(path, &error));
         QVERIFY(error.contains(QStringLiteral("旧工程格式已废弃")));
         QVERIFY(window.document() == nullptr);
+    }
+
+    void settingsDialogAppliesAndPersists()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        const AppSettings original = window->settingsForTest();
+        QAction* settingsAction = window->settingsActionForTest();
+        QVERIFY(settingsAction != nullptr);
+        settingsAction->trigger();
+
+        QTRY_VERIFY(window->settingsDialogForTest() != nullptr);
+        SettingsDialog* dialog = window->settingsDialogForTest();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->isModal());
+
+        auto* delay = dialog->findChild<QSpinBox*>(QStringLiteral("humanCommitDelayMs"));
+        QVERIFY(delay != nullptr);
+        const int wanted =
+            original.humanCommitDelayMs == 2500 ? 2300 : 2500;
+        delay->setValue(wanted);
+
+        auto* apply = dialog->findChild<QPushButton*>(QStringLiteral("applyButton"));
+        QVERIFY(apply != nullptr);
+        apply->click();
+
+        QCOMPARE(window->settingsForTest().humanCommitDelayMs, wanted);
+        QCOMPARE(window->document()->humanCommitDelayMs(), wanted);
+
+        // Put the shared QSettings file back so other test cases keep the
+        // documented 1 s debounce.
+        delay->setValue(original.humanCommitDelayMs);
+        apply->click();
+        QCOMPARE(window->settingsForTest().humanCommitDelayMs,
+                 original.humanCommitDelayMs);
+
+        dialog->close();
+        QTRY_VERIFY(window->settingsDialogForTest() == nullptr);
+    }
+
+    void mcpLogDockTracksToolCallsAndEmergencyStop()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+        window->show();
+
+        McpLogPanel* panel = window->mcpLogPanelForTest();
+        QDockWidget* dock = window->mcpLogDockForTest();
+        QAction* logAction = window->mcpLogActionForTest();
+        mcp2::HttpServer* server = window->mcpServerForTest();
+        QVERIFY(panel != nullptr);
+        QVERIFY(dock != nullptr);
+        QVERIFY(logAction != nullptr);
+        QVERIFY(server != nullptr);
+        QVERIFY(dock->isHidden());
+
+        const int before = panel->entryCountForTest();
+
+        // A write tool locks every editing panel except the log itself.
+        server->toolCallStarted(QStringLiteral("entity.create"),
+                                QStringLiteral("{\"name\":\"标题\"}"), true);
+        QVERIFY(!window->assetPanelForTest()->isEnabled());
+        QVERIFY(!window->timelineForTest()->isEnabled());
+        QVERIFY(!window->propertiesPanelForTest()->isEnabled());
+        QVERIFY(!window->viewportForTest()->isEnabled());
+        QVERIFY(panel->isEnabled());
+        QVERIFY(!dock->isHidden());
+        QVERIFY(logAction->isChecked());
+        auto* statusAi = window->findChild<QLabel*>(QStringLiteral("statusAi"));
+        QVERIFY(statusAi != nullptr);
+        QVERIFY(statusAi->isVisible());
+        QCOMPARE(statusAi->text(), QStringLiteral("AI 修改中…"));
+
+        server->toolCallFinished(QStringLiteral("entity.create"),
+                                 QStringLiteral("{\"ok\":true}"), 12, true);
+        QVERIFY(window->assetPanelForTest()->isEnabled());
+        QVERIFY(window->timelineForTest()->isEnabled());
+        QVERIFY(window->propertiesPanelForTest()->isEnabled());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        QVERIFY(statusAi->isHidden());
+        QVERIFY(panel->entryCountForTest() > before);
+
+        // Read-only tools never lock the editor.
+        server->toolCallStarted(QStringLiteral("view.state"),
+                                QStringLiteral("{}"), false);
+        QVERIFY(window->viewportForTest()->isEnabled());
+        server->toolCallFinished(QStringLiteral("view.state"),
+                                 QStringLiteral("{\"ok\":true}"), 1, true);
+
+        // The panel buttons are wired to the transport's emergency stop.
+        auto* stopButton = panel->findChild<QPushButton*>(QStringLiteral("mcpLogStopButton"));
+        auto* resumeButton = panel->findChild<QPushButton*>(QStringLiteral("mcpLogResumeButton"));
+        QVERIFY(stopButton != nullptr);
+        QVERIFY(resumeButton != nullptr);
+
+        stopButton->click();
+        QVERIFY(server->aiStopped());
+        QVERIFY(!window->viewportForTest()->isEnabled());
+        QVERIFY(statusAi->isVisible());
+        QCOMPARE(statusAi->text(), QStringLiteral("AI 已急停"));
+
+        // stop wins over a finished call: the editor stays locked.
+        server->toolCallStarted(QStringLiteral("entity.update"),
+                                QStringLiteral("{}"), true);
+        server->toolCallFinished(QStringLiteral("entity.update"),
+                                 QStringLiteral("{\"ok\":false}"), 2, false);
+        QVERIFY(!window->viewportForTest()->isEnabled());
+
+        resumeButton->click();
+        QVERIFY(!server->aiStopped());
+        QVERIFY(window->assetPanelForTest()->isEnabled());
+        QVERIFY(window->timelineForTest()->isEnabled());
+        QVERIFY(window->propertiesPanelForTest()->isEnabled());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        QVERIFY(statusAi->isHidden());
+    }
+
+    void appWordingHasNoGitLfs()
+    {
+        const QDir sourceDir(QStringLiteral(PVF_NEXT_APP_SOURCE_DIR));
+        QVERIFY(sourceDir.exists());
+        const QStringList files =
+            sourceDir.entryList({QStringLiteral("*.cpp"), QStringLiteral("*.h")},
+                                QDir::Files);
+        QVERIFY(!files.isEmpty());
+        for (const QString& name : files) {
+            QFile file(sourceDir.filePath(name));
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            const QString text = QString::fromUtf8(file.readAll());
+            QVERIFY2(!text.contains(QStringLiteral("Git LFS"), Qt::CaseInsensitive),
+                     qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("git-lfs"), Qt::CaseInsensitive),
+                     qPrintable(name));
+        }
     }
 };
 
