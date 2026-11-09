@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Network)
 
 if(NOT TARGET pvf_model)
     add_subdirectory(../model ${CMAKE_CURRENT_BINARY_DIR}/pvf-model)
@@ -39,6 +39,8 @@ add_library(pvf_mcp2 STATIC
     PreviewTools.cpp
     AssetTools.cpp
     SchemaTools.cpp
+    HttpServer.h
+    HttpServer.cpp
 )
 
 target_include_directories(pvf_mcp2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -50,6 +52,7 @@ target_link_libraries(pvf_mcp2 PUBLIC
     pvf_render2
     Qt6::Core
     Qt6::Gui
+    Qt6::Network
 )
 target_compile_features(pvf_mcp2 PUBLIC cxx_std_20)
 
@@ -92,6 +95,30 @@ if(BUILD_TESTING)
 
     foreach(test_case IN LISTS PVF_MCP2_TEST_CASES)
         add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_tests ${test_case})
+        set_tests_properties(mcp2.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endforeach()
+
+    add_executable(pvf_mcp2_http_tests tests/http_server_tests.cpp)
+    target_link_libraries(pvf_mcp2_http_tests PRIVATE
+        pvf_mcp2
+        Qt6::Test
+        Qt6::Network
+    )
+
+    set(PVF_MCP2_HTTP_TEST_CASES
+        httpInitialize
+        httpToolsList
+        httpToolsCallProjectGet
+        httpSecurityAndLimits
+        httpNotificationsAndErrors
+        httpCredentialsPersistAcrossRestart
+        httpDefaultConfigUsesFixedPort
+        httpPortConflictFailsClearly
+    )
+
+    foreach(test_case IN LISTS PVF_MCP2_HTTP_TEST_CASES)
+        add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_http_tests ${test_case})
         set_tests_properties(mcp2.${test_case} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endforeach()
