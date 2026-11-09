@@ -3,8 +3,15 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFile>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMimeData>
 #include <QPainter>
+#include <QTemporaryDir>
 #include <QTest>
 
 namespace {
@@ -20,9 +27,9 @@ using pvf::next::TimelineWidget;
 class FakeDocument : public Document
 {
 public:
-    FakeDocument()
+    explicit FakeDocument(const QString& projectRoot = QDir::tempPath())
         : Document(nullptr)
-        , m_assets(QDir::tempPath())
+        , m_assets(projectRoot)
     {
     }
 
@@ -127,6 +134,67 @@ QImage renderWidget(TimelineWidget& widget, const QSize& size = QSize(800, 300))
     return image;
 }
 
+int rowCenterY(const TimelineWidget& widget, int row)
+{
+    // Mirrors the widget layout: 14 px scrollbar, 30 px rows, row 0 at bottom.
+    return widget.height() - 14 - 15 - row * 30;
+}
+
+bool writePng(const QString& path, const QColor& color)
+{
+    QImage image(8, 8, QImage::Format_ARGB32_Premultiplied);
+    image.fill(color);
+    return image.save(path, "PNG");
+}
+
+bool writeFakeAsset(const QString& projectRoot, const QString& hash,
+                    const QString& type, const QString& name,
+                    int durationFrames = 0,
+                    const QString& audioHash = QString())
+{
+    const QString directory =
+        QDir(projectRoot).filePath(QStringLiteral("assets/") + hash);
+    if (!QDir().mkpath(directory))
+        return false;
+
+    QFile content(directory + QStringLiteral("/content.bin"));
+    if (!content.open(QIODevice::WriteOnly))
+        return false;
+    content.write("x");
+    content.close();
+
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("hash"), hash);
+    metadata.insert(QStringLiteral("type"), type);
+    metadata.insert(QStringLiteral("name"), name);
+    if (durationFrames > 0)
+        metadata.insert(QStringLiteral("durationFrames"), durationFrames);
+    if (!audioHash.isEmpty())
+        metadata.insert(QStringLiteral("audioHash"), audioHash);
+
+    QFile json(directory + QStringLiteral("/asset.json"));
+    if (!json.open(QIODevice::WriteOnly))
+        return false;
+    json.write(QJsonDocument(metadata).toJson(QJsonDocument::Indented));
+    json.close();
+    return true;
+}
+
+bool sendAssetDrop(TimelineWidget& widget, const QString& hash,
+                   const QPoint& position)
+{
+    constexpr char mimeType[] = "application/x-pvforge-asset";
+    QMimeData mime;
+    mime.setData(QString::fromLatin1(mimeType), hash.toUtf8());
+    QDragEnterEvent enter(position, Qt::CopyAction, &mime, Qt::LeftButton,
+                          Qt::NoModifier);
+    QApplication::sendEvent(&widget, &enter);
+    QDropEvent event(QPointF(position), Qt::CopyAction, &mime,
+                     Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&widget, &event);
+    return event.isAccepted();
+}
+
 } // namespace
 
 class TimelineWidgetTest : public QObject
@@ -144,6 +212,10 @@ private slots:
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
     void doubleClickAndBreadcrumb();
+    void dropAssetCreatesEntity();
+    void dropOntoOccupiedRowUsesNextRow();
+    void dropVideoCreatesAudioEntity();
+    void dragEnterRejectsUnknownMime();
 };
 
 void TimelineWidgetTest::rowsAreBottomUp()
@@ -391,6 +463,136 @@ void TimelineWidgetTest::doubleClickAndBreadcrumb()
                       widget.breadcrumbRect().center());
     QVERIFY(widget.parentUuid().isEmpty());
     QVERIFY(widget.entityBarRect(parent).isValid());
+}
+
+void TimelineWidgetTest::dropAssetCreatesEntity()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+
+    const QString path = directory.path() + QStringLiteral("/green.png");
+    QVERIFY(writePng(path, Qt::green));
+    QString error;
+    const auto stored = document.assets().importFile(path, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    const QPoint dropPosition(widget.xFromFrame(30), rowCenterY(widget, 0));
+    QVERIFY(sendAssetDrop(widget, stored->hash, dropPosition));
+
+    QCOMPARE(document.commitEntitiesCount, 1);
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.lastCommitUuids.size(), 1);
+    QCOMPARE(int(document.project().entities.size()), 1);
+
+    const Uuid uuid = document.lastCommitUuid;
+    const pvf::model::Entity entity =
+        document.project().entities.value(uuid);
+    QCOMPARE(entity.name, QStringLiteral("green.png"));
+    QCOMPARE(entity.parentUuid, Uuid());
+    QCOMPARE(entity.start, 30);
+    QCOMPARE(entity.end, 60);
+    QCOMPARE(entity.row, 0);
+    QCOMPARE(entity.content.kind, ContentKind::Asset);
+    QCOMPARE(entity.content.asset.hash, stored->hash);
+    QCOMPARE(entity.content.asset.type, AssetType::Image);
+    QCOMPARE(entity.content.asset.sourceIn, 0);
+    QCOMPARE(entity.content.asset.volume, 1.0);
+    QCOMPARE(document.selection(), uuid);
+}
+
+void TimelineWidgetTest::dropOntoOccupiedRowUsesNextRow()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    const Uuid existing =
+        addEntity(document, QStringLiteral("existing"), 20, 40, 0);
+
+    const QString path = directory.path() + QStringLiteral("/green.png");
+    QVERIFY(writePng(path, Qt::green));
+    QString error;
+    const auto stored = document.assets().importFile(path, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    const QPoint dropPosition(widget.xFromFrame(30), rowCenterY(widget, 0));
+    QVERIFY(sendAssetDrop(widget, stored->hash, dropPosition));
+
+    QCOMPARE(document.commitEntitiesCount, 1);
+    QCOMPARE(int(document.project().entities.size()), 2);
+    const Uuid created = document.lastCommitUuid;
+    QCOMPARE(document.project().entities.value(created).row, 1);
+    QCOMPARE(document.project().entities.value(existing).row, 0);
+}
+
+void TimelineWidgetTest::dropVideoCreatesAudioEntity()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+
+    const QString videoHash(64, QLatin1Char('a'));
+    const QString audioHash(64, QLatin1Char('b'));
+    QVERIFY(writeFakeAsset(directory.path(), videoHash,
+                           QStringLiteral("video"),
+                           QStringLiteral("clip.mp4"), 45, audioHash));
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    const QPoint dropPosition(widget.xFromFrame(10), rowCenterY(widget, 0));
+    QVERIFY(sendAssetDrop(widget, videoHash, dropPosition));
+
+    QCOMPARE(document.commitEntitiesCount, 1);
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.lastCommitUuids.size(), 2);
+
+    const Uuid videoUuid = document.lastCommitUuids.at(0);
+    const Uuid audioUuid = document.lastCommitUuids.at(1);
+    const pvf::model::Entity video =
+        document.project().entities.value(videoUuid);
+    const pvf::model::Entity audio =
+        document.project().entities.value(audioUuid);
+
+    QCOMPARE(video.name, QStringLiteral("clip.mp4"));
+    QCOMPARE(video.start, 10);
+    QCOMPARE(video.end, 55);
+    QCOMPARE(video.row, 0);
+    QCOMPARE(video.content.asset.hash, videoHash);
+    QCOMPARE(video.content.asset.type, AssetType::Video);
+
+    QCOMPARE(audio.name, QStringLiteral("clip.mp4 音频"));
+    QCOMPARE(audio.start, 10);
+    QCOMPARE(audio.end, 55);
+    QCOMPARE(audio.row, 1);
+    QCOMPARE(audio.content.asset.hash, audioHash);
+    QCOMPARE(audio.content.asset.type, AssetType::Audio);
+    QCOMPARE(document.selection(), videoUuid);
+}
+
+void TimelineWidgetTest::dragEnterRejectsUnknownMime()
+{
+    FakeDocument document;
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QMimeData unknown;
+    unknown.setText(QStringLiteral("plain text"));
+    QDragEnterEvent unknownEvent(QPoint(10, 10), Qt::CopyAction, &unknown,
+                                 Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&widget, &unknownEvent);
+    QVERIFY(!unknownEvent.isAccepted());
+
+    constexpr char mimeType[] = "application/x-pvforge-asset";
+    QMimeData asset;
+    asset.setData(QString::fromLatin1(mimeType), QByteArray("hash"));
+    QDragEnterEvent assetEvent(QPoint(10, 10), Qt::CopyAction, &asset,
+                               Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&widget, &assetEvent);
+    QVERIFY(assetEvent.isAccepted());
 }
 
 int main(int argc, char* argv[])

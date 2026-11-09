@@ -9,12 +9,19 @@
 #include <QVector>
 #include <QWidget>
 
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QPainter;
 class QResizeEvent;
 class QScrollBar;
 class QWheelEvent;
+
+namespace pvf::assets {
+struct StoredAsset;
+}
 
 namespace pvf::model {
 struct Entity;
@@ -32,8 +39,9 @@ class Document;
 //
 // The widget edits the Document in place while dragging and commits one
 // entity operation on mouse release (“pvf: move entity ...” / “pvf: trim
-// entity ...”). Multi-select, rubber-band selection, asset drops and keyframe
-// dragging are intentionally left to a later pass.
+// entity ...”). Assets can be dropped from the asset panel; multi-select,
+// rubber-band selection and keyframe dragging are intentionally left to a
+// later pass.
 class TimelineWidget : public QWidget
 {
     Q_OBJECT
@@ -62,6 +70,10 @@ public:
     QRect entityBarRect(const Uuid& uuid) const;
     QVector<Uuid> visibleEntities() const;
 
+signals:
+    // Emitted for drop problems that should surface in the shell status bar.
+    void statusMessage(const QString& message);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -70,6 +82,9 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     enum class DragMode
@@ -110,6 +125,11 @@ private:
     void updateHoverCursor(const QPoint& pos);
     void applyDrag(const QPoint& pos);
     void finishDrag();
+
+    int assetDurationFrames(const assets::StoredAsset& asset) const;
+    int dropRowFor(int y, int startFrame, int endFrame) const;
+    QVector<Uuid> createEntitiesForAsset(const assets::StoredAsset& asset,
+                                         int startFrame, int row);
 
     void paintToolbar(QPainter& painter);
     void paintRuler(QPainter& painter);

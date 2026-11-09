@@ -2,8 +2,12 @@
 
 #include "next/core/Document.h"
 
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QFont>
 #include <QFontMetrics>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
@@ -21,6 +25,18 @@
 namespace pvf::next {
 
 namespace {
+
+constexpr char kAssetMimeType[] = "application/x-pvforge-asset";
+
+bool hasAssetMime(const QMimeData* mime)
+{
+    return mime && mime->hasFormat(QString::fromLatin1(kAssetMimeType));
+}
+
+bool rangesOverlap(int aStart, int aEnd, int bStart, int bEnd)
+{
+    return aStart < bEnd && bStart < aEnd;
+}
 
 QColor contentColor(const model::Entity& entity)
 {
@@ -143,6 +159,7 @@ TimelineWidget::TimelineWidget(Document* document, QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAcceptDrops(true);
     setMinimumSize(240, 140);
 
     m_hScroll = new QScrollBar(Qt::Horizontal, this);
@@ -1087,6 +1104,169 @@ void TimelineWidget::resizeEvent(QResizeEvent* event)
                                kScrollBarHeight);
     }
     updateScrollBar();
+}
+
+int TimelineWidget::assetDurationFrames(const assets::StoredAsset& asset) const
+{
+    int frames =
+        asset.metadata.value(QStringLiteral("durationFrames")).toInt(0);
+    if (frames <= 0 && m_document)
+        frames = m_document->project().settings.fps;
+    return std::max(1, frames);
+}
+
+int TimelineWidget::dropRowFor(int y, int startFrame, int endFrame) const
+{
+    const QRect body = bodyRect();
+    int candidate = -1;
+    if (!body.isEmpty() && y >= body.top() && y <= body.bottom())
+        candidate = std::max(0, (body.bottom() - y) / kRowHeight);
+
+    int highestUsed = -1;
+    int highestInRange = -1;
+    const QVector<Uuid> siblings = visibleEntities();
+    for (const Uuid& uuid : siblings)
+    {
+        const auto it = m_document->project().entities.constFind(uuid);
+        if (it == m_document->project().entities.constEnd())
+            continue;
+        const model::Entity& entity = it.value();
+        highestUsed = std::max(highestUsed, std::max(0, entity.row));
+        if (rangesOverlap(entity.start, entity.end, startFrame, endFrame))
+            highestInRange = std::max(highestInRange, std::max(0, entity.row));
+    }
+
+    // Blank rows above the existing row space (and drops outside the body)
+    // use the model default: highest occupied row in [start, end) + 1.
+    const int autoRow = std::max(0, highestInRange + 1);
+    if (candidate < 0 || candidate > highestUsed)
+        return autoRow;
+
+    // Keep the row under the cursor, unless a sibling already overlaps this
+    // time range there; then fall back to the next free row.
+    for (const Uuid& uuid : siblings)
+    {
+        const auto it = m_document->project().entities.constFind(uuid);
+        if (it == m_document->project().entities.constEnd())
+            continue;
+        const model::Entity& entity = it.value();
+        if (std::max(0, entity.row) == candidate
+            && rangesOverlap(entity.start, entity.end, startFrame, endFrame))
+            return autoRow;
+    }
+    return candidate;
+}
+
+QVector<Uuid> TimelineWidget::createEntitiesForAsset(
+    const assets::StoredAsset& asset, int startFrame, int row)
+{
+    QVector<Uuid> created;
+    if (!m_document)
+        return created;
+
+    const int start = std::max(0, startFrame);
+    const int duration = assetDurationFrames(asset);
+    const QString name = asset.name.isEmpty() ? asset.hash : asset.name;
+
+    model::Entity main;
+    main.uuid = model::newUuid();
+    main.name = name;
+    main.parentUuid = m_parentUuid;
+    main.start = start;
+    main.end = start + duration;
+    main.row = std::max(0, row);
+    main.content.kind = ContentKind::Asset;
+    main.content.asset.hash = asset.hash;
+    main.content.asset.type = asset.type;
+    main.content.asset.sourceIn = 0;
+    main.content.asset.volume = 1.0;
+    m_document->mutableProject().entities.insert(main.uuid, main);
+    created.append(main.uuid);
+
+    // Video imports split their audio into a separate asset. Recreate the
+    // paired entity on the row above, exactly like the importer does.
+    const QString audioHash =
+        asset.metadata.value(QStringLiteral("audioHash")).toString();
+    if (asset.type == AssetType::Video && !audioHash.isEmpty())
+    {
+        model::Entity audio;
+        audio.uuid = model::newUuid();
+        audio.name = name + QStringLiteral(" 音频");
+        audio.parentUuid = m_parentUuid;
+        audio.start = main.start;
+        audio.end = main.end;
+        audio.row = main.row + 1;
+        audio.content.kind = ContentKind::Asset;
+        audio.content.asset.hash = audioHash;
+        audio.content.asset.type = AssetType::Audio;
+        audio.content.asset.sourceIn = 0;
+        audio.content.asset.volume = 1.0;
+        m_document->mutableProject().entities.insert(audio.uuid, audio);
+        created.append(audio.uuid);
+    }
+
+    return created;
+}
+
+void TimelineWidget::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (m_document && hasAssetMime(event->mimeData()))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void TimelineWidget::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (m_document && hasAssetMime(event->mimeData()))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void TimelineWidget::dropEvent(QDropEvent* event)
+{
+    if (!m_document || !hasAssetMime(event->mimeData()))
+    {
+        event->ignore();
+        return;
+    }
+
+    const QString hash =
+        QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kAssetMimeType)))
+            .trimmed();
+    if (hash.isEmpty())
+    {
+        event->ignore();
+        return;
+    }
+
+    const auto asset = m_document->assets().get(hash);
+    if (!asset)
+    {
+        emit statusMessage(tr("素材缺失：%1").arg(hash));
+        event->ignore();
+        return;
+    }
+
+    const QPoint pos = event->position().toPoint();
+    const int start = std::max(0, frameFromX(pos.x()));
+    const int end = start + assetDurationFrames(*asset);
+    const int row = dropRowFor(pos.y(), start, end);
+    const QVector<Uuid> created = createEntitiesForAsset(*asset, start, row);
+    if (created.isEmpty())
+    {
+        event->ignore();
+        return;
+    }
+
+    m_document->setSelection(created.first());
+    const QString label = asset->name.isEmpty() ? hash : asset->name;
+    m_document->commitEntities(
+        created, QStringLiteral("pvf: add asset \"%1\"").arg(label));
+    updateScrollBar();
+    update();
+    event->acceptProposedAction();
 }
 
 void TimelineWidget::applyDrag(const QPoint& pos)

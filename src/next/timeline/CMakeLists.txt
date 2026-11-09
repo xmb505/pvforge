@@ -51,6 +51,10 @@ if(BUILD_TESTING)
         solverBandPaints
         privateTimelineShowsOnlyChildren
         doubleClickAndBreadcrumb
+        dropAssetCreatesEntity
+        dropOntoOccupiedRowUsesNextRow
+        dropVideoCreatesAudioEntity
+        dragEnterRejectsUnknownMime
     )
 
     foreach(test_case IN LISTS PVF_TIMELINE_TEST_CASES)
