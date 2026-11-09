@@ -24,6 +24,7 @@ struct Tx
     store::ProjectStore* store = nullptr;
     model::Project backup;
     model::Project project;
+    ViewState viewState;
     QSet<Uuid> dirty;
     QSet<Uuid> deleted;
     bool projectDirty = false;
@@ -69,6 +70,8 @@ QJsonObject assetJson(const assets::AssetStore& assetStore,
 model::Entity* findEntity(model::Project& project, const Uuid& uuid);
 const model::Entity* findEntity(const model::Project& project, const Uuid& uuid);
 Uuid lockedBy(const model::Project& project, const Uuid& uuid);
+// Returns conflict with details.lockedBy when the entity or an ancestor is
+// locked. This is the single write-guard used by every tool family.
 bool ensureUnlocked(const model::Project& project, const Uuid& uuid, Result* error);
 QVector<Uuid> subtree(const model::Project& project, const Uuid& uuid);
 int depthOf(const model::Project& project, const Uuid& uuid);
@@ -125,6 +128,22 @@ Result keyframesRemove(Tx& tx, const QJsonObject& args);
 Result keyframesMove(Tx& tx, const QJsonObject& args);
 Result keyframesClear(Tx& tx, const QJsonObject& args);
 Result keyframesSetEasing(Tx& tx, const QJsonObject& args);
+
+Result solverCreate(Tx& tx, const QJsonObject& args);
+Result solverUpdate(Tx& tx, const QJsonObject& args);
+Result solverDelete(Tx& tx, const QJsonObject& args);
+Result solverList(Tx& tx, const QJsonObject& args);
+Result solverEvaluate(Tx& tx, const QJsonObject& args);
+
+Result previewRenderFrame(Tx& tx, const QJsonObject& args);
+Result viewStateGet(Tx& tx, const QJsonObject& args);
+
+// Parses one `solvers[]` element (fields same as solver.create without
+// entityUuid) against an entity that may not be stored in the project yet.
+Result parseSolverCreate(const model::Project& project,
+                         const model::Entity& entity,
+                         const QJsonObject& object,
+                         model::SolverSegment* segment);
 
 Result assetImport(Tx& tx, const QJsonObject& args);
 Result assetList(Tx& tx, const QJsonObject& args);

@@ -6,6 +6,7 @@
 #include <QJsonObject>
 
 #include <exception>
+#include <utility>
 
 namespace pvf::mcp2 {
 
@@ -72,6 +73,15 @@ const ToolEntry kTools[] = {
     {"keyframes.clear", &detail::keyframesClear},
     {"keyframes.setEasing", &detail::keyframesSetEasing},
 
+    {"solver.create", &detail::solverCreate},
+    {"solver.update", &detail::solverUpdate},
+    {"solver.delete", &detail::solverDelete},
+    {"solver.list", &detail::solverList},
+    {"solver.evaluate", &detail::solverEvaluate},
+
+    {"preview.render_frame", &detail::previewRenderFrame},
+    {"view.state", &detail::viewStateGet},
+
     {"asset.import", &detail::assetImport},
     {"asset.list", &detail::assetList},
     {"asset.get", &detail::assetGet},
@@ -98,6 +108,11 @@ Service::Service(store::ProjectStore* store, assets::AssetStore* assets)
     : m_store(store)
     , m_assets(assets)
 {
+}
+
+void Service::setViewStateProvider(ViewStateProvider provider)
+{
+    m_viewStateProvider = std::move(provider);
 }
 
 QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
@@ -128,6 +143,8 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
     try
     {
         detail::Tx tx(m_store);
+        if (m_viewStateProvider)
+            tx.viewState = m_viewStateProvider();
         return entry->handler(tx, args).toJson();
     }
     catch (const std::exception& exception)

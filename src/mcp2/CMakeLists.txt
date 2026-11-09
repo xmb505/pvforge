@@ -21,18 +21,36 @@ if(NOT TARGET pvf_store)
     add_subdirectory(../store ${CMAKE_CURRENT_BINARY_DIR}/pvf-store)
 endif()
 
+if(NOT TARGET pvf_anim)
+    add_subdirectory(../anim ${CMAKE_CURRENT_BINARY_DIR}/pvf-anim)
+endif()
+
+if(NOT TARGET pvf_render2)
+    add_subdirectory(../render2 ${CMAKE_CURRENT_BINARY_DIR}/pvf-render2)
+endif()
+
 add_library(pvf_mcp2 STATIC
     Service.cpp
     Support.cpp
     ProjectTools.cpp
     EntityTools.cpp
     KeyframeTools.cpp
+    SolverTools.cpp
+    PreviewTools.cpp
     AssetTools.cpp
     SchemaTools.cpp
 )
 
 target_include_directories(pvf_mcp2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(pvf_mcp2 PUBLIC pvf_model pvf_store pvf_assets Qt6::Core)
+target_link_libraries(pvf_mcp2 PUBLIC
+    pvf_model
+    pvf_store
+    pvf_assets
+    pvf_anim
+    pvf_render2
+    Qt6::Core
+    Qt6::Gui
+)
 target_compile_features(pvf_mcp2 PUBLIC cxx_std_20)
 
 include(CTest)
@@ -64,6 +82,12 @@ if(BUILD_TESTING)
         projectUpdateFpsNeedsConfirm
         deleteManyMergesHierarchy
         listToolsAndSchema
+        solverCreateUpdateDelete
+        solverValidationRejects
+        viewStateReturnsInjected
+        previewRenderFrameWritesPng
+        previewRejectsOversize
+        solverEvaluateNestedEntity
     )
 
     foreach(test_case IN LISTS PVF_MCP2_TEST_CASES)

@@ -99,7 +99,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity"))},
             {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset"))},
             {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QStringLiteral("{track: [key,...]}"))},
-            {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("Phase B"))},
+            {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))},
         });
     }
     if (topic == QLatin1String("keyframes"))
@@ -161,13 +161,44 @@ QJsonObject schemaTopic(const QString& topic)
                            QStringLiteral("affected")}));
         return schema;
     }
-    if (topic == QLatin1String("solver") || topic == QLatin1String("preview"))
+    if (topic == QLatin1String("solver"))
     {
-        QJsonObject schema;
-        schema.insert(QStringLiteral("available"), false);
-        schema.insert(QStringLiteral("reason"),
-                      QStringLiteral("Phase A 未实现，留给 Phase B"));
-        return schema;
+        return openSchema({
+            {QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QStringLiteral("目标实体 UUID"))},
+            {QStringLiteral("solverId"), prop(QStringLiteral("string"), QStringLiteral("求解段 id"))},
+            {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole"))},
+            {QStringLiteral("startFrame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration-1"))},
+            {QStringLiteral("endFrame"), prop(QStringLiteral("integer"), QStringLiteral("-1 = clip 末帧；否则 startFrame+1..duration-1"))},
+            {QStringLiteral("initialVelocity"), prop(QStringLiteral("object"), QStringLiteral("{x,y} px/s，仅 gravity/blackhole"))},
+            {QStringLiteral("params"), prop(QStringLiteral("object"), QStringLiteral("按效果取字段；gravity/orbit/blackhole 必填 targetUuid"))},
+            {QStringLiteral("patch"), prop(QStringLiteral("object"), QStringLiteral("startFrame/endFrame/initialVelocity/params 子集"))},
+            {QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("相对帧号，最多 10000 个采样"))},
+        });
+    }
+    if (topic == QLatin1String("preview"))
+    {
+        return openSchema({
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，默认播放头"))},
+            {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("默认 view.state 摄像机；null = 全画布"))},
+            {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程宽度"))},
+            {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程高度"))},
+            {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
+            {QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("临时 PNG 路径"))},
+        });
+    }
+    if (topic == QLatin1String("view"))
+    {
+        return openSchema({
+            {QStringLiteral("playhead"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号"))},
+            {QStringLiteral("selection"), prop(QStringLiteral("string|null"), QStringLiteral("选中实体 UUID"))},
+            {QStringLiteral("timelineParent"), prop(QStringLiteral("string|null"), QStringLiteral("空 = 根时间轴"))},
+            {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("空 = 全画布"))},
+            {QStringLiteral("viewRect"), prop(QStringLiteral("object|null"), QStringLiteral("{x,y,width,height} 项目坐标"))},
+            {QStringLiteral("fps"), prop(QStringLiteral("integer"), QString())},
+            {QStringLiteral("width"), prop(QStringLiteral("integer"), QString())},
+            {QStringLiteral("height"), prop(QStringLiteral("integer"), QString())},
+            {QStringLiteral("root"), prop(QStringLiteral("string"), QStringLiteral("工程目录"))},
+        });
     }
     return QJsonObject();
 }
@@ -179,6 +210,7 @@ const QStringList& schemaTopics()
         QStringLiteral("keyframes"), QStringLiteral("asset"),
         QStringLiteral("markers"),   QStringLiteral("errors"),
         QStringLiteral("solver"),    QStringLiteral("preview"),
+        QStringLiteral("view"),
     };
     return topics;
 }
@@ -207,8 +239,18 @@ QString guideMarkdown(const QString& topic)
     if (topic == QLatin1String("solver"))
         return QStringLiteral(
             "# 求解段\n"
-            "Phase A 不包含 `solver.*` 工具与 `solver.evaluate`；"
-            "已有求解段仍会参与实体文件校验，写 `x/y` 或 `rotation` 普通关键帧到段内会返回 `conflict`。\n");
+            "- 段帧号相对实体 start，闭区间 `[startFrame,endFrame]`；`-1` = clip 末帧。\n"
+            "- `gravity`/`orbit`/`blackhole` 必填 `params.targetUuid`；`spin` 不需要目标。\n"
+            "- `startFrame` 必须在被驱动轨道上已有关键帧：x/y（gravity/orbit/blackhole）或 rotation（spin）。\n"
+            "- 段不能重叠；段内不能写被驱动属性的普通关键帧。\n"
+            "- `solver.evaluate` 只读，返回相对 start 的采样点、速度和碰撞/停止标记，不写关键帧。\n");
+    if (topic == QLatin1String("preview"))
+        return QStringLiteral(
+            "# 预览\n"
+            "- `view.state` 读取播放头、选中实体、私有时间线、活动摄像机和视口范围。\n"
+            "- `preview.render_frame` 渲染指定全局帧并写入临时 PNG；默认帧是播放头、默认摄像机来自 `view.state`。\n"
+            "- 输出宽高限制 1..4096，PNG 不超过 20MB；预览不修改工程、不产生 commit。\n"
+            "- 返回 `path` 后可直接读取图片；渲染失败返回 `internal_error`。\n");
     if (topic == QLatin1String("assets"))
         return QStringLiteral(
             "# 素材\n"
@@ -270,8 +312,8 @@ Result guideGet(Tx& tx, const QJsonObject& args)
 
     static const QStringList topics = {
         QStringLiteral("authoring"), QStringLiteral("workflow"),
-        QStringLiteral("solver"),    QStringLiteral("assets"),
-        QStringLiteral("examples"),
+        QStringLiteral("solver"),    QStringLiteral("preview"),
+        QStringLiteral("assets"),    QStringLiteral("examples"),
     };
     if (!topics.contains(topic))
         return failure(QStringLiteral("invalid_argument"),
@@ -318,7 +360,7 @@ QJsonObject listTools()
          {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QString())},
-         {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("Phase B"))}},
+         {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))}},
         {QStringLiteral("start")});
 
     tools.append(toolSchema(QStringLiteral("entity.create"),
@@ -442,6 +484,50 @@ QJsonObject listTools()
                       QStringLiteral("frame"), QStringLiteral("easing")})));
 
     tools.append(toolSchema(
+        QStringLiteral("solver.create"), QStringLiteral("给实体新增一个求解段"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QStringLiteral("实体 UUID"))},
+                      {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole"))},
+                      {QStringLiteral("startFrame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start"))},
+                      {QStringLiteral("endFrame"), prop(QStringLiteral("integer"), QStringLiteral("默认 -1"))},
+                      {QStringLiteral("initialVelocity"), prop(QStringLiteral("object"), QStringLiteral("{x,y} px/s"))},
+                      {QStringLiteral("params"), prop(QStringLiteral("object"), QStringLiteral("按效果取字段"))}},
+                     {QStringLiteral("entityUuid"), QStringLiteral("effect"),
+                      QStringLiteral("startFrame"), QStringLiteral("params")})));
+    tools.append(toolSchema(
+        QStringLiteral("solver.update"), QStringLiteral("修改求解段帧范围、初速度或参数"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("solverId"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("patch"), prop(QStringLiteral("object"), QStringLiteral("startFrame/endFrame/initialVelocity/params"))}},
+                     {QStringLiteral("entityUuid"), QStringLiteral("solverId"),
+                      QStringLiteral("patch")})));
+    tools.append(toolSchema(
+        QStringLiteral("solver.delete"), QStringLiteral("删除求解段，开始帧关键帧保留"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("solverId"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("entityUuid"), QStringLiteral("solverId")})));
+    tools.append(toolSchema(
+        QStringLiteral("solver.list"), QStringLiteral("按 startFrame 列出一条实体的求解段"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("entityUuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("solver.evaluate"), QStringLiteral("内存解算求解段并返回采样点（只读）"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("solverId"), prop(QStringLiteral("string"), QStringLiteral("省略 = 全部段"))},
+                      {QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("相对帧号，最多 10000 个"))}},
+                     {QStringLiteral("entityUuid")})));
+
+    tools.append(toolSchema(
+        QStringLiteral("preview.render_frame"), QStringLiteral("渲染指定帧到临时 PNG（只读）"),
+        objectSchema({{QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("默认播放头"))},
+                      {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("默认 view.state 摄像机"))},
+                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096"))},
+                      {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096"))},
+                      {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("view.state"), QStringLiteral("读取播放头、选中实体、时间线、摄像机和视口状态"),
+        empty));
+
+    tools.append(toolSchema(
         QStringLiteral("asset.import"), QStringLiteral("把本地文件/目录复制进工程素材库，视频自动拆 WAV"),
         objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径"))},
                       {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
@@ -513,10 +599,10 @@ QJsonObject listTools()
 
     tools.append(toolSchema(
         QStringLiteral("schema.get"), QStringLiteral("读取数据对象 JSON Schema 摘要"),
-        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("project|entity|keyframes|asset|markers|errors|solver|preview|all"))}})));
+        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("project|entity|keyframes|asset|markers|errors|solver|preview|view|all"))}})));
     tools.append(toolSchema(
         QStringLiteral("guide.get"), QStringLiteral("读取 Markdown 编写指南"),
-        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("authoring|workflow|solver|assets|examples"))}})));
+        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("authoring|workflow|solver|preview|assets|examples"))}})));
 
     QJsonObject result;
     result.insert(QStringLiteral("tools"), tools);

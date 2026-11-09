@@ -383,9 +383,22 @@ Result createEntityInternal(Tx& tx, const QJsonObject& args,
         if (!solversValue.isArray())
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("solvers 必须是数组"));
-        if (!solversValue.toArray().isEmpty())
-            return failure(QStringLiteral("not_available"),
-                           QStringLiteral("求解段写入在 Phase A 未实现，请等待 solver 工具"));
+        const QJsonArray solvers = solversValue.toArray();
+        for (int i = 0; i < solvers.size(); ++i)
+        {
+            if (!solvers.at(i).isObject())
+                return failure(QStringLiteral("invalid_argument"),
+                               QStringLiteral("solvers[%1] 必须是对象").arg(i));
+            model::SolverSegment segment;
+            Result parsed = parseSolverCreate(project, entity,
+                                              solvers.at(i).toObject(), &segment);
+            if (!parsed.ok)
+            {
+                parsed.details.insert(QStringLiteral("index"), i);
+                return parsed;
+            }
+            entity.solvers.append(segment);
+        }
     }
 
     project.entities.insert(entity.uuid, entity);

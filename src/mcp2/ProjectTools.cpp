@@ -163,7 +163,10 @@ Result projectSummary(Tx& tx, const QJsonObject& args)
     data.insert(QStringLiteral("entityCount"), project.entities.size());
     data.insert(QStringLiteral("assetCount"), tx.store->assets().list().size());
     data.insert(QStringLiteral("markerCount"), project.markers.size());
-    data.insert(QStringLiteral("activeCameraUuid"), QJsonValue(QJsonValue::Null));
+    data.insert(QStringLiteral("activeCameraUuid"),
+                tx.viewState.cameraUuid.isEmpty()
+                    ? QJsonValue(QJsonValue::Null)
+                    : QJsonValue(tx.viewState.cameraUuid));
     data.insert(QStringLiteral("writeEnabled"), true);
     return success(data);
 }

@@ -495,7 +495,7 @@ bool ensureUnlocked(const model::Project& project, const Uuid& uuid, Result* err
         return true;
     QJsonObject details;
     details.insert(QStringLiteral("lockedBy"), source);
-    *error = failure(QStringLiteral("permission_denied"),
+    *error = failure(QStringLiteral("conflict"),
                      QStringLiteral("实体被锁定，无法写入"), details);
     return false;
 }
