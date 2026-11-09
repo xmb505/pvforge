@@ -711,6 +711,7 @@ void HtmlFrameService::stop()
         delete m_final;
         m_final = nullptr;
     }
+    m_finalThreadId = nullptr;
 
     m_tiered.reset();
     m_diskProxy.reset();
@@ -927,11 +928,34 @@ void HtmlFrameService::queueFrameFailed(const AssetHash& assetHash, int localFra
 
 QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
 {
+    // Reject an out-of-range size before any browser (frontend or final)
+    // starts; the same rule as PvhtmlRenderer::renderFrame().
+    const QString sizeError = validateFrameSize(request.size);
+    if (!sizeError.isEmpty())
+    {
+        if (error)
+            *error = sizeError;
+        return QImage{};
+    }
+
     if (!ensureStarted(error))
         return QImage{};
 
     if (!m_final)
+    {
         m_final = new PvhtmlRenderer(this);
+        m_finalThreadId = QThread::currentThreadId();
+    }
+    else if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
+    {
+        const QString message =
+            QStringLiteral("finalFrame() must be called from the thread that created the "
+                           "final renderer; call stopFinal() on that thread first");
+        qWarning().noquote() << QStringLiteral("html2:") << message;
+        if (error)
+            *error = message;
+        return QImage{};
+    }
     m_final->setChromeExecutable(m_chromeExecutable);
     if (!m_final->isRunning())
     {
@@ -961,6 +985,29 @@ QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
     if (error)
         error->clear();
     return image;
+}
+
+void HtmlFrameService::stopFinal()
+{
+    if (!m_final)
+        return;
+    if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
+    {
+        qWarning().noquote()
+            << QStringLiteral("html2: stopFinal() must be called from the thread that "
+                              "created the final renderer; ignoring this call");
+        return;
+    }
+
+    m_final->stop();
+    delete m_final;
+    m_final = nullptr;
+    m_finalThreadId = nullptr;
+}
+
+bool HtmlFrameService::finalRunning() const
+{
+    return m_final && m_final->isRunning();
 }
 
 void HtmlFrameService::prefetch(const QVector<FrameRequest>& requests)

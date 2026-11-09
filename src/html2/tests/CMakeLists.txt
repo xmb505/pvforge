@@ -23,6 +23,8 @@ set(PVF_HTML2_TEST_CASES
     cancelPendingLowRes
     customCacheBudgets
     chromeExecutableOverride
+    finalFrameSizeLimits
+    finalRendererRestart
 )
 
 foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)

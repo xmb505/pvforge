@@ -1113,6 +1113,148 @@ void cancelPendingLowRes()
     service.stop();
 }
 
+void finalFrameSizeLimits()
+{
+    using pvf::html2::validateFrameSize;
+
+    // Pure size validation: no browser needed.
+    CHECK(validateFrameSize(QSize(1, 1)).isEmpty());
+    CHECK(validateFrameSize(QSize(4000, 100)).isEmpty());
+    CHECK(validateFrameSize(QSize(8191, 8192)).isEmpty());
+    CHECK(validateFrameSize(QSize(8192, 8192)).isEmpty());
+    CHECK(!validateFrameSize(QSize(8193, 100)).isEmpty());
+    CHECK(validateFrameSize(QSize(8193, 100)).contains(QStringLiteral("8192")));
+    CHECK(!validateFrameSize(QSize(100, 8193)).isEmpty());
+    CHECK(!validateFrameSize(QSize(0, 0)).isEmpty());
+    CHECK(!validateFrameSize(QSize(-1, 100)).isEmpty());
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+
+    // An oversized request is rejected before any browser starts, and the
+    // message names the 8192 limit.
+    pvf::html2::FrameRequest oversized;
+    oversized.bundleDir = bundle;
+    oversized.size = QSize(8193, 100);
+    QString error;
+    const QImage rejected = service.finalFrame(oversized, &error);
+    CHECK(rejected.isNull());
+    CHECK(error.contains(QStringLiteral("8192")));
+    CHECK(!service.isRunning());
+    CHECK(!service.finalRunning());
+
+    // The renderer itself applies the same rule before starting Chrome.
+    pvf::html2::PvhtmlRenderer renderer;
+    pvf::html2::FrameRequest huge;
+    huge.bundleDir = bundle;
+    huge.size = QSize(8193, 8192);
+    QString rendererError;
+    CHECK(renderer.renderFrame(huge, &rendererError).isNull());
+    CHECK(rendererError.contains(QStringLiteral("8192")));
+    CHECK(!renderer.isRunning());
+
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+        return;
+    }
+
+    QString startError;
+    CHECK_DETAIL(service.start(&startError), startError);
+    if (!service.isRunning())
+        return;
+
+    // 4000x100 stays below the old 4096 cap only on one axis; both axes are
+    // well within 8192 and a real render must still work.
+    pvf::html2::FrameRequest wide;
+    wide.bundleDir = bundle;
+    wide.size = QSize(4000, 100);
+    wide.timeoutMs = 15000;
+    error.clear();
+    const QImage image = service.finalFrame(wide, &error);
+    CHECK_DETAIL(!image.isNull(), error);
+    if (!image.isNull())
+    {
+        CHECK(image.size() == QSize(4000, 100));
+        CHECK(colorNear(image, 2000, 50, QColor(0, 255, 0)));
+    }
+    CHECK(service.finalRunning());
+    CHECK(service.stats().renders == 1);
+
+    service.stopFinal();
+    CHECK(!service.finalRunning());
+    service.stop();
+}
+
+void finalRendererRestart()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    CHECK(!service.finalRunning());
+    service.stopFinal(); // no-op before the final renderer exists
+    CHECK(!service.finalRunning());
+
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    pvf::html2::FrameRequest request;
+    request.bundleDir = bundle;
+    request.size = QSize(100, 100);
+    request.timeoutMs = 10000;
+
+    error.clear();
+    const QImage first = service.finalFrame(request, &error);
+    CHECK_DETAIL(!first.isNull(), error);
+    CHECK(service.finalRunning());
+    CHECK(service.stats().renders == 1);
+
+    // stopFinal() releases the final browser but keeps the service (frontend
+    // and cache browsers) running.
+    service.stopFinal();
+    CHECK(!service.finalRunning());
+    CHECK(service.isRunning());
+
+    // The next finalFrame() lazily creates a fresh final renderer.
+    error.clear();
+    const QImage second = service.finalFrame(request, &error);
+    CHECK_DETAIL(!second.isNull(), error);
+    if (!second.isNull())
+        CHECK(colorNear(second, 50, 50, QColor(0, 255, 0)));
+    CHECK(service.finalRunning());
+    CHECK(service.stats().renders == 2);
+
+    service.stopFinal();
+    CHECK(!service.finalRunning());
+    service.stop();
+    CHECK(!service.isRunning());
+}
+
 void customCacheBudgets()
 {
     if (!chromeAvailable())
@@ -1254,7 +1396,8 @@ int main(int argc, char** argv)
                                "finalFrameUncached frameKeyVaries "
                                "asyncRequestLowRes lowResWaitTimeout "
                                "lowResPreemption cancelPendingLowRes "
-                               "customCacheBudgets chromeExecutableOverride\n";
+                               "customCacheBudgets chromeExecutableOverride "
+                               "finalFrameSizeLimits finalRendererRestart\n";
         return 2;
     }
 
@@ -1287,6 +1430,10 @@ int main(int argc, char** argv)
         customCacheBudgets();
     else if (name == QStringLiteral("chromeExecutableOverride"))
         chromeExecutableOverride();
+    else if (name == QStringLiteral("finalFrameSizeLimits"))
+        finalFrameSizeLimits();
+    else if (name == QStringLiteral("finalRendererRestart"))
+        finalRendererRestart();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';

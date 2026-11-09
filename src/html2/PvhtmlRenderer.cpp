@@ -20,7 +20,6 @@ namespace pvf::html2 {
 
 namespace {
 
-constexpr int kMaxEdge = 4096;
 constexpr int kMaxTimeoutMs = 30000;
 constexpr int kMinTimeoutMs = 100;
 
@@ -124,6 +123,18 @@ struct FrameClock
 };
 
 } // namespace
+
+QString validateFrameSize(const QSize& size)
+{
+    if (size.isEmpty() || !size.isValid())
+        return QStringLiteral("HTML frame size is invalid");
+    if (size.width() > kMaxFrameEdge || size.height() > kMaxFrameEdge)
+        return QStringLiteral("HTML frame size %1x%2 exceeds the %3 px limit")
+            .arg(size.width())
+            .arg(size.height())
+            .arg(kMaxFrameEdge);
+    return QString();
+}
 
 PvhtmlRenderer::PvhtmlRenderer(QObject* parent)
     : QObject(parent)
@@ -312,10 +323,9 @@ QImage PvhtmlRenderer::renderFrame(const FrameRequest& request, QString* error)
     if (!isSafeBundleRelativePath(request.entry))
         return fail(QStringLiteral("HTML entry is not a safe bundle-relative path: %1")
                         .arg(request.entry));
-    if (request.size.isEmpty() || !request.size.isValid())
-        return fail(QStringLiteral("HTML frame size is invalid"));
-    if (request.size.width() > kMaxEdge || request.size.height() > kMaxEdge)
-        return fail(QStringLiteral("HTML frame size exceeds %1 px").arg(kMaxEdge));
+    const QString sizeError = validateFrameSize(request.size);
+    if (!sizeError.isEmpty())
+        return fail(sizeError);
 
     const int timeoutMs =
         request.timeoutMs > 0

@@ -45,6 +45,16 @@ struct Stats
 //    thread, started lazily by the first finalFrame() call. Final frames are
 //    never cached.
 //
+// Threading of the final renderer: the first finalFrame() creates the final
+// PvhtmlRenderer (and its browser) on the calling thread, and Qt keeps that
+// QObject and its CDP sockets bound to it. finalFrame() must therefore always
+// be called from exactly one thread. Successive export tasks must reuse that
+// thread, or call stopFinal() on it when the task ends. There is no
+// cross-thread migration; stopFinal() itself must run on the thread that first
+// called finalFrame(), so a later task on another thread can create a fresh
+// renderer. Violating either rule is reported as a warning and the call fails
+// instead of silently rendering from the wrong thread.
+//
 // Low-resolution frames go through TieredCache(MemoryCache,
 // DiskCache(cacheRoot)), with 256 MB / 2 GB defaults that the constructor
 // overrides. The key is assetHash + local frame + variables +
@@ -91,8 +101,19 @@ public:
     // requestLowRes() plus an unbounded wait, so the caller blocks but the
     // frontend renderer still runs on its own thread.
     QImage frame(const FrameRequest& request, QString* error = nullptr);
-    // High resolution: always uses the final browser. Nothing is cached.
+    // High resolution: always uses the final browser. Nothing is cached. The
+    // final browser is created lazily on this thread; see the class comment for
+    // the single-thread contract. An out-of-range size is rejected before any
+    // browser is started.
     QImage finalFrame(const FrameRequest& request, QString* error = nullptr);
+
+    // Releases the final renderer and its browser, so the next finalFrame() can
+    // create a fresh one (possibly on another thread). Must be called from the
+    // thread that first called finalFrame(); a call from any other thread warns
+    // and does nothing. Safe to call when no final renderer exists.
+    void stopFinal();
+    // True while the final renderer exists and its browser is running.
+    bool finalRunning() const;
 
     // Low resolution, asynchronous. A cache hit returns an already finished
     // future; a miss is queued for the frontend worker. Queuing a newer miss
@@ -167,6 +188,7 @@ private:
 
     FrontendWorker* m_frontendWorker = nullptr;
     PvhtmlRenderer* m_final = nullptr;
+    Qt::HANDLE m_finalThreadId = nullptr; // thread that created m_final
     FrameCacheWorker* m_cacheWorker = nullptr;
 
     QMutex m_cacheMutex;

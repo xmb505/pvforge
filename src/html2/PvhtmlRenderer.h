@@ -16,6 +16,15 @@ namespace pvf::html2 {
 
 class LocalBundleServer;
 
+// Largest accepted edge of a frame, in CSS pixels. Aligned with export2's
+// kMaxDimension so a 1x export can always render at the project size.
+constexpr int kMaxFrameEdge = 8192;
+
+// Empty when `size` can be rendered; otherwise a user-facing reason. Shared by
+// renderFrame() and HtmlFrameService::finalFrame(), so an oversized export is
+// rejected before any browser starts.
+QString validateFrameSize(const QSize& size);
+
 // One deterministic frame of a .pvhtml bundle.
 //
 // `localFrame` is the asset-local frame number and `time` is seconds; both are
