@@ -468,6 +468,10 @@ QJsonObject assetJson(const assets::AssetStore& assetStore,
                   metadataValue(metadata, QStringLiteral("entry")));
     object.insert(QStringLiteral("variables"),
                   metadataValue(metadata, QStringLiteral("variables")));
+    QJsonArray tagArray;
+    for (const QString& tag : asset.tags)
+        tagArray.append(tag);
+    object.insert(QStringLiteral("tags"), tagArray);
     object.insert(QStringLiteral("usedBy"), usedBy);
     object.insert(QStringLiteral("missing"),
                   !QFileInfo::exists(asset.directory));
