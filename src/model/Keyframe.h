@@ -36,7 +36,15 @@ struct Track
 
 // Returns nullopt for an empty track. Values are held constant before the
 // first key and after the last key. step=true holds the left value.
-std::optional<double> evaluateTrack(const Track& track, int frame, bool step = false);
+//
+// Keyframe frames stay integers, but the query may be fractional so exports can
+// sample 2x/4x the project fps.  Numeric tracks interpolate between the
+// surrounding keys; step tracks (visible/physicsInteract) take the left value of
+// floor(frame).
+std::optional<double> evaluateTrack(const Track& track, double frame,
+                                    bool step = false);
+std::optional<double> evaluateTrack(const Track& track, int frame,
+                                    bool step = false);
 
 QJsonObject toJson(const Keyframe& keyframe);
 std::optional<Keyframe> keyframeFromJson(const QJsonObject& object, QString* error = nullptr);

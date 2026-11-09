@@ -32,9 +32,9 @@ bool drivesRotation(SolverEffect effect)
     return effect == SolverEffect::Spin;
 }
 
-QString joinKey(const Uuid& uuid, int frame)
+QString joinKey(const Uuid& uuid, double frame)
 {
-    return uuid + kKeySeparator + QString::number(frame);
+    return uuid + kKeySeparator + QString::number(frame, 'g', 17);
 }
 
 QString segmentKey(const model::Entity& entity, const model::SolverSegment& segment)
@@ -49,7 +49,7 @@ QString segmentKey(const model::Entity& entity, const model::SolverSegment& segm
 }
 
 std::optional<double> trackValueIfPresent(const model::Entity& entity,
-                                          const QString& name, int relativeFrame,
+                                          const QString& name, double relativeFrame,
                                           bool step = false)
 {
     const auto it = entity.tracks.constFind(name);
@@ -59,7 +59,7 @@ std::optional<double> trackValueIfPresent(const model::Entity& entity,
 }
 
 double trackValue(const model::Entity& entity, const QString& name,
-                  int relativeFrame, double fallback, bool step = false)
+                  double relativeFrame, double fallback, bool step = false)
 {
     return trackValueIfPresent(entity, name, relativeFrame, step).value_or(fallback);
 }
@@ -78,7 +78,7 @@ struct LocalValues
 };
 
 // Solver-free values, used for cycle guards and re-entrancy fallbacks.
-LocalValues plainValues(const model::Entity& entity, int relativeFrame)
+LocalValues plainValues(const model::Entity& entity, double relativeFrame)
 {
     LocalValues values;
     values.x = trackValue(entity, QStringLiteral("x"), relativeFrame,
@@ -126,7 +126,7 @@ Pose composePose(const LocalValues& values, bool inheritVisibility,
     return pose;
 }
 
-Pose plainPose(const model::Entity& entity, int projectFrame)
+Pose plainPose(const model::Entity& entity, double projectFrame)
 {
     return composePose(plainValues(entity, projectFrame - entity.start),
                        entity.inheritVisibility, nullptr);
@@ -161,10 +161,11 @@ solver::Pose startPoseAt(const model::Entity& entity, int relativeFrame)
 // implementation evaluates entities through this module.
 thread_local QSet<QString> gActiveEvaluations;
 
-QString evaluationKey(const model::Project& project, const Uuid& uuid, int frame)
+QString evaluationKey(const model::Project& project, const Uuid& uuid,
+                      double frame)
 {
     return QString::number(reinterpret_cast<quintptr>(&project)) + kKeySeparator
-           + uuid + kKeySeparator + QString::number(frame);
+           + uuid + kKeySeparator + QString::number(frame, 'g', 17);
 }
 
 class ActiveEvaluationGuard
@@ -215,29 +216,29 @@ public:
     {
     }
 
-    Pose evaluate(const Uuid& uuid, int projectFrame);
-    QTransform parentWorldOf(const model::Entity& entity, int projectFrame);
+    Pose evaluate(const Uuid& uuid, double projectFrame);
+    QTransform parentWorldOf(const model::Entity& entity, double projectFrame);
 
 private:
-    Pose localPose(const model::Entity& entity, int projectFrame,
+    Pose localPose(const model::Entity& entity, double projectFrame,
                    const Pose* parent);
     double drivenValue(const model::Entity& entity, const QString& track,
-                       int relativeFrame, double fallback);
+                       double relativeFrame, double fallback);
 
     const model::SolverSegment* activeSegment(const model::Entity& entity,
-                                              int relativeFrame,
+                                              double relativeFrame,
                                               bool rotationTrack) const;
     const model::SolverSegment* latestEndedSegment(const model::Entity& entity,
-                                                   int relativeFrame,
+                                                   double relativeFrame,
                                                    bool rotationTrack) const;
 
     std::optional<double> anchoredValue(const model::Entity& entity,
                                         const QString& track,
-                                        int relativeFrame,
+                                        double relativeFrame,
                                         const model::SolverSegment& segment);
     std::optional<solver::Sample> sampleAt(const model::Entity& entity,
                                            const model::SolverSegment& segment,
-                                           int relativeFrame);
+                                           double relativeFrame);
     QVector<solver::Sample> samplesFor(const model::Entity& entity,
                                        const model::SolverSegment& segment);
 
@@ -292,7 +293,7 @@ QTransform SolverWorldAdapter::parentWorldOf(int projectFrame) const
 }
 
 QTransform EvalContext::parentWorldOf(const model::Entity& entity,
-                                      int projectFrame)
+                                      double projectFrame)
 {
     if (entity.parentUuid.isEmpty()
         || !m_project.entities.contains(entity.parentUuid))
@@ -300,7 +301,7 @@ QTransform EvalContext::parentWorldOf(const model::Entity& entity,
     return evaluate(entity.parentUuid, projectFrame).world;
 }
 
-Pose EvalContext::evaluate(const Uuid& uuid, int projectFrame)
+Pose EvalContext::evaluate(const Uuid& uuid, double projectFrame)
 {
     const auto entityIt = m_project.entities.constFind(uuid);
     if (entityIt == m_project.entities.constEnd())
@@ -309,7 +310,7 @@ Pose EvalContext::evaluate(const Uuid& uuid, int projectFrame)
     const auto cachedEntity = m_cache.poses.constFind(uuid);
     if (cachedEntity != m_cache.poses.constEnd())
     {
-        const QHash<int, Pose>& frames = cachedEntity.value();
+        const QHash<double, Pose>& frames = cachedEntity.value();
         const auto cachedFrame = frames.constFind(projectFrame);
         if (cachedFrame != frames.constEnd())
             return cachedFrame.value();
@@ -343,10 +344,10 @@ Pose EvalContext::evaluate(const Uuid& uuid, int projectFrame)
     return pose;
 }
 
-Pose EvalContext::localPose(const model::Entity& entity, int projectFrame,
+Pose EvalContext::localPose(const model::Entity& entity, double projectFrame,
                             const Pose* parent)
 {
-    const int relativeFrame = projectFrame - entity.start;
+    const double relativeFrame = projectFrame - entity.start;
     LocalValues values;
     values.x = drivenValue(entity, QStringLiteral("x"), relativeFrame,
                            entity.transform.x);
@@ -374,7 +375,7 @@ Pose EvalContext::localPose(const model::Entity& entity, int projectFrame,
 }
 
 double EvalContext::drivenValue(const model::Entity& entity,
-                                const QString& track, int relativeFrame,
+                                const QString& track, double relativeFrame,
                                 double fallback)
 {
     const bool rotationTrack = track == QStringLiteral("rotation");
@@ -407,7 +408,7 @@ double EvalContext::drivenValue(const model::Entity& entity,
 }
 
 const model::SolverSegment* EvalContext::activeSegment(
-    const model::Entity& entity, int relativeFrame, bool rotationTrack) const
+    const model::Entity& entity, double relativeFrame, bool rotationTrack) const
 {
     if (entity.duration() <= 0)
         return nullptr;
@@ -433,7 +434,7 @@ const model::SolverSegment* EvalContext::activeSegment(
 }
 
 const model::SolverSegment* EvalContext::latestEndedSegment(
-    const model::Entity& entity, int relativeFrame, bool rotationTrack) const
+    const model::Entity& entity, double relativeFrame, bool rotationTrack) const
 {
     if (entity.duration() <= 0)
         return nullptr;
@@ -458,7 +459,7 @@ const model::SolverSegment* EvalContext::latestEndedSegment(
 }
 
 std::optional<double> EvalContext::anchoredValue(
-    const model::Entity& entity, const QString& track, int relativeFrame,
+    const model::Entity& entity, const QString& track, double relativeFrame,
     const model::SolverSegment& segment)
 {
     const int end = effectiveEnd(entity, segment);
@@ -503,13 +504,33 @@ std::optional<double> EvalContext::anchoredValue(
 
 std::optional<solver::Sample> EvalContext::sampleAt(
     const model::Entity& entity, const model::SolverSegment& segment,
-    int relativeFrame)
+    double relativeFrame)
 {
     const QVector<solver::Sample> samples = samplesFor(entity, segment);
-    const int index = relativeFrame - segment.startFrame;
-    if (index < 0 || index >= samples.size())
+    if (samples.isEmpty())
         return std::nullopt;
-    return samples.at(index);
+
+    // Solver samples live on integer frames.  Fractional project frames
+    // interpolate the two neighbouring samples (position and rotation only;
+    // velocity/collision flags keep the left sample).
+    const double local = relativeFrame - double(segment.startFrame);
+    if (local < 0.0 || local > double(samples.size() - 1))
+        return std::nullopt;
+
+    const int lower = int(std::floor(local));
+    const int upper = int(std::ceil(local));
+    const solver::Sample& left = samples.at(lower);
+    if (upper == lower)
+        return left;
+
+    const solver::Sample& right = samples.at(upper);
+    solver::Sample mixed = left;
+    const double t = local - double(lower);
+    mixed.pose.position =
+        left.pose.position + (right.pose.position - left.pose.position) * t;
+    mixed.pose.rotation =
+        left.pose.rotation + (right.pose.rotation - left.pose.rotation) * t;
+    return mixed;
 }
 
 QVector<solver::Sample> EvalContext::samplesFor(
@@ -604,12 +625,25 @@ bool physicsInteractAt(const model::Project& project, const Uuid& entityUuid,
 Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,
                     int projectFrame, const World& world)
 {
+    return evaluateEntity(project, entityUuid, double(projectFrame), world);
+}
+
+Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,
+                    double projectFrame, const World& world)
+{
     Cache cache;
     return evaluateEntity(project, entityUuid, projectFrame, world, cache);
 }
 
 Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,
                     int projectFrame, const World& world, Cache& cache)
+{
+    return evaluateEntity(project, entityUuid, double(projectFrame), world,
+                          cache);
+}
+
+Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,
+                    double projectFrame, const World& world, Cache& cache)
 {
     const auto it = project.entities.constFind(entityUuid);
     if (it == project.entities.constEnd())

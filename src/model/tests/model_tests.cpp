@@ -460,6 +460,51 @@ void testTrackEvaluation()
     CHECK(value.has_value() && nearly(*value, 50.0));
 }
 
+void testFractionalTrackEvaluation()
+{
+    Track linear;
+    linear.keys = {keyAt(0, 0.0), keyAt(10, 10.0)};
+
+    auto value = evaluateTrack(linear, 5.5);
+    CHECK(value.has_value() && nearly(*value, 5.5));
+    value = evaluateTrack(linear, 2.25);
+    CHECK(value.has_value() && nearly(*value, 2.25));
+
+    // The int overload keeps its old behaviour and clamps outside the keys.
+    value = evaluateTrack(linear, 5);
+    CHECK(value.has_value() && nearly(*value, 5.0));
+    value = evaluateTrack(linear, -0.5);
+    CHECK(value.has_value() && nearly(*value, 0.0));
+    value = evaluateTrack(linear, 20.5);
+    CHECK(value.has_value() && nearly(*value, 10.0));
+
+    // Ease-in applies to the fractional position inside the segment.
+    Track easeIn;
+    Keyframe easeIn0 = keyAt(0, 0.0);
+    easeIn0.easing.type = QStringLiteral("easeIn");
+    easeIn.keys = {easeIn0, keyAt(8, 100.0)};
+
+    value = evaluateTrack(easeIn, 4.0);
+    CHECK(value.has_value() && nearly(*value, 25.0));
+    value = evaluateTrack(easeIn, 2.5); // t = 0.3125 -> eased t^2
+    CHECK(value.has_value() && nearly(*value, 100.0 * 0.3125 * 0.3125));
+
+    // Step tracks take the left value of floor(frame).
+    Track step;
+    step.keys = {keyAt(0, 1.0), keyAt(5, 0.0), keyAt(10, 1.0)};
+
+    value = evaluateTrack(step, 5.9, true);
+    CHECK(value.has_value() && nearly(*value, 0.0));
+    value = evaluateTrack(step, 4.9, true);
+    CHECK(value.has_value() && nearly(*value, 1.0));
+    value = evaluateTrack(step, 10.0, true);
+    CHECK(value.has_value() && nearly(*value, 1.0));
+    value = evaluateTrack(step, 10.9, true);
+    CHECK(value.has_value() && nearly(*value, 1.0));
+    value = evaluateTrack(step, 2.5, false);
+    CHECK(value.has_value() && nearly(*value, 0.5));
+}
+
 void testEntityValidation()
 {
     Entity valid = makeEntity(0, 10);
@@ -964,6 +1009,7 @@ const TestCase kTests[] = {
     {"component-json-roundtrip", testComponentJsonRoundTrip},
     {"project-json-roundtrip", testProjectJsonRoundTrip},
     {"track-evaluation", testTrackEvaluation},
+    {"track-evaluation-fractional", testFractionalTrackEvaluation},
     {"entity-validation", testEntityValidation},
     {"solver-validation", testSolverValidation},
     {"solver-targets", testSolverTargets},

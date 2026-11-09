@@ -134,7 +134,7 @@ export2::Options makeOptions(const QString& path)
     options.outputPath = path;
     options.cameraUuid = QStringLiteral("camera");
     options.outputSize = QSize(160, 90);
-    options.fps = 30;
+    options.outputFps = 30;
     options.crf = 18;
     return options;
 }
@@ -462,6 +462,174 @@ void testMissingAudioSkipped()
     }
 }
 
+void testOutputFpsMultipliers()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject(); // 10 frames at 30 fps
+
+    {
+        const QString path = directory.path() + QStringLiteral("/fps60.mp4");
+        export2::Options options = makeOptions(path);
+        options.outputFps = 60;
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+
+        CHECK(result.ok);
+        CHECK(result.framesWritten == 20);
+        AVFormatContext* input = openInput(path);
+        CHECK(input != nullptr);
+        if (input)
+        {
+            CHECK(input->nb_streams == 1);
+            if (input->nb_streams >= 1)
+            {
+                const AVStream* video = input->streams[0];
+                CHECK(video->codecpar->width == 160);
+                CHECK(video->codecpar->height == 90);
+                CHECK(std::abs(av_q2d(video->r_frame_rate) - 60.0) < 0.01);
+            }
+            CHECK(std::abs(inputDuration(input) - 10.0 / 30.0) < 0.05);
+            avformat_close_input(&input);
+        }
+    }
+
+    {
+        const QString path = directory.path() + QStringLiteral("/fps120.mp4");
+        export2::Options options = makeOptions(path);
+        options.outputFps = 120;
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+
+        CHECK(result.ok);
+        CHECK(result.framesWritten == 40);
+        AVFormatContext* input = openInput(path);
+        CHECK(input != nullptr);
+        if (input)
+        {
+            CHECK(input->nb_streams == 1);
+            if (input->nb_streams >= 1)
+            {
+                const AVStream* video = input->streams[0];
+                CHECK(std::abs(av_q2d(video->r_frame_rate) - 120.0) < 0.01);
+            }
+            CHECK(std::abs(inputDuration(input) - 10.0 / 30.0) < 0.05);
+            avformat_close_input(&input);
+        }
+    }
+}
+
+void testInvalidOutputFps()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/bad-fps.mp4");
+
+    export2::Options options = makeOptions(path);
+    options.outputFps = 45; // not 1x/2x/4x of 30
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(!result.ok);
+    CHECK(result.error.contains(QStringLiteral("帧率")));
+    CHECK(!QFileInfo::exists(path));
+}
+
+void testResolutionScale()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/scale2.mp4");
+
+    export2::Options options = makeOptions(path);
+    options.outputSize = QSize(); // project size * resolutionScale
+    options.resolutionScale = 2;
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 10);
+    AVFormatContext* input = openInput(path);
+    CHECK(input != nullptr);
+    if (input)
+    {
+        CHECK(input->nb_streams == 1);
+        if (input->nb_streams >= 1)
+        {
+            CHECK(input->streams[0]->codecpar->width == 320);
+            CHECK(input->streams[0]->codecpar->height == 180);
+        }
+        CHECK(std::abs(inputDuration(input) - 10.0 / 30.0) < 0.05);
+        avformat_close_input(&input);
+    }
+}
+
+void testInvalidResolutionScale()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/scale3.mp4");
+
+    export2::Options options = makeOptions(path);
+    options.outputSize = QSize();
+    options.resolutionScale = 3;
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(!result.ok);
+    CHECK(result.error.contains(QStringLiteral("倍率")));
+    CHECK(!QFileInfo::exists(path));
+}
+
+void testAudioDurationAtDoubleFps()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    const QString wav =
+        writeToneWav(directory.path() + QStringLiteral("/tone.wav"), 48000, 1);
+    CHECK(!wav.isEmpty());
+    const auto stored = store.importFile(wav);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(30); // 1 second at 30 fps
+    const Entity audio =
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+    project.entities.insert(audio.uuid, audio);
+
+    const QString path = directory.path() + QStringLiteral("/audio60.mp4");
+    export2::Options options = makeOptions(path);
+    options.outputFps = 60;
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 60);
+    CHECK(result.warnings.isEmpty());
+
+    AVFormatContext* input = openInput(path);
+    CHECK(input != nullptr);
+    if (input)
+    {
+        CHECK(input->nb_streams == 2);
+        CHECK(audioStreamOf(input) != nullptr);
+        // Audio keeps the project duration in seconds, not the output frame
+        // count.
+        CHECK(std::abs(inputDuration(input) - 1.0) < 0.1);
+        avformat_close_input(&input);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -479,6 +647,12 @@ int main(int argc, char** argv)
         {QStringLiteral("missingCamera"), testMissingCamera},
         {QStringLiteral("cancelRemovesFile"), testCancelRemovesFile},
         {QStringLiteral("oversizedOutput"), testOversizedOutput},
+        {QStringLiteral("outputFpsMultipliers"), testOutputFpsMultipliers},
+        {QStringLiteral("invalidOutputFps"), testInvalidOutputFps},
+        {QStringLiteral("resolutionScale"), testResolutionScale},
+        {QStringLiteral("invalidResolutionScale"), testInvalidResolutionScale},
+        {QStringLiteral("audioDurationAtDoubleFps"),
+         testAudioDurationAtDoubleFps},
     };
 
     QString requested;

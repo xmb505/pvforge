@@ -334,6 +334,90 @@ void testSegmentEndContinuity()
     CHECK(anim::solverAt(entity, 31) == nullptr);
 }
 
+void testFractionalTracks()
+{
+    Project project;
+    Entity entity = makeEntity(QStringLiteral("fractional"));
+    setTrack(entity, "x", {{0, 0.0}, {10, 10.0}});
+    addEntity(project, entity);
+
+    Entity stepEntity = makeEntity(QStringLiteral("fractional-visible"));
+    setTrack(stepEntity, "visible", {{0, 1.0}, {10, 0.0}});
+    addEntity(project, stepEntity);
+
+    MockWorld world;
+    const QPointF mid = anim::evaluateEntity(project, entity.uuid, 5.5, world)
+                            .world.map(QPointF(0.0, 0.0));
+    CHECK_NEAR(mid.x(), 5.5, 1e-9);
+
+    const QPointF quarter =
+        anim::evaluateEntity(project, entity.uuid, 2.25, world)
+            .world.map(QPointF(0.0, 0.0));
+    CHECK_NEAR(quarter.x(), 2.25, 1e-9);
+
+    // Step tracks only change on integer frames.
+    CHECK(anim::evaluateEntity(project, stepEntity.uuid, 9.9, world).visible);
+    CHECK(!anim::evaluateEntity(project, stepEntity.uuid, 10.0, world).visible);
+}
+
+void testFractionalSolverSegment()
+{
+    Project project;
+    Entity entity = makeEntity(QStringLiteral("fractional-spin"), 0, 100);
+    setTrack(entity, "rotation", {{0, 10.0}, {20, 100.0}});
+    SolverSegment segment = makeSegment(
+        QStringLiteral("seg-fractional-spin"), SolverEffect::Spin, 0, 10);
+    segment.params.insert(QStringLiteral("angularVelocity"), 6.0);
+    segment.params.insert(QStringLiteral("direction"), 1);
+    entity.solvers.append(segment);
+    addEntity(project, entity);
+
+    MockWorld world;
+    const auto rotationAt = [&](double frame)
+    {
+        const anim::Pose pose = anim::evaluateEntity(
+            project, entity.uuid, frame, world);
+        return qRadiansToDegrees(std::atan2(pose.world.m12(), pose.world.m11()));
+    };
+
+    // Samples sit on integer frames; 5.5 interpolates spin samples 5 and 6.
+    CHECK_NEAR(rotationAt(5.0), 40.0, 1e-6);
+    CHECK_NEAR(rotationAt(6.0), 46.0, 1e-6);
+    CHECK_NEAR(rotationAt(5.5), 43.0, 1e-6);
+    // After the segment the solved end sample is the implicit left value.
+    CHECK_NEAR(rotationAt(10.5), 71.5, 1e-6);
+
+    // Gravity drives x/y; a fractional frame lands between its two samples.
+    Project fallProject;
+    Entity falling = makeEntity(QStringLiteral("fractional-fall"), 0, 100);
+    setTrack(falling, "x", {{0, 0.0}});
+    setTrack(falling, "y", {{0, 0.0}});
+    SolverSegment gravity = makeSegment(
+        QStringLiteral("seg-fractional-gravity"), SolverEffect::Gravity, 0, 10,
+        QStringLiteral("ground"));
+    gravity.initialVelocity = QPointF(0.0, 30.0);
+    falling.solvers.append(gravity);
+    addEntity(fallProject, falling);
+    addEntity(fallProject, makeEntity(QStringLiteral("ground")));
+
+    MockWorld fallWorld;
+    fallWorld.poses.insert(QStringLiteral("ground"),
+                           solver::Pose{QPointF(0.0, 500.0), 0.0});
+    const auto yAt = [&](double frame)
+    {
+        return anim::evaluateEntity(fallProject, falling.uuid, frame, fallWorld)
+            .world.map(QPointF(0.0, 0.0))
+            .y();
+    };
+
+    const double y1 = yAt(1.0);
+    const double y2 = yAt(2.0);
+    const double y15 = yAt(1.5);
+    CHECK(y15 > y1);
+    CHECK(y15 < y2);
+    CHECK_NEAR(y15, (y1 + y2) / 2.0, 1e-9);
+}
+
 void testParentTransform()
 {
     Project project;
@@ -588,9 +672,11 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
 
     testNormalTracks();
+    testFractionalTracks();
     testPivotFormula();
     testGravitySegment();
     testSpinSegment();
+    testFractionalSolverSegment();
     testOrbitSegmentMiddle();
     testSegmentEndContinuity();
     testParentTransform();

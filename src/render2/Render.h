@@ -16,14 +16,17 @@ namespace pvf::render2 {
 
 // Returns the decoded frame for one asset-backed entity at a project frame.
 // HTML and video services supply these; an empty image keeps the placeholder.
-using FrameProvider = std::function<QImage(const Uuid& entityUuid, int projectFrame)>;
+// The frame is a double so 2x/4x exports can request fractional project frames.
+using FrameProvider = std::function<QImage(const Uuid& entityUuid,
+                                           double projectFrame)>;
 
 // One rendered frame request.  An empty outputSize means the project canvas
 // size; an invalid background means project.settings.background.  An empty
 // cameraUuid renders the whole project canvas (0,0,width,height).
+// `projectFrame` is fractional during 2x/4x fps export sampling.
 struct Options
 {
-    int projectFrame = 0;
+    double projectFrame = 0.0;
     Uuid cameraUuid;
     QSize outputSize;
     QColor background;

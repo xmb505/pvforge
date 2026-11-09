@@ -3,6 +3,7 @@
 #include "JsonUtil.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace pvf::model {
 
@@ -16,6 +17,11 @@ bool Keyframe::operator==(const Keyframe& other) const
 
 std::optional<double> evaluateTrack(const Track& track, int frame, bool step)
 {
+    return evaluateTrack(track, double(frame), step);
+}
+
+std::optional<double> evaluateTrack(const Track& track, double frame, bool step)
+{
     if (track.keys.isEmpty())
         return std::nullopt;
 
@@ -25,22 +31,26 @@ std::optional<double> evaluateTrack(const Track& track, int frame, bool step)
                          return a.frame < b.frame;
                      });
 
-    if (frame <= sorted.first().frame)
+    // Step tracks only change on integer frames: a fractional frame takes the
+    // left value of the integer frame it sits in.
+    const double lookup = step ? std::floor(frame) : frame;
+
+    if (lookup <= sorted.first().frame)
         return sorted.first().value;
-    if (frame >= sorted.last().frame)
+    if (lookup >= sorted.last().frame)
         return sorted.last().value;
 
     int index = 0;
     for (int i = 0; i < sorted.size(); ++i)
     {
-        if (sorted.at(i).frame <= frame)
+        if (sorted.at(i).frame <= lookup)
             index = i;
         else
             break;
     }
 
     const Keyframe& left = sorted.at(index);
-    if (left.frame == frame)
+    if (left.frame == lookup)
         return left.value;
 
     const Keyframe& right = sorted.at(index + 1);
@@ -51,7 +61,7 @@ std::optional<double> evaluateTrack(const Track& track, int frame, bool step)
     if (span <= 0)
         return right.value;
 
-    const double t = double(frame - left.frame) / double(span);
+    const double t = (lookup - left.frame) / double(span);
     return left.value + (right.value - left.value) * easedProgress(left.easing, t);
 }
 

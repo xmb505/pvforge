@@ -42,8 +42,10 @@ struct World
 // only that entity's direct entries; use clear() after a parent edit.
 struct Cache
 {
-    // Internal storage, exposed for simple lifetime management.
-    QHash<Uuid, QHash<int, Pose>> poses; // entity uuid -> project frame -> pose
+    // Internal storage, exposed for simple lifetime management.  Frames are
+    // doubles so fractional export sampling (2x/4x project fps) can be cached
+    // next to integer project frames.
+    QHash<Uuid, QHash<double, Pose>> poses; // entity uuid -> project frame -> pose
     QHash<QString, QVector<solver::Sample>> solverSamples; // segment signature
 
     void clear();
@@ -66,10 +68,18 @@ bool physicsInteractAt(const model::Project &project, const Uuid &entityUuid,
 // Every other track stays on ordinary keyframes.  After a segment ends, its
 // solved end pose acts as an implicit left key so the next ordinary key does
 // not jump back to the pre-segment value.
+//
+// The double overload samples at fractional project frames (export 2x/4x fps).
+// Ordinary tracks interpolate between keys; inside a solver segment the
+// neighbouring integer solver samples are interpolated (position and rotation).
+Pose evaluateEntity(const model::Project &project, const Uuid &entityUuid,
+                    double projectFrame, const World &world);
 Pose evaluateEntity(const model::Project &project, const Uuid &entityUuid,
                     int projectFrame, const World &world);
 
 // Same evaluation with a caller-owned cache.  Use this in render loops.
+Pose evaluateEntity(const model::Project &project, const Uuid &entityUuid,
+                    double projectFrame, const World &world, Cache &cache);
 Pose evaluateEntity(const model::Project &project, const Uuid &entityUuid,
                     int projectFrame, const World &world, Cache &cache);
 

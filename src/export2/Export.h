@@ -28,8 +28,17 @@ namespace pvf::export2 {
 // not match the project, the project canvas is scaled to fit and centered
 // (letterbox/pillarbox), with the project background colour filling the bars.
 //
-// `fps` drives both the time base and the MP4 frame rate.  `crf` is the libx264
-// constant-rate-factor, clamped to 0..51.
+// `outputFps` is the frame rate of the exported MP4 and must be 1x/2x/4x the
+// project fps (0 = project fps).  Each output frame samples the project at
+// `outputFrame * projectFps / outputFps`, so keyframes, video and HTML are
+// time-sampled while the project data stays untouched.  `fps` is a legacy alias
+// used only when `outputFps` is 0.  `crf` is the libx264 constant-rate-factor,
+// clamped to 0..51.
+//
+// `resolutionScale` is 1, 2 or 4: without an explicit `outputSize`, the export
+// is the project canvas multiplied by that integer factor (aspect preserved,
+// camera mapping scales with it).  An explicit `outputSize` wins over the
+// scale.
 //
 // Audio: every Asset entity with assetType Audio that overlaps the export
 // range is decoded through FFmpeg, resampled to 48 kHz stereo float and mixed
@@ -45,8 +54,10 @@ struct Options
     Uuid cameraUuid;    // required
     int startFrame = 0; // ignored unless endFrame > startFrame
     int endFrame = 0;   // exclusive
-    QSize outputSize;   // empty = project size
-    int fps = 30;
+    QSize outputSize;   // empty = project size * resolutionScale
+    int fps = 0;        // legacy alias of outputFps; 0 = project fps
+    int outputFps = 0;  // 0 = project fps; otherwise 1x/2x/4x project fps
+    int resolutionScale = 1; // 1, 2 or 4
     int crf = 18;
     bool includeAudio = true;
 };

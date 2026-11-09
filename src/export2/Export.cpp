@@ -428,8 +428,25 @@ Result exportVideo(const model::Project& project,
 
     if (options.outputPath.trimmed().isEmpty())
         return fail(QStringLiteral("输出路径为空"));
-    if (options.fps <= 0)
-        return fail(QStringLiteral("帧率无效"));
+
+    const int projectFps = project.settings.fps;
+    if (projectFps <= 0)
+        return fail(QStringLiteral("工程帧率无效"));
+
+    // Output fps: project fps by default.  Only integer 1x/2x/4x multiples are
+    // supported so every output frame maps onto a stable time grid.
+    const int requestedFps =
+        options.outputFps > 0 ? options.outputFps : options.fps;
+    const int outputFps = requestedFps > 0 ? requestedFps : projectFps;
+    const int fpsScale = outputFps % projectFps == 0
+                             ? outputFps / projectFps
+                             : 0;
+    if (fpsScale != 1 && fpsScale != 2 && fpsScale != 4)
+        return fail(QStringLiteral("输出帧率必须是工程帧率的 1x/2x/4x"));
+
+    if (options.resolutionScale != 1 && options.resolutionScale != 2
+        && options.resolutionScale != 4)
+        return fail(QStringLiteral("分辨率倍率必须是 1x/2x/4x"));
 
     if (options.cameraUuid.isEmpty())
         return fail(QStringLiteral("没有选择摄像机"));
@@ -453,19 +470,26 @@ Result exportVideo(const model::Project& project,
         return fail(QStringLiteral("导出范围必须位于摄像机范围内"));
 
     const int crf = std::clamp(options.crf, 0, 51);
-    const int total = end - start;
+    const int projectFrames = end - start;
+    // The export keeps the camera range's duration in seconds, not its project
+    // frame count: 10 project frames at 30 fps become 20 output frames at 60.
+    const int total = std::max(
+        1, int(std::llround(double(projectFrames) * double(outputFps)
+                            / double(projectFps))));
+    const double projectFrameStep = double(projectFps) / double(outputFps);
 
+    const QSize projectSize(std::max(1, project.settings.width),
+                            std::max(1, project.settings.height));
     QSize requested = options.outputSize;
     if (requested.isEmpty())
-        requested = QSize(project.settings.width, project.settings.height);
+        requested = QSize(projectSize.width() * options.resolutionScale,
+                          projectSize.height() * options.resolutionScale);
     if (requested.width() < 1 || requested.height() < 1)
         return fail(QStringLiteral("输出尺寸无效"));
     if (requested.width() > kMaxDimension || requested.height() > kMaxDimension)
         return fail(QStringLiteral("输出尺寸超过 4096 像素"));
 
     const QSize outputSize = evenSize(requested);
-    const QSize projectSize(std::max(1, project.settings.width),
-                            std::max(1, project.settings.height));
     const QSize contentSize = contentSizeFor(outputSize, projectSize);
 
     QColor background(project.settings.background);
@@ -474,7 +498,8 @@ Result exportVideo(const model::Project& project,
 
     AudioMix audioMix;
     if (options.includeAudio)
-        audioMix = mixProjectAudio(project, assets, start, total, options.fps);
+        audioMix =
+            mixProjectAudio(project, assets, start, projectFrames, projectFps);
     result.warnings = audioMix.warnings;
 
     const QFileInfo outputInfo(options.outputPath);
@@ -520,9 +545,9 @@ Result exportVideo(const model::Project& project,
     codecContext->width = outputSize.width();
     codecContext->height = outputSize.height();
     codecContext->pix_fmt = AV_PIX_FMT_YUV420P;
-    codecContext->time_base = AVRational{1, options.fps};
-    codecContext->framerate = AVRational{options.fps, 1};
-    codecContext->gop_size = std::max(1, options.fps * 2);
+    codecContext->time_base = AVRational{1, outputFps};
+    codecContext->framerate = AVRational{outputFps, 1};
+    codecContext->gop_size = std::max(1, outputFps * 2);
     codecContext->max_b_frames = 0;
     if (format->oformat->flags & AVFMT_GLOBALHEADER)
         codecContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -535,7 +560,7 @@ Result exportVideo(const model::Project& project,
     else
     {
         codecContext->bit_rate = std::max<qint64>(
-            1, qint64(outputSize.width()) * outputSize.height() * options.fps
+            1, qint64(outputSize.width()) * outputSize.height() * outputFps
                    / 8);
     }
 
@@ -813,7 +838,8 @@ Result exportVideo(const model::Project& project,
     int framesWritten = 0;
     for (int frameIndex = 0; frameIndex < total; ++frameIndex)
     {
-        renderOptions.projectFrame = start + frameIndex;
+        // Time sampling: output frame -> project frame (fractional at 2x/4x).
+        renderOptions.projectFrame = start + frameIndex * projectFrameStep;
         QImage rendered = render2::renderFrame(project, assets, renderOptions,
                                                world, cache);
         if (rendered.isNull())
@@ -865,7 +891,7 @@ Result exportVideo(const model::Project& project,
         if (audioEnabled)
         {
             const int64_t target = llround(
-                double(frameIndex + 1) * kAudioSampleRate / options.fps);
+                double(frameIndex + 1) * kAudioSampleRate / outputFps);
             status = encodeAudioUntil(target);
             if (status < 0)
             {

@@ -79,7 +79,7 @@ void add(Project& project, const Entity& entity)
 }
 
 QImage render(const Project& project, const assets::AssetStore& store,
-              int frame = 0, const Uuid& camera = Uuid(),
+              double frame = 0.0, const Uuid& camera = Uuid(),
               const QSize& outputSize = QSize(),
               const QColor& background = QColor())
 {
@@ -381,6 +381,62 @@ void testWorldPoseAndShape()
     CHECK(!shape.contains(QPointF(0.0, 0.0)));
 }
 
+void testFractionalProjectFrame()
+{
+    Project project = makeProject(100, 100);
+    Entity rect = makeVector(QStringLiteral("moving"), 4, 4, Qt::red);
+    rect.transform.y = 50.0;
+    Track xTrack;
+    Keyframe startKey;
+    startKey.frame = 0;
+    startKey.value = 0.0;
+    Keyframe endKey;
+    endKey.frame = 10;
+    endKey.value = 100.0;
+    xTrack.keys = {startKey, endKey};
+    rect.tracks.insert(QStringLiteral("x"), xTrack);
+    add(project, rect);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    const QImage at5 = render(project, store, 5.0);
+    const QImage at55 = render(project, store, 5.5);
+    const QImage at6 = render(project, store, 6.0);
+
+    // 4x4 rect: x=50 at frame 5, x=55 at 5.5, x=60 at 6.
+    CHECK(nearColor(at5.pixelColor(50, 50), Qt::red));
+    CHECK(nearColor(at6.pixelColor(60, 50), Qt::red));
+    CHECK(nearColor(at55.pixelColor(55, 50), Qt::red));
+    CHECK(!nearColor(at55.pixelColor(50, 50), Qt::red));
+    CHECK(!nearColor(at5.pixelColor(55, 50), Qt::red));
+}
+
+void testFrameProviderReceivesFractionalFrame()
+{
+    Project project = makeProject(100, 100);
+    Entity video = makeEntity(QStringLiteral("video"));
+    video.content.kind = ContentKind::Asset;
+    video.content.asset.type = AssetType::Video;
+    add(project, video);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    render2::Options options;
+    options.projectFrame = 5.5;
+    double received = -1.0;
+    options.videoFrame = [&](const Uuid&, double projectFrame) {
+        received = projectFrame;
+        return QImage();
+    };
+
+    render2::SceneWorld world(project, store);
+    anim::Cache cache;
+    render2::renderFrame(project, store, options, world, cache);
+    CHECK(std::abs(received - 5.5) < 1e-12);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -403,6 +459,9 @@ int main(int argc, char** argv)
         {QStringLiteral("cameraNegativeScaleFlips"),
          testCameraNegativeScaleFlips},
         {QStringLiteral("worldPoseAndShape"), testWorldPoseAndShape},
+        {QStringLiteral("fractionalProjectFrame"), testFractionalProjectFrame},
+        {QStringLiteral("frameProviderReceivesFractionalFrame"),
+         testFrameProviderReceivesFractionalFrame},
     };
 
     QString requested;

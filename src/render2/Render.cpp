@@ -37,9 +37,10 @@ QColor colorOr(const QString& value, const QColor& fallback)
     return color.isValid() ? color : fallback;
 }
 
-bool activeAt(const model::Entity& entity, int projectFrame)
+bool activeAt(const model::Entity& entity, double projectFrame)
 {
-    return projectFrame >= entity.start && projectFrame < entity.end;
+    return projectFrame >= double(entity.start)
+           && projectFrame < double(entity.end);
 }
 
 QVariantMap textStyleData(const model::TextContent& text)
@@ -241,7 +242,7 @@ void paintText(QPainter& painter, const model::TextContent& text)
 
 void paintContent(QPainter& painter, const model::Entity& entity,
                   const assets::AssetStore& store, const Options& options,
-                  int projectFrame)
+                  double projectFrame)
 {
     switch (entity.content.kind)
     {
@@ -443,7 +444,7 @@ QTransform cameraView(const model::Project& project, const Options& options,
 
 void drawChildren(QPainter& painter, const model::Project& project,
                   const assets::AssetStore& store, const Uuid& parentUuid,
-                  int projectFrame, anim::World& world, anim::Cache& cache,
+                  double projectFrame, anim::World& world, anim::Cache& cache,
                   QSet<Uuid>& visited, const Options& options)
 {
     const QVector<Uuid> children = model::childrenOf(project, parentUuid);
