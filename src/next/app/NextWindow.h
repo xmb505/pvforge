@@ -14,6 +14,11 @@ class QDialog;
 class QLabel;
 class QSpinBox;
 
+namespace pvf::mcp2 {
+class HttpServer;
+class Service;
+}
+
 namespace pvf::next {
 
 class AssetPanel;
@@ -48,6 +53,13 @@ public:
     // timeline, inserts it into the document and commits it once.
     void createEntity(ContentKind kind);
 
+    // Test hook: point the MCP transport at a temporary config file before
+    // opening a project.  Empty restores the default persistent location.
+    void setMcpConfigPathForTest(const QString& path);
+
+    mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
+    mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
+
     // Accessors used by the shell tests and by future automation.
     ViewportWidget* viewportForTest() const { return m_viewport; }
     TimelineWidget* timelineForTest() const { return m_timeline; }
@@ -57,6 +69,7 @@ public:
     QComboBox* cameraComboBoxForTest() const { return m_cameraCombo; }
     QAction* undoActionForTest() const { return m_undoAction; }
     QAction* redoActionForTest() const { return m_redoAction; }
+    QAction* exportActionForTest() const { return m_exportAction; }
     QAction* createEntityActionForTest(ContentKind kind) const;
 
     // Opens the private timeline overlay for a parent entity.  Exposed as a
@@ -69,6 +82,7 @@ private slots:
     void openPrivateTimeline(const Uuid& parentUuid);
     void chooseNewProject();
     void chooseOpenProject();
+    void exportVideo();
     void undo();
     void redo();
 
@@ -80,6 +94,10 @@ private:
     void updateActions();
     void updateStatus();
     void rebuildCameras();
+    void startMcpServer();
+    void stopMcpServer();
+    void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
+                     const QString& outputPath, bool includeAudio);
     void closeOrphanedPrivateTimelines();
     void closeAllPrivateTimelines();
     void replaceCentralWidget(QWidget* widget);
@@ -87,6 +105,10 @@ private:
 
     std::unique_ptr<ProjectDocument> m_ownedDocument;
     ProjectDocument* m_document = nullptr;
+    std::unique_ptr<mcp2::Service> m_mcpService;
+    std::unique_ptr<mcp2::HttpServer> m_mcpServer;
+    QString m_mcpConfigPath;
+    QString m_mcpStatus;
 
     AssetPanel* m_assetPanel = nullptr;
     ViewportWidget* m_viewport = nullptr;
@@ -103,6 +125,7 @@ private:
     QAction* m_createTextAction = nullptr;
     QAction* m_createVectorAction = nullptr;
     QAction* m_createCameraAction = nullptr;
+    QAction* m_exportAction = nullptr;
 
     QSpinBox* m_playheadSpin = nullptr;
     QComboBox* m_cameraCombo = nullptr;
@@ -113,6 +136,7 @@ private:
     QLabel* m_statusDir = nullptr;
     QLabel* m_statusFrame = nullptr;
     QLabel* m_statusFps = nullptr;
+    QLabel* m_statusMcp = nullptr;
 
     QHash<Uuid, QDialog*> m_privateTimelines;
 

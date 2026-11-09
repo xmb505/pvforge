@@ -1,5 +1,9 @@
 #include "next/app/NextWindow.h"
 
+#include "export2/Export.h"
+#include "mcp2/HttpServer.h"
+#include "mcp2/Service.h"
+#include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
 #include "next/properties/PropertiesPanel.h"
@@ -11,6 +15,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -18,6 +23,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
@@ -27,16 +33,22 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QVector>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 
 namespace pvf::next {
 
@@ -246,17 +258,20 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     updateActions();
     updateStatus();
     rebuildCameras();
+    startMcpServer();
 }
 
 NextWindow::~NextWindow()
 {
+    stopMcpServer();
     closeAllPrivateTimelines();
 }
 
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
-    // Private overlay timelines hold the old Document*; drop them before the
-    // old document and its panels die.
+    // The MCP service points into the old store, and private overlay
+    // timelines point at the old Document*; drop both first.
+    stopMcpServer();
     closeAllPrivateTimelines();
 
     // Remove the old panels before the old document is destroyed: every panel
@@ -282,6 +297,7 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     updateActions();
     updateStatus();
     rebuildCameras();
+    startMcpServer();
 }
 
 void NextWindow::buildUi()
@@ -298,6 +314,11 @@ void NextWindow::buildUi()
     m_openAction->setShortcut(QKeySequence::Open);
     connect(m_openAction, &QAction::triggered, this, &NextWindow::chooseOpenProject);
     fileMenu->addAction(m_openAction);
+
+    m_exportAction = new QAction(tr("导出视频…"), this);
+    m_exportAction->setObjectName(QStringLiteral("exportVideoAction"));
+    connect(m_exportAction, &QAction::triggered, this, &NextWindow::exportVideo);
+    fileMenu->addAction(m_exportAction);
 
     fileMenu->addSeparator();
     m_quitAction = new QAction(tr("退出"), this);
@@ -424,6 +445,11 @@ void NextWindow::buildUi()
     m_statusDir->setTextInteractionFlags(Qt::TextSelectableByMouse);
     statusBar()->addWidget(m_statusDir, 1);
 
+    m_statusMcp = new QLabel(tr("MCP 未启动"), this);
+    m_statusMcp->setObjectName(QStringLiteral("statusMcp"));
+    m_statusMcp->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    statusBar()->addPermanentWidget(m_statusMcp);
+
     m_statusFrame = new QLabel(tr("帧 —"), this);
     m_statusFrame->setObjectName(QStringLiteral("statusFrame"));
     statusBar()->addPermanentWidget(m_statusFrame);
@@ -465,6 +491,14 @@ void NextWindow::buildEditor()
 
     connect(m_timeline, &TimelineWidget::privateTimelineRequested, this,
             &NextWindow::openPrivateTimeline);
+    connect(m_timeline, &TimelineWidget::statusMessage, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(message, 5000);
+            });
+    connect(m_assetPanel, &AssetPanel::statusMessage, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(message, 5000);
+            });
 
     replaceCentralWidget(vertical);
 
@@ -740,6 +774,171 @@ QAction* NextWindow::createEntityActionForTest(ContentKind kind) const
     return nullptr;
 }
 
+void NextWindow::setMcpConfigPathForTest(const QString& path)
+{
+    m_mcpConfigPath = path;
+    if (m_document)
+        startMcpServer();
+}
+
+void NextWindow::startMcpServer()
+{
+    stopMcpServer();
+
+    if (!m_document || !m_document->store()) {
+        updateStatus();
+        return;
+    }
+
+    m_mcpService = std::make_unique<mcp2::Service>(
+        m_document->store(), &m_document->assets());
+    m_mcpService->setViewStateProvider([this] {
+        mcp2::ViewState state;
+        if (m_document) {
+            state.playhead = m_document->playhead();
+            state.selection = m_document->selection();
+            if (m_timeline)
+                state.timelineParent = m_timeline->parentUuid();
+            if (m_viewport)
+                state.cameraUuid = m_viewport->cameraUuid();
+        }
+        return state;
+    });
+
+    auto server = std::make_unique<mcp2::HttpServer>(m_mcpService.get());
+    if (!m_mcpConfigPath.isEmpty()) {
+        server->setConfigFilePath(m_mcpConfigPath);
+        // Keep the test endpoint file next to the temporary config instead of
+        // overwriting the user's real endpoint file.
+        server->setEndpointFilePath(m_mcpConfigPath
+                                    + QStringLiteral(".endpoint.json"));
+    }
+
+    QString error;
+    const quint16 port = server->start(0, &error);
+    if (port == 0) {
+        const QString detail = error.isEmpty() ? tr("未知错误") : error;
+        m_mcpStatus = tr("MCP 未启动: %1").arg(detail);
+        qWarning().noquote() << QStringLiteral("PVForge MCP:") << detail;
+    } else {
+        m_mcpStatus = tr("MCP 127.0.0.1:%1").arg(port);
+    }
+
+    m_mcpServer = std::move(server);
+    updateStatus();
+}
+
+void NextWindow::stopMcpServer()
+{
+    if (m_mcpServer) {
+        m_mcpServer->stop();
+        m_mcpServer.reset();
+    }
+    m_mcpService.reset();
+    m_mcpStatus.clear();
+}
+
+void NextWindow::exportVideo()
+{
+    if (!m_document)
+        return;
+
+    const Uuid preferred = m_viewport ? m_viewport->cameraUuid() : Uuid();
+    ExportDialog dialog(m_document->project(), preferred, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    startExport(dialog.cameraUuid(), dialog.startFrame(), dialog.endFrame(),
+                dialog.outputPath(), dialog.includeAudio());
+}
+
+void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
+                             const QString& outputPath, bool includeAudio)
+{
+    if (!m_document || outputPath.isEmpty())
+        return;
+
+    auto project = std::make_shared<model::Project>(m_document->project());
+    auto assets = std::make_shared<assets::AssetStore>(m_document->assets());
+
+    export2::Options options;
+    options.outputPath = outputPath;
+    options.cameraUuid = cameraUuid;
+    options.startFrame = startFrame;
+    options.endFrame = endFrame;
+    options.outputSize = QSize(project->settings.width, project->settings.height);
+    options.fps = project->settings.fps;
+    options.includeAudio = includeAudio;
+    options.crf = 18;
+
+    const int totalFrames = std::max(1, endFrame - startFrame);
+    auto progressValue = std::make_shared<std::atomic_int>(0);
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+
+    auto* progress = new QProgressDialog(
+        tr("正在导出视频…"), tr("取消"), 0, totalFrames, this);
+    progress->setWindowTitle(tr("导出视频"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setLabelText(tr("正在导出视频… 0 / %1 帧").arg(totalFrames));
+    progress->setValue(0);
+
+    auto* watcher = new QFutureWatcher<export2::Result>(this);
+    auto* timer = new QTimer(watcher);
+
+    connect(progress, &QProgressDialog::canceled, this,
+            [cancelled] { cancelled->store(true); });
+    connect(timer, &QTimer::timeout, this,
+            [progress, progressValue, cancelled] {
+                if (progress->wasCanceled())
+                    cancelled->store(true);
+                const int frame = progressValue->load();
+                if (frame > progress->value()) {
+                    progress->setValue(std::min(frame, progress->maximum()));
+                    progress->setLabelText(
+                        tr("正在导出视频… %1 / %2 帧")
+                            .arg(frame)
+                            .arg(progress->maximum()));
+                }
+            });
+    timer->start(100);
+
+    connect(watcher, &QFutureWatcher<export2::Result>::finished, this,
+            [this, watcher, progress, timer, outputPath] {
+                timer->stop();
+                const export2::Result result = watcher->result();
+                progress->close();
+                progress->deleteLater();
+                watcher->deleteLater();
+
+                if (result.ok) {
+                    QString text = tr("已导出 %1 帧到 %2")
+                                       .arg(result.framesWritten)
+                                       .arg(QDir::toNativeSeparators(outputPath));
+                    if (!result.warnings.isEmpty())
+                        text += QStringLiteral("\n\n") + result.warnings.join('\n');
+                    QMessageBox::information(this, tr("导出完成"), text);
+                } else if (result.error == QStringLiteral("cancelled")) {
+                    statusBar()->showMessage(tr("导出已取消"), 5000);
+                } else {
+                    QMessageBox::critical(this, tr("导出失败"), result.error);
+                }
+            });
+
+    progress->show();
+    watcher->setFuture(QtConcurrent::run(
+        [project, assets, options, progressValue, cancelled] {
+            return export2::exportVideo(
+                *project, *assets, options,
+                [progressValue, cancelled](int frame, int) {
+                    progressValue->store(frame);
+                    return !cancelled->load();
+                });
+        }));
+}
+
 void NextWindow::openPrivateTimelineForTest(const Uuid& parentUuid)
 {
     openPrivateTimeline(parentUuid);
@@ -794,6 +993,10 @@ void NextWindow::openPrivateTimeline(const Uuid& parentUuid)
     });
     connect(timeline, &TimelineWidget::privateTimelineRequested, this,
             &NextWindow::openPrivateTimeline);
+    connect(timeline, &TimelineWidget::statusMessage, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(message, 5000);
+            });
 
     dialog->show();
     dialog->raise();
@@ -850,6 +1053,20 @@ void NextWindow::updateActions()
         m_undoAction->setEnabled(open);
     if (m_redoAction)
         m_redoAction->setEnabled(open);
+
+    bool hasCamera = false;
+    if (m_document) {
+        const auto& entities = m_document->project().entities;
+        for (auto it = entities.constBegin(); it != entities.constEnd(); ++it) {
+            if (it.value().content.kind == ContentKind::Camera) {
+                hasCamera = true;
+                break;
+            }
+        }
+    }
+    if (m_exportAction)
+        m_exportAction->setEnabled(open && hasCamera);
+
     for (QAction* action : {m_createEmptyAction, m_createTextAction,
                             m_createVectorAction, m_createCameraAction}) {
         if (action)
@@ -867,6 +1084,11 @@ void NextWindow::updateActions()
 
 void NextWindow::updateStatus()
 {
+    if (m_statusMcp) {
+        m_statusMcp->setText(m_mcpStatus.isEmpty() ? tr("MCP 未启动")
+                                                   : m_mcpStatus);
+    }
+
     if (!m_document) {
         setWindowTitle(tr("PVForge Next"));
         if (m_statusDir)

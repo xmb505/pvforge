@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Test)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Concurrent Test)
 
 if(NOT TARGET pvf_next_core)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../core
@@ -39,11 +39,23 @@ if(NOT TARGET pvf_next_timeline)
                      ${CMAKE_CURRENT_BINARY_DIR}/timeline_dep)
 endif()
 
+if(NOT TARGET pvf_mcp2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../mcp2
+                     ${CMAKE_CURRENT_BINARY_DIR}/mcp2_dep)
+endif()
+
+if(NOT TARGET pvf_export2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../export2
+                     ${CMAKE_CURRENT_BINARY_DIR}/export2_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
     NextWindow.cpp
     NextWindow.h
+    ExportDialog.cpp
+    ExportDialog.h
 )
 
 target_include_directories(pvf_next_app PUBLIC
@@ -58,8 +70,11 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_next_properties
     pvf_next_timeline
     pvf_render2
+    pvf_mcp2
+    pvf_export2
     Qt6::Core
     Qt6::Widgets
+    Qt6::Concurrent
 )
 
 target_compile_features(pvf_next_app PUBLIC cxx_std_20)
@@ -75,7 +90,10 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_next_timeline
     pvf_render2
     pvf_store
+    pvf_mcp2
+    pvf_export2
     Qt6::Widgets
+    Qt6::Concurrent
 )
 
 include(CTest)
@@ -85,11 +103,11 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_next_app_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_app_tests)
     set_tests_properties(next.project_document PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH}")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
     add_executable(pvf_next_window_tests tests/NextWindowTests.cpp)
     target_link_libraries(pvf_next_window_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
     set_tests_properties(next.window_shell PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH}")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

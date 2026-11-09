@@ -1,5 +1,8 @@
 #include "next/app/NextWindow.h"
 
+#include "mcp2/HttpServer.h"
+#include "mcp2/Service.h"
+#include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
@@ -11,7 +14,10 @@
 #include <QDialog>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMessageBox>
+#include <QPointer>
 #include <QProcess>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -439,6 +445,114 @@ private slots:
         QTRY_COMPARE(window->privateTimelineCountForTest(), 0);
         QVERIFY(window->privateTimelineDialogForTest(parent.uuid) == nullptr);
         QVERIFY(window->timelineForTest()->parentUuid().isEmpty());
+    }
+
+    void exportActionAndDialog()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QAction* exportAction = window->exportActionForTest();
+        QVERIFY(exportAction != nullptr);
+        QVERIFY(!exportAction->isEnabled());
+
+        window->createEntity(ContentKind::Camera);
+        QVERIFY(exportAction->isEnabled());
+
+        const Uuid cameraUuid = window->document()->selection();
+        QVERIFY(!cameraUuid.isEmpty());
+        Entity camera = window->document()->project().entities.value(cameraUuid);
+        camera.start = 12;
+        camera.end = 48;
+        window->document()->mutableProject().entities.insert(cameraUuid, camera);
+        QVERIFY2(window->document()->commitEntity(
+                     cameraUuid, QStringLiteral("pvf: trim camera"), &error),
+                 qPrintable(error));
+
+        ExportDialog dialog(window->document()->project(), cameraUuid);
+        QCOMPARE(dialog.cameraUuid(), cameraUuid);
+        QCOMPARE(dialog.startFrame(), 12);
+        QCOMPARE(dialog.endFrame(), 48);
+        QVERIFY(dialog.includeAudio());
+        QVERIFY(dialog.cameraComboBoxForTest() != nullptr);
+        QCOMPARE(dialog.cameraComboBoxForTest()->count(), 1);
+    }
+
+    void mcpServerStartsAndReportsViewState()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString projectDir = temp.path() + QStringLiteral("/mcp.pvproj");
+        QString error;
+
+        {
+            ProjectSettings settings;
+            settings.name = QStringLiteral("MCP");
+            settings.width = 640;
+            settings.height = 360;
+            settings.fps = 24;
+            auto document = ProjectDocument::create(projectDir, settings, &error);
+            QVERIFY2(document != nullptr, qPrintable(error));
+        }
+
+        const QString configPath = temp.path() + QStringLiteral("/mcp.json");
+        QJsonObject config;
+        config.insert(QStringLiteral("port"), 0);
+        config.insert(QStringLiteral("token"), QStringLiteral("test-token"));
+        QFile configFile(configPath);
+        QVERIFY(configFile.open(QIODevice::WriteOnly));
+        configFile.write(QJsonDocument(config).toJson());
+        configFile.close();
+
+        NextWindow window(nullptr);
+        window.setMcpConfigPathForTest(configPath);
+        QVERIFY2(window.openProject(projectDir, &error), qPrintable(error));
+
+        QVERIFY(window.mcpServiceForTest() != nullptr);
+        mcp2::HttpServer* server = window.mcpServerForTest();
+        QVERIFY(server != nullptr);
+        QVERIFY(server->isRunning());
+        QVERIFY(server->port() > 0);
+        QCOMPARE(server->token(), QByteArray("test-token"));
+
+        window.document()->setPlayhead(9);
+        window.createEntity(ContentKind::Camera);
+        const Uuid selected = window.document()->selection();
+        QVERIFY(!selected.isEmpty());
+
+        const QJsonObject result =
+            window.mcpServiceForTest()->execute(QStringLiteral("view.state"), {});
+        QVERIFY(result.value(QStringLiteral("ok")).toBool());
+        const QJsonObject data = result.value(QStringLiteral("data")).toObject();
+        QCOMPARE(data.value(QStringLiteral("playhead")).toInt(), 9);
+        QCOMPARE(data.value(QStringLiteral("selection")).toString(), selected);
+        QVERIFY(data.value(QStringLiteral("timelineParent")).toString().isEmpty());
+        QVERIFY(data.value(QStringLiteral("cameraUuid")).toString().isEmpty());
+
+        QPointer<mcp2::HttpServer> oldServer(server);
+        ProjectSettings secondSettings;
+        secondSettings.name = QStringLiteral("MCP2");
+        auto secondDocument = ProjectDocument::create(
+            temp.path() + QStringLiteral("/mcp2.pvproj"), secondSettings, &error);
+        QVERIFY2(secondDocument != nullptr, qPrintable(error));
+        window.setDocument(std::move(secondDocument));
+        QVERIFY(oldServer.isNull());
+        QVERIFY(window.mcpServiceForTest() != nullptr);
+        QVERIFY(window.mcpServerForTest() != nullptr);
+        QVERIFY(window.mcpServerForTest()->isRunning());
+
+        window.setDocument(nullptr);
+        QVERIFY(window.mcpServerForTest() == nullptr);
+        QVERIFY(window.mcpServiceForTest() == nullptr);
     }
 
     void undoRedoActionsDoNotCrash()
