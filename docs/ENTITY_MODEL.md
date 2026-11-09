@@ -282,6 +282,11 @@
   - 摄像机：`start + 1 秒`，之后可拉长。
 - 行号持久化；删除实体不压缩其他实体的 row。
 - 关键帧模式、片段模式、框选、多选、删除、拖拽、缩放、滚动条等交互在现有 clip 时间线基础上改，不退回旧文件夹树。
+- 实体名字只能在属性面板改；双击实体条主体 = 在双击帧打关键帧；实体条左侧的“+”按钮 = 打开私有时间线浮层。
+- 双击打 key 的轨道：优先给该实体已有动画的轨道；如果一条轨道都没有，就给通用变换轨道（x/y/rotation/scaleX/scaleY/opacity）打 key。
+- 时间轴合并菱形：同一帧上所有轨道的 key 显示成一个菱形；拖动时该帧所有 key 一起移动。
+- 关键帧复制/粘贴只支持同一实体同一轨道；跨实体不做。
+- Auto-key 默认开启；Properties 里改可动画属性会自动在当前帧打/更新 key，工具栏可关。
 - markers 显示在标尺上，可增删改，不影响时间轴长度。
 
 ### 4.1 切分实体
@@ -504,6 +509,70 @@ solver.evaluate(entityUuid, solverId?, frames[])
   - 按帧截图，缓存键为 `assetHash + frame + 变量值 + 输出尺寸`。
 - 找不到 Chrome 时 HTML 层显示错误占位，其他功能不受影响。
 - MCP 创建 HTML 强制两步：先 `asset.import` 导入 `.pvhtml`，再用 `entity.create` 或 `asset.assign` 引用 assetHash；不允许 `entity.create` 直接吃 `.pvhtml` 路径。
+
+### 6.5 HTML 渲染与缓存
+
+三个 Chrome 进程：
+
+- **前端浏览器**：低清，处理当前视口帧；有 HTML 层就常驻。
+- **缓存浏览器**：低清，后台预渲染；有 HTML 层就常驻。
+- **成品浏览器**：高清，只在导出/最终渲染时启动，逐帧渲染，不缓存。
+
+缓存键（与时间轴位置无关）：
+
+```text
+assetHash + HTML 本地帧/时间 + 变量值 + 输出尺寸 + Chrome 版本 + bundle 入口 hash
+```
+
+- 拖动 clip 改变时间轴位置不失效；复制同一 HTML 素材可共享缓存。
+- 浮点变量统一保留 6 位小数后再进 key。
+- `timeDependent=false` 的静态 HTML 只缓存一张图；true 才按帧/变量缓存。
+- 低清档：视口适配，最大宽度 1280px；WebP 质量 80。
+- 高清不缓存；成品浏览器每次直接渲染。
+
+缓存分层（无外部服务依赖）：
+
+- **L0 内存 QImage LRU**：已解码图片，默认上限 256MB；当前帧和预取帧直接命中。
+- **L1 本地磁盘 WebP LRU**：WebP 质量 80 + 索引（优先 SQLite），按 last_access 做 LRU，默认上限 2GB；跨会话保留。
+- 内存 miss 查磁盘，命中后解码并回填内存。
+- 不引入 Redis / cache-cat / MySQL。缓存丢失只意味着重算，不需要强一致或持久化保证。
+- 用户关闭缓存：只用前端浏览器实时渲染；导出时再拉起成品浏览器。
+
+预缓存：
+
+- 当前帧命中/渲染完成后，缓存浏览器优先渲染“当前帧之后到下一个关键帧/变量变化/片段末尾”的帧；再从当前帧向前补。
+- 缓存浏览器串行处理，前端浏览器优先当前帧；缓存任务可被新的当前帧请求抢占。
+- 缓存写入不阻塞 UI；失败只记 warning。
+
+未命中与 watchdog：
+
+- 当前帧缓存未命中时，视口阻塞等待前端浏览器出图；超过 **3000ms（可设置）** 自动暂停预览并显示错误占位，后台继续渲染。
+- 渲染完成后自动恢复显示/播放。
+
+Chrome 升级：
+
+- 缓存键包含 Chrome 版本。
+- 升级后按 HTML 资产抽样 3 帧重渲染，比较缓存图的 sha256；不一致只清该资产的缓存，不是全清。
+
+预览：
+
+- 低清帧直接用于视口；导出时成品浏览器按最终分辨率重渲染。
+- 缓存状态（命中/未命中/渲染中）可在状态栏或调试面板显示。
+
+`.pvhtml` 页面协议：
+
+```js
+// host 在每帧设置：
+window.__PVFORGE__ = { frame, time, vars };
+window.dispatchEvent(new CustomEvent("pvforgeframe", { detail: window.__PVFORGE__ }));
+
+// 页面可选：准备好后设置
+window.__PVFORGE_READY__ = true;      // 或 Promise
+```
+
+- 静态 HTML 可以完全忽略这个协议。
+- host 等待 `__PVFORGE_READY__`（如果有）、`document.fonts.ready` 和两次 requestAnimationFrame 后截图。
+- 变量名/类型来自 `.pvhtml/pvhtml.json` manifest。
 
 ## 7. MCP
 
