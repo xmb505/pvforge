@@ -1,0 +1,526 @@
+#include "mcp2/Internal.h"
+
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QStringList>
+
+#include <initializer_list>
+
+namespace pvf::mcp2::detail {
+
+namespace {
+
+QJsonObject prop(const QString& type, const QString& description)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("type"), type);
+    if (!description.isEmpty())
+        object.insert(QStringLiteral("description"), description);
+    return object;
+}
+
+QJsonObject arrayOf(const QString& itemType, const QString& description)
+{
+    QJsonObject items;
+    items.insert(QStringLiteral("type"), itemType);
+    QJsonObject object;
+    object.insert(QStringLiteral("type"), QStringLiteral("array"));
+    object.insert(QStringLiteral("items"), items);
+    if (!description.isEmpty())
+        object.insert(QStringLiteral("description"), description);
+    return object;
+}
+
+QJsonObject objectSchema(std::initializer_list<QPair<QString, QJsonObject>> fields,
+                         const QStringList& required = {})
+{
+    QJsonObject properties;
+    for (const auto& field : fields)
+        properties.insert(field.first, field.second);
+
+    QJsonObject schema;
+    schema.insert(QStringLiteral("type"), QStringLiteral("object"));
+    schema.insert(QStringLiteral("properties"), properties);
+    if (!required.isEmpty())
+    {
+        QJsonArray requiredArray;
+        for (const QString& name : required)
+            requiredArray.append(name);
+        schema.insert(QStringLiteral("required"), requiredArray);
+    }
+    schema.insert(QStringLiteral("additionalProperties"), false);
+    return schema;
+}
+
+QJsonObject openSchema(std::initializer_list<QPair<QString, QJsonObject>> fields,
+                       const QStringList& required = {})
+{
+    QJsonObject schema = objectSchema(fields, required);
+    schema.remove(QStringLiteral("additionalProperties"));
+    return schema;
+}
+
+QJsonObject toolSchema(const QString& name, const QString& description,
+                       const QJsonObject& inputSchema)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), name);
+    object.insert(QStringLiteral("description"), description);
+    object.insert(QStringLiteral("inputSchema"), inputSchema);
+    return object;
+}
+
+QJsonObject schemaTopic(const QString& topic)
+{
+    if (topic == QLatin1String("project"))
+    {
+        return openSchema({
+            {QStringLiteral("name"), prop(QStringLiteral("string"), QStringLiteral("1..256 字符"))},
+            {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("16..16384"))},
+            {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("16..16384"))},
+            {QStringLiteral("fps"), prop(QStringLiteral("integer"), QStringLiteral("1..240"))},
+            {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        });
+    }
+    if (topic == QLatin1String("entity"))
+    {
+        return openSchema({
+            {QStringLiteral("uuid"), prop(QStringLiteral("string"), QStringLiteral("UUID v4"))},
+            {QStringLiteral("name"), prop(QStringLiteral("string"), QStringLiteral("1..256 字符"))},
+            {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("null = 根实体"))},
+            {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= 0"))},
+            {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，> start"))},
+            {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral(">= 0，0 在最底"))},
+            {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
+            {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QStringLiteral("锁定后 MCP 不能写"))},
+            {QStringLiteral("inheritVisibility"), prop(QStringLiteral("boolean"), QString())},
+            {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
+            {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("参与碰撞"))},
+            {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity"))},
+            {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset"))},
+            {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QStringLiteral("{track: [key,...]}"))},
+            {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("Phase B"))},
+        });
+    }
+    if (topic == QLatin1String("keyframes"))
+    {
+        return openSchema({
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration-1"))},
+            {QStringLiteral("value"), prop(QStringLiteral("number"), QStringLiteral("布尔轨道用 0/1"))},
+            {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QStringLiteral("预设名或 {type:bezier,inX,inY,outX,outY}"))},
+            {QStringLiteral("note"), prop(QStringLiteral("string"), QStringLiteral("最长 4096"))},
+            {QStringLiteral("tracks"), arrayOf(QStringLiteral("string"), QStringLiteral("x,y,rotation,scaleX,scaleY,opacity,pivotX,pivotY,visible,physicsInteract + 内容专用轨道"))},
+        });
+    }
+    if (topic == QLatin1String("asset"))
+    {
+        return openSchema({
+            {QStringLiteral("hash"), prop(QStringLiteral("string"), QStringLiteral("64 位 sha256"))},
+            {QStringLiteral("type"), prop(QStringLiteral("string"), QStringLiteral("image|video|audio|html"))},
+            {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
+            {QStringLiteral("width"), prop(QStringLiteral("integer"), QString())},
+            {QStringLiteral("height"), prop(QStringLiteral("integer"), QString())},
+            {QStringLiteral("durationFrames"), prop(QStringLiteral("integer"), QStringLiteral("视频/音频帧数"))},
+            {QStringLiteral("sampleRate"), prop(QStringLiteral("integer"), QStringLiteral("仅音频"))},
+            {QStringLiteral("channels"), prop(QStringLiteral("integer"), QStringLiteral("仅音频"))},
+            {QStringLiteral("entry"), prop(QStringLiteral("string|null"), QStringLiteral("仅 HTML"))},
+            {QStringLiteral("variables"), prop(QStringLiteral("object|null"), QStringLiteral("仅 HTML"))},
+            {QStringLiteral("usedBy"), arrayOf(QStringLiteral("string"), QString())},
+            {QStringLiteral("missing"), prop(QStringLiteral("boolean"), QString())},
+            {QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("服务器本地路径"))},
+        });
+    }
+    if (topic == QLatin1String("markers"))
+    {
+        return openSchema({
+            {QStringLiteral("id"), prop(QStringLiteral("string"), QStringLiteral("省略 = 新建"))},
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号"))},
+            {QStringLiteral("title"), prop(QStringLiteral("string"), QStringLiteral("1..256 字符"))},
+            {QStringLiteral("note"), prop(QStringLiteral("string"), QStringLiteral("最长 4096"))},
+            {QStringLiteral("tags"), arrayOf(QStringLiteral("string"), QStringLiteral("最多 32 个"))},
+            {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        });
+    }
+    if (topic == QLatin1String("errors"))
+    {
+        QJsonArray codes;
+        for (const QString& code :
+             {QStringLiteral("invalid_argument"), QStringLiteral("permission_denied"),
+              QStringLiteral("confirm_required"), QStringLiteral("conflict"),
+              QStringLiteral("limit_exceeded"), QStringLiteral("stopped_by_human"),
+              QStringLiteral("not_available"), QStringLiteral("internal_error")})
+            codes.append(code);
+        QJsonObject schema;
+        schema.insert(QStringLiteral("codes"), codes);
+        schema.insert(QStringLiteral("detailsKeys"),
+                      QJsonArray::fromStringList(
+                          {QStringLiteral("allowedRange"),
+                           QStringLiteral("allowedTracks"), QStringLiteral("missing"),
+                           QStringLiteral("index"), QStringLiteral("lockedBy"),
+                           QStringLiteral("conflicts"), QStringLiteral("requires"),
+                           QStringLiteral("affected")}));
+        return schema;
+    }
+    if (topic == QLatin1String("solver") || topic == QLatin1String("preview"))
+    {
+        QJsonObject schema;
+        schema.insert(QStringLiteral("available"), false);
+        schema.insert(QStringLiteral("reason"),
+                      QStringLiteral("Phase A 未实现，留给 Phase B"));
+        return schema;
+    }
+    return QJsonObject();
+}
+
+const QStringList& schemaTopics()
+{
+    static const QStringList topics = {
+        QStringLiteral("project"),   QStringLiteral("entity"),
+        QStringLiteral("keyframes"), QStringLiteral("asset"),
+        QStringLiteral("markers"),   QStringLiteral("errors"),
+        QStringLiteral("solver"),    QStringLiteral("preview"),
+    };
+    return topics;
+}
+
+QString guideMarkdown(const QString& topic)
+{
+    if (topic == QLatin1String("authoring"))
+        return QStringLiteral(
+            "# 编写规则\n"
+            "- 先读 `project.summary` 和 `entity.list`，再改。\n"
+            "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration-1`。\n"
+            "- 一次工具调用只做一个逻辑操作，写工具各自产生一个 commit。\n"
+            "- 批量工具全成功或全回滚。\n"
+            "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
+            "- 删除实体/素材必须带 `confirm: true`。\n"
+            "- 改完用 `entity.get` 或 `keyframes.get` 自查。\n");
+    if (topic == QLatin1String("workflow"))
+        return QStringLiteral(
+            "# 推荐工作流\n"
+            "1. `project.summary` 确认 fps/尺寸/内容长度。\n"
+            "2. `entity.list` / `entity.get` 找到目标 UUID、父级、row。\n"
+            "3. `entity.createTree` 一次建父子层级，或 `entity.createMany` 建平级实体。\n"
+            "4. `keyframes.setMany` 一次写多条轨道。\n"
+            "5. `entity.move` / `entity.trim` / `entity.reparent` 调整时间与层级。\n"
+            "6. 需要回退时用 `history.undo`，不要写相反值模拟撤销。\n");
+    if (topic == QLatin1String("solver"))
+        return QStringLiteral(
+            "# 求解段\n"
+            "Phase A 不包含 `solver.*` 工具与 `solver.evaluate`；"
+            "已有求解段仍会参与实体文件校验，写 `x/y` 或 `rotation` 普通关键帧到段内会返回 `conflict`。\n");
+    if (topic == QLatin1String("assets"))
+        return QStringLiteral(
+            "# 素材\n"
+            "- `asset.import` 只接受本地绝对路径；相同内容按 sha256 去重。\n"
+            "- 视频默认拆出 WAV 音频素材，返回 `asset` 与 `audioAsset` 两个 hash。\n"
+            "- HTML 必须两步：先 `asset.import` 导入 `.pvhtml`，再 `entity.create`/`asset.assign`。\n"
+            "- 素材没有 UUID，只有 hash；删除素材不会删除引用它的实体。\n");
+    if (topic == QLatin1String("examples"))
+        return QStringLiteral(
+            "# 示例\n"
+            "```json\n"
+            "{\"root\":{\"name\":\"标题组\",\"start\":0,\"end\":90,"
+            "\"children\":[{\"name\":\"标题\",\"content\":{\"kind\":\"text\","
+            "\"text\":{\"text\":\"PVFORGE\",\"pixelSize\":180}}}]}}\n"
+            "```\n"
+            "对所有关键帧调用 `keyframes.setMany`，帧号按各实体自己的 start 计算。\n");
+    return QString();
+}
+
+} // namespace
+
+Result schemaGet(Tx& tx, const QJsonObject& args)
+{
+    Q_UNUSED(tx);
+    Result error;
+    QString topic = QStringLiteral("all");
+    if (!readString(args, "topic", &topic, &error))
+        return error;
+
+    if (topic != QLatin1String("all") && !schemaTopics().contains(topic))
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("未知 schema topic：%1").arg(topic));
+
+    QJsonObject schema;
+    if (topic == QLatin1String("all"))
+    {
+        for (const QString& name : schemaTopics())
+            schema.insert(name, schemaTopic(name));
+    }
+    else
+    {
+        schema = schemaTopic(topic);
+    }
+
+    QJsonObject data;
+    data.insert(QStringLiteral("version"), 1);
+    data.insert(QStringLiteral("topic"), topic);
+    data.insert(QStringLiteral("schema"), schema);
+    return success(data);
+}
+
+Result guideGet(Tx& tx, const QJsonObject& args)
+{
+    Q_UNUSED(tx);
+    Result error;
+    QString topic = QStringLiteral("authoring");
+    if (!readString(args, "topic", &topic, &error))
+        return error;
+
+    static const QStringList topics = {
+        QStringLiteral("authoring"), QStringLiteral("workflow"),
+        QStringLiteral("solver"),    QStringLiteral("assets"),
+        QStringLiteral("examples"),
+    };
+    if (!topics.contains(topic))
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("未知 guide topic：%1").arg(topic));
+
+    QJsonObject data;
+    data.insert(QStringLiteral("topic"), topic);
+    data.insert(QStringLiteral("markdown"), guideMarkdown(topic));
+    return success(data);
+}
+
+QJsonObject listTools()
+{
+    const QJsonObject empty = objectSchema({});
+    const QJsonObject uuid = objectSchema(
+        {{QStringLiteral("uuid"), prop(QStringLiteral("string"), QStringLiteral("实体 UUID"))}},
+        {QStringLiteral("uuid")});
+
+    QJsonArray tools;
+    tools.append(toolSchema(QStringLiteral("project.get"),
+                            QStringLiteral("读取工程设置、路径、计数和 git 状态"), empty));
+    tools.append(toolSchema(QStringLiteral("project.summary"),
+                            QStringLiteral("轻量工程概况"), empty));
+    tools.append(toolSchema(
+        QStringLiteral("project.update"), QStringLiteral("修改工程设置"),
+        objectSchema({{QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("height"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("fps"), prop(QStringLiteral("integer"), QStringLiteral("非空工程需 confirm"))},
+                      {QStringLiteral("background"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}})));
+
+    const QJsonObject entityCreateSchema = objectSchema(
+        {{QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
+         {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
+         {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("必填"))},
+         {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("默认按内容类型"))},
+         {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1"))},
+         {QStringLiteral("content"), prop(QStringLiteral("object"), QString())},
+         {QStringLiteral("transform"), prop(QStringLiteral("object"), QString())},
+         {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
+         {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QString())},
+         {QStringLiteral("inheritVisibility"), prop(QStringLiteral("boolean"), QString())},
+         {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
+         {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QString())},
+         {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QString())},
+         {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("Phase B"))}},
+        {QStringLiteral("start")});
+
+    tools.append(toolSchema(QStringLiteral("entity.create"),
+                            QStringLiteral("创建一个实体，必须显式给 start"),
+                            entityCreateSchema));
+    tools.append(toolSchema(
+        QStringLiteral("entity.createTree"), QStringLiteral("一次创建父实体、子实体、关键帧和行号"),
+        objectSchema({{QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
+                      {QStringLiteral("root"), prop(QStringLiteral("object"), QStringLiteral("递归节点，最多 200 个"))}},
+                     {QStringLiteral("root")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.createMany"), QStringLiteral("一次创建多个互不嵌套的实体"),
+        objectSchema({{QStringLiteral("entities"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个"))}},
+                     {QStringLiteral("entities")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.get"), QStringLiteral("读取实体完整状态和指定帧求值"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("includeChildren"), prop(QStringLiteral("boolean"), QString())}},
+                     {QStringLiteral("uuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.list"), QStringLiteral("按父级/根层分页列出实体"),
+        objectSchema({{QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("省略 = 全部"))},
+                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500"))},
+                      {QStringLiteral("includeKeyframes"), prop(QStringLiteral("boolean"), QString())},
+                      {QStringLiteral("includeSolvers"), prop(QStringLiteral("boolean"), QString())}})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.update"), QStringLiteral("局部修改实体（不改时间/父级/关键帧/素材引用）"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("patch"), prop(QStringLiteral("object"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("patch")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.updateMany"), QStringLiteral("批量局部修改，整批一个 commit"),
+        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,patch}"))}},
+                     {QStringLiteral("items")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.move"), QStringLiteral("平移实体/子树或改行号，不改时长和关键帧"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("与 delta 二选一"))},
+                      {QStringLiteral("delta"), prop(QStringLiteral("integer"), QStringLiteral("与 start 二选一"))},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                     {QStringLiteral("uuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.trim"), QStringLiteral("裁剪实体并级联裁剪子实体；删子实体需 confirm"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("start"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("end"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}},
+                     {QStringLiteral("uuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.reparent"), QStringLiteral("换父级；mode 必填且无默认"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
+                      {QStringLiteral("mode"), prop(QStringLiteral("string"), QStringLiteral("preserveWorld|keepLocal"))},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("parentUuid"), QStringLiteral("mode")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.duplicate"), QStringLiteral("复制实体/子树，生成新 UUID"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("deep"), prop(QStringLiteral("boolean"), QString())},
+                      {QStringLiteral("offsetFrames"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
+                      {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                     {QStringLiteral("uuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.delete"), QStringLiteral("删除实体及后代，必须 confirm"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QStringLiteral("必须为 true"))}},
+                     {QStringLiteral("uuid"), QStringLiteral("confirm")})));
+    tools.append(toolSchema(
+        QStringLiteral("entity.deleteMany"), QStringLiteral("批量删除，必须 confirm"),
+        objectSchema({{QStringLiteral("uuids"), arrayOf(QStringLiteral("string"), QStringLiteral("1..200 个"))},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}},
+                     {QStringLiteral("uuids"), QStringLiteral("confirm")})));
+
+    const QJsonObject keyframesSetSchema = objectSchema(
+        {{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+         {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
+         {QStringLiteral("keys"), arrayOf(QStringLiteral("object"), QStringLiteral("空数组 = 清空"))}},
+        {QStringLiteral("uuid"), QStringLiteral("track"), QStringLiteral("keys")});
+    tools.append(toolSchema(QStringLiteral("keyframes.get"),
+                            QStringLiteral("读取单条或全部轨道"),
+                            objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                                          {QStringLiteral("track"), prop(QStringLiteral("string"), QString())}},
+                                         {QStringLiteral("uuid")})));
+    tools.append(toolSchema(QStringLiteral("keyframes.set"),
+                            QStringLiteral("替换一条轨道的全部关键帧"), keyframesSetSchema));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.setMany"), QStringLiteral("一次替换多条轨道，整批一个 commit"),
+        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,track,keys}"))}},
+                     {QStringLiteral("items")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.remove"), QStringLiteral("删除指定帧上的关键帧（幂等）"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("track"), QStringLiteral("frame")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.move"), QStringLiteral("移动一个关键帧到另一帧"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("fromFrame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("toFrame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("overwrite"), prop(QStringLiteral("boolean"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("track"),
+                      QStringLiteral("fromFrame"), QStringLiteral("toFrame")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.clear"), QStringLiteral("清空一条轨道"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("track")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.setEasing"), QStringLiteral("修改已有关键帧的缓动"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QString())}},
+                     {QStringLiteral("uuid"), QStringLiteral("track"),
+                      QStringLiteral("frame"), QStringLiteral("easing")})));
+
+    tools.append(toolSchema(
+        QStringLiteral("asset.import"), QStringLiteral("把本地文件/目录复制进工程素材库，视频自动拆 WAV"),
+        objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径"))},
+                      {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("type"), prop(QStringLiteral("string"), QStringLiteral("image|video|audio|html"))},
+                      {QStringLiteral("extractAudio"), prop(QStringLiteral("boolean"), QStringLiteral("视频默认 true"))}},
+                     {QStringLiteral("path")})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.list"), QStringLiteral("分页列出素材"),
+        objectSchema({{QStringLiteral("type"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("query"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.get"), QStringLiteral("读取素材及引用列表"),
+        objectSchema({{QStringLiteral("hash"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("hash")})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.assign"), QStringLiteral("给实体换素材/内容"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("assetHash"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("sourceIn"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("volume"), prop(QStringLiteral("number"), QString())}},
+                     {QStringLiteral("entityUuid"), QStringLiteral("assetHash")})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.unassign"), QStringLiteral("把实体内容清空为 empty"),
+        objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("entityUuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.rename"), QStringLiteral("重命名素材"),
+        objectSchema({{QStringLiteral("hash"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("name"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("hash"), QStringLiteral("name")})));
+    tools.append(toolSchema(
+        QStringLiteral("asset.delete"), QStringLiteral("删除素材，必须 confirm"),
+        objectSchema({{QStringLiteral("hash"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}},
+                     {QStringLiteral("hash"), QStringLiteral("confirm")})));
+
+    tools.append(toolSchema(
+        QStringLiteral("markers.list"), QStringLiteral("按帧范围分页列出标记"),
+        objectSchema({{QStringLiteral("fromFrame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("toFrame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QString())}})));
+    tools.append(toolSchema(
+        QStringLiteral("markers.set"), QStringLiteral("创建或更新标记"),
+        objectSchema({{QStringLiteral("id"), prop(QStringLiteral("string"), QStringLiteral("省略 = 新建"))},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("title"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("note"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("tags"), arrayOf(QStringLiteral("string"), QString())},
+                      {QStringLiteral("color"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("frame"), QStringLiteral("title")})));
+    tools.append(toolSchema(
+        QStringLiteral("markers.remove"), QStringLiteral("删除标记"),
+        objectSchema({{QStringLiteral("id"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("id")})));
+
+    tools.append(toolSchema(
+        QStringLiteral("history.undo"), QStringLiteral("git revert 最近的操作 commit"),
+        objectSchema({{QStringLiteral("steps"), prop(QStringLiteral("integer"), QStringLiteral("1..10"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("history.redo"), QStringLiteral("revert 最近一次 undo"),
+        objectSchema({{QStringLiteral("steps"), prop(QStringLiteral("integer"), QStringLiteral("1..10"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("history.log"), QStringLiteral("分页读取 pvf: 提交历史"),
+        objectSchema({{QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..100"))}})));
+
+    tools.append(toolSchema(
+        QStringLiteral("schema.get"), QStringLiteral("读取数据对象 JSON Schema 摘要"),
+        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("project|entity|keyframes|asset|markers|errors|solver|preview|all"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("guide.get"), QStringLiteral("读取 Markdown 编写指南"),
+        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("authoring|workflow|solver|assets|examples"))}})));
+
+    QJsonObject result;
+    result.insert(QStringLiteral("tools"), tools);
+    return result;
+}
+
+} // namespace pvf::mcp2::detail
