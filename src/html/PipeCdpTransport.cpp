@@ -15,9 +15,10 @@ namespace html {
 
 namespace {
 
-// A screenshot reply for a 4096x4096 frame is a few tens of MiB once base64
-// encoded. Anything past this is a protocol failure, not a valid CDP message.
-constexpr qsizetype kMaxIncomingMessage = 128 * 1024 * 1024;
+// A screenshot reply for an 8192x4320 frame can approach 200 MiB once base64
+// encoded (high-entropy PNG). Anything past this is a protocol failure, not a
+// valid CDP message.
+constexpr qsizetype kMaxIncomingMessage = 512 * 1024 * 1024;
 
 #ifdef Q_OS_UNIX
 bool setNonBlocking(int fd)
