@@ -17,6 +17,10 @@ set(PVF_HTML2_TEST_CASES
     prefetchFillsCache
     finalFrameUncached
     frameKeyVaries
+    asyncRequestLowRes
+    lowResWaitTimeout
+    lowResPreemption
+    cancelPendingLowRes
 )
 
 foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)

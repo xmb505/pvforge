@@ -11,6 +11,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QHostAddress>
 #include <QImage>
@@ -240,9 +241,56 @@ window.addEventListener("pvforgeframe", function () {
     return bundle;
 }
 
+QString buildDelayedBundle(const QString& parentDir, int delayMs)
+{
+    const QString bundle = parentDir + QStringLiteral("/delayed-bundle");
+    if (!QDir().mkpath(bundle))
+        return QString();
+    const QString html = QStringLiteral(R"HTML(<!doctype html>
+<html><body style="margin:0;background:#0000ff">
+<script>
+window.addEventListener("pvforgeframe", function () {
+  window.__PVFORGE_READY__ = new Promise(function (resolve) {
+    setTimeout(resolve, %1);
+  });
+});
+</script>
+</body></html>
+)HTML").arg(delayMs);
+    if (!writeFile(bundle + QStringLiteral("/index.html"), html.toUtf8()))
+        return QString();
+    return bundle;
+}
+
 bool chromeAvailable()
 {
     return !pvf::html::HtmlBrowser::detectExecutable().isEmpty();
+}
+
+bool waitForFuture(QFuture<QImage>& future, int timeoutMs)
+{
+    if (future.isFinished())
+        return true;
+
+    QEventLoop loop;
+    QFutureWatcher<QImage> watcher;
+    QObject::connect(&watcher, &QFutureWatcher<QImage>::finished, &loop, &QEventLoop::quit);
+    watcher.setFuture(future);
+    QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    return future.isFinished();
+}
+
+void waitBriefly(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+}
+
+void drainEvents()
+{
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
 void serverServesAndRejects()
@@ -787,6 +835,284 @@ void frameKeyVaries()
     CHECK(canonicalKey(variant) != baseline);
 }
 
+void asyncRequestLowRes()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    const pvf::html2::FrameRequest request =
+        lowResRequest(bundle, QStringLiteral("async-asset"));
+
+    int readyCount = 0;
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::frameReady, &service,
+                     [&readyCount](const pvf::AssetHash&, int, const QImage&) {
+                         ++readyCount;
+                     });
+
+    QFuture<QImage> future = service.requestLowRes(request);
+    CHECK(waitForFuture(future, 20000));
+    CHECK(future.isFinished());
+    if (future.isFinished() && future.resultCount() > 0)
+    {
+        const QImage image = future.result();
+        CHECK(!image.isNull());
+        if (!image.isNull())
+        {
+            CHECK(image.size() == QSize(160, 90));
+            CHECK(colorNear(image, 80, 45, QColor(255, 0, 0)));
+        }
+    }
+    drainEvents();
+    CHECK(readyCount == 1);
+    CHECK(service.stats().renders == 1);
+
+    // A second request is a cache hit: already finished, no new frameReady.
+    QFuture<QImage> hit = service.requestLowRes(request);
+    CHECK(hit.isFinished());
+    if (hit.isFinished() && hit.resultCount() > 0)
+        CHECK(!hit.result().isNull());
+    drainEvents();
+    CHECK(readyCount == 1);
+    CHECK(service.stats().renders == 1);
+    CHECK(service.stats().memoryHits + service.stats().diskHits >= 1);
+
+    service.stop();
+}
+
+void lowResWaitTimeout()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildDelayedBundle(temporary.path(), 700);
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    const pvf::html2::FrameRequest request =
+        lowResRequest(bundle, QStringLiteral("wait-timeout-asset"));
+
+    int readyCount = 0;
+    QImage readyImage;
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::frameReady, &service,
+                     [&readyCount, &readyImage](const pvf::AssetHash&, int, const QImage& image) {
+                         ++readyCount;
+                         readyImage = image;
+                     });
+
+    QElapsedTimer timer;
+    timer.start();
+    error.clear();
+    const QImage image = service.lowResWait(request, 300, &error);
+    const qint64 elapsed = timer.elapsed();
+
+    CHECK(image.isNull());
+    CHECK(error == QStringLiteral("timeout"));
+    CHECK(elapsed < 5000);
+    CHECK(readyCount == 0);
+
+    // The timed-out request keeps running and fills the cache.
+    if (readyCount == 0)
+    {
+        QEventLoop loop;
+        QObject::connect(&service, &pvf::html2::HtmlFrameService::frameReady, &loop,
+                         [&loop](const pvf::AssetHash&, int, const QImage&) { loop.quit(); });
+        QTimer::singleShot(15000, &loop, &QEventLoop::quit);
+        loop.exec(QEventLoop::ExcludeUserInputEvents);
+    }
+    CHECK(readyCount == 1);
+    CHECK(!readyImage.isNull());
+    CHECK(service.stats().renders == 1);
+
+    QFuture<QImage> hit = service.requestLowRes(request);
+    CHECK(hit.isFinished());
+    if (hit.isFinished() && hit.resultCount() > 0)
+        CHECK(!hit.result().isNull());
+    CHECK(service.stats().renders == 1);
+
+    service.stop();
+}
+
+void lowResPreemption()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString slowBundle = buildNeverReadyBundle(temporary.path());
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!slowBundle.isEmpty());
+    CHECK(!bundle.isEmpty());
+    if (slowBundle.isEmpty() || bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    int readyCount = 0;
+    int failedCount = 0;
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::frameReady, &service,
+                     [&readyCount](const pvf::AssetHash&, int, const QImage&) {
+                         ++readyCount;
+                     });
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::frameFailed, &service,
+                     [&failedCount](const pvf::AssetHash&, int, const QString&) {
+                         ++failedCount;
+                     });
+
+    // Occupy the frontend worker with a frame that only fails after 800 ms.
+    pvf::html2::FrameRequest slow =
+        lowResRequest(slowBundle, QStringLiteral("preempt-slow"));
+    slow.timeoutMs = 800;
+    QFuture<QImage> slowFuture = service.requestLowRes(slow);
+    waitBriefly(100);
+
+    pvf::html2::FrameRequest queued =
+        lowResRequest(bundle, QStringLiteral("preempt-fast"));
+    queued.vars.insert(QStringLiteral("color"), QStringLiteral("#ff0000"));
+    pvf::html2::FrameRequest newest = queued;
+    newest.vars.insert(QStringLiteral("color"), QStringLiteral("#00ff00"));
+
+    QFuture<QImage> preempted = service.requestLowRes(queued);
+    QFuture<QImage> latest = service.requestLowRes(newest);
+
+    CHECK(preempted.isFinished());
+    if (preempted.isFinished())
+        CHECK(preempted.resultCount() == 0);
+
+    CHECK(waitForFuture(latest, 20000));
+    if (latest.isFinished() && latest.resultCount() > 0)
+    {
+        const QImage image = latest.result();
+        CHECK(!image.isNull());
+        if (!image.isNull())
+            CHECK(colorNear(image, 80, 45, QColor(0, 255, 0)));
+    }
+    CHECK(waitForFuture(slowFuture, 20000));
+
+    drainEvents();
+    CHECK(readyCount == 1);
+    CHECK(failedCount == 1);
+    CHECK(service.stats().renders == 1);
+
+    service.stop();
+}
+
+void cancelPendingLowRes()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString slowBundle = buildNeverReadyBundle(temporary.path());
+    const QString bundle = buildRenderBundle(temporary.path());
+    CHECK(!slowBundle.isEmpty());
+    CHECK(!bundle.isEmpty());
+    if (slowBundle.isEmpty() || bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    int readyCount = 0;
+    QObject::connect(&service, &pvf::html2::HtmlFrameService::frameReady, &service,
+                     [&readyCount](const pvf::AssetHash&, int, const QImage&) {
+                         ++readyCount;
+                     });
+
+    pvf::html2::FrameRequest slow =
+        lowResRequest(slowBundle, QStringLiteral("cancel-slow"));
+    slow.timeoutMs = 800;
+    QFuture<QImage> slowFuture = service.requestLowRes(slow);
+    waitBriefly(100);
+
+    pvf::html2::FrameRequest queued =
+        lowResRequest(bundle, QStringLiteral("cancel-queued"));
+    queued.vars.insert(QStringLiteral("color"), QStringLiteral("#0000ff"));
+    QFuture<QImage> cancelled = service.requestLowRes(queued);
+    CHECK(!cancelled.isFinished());
+
+    service.cancelPendingLowRes();
+    CHECK(cancelled.isFinished());
+    if (cancelled.isFinished())
+        CHECK(cancelled.resultCount() == 0);
+
+    CHECK(waitForFuture(slowFuture, 20000));
+    drainEvents();
+    CHECK(readyCount == 0);
+
+    // Cancelling queued work must not break the running service.
+    pvf::html2::FrameRequest after =
+        lowResRequest(bundle, QStringLiteral("cancel-after"));
+    after.vars.insert(QStringLiteral("color"), QStringLiteral("#00ff00"));
+    QFuture<QImage> afterFuture = service.requestLowRes(after);
+    CHECK(waitForFuture(afterFuture, 20000));
+    if (afterFuture.isFinished() && afterFuture.resultCount() > 0)
+    {
+        const QImage image = afterFuture.result();
+        CHECK(!image.isNull());
+        if (!image.isNull())
+            CHECK(colorNear(image, 80, 45, QColor(0, 255, 0)));
+    }
+    drainEvents();
+    CHECK(readyCount == 1);
+
+    service.stop();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -803,7 +1129,9 @@ int main(int argc, char** argv)
                             << "cases: serverServesAndRejects renderFrameColors "
                                "timeoutDoesNotHang frameCacheHits "
                                "staticFramesShareCache prefetchFillsCache "
-                               "finalFrameUncached frameKeyVaries\n";
+                               "finalFrameUncached frameKeyVaries "
+                               "asyncRequestLowRes lowResWaitTimeout "
+                               "lowResPreemption cancelPendingLowRes\n";
         return 2;
     }
 
@@ -824,6 +1152,14 @@ int main(int argc, char** argv)
         finalFrameUncached();
     else if (name == QStringLiteral("frameKeyVaries"))
         frameKeyVaries();
+    else if (name == QStringLiteral("asyncRequestLowRes"))
+        asyncRequestLowRes();
+    else if (name == QStringLiteral("lowResWaitTimeout"))
+        lowResWaitTimeout();
+    else if (name == QStringLiteral("lowResPreemption"))
+        lowResPreemption();
+    else if (name == QStringLiteral("cancelPendingLowRes"))
+        cancelPendingLowRes();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';

@@ -3,9 +3,11 @@
 #include "html2/PvhtmlRenderer.h"
 #include "htmlcache/FrameKey.h"
 
+#include <QFuture>
 #include <QImage>
 #include <QMutex>
 #include <QObject>
+#include <QSharedPointer>
 #include <QString>
 #include <QVector>
 
@@ -21,6 +23,7 @@ namespace pvf::html2 {
 
 class FrameCacheWorker;
 class FrameDiskWorker;
+class FrontendWorker;
 class DiskCacheProxy;
 class LockedFrameCache;
 
@@ -34,12 +37,13 @@ struct Stats
 
 // Manages the three headless browsers described in docs/ENTITY_MODEL.md 6.5:
 //
-//  - frontend: renders the current low-resolution frame on the caller's thread
-//    and is started by start();
-//  - cache:    renders prefetched low-resolution frames on a private QThread,
+//  - frontend: renders the current low-resolution frame on a private QThread,
 //    one at a time, and is started by start();
-//  - final:    renders high-resolution frames for export, started lazily by the
-//    first finalFrame() call. Final frames are never cached.
+//  - cache:    renders prefetched low-resolution frames on a second private
+//    QThread, one at a time, and is started by start();
+//  - final:    renders high-resolution frames for export on the caller's
+//    thread, started lazily by the first finalFrame() call. Final frames are
+//    never cached.
 //
 // Low-resolution frames go through TieredCache(MemoryCache 256 MB,
 // DiskCache(cacheRoot, 2 GB)). The key is assetHash + local frame + variables +
@@ -47,15 +51,17 @@ struct Stats
 // timeDependent=false the request is normalised to localFrame=0, time=0 before
 // both the lookup and the render, so every timeline frame shares one entry.
 //
-// frame(), finalFrame() and prefetch() are meant to be called from the thread
-// that owns the service (usually the UI thread). The memory tier is guarded by
-// a mutex; the SQLite-backed DiskCache lives on its own thread because
-// QSqlDatabase connections are bound to their creating thread. Prefetch
-// failures are warnings; they never terminate the service.
+// requestLowRes(), lowResWait(), frame(), finalFrame(), prefetch() and the
+// cancellation helpers are meant to be called from the thread that owns the
+// service (usually the UI thread). The memory tier is guarded by a mutex; the
+// SQLite-backed DiskCache lives on its own thread because QSqlDatabase
+// connections are bound to their creating thread. Prefetch failures are
+// warnings; they never terminate the service.
 class HtmlFrameService : public QObject
 {
     Q_OBJECT
     friend class FrameCacheWorker;
+    friend class FrontendWorker;
 
 public:
     explicit HtmlFrameService(QString cacheRoot, QObject* parent = nullptr);
@@ -70,11 +76,26 @@ public:
     void stop();
     bool isRunning() const;
 
-    // Low resolution: memory -> disk cache, then the frontend browser. A miss
-    // renders synchronously and writes the result back to both tiers.
+    // Low resolution, synchronous compatibility entry point. Internally it is
+    // requestLowRes() plus an unbounded wait, so the caller blocks but the
+    // frontend renderer still runs on its own thread.
     QImage frame(const FrameRequest& request, QString* error = nullptr);
     // High resolution: always uses the final browser. Nothing is cached.
     QImage finalFrame(const FrameRequest& request, QString* error = nullptr);
+
+    // Low resolution, asynchronous. A cache hit returns an already finished
+    // future; a miss is queued for the frontend worker. Queuing a newer miss
+    // cancels the previously queued (not yet running) miss.
+    QFuture<QImage> requestLowRes(const FrameRequest& request);
+
+    // requestLowRes() plus at most maxWaitMs of waiting (negative waits
+    // forever). A timeout returns a null image with error="timeout" while the
+    // background request keeps running; it is not cancelled.
+    QImage lowResWait(const FrameRequest& request, int maxWaitMs, QString* error = nullptr);
+
+    // Cancels the queued frontend request. The frame currently rendering is
+    // allowed to finish; a cancelled request emits no frameReady/frameFailed.
+    void cancelPendingLowRes();
 
     // Replaces the pending prefetch batch with `requests` (older pending work
     // is discarded, the frame currently rendering is allowed to finish) and
@@ -89,6 +110,10 @@ public:
 signals:
     void prefetchedFrame(const AssetHash& assetHash, int localFrame);
     void prefetchError(const QString& message);
+    // Emitted when a low-resolution request produced an image (fresh render or
+    // a cache fill that happened after the caller's initial miss).
+    void frameReady(const AssetHash& assetHash, int localFrame, const QImage& image);
+    void frameFailed(const AssetHash& assetHash, int localFrame, const QString& error);
 
 private:
     enum class CacheTier
@@ -98,10 +123,20 @@ private:
         Disk
     };
 
+    struct LowResOutcome;
+    struct LowResSubmission;
+
     bool ensureStarted(QString* error);
     FrameRequest normalizedRequest(const FrameRequest& request) const;
     htmlcache::FrameKey keyFor(const FrameRequest& request) const;
     QString entryHashFor(const QString& bundleDir, const QString& entry) const;
+
+    QFuture<QImage> submitLowRes(const FrameRequest& request,
+                                 QSharedPointer<LowResOutcome>* outcome);
+    void finishLowRes(const LowResSubmission& submission, const QImage& image,
+                      const QString& error, bool notify);
+    void queueFrameReady(const AssetHash& assetHash, int localFrame, const QImage& image);
+    void queueFrameFailed(const AssetHash& assetHash, int localFrame, const QString& error);
 
     CacheTier lookupCached(const htmlcache::FrameKey& key, QImage* image);
     void storeCached(const htmlcache::FrameKey& key, const QImage& image);
@@ -116,7 +151,7 @@ private:
     QString m_chromeVersion;
     bool m_running = false;
 
-    PvhtmlRenderer* m_frontend = nullptr;
+    FrontendWorker* m_frontendWorker = nullptr;
     PvhtmlRenderer* m_final = nullptr;
     FrameCacheWorker* m_cacheWorker = nullptr;
 

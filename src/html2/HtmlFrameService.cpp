@@ -8,10 +8,14 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
+#include <QFutureWatcher>
 #include <QMetaObject>
 #include <QMutexLocker>
+#include <QPromise>
 #include <QThread>
+#include <QTimer>
 #include <QWaitCondition>
 
 #include <optional>
@@ -26,6 +30,168 @@ constexpr qint64 kDiskCacheBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDiskStartTimeoutMs = 60000;
 
 } // namespace
+
+struct HtmlFrameService::LowResOutcome
+{
+    QMutex mutex;
+    QImage image;
+    QString error;
+};
+
+struct HtmlFrameService::LowResSubmission
+{
+    FrameRequest request; // original request, used for frameReady identity
+    htmlcache::FrameKey key;
+    QSharedPointer<QPromise<QImage>> promise;
+    QSharedPointer<LowResOutcome> outcome;
+};
+
+// Frontend renderer thread. It owns one PvhtmlRenderer for its whole lifetime
+// and processes only the newest queued request; a newer request cancels the
+// queued one while the frame currently rendering is allowed to finish.
+class FrontendWorker final : public QThread
+{
+public:
+    explicit FrontendWorker(HtmlFrameService* service)
+        : m_service(service)
+    {
+    }
+
+    ~FrontendWorker() override
+    {
+        requestStop();
+        wait();
+    }
+
+    bool waitForStart(QString* error)
+    {
+        QMutexLocker locker(&m_mutex);
+        while (!m_startDone)
+            m_startCond.wait(&m_mutex);
+        if (error)
+            *error = m_started ? QString() : m_startError;
+        return m_started;
+    }
+
+    QString chromeVersion() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_chromeVersion;
+    }
+
+    void enqueue(HtmlFrameService::LowResSubmission submission)
+    {
+        std::optional<HtmlFrameService::LowResSubmission> preempted;
+        {
+            QMutexLocker locker(&m_mutex);
+            preempted = std::move(m_pending);
+            m_pending = std::move(submission);
+            m_cond.wakeAll();
+        }
+        if (preempted)
+        {
+            m_service->finishLowRes(*preempted, QImage{},
+                                    QStringLiteral("superseded by a newer request"), false);
+        }
+    }
+
+    void cancelPending()
+    {
+        std::optional<HtmlFrameService::LowResSubmission> cancelled;
+        {
+            QMutexLocker locker(&m_mutex);
+            cancelled = std::move(m_pending);
+            m_pending.reset();
+        }
+        if (cancelled)
+            m_service->finishLowRes(*cancelled, QImage{}, QStringLiteral("cancelled"), false);
+    }
+
+    void requestStop()
+    {
+        std::optional<HtmlFrameService::LowResSubmission> cancelled;
+        {
+            QMutexLocker locker(&m_mutex);
+            m_stop = true;
+            cancelled = std::move(m_pending);
+            m_pending.reset();
+            m_cond.wakeAll();
+        }
+        if (cancelled)
+            m_service->finishLowRes(*cancelled, QImage{}, QStringLiteral("cancelled"), false);
+    }
+
+protected:
+    void run() override
+    {
+        PvhtmlRenderer renderer;
+        QString error;
+        const bool started = renderer.start(&error);
+        {
+            QMutexLocker locker(&m_mutex);
+            m_startDone = true;
+            m_started = started;
+            m_startError = error;
+            m_chromeVersion = renderer.chromeVersion().trimmed();
+            m_startCond.wakeAll();
+        }
+        if (!started)
+            return;
+
+        for (;;)
+        {
+            std::optional<HtmlFrameService::LowResSubmission> pending;
+            {
+                QMutexLocker locker(&m_mutex);
+                while (!m_stop && !m_pending)
+                    m_cond.wait(&m_mutex);
+                if (m_stop)
+                    break;
+                pending = std::move(m_pending);
+                m_pending.reset();
+            }
+
+            // A prefetch or another request may have filled the cache between
+            // the caller's lookup and this worker picking the job up.
+            QImage cached;
+            const HtmlFrameService::CacheTier tier =
+                m_service->lookupCached(pending->key, &cached);
+            if (tier != HtmlFrameService::CacheTier::Miss)
+            {
+                m_service->noteHit(tier);
+                m_service->finishLowRes(*pending, cached, QString(), true);
+                continue;
+            }
+
+            QString renderError;
+            const QImage image = renderer.renderFrame(
+                m_service->normalizedRequest(pending->request), &renderError);
+            if (image.isNull())
+            {
+                m_service->finishLowRes(*pending, QImage{}, renderError, true);
+                continue;
+            }
+
+            m_service->storeCached(pending->key, image);
+            m_service->noteRender();
+            m_service->finishLowRes(*pending, image, QString(), true);
+        }
+
+        renderer.stop();
+    }
+
+private:
+    HtmlFrameService* m_service = nullptr;
+    mutable QMutex m_mutex;
+    QWaitCondition m_cond;
+    QWaitCondition m_startCond;
+    bool m_startDone = false;
+    bool m_started = false;
+    bool m_stop = false;
+    QString m_startError;
+    QString m_chromeVersion;
+    std::optional<HtmlFrameService::LowResSubmission> m_pending;
+};
 
 // Serial prefetch worker. The renderer is created inside run(), so the whole
 // Chrome process and its QObject children belong to this thread and the
@@ -449,7 +615,7 @@ bool HtmlFrameService::start(QString* error)
 
     // A previous attempt may have left a partially started service (for
     // example the frontend crashed while the cache thread survived).
-    if (m_frontend || m_cacheWorker || m_diskWorker)
+    if (m_frontendWorker || m_cacheWorker || m_diskWorker)
         stop();
 
     if (!m_memory)
@@ -471,19 +637,23 @@ bool HtmlFrameService::start(QString* error)
                                                             m_diskProxy.get());
     }
 
-    if (!m_frontend)
-        m_frontend = new PvhtmlRenderer(this);
+    m_frontendWorker = new FrontendWorker(this);
+    m_frontendWorker->start();
 
     QString frontendError;
-    if (!m_frontend->start(&frontendError))
+    if (!m_frontendWorker->waitForStart(&frontendError))
     {
-        if (error)
-            *error = frontendError;
         stop();
+        if (error)
+        {
+            *error = frontendError.isEmpty()
+                         ? QStringLiteral("the HTML frontend browser failed to start")
+                         : frontendError;
+        }
         return false;
     }
     // The frontend browser is the version authority for every cache key.
-    m_chromeVersion = m_frontend->chromeVersion().trimmed();
+    m_chromeVersion = m_frontendWorker->chromeVersion().trimmed();
 
     m_cacheWorker = new FrameCacheWorker(this);
     m_cacheWorker->start();
@@ -512,18 +682,19 @@ bool HtmlFrameService::start(QString* error)
 
 void HtmlFrameService::stop()
 {
+    if (m_frontendWorker)
+    {
+        m_frontendWorker->requestStop();
+        m_frontendWorker->wait();
+        delete m_frontendWorker;
+        m_frontendWorker = nullptr;
+    }
     if (m_cacheWorker)
     {
         m_cacheWorker->requestStop();
         m_cacheWorker->wait();
         delete m_cacheWorker;
         m_cacheWorker = nullptr;
-    }
-    if (m_frontend)
-    {
-        m_frontend->stop();
-        delete m_frontend;
-        m_frontend = nullptr;
     }
     if (m_final)
     {
@@ -550,7 +721,7 @@ void HtmlFrameService::stop()
 
 bool HtmlFrameService::isRunning() const
 {
-    return m_running && m_frontend && m_frontend->isRunning() && m_cacheWorker
+    return m_running && m_frontendWorker && m_frontendWorker->isRunning() && m_cacheWorker
            && m_cacheWorker->isRunning();
 }
 
@@ -565,10 +736,117 @@ bool HtmlFrameService::ensureStarted(QString* error)
     return start(error);
 }
 
+QFuture<QImage> HtmlFrameService::requestLowRes(const FrameRequest& request)
+{
+    return submitLowRes(request, nullptr);
+}
+
+QImage HtmlFrameService::lowResWait(const FrameRequest& request, int maxWaitMs, QString* error)
+{
+    QSharedPointer<LowResOutcome> outcome;
+    QFuture<QImage> future = submitLowRes(request, &outcome);
+
+    if (!future.isFinished() && maxWaitMs != 0)
+    {
+        if (maxWaitMs < 0)
+        {
+            future.waitForFinished();
+        }
+        else
+        {
+            QEventLoop loop;
+            QFutureWatcher<QImage> watcher;
+            QObject::connect(&watcher, &QFutureWatcher<QImage>::finished, &loop,
+                             &QEventLoop::quit);
+            watcher.setFuture(future);
+
+            QTimer timer;
+            timer.setSingleShot(true);
+            QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+            timer.start(maxWaitMs);
+            loop.exec(QEventLoop::ExcludeUserInputEvents);
+        }
+    }
+
+    if (!future.isFinished())
+    {
+        if (error)
+            *error = QStringLiteral("timeout");
+        return QImage{};
+    }
+
+    QString message;
+    QImage image;
+    {
+        QMutexLocker locker(&outcome->mutex);
+        message = outcome->error;
+        image = outcome->image;
+    }
+
+    if (error)
+    {
+        if (!image.isNull())
+            error->clear();
+        else
+            *error = message.isEmpty() ? QStringLiteral("HTML frame failed") : message;
+    }
+    return image;
+}
+
+void HtmlFrameService::cancelPendingLowRes()
+{
+    if (m_frontendWorker)
+        m_frontendWorker->cancelPending();
+}
+
 QImage HtmlFrameService::frame(const FrameRequest& request, QString* error)
 {
-    if (!ensureStarted(error))
-        return QImage{};
+    QSharedPointer<LowResOutcome> outcome;
+    QFuture<QImage> future = submitLowRes(request, &outcome);
+    future.waitForFinished();
+
+    QString message;
+    QImage image;
+    {
+        QMutexLocker locker(&outcome->mutex);
+        message = outcome->error;
+        image = outcome->image;
+    }
+
+    if (error)
+    {
+        if (!image.isNull())
+            error->clear();
+        else
+            *error = message.isEmpty() ? QStringLiteral("HTML frame failed") : message;
+    }
+    return image;
+}
+
+QFuture<QImage> HtmlFrameService::submitLowRes(const FrameRequest& request,
+                                               QSharedPointer<LowResOutcome>* outcome)
+{
+    auto state = QSharedPointer<LowResOutcome>::create();
+    auto promise = QSharedPointer<QPromise<QImage>>::create();
+    promise->start();
+    QFuture<QImage> future = promise->future();
+    if (outcome)
+        *outcome = state;
+
+    QString startError;
+    if (!ensureStarted(&startError))
+    {
+        const QString message = startError.isEmpty()
+                                    ? QStringLiteral("the HTML frame service is not running")
+                                    : startError;
+        {
+            QMutexLocker locker(&state->mutex);
+            state->error = message;
+        }
+        promise->finish();
+        queueFrameFailed(request.assetHash, request.localFrame, message);
+        return future;
+    }
 
     const FrameRequest normalized = normalizedRequest(request);
     const htmlcache::FrameKey key = keyFor(normalized);
@@ -577,26 +855,65 @@ QImage HtmlFrameService::frame(const FrameRequest& request, QString* error)
     const CacheTier tier = lookupCached(key, &cached);
     if (tier != CacheTier::Miss)
     {
+        // Cache hit: no browser work and an already finished future.
         noteHit(tier);
-        if (error)
-            error->clear();
-        return cached;
+        {
+            QMutexLocker locker(&state->mutex);
+            state->image = cached;
+        }
+        promise->addResult(cached);
+        promise->finish();
+        return future;
     }
 
-    QString renderError;
-    const QImage image = m_frontend->renderFrame(normalized, &renderError);
-    if (image.isNull())
+    LowResSubmission submission;
+    submission.request = request;
+    submission.key = key;
+    submission.promise = promise;
+    submission.outcome = state;
+    m_frontendWorker->enqueue(std::move(submission));
+    return future;
+}
+
+void HtmlFrameService::finishLowRes(const LowResSubmission& submission, const QImage& image,
+                                    const QString& error, bool notify)
+{
     {
-        if (error)
-            *error = renderError;
-        return QImage{};
+        QMutexLocker locker(&submission.outcome->mutex);
+        submission.outcome->image = image;
+        submission.outcome->error = error;
     }
 
-    storeCached(key, image);
-    noteRender();
-    if (error)
-        error->clear();
-    return image;
+    if (!image.isNull())
+        submission.promise->addResult(image);
+    submission.promise->finish();
+
+    if (!notify)
+        return;
+    if (image.isNull())
+        queueFrameFailed(submission.request.assetHash, submission.request.localFrame, error);
+    else
+        queueFrameReady(submission.request.assetHash, submission.request.localFrame, image);
+}
+
+void HtmlFrameService::queueFrameReady(const AssetHash& assetHash, int localFrame,
+                                       const QImage& image)
+{
+    QMetaObject::invokeMethod(
+        this, [this, assetHash, localFrame, image]() {
+            emit frameReady(assetHash, localFrame, image);
+        },
+        Qt::QueuedConnection);
+}
+
+void HtmlFrameService::queueFrameFailed(const AssetHash& assetHash, int localFrame,
+                                        const QString& error)
+{
+    QMetaObject::invokeMethod(
+        this, [this, assetHash, localFrame, error]() {
+            emit frameFailed(assetHash, localFrame, error);
+        },
+        Qt::QueuedConnection);
 }
 
 QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
