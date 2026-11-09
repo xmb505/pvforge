@@ -2,7 +2,7 @@
 
 > 日期：2026-11-10  
 > 分支：`new-entity-model`  
-> 最新已提交：`bc17eb8 feat: wire media services into the viewport`  
+> 最新已提交：`2ba02cc feat: pause playback when html frames stall`  
 > 设计主文档：`docs/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/INTEGRATION_PLAN.md`  
@@ -84,7 +84,7 @@
 - 人类操作走内存 undo；停手 1 秒/手动保存时合并成一个 commit。
 - Ctrl+Z/Ctrl+Shift+Z 是**内存快照 undo/redo**，不调用 git revert、不产生 commit；覆盖文本数据，不含素材文件；默认最多 200 步或 512MB。
 - 应用关闭后内存栈丢失，靠 git 历史冷恢复。
-- 打开工程检测未提交文本，提供恢复/丢弃/提交（Store API 在做）。
+- 打开工程检测未提交文本，提供恢复/丢弃/提交（Store API 已有，UI 待接）。
 
 ### 渲染 / 导出
 
@@ -122,7 +122,7 @@
 | Solver | `src/solver` | 重力/公转/自转/黑洞；10 测试 |
 | Assets | `src/assets` | sha256/素材库/WAV/.pvhtml/标签；17 CTest |
 | Gizmo | `src/gizmo` | 四角旋转/Office 缩放/中心四象限；10 组 265 断言 |
-| Store | `src/store` | 文本-only git、内存 undo、debounce；17 测试 |
+| Store | `src/store` | 文本-only git、内存 undo、debounce、崩溃恢复扫描；21 测试 |
 | Anim | `src/anim` | 普通/求解段/父子/可见性/小数帧；12 测试 |
 | Renderer2 | `src/render2` | 图/矢量/文字/相机/占位/provider；11 测试 |
 | Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率；10 CTest |
@@ -132,7 +132,7 @@
 | Video2 | `src/video2` | 取帧/代理/全量抽图/队列；25 测试 |
 | MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览；40 测试 |
 | Next core | `src/next/core` | Document 接口 |
-| Next app | `src/next/app` | ProjectDocument/NextWindow/Playback/MediaServices/Export/MCP log；4 CTest |
+| Next app | `src/next/app` | ProjectDocument/NextWindow/Playback+看门狗/MediaServices/Export/MCP log；5 CTest |
 | Timeline | `src/next/timeline` | 行/裁剪/关键帧/拖放/浮层信号；30 测试 |
 | Properties | `src/next/properties` | 属性/auto-key/求解段创建/轨迹预览；29 + 11 测试 |
 | AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度；15 测试 |
@@ -144,21 +144,21 @@
 
 ## 4. 当前未完成 / 已知缺口
 
-1. **Watchdog 未接完**：`PlaybackController` 正在改；剩余：MediaServices pending 标记、真实帧喂狗、NextWindow 状态栏、测试。
-2. **导出最终 HTML/视频 provider 未接**：Export2 支持 provider，但 ExportDialog 还没把 MediaServices 的 finalFrame/原片解码塞进去；高帧率/分辨率字段也还没加到导出对话框。
-3. **崩溃恢复 UI 未接**：Store 正在做 `dirtyTextFiles/commitRecoveredText/discardDirtyText`；NextWindow 打开工程时弹窗“恢复/丢弃/提交”未做。
-4. **视频抽图队列设置**：AssetPanel 队列固定 960 宽/2GB；Settings 的 videoProxyWidth/disk budget 还没传进去；历史视频不会自动补抽（只处理新导入）。
-5. **HTML 服务设置**：MediaServices 已传缓存预算/Chrome 路径；运行中改 Chrome 路径需重启服务（当前 MediaServices applySettings 会重建）。
-6. **HTML 看门狗/异步**：H2 有 `requestLowRes/lowResWait/frameReady`；MediaServices 用 300ms 等待；watchdog 未接。
-7. **HTML Chrome 升级抽样校验**未实现（版本进 key，未抽样清资产缓存）。
-8. **HTML finalFrame 线程**：导出线程调用 finalFrame 的线程模型未验证；ExportDialog 需要固定线程。
-9. **导出 4x**：1080p 4x=7680 会被 4096 上限拒绝；2x 可用。
-10. **视频最终 provider**：导出需原片解码，不能只用序列；MediaServices 还没有 export-specific VideoFrames。
-11. **Asset tags MCP**：`asset.setTags` 已加；MCP 文档工具数 46 需再核对。
-12. **Timeline 实体多选/框选**：第一版单选；关键帧多选已做。
-13. **Timeline 私有浮层**：App 已接 `privateTimelineRequested`；主时间轴双击打 key、+ 打开浮层。
-14. **旧 app 删除**：`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。
-15. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
+1. **崩溃恢复 UI 未接**：Store 已提供 `dirtyTextFiles/commitRecoveredText/discardDirtyText`；NextWindow 打开工程时弹窗“恢复/丢弃/提交”未做。
+2. **导出最终 HTML/视频 provider**：Export2 支持 provider，ExportDialog 的高帧率/分辨率字段和 MediaServices 的 finalFrame/原片解码正在接。
+3. **视频抽图队列设置**：AssetPanel 队列固定 960 宽/2GB；正在加 `setVideoExtractionOptions` 和历史视频补抽接口，主窗口接线随后。
+4. **HTML 服务设置**：MediaServices 已传缓存预算/Chrome 路径；运行中改 Chrome 路径会重建服务。
+5. **HTML 看门狗**：已接（MediaServices pending + PlaybackController 3s + 真实帧喂狗）；阈值跟设置。
+6. **HTML Chrome 升级抽样校验**未实现（版本进 key，未抽样清资产缓存）。
+7. **HTML finalFrame 线程**：导出线程调用 finalFrame 的线程模型未验证；ExportDialog 需要固定线程。
+8. **视频最终 provider**：导出需原片解码，不能只用序列；正在加 export-specific VideoFrames。
+9. **Asset tags MCP**：`asset.setTags` 已加；MCP 文档工具数 46 需再核对。
+10. **Timeline 实体多选/框选**：第一版单选；关键帧多选已做。
+11. **Timeline 私有浮层**：App 已接 `privateTimelineRequested`；主时间轴双击打 key、+ 打开浮层。
+12. **旧 app 删除**：`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。
+13. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
+14. **崩溃恢复扫描白名单**：只认 `project.json`、`entities/*.json`、`.gitignore`；未来新增独立文本文件需扩展。
+15. **内存 undo 不持久化**：重开工程只靠 git 历史冷恢复；符合设计。
 
 ## 5. 构建 / 测试
 
@@ -198,9 +198,8 @@ ctest --test-dir /tmp/pvf-store-build --output-on-failure
 
 ## 7. 下一步建议顺序
 
-1. 等 watchdog / crash recovery agent 完成并 review。
-2. 接 ExportDialog：输出 fps（1x/2x/4x）、分辨率（1x/2x/4x）、音频、最终 provider。
-3. 接崩溃恢复弹窗。
-4. 把 Settings 的视频抽图宽度/预算传给 AssetPanel 队列。
-5. 端到端验收工程：矢量/文字/图片/视频/HTML/音频/相机；播放、拖拽、裁剪、关键帧、求解段、MCP、导出。
-6. 删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
+1. 接 ExportDialog：输出 fps（1x/2x/4x）、分辨率（1x/2x/4x）、音频、最终 provider。
+2. 接崩溃恢复弹窗（恢复/丢弃/提交）。
+3. 把 Settings 的视频抽图宽度/预算传给 AssetPanel 队列，并补抽历史视频。
+4. 端到端验收工程：矢量/文字/图片/视频/HTML/音频/相机；播放、拖拽、裁剪、关键帧、求解段、MCP、导出。
+5. 删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
