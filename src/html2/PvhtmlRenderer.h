@@ -75,6 +75,12 @@ public:
     explicit PvhtmlRenderer(QObject* parent = nullptr);
     ~PvhtmlRenderer() override;
 
+    // Explicit Chromium-based browser path. Empty means auto-detection. The
+    // setting is applied by the next start(); it does not restart a running
+    // browser.
+    void setChromeExecutable(const QString& path) { m_chromeExecutable = path; }
+    QString chromeExecutable() const { return m_chromeExecutable; }
+
     bool start(QString* error = nullptr);   // start Chrome (pipe transport first)
     void stop();
     bool isRunning() const;
@@ -98,6 +104,7 @@ private:
     QString m_loadedUrl;
     QSize m_viewport;
     QString m_chromeVersion;
+    QString m_chromeExecutable;
     QString m_lastError;
 };
 

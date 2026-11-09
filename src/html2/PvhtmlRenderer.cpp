@@ -167,6 +167,7 @@ bool PvhtmlRenderer::start(QString* error)
         m_browser = new pvf::html::HtmlBrowser(this);
 
     pvf::html::BrowserStartOptions options;
+    options.executable = m_chromeExecutable;
     options.offline = true;
     options.timeoutMs = 15000;
     // HtmlBrowser blocks every network destination with a dead proxy and

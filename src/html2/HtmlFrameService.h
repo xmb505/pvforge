@@ -45,8 +45,9 @@ struct Stats
 //    thread, started lazily by the first finalFrame() call. Final frames are
 //    never cached.
 //
-// Low-resolution frames go through TieredCache(MemoryCache 256 MB,
-// DiskCache(cacheRoot, 2 GB)). The key is assetHash + local frame + variables +
+// Low-resolution frames go through TieredCache(MemoryCache,
+// DiskCache(cacheRoot)), with 256 MB / 2 GB defaults that the constructor
+// overrides. The key is assetHash + local frame + variables +
 // output size + frontend Chrome version + entry file hash. With
 // timeDependent=false the request is normalised to localFrame=0, time=0 before
 // both the lookup and the render, so every timeline frame shares one entry.
@@ -64,11 +65,21 @@ class HtmlFrameService : public QObject
     friend class FrontendWorker;
 
 public:
-    explicit HtmlFrameService(QString cacheRoot, QObject* parent = nullptr);
+    explicit HtmlFrameService(QString cacheRoot,
+                              qint64 memoryBytes = 256LL * 1024 * 1024,
+                              qint64 diskBytes = 2LL * 1024 * 1024 * 1024,
+                              QObject* parent = nullptr);
     ~HtmlFrameService() override;
 
     HtmlFrameService(const HtmlFrameService&) = delete;
     HtmlFrameService& operator=(const HtmlFrameService&) = delete;
+
+    // Explicit Chromium-based browser path for all three renderers. Empty
+    // means auto-detection. Starting with a path that cannot be executed makes
+    // start() (or the first finalFrame()) fail. Calling this while running is
+    // recorded but needs stop()/start() to take effect.
+    void setChromeExecutable(const QString& path);
+    QString chromeExecutable() const { return m_chromeExecutable; }
 
     // Starts the frontend and cache browsers. Returns false when either fails;
     // in that case nothing is left running. The final browser is not started.
@@ -148,6 +159,9 @@ private:
     void queuePrefetchError(const QString& message);
 
     QString m_cacheRoot;
+    qint64 m_memoryBytes = 0;
+    qint64 m_diskBytes = 0;
+    QString m_chromeExecutable;
     QString m_chromeVersion;
     bool m_running = false;
 

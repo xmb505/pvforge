@@ -25,8 +25,6 @@ namespace pvf::html2 {
 
 namespace {
 
-constexpr qint64 kMemoryCacheBytes = 256LL * 1024 * 1024;
-constexpr qint64 kDiskCacheBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDiskStartTimeoutMs = 60000;
 
 } // namespace
@@ -52,8 +50,9 @@ struct HtmlFrameService::LowResSubmission
 class FrontendWorker final : public QThread
 {
 public:
-    explicit FrontendWorker(HtmlFrameService* service)
+    FrontendWorker(HtmlFrameService* service, QString chromeExecutable)
         : m_service(service)
+        , m_chromeExecutable(std::move(chromeExecutable))
     {
     }
 
@@ -125,6 +124,7 @@ protected:
     void run() override
     {
         PvhtmlRenderer renderer;
+        renderer.setChromeExecutable(m_chromeExecutable);
         QString error;
         const bool started = renderer.start(&error);
         {
@@ -190,6 +190,7 @@ private:
     bool m_stop = false;
     QString m_startError;
     QString m_chromeVersion;
+    QString m_chromeExecutable;
     std::optional<HtmlFrameService::LowResSubmission> m_pending;
 };
 
@@ -199,8 +200,9 @@ private:
 class FrameCacheWorker final : public QThread
 {
 public:
-    explicit FrameCacheWorker(HtmlFrameService* service)
+    FrameCacheWorker(HtmlFrameService* service, QString chromeExecutable)
         : m_service(service)
+        , m_chromeExecutable(std::move(chromeExecutable))
     {
     }
 
@@ -253,6 +255,7 @@ protected:
     void run() override
     {
         PvhtmlRenderer renderer;
+        renderer.setChromeExecutable(m_chromeExecutable);
         QString error;
         const bool started = renderer.start(&error);
         {
@@ -346,6 +349,7 @@ private:
     bool m_started = false;
     bool m_stop = false;
     QString m_startError;
+    QString m_chromeExecutable;
     QVector<FrameRequest> m_batch;
     quint64 m_generation = 0;
 };
@@ -357,8 +361,9 @@ private:
 class FrameDiskWorker final : public QThread
 {
 public:
-    explicit FrameDiskWorker(QString cacheRoot)
+    FrameDiskWorker(QString cacheRoot, qint64 diskBytes)
         : m_root(std::move(cacheRoot))
+        , m_diskBytes(diskBytes)
     {
     }
 
@@ -443,7 +448,7 @@ public:
 protected:
     void run() override
     {
-        htmlcache::DiskCache cache(m_root, kDiskCacheBytes);
+        htmlcache::DiskCache cache(m_root, m_diskBytes);
         {
             QMutexLocker locker(&m_mutex);
             m_startDone = true;
@@ -512,6 +517,7 @@ private:
     };
 
     QString m_root;
+    qint64 m_diskBytes = 0;
     QMutex m_mutex;
     QMutex m_callMutex;
     QWaitCondition m_cond;
@@ -593,9 +599,12 @@ private:
     QMutex* m_mutex = nullptr;
 };
 
-HtmlFrameService::HtmlFrameService(QString cacheRoot, QObject* parent)
+HtmlFrameService::HtmlFrameService(QString cacheRoot, qint64 memoryBytes, qint64 diskBytes,
+                                   QObject* parent)
     : QObject(parent)
     , m_cacheRoot(std::move(cacheRoot))
+    , m_memoryBytes(memoryBytes)
+    , m_diskBytes(diskBytes)
 {
 }
 
@@ -620,9 +629,9 @@ bool HtmlFrameService::start(QString* error)
 
     if (!m_memory)
     {
-        m_memory = std::make_unique<htmlcache::MemoryCache>(kMemoryCacheBytes);
+        m_memory = std::make_unique<htmlcache::MemoryCache>(m_memoryBytes);
 
-        m_diskWorker = new FrameDiskWorker(m_cacheRoot);
+        m_diskWorker = new FrameDiskWorker(m_cacheRoot, m_diskBytes);
         m_diskWorker->start();
         QString diskError;
         if (!m_diskWorker->waitForStart(&diskError))
@@ -637,7 +646,7 @@ bool HtmlFrameService::start(QString* error)
                                                             m_diskProxy.get());
     }
 
-    m_frontendWorker = new FrontendWorker(this);
+    m_frontendWorker = new FrontendWorker(this, m_chromeExecutable);
     m_frontendWorker->start();
 
     QString frontendError;
@@ -655,7 +664,7 @@ bool HtmlFrameService::start(QString* error)
     // The frontend browser is the version authority for every cache key.
     m_chromeVersion = m_frontendWorker->chromeVersion().trimmed();
 
-    m_cacheWorker = new FrameCacheWorker(this);
+    m_cacheWorker = new FrameCacheWorker(this, m_chromeExecutable);
     m_cacheWorker->start();
 
     QString cacheError;
@@ -923,6 +932,7 @@ QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
 
     if (!m_final)
         m_final = new PvhtmlRenderer(this);
+    m_final->setChromeExecutable(m_chromeExecutable);
     if (!m_final->isRunning())
     {
         QString startError;
@@ -971,6 +981,18 @@ void HtmlFrameService::clearAsset(const AssetHash& assetHash)
 
     if (m_tiered)
         m_tiered->clearAsset(assetHash);
+}
+
+void HtmlFrameService::setChromeExecutable(const QString& path)
+{
+    m_chromeExecutable = path;
+    if (m_final)
+        m_final->setChromeExecutable(path);
+    if (m_running)
+    {
+        qWarning().noquote()
+            << QStringLiteral("html2: Chrome executable change takes effect after stop()/start()");
+    }
 }
 
 QString HtmlFrameService::chromeVersion() const

@@ -1113,6 +1113,128 @@ void cancelPendingLowRes()
     service.stop();
 }
 
+void customCacheBudgets()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    // Tiny explicit budgets must be forwarded to MemoryCache/DiskCache.
+    const QString smallRoot = temporary.path() + QStringLiteral("/cache-small");
+    {
+        pvf::html2::HtmlFrameService service(smallRoot, 1024LL * 1024, 2LL * 1024 * 1024);
+        QString error;
+        CHECK_DETAIL(service.start(&error), error);
+        if (service.isRunning())
+        {
+            pvf::html2::FrameRequest request =
+                lowResRequest(bundle, QStringLiteral("budget-small"));
+            request.size = QSize(64, 36);
+            error.clear();
+            const QImage image = service.frame(request, &error);
+            CHECK_DETAIL(!image.isNull(), error);
+            if (!image.isNull())
+                CHECK(image.size() == QSize(64, 36));
+            CHECK(cachedWebpCount(smallRoot) == 1);
+            CHECK(service.stats().renders == 1);
+        }
+        service.stop();
+    }
+
+    // A different budget pair is equally valid.
+    const QString largeRoot = temporary.path() + QStringLiteral("/cache-large");
+    {
+        pvf::html2::HtmlFrameService service(largeRoot, 16LL * 1024 * 1024,
+                                            64LL * 1024 * 1024);
+        QString error;
+        CHECK_DETAIL(service.start(&error), error);
+        if (service.isRunning())
+        {
+            pvf::html2::FrameRequest request =
+                lowResRequest(bundle, QStringLiteral("budget-large"));
+            request.size = QSize(64, 36);
+            error.clear();
+            const QImage image = service.frame(request, &error);
+            CHECK_DETAIL(!image.isNull(), error);
+            if (!image.isNull())
+                CHECK(image.size() == QSize(64, 36));
+            CHECK(cachedWebpCount(largeRoot) == 1);
+            CHECK(service.stats().renders == 1);
+        }
+        service.stop();
+    }
+}
+
+void chromeExecutableOverride()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
+        return;
+    }
+
+    const QString missing = QStringLiteral("/definitely/missing/pvf-chrome");
+
+    // The renderer must honour an explicit executable on start().
+    pvf::html2::PvhtmlRenderer renderer;
+    renderer.setChromeExecutable(missing);
+    CHECK(renderer.chromeExecutable() == missing);
+    QString rendererError;
+    CHECK(!renderer.start(&rendererError));
+    CHECK(!rendererError.isEmpty());
+    CHECK(!renderer.isRunning());
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    service.setChromeExecutable(missing);
+    QString error;
+    CHECK(!service.start(&error));
+    CHECK(!error.isEmpty());
+    CHECK(!service.isRunning());
+
+    // Empty means auto-detection; a stopped service can be restarted.
+    service.setChromeExecutable(QString());
+    CHECK(service.chromeExecutable().isEmpty());
+    error.clear();
+    CHECK_DETAIL(service.start(&error), error);
+    CHECK(service.isRunning());
+    CHECK(!service.chromeVersion().isEmpty());
+    if (service.isRunning())
+    {
+        pvf::html2::FrameRequest request =
+            lowResRequest(bundle, QStringLiteral("chrome-override-asset"));
+        request.size = QSize(64, 36);
+        error.clear();
+        const QImage image = service.frame(request, &error);
+        CHECK_DETAIL(!image.isNull(), error);
+        if (!image.isNull())
+            CHECK(colorNear(image, 32, 18, QColor(0, 255, 0)));
+    }
+    service.stop();
+    CHECK(!service.isRunning());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1131,7 +1253,8 @@ int main(int argc, char** argv)
                                "staticFramesShareCache prefetchFillsCache "
                                "finalFrameUncached frameKeyVaries "
                                "asyncRequestLowRes lowResWaitTimeout "
-                               "lowResPreemption cancelPendingLowRes\n";
+                               "lowResPreemption cancelPendingLowRes "
+                               "customCacheBudgets chromeExecutableOverride\n";
         return 2;
     }
 
@@ -1160,6 +1283,10 @@ int main(int argc, char** argv)
         lowResPreemption();
     else if (name == QStringLiteral("cancelPendingLowRes"))
         cancelPendingLowRes();
+    else if (name == QStringLiteral("customCacheBudgets"))
+        customCacheBudgets();
+    else if (name == QStringLiteral("chromeExecutableOverride"))
+        chromeExecutableOverride();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';
