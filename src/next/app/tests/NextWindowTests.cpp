@@ -4,11 +4,13 @@
 #include "mcp2/Service.h"
 #include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
+#include "next/properties/PropertiesPanel.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -636,6 +638,138 @@ private slots:
         QVERIFY(window->isPlayingForTest());
         QTRY_VERIFY(!window->isPlayingForTest());
         QCOMPARE(window->document()->playhead(), 10);
+    }
+
+    void deleteCascadesSelectedSubtreeInOneCommit()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        Entity parent;
+        parent.uuid = model::newUuid();
+        parent.name = QStringLiteral("父");
+        parent.start = 0;
+        parent.end = 60;
+
+        Entity child;
+        child.uuid = model::newUuid();
+        child.name = QStringLiteral("子");
+        child.parentUuid = parent.uuid;
+        child.start = 0;
+        child.end = 30;
+
+        window->document()->mutableProject().entities.insert(parent.uuid, parent);
+        window->document()->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(window->document()->commitEntities(
+                     {parent.uuid, child.uuid}, QStringLiteral("pvf: create tree"),
+                     &error),
+                 qPrintable(error));
+
+        window->document()->setSelection(parent.uuid);
+        QVERIFY(window->deleteActionForTest()->isEnabled());
+
+        const int commitsBefore = commitCount(window.get());
+        QVERIFY2(window->deleteSelectedEntityForTest(true, &error),
+                 qPrintable(error));
+        QVERIFY(!window->document()->project().entities.contains(parent.uuid));
+        QVERIFY(!window->document()->project().entities.contains(child.uuid));
+        QVERIFY(window->document()->selection().isEmpty());
+        QCOMPARE(commitCount(window.get()), commitsBefore + 1);
+    }
+
+    void deleteLeafRemovesOnlyItself()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        Entity leaf;
+        leaf.uuid = model::newUuid();
+        leaf.name = QStringLiteral("叶");
+        leaf.start = 0;
+        leaf.end = 10;
+        window->document()->mutableProject().entities.insert(leaf.uuid, leaf);
+        QVERIFY2(window->document()->commitEntity(
+                     leaf.uuid, QStringLiteral("pvf: create leaf"), &error),
+                 qPrintable(error));
+
+        window->document()->setSelection(leaf.uuid);
+        QVERIFY2(window->deleteSelectedEntityForTest(false, &error),
+                 qPrintable(error));
+        QVERIFY(!window->document()->project().entities.contains(leaf.uuid));
+        QVERIFY(window->document()->selection().isEmpty());
+    }
+
+    void deleteLockedEntityIsRejected()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        Entity locked;
+        locked.uuid = model::newUuid();
+        locked.name = QStringLiteral("锁定的");
+        locked.start = 0;
+        locked.end = 10;
+        locked.locked = true;
+        window->document()->mutableProject().entities.insert(locked.uuid, locked);
+        QVERIFY2(window->document()->commitEntity(
+                     locked.uuid, QStringLiteral("pvf: create locked"), &error),
+                 qPrintable(error));
+
+        window->document()->setSelection(locked.uuid);
+        QVERIFY(!window->deleteActionForTest()->isEnabled());
+
+        QString deleteError;
+        QVERIFY(!window->deleteSelectedEntityForTest(true, &deleteError));
+        QVERIFY(!deleteError.isEmpty());
+        QVERIFY(window->document()->project().entities.contains(locked.uuid));
+    }
+
+    void autoKeyDefaultsOnAndResetsAfterProjectSwitch()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QCheckBox* check = window->autoKeyCheckBoxForTest();
+        QVERIFY(check != nullptr);
+        QVERIFY(check->isChecked());
+        QVERIFY(window->propertiesPanelForTest()->autoKey());
+
+        check->setChecked(false);
+        QVERIFY(!window->propertiesPanelForTest()->autoKey());
+
+        ProjectSettings settings;
+        settings.name = QStringLiteral("Switch");
+        auto second = ProjectDocument::create(
+            temp.path() + QStringLiteral("/switch.pvproj"), settings, &error);
+        QVERIFY2(second != nullptr, qPrintable(error));
+        window->setDocument(std::move(second));
+
+        QVERIFY(window->autoKeyCheckBoxForTest()->isChecked());
+        QVERIFY(window->propertiesPanelForTest()->autoKey());
     }
 
     void undoRedoActionsDoNotCrash()

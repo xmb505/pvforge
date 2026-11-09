@@ -36,6 +36,7 @@
 #include <QPixmap>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSpinBox>
@@ -234,6 +235,17 @@ QString defaultEntityName(ContentKind kind)
     return {};
 }
 
+void collectSubtree(const model::Project& project, const Uuid& uuid,
+                    QSet<Uuid>& visited, QVector<Uuid>& out)
+{
+    if (uuid.isEmpty() || visited.contains(uuid))
+        return;
+    visited.insert(uuid);
+    out.append(uuid);
+    for (const Uuid& child : model::childrenOf(project, uuid))
+        collectSubtree(project, child, visited, out);
+}
+
 } // namespace
 
 NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* parent)
@@ -299,6 +311,11 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     m_ownedDocument = std::move(document);
     m_document = m_ownedDocument.get();
 
+    if (m_autoKeyCheck) {
+        QSignalBlocker blocker(m_autoKeyCheck);
+        m_autoKeyCheck->setChecked(true);
+    }
+
     if (m_document) {
         connectDocument();
         buildEditor();
@@ -353,6 +370,16 @@ void NextWindow::buildUi()
     m_redoAction->setShortcut(QKeySequence::Redo);
     connect(m_redoAction, &QAction::triggered, this, &NextWindow::redo);
     editMenu->addAction(m_redoAction);
+
+    editMenu->addSeparator();
+    m_deleteAction = new QAction(tr("删除实体"), this);
+    m_deleteAction->setObjectName(QStringLiteral("deleteEntityAction"));
+    m_deleteAction->setShortcuts(
+        {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)});
+    m_deleteAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_deleteAction, &QAction::triggered, this,
+            &NextWindow::deleteSelectedEntity);
+    editMenu->addAction(m_deleteAction);
 
     QMenu* entityMenu = menuBar()->addMenu(tr("实体(&N)"));
     auto addCreateAction = [this, entityMenu](QAction*& target, const QString& text,
@@ -506,6 +533,20 @@ void NextWindow::buildUi()
     });
     toolbar->addWidget(m_gizmoCheck);
 
+    m_autoKeyCheck = new QCheckBox(tr("自动关键帧"), toolbar);
+    m_autoKeyCheck->setObjectName(QStringLiteral("shellAutoKeyCheck"));
+    m_autoKeyCheck->setChecked(true);
+    m_autoKeyCheck->setContentsMargins(10, 0, 4, 0);
+    m_autoKeyCheck->setToolTip(
+        tr("开启后，编辑可动画属性会在播放头处插入或更新关键帧。"));
+    connect(m_autoKeyCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_propertiesPanel)
+            m_propertiesPanel->setAutoKey(checked);
+        statusBar()->showMessage(
+            checked ? tr("自动关键帧：开") : tr("自动关键帧：关"), 3000);
+    });
+    toolbar->addWidget(m_autoKeyCheck);
+
     statusBar()->setSizeGripEnabled(true);
     m_statusDir = new QLabel(tr("未打开工程"), this);
     m_statusDir->setObjectName(QStringLiteral("statusProjectDir"));
@@ -535,6 +576,26 @@ void NextWindow::buildEditor()
     m_assetPanel = new AssetPanel(m_document, top);
     m_viewport = new ViewportWidget(m_document, top);
     m_propertiesPanel = new PropertiesPanel(m_document, top);
+
+    m_propertiesPanel->setAutoKey(!m_autoKeyCheck
+                                  || m_autoKeyCheck->isChecked());
+    if (auto* panelAutoKey =
+            m_propertiesPanel->findChild<QCheckBox*>(
+                QStringLiteral("autoKeyCheck"))) {
+        connect(panelAutoKey, &QCheckBox::toggled, this,
+                [this](bool checked) {
+                    if (m_autoKeyCheck) {
+                        QSignalBlocker blocker(m_autoKeyCheck);
+                        m_autoKeyCheck->setChecked(checked);
+                    }
+                    if (m_propertiesPanel)
+                        m_propertiesPanel->setAutoKey(checked);
+                    statusBar()->showMessage(
+                        checked ? tr("自动关键帧：开")
+                                : tr("自动关键帧：关"),
+                        3000);
+                });
+    }
 
     top->addWidget(m_assetPanel);
     top->addWidget(m_viewport);
@@ -643,6 +704,7 @@ void NextWindow::connectDocument()
             m_timeline->refresh();
         if (m_viewport)
             m_viewport->refresh();
+        updateActions();
     });
 
     connect(m_document, &Document::playheadChanged, this, [this] {
@@ -1027,6 +1089,19 @@ bool NextWindow::isPlayingForTest() const
     return m_playback && m_playback->isPlaying();
 }
 
+bool NextWindow::deleteSelectedEntityForTest(bool confirmed, QString* error)
+{
+    const QVector<Uuid> uuids = collectDeletionSet(error);
+    if (uuids.isEmpty())
+        return false;
+    if (uuids.size() > 1 && !confirmed) {
+        if (error)
+            *error = tr("需要确认级联删除");
+        return false;
+    }
+    return deleteEntitySet(uuids, error);
+}
+
 void NextWindow::openPrivateTimeline(const Uuid& parentUuid)
 {
     if (!m_document)
@@ -1155,11 +1230,23 @@ void NextWindow::updateActions()
     if (m_exportAction)
         m_exportAction->setEnabled(open && hasCamera);
 
+    bool canDelete = false;
+    if (m_document) {
+        const Uuid selection = m_document->selection();
+        const auto it = m_document->project().entities.constFind(selection);
+        canDelete = it != m_document->project().entities.constEnd()
+                    && !it.value().locked;
+    }
+    if (m_deleteAction)
+        m_deleteAction->setEnabled(canDelete);
+
     for (QAction* action : {m_createEmptyAction, m_createTextAction,
                             m_createVectorAction, m_createCameraAction}) {
         if (action)
             action->setEnabled(open);
     }
+    if (m_autoKeyCheck)
+        m_autoKeyCheck->setEnabled(open);
     if (m_playheadSpin)
         m_playheadSpin->setEnabled(open);
     if (m_cameraCombo)
@@ -1316,6 +1403,83 @@ void NextWindow::redo()
     QString error;
     if (!m_document->redo(&error))
         showError(tr("重做失败"), error);
+}
+
+QVector<Uuid> NextWindow::collectDeletionSet(QString* error) const
+{
+    auto fail = [error](const QString& message) {
+        if (error)
+            *error = message;
+        return QVector<Uuid>();
+    };
+
+    if (!m_document)
+        return fail(tr("没有打开工程"));
+
+    const Uuid uuid = m_document->selection();
+    if (uuid.isEmpty())
+        return fail(tr("没有选中实体"));
+
+    const auto& entities = m_document->project().entities;
+    const auto it = entities.constFind(uuid);
+    if (it == entities.constEnd())
+        return fail(tr("选中的实体不存在"));
+    if (it.value().locked)
+        return fail(tr("实体已锁定，不能删除"));
+
+    QVector<Uuid> uuids;
+    QSet<Uuid> visited;
+    collectSubtree(m_document->project(), uuid, visited, uuids);
+    return uuids;
+}
+
+bool NextWindow::deleteEntitySet(const QVector<Uuid>& uuids, QString* error)
+{
+    if (!m_document || uuids.isEmpty()) {
+        if (error)
+            *error = tr("没有可删除的实体");
+        return false;
+    }
+
+    QString message;
+    if (uuids.size() == 1) {
+        const auto it = m_document->project().entities.constFind(uuids.first());
+        const QString name =
+            it != m_document->project().entities.constEnd() ? it.value().name
+                                                            : QString();
+        message = QStringLiteral("pvf: delete entity \"%1\"").arg(name);
+    } else {
+        message = QStringLiteral("pvf: delete %1 entities").arg(uuids.size());
+    }
+
+    if (!m_document->deleteEntities(uuids, message, error))
+        return false;
+
+    m_document->setSelection(Uuid());
+    refreshAll();
+    return true;
+}
+
+void NextWindow::deleteSelectedEntity()
+{
+    QString error;
+    const QVector<Uuid> uuids = collectDeletionSet(&error);
+    if (uuids.isEmpty()) {
+        showError(tr("删除实体失败"), error);
+        return;
+    }
+
+    if (uuids.size() > 1) {
+        const auto answer = QMessageBox::question(
+            this, tr("删除实体"),
+            tr("将级联删除 %1 个实体。确定吗？").arg(uuids.size()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    if (!deleteEntitySet(uuids, &error))
+        showError(tr("删除实体失败"), error);
 }
 
 void NextWindow::showError(const QString& title, const QString& error)

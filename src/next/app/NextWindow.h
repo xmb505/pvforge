@@ -4,6 +4,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QVector>
 
 #include <memory>
 
@@ -66,6 +67,12 @@ public:
     bool isPlayingForTest() const;
     PlaybackController* playbackControllerForTest() const { return m_playback.get(); }
 
+    // Delete flow with the confirmation bypassed for tests.
+    bool deleteSelectedEntityForTest(bool confirmed = true,
+                                     QString* error = nullptr);
+    QAction* deleteActionForTest() const { return m_deleteAction; }
+    QCheckBox* autoKeyCheckBoxForTest() const { return m_autoKeyCheck; }
+
     // Accessors used by the shell tests and by future automation.
     ViewportWidget* viewportForTest() const { return m_viewport; }
     TimelineWidget* timelineForTest() const { return m_timeline; }
@@ -89,6 +96,7 @@ private slots:
     void chooseNewProject();
     void chooseOpenProject();
     void exportVideo();
+    void deleteSelectedEntity();
     void undo();
     void redo();
 
@@ -105,6 +113,8 @@ private:
     void stopMcpServer();
     void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
                      const QString& outputPath, bool includeAudio);
+    QVector<Uuid> collectDeletionSet(QString* error) const;
+    bool deleteEntitySet(const QVector<Uuid>& uuids, QString* error);
     void closeOrphanedPrivateTimelines();
     void closeAllPrivateTimelines();
     void replaceCentralWidget(QWidget* widget);
@@ -134,6 +144,7 @@ private:
     QAction* m_createVectorAction = nullptr;
     QAction* m_createCameraAction = nullptr;
     QAction* m_exportAction = nullptr;
+    QAction* m_deleteAction = nullptr;
     QAction* m_playPauseAction = nullptr;
     QAction* m_homeAction = nullptr;
     QAction* m_endAction = nullptr;
@@ -143,6 +154,7 @@ private:
     QSpinBox* m_playheadSpin = nullptr;
     QComboBox* m_cameraCombo = nullptr;
     QCheckBox* m_gizmoCheck = nullptr;
+    QCheckBox* m_autoKeyCheck = nullptr;
     QLabel* m_fpsLabel = nullptr;
     QLabel* m_resolutionLabel = nullptr;
 
