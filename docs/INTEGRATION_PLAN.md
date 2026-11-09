@@ -12,31 +12,19 @@
 
 ## 进度
 
-- 已完成：Model / Assets / Solver / Gizmo / Store / Anim / NextCore / ProjectDocument / Renderer2 / AssetPanel。
-- 进行中：TimelineWidget、PropertiesPanel、ViewportWidget、MCP v2 Phase A。
-- 待做：
-  - 关键帧编辑 UI（打 key/删 key/拖 key；目前 Properties 只改静态值）
-  - 删除实体（Del + 级联确认）
-  - 播放控制 + 音频播放（音频为主时钟）
-  - 导出对话框 + 进度（Export2 完成后接）
-  - 求解轨迹预览 + 初速度手柄
-  - 视频真实解码、HTML 真实渲染
-  - MCP HTTP transport + 固定端口/token
-  - Timeline 裁剪级联（进行中）
-- 已完成模块都有独立测试；根 CMake 已能一起编。
+> 详细模块/测试/缺口见 [STATUS.md](STATUS.md)。
+
+- 已完成：Model / Assets / Solver / Gizmo / Store / Anim / Renderer2 / Export2 / Audio2 / HTML cache / HTML2 / Video2 / MCP2 / NextCore / ProjectDocument / Renderer2 / AssetPanel / Timeline / Properties / Viewport / Settings / MCP log / NextWindow。
+- 进行中：Watchdog、Store 崩溃恢复。
+- 待做：导出最终 HTML/视频 provider + 高帧率对话框、崩溃恢复弹窗、视频抽图设置、端到端验收、删除旧 app。
+- 根 CMake 已能一起编；`pvforge-next` 可链接。
 
 ## 当前状态
 
-- 分支：`timeline-clip-merge`，HEAD `4e907ef`。
-- 旧模型仍在 `src/core/Project.*`、`src/ui/TimelinePanel.*`、`src/mcp/*`、`src/render/SceneRenderer.*`。
-- 新模型设计：`docs/ENTITY_MODEL.md`。
-- 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`。
-- 新模块：
-  - `src/model/`：实体/工程数据、JSON、校验
-  - `src/solver/`：物理求解
-  - `src/assets/`：sha256、素材库、WAV、.pvhtml
-  - `src/gizmo/`：gizmo 数学
-  - `src/common/Types.h`：共享枚举/UUID 类型
+- 分支：`new-entity-model`。
+- 新设计：`docs/ENTITY_MODEL.md`；状态/交接：`docs/STATUS.md`。
+- 旧模型仍在 `src/core/Project.*`、`src/ui/TimelinePanel.*`、`src/mcp/*`、`src/render/SceneRenderer.*`，仅作为回退参考。
+- 新模块：`src/model`、`store`、`assets`、`solver`、`anim`、`gizmo`、`render2`、`htmlcache`、`html2`、`video2`、`audio2`、`export2`、`mcp2`、`next/*`。
 
 ## 整合顺序
 
