@@ -222,7 +222,8 @@ QString guideMarkdown(const QString& topic)
             "# 编写规则\n"
             "- 先读 `project.summary` 和 `entity.list`，再改。\n"
             "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration-1`。\n"
-            "- 一次工具调用只做一个逻辑操作，写工具各自产生一个 commit。\n"
+            "- 一次工具调用只做一个逻辑操作；有文本 diff 的写工具各自产生一个 commit。\n"
+            "- git 只管理文本；素材不进 git，纯素材导入可能没有 commit。\n"
             "- 批量工具全成功或全回滚。\n"
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"
@@ -230,12 +231,12 @@ QString guideMarkdown(const QString& topic)
     if (topic == QLatin1String("workflow"))
         return QStringLiteral(
             "# 推荐工作流\n"
-            "1. `project.summary` 确认 fps/尺寸/内容长度。\n"
+            "1. `project.summary` 确认 fps/尺寸/内容长度；fps/尺寸创建后锁定，`project.update` 不能改。\n"
             "2. `entity.list` / `entity.get` 找到目标 UUID、父级、row。\n"
             "3. `entity.createTree` 一次建父子层级，或 `entity.createMany` 建平级实体。\n"
             "4. `keyframes.setMany` 一次写多条轨道。\n"
             "5. `entity.move` / `entity.trim` / `entity.reparent` 调整时间与层级。\n"
-            "6. 需要回退时用 `history.undo`，不要写相反值模拟撤销。\n");
+            "6. 需要回退时用 `history.undo`（内存撤销，不产生 git commit），不要写相反值模拟撤销。\n");
     if (topic == QLatin1String("solver"))
         return QStringLiteral(
             "# 求解段\n"
@@ -255,6 +256,7 @@ QString guideMarkdown(const QString& topic)
         return QStringLiteral(
             "# 素材\n"
             "- `asset.import` 只接受本地绝对路径；相同内容按 sha256 去重。\n"
+            "- 素材存在 `assets/`，不进 git；纯素材导入没有文本 diff 时不产生 commit。\n"
             "- 视频默认拆出 WAV 音频素材，返回 `asset` 与 `audioAsset` 两个 hash。\n"
             "- HTML 必须两步：先 `asset.import` 导入 `.pvhtml`，再 `entity.create`/`asset.assign`。\n"
             "- 素材没有 UUID，只有 hash；删除素材不会删除引用它的实体。\n");
@@ -338,11 +340,12 @@ QJsonObject listTools()
     tools.append(toolSchema(QStringLiteral("project.summary"),
                             QStringLiteral("轻量工程概况"), empty));
     tools.append(toolSchema(
-        QStringLiteral("project.update"), QStringLiteral("修改工程设置"),
+        QStringLiteral("project.update"),
+        QStringLiteral("修改工程名称/背景；fps 与分辨率创建后锁定"),
         objectSchema({{QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QString())},
-                      {QStringLiteral("height"), prop(QStringLiteral("integer"), QString())},
-                      {QStringLiteral("fps"), prop(QStringLiteral("integer"), QStringLiteral("非空工程需 confirm"))},
+                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
+                      {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
+                      {QStringLiteral("fps"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
                       {QStringLiteral("background"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}})));
 
@@ -528,7 +531,8 @@ QJsonObject listTools()
         empty));
 
     tools.append(toolSchema(
-        QStringLiteral("asset.import"), QStringLiteral("把本地文件/目录复制进工程素材库，视频自动拆 WAV"),
+        QStringLiteral("asset.import"),
+        QStringLiteral("把本地文件/目录复制进工程素材库，视频自动拆 WAV；素材不进 git，纯素材导入可能没有 commit"),
         objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径"))},
                       {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("type"), prop(QStringLiteral("string"), QStringLiteral("image|video|audio|html"))},
@@ -587,13 +591,15 @@ QJsonObject listTools()
                      {QStringLiteral("id")})));
 
     tools.append(toolSchema(
-        QStringLiteral("history.undo"), QStringLiteral("git revert 最近的操作 commit"),
+        QStringLiteral("history.undo"),
+        QStringLiteral("内存撤销最近的操作，不产生 git commit；git 历史面板是冷恢复"),
         objectSchema({{QStringLiteral("steps"), prop(QStringLiteral("integer"), QStringLiteral("1..10"))}})));
     tools.append(toolSchema(
-        QStringLiteral("history.redo"), QStringLiteral("revert 最近一次 undo"),
+        QStringLiteral("history.redo"),
+        QStringLiteral("内存重做最近撤销的操作，不产生 git commit"),
         objectSchema({{QStringLiteral("steps"), prop(QStringLiteral("integer"), QStringLiteral("1..10"))}})));
     tools.append(toolSchema(
-        QStringLiteral("history.log"), QStringLiteral("分页读取 pvf: 提交历史"),
+        QStringLiteral("history.log"), QStringLiteral("分页读取 git 冷备提交历史"),
         objectSchema({{QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..100"))}})));
 

@@ -62,7 +62,22 @@ public:
     void setConfigFilePath(const QString& path);
     QString configFilePath() const;
 
+    // Human emergency stop. While stopped, tools/call still succeeds at the
+    // HTTP/JSON-RPC level but every write tool returns isError=true with
+    // error.code "stopped_by_human"; tools/list and read-only tools keep
+    // working. resumeAi() re-enables writes. Committed history is kept.
+    void stopAi();
+    void resumeAi();
+    bool aiStopped() const;
+
 signals:
+    void toolCallStarted(const QString& name, const QString& argsJson,
+                         bool write);
+    void toolCallFinished(const QString& name, const QString& resultJson,
+                          qint64 ms, bool ok);
+    void stoppedChanged(bool stopped);
+
+    // Kept for existing log wiring.
     void toolInvoked(const QString& name, const QString& argsJson,
                      const QString& resultJson, qint64 durationMs, bool ok);
 

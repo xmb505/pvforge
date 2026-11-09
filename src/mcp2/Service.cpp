@@ -4,6 +4,7 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 
 #include <exception>
 #include <utility>
@@ -115,6 +116,50 @@ void Service::setViewStateProvider(ViewStateProvider provider)
     m_viewStateProvider = std::move(provider);
 }
 
+void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
+{
+    m_batchCheckpoint = std::move(checkpoint);
+}
+
+void Service::requestStop()
+{
+    m_stopped.store(true, std::memory_order_relaxed);
+}
+
+void Service::resumeWrites()
+{
+    m_stopped.store(false, std::memory_order_relaxed);
+}
+
+bool Service::isStopped() const
+{
+    return m_stopped.load(std::memory_order_relaxed);
+}
+
+bool Service::isWriteTool(const QString& tool)
+{
+    // Everything not listed here modifies project text. Unknown names count
+    // as writes so a stopped server never forwards a surprising mutation.
+    static const QSet<QString> readOnly = {
+        QStringLiteral("project.get"),
+        QStringLiteral("project.summary"),
+        QStringLiteral("entity.get"),
+        QStringLiteral("entity.list"),
+        QStringLiteral("keyframes.get"),
+        QStringLiteral("solver.list"),
+        QStringLiteral("solver.evaluate"),
+        QStringLiteral("preview.render_frame"),
+        QStringLiteral("view.state"),
+        QStringLiteral("asset.list"),
+        QStringLiteral("asset.get"),
+        QStringLiteral("markers.list"),
+        QStringLiteral("history.log"),
+        QStringLiteral("schema.get"),
+        QStringLiteral("guide.get"),
+    };
+    return !readOnly.contains(tool);
+}
+
 QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
 {
     if (!m_store)
@@ -140,11 +185,19 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
             .toJson();
     }
 
+    if (isWriteTool(tool) && isStopped())
+        return detail::stoppedByHuman().toJson();
+
     try
     {
         detail::Tx tx(m_store);
         if (m_viewStateProvider)
             tx.viewState = m_viewStateProvider();
+        tx.stopCheck = [this] {
+            if (m_batchCheckpoint)
+                m_batchCheckpoint();
+            return isStopped();
+        };
         return entry->handler(tx, args).toJson();
     }
     catch (const std::exception& exception)

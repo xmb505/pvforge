@@ -443,6 +443,25 @@ void HttpServer::setConfigFilePath(const QString& path)
     m_configFilePath = path;
 }
 
+void HttpServer::stopAi()
+{
+    if (m_service)
+        m_service->requestStop();
+    emit stoppedChanged(true);
+}
+
+void HttpServer::resumeAi()
+{
+    if (m_service)
+        m_service->resumeWrites();
+    emit stoppedChanged(false);
+}
+
+bool HttpServer::aiStopped() const
+{
+    return m_service && m_service->isStopped();
+}
+
 bool HttpServer::loadOrCreateConfig(QString* error)
 {
     const QString path = configFilePath();
@@ -1079,7 +1098,9 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             result.insert(
                 QStringLiteral("instructions"),
                 QStringLiteral("PVForge MCP：写工具默认可用；工具结果是结构化 JSON，"
-                               "失败时返回 {ok:false,error:{code,message}}。"));
+                               "失败时返回 {ok:false,error:{code,message}}。"
+                               "人类急停期间写工具返回 stopped_by_human，"
+                               "只读工具仍可用；等人类恢复后再继续。"));
 
             const QByteArray extra =
                 QByteArrayLiteral("Mcp-Session-Id: ") + m_sessionId
@@ -1135,6 +1156,10 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             QElapsedTimer timer;
             timer.start();
 
+            const bool write = Service::isWriteTool(name);
+            const QString argsJson = QString::fromUtf8(compactJson(args));
+            emit toolCallStarted(name, argsJson, write);
+
             QJsonObject serviceResult;
             if (m_service)
             {
@@ -1153,6 +1178,7 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
 
             const bool ok = serviceResult.value(QStringLiteral("ok")).toBool();
             const QByteArray serviceJson = compactJson(serviceResult);
+            const qint64 elapsed = timer.elapsed();
 
             QJsonObject textContent;
             textContent.insert(QStringLiteral("type"), QStringLiteral("text"));
@@ -1166,11 +1192,9 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             result.insert(QStringLiteral("structuredContent"), serviceResult);
             result.insert(QStringLiteral("isError"), !ok);
 
-            emit toolInvoked(
-                name,
-                QString::fromUtf8(compactJson(args)),
-                QString::fromUtf8(serviceJson),
-                timer.elapsed(), ok);
+            emit toolCallFinished(name, QString::fromUtf8(serviceJson), elapsed, ok);
+            emit toolInvoked(name, argsJson, QString::fromUtf8(serviceJson),
+                             elapsed, ok);
 
             sendRpcResult(socket, id, result);
             return;

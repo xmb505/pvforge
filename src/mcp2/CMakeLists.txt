@@ -82,7 +82,7 @@ if(BUILD_TESTING)
         keyframesSetManyRollsBack
         assetAssignAndUnassign
         duplicateSubtreeOneCommit
-        projectUpdateFpsNeedsConfirm
+        projectUpdateRejectsFpsAndResolution
         deleteManyMergesHierarchy
         listToolsAndSchema
         solverCreateUpdateDelete
@@ -91,6 +91,11 @@ if(BUILD_TESTING)
         previewRenderFrameWritesPng
         previewRejectsOversize
         solverEvaluateNestedEntity
+        stopBlocksWrites
+        stopKeepsReadsWorking
+        resumeRestoresWrites
+        createManyAbortsMidBatch
+        writeToolClassification
     )
 
     foreach(test_case IN LISTS PVF_MCP2_TEST_CASES)
@@ -115,6 +120,7 @@ if(BUILD_TESTING)
         httpCredentialsPersistAcrossRestart
         httpDefaultConfigUsesFixedPort
         httpPortConflictFailsClearly
+        httpStopAiBlocksWrites
     )
 
     foreach(test_case IN LISTS PVF_MCP2_HTTP_TEST_CASES)

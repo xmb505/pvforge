@@ -12,6 +12,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include <functional>
+
 namespace pvf::mcp2::detail {
 
 // One tool call works on a private copy of the project. Nothing reaches the
@@ -28,6 +30,9 @@ struct Tx
     QSet<Uuid> dirty;
     QSet<Uuid> deleted;
     bool projectDirty = false;
+    // Set by Service::execute. Batch loops call stopRequested(tx) between
+    // items; a landing human stop drops the whole transaction.
+    std::function<bool()> stopCheck;
 
     model::Project& p() { return project; }
     const model::Project& p() const { return project; }
@@ -43,6 +48,12 @@ struct Tx
 Result failure(const QString& code, const QString& message,
                const QJsonObject& details = QJsonObject());
 Result success(const QJsonObject& data = QJsonObject());
+
+// Human stop helpers. stopRequested() is false when no stop source is wired.
+// Long batch loops call it between items and bail out with stoppedByHuman(),
+// which drops the transaction copy without writing anything.
+bool stopRequested(Tx& tx);
+Result stoppedByHuman();
 
 // Argument readers.
 bool readInt(const QJsonObject& args, const char* key, int* out, Result* error,

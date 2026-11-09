@@ -529,6 +529,8 @@ Result trimChildren(Tx& tx, const Uuid& parentUuid, int newStart, int newEnd,
 
     for (const Uuid& childId : std::as_const(childIds))
     {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         const model::Entity* child = findEntity(tx.p(), childId);
         if (!child)
             continue;
@@ -762,6 +764,8 @@ Result deleteCore(Tx& tx, const QVector<Uuid>& roots, DeleteStats* stats)
 
     for (const Uuid& uuid : std::as_const(removedUuids))
     {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         tx.p().entities.remove(uuid);
         tx.drop(uuid);
         stats->deletedUuids << uuid;
@@ -1164,6 +1168,8 @@ Result entityCreateMany(Tx& tx, const QJsonObject& args)
     QJsonArray created;
     for (int i = 0; i < entities.size(); ++i)
     {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         if (!entities.at(i).isObject())
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("entities[%1] 必须是对象").arg(i));
@@ -1216,6 +1222,8 @@ Result entityCreateTree(Tx& tx, const QJsonObject& args)
     std::function<Result(const QJsonObject&, const Uuid&, const QString&, int)> build;
     build = [&](const QJsonObject& node, const Uuid& parent, const QString& path,
                 int depth) -> Result {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         if (depth > kMaxDepth)
             return failure(QStringLiteral("conflict"),
                            QStringLiteral("树深度超过 %1").arg(kMaxDepth));
@@ -1513,6 +1521,8 @@ Result entityUpdateMany(Tx& tx, const QJsonObject& args)
     QJsonArray results;
     for (int i = 0; i < items.size(); ++i)
     {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         if (!items.at(i).isObject())
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("items[%1] 必须是对象").arg(i));

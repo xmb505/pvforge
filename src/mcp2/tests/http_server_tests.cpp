@@ -199,6 +199,25 @@ bool containsTool(const QJsonArray& tools, const QString& name)
     return false;
 }
 
+QJsonObject toolCallRequest(const QString& name, const QJsonObject& arguments,
+                            int id = 7)
+{
+    return QJsonObject{
+        {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+        {QStringLiteral("id"), id},
+        {QStringLiteral("method"), QStringLiteral("tools/call")},
+        {QStringLiteral("params"),
+         QJsonObject{{QStringLiteral("name"), name},
+                     {QStringLiteral("arguments"), arguments}}}};
+}
+
+QJsonObject createEntityArgs(const QString& name, int start, int end)
+{
+    return QJsonObject{{QStringLiteral("name"), name},
+                       {QStringLiteral("start"), start},
+                       {QStringLiteral("end"), end}};
+}
+
 } // namespace
 
 class HttpServerTests : public QObject
@@ -216,6 +235,7 @@ private slots:
     void httpCredentialsPersistAcrossRestart();
     void httpDefaultConfigUsesFixedPort();
     void httpPortConflictFailsClearly();
+    void httpStopAiBlocksWrites();
 };
 
 void HttpServerTests::initTestCase()
@@ -599,6 +619,110 @@ void HttpServerTests::httpPortConflictFailsClearly()
     QVERIFY(!QFileInfo::exists(fixture.endpointPath));
 
     blocker.close();
+}
+
+void HttpServerTests::httpStopAiBlocksWrites()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    QString error;
+    QVERIFY2(fixture.server->start(0, &error) > 0, qPrintable(error));
+    const QByteArray token = fixture.server->token();
+
+    QSignalSpy started(fixture.server.get(),
+                       &mcp2::HttpServer::toolCallStarted);
+    QSignalSpy finished(fixture.server.get(),
+                        &mcp2::HttpServer::toolCallFinished);
+    QSignalSpy stopped(fixture.server.get(),
+                       &mcp2::HttpServer::stoppedChanged);
+
+    // A normal write call is flagged as a write and succeeds.
+    Response response = sendRpc(
+        fixture, token,
+        toolCallRequest(QStringLiteral("entity.create"),
+                        createEntityArgs(QStringLiteral("第一个"), 0, 30)));
+    QCOMPARE(response.status, 200);
+    QCOMPARE(rpcResult(response).value(QStringLiteral("isError")).toBool(), false);
+    QCOMPARE(started.count(), 1);
+    QCOMPARE(started.at(0).at(0).toString(), QStringLiteral("entity.create"));
+    QCOMPARE(started.at(0).at(2).toBool(), true);
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(finished.at(0).at(3).toBool(), true);
+    QVERIFY(finished.at(0).at(2).toLongLong() >= 0);
+
+    // A read-only call is flagged as read.
+    response = sendRpc(fixture, token,
+                       toolCallRequest(QStringLiteral("project.get"), QJsonObject()));
+    QCOMPARE(response.status, 200);
+    QCOMPARE(rpcResult(response).value(QStringLiteral("isError")).toBool(), false);
+    QCOMPARE(started.count(), 2);
+    QCOMPARE(started.at(1).at(0).toString(), QStringLiteral("project.get"));
+    QCOMPARE(started.at(1).at(2).toBool(), false);
+    QCOMPARE(finished.at(1).at(3).toBool(), true);
+
+    const int entitiesBefore = fixture.store->project().entities.size();
+    const int historyBefore = fixture.store->history(0).size();
+
+    fixture.server->stopAi();
+    QVERIFY(fixture.server->aiStopped());
+    QCOMPARE(stopped.count(), 1);
+    QCOMPARE(stopped.at(0).at(0).toBool(), true);
+
+    // tools/list keeps returning every tool while stopped.
+    response = sendRpc(fixture, token,
+                       QJsonObject{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                                   {QStringLiteral("id"), 20},
+                                   {QStringLiteral("method"), QStringLiteral("tools/list")}});
+    QCOMPARE(response.status, 200);
+    QVERIFY(containsTool(rpcResult(response).value(QStringLiteral("tools")).toArray(),
+                         QStringLiteral("entity.create")));
+
+    // A stopped write is a 200 JSON-RPC result with isError=true, not HTTP 500.
+    response = sendRpc(
+        fixture, token,
+        toolCallRequest(QStringLiteral("entity.create"),
+                        createEntityArgs(QStringLiteral("拒绝"), 0, 30)));
+    QCOMPARE(response.status, 200);
+    const QJsonObject denied = rpcResult(response);
+    QCOMPARE(denied.value(QStringLiteral("isError")).toBool(), true);
+    const QJsonObject deniedBody =
+        denied.value(QStringLiteral("structuredContent")).toObject();
+    QCOMPARE(deniedBody.value(QStringLiteral("ok")).toBool(), false);
+    QCOMPARE(deniedBody.value(QStringLiteral("error"))
+                 .toObject()
+                 .value(QStringLiteral("code"))
+                 .toString(),
+             QStringLiteral("stopped_by_human"));
+    QCOMPARE(started.count(), 3);
+    QCOMPARE(started.at(2).at(2).toBool(), true);
+    QCOMPARE(finished.count(), 3);
+    QCOMPARE(finished.at(2).at(3).toBool(), false);
+
+    QCOMPARE(fixture.store->project().entities.size(), entitiesBefore);
+    QCOMPARE(fixture.store->history(0).size(), historyBefore);
+
+    // Read-only tools still work while stopped.
+    response = sendRpc(fixture, token,
+                       toolCallRequest(QStringLiteral("project.get"), QJsonObject()));
+    QCOMPARE(response.status, 200);
+    QCOMPARE(rpcResult(response).value(QStringLiteral("isError")).toBool(), false);
+
+    // Resume re-enables writes and reports the state change.
+    fixture.server->resumeAi();
+    QVERIFY(!fixture.server->aiStopped());
+    QCOMPARE(stopped.count(), 2);
+    QCOMPARE(stopped.at(1).at(0).toBool(), false);
+
+    response = sendRpc(
+        fixture, token,
+        toolCallRequest(QStringLiteral("entity.create"),
+                        createEntityArgs(QStringLiteral("恢复"), 0, 30)));
+    QCOMPARE(response.status, 200);
+    QCOMPARE(rpcResult(response).value(QStringLiteral("isError")).toBool(), false);
+    QCOMPARE(fixture.store->project().entities.size(), entitiesBefore + 1);
+
+    fixture.server->stop();
 }
 
 int main(int argc, char** argv)

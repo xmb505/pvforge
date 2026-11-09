@@ -289,6 +289,8 @@ Result keyframesSetMany(Tx& tx, const QJsonObject& args)
     QJsonArray results;
     for (int i = 0; i < items.size(); ++i)
     {
+        if (stopRequested(tx))
+            return stoppedByHuman();
         if (!items.at(i).isObject())
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("items[%1] 必须是对象").arg(i));

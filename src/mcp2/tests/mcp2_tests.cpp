@@ -139,7 +139,7 @@ private slots:
     void keyframesSetManyRollsBack();
     void assetAssignAndUnassign();
     void duplicateSubtreeOneCommit();
-    void projectUpdateFpsNeedsConfirm();
+    void projectUpdateRejectsFpsAndResolution();
     void deleteManyMergesHierarchy();
     void listToolsAndSchema();
     void solverCreateUpdateDelete();
@@ -148,6 +148,12 @@ private slots:
     void previewRenderFrameWritesPng();
     void previewRejectsOversize();
     void solverEvaluateNestedEntity();
+
+    void stopBlocksWrites();
+    void stopKeepsReadsWorking();
+    void resumeRestoresWrites();
+    void createManyAbortsMidBatch();
+    void writeToolClassification();
 };
 
 void Mcp2Tests::initTestCase()
@@ -715,8 +721,12 @@ void Mcp2Tests::assetImportDeduplicates()
     const QString hash = data.value(QStringLiteral("asset")).toObject()
                              .value(QStringLiteral("hash")).toString();
     QCOMPARE(hash.size(), 64);
-    QVERIFY(!result.value(QStringLiteral("commit")).toObject()
-                 .value(QStringLiteral("hash")).toString().isEmpty());
+    // Assets never enter git: a pure import may have no text diff at all, so
+    // the commit envelope is optional and may carry an empty hash.
+    const QJsonValue commit = result.value(QStringLiteral("commit"));
+    QVERIFY(commit.isUndefined() || commit.isNull()
+            || commit.toObject().value(QStringLiteral("hash")).toString().isEmpty());
+    QVERIFY(fixture.store->assets().get(hash).has_value());
 
     result = fixture.call(QStringLiteral("asset.import"),
                           QJsonObject{{QStringLiteral("path"), imagePath},
@@ -795,29 +805,42 @@ void Mcp2Tests::historyUndoRedo()
         uuidOf(fixture.call(QStringLiteral("entity.create"),
                             entityArgs(QStringLiteral("甲"), 0, 30)));
     QVERIFY(!uuid.isEmpty());
-    QCOMPARE(fixture.historySize(), 2);
+    const int gitBefore = fixture.historySize();
+    QCOMPARE(gitBefore, 2); // init + create
+    const QString headBefore = fixture.store->history(1).first().hash;
 
     QJsonObject result = fixture.call(QStringLiteral("history.undo"),
                                       QJsonObject{{QStringLiteral("steps"), 1}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
-    QCOMPARE(result.value(QStringLiteral("data")).toObject()
-                 .value(QStringLiteral("reverted")).toArray().size(),
-             1);
     QVERIFY(fixture.store->project().entities.isEmpty());
-    QVERIFY(!result.value(QStringLiteral("data")).toObject()
-                 .value(QStringLiteral("head")).toString().isEmpty());
+    QCOMPARE(fixture.historySize(), gitBefore);
+    QCOMPARE(fixture.store->history(1).first().hash, headBefore);
+    QVERIFY(!result.contains(QStringLiteral("commit")));
+    QCOMPARE(result.value(QStringLiteral("data"))
+                 .toObject()
+                 .value(QStringLiteral("steps"))
+                 .toInt(),
+             1);
 
     result = fixture.call(QStringLiteral("history.redo"),
                           QJsonObject{{QStringLiteral("steps"), 1}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     QCOMPARE(fixture.store->project().entities.size(), 1);
     QCOMPARE(fixture.store->project().entities.value(uuid).name, QStringLiteral("甲"));
+    QCOMPARE(fixture.historySize(), gitBefore);
+    QCOMPARE(fixture.store->history(1).first().hash, headBefore);
+    QVERIFY(!result.contains(QStringLiteral("commit")));
 
+    // history.log only reports the git cold backup, which undo/redo never touch.
     result = fixture.call(QStringLiteral("history.log"));
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
-    QVERIFY(result.value(QStringLiteral("data")).toObject()
-                .value(QStringLiteral("commits")).toArray().size()
-            >= 3);
+    const QJsonObject logData = result.value(QStringLiteral("data")).toObject();
+    QCOMPARE(logData.value(QStringLiteral("commits")).toArray().size(), gitBefore);
+    QCOMPARE(logData.value(QStringLiteral("page"))
+                 .toObject()
+                 .value(QStringLiteral("total"))
+                 .toInt(),
+             gitBefore);
 }
 
 void Mcp2Tests::defaultRowIsHighestPlusOne()
@@ -1022,7 +1045,7 @@ void Mcp2Tests::duplicateSubtreeOneCommit()
     QCOMPARE(copy.end, 70);
 }
 
-void Mcp2Tests::projectUpdateFpsNeedsConfirm()
+void Mcp2Tests::projectUpdateRejectsFpsAndResolution()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
@@ -1031,27 +1054,55 @@ void Mcp2Tests::projectUpdateFpsNeedsConfirm()
                                  entityArgs(QStringLiteral("实体"), 0, 30)))
                  .isEmpty());
 
-    QJsonObject result =
+    const model::ProjectSettings before = fixture.store->project().settings;
+
+    QVector<QJsonObject> lockedPatches;
+    lockedPatches.append(QJsonObject{{QStringLiteral("fps"), 24}});
+    lockedPatches.append(QJsonObject{{QStringLiteral("fps"), 24},
+                                     {QStringLiteral("confirm"), true}});
+    lockedPatches.append(QJsonObject{{QStringLiteral("width"), 1280}});
+    lockedPatches.append(QJsonObject{{QStringLiteral("height"), 720}});
+    for (const QJsonObject& patch : std::as_const(lockedPatches))
+    {
+        const QJsonObject result =
+            fixture.call(QStringLiteral("project.update"), patch);
+        QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+        QCOMPARE(errorCode(result), QStringLiteral("conflict"));
+        const QString message = result.value(QStringLiteral("error"))
+                                    .toObject()
+                                    .value(QStringLiteral("message"))
+                                    .toString();
+        QVERIFY2(message.contains(QStringLiteral("锁定")), qPrintable(message));
+    }
+
+    QCOMPARE(fixture.store->project().settings.fps, before.fps);
+    QCOMPARE(fixture.store->project().settings.width, before.width);
+    QCOMPARE(fixture.store->project().settings.height, before.height);
+
+    // Name and background stay editable.
+    const QJsonObject result =
         fixture.call(QStringLiteral("project.update"),
-                     QJsonObject{{QStringLiteral("fps"), 24}});
-    QCOMPARE(errorCode(result), QStringLiteral("confirm_required"));
-    QCOMPARE(fixture.store->project().settings.fps, 30);
-
-    result = fixture.call(QStringLiteral("project.update"),
-                          QJsonObject{{QStringLiteral("fps"), 24},
-                                      {QStringLiteral("confirm"), true}});
+                     QJsonObject{{QStringLiteral("name"), QStringLiteral("新名字")},
+                                 {QStringLiteral("background"), QStringLiteral("#112233")}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().settings.fps, 24);
-    QVERIFY(result.value(QStringLiteral("data")).toObject()
-                .value(QStringLiteral("changed")).toArray()
-                .contains(QStringLiteral("fps")));
+    const QJsonArray changedArray = result.value(QStringLiteral("data"))
+                                        .toObject()
+                                        .value(QStringLiteral("changed"))
+                                        .toArray();
+    QVERIFY(changedArray.contains(QStringLiteral("name")));
+    QVERIFY(changedArray.contains(QStringLiteral("background")));
+    QCOMPARE(fixture.store->project().settings.name, QStringLiteral("新名字"));
+    QCOMPARE(fixture.store->project().settings.background, QStringLiteral("#112233"));
 
-    result = fixture.call(QStringLiteral("project.get"));
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
-    QCOMPARE(result.value(QStringLiteral("data")).toObject()
-                 .value(QStringLiteral("settings")).toObject()
-                 .value(QStringLiteral("fps")).toInt(),
-             24);
+    const QJsonObject project = fixture.call(QStringLiteral("project.get"));
+    QVERIFY2(project.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(project)));
+    const QJsonObject settings = project.value(QStringLiteral("data"))
+                                     .toObject()
+                                     .value(QStringLiteral("settings"))
+                                     .toObject();
+    QCOMPARE(settings.value(QStringLiteral("fps")).toInt(), before.fps);
+    QCOMPARE(settings.value(QStringLiteral("width")).toInt(), before.width);
+    QCOMPARE(settings.value(QStringLiteral("height")).toInt(), before.height);
 }
 
 void Mcp2Tests::deleteManyMergesHierarchy()
@@ -1589,6 +1640,156 @@ void Mcp2Tests::solverEvaluateNestedEntity()
             < 1e-6);
     QCOMPARE(samples.at(1).toObject().value(QStringLiteral("frame")).toInt(), 10);
     QCOMPARE(samples.at(2).toObject().value(QStringLiteral("frame")).toInt(), 29);
+}
+
+void Mcp2Tests::stopBlocksWrites()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString uuid =
+        uuidOf(fixture.call(QStringLiteral("entity.create"),
+                            entityArgs(QStringLiteral("保留"), 0, 30)));
+    QVERIFY(!uuid.isEmpty());
+    const int historyBefore = fixture.historySize();
+
+    fixture.service->requestStop();
+    QVERIFY(fixture.service->isStopped());
+
+    QJsonObject result = fixture.call(QStringLiteral("entity.create"),
+                                      entityArgs(QStringLiteral("急停后"), 0, 30));
+    QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+    QCOMPARE(result.value(QStringLiteral("error"))
+                 .toObject()
+                 .value(QStringLiteral("message"))
+                 .toString(),
+             QStringLiteral("人类按下急停，此次操作未实现"));
+
+    result = fixture.call(QStringLiteral("entity.delete"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid},
+                                      {QStringLiteral("confirm"), true}});
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+
+    QCOMPARE(fixture.store->project().entities.size(), 1);
+    QVERIFY(fixture.store->project().entities.contains(uuid));
+    QCOMPARE(fixture.historySize(), historyBefore);
+}
+
+void Mcp2Tests::stopKeepsReadsWorking()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString uuid =
+        uuidOf(fixture.call(QStringLiteral("entity.create"),
+                            entityArgs(QStringLiteral("实体"), 0, 30)));
+    QVERIFY(!uuid.isEmpty());
+
+    fixture.service->requestStop();
+    QVERIFY(fixture.service->isStopped());
+
+    QJsonObject result = fixture.call(QStringLiteral("project.get"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    result = fixture.call(QStringLiteral("entity.list"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data"))
+                 .toObject()
+                 .value(QStringLiteral("page"))
+                 .toObject()
+                 .value(QStringLiteral("total"))
+                 .toInt(),
+             1);
+
+    result = fixture.call(QStringLiteral("view.state"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    result = fixture.call(QStringLiteral("keyframes.get"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid},
+                                      {QStringLiteral("track"), QStringLiteral("x")}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::resumeRestoresWrites()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    fixture.service->requestStop();
+    QJsonObject result = fixture.call(QStringLiteral("entity.create"),
+                                      entityArgs(QStringLiteral("拒绝"), 0, 30));
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+    QVERIFY(fixture.store->project().entities.isEmpty());
+
+    const int historyBefore = fixture.historySize();
+    fixture.service->resumeWrites();
+    QVERIFY(!fixture.service->isStopped());
+
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("恢复"), 0, 30));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.size(), 1);
+    QCOMPARE(fixture.historySize(), historyBefore + 1);
+
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"),
+                                       uuidOf(result)}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::createManyAbortsMidBatch()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    QJsonArray entities;
+    for (int i = 0; i < 6; ++i)
+        entities.append(entityArgs(QStringLiteral("批量%1").arg(i), 0, 30));
+
+    int checkpoints = 0;
+    fixture.service->setBatchCheckpoint([&] {
+        if (++checkpoints == 3)
+            fixture.service->requestStop();
+    });
+
+    const int historyBefore = fixture.historySize();
+    QJsonObject result =
+        fixture.call(QStringLiteral("entity.createMany"),
+                     QJsonObject{{QStringLiteral("entities"), entities}});
+    QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+    QVERIFY(checkpoints >= 3);
+    QVERIFY(fixture.store->project().entities.isEmpty());
+    QCOMPARE(fixture.historySize(), historyBefore);
+
+    // The stop persists: the next call is refused outright.
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("再来"), 0, 30));
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+    QVERIFY(fixture.store->project().entities.isEmpty());
+
+    fixture.service->setBatchCheckpoint({});
+    fixture.service->resumeWrites();
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("恢复"), 0, 30));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::writeToolClassification()
+{
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("entity.create")));
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("entity.deleteMany")));
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("keyframes.setMany")));
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("history.undo")));
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("asset.import")));
+    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("not.a.tool")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("project.get")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("entity.list")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("preview.render_frame")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("view.state")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("solver.evaluate")));
+    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("schema.get")));
 }
 
 int main(int argc, char** argv)

@@ -185,6 +185,24 @@ Result projectUpdate(Tx& tx, const QJsonObject& args)
                            QStringLiteral("未知参数 %1").arg(it.key()));
     }
 
+    // fps and resolution are fixed for the lifetime of a project; the design
+    // requires a new project instead of silently re-scaling existing data.
+    QStringList locked;
+    for (const char* key : {"fps", "width", "height"})
+    {
+        if (args.contains(QLatin1String(key)))
+            locked << QLatin1String(key);
+    }
+    if (!locked.isEmpty())
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("locked"),
+                       QJsonArray::fromStringList(locked));
+        return failure(QStringLiteral("conflict"),
+                       QStringLiteral("fps/分辨率创建后锁定，不能修改；请新建工程"),
+                       details);
+    }
+
     model::ProjectSettings& settings = tx.p().settings;
     QStringList changed;
     Result error;
@@ -203,74 +221,6 @@ Result projectUpdate(Tx& tx, const QJsonObject& args)
         }
     }
     else if (!error.message.isEmpty())
-        return error;
-
-    int width = settings.width;
-    if (readInt(args, "width", &width, &error))
-    {
-        if (args.contains(QStringLiteral("width")))
-        {
-            if (width < 16 || width > 16384)
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("width 必须在 16..16384"));
-            if (width != settings.width)
-            {
-                settings.width = width;
-                changed << QStringLiteral("width");
-            }
-        }
-    }
-    else
-        return error;
-
-    int height = settings.height;
-    if (readInt(args, "height", &height, &error))
-    {
-        if (args.contains(QStringLiteral("height")))
-        {
-            if (height < 16 || height > 16384)
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("height 必须在 16..16384"));
-            if (height != settings.height)
-            {
-                settings.height = height;
-                changed << QStringLiteral("height");
-            }
-        }
-    }
-    else
-        return error;
-
-    int fps = settings.fps;
-    if (readInt(args, "fps", &fps, &error))
-    {
-        if (args.contains(QStringLiteral("fps")))
-        {
-            if (fps < 1 || fps > 240)
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("fps 必须在 1..240"));
-            if (fps != settings.fps)
-            {
-                if (!tx.p().entities.isEmpty() && !confirmed(args))
-                {
-                    QJsonObject affected;
-                    affected.insert(QStringLiteral("fps"), fps);
-                    affected.insert(QStringLiteral("entityCount"),
-                                    tx.p().entities.size());
-                    QJsonObject details;
-                    details.insert(QStringLiteral("requires"),
-                                   QStringLiteral("confirm"));
-                    details.insert(QStringLiteral("affected"), affected);
-                    return failure(QStringLiteral("confirm_required"),
-                                   QStringLiteral("非空工程修改 fps 需要 confirm"),
-                                   details);
-                }
-                settings.fps = fps;
-                changed << QStringLiteral("fps");
-            }
-        }
-    }
-    else
         return error;
 
     QString background;
@@ -489,40 +439,36 @@ Result historyUndo(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("steps 必须在 1..10"));
 
-    const QVector<store::GitCommit> before = tx.store->history(0);
-    if (before.isEmpty())
+    const int available = tx.store->undoDepth();
+    if (available <= 0)
         return failure(QStringLiteral("conflict"),
-                       QStringLiteral("没有可撤销的提交"));
+                       QStringLiteral("没有可撤销的操作"));
 
-    QJsonArray reverted;
-    const int count = std::min(steps, int(before.size()));
+    int applied = 0;
+    const int count = std::min(steps, available);
     for (int i = 0; i < count; ++i)
-        reverted.append(commitJson(before.at(i)));
-
-    for (int i = 0; i < steps; ++i)
     {
         QString message;
         if (!tx.store->undo(&message))
-            return failure(QStringLiteral("conflict"), message);
+        {
+            if (applied == 0)
+                return failure(QStringLiteral("conflict"), message);
+            break;
+        }
+        ++applied;
     }
 
-    const QVector<store::GitCommit> after = tx.store->history(0);
-    QJsonObject newCommit;
-    QString head;
-    if (!after.isEmpty())
-    {
-        newCommit = commitJson(after.first());
-        head = after.first().hash;
-    }
-
+    // Undo restores an in-memory snapshot. Git is only the cold backup, so no
+    // commit is created here and the head stays where it was.
+    const QVector<store::GitCommit> head = tx.store->history(1);
     QJsonObject data;
-    data.insert(QStringLiteral("reverted"), reverted);
-    data.insert(QStringLiteral("newCommit"), newCommit);
-    data.insert(QStringLiteral("head"), head);
-
-    Result result = success(data);
-    result.commitHash = head;
-    return result;
+    data.insert(QStringLiteral("steps"), applied);
+    data.insert(QStringLiteral("undoDepth"), tx.store->undoDepth());
+    data.insert(QStringLiteral("redoDepth"), tx.store->redoDepth());
+    data.insert(QStringLiteral("head"),
+                head.isEmpty() ? QJsonValue(QJsonValue::Null)
+                               : QJsonValue(head.first().hash));
+    return success(data);
 }
 
 Result historyRedo(Tx& tx, const QJsonObject& args)
@@ -535,42 +481,35 @@ Result historyRedo(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("steps 必须在 1..10"));
 
-    QString previousHead;
-    const QVector<store::GitCommit> before = tx.store->history(1);
-    if (!before.isEmpty())
-        previousHead = before.first().hash;
+    const int available = tx.store->redoDepth();
+    if (available <= 0)
+        return failure(QStringLiteral("conflict"),
+                       QStringLiteral("没有可重做的操作"));
 
-    for (int i = 0; i < steps; ++i)
+    int applied = 0;
+    const int count = std::min(steps, available);
+    for (int i = 0; i < count; ++i)
     {
         QString message;
         if (!tx.store->redo(&message))
-            return failure(QStringLiteral("conflict"), message);
-    }
-
-    const QVector<store::GitCommit> after = tx.store->history(0);
-    QJsonArray redone;
-    QJsonObject newCommit;
-    QString head;
-    for (const store::GitCommit& commit : after)
-    {
-        if (!previousHead.isEmpty() && commit.hash == previousHead)
-            break;
-        redone.append(commitJson(commit));
-        if (head.isEmpty())
         {
-            head = commit.hash;
-            newCommit = commitJson(commit);
+            if (applied == 0)
+                return failure(QStringLiteral("conflict"), message);
+            break;
         }
+        ++applied;
     }
 
+    // Redo is also an in-memory snapshot restore; git history is untouched.
+    const QVector<store::GitCommit> head = tx.store->history(1);
     QJsonObject data;
-    data.insert(QStringLiteral("redone"), redone);
-    data.insert(QStringLiteral("newCommit"), newCommit);
-    data.insert(QStringLiteral("head"), head);
-
-    Result result = success(data);
-    result.commitHash = head;
-    return result;
+    data.insert(QStringLiteral("steps"), applied);
+    data.insert(QStringLiteral("undoDepth"), tx.store->undoDepth());
+    data.insert(QStringLiteral("redoDepth"), tx.store->redoDepth());
+    data.insert(QStringLiteral("head"),
+                head.isEmpty() ? QJsonValue(QJsonValue::Null)
+                               : QJsonValue(head.first().hash));
+    return success(data);
 }
 
 Result historyLog(Tx& tx, const QJsonObject& args)

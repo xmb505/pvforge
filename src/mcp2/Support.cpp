@@ -76,6 +76,17 @@ Result success(const QJsonObject& data)
     return result;
 }
 
+bool stopRequested(Tx& tx)
+{
+    return tx.stopCheck && tx.stopCheck();
+}
+
+Result stoppedByHuman()
+{
+    return failure(QStringLiteral("stopped_by_human"),
+                   QStringLiteral("人类按下急停，此次操作未实现"));
+}
+
 Tx::Tx(store::ProjectStore* projectStore)
     : store(projectStore)
     , backup(projectStore ? projectStore->project() : model::Project())
@@ -93,6 +104,11 @@ Result Tx::finish(const QJsonObject& data, const QString& message)
 {
     if (!store)
         return failure(QStringLiteral("not_available"), QStringLiteral("工程未打开"));
+
+    // A stop that lands after the last batch item still cancels this call
+    // before anything reaches the store.
+    if (stopRequested(*this))
+        return stoppedByHuman();
 
     QString validationError;
     if (!model::validateProject(project, &validationError))

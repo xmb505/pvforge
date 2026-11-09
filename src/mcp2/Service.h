@@ -6,6 +6,7 @@
 #include <QRect>
 #include <QString>
 
+#include <atomic>
 #include <functional>
 
 namespace pvf::store {
@@ -62,6 +63,25 @@ public:
     // structured failure envelope; the method never throws.
     QJsonObject execute(const QString& tool, const QJsonObject& args);
 
+    // Human emergency stop. While stopped, write tools fail with
+    // errorCode "stopped_by_human" and touch nothing; read-only tools keep
+    // working so the AI can inspect state. Already committed history stays.
+    // Writes resume only through resumeWrites().
+    void requestStop();
+    void resumeWrites();
+    bool isStopped() const;
+
+    // True for tools that modify project text (project.update, entity.*,
+    // keyframes.*, solver.create/update/delete, asset.*, markers.*,
+    // history.undo/redo). Unknown names count as writes.
+    static bool isWriteTool(const QString& tool);
+
+    // Optional hook run at every batch checkpoint, right before the stop flag
+    // is read. The UI can pump its event loop here so the stop button stays
+    // clickable during a long transaction.
+    using BatchCheckpoint = std::function<void()>;
+    void setBatchCheckpoint(BatchCheckpoint checkpoint);
+
     // MCP tools/list payload: { "tools": [ {name, description, inputSchema} ] }.
     QJsonObject listTools() const;
 
@@ -69,6 +89,8 @@ private:
     store::ProjectStore* m_store = nullptr;
     assets::AssetStore* m_assets = nullptr;
     ViewStateProvider m_viewStateProvider;
+    BatchCheckpoint m_batchCheckpoint;
+    std::atomic<bool> m_stopped{false};
 };
 
 } // namespace pvf::mcp2
