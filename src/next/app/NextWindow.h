@@ -10,6 +10,7 @@
 
 class QAction;
 class QCheckBox;
+class QCloseEvent;
 class QComboBox;
 class QDialog;
 class QLabel;
@@ -100,6 +101,9 @@ private slots:
     void undo();
     void redo();
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private:
     void buildUi();
     void buildEditor();
@@ -162,6 +166,7 @@ private:
     QLabel* m_statusFrame = nullptr;
     QLabel* m_statusFps = nullptr;
     QLabel* m_statusMcp = nullptr;
+    QLabel* m_statusCommit = nullptr;
 
     QHash<Uuid, QDialog*> m_privateTimelines;
 

@@ -40,4 +40,15 @@ bool Document::commitChanges(const QVector<Uuid>& upserts,
     return commitEntities(upserts, message, error);
 }
 
+void Document::flush(QString* error)
+{
+    if (error)
+        error->clear();
+}
+
+bool Document::hasPendingCommit() const
+{
+    return false;
+}
+
 } // namespace pvf::next

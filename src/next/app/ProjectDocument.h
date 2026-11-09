@@ -3,6 +3,8 @@
 #include "next/core/Document.h"
 #include "store/Store.h"
 
+#include <QTimer>
+
 #include <memory>
 
 namespace pvf::next {
@@ -47,6 +49,9 @@ public:
     bool undo(QString* error = nullptr) override;
     bool redo(QString* error = nullptr) override;
 
+    void flush(QString* error = nullptr) override;
+    bool hasPendingCommit() const override;
+
     store::ProjectStore* store() { return m_store.get(); }
     const store::ProjectStore* store() const { return m_store.get(); }
 
@@ -57,7 +62,11 @@ private:
     explicit ProjectDocument(std::unique_ptr<store::ProjectStore> store,
                              QObject* parent = nullptr);
 
+    void scheduleCommit();
+
     std::unique_ptr<store::ProjectStore> m_store;
+    QTimer m_commitTimer;
+    bool m_pendingCommit = false;
     int m_playhead = 0;
     Uuid m_selection;
 };

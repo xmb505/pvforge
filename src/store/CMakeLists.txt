@@ -41,7 +41,11 @@ if(BUILD_TESTING)
         commitAndHistory
         assetImportCommit
         commitFailureReportsStderr
-        undoRedo
+        undoRedoRestoresText
+        undoProjectSettings
+        undoNewAndDeletedFiles
+        undoStackLimits
+        assetsSurviveUndo
         corruptProjectJson
         corruptEntityJson
         nonGitDirectoryRejected

@@ -117,7 +117,11 @@ private slots:
     void commitAndHistory();
     void assetImportCommit();
     void commitFailureReportsStderr();
-    void undoRedo();
+    void undoRedoRestoresText();
+    void undoProjectSettings();
+    void undoNewAndDeletedFiles();
+    void undoStackLimits();
+    void assetsSurviveUndo();
     void corruptProjectJson();
     void corruptEntityJson();
     void nonGitDirectoryRejected();
@@ -517,7 +521,7 @@ void StoreTests::commitFailureReportsStderr()
              QStringLiteral("pvf: retry"));
 }
 
-void StoreTests::undoRedo()
+void StoreTests::undoRedoRestoresText()
 {
     SKIP_WITHOUT_GIT();
 
@@ -529,17 +533,16 @@ void StoreTests::undoRedo()
     auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
     QVERIFY2(store.has_value(), qPrintable(error));
 
-    model::Entity entity = makeEntity();
+    model::Entity entity = makeEntity(QStringLiteral("原标题"));
     const QString entityPath =
         path + QStringLiteral("/entities/") + entity.uuid + QStringLiteral(".json");
     store->mutableProject().entities.insert(entity.uuid, entity);
     QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
-    QVERIFY2(store->commit(QStringLiteral("pvf: add entity"), &error),
+    QVERIFY2(store->commit(QStringLiteral("pvf: create entity"), &error),
              qPrintable(error));
-    QVERIFY(QFileInfo::exists(entityPath));
-    QVERIFY(store->project().entities.contains(entity.uuid));
-    const QString operationHash = store->history(1, &error).first().hash;
-    QCOMPARE(operationHash.size(), 40);
+
+    const int commits = store->history(50, &error).size();
+    QCOMPARE(commits, 2);
 
     // An unrelated file staged by the user must survive undo/redo unchanged.
     const QString userPath = path + QStringLiteral("/user-notes.txt");
@@ -549,54 +552,230 @@ void StoreTests::undoRedo()
                  .exitCode,
              0);
 
-    QVERIFY2(store->undo(&error), qPrintable(error));
-    QVERIFY(!QFileInfo::exists(entityPath));
-    QVERIFY(!store->project().entities.contains(entity.uuid));
-    QCOMPARE(store->history(1, &error).first().message,
-             QStringLiteral("pvf: undo ") + operationHash);
+    model::Entity renamed = store->project().entities.value(entity.uuid);
+    renamed.name = QStringLiteral("新标题");
+    store->mutableProject().entities.insert(entity.uuid, renamed);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: rename"), &error),
+             qPrintable(error));
+    QCOMPARE(store->history(50, &error).size(), commits + 1);
 
-    const CommandResult undoShow =
-        runGit(store->root(),
-               {QStringLiteral("show"), QStringLiteral("--name-only"),
-                QStringLiteral("--format="), QStringLiteral("HEAD")});
-    QVERIFY2(!undoShow.out.contains(QStringLiteral("user-notes.txt")),
-             qPrintable(undoShow.out));
+    // Undo only touches the memory stack: git log must not grow.
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("原标题"));
+    QVERIFY2(readText(entityPath).contains(QStringLiteral("原标题")),
+             qPrintable(readText(entityPath)));
+    QCOMPARE(store->history(50, &error).size(), commits + 1);
     QVERIFY(runGit(store->root(),
                    {QStringLiteral("status"), QStringLiteral("--porcelain")})
                 .out.contains(QStringLiteral("user-notes.txt")));
+    QCOMPARE(store->history(1, &error).first().message,
+             QStringLiteral("pvf: rename"));
 
+    QVERIFY2(store->redo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("新标题"));
+    QVERIFY2(readText(entityPath).contains(QStringLiteral("新标题")),
+             qPrintable(readText(entityPath)));
+    QCOMPARE(store->history(50, &error).size(), commits + 1);
+
+    // Memory history is not persisted across sessions.
+    auto reopened = ProjectStore::open(path, &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
     error.clear();
-    QVERIFY(!store->undo(&error));
+    QVERIFY(!reopened->undo(&error));
     QVERIFY(!error.isEmpty());
+}
+
+void StoreTests::undoProjectSettings()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    store->mutableProject().settings.name = QStringLiteral("改过的工程名");
+    QVERIFY2(store->saveProject(&error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: rename project"), &error),
+             qPrintable(error));
+    const int commits = store->history(50, &error).size();
+
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QCOMPARE(store->project().settings.name, QStringLiteral("未命名项目"));
+    QCOMPARE(store->history(50, &error).size(), commits);
+
+    QVERIFY2(store->redo(&error), qPrintable(error));
+    QCOMPARE(store->project().settings.name, QStringLiteral("改过的工程名"));
+    QCOMPARE(store->history(50, &error).size(), commits);
+}
+
+void StoreTests::undoNewAndDeletedFiles()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity entity = makeEntity(QStringLiteral("甲乙"));
+    const QString entityPath =
+        path + QStringLiteral("/entities/") + entity.uuid + QStringLiteral(".json");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: create entity"), &error),
+             qPrintable(error));
+    const int commits = store->history(50, &error).size();
+
+    // Undoing a new file deletes it; redo brings it back.
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(entityPath));
+    QVERIFY(!store->project().entities.contains(entity.uuid));
+    QCOMPARE(store->history(50, &error).size(), commits);
 
     QVERIFY2(store->redo(&error), qPrintable(error));
     QVERIFY(QFileInfo::exists(entityPath));
     QVERIFY(store->project().entities.contains(entity.uuid));
-    QVERIFY(store->history(1, &error).first().message.startsWith(
-        QStringLiteral("pvf: redo ")));
+    QCOMPARE(store->history(50, &error).size(), commits);
 
-    // Undo again, then make sure the stacks survive a reopen.
+    // Undoing a deletion restores the file and the model entry.
+    QVERIFY2(store->deleteEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(entityPath));
+    QVERIFY2(store->commit(QStringLiteral("pvf: delete entity"), &error),
+             qPrintable(error));
+    const int afterDelete = store->history(50, &error).size();
+
     QVERIFY2(store->undo(&error), qPrintable(error));
-    QVERIFY(!QFileInfo::exists(entityPath));
-
-    auto reopened = ProjectStore::open(path, &error);
-    QVERIFY2(reopened.has_value(), qPrintable(error));
-    QVERIFY(!reopened->project().entities.contains(entity.uuid));
-
-    error.clear();
-    QVERIFY(!reopened->undo(&error));
-    QVERIFY(!error.isEmpty());
-
-    QVERIFY2(reopened->redo(&error), qPrintable(error));
     QVERIFY(QFileInfo::exists(entityPath));
-    QVERIFY(reopened->project().entities.contains(entity.uuid));
+    QVERIFY(store->project().entities.contains(entity.uuid));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("甲乙"));
+    QCOMPARE(store->history(50, &error).size(), afterDelete);
 
-    auto reopenedAgain = ProjectStore::open(path, &error);
-    QVERIFY2(reopenedAgain.has_value(), qPrintable(error));
-    QVERIFY(reopenedAgain->project().entities.contains(entity.uuid));
-    QVERIFY2(reopenedAgain->undo(&error), qPrintable(error));
+    QVERIFY2(store->redo(&error), qPrintable(error));
     QVERIFY(!QFileInfo::exists(entityPath));
-    QVERIFY(!reopenedAgain->project().entities.contains(entity.uuid));
+    QVERIFY(!store->project().entities.contains(entity.uuid));
+    QCOMPARE(store->history(50, &error).size(), afterDelete);
+}
+
+void StoreTests::undoStackLimits()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    // Empty stack reports a clear error instead of silently doing nothing.
+    error.clear();
+    QVERIFY(!store->undo(&error));
+    QVERIFY2(error.contains(QStringLiteral("撤销")), qPrintable(error));
+    error.clear();
+    QVERIFY(!store->redo(&error));
+    QVERIFY2(error.contains(QStringLiteral("重做")), qPrintable(error));
+
+    // Entry-count cap: keep only the newest two operations.
+    store->setUndoLimitsForTest(2, 512LL * 1024 * 1024);
+    model::Entity entity = makeEntity(QStringLiteral("v1"));
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v1"), &error), qPrintable(error));
+
+    entity.name = QStringLiteral("v2");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v2"), &error), qPrintable(error));
+
+    entity.name = QStringLiteral("v3");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v3"), &error), qPrintable(error));
+
+    QCOMPARE(store->undoDepth(), 2);
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v2"));
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v1"));
+    error.clear();
+    QVERIFY(!store->undo(&error));
+
+    // Byte cap: an entry larger than the cap is evicted immediately.
+    store->setUndoLimitsForTest(200, 1);
+    QCOMPARE(store->undoDepth(), 0);
+    entity.name = QStringLiteral("v4");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v4"), &error), qPrintable(error));
+    QCOMPARE(store->undoDepth(), 0);
+    error.clear();
+    QVERIFY(!store->undo(&error));
+}
+
+void StoreTests::assetsSurviveUndo()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    QTemporaryDir source;
+    QVERIFY(source.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    const QString pngPath = source.filePath(QStringLiteral("dot.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::blue);
+    QVERIFY(image.save(pngPath));
+
+    const auto asset = store->assets().importFile(pngPath, &error);
+    QVERIFY2(asset.has_value(), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: import asset"), &error),
+             qPrintable(error));
+    // Assets never produce undo entries.
+    QCOMPARE(store->undoDepth(), 0);
+
+    model::Entity entity = makeEntity(QStringLiteral("素材实体"));
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.hash = asset->hash;
+    entity.content.asset.type = AssetType::Image;
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: add asset entity"), &error),
+             qPrintable(error));
+
+    const QString assetJson = asset->directory + QStringLiteral("/asset.json");
+    QVERIFY(QFileInfo::exists(assetJson));
+    QVERIFY(store->assets().get(asset->hash).has_value());
+
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QVERIFY(!store->project().entities.contains(entity.uuid));
+    // The asset was neither recorded nor rolled back.
+    QVERIFY(store->assets().get(asset->hash).has_value());
+    QVERIFY(QFileInfo::exists(assetJson));
+    bool hasContent = false;
+    const QFileInfoList files =
+        QDir(asset->directory).entryInfoList(QStringList{QStringLiteral("content.*")},
+                                             QDir::Files);
+    hasContent = !files.isEmpty();
+    QVERIFY2(hasContent, qPrintable(asset->directory));
 }
 
 void StoreTests::corruptProjectJson()

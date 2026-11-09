@@ -13,9 +13,12 @@ namespace pvf::next {
 // store::ProjectStore + playhead + selection; panels only depend on this
 // interface so they can be built and tested without the whole window.
 //
-// All writes go through commitEntity()/commitProject(): one user-visible
-// operation = one store commit. Panels should mutate mutableProject(), then
-// call the matching commit method with a "pvf: ..." message.
+// All writes go through commitEntity()/commitProject(). Human writes are saved
+// immediately and merged into one git commit by a short debounce; commitEntity()
+// only reports whether the save succeeded. Call flush() before closing,
+// switching projects or exporting to force the pending commit out.
+//
+// Undo/redo operate on the store's in-memory snapshots and never run git.
 class Document : public QObject
 {
     Q_OBJECT
@@ -56,10 +59,20 @@ public:
     virtual bool undo(QString* error = nullptr) = 0;
     virtual bool redo(QString* error = nullptr) = 0;
 
+    // Commits any pending debounced write immediately. Call before closing,
+    // switching projects or exporting. *error is set (and commitFailed is
+    // emitted) when the git commit fails; the saved edits stay on disk.
+    virtual void flush(QString* error = nullptr);
+    virtual bool hasPendingCommit() const;
+
 signals:
     void changed();
     void selectionChanged();
     void playheadChanged();
+    // A debounced (or explicit flush) git commit failed; the saved edits are
+    // still on disk and remain pending.
+    void commitFailed(const QString& message);
+    void pendingCommitChanged(bool pending);
 };
 
 } // namespace pvf::next

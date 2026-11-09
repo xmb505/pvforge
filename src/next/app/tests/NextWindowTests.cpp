@@ -21,6 +21,7 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QProcess>
+#include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -70,20 +71,6 @@ Entity makeCamera(const QString& name)
 int commitCount(NextWindow* window)
 {
     return window->document()->store()->history(10000).size();
-}
-
-void dismissNextMessageBox()
-{
-    QTimer::singleShot(0, [] {
-        if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
-            box->accept();
-            return;
-        }
-        for (QWidget* widget : QApplication::topLevelWidgets()) {
-            if (auto* box = qobject_cast<QMessageBox*>(widget))
-                box->accept();
-        }
-    });
 }
 
 } // namespace
@@ -238,7 +225,10 @@ private slots:
         QCOMPARE(camera.row, 3);
 
         QCOMPARE(document->project().entities.size(), 4);
-        QCOMPARE(commitCount(window.get()), commitsBefore + 4);
+        // Four rapid human operations coalesce into one debounced commit.
+        QCOMPARE(commitCount(window.get()), commitsBefore);
+        QTRY_COMPARE_WITH_TIMEOUT(commitCount(window.get()), commitsBefore + 1,
+                                  3000);
     }
 
     void createEntityRowsAndPrivateParent()
@@ -340,7 +330,7 @@ private slots:
         QCOMPARE(oneFrameChild.end, 11);
     }
 
-    void createEntityRollsBackWhenCommitFails()
+    void createEntityKeepsSaveWhenCommitFails()
     {
         if (!gitLfsAvailable())
             QSKIP("git-lfs is not available; store creation requires it");
@@ -353,19 +343,28 @@ private slots:
 
         ProjectDocument* document = window->document();
         document->setPlayhead(5);
-        const Uuid previousSelection = document->selection();
-        const int previousEntityCount = document->project().entities.size();
-        QVERIFY(previousSelection.isEmpty());
+        QVERIFY(document->selection().isEmpty());
 
-        QVERIFY(QDir(document->root()).rename(QStringLiteral(".git"),
-                                              QStringLiteral(".git-disabled")));
+        QDir root(document->root());
+        QVERIFY(root.rename(QStringLiteral(".git"),
+                            QStringLiteral(".git-disabled")));
 
-        dismissNextMessageBox();
+        QSignalSpy failedSpy(document, &Document::commitFailed);
         window->createEntity(ContentKind::Empty);
 
-        QCOMPARE(document->project().entities.size(), previousEntityCount);
-        QVERIFY(document->selection().isEmpty());
+        // The entity is saved; only the git cold backup fails later.
+        QCOMPARE(document->project().entities.size(), 1);
+        QVERIFY(!document->selection().isEmpty());
         QCOMPARE(document->playhead(), 5);
+
+        error.clear();
+        document->flush(&error);
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(failedSpy.count(), 1);
+        QVERIFY(document->hasPendingCommit());
+
+        QVERIFY(root.rename(QStringLiteral(".git-disabled"),
+                            QStringLiteral(".git")));
     }
 
     void createActionsDisabledWithoutDocument()
@@ -670,6 +669,8 @@ private slots:
                      {parent.uuid, child.uuid}, QStringLiteral("pvf: create tree"),
                      &error),
                  qPrintable(error));
+        window->document()->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
 
         window->document()->setSelection(parent.uuid);
         QVERIFY(window->deleteActionForTest()->isEnabled());
@@ -677,6 +678,8 @@ private slots:
         const int commitsBefore = commitCount(window.get());
         QVERIFY2(window->deleteSelectedEntityForTest(true, &error),
                  qPrintable(error));
+        window->document()->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
         QVERIFY(!window->document()->project().entities.contains(parent.uuid));
         QVERIFY(!window->document()->project().entities.contains(child.uuid));
         QVERIFY(window->document()->selection().isEmpty());
@@ -793,6 +796,8 @@ private slots:
         QVERIFY2(window->document()->commitEntity(
                      camera.uuid, QStringLiteral("pvf: create camera"), &error),
                  qPrintable(error));
+        window->document()->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
         QVERIFY(window->document()->project().entities.contains(camera.uuid));
 
         undo->trigger();
@@ -818,6 +823,37 @@ private slots:
         window->show();
         QVERIFY(window->close());
         QCoreApplication::processEvents();
+    }
+
+    void switchingProjectFlushesPendingCommit()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        const QString oldDir = window->document()->root();
+        const int before = commitCount(window.get());
+
+        window->createEntity(ContentKind::Text);
+        QVERIFY(window->document()->hasPendingCommit());
+        QCOMPARE(commitCount(window.get()), before);
+
+        ProjectSettings settings;
+        settings.name = QStringLiteral("Second");
+        auto second = ProjectDocument::create(
+            temp.path() + QStringLiteral("/second.pvproj"), settings, &error);
+        QVERIFY2(second != nullptr, qPrintable(error));
+        window->setDocument(std::move(second));
+
+        auto reopened = store::ProjectStore::open(oldDir, &error);
+        QVERIFY2(reopened.has_value(), qPrintable(error));
+        QCOMPARE(reopened->history(100).size(), before + 1);
+        QVERIFY(!reopened->project().entities.isEmpty());
     }
 
     void oldSingleFileProjectRejected()

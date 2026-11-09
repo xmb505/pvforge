@@ -13,6 +13,7 @@
 
 #include <QAction>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
@@ -289,8 +290,33 @@ NextWindow::~NextWindow()
     closeAllPrivateTimelines();
 }
 
+void NextWindow::closeEvent(QCloseEvent* event)
+{
+    if (m_document)
+    {
+        QString error;
+        m_document->flush(&error);
+        if (!error.isEmpty())
+        {
+            showError(tr("提交失败"), error);
+            event->ignore();
+            return;
+        }
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
+    // Commit any debounced human edit before the old document goes away.
+    if (m_document)
+    {
+        QString error;
+        m_document->flush(&error);
+        if (!error.isEmpty())
+            statusBar()->showMessage(tr("提交失败：%1").arg(error), 8000);
+    }
+
     // The playback clock, MCP service and private overlay timelines all point
     // into the old document; drop them before it dies.
     if (m_playback)
@@ -553,6 +579,10 @@ void NextWindow::buildUi()
     m_statusDir->setTextInteractionFlags(Qt::TextSelectableByMouse);
     statusBar()->addWidget(m_statusDir, 1);
 
+    m_statusCommit = new QLabel(QString(), this);
+    m_statusCommit->setObjectName(QStringLiteral("statusCommit"));
+    statusBar()->addPermanentWidget(m_statusCommit);
+
     m_statusMcp = new QLabel(tr("MCP 未启动"), this);
     m_statusMcp->setObjectName(QStringLiteral("statusMcp"));
     m_statusMcp->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -718,6 +748,13 @@ void NextWindow::connectDocument()
             m_viewport->refresh();
         updateStatus();
     });
+
+    connect(m_document, &Document::pendingCommitChanged, this,
+            [this](bool) { updateStatus(); });
+    connect(m_document, &Document::commitFailed, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(tr("提交失败：%1").arg(message), 8000);
+            });
 }
 
 void NextWindow::refreshAll()
@@ -971,6 +1008,14 @@ void NextWindow::exportVideo()
 {
     if (!m_document)
         return;
+
+    QString flushError;
+    m_document->flush(&flushError);
+    if (!flushError.isEmpty())
+    {
+        statusBar()->showMessage(tr("提交失败：%1").arg(flushError), 8000);
+        return;
+    }
 
     const Uuid preferred = m_viewport ? m_viewport->cameraUuid() : Uuid();
     ExportDialog dialog(m_document->project(), preferred, this);
@@ -1277,6 +1322,8 @@ void NextWindow::updateStatus()
             m_statusFrame->setText(tr("帧 —"));
         if (m_statusFps)
             m_statusFps->setText(tr("fps —"));
+        if (m_statusCommit)
+            m_statusCommit->setText(QString());
         if (m_fpsLabel)
             m_fpsLabel->setText(tr("fps —"));
         if (m_resolutionLabel)
@@ -1304,6 +1351,9 @@ void NextWindow::updateStatus()
     if (m_resolutionLabel)
         m_resolutionLabel->setText(
             tr("%1 × %2").arg(settings.width).arg(settings.height));
+    if (m_statusCommit)
+        m_statusCommit->setText(m_document->hasPendingCommit() ? tr("未提交")
+                                                              : tr("已提交"));
 
     if (m_playheadSpin) {
         QSignalBlocker blocker(m_playheadSpin);
