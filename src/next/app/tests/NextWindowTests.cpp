@@ -1,15 +1,20 @@
 #include "next/app/NextWindow.h"
 
 #include "next/app/ProjectDocument.h"
+#include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
+#include <QMessageBox>
 #include <QProcess>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <memory>
@@ -51,6 +56,25 @@ Entity makeCamera(const QString& name)
     entity.end = 30;
     entity.content.kind = ContentKind::Camera;
     return entity;
+}
+
+int commitCount(NextWindow* window)
+{
+    return window->document()->store()->history(10000).size();
+}
+
+void dismissNextMessageBox()
+{
+    QTimer::singleShot(0, [] {
+        if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            box->accept();
+            return;
+        }
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* box = qobject_cast<QMessageBox*>(widget))
+                box->accept();
+        }
+    });
 }
 
 } // namespace
@@ -137,6 +161,213 @@ private slots:
                      empty.uuid, QStringLiteral("pvf: create empty"), &error),
                  qPrintable(error));
         QCOMPARE(combo->count(), 2);
+    }
+
+    void createEntityActionsPickDefaults()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        document->setPlayhead(10);
+        const int commitsBefore = commitCount(window.get());
+
+        QAction* emptyAction = window->createEntityActionForTest(ContentKind::Empty);
+        QVERIFY(emptyAction != nullptr);
+        QVERIFY(emptyAction->isEnabled());
+        emptyAction->trigger();
+
+        QCOMPARE(document->project().entities.size(), 1);
+        const Uuid emptyUuid = document->selection();
+        QVERIFY(!emptyUuid.isEmpty());
+        QVERIFY(document->project().entities.contains(emptyUuid));
+        const Entity empty = document->project().entities.value(emptyUuid);
+        QCOMPARE(empty.name, QStringLiteral("空实体"));
+        QCOMPARE(empty.content.kind, ContentKind::Empty);
+        QCOMPARE(empty.start, 10);
+        QCOMPARE(empty.end, 34);
+        QCOMPARE(empty.row, 0);
+        QVERIFY(empty.parentUuid.isEmpty());
+
+        QAction* textAction = window->createEntityActionForTest(ContentKind::Text);
+        QVERIFY(textAction != nullptr);
+        textAction->trigger();
+        const Entity text = document->project().entities.value(document->selection());
+        QCOMPARE(text.name, QStringLiteral("文字"));
+        QCOMPARE(text.content.kind, ContentKind::Text);
+        QCOMPARE(text.content.text.text, QStringLiteral("文字"));
+        QCOMPARE(text.content.text.pixelSize, 96);
+        QCOMPARE(text.content.text.color, QStringLiteral("#ffffff"));
+        QCOMPARE(text.content.text.align, int(Qt::AlignCenter));
+        QCOMPARE(text.row, 1);
+
+        QAction* vectorAction = window->createEntityActionForTest(ContentKind::Vector);
+        QVERIFY(vectorAction != nullptr);
+        vectorAction->trigger();
+        const Entity vector = document->project().entities.value(document->selection());
+        QCOMPARE(vector.name, QStringLiteral("矢量"));
+        QCOMPARE(vector.content.kind, ContentKind::Vector);
+        QCOMPARE(vector.content.vector.shape, 0);
+        QCOMPARE(vector.content.vector.width, 240.0);
+        QCOMPARE(vector.content.vector.height, 120.0);
+        QCOMPARE(vector.content.vector.cornerRadius, 8.0);
+        QCOMPARE(vector.content.vector.fillColor, QStringLiteral("#ffffff"));
+        QCOMPARE(vector.row, 2);
+
+        QAction* cameraAction = window->createEntityActionForTest(ContentKind::Camera);
+        QVERIFY(cameraAction != nullptr);
+        cameraAction->trigger();
+        const Entity camera = document->project().entities.value(document->selection());
+        QCOMPARE(camera.name, QStringLiteral("摄像机"));
+        QCOMPARE(camera.content.kind, ContentKind::Camera);
+        QCOMPARE(camera.row, 3);
+
+        QCOMPARE(document->project().entities.size(), 4);
+        QCOMPARE(commitCount(window.get()), commitsBefore + 4);
+    }
+
+    void createEntityRowsAndPrivateParent()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        document->setPlayhead(0);
+
+        window->createEntity(ContentKind::Empty);
+        const Uuid parentUuid = document->selection();
+        QVERIFY(!parentUuid.isEmpty());
+        QCOMPARE(document->project().entities.value(parentUuid).row, 0);
+
+        window->createEntity(ContentKind::Text);
+        const Entity sibling =
+            document->project().entities.value(document->selection());
+        QCOMPARE(sibling.row, 1);
+        QVERIFY(sibling.parentUuid.isEmpty());
+        QCOMPARE(sibling.start, 0);
+        QCOMPARE(sibling.end, 24);
+
+        window->timelineForTest()->setParentUuid(parentUuid);
+        window->createEntity(ContentKind::Camera);
+        const Entity child =
+            document->project().entities.value(document->selection());
+        QCOMPARE(child.parentUuid, parentUuid);
+        QCOMPARE(child.row, 0);
+        QCOMPARE(child.start, 0);
+        QCOMPARE(child.end, 24);
+    }
+
+    void createEntityClampsToPrivateParent()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+
+        Entity parent;
+        parent.uuid = model::newUuid();
+        parent.name = QStringLiteral("父");
+        parent.start = 10;
+        parent.end = 20;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        QVERIFY2(document->commitEntity(parent.uuid, QStringLiteral("pvf: create parent"),
+                                        &error),
+                 qPrintable(error));
+
+        window->timelineForTest()->setParentUuid(parent.uuid);
+
+        document->setPlayhead(30);
+        window->createEntity(ContentKind::Text);
+        const Entity clampedHigh =
+            document->project().entities.value(document->selection());
+        QCOMPARE(clampedHigh.parentUuid, parent.uuid);
+        QCOMPARE(clampedHigh.start, 19);
+        QCOMPARE(clampedHigh.end, 20);
+
+        document->setPlayhead(5);
+        window->createEntity(ContentKind::Text);
+        const Entity clampedLow =
+            document->project().entities.value(document->selection());
+        QCOMPARE(clampedLow.parentUuid, parent.uuid);
+        QCOMPARE(clampedLow.start, 10);
+        QCOMPARE(clampedLow.end, 20);
+
+        Entity oneFrame;
+        oneFrame.uuid = model::newUuid();
+        oneFrame.name = QStringLiteral("单帧父");
+        oneFrame.start = 10;
+        oneFrame.end = 11;
+        document->mutableProject().entities.insert(oneFrame.uuid, oneFrame);
+        QVERIFY2(document->commitEntity(oneFrame.uuid,
+                                        QStringLiteral("pvf: create one-frame parent"),
+                                        &error),
+                 qPrintable(error));
+
+        window->timelineForTest()->setParentUuid(oneFrame.uuid);
+        document->setPlayhead(10);
+        window->createEntity(ContentKind::Empty);
+        const Entity oneFrameChild =
+            document->project().entities.value(document->selection());
+        QCOMPARE(oneFrameChild.parentUuid, oneFrame.uuid);
+        QCOMPARE(oneFrameChild.start, 10);
+        QCOMPARE(oneFrameChild.end, 11);
+    }
+
+    void createEntityRollsBackWhenCommitFails()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        document->setPlayhead(5);
+        const Uuid previousSelection = document->selection();
+        const int previousEntityCount = document->project().entities.size();
+        QVERIFY(previousSelection.isEmpty());
+
+        QVERIFY(QDir(document->root()).rename(QStringLiteral(".git"),
+                                              QStringLiteral(".git-disabled")));
+
+        dismissNextMessageBox();
+        window->createEntity(ContentKind::Empty);
+
+        QCOMPARE(document->project().entities.size(), previousEntityCount);
+        QVERIFY(document->selection().isEmpty());
+        QCOMPARE(document->playhead(), 5);
+    }
+
+    void createActionsDisabledWithoutDocument()
+    {
+        NextWindow window(nullptr);
+        for (ContentKind kind : {ContentKind::Empty, ContentKind::Text,
+                                 ContentKind::Vector, ContentKind::Camera}) {
+            QAction* action = window.createEntityActionForTest(kind);
+            QVERIFY(action != nullptr);
+            QVERIFY(!action->isEnabled());
+        }
     }
 
     void undoRedoActionsDoNotCrash()

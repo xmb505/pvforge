@@ -204,6 +204,23 @@ private:
     QColor m_background;
 };
 
+QString defaultEntityName(ContentKind kind)
+{
+    switch (kind) {
+    case ContentKind::Empty:
+        return QStringLiteral("空实体");
+    case ContentKind::Text:
+        return QStringLiteral("文字");
+    case ContentKind::Vector:
+        return QStringLiteral("矢量");
+    case ContentKind::Camera:
+        return QStringLiteral("摄像机");
+    case ContentKind::Asset:
+        break;
+    }
+    return {};
+}
+
 } // namespace
 
 NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* parent)
@@ -295,6 +312,24 @@ void NextWindow::buildUi()
     connect(m_redoAction, &QAction::triggered, this, &NextWindow::redo);
     editMenu->addAction(m_redoAction);
 
+    QMenu* entityMenu = menuBar()->addMenu(tr("实体(&N)"));
+    auto addCreateAction = [this, entityMenu](QAction*& target, const QString& text,
+                                              const QString& objectName,
+                                              ContentKind kind) {
+        target = new QAction(text, this);
+        target->setObjectName(objectName);
+        connect(target, &QAction::triggered, this, [this, kind] { createEntity(kind); });
+        entityMenu->addAction(target);
+    };
+    addCreateAction(m_createEmptyAction, tr("新建空实体"),
+                    QStringLiteral("createEmptyEntityAction"), ContentKind::Empty);
+    addCreateAction(m_createTextAction, tr("新建文字"),
+                    QStringLiteral("createTextEntityAction"), ContentKind::Text);
+    addCreateAction(m_createVectorAction, tr("新建矢量"),
+                    QStringLiteral("createVectorEntityAction"), ContentKind::Vector);
+    addCreateAction(m_createCameraAction, tr("新建摄像机"),
+                    QStringLiteral("createCameraEntityAction"), ContentKind::Camera);
+
     QMenu* viewMenu = menuBar()->addMenu(tr("视图(&V)"));
     m_gizmoAction = new QAction(tr("显示 Gizmo"), this);
     m_gizmoAction->setObjectName(QStringLiteral("showGizmoAction"));
@@ -319,6 +354,11 @@ void NextWindow::buildUi()
     toolbar->addSeparator();
     toolbar->addAction(m_undoAction);
     toolbar->addAction(m_redoAction);
+    toolbar->addSeparator();
+    toolbar->addAction(m_createEmptyAction);
+    toolbar->addAction(m_createTextAction);
+    toolbar->addAction(m_createVectorAction);
+    toolbar->addAction(m_createCameraAction);
     toolbar->addSeparator();
 
     auto* playheadLabel = new QLabel(tr("播放头"), toolbar);
@@ -576,6 +616,119 @@ void NextWindow::rebuildCameras()
         m_viewport->setCameraUuid(m_cameraCombo->currentData().toString());
 }
 
+void NextWindow::createEntity(ContentKind kind)
+{
+    if (!m_document || kind == ContentKind::Asset)
+        return;
+
+    const int previousPlayhead = m_document->playhead();
+    const Uuid previousSelection = m_document->selection();
+
+    const model::ProjectSettings& settings = m_document->project().settings;
+    const int fps = std::max(1, settings.fps);
+
+    Uuid parentUuid = m_timeline ? m_timeline->parentUuid() : Uuid();
+    const model::Entity* parent = nullptr;
+    if (!parentUuid.isEmpty()) {
+        const auto parentIt =
+            m_document->project().entities.constFind(parentUuid);
+        if (parentIt != m_document->project().entities.constEnd())
+            parent = &parentIt.value();
+        else
+            parentUuid.clear();
+    }
+
+    int start = 0;
+    int end = 0;
+    if (parent) {
+        const int lastFrame = std::max(parent->start, parent->end - 1);
+        start = std::clamp(previousPlayhead, parent->start, lastFrame);
+        end = std::min(start + fps, parent->end);
+        if (end <= start) {
+            end = std::min(start + 1, parent->end);
+            if (end <= start)
+                end = parent->end;
+        }
+    } else {
+        start = std::max(0, previousPlayhead);
+        end = start + fps;
+    }
+
+    int highestRow = -1;
+    const auto& entities = m_document->project().entities;
+    for (auto it = entities.constBegin(); it != entities.constEnd(); ++it) {
+        const model::Entity& other = it.value();
+        if (other.parentUuid != parentUuid)
+            continue;
+        if (other.start >= end || start >= other.end)
+            continue;
+        highestRow = std::max(highestRow, other.row);
+    }
+
+    model::Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = defaultEntityName(kind);
+    entity.parentUuid = parentUuid;
+    entity.start = start;
+    entity.end = end;
+    entity.row = highestRow + 1;
+    entity.content.kind = kind;
+
+    switch (kind) {
+    case ContentKind::Text:
+        entity.content.text.text = QStringLiteral("文字");
+        entity.content.text.pixelSize = 96;
+        entity.content.text.color = QStringLiteral("#ffffff");
+        entity.content.text.align = int(Qt::AlignCenter);
+        break;
+    case ContentKind::Vector:
+        entity.content.vector.shape = 0;
+        entity.content.vector.width = 240.0;
+        entity.content.vector.height = 120.0;
+        entity.content.vector.fillColor = QStringLiteral("#ffffff");
+        entity.content.vector.cornerRadius = 8.0;
+        break;
+    case ContentKind::Empty:
+    case ContentKind::Camera:
+    case ContentKind::Asset:
+        break;
+    }
+
+    m_document->mutableProject().entities.insert(entity.uuid, entity);
+
+    QString error;
+    const QString message =
+        QStringLiteral("pvf: create entity \"%1\"").arg(entity.name);
+    if (!m_document->commitEntity(entity.uuid, message, &error)) {
+        m_document->mutableProject().entities.remove(entity.uuid);
+        m_document->setPlayhead(previousPlayhead);
+        m_document->setSelection(previousSelection);
+        refreshAll();
+        showError(tr("新建实体失败"), error);
+        return;
+    }
+
+    m_document->setSelection(entity.uuid);
+    refreshAll();
+}
+
+QAction* NextWindow::createEntityActionForTest(ContentKind kind) const
+{
+    switch (kind) {
+    case ContentKind::Empty:
+        return m_createEmptyAction;
+    case ContentKind::Text:
+        return m_createTextAction;
+    case ContentKind::Vector:
+        return m_createVectorAction;
+    case ContentKind::Camera:
+        return m_createCameraAction;
+    case ContentKind::Asset:
+        break;
+    }
+    return nullptr;
+}
+
 void NextWindow::updateActions()
 {
     const bool open = m_document != nullptr;
@@ -583,6 +736,11 @@ void NextWindow::updateActions()
         m_undoAction->setEnabled(open);
     if (m_redoAction)
         m_redoAction->setEnabled(open);
+    for (QAction* action : {m_createEmptyAction, m_createTextAction,
+                            m_createVectorAction, m_createCameraAction}) {
+        if (action)
+            action->setEnabled(open);
+    }
     if (m_playheadSpin)
         m_playheadSpin->setEnabled(open);
     if (m_cameraCombo)

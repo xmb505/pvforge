@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/Types.h"
+
 #include <QMainWindow>
 
 #include <memory>
@@ -40,6 +42,10 @@ public:
     void setDocument(std::unique_ptr<ProjectDocument> document);
     void refreshAll();
 
+    // Creates one human-authored entity on the current playhead / private
+    // timeline, inserts it into the document and commits it once.
+    void createEntity(ContentKind kind);
+
     // Accessors used by the shell tests and by future automation.
     ViewportWidget* viewportForTest() const { return m_viewport; }
     TimelineWidget* timelineForTest() const { return m_timeline; }
@@ -49,6 +55,7 @@ public:
     QComboBox* cameraComboBoxForTest() const { return m_cameraCombo; }
     QAction* undoActionForTest() const { return m_undoAction; }
     QAction* redoActionForTest() const { return m_redoAction; }
+    QAction* createEntityActionForTest(ContentKind kind) const;
 
 private slots:
     void chooseNewProject();
@@ -81,6 +88,10 @@ private:
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
     QAction* m_gizmoAction = nullptr;
+    QAction* m_createEmptyAction = nullptr;
+    QAction* m_createTextAction = nullptr;
+    QAction* m_createVectorAction = nullptr;
+    QAction* m_createCameraAction = nullptr;
 
     QSpinBox* m_playheadSpin = nullptr;
     QComboBox* m_cameraCombo = nullptr;
