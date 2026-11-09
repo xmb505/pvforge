@@ -14,6 +14,11 @@ if(NOT TARGET pvf_next_core)
                      ${CMAKE_CURRENT_BINARY_DIR}/core_dep)
 endif()
 
+if(NOT TARGET pvf_video2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../video2
+                     ${CMAKE_CURRENT_BINARY_DIR}/video2_dep)
+endif()
+
 add_library(pvf_next_assets STATIC
     AssetPanel.cpp
     AssetPanel.h
@@ -25,6 +30,7 @@ target_include_directories(pvf_next_assets PUBLIC
 
 target_link_libraries(pvf_next_assets PUBLIC
     pvf_next_core
+    pvf_video2
     Qt6::Widgets
 )
 

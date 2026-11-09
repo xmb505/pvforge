@@ -27,6 +27,8 @@ add_library(pvf_video2 STATIC
     VideoFrames.cpp
     VideoSequenceService.h
     VideoSequenceService.cpp
+    VideoExtractionQueue.h
+    VideoExtractionQueue.cpp
 )
 
 target_include_directories(pvf_video2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

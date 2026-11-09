@@ -18,6 +18,11 @@ class QListWidget;
 class QListWidgetItem;
 class QMimeData;
 class QPushButton;
+class QVBoxLayout;
+
+namespace pvf::video2 {
+class VideoExtractionQueue;
+}
 
 namespace pvf::next {
 
@@ -42,6 +47,12 @@ public:
     QString assetNameAt(int index) const;
     QString assetHashAt(int index) const;
     bool assetMissingAt(int index) const;
+
+    // Background video extraction rows at the bottom of the panel. Rows are
+    // ordered by enqueue time; completed rows disappear after two seconds.
+    int progressRowCount() const;
+    QString progressTextAt(int index) const;
+    QPushButton* progressCancelButtonAt(int index) const;
 
     // Imports files or .pvhtml directories/zips. Deduplicates through the
     // store, refreshes the list and commits once. Returns false if any path
@@ -77,6 +88,8 @@ private:
         bool hasAudio = false;
     };
 
+    class ProgressRow;
+
     void rebuildEntries();
     void applyFilter();
     void updateSelectionState();
@@ -91,6 +104,15 @@ private:
     QString selectedHash() const;
     int referenceCount(const AssetHash& hash) const;
 
+    void enqueueVideoExtraction(const assets::StoredAsset& asset);
+    void ensureProgressRow(const AssetHash& hash);
+    void updateProgressRow(const AssetHash& hash, int done, int total);
+    void finishProgressRow(const AssetHash& hash);
+    void failProgressRow(const AssetHash& hash, const QString& error);
+    void removeProgressRow(const AssetHash& hash);
+    int progressRowIndex(const AssetHash& hash) const;
+    QString displayNameFor(const AssetHash& hash) const;
+
     Document* m_document = nullptr;
     QLineEdit* m_search = nullptr;
     QPushButton* m_importButton = nullptr;
@@ -98,6 +120,10 @@ private:
     QPushButton* m_renameButton = nullptr;
     QPushButton* m_deleteButton = nullptr;
     QLabel* m_status = nullptr;
+    QWidget* m_progressArea = nullptr;
+    QVBoxLayout* m_progressLayout = nullptr;
+    QVector<ProgressRow*> m_progressRows;
+    video2::VideoExtractionQueue* m_extractionQueue = nullptr;
     QVector<Entry> m_entries;
     QHash<AssetHash, QPixmap> m_iconCache;
     QString m_lastImportDir;

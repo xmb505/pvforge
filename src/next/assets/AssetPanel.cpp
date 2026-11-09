@@ -1,6 +1,7 @@
 #include "next/assets/AssetPanel.h"
 
 #include "assets/AssetTypeDetect.h"
+#include "video2/VideoExtractionQueue.h"
 
 #include <QAction>
 #include <QDir>
@@ -10,6 +11,7 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QImage>
@@ -24,11 +26,14 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -129,6 +134,124 @@ protected:
 
 } // namespace
 
+// One row in the bottom "video extraction" strip. Deliberately plain widgets:
+// the panel owns queue lifetime and row removal, the row only renders state.
+class AssetPanel::ProgressRow final : public QFrame
+{
+public:
+    ProgressRow(const AssetHash& hash, const QString& name, QWidget* parent)
+        : QFrame(parent)
+        , m_hash(hash)
+    {
+        setObjectName(QStringLiteral("VideoExtractionRow"));
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(6, 5, 6, 6);
+        layout->setSpacing(3);
+
+        auto* top = new QHBoxLayout;
+        top->setSpacing(6);
+
+        m_name = new QLabel(name, this);
+        m_name->setObjectName(QStringLiteral("VideoExtractionName"));
+        m_name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        m_name->setToolTip(name);
+        top->addWidget(m_name, 1);
+
+        m_text = new QLabel(QStringLiteral("抽帧 0/0"), this);
+        m_text->setObjectName(QStringLiteral("VideoExtractionText"));
+        QFont small = m_text->font();
+        small.setPixelSize(11);
+        m_text->setFont(small);
+        top->addWidget(m_text);
+
+        m_cancel = new QPushButton(QStringLiteral("取消"), this);
+        m_cancel->setObjectName(QStringLiteral("VideoExtractionCancel"));
+        m_cancel->setCursor(Qt::PointingHandCursor);
+        m_cancel->setFixedHeight(18);
+        top->addWidget(m_cancel);
+
+        layout->addLayout(top);
+
+        m_bar = new QProgressBar(this);
+        m_bar->setObjectName(QStringLiteral("VideoExtractionBar"));
+        m_bar->setTextVisible(false);
+        m_bar->setFixedHeight(5);
+        m_bar->setRange(0, 100);
+        m_bar->setValue(0);
+        layout->addWidget(m_bar);
+
+        m_error = new QLabel(this);
+        m_error->setObjectName(QStringLiteral("VideoExtractionError"));
+        m_error->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        m_error->hide();
+        layout->addWidget(m_error);
+    }
+
+    AssetHash hash() const { return m_hash; }
+    QPushButton* cancelButton() const { return m_cancel; }
+    bool failed() const { return m_failed; }
+    bool finished() const { return m_finished; }
+
+    QString statusText() const
+    {
+        return m_failed ? m_error->text() : m_text->text();
+    }
+
+    void setProgress(int done, int total)
+    {
+        m_total = total;
+        m_finished = false;
+        if (total > 0)
+        {
+            m_text->setText(QStringLiteral("抽帧 %1/%2").arg(done).arg(total));
+            m_bar->setRange(0, total);
+            m_bar->setValue(done);
+        }
+        else
+        {
+            m_text->setText(QStringLiteral("抽帧 %1").arg(done));
+            m_bar->setRange(0, 0);
+        }
+        m_text->setToolTip(m_text->text());
+    }
+
+    void setFinished()
+    {
+        if (m_total > 0)
+            setProgress(m_total, m_total);
+        m_finished = true;
+        m_text->setText(QStringLiteral("抽帧完成"));
+        m_bar->setRange(0, 1);
+        m_bar->setValue(1);
+        m_cancel->hide();
+    }
+
+    void setFailed(const QString& error)
+    {
+        m_failed = true;
+        m_bar->hide();
+        m_text->hide();
+        m_error->setText(QStringLiteral("抽帧失败：%1").arg(error));
+        m_error->setToolTip(error);
+        m_error->show();
+        m_cancel->setText(QStringLiteral("关闭"));
+        m_cancel->setEnabled(true);
+    }
+
+private:
+    AssetHash m_hash;
+    QLabel* m_name = nullptr;
+    QLabel* m_text = nullptr;
+    QLabel* m_error = nullptr;
+    QProgressBar* m_bar = nullptr;
+    QPushButton* m_cancel = nullptr;
+    int m_total = 0;
+    bool m_failed = false;
+    bool m_finished = false;
+};
+
 AssetPanel::AssetPanel(Document* document, QWidget* parent)
     : QWidget(parent)
     , m_document(document)
@@ -179,6 +302,19 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
         QMenu::item { padding: 5px 18px; }
         QMenu::item:selected { background: #24405c; }
         QLabel#AssetPanelStatus { color: #8b96a8; }
+        QFrame#VideoExtractionRow {
+            background: #10141a;
+            border: 1px solid #262e3a;
+        }
+        QLabel#VideoExtractionName { color: #d8dfe9; }
+        QLabel#VideoExtractionText { color: #8b96a8; }
+        QLabel#VideoExtractionError { color: #ff9a9a; }
+        QProgressBar#VideoExtractionBar {
+            background: #0d1015;
+            border: 1px solid #2b323e;
+        }
+        QProgressBar#VideoExtractionBar::chunk { background: #4c8ed9; }
+        QPushButton#VideoExtractionCancel { padding: 1px 6px; }
     )"));
 
     auto* root = new QVBoxLayout(this);
@@ -235,6 +371,30 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
     bottom->addWidget(m_deleteButton);
     root->addLayout(bottom);
 
+    m_progressArea = new QWidget(this);
+    m_progressArea->setObjectName(QStringLiteral("AssetPanelProgress"));
+    m_progressLayout = new QVBoxLayout(m_progressArea);
+    m_progressLayout->setContentsMargins(0, 0, 0, 0);
+    m_progressLayout->setSpacing(4);
+    m_progressArea->hide();
+    root->addWidget(m_progressArea);
+
+    m_extractionQueue = new video2::VideoExtractionQueue(this);
+    connect(m_extractionQueue, &video2::VideoExtractionQueue::started, this,
+            [this](const QString& hash, int) { ensureProgressRow(hash); });
+    connect(m_extractionQueue, &video2::VideoExtractionQueue::progress, this,
+            [this](const QString& hash, int done, int total) {
+                updateProgressRow(hash, done, total);
+            });
+    connect(m_extractionQueue, &video2::VideoExtractionQueue::finished, this,
+            [this](const QString& hash) { finishProgressRow(hash); });
+    connect(m_extractionQueue, &video2::VideoExtractionQueue::failed, this,
+            [this](const QString& hash, const QString& error) {
+                failProgressRow(hash, error);
+            });
+    connect(m_extractionQueue, &video2::VideoExtractionQueue::cancelled, this,
+            [this](const QString& hash) { removeProgressRow(hash); });
+
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { applyFilter(); });
     connect(m_list, &QListWidget::itemSelectionChanged, this,
             &AssetPanel::updateSelectionState);
@@ -248,7 +408,15 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
     refresh();
 }
 
-AssetPanel::~AssetPanel() = default;
+AssetPanel::~AssetPanel()
+{
+    if (m_extractionQueue)
+    {
+        m_extractionQueue->cancelAll();
+        delete m_extractionQueue;
+        m_extractionQueue = nullptr;
+    }
+}
 
 void AssetPanel::refresh()
 {
@@ -292,6 +460,130 @@ bool AssetPanel::assetMissingAt(int index) const
     if (!m_list || index < 0 || index >= m_list->count())
         return false;
     return m_list->item(index)->data(kMissingRole).toBool();
+}
+
+int AssetPanel::progressRowCount() const
+{
+    return m_progressRows.size();
+}
+
+QString AssetPanel::progressTextAt(int index) const
+{
+    if (index < 0 || index >= m_progressRows.size())
+        return {};
+    return m_progressRows.at(index)->statusText();
+}
+
+QPushButton* AssetPanel::progressCancelButtonAt(int index) const
+{
+    if (index < 0 || index >= m_progressRows.size())
+        return nullptr;
+    return m_progressRows.at(index)->cancelButton();
+}
+
+int AssetPanel::progressRowIndex(const AssetHash& hash) const
+{
+    for (int i = 0; i < m_progressRows.size(); ++i)
+    {
+        if (m_progressRows.at(i)->hash() == hash)
+            return i;
+    }
+    return -1;
+}
+
+QString AssetPanel::displayNameFor(const AssetHash& hash) const
+{
+    for (const Entry& entry : m_entries)
+    {
+        if (entry.hash == hash)
+            return entry.name;
+    }
+    if (m_document)
+    {
+        if (const auto asset = m_document->assets().get(hash))
+            return asset->name.isEmpty() ? hash.left(8) : asset->name;
+    }
+    return hash.left(8);
+}
+
+void AssetPanel::ensureProgressRow(const AssetHash& hash)
+{
+    if (!m_progressArea || progressRowIndex(hash) >= 0)
+        return;
+
+    auto* row = new ProgressRow(hash, displayNameFor(hash), m_progressArea);
+    m_progressLayout->addWidget(row);
+    m_progressRows.append(row);
+    connect(row->cancelButton(), &QPushButton::clicked, this, [this, hash]() {
+        const int index = progressRowIndex(hash);
+        if (index < 0)
+            return;
+        ProgressRow* current = m_progressRows.at(index);
+        if (current->failed())
+        {
+            removeProgressRow(hash);
+            return;
+        }
+        current->cancelButton()->setEnabled(false);
+        if (m_extractionQueue)
+            m_extractionQueue->cancel(hash);
+    });
+    m_progressArea->show();
+}
+
+void AssetPanel::updateProgressRow(const AssetHash& hash, int done, int total)
+{
+    ensureProgressRow(hash);
+    const int index = progressRowIndex(hash);
+    if (index < 0)
+        return;
+    m_progressRows.at(index)->setProgress(done, total);
+}
+
+void AssetPanel::finishProgressRow(const AssetHash& hash)
+{
+    const int index = progressRowIndex(hash);
+    if (index < 0)
+        return;
+
+    ProgressRow* row = m_progressRows.at(index);
+    row->setFinished();
+
+    // Keep the completed row for a moment so the user sees 100%, then drop it.
+    QPointer<ProgressRow> guard(row);
+    QTimer::singleShot(2000, this, [this, hash, guard]() {
+        if (!guard)
+            return;
+        const int current = progressRowIndex(hash);
+        if (current >= 0 && m_progressRows.at(current) == guard.data()
+            && guard->finished())
+            removeProgressRow(hash);
+    });
+}
+
+void AssetPanel::failProgressRow(const AssetHash& hash, const QString& error)
+{
+    ensureProgressRow(hash);
+    const int index = progressRowIndex(hash);
+    if (index < 0)
+        return;
+    m_progressRows.at(index)->setFailed(error);
+}
+
+void AssetPanel::removeProgressRow(const AssetHash& hash)
+{
+    const int index = progressRowIndex(hash);
+    if (index < 0)
+        return;
+
+    ProgressRow* row = m_progressRows.takeAt(index);
+    if (m_progressLayout)
+        m_progressLayout->removeWidget(row);
+    row->hide();
+    row->deleteLater();
+
+    if (m_progressRows.isEmpty() && m_progressArea)
+        m_progressArea->hide();
 }
 
 void AssetPanel::rebuildEntries()
@@ -552,6 +844,32 @@ QPixmap AssetPanel::iconFor(const Entry& entry)
     return pixmap;
 }
 
+void AssetPanel::enqueueVideoExtraction(const assets::StoredAsset& asset)
+{
+    if (!m_document || !m_extractionQueue)
+        return;
+
+    const int fps = m_document->project().settings.fps;
+    if (fps <= 0)
+        return;
+
+    const QStringList contentFiles = QDir(asset.directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    if (contentFiles.isEmpty())
+        return;
+
+    const QString projectRoot =
+        QFileInfo(m_document->assets().assetsDirectory()).absolutePath();
+
+    video2::ExtractionJob job;
+    job.assetHash = asset.hash;
+    job.videoPath = asset.directory + QLatin1Char('/') + contentFiles.first();
+    job.projectFps = fps;
+    job.maxWidth = 960;
+    job.cacheRoot = QDir(projectRoot).filePath(QStringLiteral(".cache/video"));
+    m_extractionQueue->enqueue(job);
+}
+
 bool AssetPanel::importPaths(const QStringList& paths, QString* error)
 {
     if (!m_document)
@@ -619,6 +937,8 @@ bool AssetPanel::importPaths(const QStringList& paths, QString* error)
             continue;
         }
         imported.append(stored->name);
+        if (stored->type == AssetType::Video)
+            enqueueVideoExtraction(*stored);
     }
 
     if (!imported.isEmpty())

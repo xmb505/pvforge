@@ -1,10 +1,20 @@
 #include "next/assets/AssetPanel.h"
 #include "next/core/Document.h"
+#include "video2/VideoExtractionQueue.h"
 
 #include <QColor>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QListWidget>
 #include <QMimeData>
+#include <QProcess>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -71,6 +81,50 @@ bool writePng(const QString& path, const QColor& color)
     return image.save(path, "PNG");
 }
 
+QString makeVideo(const QString& path, int seconds)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty())
+        return {};
+
+    QProcess process;
+    process.start(
+        QStringLiteral("ffmpeg"),
+        {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"),
+         QStringLiteral("error"), QStringLiteral("-y"), QStringLiteral("-f"),
+         QStringLiteral("lavfi"), QStringLiteral("-i"),
+         QStringLiteral("testsrc=size=160x90:rate=30:duration=%1")
+             .arg(seconds),
+         QStringLiteral("-c:v"), QStringLiteral("mpeg4"), QStringLiteral("-q:v"),
+         QStringLiteral("2"), QStringLiteral("-pix_fmt"),
+         QStringLiteral("yuv420p"), path});
+    if (!process.waitForFinished(120000))
+    {
+        process.kill();
+        process.waitForFinished();
+        return {};
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+        return {};
+    return QFileInfo::exists(path) ? path : QString();
+}
+
+QString indexFileFor(const QString& projectRoot, const QString& hash,
+                     int fps = 30, int maxWidth = 960)
+{
+    return QDir(projectRoot).filePath(
+        QStringLiteral(".cache/video/") + hash + QLatin1Char('/')
+        + QString::number(fps) + QLatin1Char('/')
+        + QString::number(maxWidth) + QStringLiteral("/index.json"));
+}
+
+QJsonObject readJson(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
 } // namespace
 
 class AssetPanelTest : public QObject
@@ -84,6 +138,9 @@ private slots:
     void renameUpdatesName();
     void deleteRemovesFromList();
     void missingAssetShowsPlaceholder();
+    void videoImportShowsProgressAndCancel();
+    void videoImportCompletesAndHides();
+    void videoExtractionFailuresStackAndClose();
 };
 
 void AssetPanelTest::importPngAppears()
@@ -244,6 +301,114 @@ void AssetPanelTest::missingAssetShowsPlaceholder()
     QCOMPARE(panel.assetCount(), 0);
     panel.setSearchText(QString());
     QCOMPARE(panel.assetCount(), 1);
+}
+
+void AssetPanelTest::videoImportShowsProgressAndCancel()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString video = makeVideo(
+        directory.path() + QStringLiteral("/clip.mp4"), 8);
+    if (video.isEmpty())
+        QSKIP("ffmpeg 不可用或无法生成测试视频");
+
+    FakeDocument document(directory.path());
+    document.mutableProject().settings.fps = 30;
+    AssetPanel panel(&document);
+    panel.resize(320, 480);
+
+    QString error;
+    QVERIFY2(panel.importPaths({video}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 1);
+
+    QTRY_VERIFY_WITH_TIMEOUT(panel.progressRowCount() > 0, 15000);
+    QVERIFY(panel.progressTextAt(0).contains(QStringLiteral("抽帧")));
+    QVERIFY(panel.findChild<QProgressBar*>() != nullptr);
+
+    QPushButton* cancel = panel.progressCancelButtonAt(0);
+    QVERIFY(cancel);
+    QVERIFY(cancel->isEnabled());
+    QVERIFY(QFileInfo(directory.path() + QStringLiteral("/.cache/video")).isDir());
+
+    cancel->click();
+    QTRY_COMPARE_WITH_TIMEOUT(panel.progressRowCount(), 0, 20000);
+}
+
+void AssetPanelTest::videoImportCompletesAndHides()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString video = makeVideo(
+        directory.path() + QStringLiteral("/short.mp4"), 1);
+    if (video.isEmpty())
+        QSKIP("ffmpeg 不可用或无法生成测试视频");
+
+    FakeDocument document(directory.path());
+    document.mutableProject().settings.fps = 30;
+    AssetPanel panel(&document);
+
+    QString error;
+    QVERIFY2(panel.importPaths({video}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 1);
+    const QString hash = panel.assetHashAt(0);
+
+    QTRY_VERIFY_WITH_TIMEOUT(panel.progressRowCount() > 0, 15000);
+
+    const QString index = indexFileFor(directory.path(), hash);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        QFileInfo(index).isFile()
+            && readJson(index).value(QStringLiteral("frames")).toObject().size()
+                   == 30,
+        60000);
+
+    // Completed rows stay visible briefly, then disappear.
+    QTRY_COMPARE_WITH_TIMEOUT(panel.progressRowCount(), 0, 6000);
+
+    const QJsonObject root = readJson(index);
+    QCOMPARE(root.value(QStringLiteral("totalFrames")).toInt(), 30);
+    QCOMPARE(root.value(QStringLiteral("projectFps")).toInt(), 30);
+    QCOMPARE(root.value(QStringLiteral("maxWidth")).toInt(), 960);
+}
+
+void AssetPanelTest::videoExtractionFailuresStackAndClose()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    AssetPanel panel(&document);
+
+    auto* queue = panel.findChild<pvf::video2::VideoExtractionQueue*>();
+    QVERIFY(queue);
+
+    pvf::video2::ExtractionJob first;
+    first.assetHash = QStringLiteral("failurehash1");
+    first.videoPath = directory.path() + QStringLiteral("/missing-1.mp4");
+    first.cacheRoot = directory.path() + QStringLiteral("/.cache/video");
+    first.maxWidth = 160;
+
+    pvf::video2::ExtractionJob second = first;
+    second.assetHash = QStringLiteral("failurehash2");
+    second.videoPath = directory.path() + QStringLiteral("/missing-2.mp4");
+
+    queue->enqueue(first);
+    queue->enqueue(second);
+
+    QTRY_COMPARE_WITH_TIMEOUT(panel.progressRowCount(), 2, 30000);
+    QVERIFY(panel.progressTextAt(0).contains(QStringLiteral("抽帧失败")));
+    QVERIFY(panel.progressTextAt(1).contains(QStringLiteral("抽帧失败")));
+
+    QPushButton* close = panel.progressCancelButtonAt(0);
+    QVERIFY(close);
+    QCOMPARE(close->text(), QStringLiteral("关闭"));
+    close->click();
+    QTRY_COMPARE(panel.progressRowCount(), 1);
+
+    QPushButton* closeLast = panel.progressCancelButtonAt(0);
+    QVERIFY(closeLast);
+    closeLast->click();
+    QTRY_COMPARE(panel.progressRowCount(), 0);
 }
 
 QTEST_MAIN(AssetPanelTest)
