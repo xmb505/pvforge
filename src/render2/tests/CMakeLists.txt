@@ -19,6 +19,9 @@ set(PVF_RENDER2_TEST_CASES
     cameraKeepsCanvasCoordinates
     cameraNegativeScaleFlips
     worldPoseAndShape
+    solverSelfShapeTerminates
+    fractionalProjectFrame
+    frameProviderReceivesFractionalFrame
 )
 
 foreach(test_case IN LISTS PVF_RENDER2_TEST_CASES)

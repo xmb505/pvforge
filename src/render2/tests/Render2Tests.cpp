@@ -381,6 +381,50 @@ void testWorldPoseAndShape()
     CHECK(!shape.contains(QPointF(0.0, 0.0)));
 }
 
+void testSolverSelfShapeTerminates()
+{
+    Project project = makeProject(100, 100);
+    Entity ball = makeVector(QStringLiteral("ball"), 10, 10, Qt::red);
+    ball.start = 0;
+    ball.end = 60;
+    ball.transform.x = 50.0;
+    ball.transform.y = 10.0;
+    Track xTrack;
+    xTrack.keys = {{0, 50.0, {}, {}}};
+    ball.tracks.insert(QStringLiteral("x"), xTrack);
+    Track yTrack;
+    yTrack.keys = {{0, 10.0, {}, {}}};
+    ball.tracks.insert(QStringLiteral("y"), yTrack);
+
+    SolverSegment gravity;
+    gravity.id = QStringLiteral("gravity");
+    gravity.effect = SolverEffect::Gravity;
+    gravity.startFrame = 0;
+    gravity.endFrame = 59;
+    gravity.params.insert(QStringLiteral("targetUuid"),
+                          QStringLiteral("ground"));
+    ball.solvers.append(gravity);
+    add(project, ball);
+
+    Entity ground = makeEntity(QStringLiteral("ground"), 0, 60);
+    add(project, ground);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    render2::SceneWorld world(project, store);
+
+    // Before the entity-keyed recursion guard, sampling the ball's own shape
+    // restarted the solver at every frame (59 -> 58 -> ...), which hung the UI.
+    const solver::Pose pose = world.poseOf(QStringLiteral("ball"), 50);
+    CHECK(std::isfinite(pose.position.x()));
+    CHECK(std::isfinite(pose.position.y()));
+    const QPainterPath shape = world.shapeOf(QStringLiteral("ball"), 50);
+    CHECK(!shape.isEmpty());
+
+    const QImage image = render(project, store, 50.0);
+    CHECK(!image.isNull());
+}
+
 void testFractionalProjectFrame()
 {
     Project project = makeProject(100, 100);
@@ -459,6 +503,8 @@ int main(int argc, char** argv)
         {QStringLiteral("cameraNegativeScaleFlips"),
          testCameraNegativeScaleFlips},
         {QStringLiteral("worldPoseAndShape"), testWorldPoseAndShape},
+        {QStringLiteral("solverSelfShapeTerminates"),
+         testSolverSelfShapeTerminates},
         {QStringLiteral("fractionalProjectFrame"), testFractionalProjectFrame},
         {QStringLiteral("frameProviderReceivesFractionalFrame"),
          testFrameProviderReceivesFractionalFrame},

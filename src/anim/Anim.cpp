@@ -161,11 +161,15 @@ solver::Pose startPoseAt(const model::Entity& entity, int relativeFrame)
 // implementation evaluates entities through this module.
 thread_local QSet<QString> gActiveEvaluations;
 
-QString evaluationKey(const model::Project& project, const Uuid& uuid,
-                      double frame)
+// Guards solver -> World -> evaluateEntity recursion.  The key deliberately
+// omits the frame: a solver sampling its own entity asks for shape/pose at many
+// frames, and evaluating each one would restart the solver (frame 59 -> 58 ->
+// ... -> exponential).  Any re-entry for the same entity returns a solver-free
+// plain pose instead.
+QString evaluationKey(const model::Project& project, const Uuid& uuid)
 {
     return QString::number(reinterpret_cast<quintptr>(&project)) + kKeySeparator
-           + uuid + kKeySeparator + QString::number(frame, 'g', 17);
+           + uuid;
 }
 
 class ActiveEvaluationGuard
@@ -649,7 +653,7 @@ Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,
     if (it == project.entities.constEnd())
         return Pose{};
 
-    const QString key = evaluationKey(project, entityUuid, projectFrame);
+    const QString key = evaluationKey(project, entityUuid);
     if (gActiveEvaluations.contains(key))
     {
         // A World callback asked us to evaluate the entity that is currently
