@@ -148,6 +148,12 @@ bool MediaServices::htmlRunning() const
     return m_html && m_html->isRunning();
 }
 
+void MediaServices::stopExportHtml()
+{
+    if (m_html)
+        m_html->stopFinal();
+}
+
 bool MediaServices::startHtml(QString* error)
 {
     if (htmlRunning())

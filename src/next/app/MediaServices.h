@@ -88,6 +88,10 @@ public:
 
     QString cacheRoot() const { return m_cacheRoot; }
     bool htmlRunning() const;
+    // Releases the final (export) HTML browser.  Must be called from the
+    // export worker thread that produced the final frames; stop() on the UI
+    // thread does not own that renderer.
+    void stopExportHtml();
     // True while the latest htmlFrame() missed the cache and timed out: the
     // frontend browser is still rendering it and htmlFrameReady will follow.
     // The playback watchdog treats this as "no frame on screen yet".

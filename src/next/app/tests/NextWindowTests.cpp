@@ -79,6 +79,62 @@ int commitCount(NextWindow* window)
     return window->document()->store()->history(10000).size();
 }
 
+struct CrashFixture
+{
+    QString projectDir;
+    Entity entity;
+};
+
+// Creates a project with one committed entity and destroys the document, so
+// the caller can simulate a crash by editing the entity file on disk.
+bool prepareProjectWithEntity(QTemporaryDir& temp, const QString& name,
+                              CrashFixture* fixture, QString* error)
+{
+    ProjectSettings settings;
+    settings.name = name;
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 24;
+
+    fixture->projectDir =
+        temp.path() + QLatin1Char('/') + name + QStringLiteral(".pvproj");
+    auto document = ProjectDocument::create(fixture->projectDir, settings, error);
+    if (!document)
+        return false;
+
+    Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("原始名字");
+    entity.start = 0;
+    entity.end = 24;
+    fixture->entity = entity;
+    document->mutableProject().entities.insert(entity.uuid, entity);
+    if (!document->commitEntity(entity.uuid,
+                                QStringLiteral("pvf: create entity"), error))
+        return false;
+    document->flush(error);
+    return error->isEmpty();
+}
+
+bool rewriteEntityName(const QString& projectDir, const Uuid& uuid,
+                       const QString& name)
+{
+    const QString path = projectDir + QStringLiteral("/entities/") + uuid
+                         + QStringLiteral(".json");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+
+    object.insert(QStringLiteral("name"), name);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    const QByteArray bytes =
+        QJsonDocument(object).toJson(QJsonDocument::Indented);
+    return file.write(bytes) == bytes.size() && file.flush();
+}
+
 } // namespace
 
 class NextWindowTests : public QObject
@@ -898,6 +954,204 @@ private slots:
         QVERIFY(!window.openProject(path, &error));
         QVERIFY(error.contains(QStringLiteral("旧工程格式已废弃")));
         QVERIFY(window.document() == nullptr);
+    }
+
+    void cleanProjectSkipsCrashRecoveryHandler()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("clean"),
+                                          &fixture, &error),
+                 qPrintable(error));
+
+        NextWindow window(nullptr);
+        int calls = 0;
+        window.setCrashRecoveryHandlerForTest(
+            [&calls](const QVector<store::DirtyText>&) {
+                ++calls;
+                return CrashRecoveryChoice::Restore;
+            });
+
+        QVERIFY2(window.openProject(fixture.projectDir, &error),
+                 qPrintable(error));
+        QCOMPARE(calls, 0);
+        QVERIFY(window.document() != nullptr);
+        QVERIFY(window.document()->store()->dirtyText().isEmpty());
+    }
+
+    void crashRecoveryRestoreOpensDirtyDiskContent()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("restore"),
+                                          &fixture, &error),
+                 qPrintable(error));
+        QVERIFY(rewriteEntityName(fixture.projectDir, fixture.entity.uuid,
+                                  QStringLiteral("崩溃后的名字")));
+
+        const QString expectedPath =
+            QStringLiteral("entities/") + fixture.entity.uuid
+            + QStringLiteral(".json");
+
+        NextWindow window(nullptr);
+        QVector<store::DirtyText> seen;
+        window.setCrashRecoveryHandlerForTest(
+            [&seen](const QVector<store::DirtyText>& dirty) {
+                seen = dirty;
+                return CrashRecoveryChoice::Restore;
+            });
+
+        QVERIFY2(window.openProject(fixture.projectDir, &error),
+                 qPrintable(error));
+        QCOMPARE(seen.size(), 1);
+        QCOMPARE(seen.first().path, expectedPath);
+        QCOMPARE(seen.first().status, QStringLiteral("modified"));
+        QVERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()
+                     ->project()
+                     .entities.value(fixture.entity.uuid)
+                     .name,
+                 QStringLiteral("崩溃后的名字"));
+        QCOMPARE(window.document()->store()->dirtyText().size(), 1);
+    }
+
+    void crashRecoveryDiscardRestoresCommittedText()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("discard"),
+                                          &fixture, &error),
+                 qPrintable(error));
+        QVERIFY(rewriteEntityName(fixture.projectDir, fixture.entity.uuid,
+                                  QStringLiteral("要丢弃的名字")));
+
+        NextWindow window(nullptr);
+        window.setCrashRecoveryHandlerForTest(
+            [](const QVector<store::DirtyText>&) {
+                return CrashRecoveryChoice::Discard;
+            });
+
+        QVERIFY2(window.openProject(fixture.projectDir, &error),
+                 qPrintable(error));
+        QVERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()
+                     ->project()
+                     .entities.value(fixture.entity.uuid)
+                     .name,
+                 QStringLiteral("原始名字"));
+        QVERIFY(window.document()->store()->dirtyText().isEmpty());
+    }
+
+    void crashRecoveryCommitCreatesRecoverCommit()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("commit"),
+                                          &fixture, &error),
+                 qPrintable(error));
+        QVERIFY(rewriteEntityName(fixture.projectDir, fixture.entity.uuid,
+                                  QStringLiteral("恢复点名字")));
+
+        NextWindow window(nullptr);
+        window.setCrashRecoveryHandlerForTest(
+            [](const QVector<store::DirtyText>&) {
+                return CrashRecoveryChoice::Commit;
+            });
+
+        QVERIFY2(window.openProject(fixture.projectDir, &error),
+                 qPrintable(error));
+        QVERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()
+                     ->project()
+                     .entities.value(fixture.entity.uuid)
+                     .name,
+                 QStringLiteral("恢复点名字"));
+        QVERIFY(window.document()->store()->dirtyText().isEmpty());
+
+        const QVector<store::GitCommit> history =
+            window.document()->store()->history(1, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!history.isEmpty());
+        QCOMPARE(history.first().message, QStringLiteral("pvf: recover"));
+    }
+
+    void crashRecoveryCancelLeavesProjectClosed()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("cancel"),
+                                          &fixture, &error),
+                 qPrintable(error));
+        QVERIFY(rewriteEntityName(fixture.projectDir, fixture.entity.uuid,
+                                  QStringLiteral("取消的名字")));
+
+        NextWindow window(nullptr);
+        int calls = 0;
+        window.setCrashRecoveryHandlerForTest(
+            [&calls](const QVector<store::DirtyText>&) {
+                ++calls;
+                return CrashRecoveryChoice::Cancel;
+            });
+
+        error.clear();
+        QVERIFY(!window.openProject(fixture.projectDir, &error));
+        QCOMPARE(calls, 1);
+        QVERIFY(window.document() == nullptr);
+        QVERIFY(error.isEmpty() || error == QStringLiteral("已取消"));
+    }
+
+    void videoExtractionUsesProxyWidthSetting()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        CrashFixture fixture;
+        QString error;
+        QVERIFY2(prepareProjectWithEntity(temp, QStringLiteral("extraction"),
+                                          &fixture, &error),
+                 qPrintable(error));
+
+        NextWindow window(nullptr);
+        AppSettings settings = window.settingsForTest();
+        settings.videoProxyWidth = 320;
+        window.setSettingsForTest(settings);
+
+        QVERIFY2(window.openProject(fixture.projectDir, &error),
+                 qPrintable(error));
+        QVERIFY(window.assetPanelForTest() != nullptr);
+        QCOMPARE(window.assetPanelForTest()->videoExtractionWidth(), 320);
+
+        // Applying a new width updates the option for later imports.
+        settings.videoProxyWidth = 1280;
+        window.setSettingsForTest(settings);
+        QCOMPARE(window.assetPanelForTest()->videoExtractionWidth(), 1280);
     }
 
     void settingsDialogAppliesAndPersists()

@@ -2,11 +2,13 @@
 
 #include "common/Types.h"
 #include "next/settings/SettingsStore.h"
+#include "store/Store.h"
 
 #include <QHash>
 #include <QMainWindow>
 #include <QVector>
 
+#include <functional>
 #include <memory>
 
 class QAction;
@@ -34,6 +36,19 @@ class PropertiesPanel;
 class SettingsDialog;
 class TimelineWidget;
 class ViewportWidget;
+
+// What to do with uncommitted text found when opening a project after an
+// unclean shutdown.  The default is Restore: keep the on-disk bytes.
+enum class CrashRecoveryChoice
+{
+    Restore,
+    Discard,
+    Commit,
+    Cancel
+};
+
+using CrashRecoveryHandler =
+    std::function<CrashRecoveryChoice(const QVector<store::DirtyText>&)>;
 
 // Application shell for the new UI.  Owns a ProjectDocument (which may be null
 // while no project is open) and wires the asset bin, viewport, properties and
@@ -64,6 +79,14 @@ public:
     // Test hook: point the MCP transport at a temporary config file before
     // opening a project.  Empty restores the default persistent location.
     void setMcpConfigPathForTest(const QString& path);
+
+    // Test hook: decide the crash-recovery action without opening a modal
+    // dialog.  An empty handler means "ask the human in a modal dialog".
+    void setCrashRecoveryHandlerForTest(CrashRecoveryHandler handler);
+
+    // Test hook: apply a settings snapshot immediately, as if the settings
+    // dialog had saved it.
+    void setSettingsForTest(const AppSettings& settings);
 
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
@@ -133,6 +156,9 @@ private:
     void buildWelcome();
     void connectDocument();
     void ensureMediaServices();
+    void configureVideoExtraction();
+    CrashRecoveryChoice askCrashRecovery(
+        const QVector<store::DirtyText>& dirty);
     void resetMediaServices();
     void attachMediaProviders();
     void updateActions();
@@ -226,6 +252,7 @@ private:
     QHash<Uuid, QDialog*> m_privateTimelines;
 
     QString m_lastBrowseDir;
+    CrashRecoveryHandler m_crashRecoveryHandler;
 };
 
 } // namespace pvf::next

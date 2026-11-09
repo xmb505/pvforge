@@ -799,6 +799,7 @@ void NextWindow::buildEditor()
 
     rebuildCameras();
     ensureMediaServices();
+    configureVideoExtraction();
 }
 
 void NextWindow::buildWelcome()
@@ -948,6 +949,21 @@ void NextWindow::ensureMediaServices()
 
     if (!m_mediaProvidersAttached)
         attachMediaProviders();
+}
+
+void NextWindow::configureVideoExtraction()
+{
+    if (!m_assetPanel)
+        return;
+
+    // The frame cache under .cache/video is keyed by the project fps and this
+    // width, so a width change starts a new cache directory.  The disk budget
+    // is the documented 2 GiB LRU limit.
+    m_assetPanel->setVideoExtractionOptions(
+        m_settings.videoProxyWidth, 2LL * 1024 * 1024 * 1024);
+    // Cheap for finished videos: the queue skips complete cache indexes and
+    // videos that are already queued or running.
+    m_assetPanel->enqueueMissingVideoExtractions();
 }
 
 void NextWindow::resetMediaServices()
@@ -1154,6 +1170,18 @@ void NextWindow::setMcpConfigPathForTest(const QString& path)
     m_mcpConfigPath = path;
     if (m_document)
         startMcpServer();
+}
+
+void NextWindow::setCrashRecoveryHandlerForTest(CrashRecoveryHandler handler)
+{
+    m_crashRecoveryHandler = std::move(handler);
+}
+
+void NextWindow::setSettingsForTest(const AppSettings& settings)
+{
+    const AppSettings previous = m_settings;
+    m_settings = settings;
+    applySettings(previous);
 }
 
 void NextWindow::startMcpServer()
@@ -1363,6 +1391,10 @@ void NextWindow::applySettings(const AppSettings& previous)
         if (m_viewport)
             m_viewport->refresh();
     }
+
+    // A new proxy width changes the extraction cache key; enqueue again so
+    // existing videos fill the new directory.
+    configureVideoExtraction();
 
     const bool portChanged = previous.mcpPort != m_settings.mcpPort;
     if (portChanged && !m_document) {
@@ -1736,13 +1768,18 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
     progress->show();
     m_exportRunning = true;
     watcher->setFuture(QtConcurrent::run(
-        [project, assets, options, progressValue, cancelled] {
-            return export2::exportVideo(
+        [project, assets, options, progressValue, cancelled, media] {
+            export2::Result result = export2::exportVideo(
                 *project, *assets, options,
                 [progressValue, cancelled](int frame, int) {
                     progressValue->store(frame);
                     return !cancelled->load();
                 });
+            // The final HTML browser was created on this worker thread; release
+            // it here so it is never destroyed from the UI thread.
+            if (media)
+                media->stopExportHtml();
+            return result;
         }));
 }
 
@@ -2027,11 +2064,56 @@ void NextWindow::chooseOpenProject()
 
     QString error;
     if (!openProject(dir, &error)) {
-        QMessageBox::warning(this, tr("打开工程失败"), error);
+        // An empty error means the human cancelled the crash-recovery dialog;
+        // that is not a failure worth a warning box.
+        if (!error.isEmpty())
+            QMessageBox::warning(this, tr("打开工程失败"), error);
         return;
     }
 
     m_lastBrowseDir = QFileInfo(dir).absolutePath();
+}
+
+CrashRecoveryChoice NextWindow::askCrashRecovery(
+    const QVector<store::DirtyText>& dirty)
+{
+    if (m_crashRecoveryHandler)
+        return m_crashRecoveryHandler(dirty);
+
+    QStringList lines;
+    const int shown = std::min<int>(dirty.size(), 20);
+    for (int i = 0; i < shown; ++i)
+        lines << QStringLiteral("%1（%2）")
+                     .arg(dirty.at(i).path, dirty.at(i).status);
+    if (dirty.size() > shown)
+        lines << tr("...等 %1 个文件").arg(dirty.size());
+
+    QMessageBox box(
+        QMessageBox::Question, tr("发现未提交的文本改动"),
+        tr("工程中有 %1 个未提交的文本文件，可能来自上次异常退出：\n\n"
+           "%2\n\n请选择如何处理这些改动。")
+            .arg(dirty.size())
+            .arg(lines.join(QLatin1Char('\n'))),
+        QMessageBox::NoButton, this);
+
+    QPushButton* restore =
+        box.addButton(tr("恢复并打开"), QMessageBox::AcceptRole);
+    QPushButton* discard =
+        box.addButton(tr("丢弃未提交文本"), QMessageBox::DestructiveRole);
+    QPushButton* commit =
+        box.addButton(tr("提交为恢复点"), QMessageBox::ActionRole);
+    QPushButton* cancel = box.addButton(tr("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(restore);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    if (box.clickedButton() == restore)
+        return CrashRecoveryChoice::Restore;
+    if (box.clickedButton() == discard)
+        return CrashRecoveryChoice::Discard;
+    if (box.clickedButton() == commit)
+        return CrashRecoveryChoice::Commit;
+    return CrashRecoveryChoice::Cancel;
 }
 
 bool NextWindow::openProject(const QString& path, QString* error)
@@ -2044,6 +2126,8 @@ bool NextWindow::openProject(const QString& path, QString* error)
 
     if (mcpToolRunning())
         return fail(tr("AI 正在操作工程，请稍后再打开工程"));
+    if (m_exportRunning)
+        return fail(tr("视频导出中，请稍后再打开工程"));
 
     const QFileInfo info(path);
     if (!info.exists())
@@ -2074,7 +2158,55 @@ bool NextWindow::openProject(const QString& path, QString* error)
     if (!document)
         return false;
 
+    QString recoveryStatus;
+    const QVector<store::DirtyText> dirty = document->store()->dirtyText();
+    if (!dirty.isEmpty())
+    {
+        const CrashRecoveryChoice choice = askCrashRecovery(dirty);
+
+        // The modal dialog runs a nested event loop, so an MCP tool or an
+        // export may have started in the meantime.  Never swap the document
+        // under either of them.
+        if (mcpToolRunning())
+            return fail(tr("AI 正在操作工程，请稍后再打开工程"));
+        if (m_exportRunning)
+            return fail(tr("视频导出中，请稍后再打开工程"));
+
+        QString recoveryError;
+        switch (choice)
+        {
+        case CrashRecoveryChoice::Restore:
+            recoveryStatus = tr("已恢复 %1 个未提交文件").arg(dirty.size());
+            break;
+        case CrashRecoveryChoice::Discard:
+            if (!document->store()->discardDirtyText(&recoveryError)
+                || !document->store()->reloadAfterDiscard(&recoveryError))
+                return fail(tr("丢弃未提交文本失败：%1")
+                                .arg(recoveryError.isEmpty()
+                                         ? tr("未知错误")
+                                         : recoveryError));
+            recoveryStatus = tr("已丢弃 %1 个未提交文件").arg(dirty.size());
+            break;
+        case CrashRecoveryChoice::Commit:
+            if (!document->store()->commitRecoveredText(&recoveryError))
+                return fail(tr("提交未提交文本失败：%1")
+                                .arg(recoveryError.isEmpty()
+                                         ? tr("未知错误")
+                                         : recoveryError));
+            recoveryStatus =
+                tr("已提交 %1 个未提交文件为恢复点").arg(dirty.size());
+            break;
+        case CrashRecoveryChoice::Cancel:
+            // Not an error: chooseOpenProject() suppresses empty errors.
+            return fail(QString());
+        }
+    }
+
     setDocument(std::move(document));
+    // Shown after setDocument(): building the editor may enqueue video
+    // extraction, which posts its own status message.
+    if (!recoveryStatus.isEmpty())
+        statusBar()->showMessage(recoveryStatus, 8000);
     return true;
 }
 

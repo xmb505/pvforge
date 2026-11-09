@@ -707,9 +707,23 @@ void HtmlFrameService::stop()
     }
     if (m_final)
     {
-        m_final->stop();
-        delete m_final;
-        m_final = nullptr;
+        if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
+        {
+            // The final renderer lives on the export worker thread. Deleting
+            // it from here would destroy thread-affine Qt objects on the wrong
+            // thread; leaking until process exit is the safe fallback.
+            qWarning().noquote()
+                << QStringLiteral("html2: stop() found a final renderer owned by "
+                                  "another thread; call stopFinal() on that thread "
+                                  "first (leaking the renderer)");
+            m_final = nullptr;
+        }
+        else
+        {
+            m_final->stop();
+            delete m_final;
+            m_final = nullptr;
+        }
     }
     m_finalThreadId = nullptr;
 
@@ -943,7 +957,9 @@ QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
 
     if (!m_final)
     {
-        m_final = new PvhtmlRenderer(this);
+        // No QObject parent: the export worker thread owns and deletes this
+        // renderer through stopFinal().
+        m_final = new PvhtmlRenderer();
         m_finalThreadId = QThread::currentThreadId();
     }
     else if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
