@@ -22,6 +22,7 @@ class Service;
 namespace pvf::next {
 
 class AssetPanel;
+class PlaybackController;
 class ProjectDocument;
 class PropertiesPanel;
 class TimelineWidget;
@@ -60,6 +61,11 @@ public:
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
 
+    // Playback test hooks: the same path as the Space shortcut.
+    void togglePlaybackForTest();
+    bool isPlayingForTest() const;
+    PlaybackController* playbackControllerForTest() const { return m_playback.get(); }
+
     // Accessors used by the shell tests and by future automation.
     ViewportWidget* viewportForTest() const { return m_viewport; }
     TimelineWidget* timelineForTest() const { return m_timeline; }
@@ -92,6 +98,7 @@ private:
     void buildWelcome();
     void connectDocument();
     void updateActions();
+    void updatePlaybackAction();
     void updateStatus();
     void rebuildCameras();
     void startMcpServer();
@@ -107,6 +114,7 @@ private:
     ProjectDocument* m_document = nullptr;
     std::unique_ptr<mcp2::Service> m_mcpService;
     std::unique_ptr<mcp2::HttpServer> m_mcpServer;
+    std::unique_ptr<PlaybackController> m_playback;
     QString m_mcpConfigPath;
     QString m_mcpStatus;
 
@@ -126,6 +134,11 @@ private:
     QAction* m_createVectorAction = nullptr;
     QAction* m_createCameraAction = nullptr;
     QAction* m_exportAction = nullptr;
+    QAction* m_playPauseAction = nullptr;
+    QAction* m_homeAction = nullptr;
+    QAction* m_endAction = nullptr;
+    QAction* m_prevFrameAction = nullptr;
+    QAction* m_nextFrameAction = nullptr;
 
     QSpinBox* m_playheadSpin = nullptr;
     QComboBox* m_cameraCombo = nullptr;

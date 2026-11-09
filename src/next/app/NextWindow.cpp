@@ -4,6 +4,7 @@
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 #include "next/app/ExportDialog.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
 #include "next/properties/PropertiesPanel.h"
@@ -245,8 +246,14 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     setMinimumSize(960, 640);
 
     m_lastBrowseDir = QDir::homePath();
+    m_playback = std::make_unique<PlaybackController>(this);
 
     buildUi();
+    connect(m_playback.get(), &PlaybackController::playbackStateChanged, this,
+            [this](bool) {
+                updatePlaybackAction();
+                updateStatus();
+            });
 
     if (m_document) {
         connectDocument();
@@ -255,6 +262,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
         buildWelcome();
     }
 
+    m_playback->setDocument(m_document);
     updateActions();
     updateStatus();
     rebuildCameras();
@@ -263,14 +271,18 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
 
 NextWindow::~NextWindow()
 {
+    if (m_playback)
+        m_playback->setDocument(nullptr);
     stopMcpServer();
     closeAllPrivateTimelines();
 }
 
 void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 {
-    // The MCP service points into the old store, and private overlay
-    // timelines point at the old Document*; drop both first.
+    // The playback clock, MCP service and private overlay timelines all point
+    // into the old document; drop them before it dies.
+    if (m_playback)
+        m_playback->setDocument(nullptr);
     stopMcpServer();
     closeAllPrivateTimelines();
 
@@ -294,6 +306,8 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
         buildWelcome();
     }
 
+    if (m_playback)
+        m_playback->setDocument(m_document);
     updateActions();
     updateStatus();
     rebuildCameras();
@@ -358,6 +372,58 @@ void NextWindow::buildUi()
     addCreateAction(m_createCameraAction, tr("新建摄像机"),
                     QStringLiteral("createCameraEntityAction"), ContentKind::Camera);
 
+    QMenu* playbackMenu = menuBar()->addMenu(tr("播放(&P)"));
+    m_playPauseAction = new QAction(tr("播放"), this);
+    m_playPauseAction->setObjectName(QStringLiteral("playPauseAction"));
+    m_playPauseAction->setShortcut(QKeySequence(Qt::Key_Space));
+    connect(m_playPauseAction, &QAction::triggered, this, [this] {
+        if (m_playback)
+            m_playback->toggle();
+    });
+    playbackMenu->addAction(m_playPauseAction);
+
+    m_homeAction = new QAction(tr("跳到开头"), this);
+    m_homeAction->setObjectName(QStringLiteral("homeAction"));
+    m_homeAction->setShortcut(QKeySequence(Qt::Key_Home));
+    connect(m_homeAction, &QAction::triggered, this, [this] {
+        if (m_document)
+            m_document->setPlayhead(0);
+    });
+    playbackMenu->addAction(m_homeAction);
+
+    m_endAction = new QAction(tr("跳到末尾"), this);
+    m_endAction->setObjectName(QStringLiteral("endAction"));
+    m_endAction->setShortcut(QKeySequence(Qt::Key_End));
+    connect(m_endAction, &QAction::triggered, this, [this] {
+        if (m_document && m_playback)
+            m_document->setPlayhead(m_playback->contentEnd());
+    });
+    playbackMenu->addAction(m_endAction);
+
+    m_prevFrameAction = new QAction(tr("上一帧"), this);
+    m_prevFrameAction->setObjectName(QStringLiteral("prevFrameAction"));
+    m_prevFrameAction->setShortcut(QKeySequence(Qt::Key_Left));
+    connect(m_prevFrameAction, &QAction::triggered, this, [this] {
+        if (!m_document || !m_playback)
+            return;
+        const int end = m_playback->contentEnd();
+        m_document->setPlayhead(
+            std::clamp(m_document->playhead() - 1, 0, end));
+    });
+    playbackMenu->addAction(m_prevFrameAction);
+
+    m_nextFrameAction = new QAction(tr("下一帧"), this);
+    m_nextFrameAction->setObjectName(QStringLiteral("nextFrameAction"));
+    m_nextFrameAction->setShortcut(QKeySequence(Qt::Key_Right));
+    connect(m_nextFrameAction, &QAction::triggered, this, [this] {
+        if (!m_document || !m_playback)
+            return;
+        const int end = m_playback->contentEnd();
+        m_document->setPlayhead(
+            std::clamp(m_document->playhead() + 1, 0, end));
+    });
+    playbackMenu->addAction(m_nextFrameAction);
+
     QMenu* viewMenu = menuBar()->addMenu(tr("视图(&V)"));
     m_gizmoAction = new QAction(tr("显示 Gizmo"), this);
     m_gizmoAction->setObjectName(QStringLiteral("showGizmoAction"));
@@ -402,6 +468,7 @@ void NextWindow::buildUi()
             m_document->setPlayhead(frame);
     });
     toolbar->addWidget(m_playheadSpin);
+    toolbar->addAction(m_playPauseAction);
 
     m_fpsLabel = new QLabel(tr("fps —"), toolbar);
     m_fpsLabel->setContentsMargins(10, 0, 10, 0);
@@ -949,6 +1016,17 @@ QDialog* NextWindow::privateTimelineDialogForTest(const Uuid& parentUuid) const
     return m_privateTimelines.value(parentUuid, nullptr);
 }
 
+void NextWindow::togglePlaybackForTest()
+{
+    if (m_playback)
+        m_playback->toggle();
+}
+
+bool NextWindow::isPlayingForTest() const
+{
+    return m_playback && m_playback->isPlaying();
+}
+
 void NextWindow::openPrivateTimeline(const Uuid& parentUuid)
 {
     if (!m_document)
@@ -1046,9 +1124,19 @@ void NextWindow::closeAllPrivateTimelines()
     }
 }
 
+void NextWindow::updatePlaybackAction()
+{
+    if (!m_playPauseAction)
+        return;
+    const bool playing = m_playback && m_playback->isPlaying();
+    m_playPauseAction->setText(playing ? tr("暂停") : tr("播放"));
+    m_playPauseAction->setEnabled(m_document != nullptr);
+}
+
 void NextWindow::updateActions()
 {
     const bool open = m_document != nullptr;
+    updatePlaybackAction();
     if (m_undoAction)
         m_undoAction->setEnabled(open);
     if (m_redoAction)
@@ -1080,6 +1168,11 @@ void NextWindow::updateActions()
         m_gizmoCheck->setEnabled(open);
     if (m_gizmoAction)
         m_gizmoAction->setEnabled(open);
+    for (QAction* action : {m_homeAction, m_endAction, m_prevFrameAction,
+                            m_nextFrameAction}) {
+        if (action)
+            action->setEnabled(open);
+    }
 }
 
 void NextWindow::updateStatus()
@@ -1114,7 +1207,9 @@ void NextWindow::updateStatus()
         m_statusDir->setText(
             tr("工程：%1").arg(QDir::toNativeSeparators(m_document->root())));
     if (m_statusFrame)
-        m_statusFrame->setText(tr("帧 %1").arg(m_document->playhead()));
+        m_statusFrame->setText(tr("帧 %1 / 总帧 %2")
+                                   .arg(m_document->playhead())
+                                   .arg(m_playback ? m_playback->contentEnd() : 0));
     if (m_statusFps)
         m_statusFps->setText(tr("fps %1").arg(settings.fps));
     if (m_fpsLabel)

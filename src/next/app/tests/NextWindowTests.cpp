@@ -555,6 +555,89 @@ private slots:
         QVERIFY(window.mcpServiceForTest() == nullptr);
     }
 
+    void playbackEmptyProjectIsNoOp()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QCOMPARE(window->document()->playhead(), 0);
+        window->togglePlaybackForTest();
+        QVERIFY(!window->isPlayingForTest());
+        QTest::qWait(100);
+        QCOMPARE(window->document()->playhead(), 0);
+    }
+
+    void playbackAdvancesAndPauses()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        Entity entity;
+        entity.uuid = model::newUuid();
+        entity.name = QStringLiteral("十帧");
+        entity.start = 0;
+        entity.end = 10;
+        window->document()->mutableProject().entities.insert(entity.uuid, entity);
+        QVERIFY2(window->document()->commitEntity(
+                     entity.uuid, QStringLiteral("pvf: create ten frames"), &error),
+                 qPrintable(error));
+
+        window->document()->setPlayhead(0);
+        window->togglePlaybackForTest();
+        QVERIFY(window->isPlayingForTest());
+
+        QTest::qWait(300);
+        const int advanced = window->document()->playhead();
+        QVERIFY(advanced > 0);
+        QVERIFY(advanced <= 10);
+
+        window->togglePlaybackForTest();
+        QVERIFY(!window->isPlayingForTest());
+        const int paused = window->document()->playhead();
+        QTest::qWait(150);
+        QCOMPARE(window->document()->playhead(), paused);
+    }
+
+    void playbackStopsAtContentEnd()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        Entity entity;
+        entity.uuid = model::newUuid();
+        entity.name = QStringLiteral("末帧");
+        entity.start = 0;
+        entity.end = 10;
+        window->document()->mutableProject().entities.insert(entity.uuid, entity);
+        QVERIFY2(window->document()->commitEntity(
+                     entity.uuid, QStringLiteral("pvf: create end marker"), &error),
+                 qPrintable(error));
+
+        window->document()->setPlayhead(0);
+        window->togglePlaybackForTest();
+        QVERIFY(window->isPlayingForTest());
+        QTRY_VERIFY(!window->isPlayingForTest());
+        QCOMPARE(window->document()->playhead(), 10);
+    }
+
     void undoRedoActionsDoNotCrash()
     {
         if (!gitLfsAvailable())

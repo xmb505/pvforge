@@ -49,6 +49,11 @@ if(NOT TARGET pvf_export2)
                      ${CMAKE_CURRENT_BINARY_DIR}/export2_dep)
 endif()
 
+if(NOT TARGET pvf_audio2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../audio2
+                     ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
@@ -56,6 +61,8 @@ add_library(pvf_next_app STATIC
     NextWindow.h
     ExportDialog.cpp
     ExportDialog.h
+    PlaybackController.cpp
+    PlaybackController.h
 )
 
 target_include_directories(pvf_next_app PUBLIC
@@ -72,6 +79,7 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_render2
     pvf_mcp2
     pvf_export2
+    pvf_audio2
     Qt6::Core
     Qt6::Widgets
     Qt6::Concurrent
@@ -92,6 +100,7 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_store
     pvf_mcp2
     pvf_export2
+    pvf_audio2
     Qt6::Widgets
     Qt6::Concurrent
 )
