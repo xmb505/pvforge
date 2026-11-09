@@ -10,6 +10,21 @@
 - 根 `CMakeLists.txt` 只由总控改一次；第二波 agent 不改根 CMake。
 - 旧测试不强行迁移；新目标建立自己的测试入口，旧测试随旧目标一起删除。
 
+## 进度
+
+- 已完成：Model / Assets / Solver / Gizmo / Store / Anim / NextCore / ProjectDocument / Renderer2 / AssetPanel。
+- 进行中：TimelineWidget、PropertiesPanel、ViewportWidget、MCP v2 Phase A。
+- 待做：
+  - 关键帧编辑 UI（打 key/删 key/拖 key；目前 Properties 只改静态值）
+  - 删除实体（Del + 级联确认）
+  - 播放控制 + 音频播放（音频为主时钟）
+  - 导出对话框 + 进度（Export2 完成后接）
+  - 求解轨迹预览 + 初速度手柄
+  - 视频真实解码、HTML 真实渲染
+  - MCP HTTP transport + 固定端口/token
+  - Timeline 裁剪级联（进行中）
+- 已完成模块都有独立测试；根 CMake 已能一起编。
+
 ## 当前状态
 
 - 分支：`timeline-clip-merge`，HEAD `4e907ef`。
