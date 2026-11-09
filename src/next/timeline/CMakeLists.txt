@@ -45,6 +45,8 @@ if(BUILD_TESTING)
         clickEntityBarSelects
         rulerClickSetsPlayhead
         dragMiddleMovesBoth
+        dragParentMovesDescendants
+        dragParentClampsAtZero
         dragLeftEdgeTrimsStart
         solverBandPaints
         privateTimelineShowsOnlyChildren

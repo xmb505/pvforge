@@ -2,6 +2,8 @@
 
 #include "common/Types.h"
 
+#include <QHash>
+#include <QPair>
 #include <QPoint>
 #include <QRect>
 #include <QVector>
@@ -136,6 +138,11 @@ private:
     int m_dragOriginalStart = 0;
     int m_dragOriginalEnd = 0;
     bool m_dragChanged = false;
+
+    // Move drags shift the whole subtree. Ranges are snapshotted on press so
+    // every mouse move can be applied as original + delta.
+    QVector<Uuid> m_dragMoveUuids;
+    QHash<Uuid, QPair<int, int>> m_dragOriginalRanges;
 
     static constexpr int kToolbarHeight = 24;
     static constexpr int kRulerHeight = 32;

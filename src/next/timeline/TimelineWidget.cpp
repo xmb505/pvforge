@@ -105,6 +105,17 @@ bool trackDrivenAt(const model::Entity& entity, const QString& track, int frame)
     return false;
 }
 
+void collectSubtree(const model::Project& project, const Uuid& uuid,
+                    QVector<Uuid>& out, QSet<Uuid>& visited)
+{
+    if (visited.contains(uuid))
+        return;
+    visited.insert(uuid);
+    out.append(uuid);
+    for (const Uuid& child : model::childrenOf(project, uuid))
+        collectSubtree(project, child, out, visited);
+}
+
 void drawBadge(QPainter& painter, const QRect& bar, const QString& text, int slot)
 {
     const int size = 12;
@@ -169,6 +180,8 @@ void TimelineWidget::setParentUuid(const Uuid& parentUuid)
 
     m_dragMode = DragMode::None;
     m_dragEntity.clear();
+    m_dragMoveUuids.clear();
+    m_dragOriginalRanges.clear();
     m_dragChanged = false;
 
     // Start the private timeline at its owner instead of frame 0, so children
@@ -902,6 +915,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
 
     setFocus(Qt::MouseFocusReason);
     const QPoint pos = event->position().toPoint();
+    m_dragMoveUuids.clear();
+    m_dragOriginalRanges.clear();
 
     if (!m_parentUuid.isEmpty() && breadcrumbRect().contains(pos))
     {
@@ -958,6 +973,17 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     else
     {
         m_dragMode = DragMode::Move;
+        QSet<Uuid> visited;
+        collectSubtree(m_document->project(), m_dragEntity, m_dragMoveUuids,
+                       visited);
+        for (const Uuid& uuid : m_dragMoveUuids)
+        {
+            const auto entity =
+                m_document->project().entities.constFind(uuid);
+            if (entity != m_document->project().entities.constEnd())
+                m_dragOriginalRanges.insert(
+                    uuid, qMakePair(entity.value().start, entity.value().end));
+        }
         setCursor(Qt::ClosedHandCursor);
     }
     update();
@@ -1010,6 +1036,8 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
 
     m_dragMode = DragMode::None;
     m_dragEntity.clear();
+    m_dragMoveUuids.clear();
+    m_dragOriginalRanges.clear();
     m_dragChanged = false;
     m_document->setSelection(hit.uuid);
     setParentUuid(hit.uuid);
@@ -1095,15 +1123,42 @@ void TimelineWidget::applyDrag(const QPoint& pos)
         const int newStart =
             std::clamp(m_dragOriginalStart + delta, minStart,
                        std::max(minStart, lastStart));
-        const int newEnd = newStart + duration;
-        if (newStart != entity.start || newEnd != entity.end)
+        int appliedDelta = newStart - m_dragOriginalStart;
+
+        // Never push any entity of the moved subtree before frame 0.
+        int earliestStart = INT_MAX;
+        for (const Uuid& uuid : m_dragMoveUuids)
         {
-            entity.start = newStart;
-            entity.end = newEnd;
-            m_dragChanged = true;
+            const auto range = m_dragOriginalRanges.constFind(uuid);
+            if (range != m_dragOriginalRanges.constEnd())
+                earliestStart = std::min(earliestStart, range.value().first);
         }
-        // TODO(timeline): moving a parent must also shift all descendants by
-        // the same delta (time is absolute in the entity model).
+        if (earliestStart != INT_MAX)
+            appliedDelta = std::max(appliedDelta, -earliestStart);
+
+        bool changed = false;
+        for (const Uuid& uuid : m_dragMoveUuids)
+        {
+            const auto range = m_dragOriginalRanges.constFind(uuid);
+            if (range == m_dragOriginalRanges.constEnd())
+                continue;
+
+            auto entityIt = m_document->mutableProject().entities.find(uuid);
+            if (entityIt == m_document->mutableProject().entities.end())
+                continue;
+
+            const int shiftedStart = range.value().first + appliedDelta;
+            const int shiftedEnd = range.value().second + appliedDelta;
+            if (entityIt.value().start != shiftedStart
+                || entityIt.value().end != shiftedEnd)
+            {
+                entityIt.value().start = shiftedStart;
+                entityIt.value().end = shiftedEnd;
+                changed = true;
+            }
+        }
+        if (changed)
+            m_dragChanged = true;
         break;
     }
     case DragMode::TrimStart:
@@ -1154,9 +1209,13 @@ void TimelineWidget::finishDrag()
     const DragMode mode = m_dragMode;
     const Uuid uuid = m_dragEntity;
     const bool changed = m_dragChanged;
+    const QVector<Uuid> moveUuids = m_dragMoveUuids;
+    const QHash<Uuid, QPair<int, int>> moveRanges = m_dragOriginalRanges;
 
     m_dragMode = DragMode::None;
     m_dragEntity.clear();
+    m_dragMoveUuids.clear();
+    m_dragOriginalRanges.clear();
     m_dragChanged = false;
 
     if (!m_document || !changed || uuid.isEmpty())
@@ -1165,16 +1224,47 @@ void TimelineWidget::finishDrag()
     const auto it = m_document->project().entities.constFind(uuid);
     if (it == m_document->project().entities.constEnd())
         return;
-    if (it.value().start == m_dragOriginalStart
-        && it.value().end == m_dragOriginalEnd)
-        return;
 
     const QString name = it.value().name.isEmpty() ? uuid : it.value().name;
-    const QString message =
-        mode == DragMode::Move
-            ? QStringLiteral("pvf: move entity \"%1\"").arg(name)
-            : QStringLiteral("pvf: trim entity \"%1\"").arg(name);
-    m_document->commitEntity(uuid, message);
+
+    if (mode == DragMode::Move)
+    {
+        QVector<Uuid> commitUuids;
+        bool differs = false;
+        for (const Uuid& moved : moveUuids)
+        {
+            const auto range = moveRanges.constFind(moved);
+            const auto entity =
+                m_document->project().entities.constFind(moved);
+            if (range == moveRanges.constEnd()
+                || entity == m_document->project().entities.constEnd())
+                continue;
+
+            commitUuids.append(moved);
+            if (entity.value().start != range.value().first
+                || entity.value().end != range.value().second)
+                differs = true;
+        }
+        if (!differs || commitUuids.isEmpty())
+            return;
+
+        m_document->commitEntities(
+            commitUuids, QStringLiteral("pvf: move entity \"%1\"").arg(name));
+    }
+    else if (mode == DragMode::TrimStart || mode == DragMode::TrimEnd)
+    {
+        if (it.value().start == m_dragOriginalStart
+            && it.value().end == m_dragOriginalEnd)
+            return;
+
+        m_document->commitEntity(
+            uuid, QStringLiteral("pvf: trim entity \"%1\"").arg(name));
+    }
+    else
+    {
+        return;
+    }
+
     updateScrollBar();
     update();
 }

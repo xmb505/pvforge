@@ -50,6 +50,19 @@ public:
         Q_UNUSED(error);
         ++commitCount;
         lastCommitUuid = uuid;
+        lastCommitUuids = {uuid};
+        lastCommitMessage = message;
+        return true;
+    }
+
+    bool commitEntities(const QVector<Uuid>& uuids, const QString& message,
+                        QString* error) override
+    {
+        Q_UNUSED(error);
+        ++commitCount;
+        ++commitEntitiesCount;
+        lastCommitUuids = uuids;
+        lastCommitUuid = uuids.isEmpty() ? Uuid() : uuids.first();
         lastCommitMessage = message;
         return true;
     }
@@ -76,7 +89,9 @@ public:
     }
 
     int commitCount = 0;
+    int commitEntitiesCount = 0;
     Uuid lastCommitUuid;
+    QVector<Uuid> lastCommitUuids;
     QString lastCommitMessage;
 
 private:
@@ -123,6 +138,8 @@ private slots:
     void clickEntityBarSelects();
     void rulerClickSetsPlayhead();
     void dragMiddleMovesBoth();
+    void dragParentMovesDescendants();
+    void dragParentClampsAtZero();
     void dragLeftEdgeTrimsStart();
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
@@ -201,9 +218,82 @@ void TimelineWidgetTest::dragMiddleMovesBoth()
     QCOMPARE(entity.start, 18);
     QCOMPARE(entity.end, 38);
     QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.commitEntitiesCount, 1);
     QCOMPARE(document.lastCommitUuid, uuid);
+    QVERIFY(document.lastCommitUuids.contains(uuid));
     QVERIFY(document.lastCommitMessage.startsWith(
         QStringLiteral("pvf: move entity")));
+}
+
+void TimelineWidgetTest::dragParentMovesDescendants()
+{
+    FakeDocument document;
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 10, 20, 0);
+    const Uuid child =
+        addEntity(document, QStringLiteral("child"), 12, 18, 0, parent);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    const QRect bar = widget.entityBarRect(parent);
+    QVERIFY(bar.isValid());
+
+    const QPoint from = bar.center();
+    const QPoint to = from + QPoint(int(5 * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    const pvf::model::Entity movedParent =
+        document.project().entities.value(parent);
+    const pvf::model::Entity movedChild =
+        document.project().entities.value(child);
+    QCOMPARE(movedParent.start, 15);
+    QCOMPARE(movedParent.end, 25);
+    QCOMPARE(movedChild.start, 17);
+    QCOMPARE(movedChild.end, 23);
+
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.commitEntitiesCount, 1);
+    QCOMPARE(document.lastCommitUuids.size(), 2);
+    QVERIFY(document.lastCommitUuids.contains(parent));
+    QVERIFY(document.lastCommitUuids.contains(child));
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: move entity")));
+}
+
+void TimelineWidgetTest::dragParentClampsAtZero()
+{
+    FakeDocument document;
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 10, 20, 0);
+    const Uuid child =
+        addEntity(document, QStringLiteral("child"), 12, 18, 0, parent);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    const QRect bar = widget.entityBarRect(parent);
+    QVERIFY(bar.isValid());
+
+    const QPoint from = bar.center();
+    const QPoint to(from.x() - int(15 * widget.pixelsPerFrame()),
+                    from.y());
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    const pvf::model::Entity movedParent =
+        document.project().entities.value(parent);
+    const pvf::model::Entity movedChild =
+        document.project().entities.value(child);
+    QCOMPARE(movedParent.start, 0);
+    QCOMPARE(movedParent.end, 10);
+    QCOMPARE(movedChild.start, 2);
+    QCOMPARE(movedChild.end, 8);
+    QVERIFY(movedParent.start >= 0);
+    QVERIFY(movedChild.start >= 0);
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.commitEntitiesCount, 1);
 }
 
 void TimelineWidgetTest::dragLeftEdgeTrimsStart()
