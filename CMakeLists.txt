@@ -124,3 +124,14 @@ target_link_libraries(pvforge PRIVATE
 )
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
+
+# New entity model modules. The old pvforge target stays buildable while
+# pvforge-next is assembled; these libraries are not linked into it yet.
+add_subdirectory(src/model)
+add_subdirectory(src/assets)
+add_subdirectory(src/solver)
+add_subdirectory(src/gizmo)
+add_subdirectory(src/store)
+add_subdirectory(src/anim)
+add_subdirectory(src/next/core)
+add_subdirectory(src/next/app)
