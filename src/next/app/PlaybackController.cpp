@@ -106,7 +106,7 @@ void PlaybackController::pause()
 
 void PlaybackController::noteFramePresented()
 {
-    m_lastFrame.restart();
+    m_lastFrame.start();
 }
 
 void PlaybackController::setMediaPendingProvider(std::function<bool()> provider)

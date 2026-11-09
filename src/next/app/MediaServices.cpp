@@ -292,7 +292,11 @@ QImage MediaServices::htmlFrame(const Uuid& entityUuid, double projectFrame)
         return {};
 
     if (!htmlRunning() && !startHtml(nullptr))
+    {
+        // Nothing is rendering in the background, so do not hold playback.
+        m_htmlPending = false;
         return {};
+    }
 
     const html2::FrameRequest request =
         makeHtmlRequest(*entity, *asset, projectFrame);
