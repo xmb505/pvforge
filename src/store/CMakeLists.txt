@@ -46,7 +46,6 @@ if(BUILD_TESTING)
         corruptEntityJson
         nonGitDirectoryRejected
         missingGitToolReportsError
-        missingGitLfsReportsError
         createRejectsInvalidInput
     )
 

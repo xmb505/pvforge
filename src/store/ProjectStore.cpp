@@ -94,7 +94,7 @@ QString processFailure(const ProcessResult& result)
     return detail;
 }
 
-bool checkGitTools(QString* error)
+bool checkGit(QString* error)
 {
     const ProcessResult git = runProcess(QStringLiteral("git"),
                                          {QStringLiteral("--version")});
@@ -103,17 +103,6 @@ bool checkGitTools(QString* error)
         setError(error,
                  QStringLiteral("找不到 git，请安装 Git 后重试（%1）")
                      .arg(processFailure(git)));
-        return false;
-    }
-
-    const ProcessResult lfs = runProcess(QStringLiteral("git"),
-                                         {QStringLiteral("lfs"),
-                                          QStringLiteral("version")});
-    if (!lfs.started || lfs.exitCode != 0)
-    {
-        setError(error,
-                 QStringLiteral("找不到 git-lfs，请安装 Git LFS 后重试（%1）")
-                     .arg(processFailure(lfs)));
         return false;
     }
     return true;
@@ -454,80 +443,18 @@ bool commitOnlyPaths(const QString& root, const QString& message,
     return true;
 }
 
-const char kGitAttributes[] = R"(# PVForge media is stored in Git LFS.
-*.png filter=lfs diff=lfs merge=lfs -text
-*.jpg filter=lfs diff=lfs merge=lfs -text
-*.jpeg filter=lfs diff=lfs merge=lfs -text
-*.jfif filter=lfs diff=lfs merge=lfs -text
-*.gif filter=lfs diff=lfs merge=lfs -text
-*.bmp filter=lfs diff=lfs merge=lfs -text
-*.webp filter=lfs diff=lfs merge=lfs -text
-*.tif filter=lfs diff=lfs merge=lfs -text
-*.tiff filter=lfs diff=lfs merge=lfs -text
-*.avif filter=lfs diff=lfs merge=lfs -text
-*.heic filter=lfs diff=lfs merge=lfs -text
-*.heif filter=lfs diff=lfs merge=lfs -text
-*.mp4 filter=lfs diff=lfs merge=lfs -text
-*.m4v filter=lfs diff=lfs merge=lfs -text
-*.mov filter=lfs diff=lfs merge=lfs -text
-*.webm filter=lfs diff=lfs merge=lfs -text
-*.mkv filter=lfs diff=lfs merge=lfs -text
-*.avi filter=lfs diff=lfs merge=lfs -text
-*.mpg filter=lfs diff=lfs merge=lfs -text
-*.mpeg filter=lfs diff=lfs merge=lfs -text
-*.wmv filter=lfs diff=lfs merge=lfs -text
-*.flv filter=lfs diff=lfs merge=lfs -text
-*.mp3 filter=lfs diff=lfs merge=lfs -text
-*.wav filter=lfs diff=lfs merge=lfs -text
-*.ogg filter=lfs diff=lfs merge=lfs -text
-*.oga filter=lfs diff=lfs merge=lfs -text
-*.flac filter=lfs diff=lfs merge=lfs -text
-*.m4a filter=lfs diff=lfs merge=lfs -text
-*.aac filter=lfs diff=lfs merge=lfs -text
-*.opus filter=lfs diff=lfs merge=lfs -text
-*.aif filter=lfs diff=lfs merge=lfs -text
-*.aiff filter=lfs diff=lfs merge=lfs -text
-*.wma filter=lfs diff=lfs merge=lfs -text
-# Case variants can appear inside imported HTML bundles.
-*.PNG filter=lfs diff=lfs merge=lfs -text
-*.JPG filter=lfs diff=lfs merge=lfs -text
-*.JPEG filter=lfs diff=lfs merge=lfs -text
-*.GIF filter=lfs diff=lfs merge=lfs -text
-*.BMP filter=lfs diff=lfs merge=lfs -text
-*.WEBP filter=lfs diff=lfs merge=lfs -text
-*.TIFF filter=lfs diff=lfs merge=lfs -text
-*.TIF filter=lfs diff=lfs merge=lfs -text
-*.AVIF filter=lfs diff=lfs merge=lfs -text
-*.HEIC filter=lfs diff=lfs merge=lfs -text
-*.HEIF filter=lfs diff=lfs merge=lfs -text
-*.MP4 filter=lfs diff=lfs merge=lfs -text
-*.M4V filter=lfs diff=lfs merge=lfs -text
-*.MOV filter=lfs diff=lfs merge=lfs -text
-*.WEBM filter=lfs diff=lfs merge=lfs -text
-*.MKV filter=lfs diff=lfs merge=lfs -text
-*.AVI filter=lfs diff=lfs merge=lfs -text
-*.MPG filter=lfs diff=lfs merge=lfs -text
-*.MPEG filter=lfs diff=lfs merge=lfs -text
-*.WMV filter=lfs diff=lfs merge=lfs -text
-*.FLV filter=lfs diff=lfs merge=lfs -text
-*.MP3 filter=lfs diff=lfs merge=lfs -text
-*.WAV filter=lfs diff=lfs merge=lfs -text
-*.OGG filter=lfs diff=lfs merge=lfs -text
-*.OGA filter=lfs diff=lfs merge=lfs -text
-*.FLAC filter=lfs diff=lfs merge=lfs -text
-*.M4A filter=lfs diff=lfs merge=lfs -text
-*.AAC filter=lfs diff=lfs merge=lfs -text
-*.OPUS filter=lfs diff=lfs merge=lfs -text
-*.AIF filter=lfs diff=lfs merge=lfs -text
-*.AIFF filter=lfs diff=lfs merge=lfs -text
-*.WMA filter=lfs diff=lfs merge=lfs -text
-)";
-
-const char kGitIgnore[] = R"(# PVForge cache and temporary files.
+const char kGitIgnore[] = R"(# PVForge versions text project data only; media and caches stay local.
+assets/
+.cache/
 .pvforge/
+
+# Temporary preview and export files.
 *.tmp
 *.temp
 *.part
+.pvforge-preview-*
+pvforge-preview-*
+preview-*
 *.swp
 *.swo
 *~
@@ -559,7 +486,7 @@ std::optional<ProjectStore> ProjectStore::create(
     if (!model::validateProject(initialProject, error))
         return std::nullopt;
 
-    if (!checkGitTools(error))
+    if (!checkGit(error))
         return std::nullopt;
 
     const QString root =
@@ -592,8 +519,6 @@ std::optional<ProjectStore> ProjectStore::create(
 
     if (!writeJsonObject(absolutePath(root, QStringLiteral("project.json")),
                          model::toJson(initialProject), error)
-        || !writeTextFile(absolutePath(root, QStringLiteral(".gitattributes")),
-                          QString::fromLatin1(kGitAttributes), error)
         || !writeTextFile(absolutePath(root, QStringLiteral(".gitignore")),
                           QString::fromLatin1(kGitIgnore), error))
     {
@@ -612,21 +537,9 @@ std::optional<ProjectStore> ProjectStore::create(
     if (!ensureGitIdentity(root, error))
         return std::nullopt;
 
-    const ProcessResult lfsInstall = runGit(
-        root, {QStringLiteral("lfs"), QStringLiteral("install"),
-               QStringLiteral("--local")});
-    if (lfsInstall.exitCode != 0)
-    {
-        setError(error,
-                 QStringLiteral("git lfs install --local 失败：%1")
-                     .arg(processFailure(lfsInstall)));
-        return std::nullopt;
-    }
-
     const ProcessResult add = runGit(
         root, {QStringLiteral("add"), QStringLiteral("--"),
-               QStringLiteral(".gitattributes"), QStringLiteral(".gitignore"),
-               QStringLiteral("project.json")});
+               QStringLiteral(".gitignore"), QStringLiteral("project.json")});
     if (add.exitCode != 0)
     {
         setError(error,
@@ -638,8 +551,7 @@ std::optional<ProjectStore> ProjectStore::create(
     QString ignoredHash;
     if (!commitOnlyPaths(
             root, QString::fromLatin1(kInitMessage),
-            {QStringLiteral(".gitattributes"), QStringLiteral(".gitignore"),
-             QStringLiteral("project.json")},
+            {QStringLiteral(".gitignore"), QStringLiteral("project.json")},
             &ignoredHash, error))
     {
         return std::nullopt;
@@ -666,7 +578,7 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
         return std::nullopt;
     }
 
-    if (!checkGitTools(error))
+    if (!checkGit(error))
         return std::nullopt;
 
     if (!QFileInfo::exists(absolutePath(root, QStringLiteral(".git"))))
@@ -765,6 +677,8 @@ bool ProjectStore::commit(const QString& message, QString* error)
 {
     const QString normalized = normalizedMessage(message);
 
+    // Git backs up text project data only. assets/ and .cache/ are local and
+    // ignored, so they are never staged here.
     QStringList candidates;
     if (m_projectDirty)
         candidates << QStringLiteral("project.json");
@@ -772,9 +686,6 @@ bool ProjectStore::commit(const QString& message, QString* error)
     QStringList dirtyEntities = m_dirtyEntities.values();
     std::sort(dirtyEntities.begin(), dirtyEntities.end());
     candidates += dirtyEntities;
-
-    if (QFileInfo(absolutePath(m_root, QStringLiteral("assets"))).isDir())
-        candidates << QStringLiteral("assets");
 
     QStringList addPaths;
     for (const QString& relativePath : std::as_const(candidates))

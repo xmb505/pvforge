@@ -42,12 +42,11 @@ CommandResult runGit(const QString& root, const QStringList& arguments)
     return result;
 }
 
-bool gitLfsAvailable()
+bool gitAvailable()
 {
     static const bool available = [] {
         QProcess process;
-        process.start(QStringLiteral("git"),
-                      {QStringLiteral("lfs"), QStringLiteral("version")});
+        process.start(QStringLiteral("git"), {QStringLiteral("--version")});
         if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
             return false;
         return process.exitStatus() == QProcess::NormalExit
@@ -97,11 +96,11 @@ struct PathGuard
     QByteArray oldPath;
 };
 
-#define SKIP_WITHOUT_GIT_LFS()                                                \
+#define SKIP_WITHOUT_GIT()                                                    \
     do                                                                        \
     {                                                                         \
-        if (!gitLfsAvailable())                                               \
-            QSKIP("git-lfs 不可用，跳过依赖 git 的测试");                    \
+        if (!gitAvailable())                                                  \
+            QSKIP("git 不可用，跳过依赖 git 的测试");                         \
     } while (false)
 
 } // namespace
@@ -123,13 +122,12 @@ private slots:
     void corruptEntityJson();
     void nonGitDirectoryRejected();
     void missingGitToolReportsError();
-    void missingGitLfsReportsError();
     void createRejectsInvalidInput();
 };
 
 void StoreTests::createOpenRoundTrip()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -157,26 +155,27 @@ void StoreTests::createOpenRoundTrip()
     QVERIFY(QFileInfo::exists(path + QStringLiteral("/project.json")));
     QVERIFY(QFileInfo(path + QStringLiteral("/entities")).isDir());
     QVERIFY(QFileInfo(path + QStringLiteral("/assets")).isDir());
-    QVERIFY(QFileInfo::exists(path + QStringLiteral("/.gitattributes")));
+    QVERIFY(!QFileInfo::exists(path + QStringLiteral("/.gitattributes")));
     QVERIFY(QFileInfo::exists(path + QStringLiteral("/.gitignore")));
     QVERIFY(QFileInfo::exists(path + QStringLiteral("/.git")));
 
-    const QString attributes = readText(path + QStringLiteral("/.gitattributes"));
-    QVERIFY(attributes.contains(QStringLiteral("*.png filter=lfs")));
-    QVERIFY(attributes.contains(QStringLiteral("*.mp4 filter=lfs")));
-    QVERIFY(attributes.contains(QStringLiteral("*.wav filter=lfs")));
-
     const QString ignore = readText(path + QStringLiteral("/.gitignore"));
+    QVERIFY(ignore.contains(QStringLiteral("assets/")));
+    QVERIFY(ignore.contains(QStringLiteral(".cache/")));
     QVERIFY(ignore.contains(QStringLiteral(".pvforge/")));
     QVERIFY(ignore.contains(QStringLiteral("*.tmp")));
 
-    const CommandResult lfsConfig =
+    const CommandResult initialShow =
         runGit(created->root(),
-               {QStringLiteral("config"), QStringLiteral("--get"),
-                QStringLiteral("filter.lfs.clean")});
-    QCOMPARE(lfsConfig.exitCode, 0);
-    QVERIFY2(lfsConfig.out.contains(QStringLiteral("git-lfs")),
-             qPrintable(lfsConfig.out));
+               {QStringLiteral("show"), QStringLiteral("--name-only"),
+                QStringLiteral("--format="), QStringLiteral("HEAD")});
+    QCOMPARE(initialShow.exitCode, 0);
+    QVERIFY2(initialShow.out.contains(QStringLiteral("project.json")),
+             qPrintable(initialShow.out));
+    QVERIFY2(!initialShow.out.contains(QStringLiteral("assets/")),
+             qPrintable(initialShow.out));
+    QVERIFY2(!initialShow.out.contains(QStringLiteral(".gitattributes")),
+             qPrintable(initialShow.out));
 
     const QVector<GitCommit> history = created->history(50, &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
@@ -194,7 +193,7 @@ void StoreTests::createOpenRoundTrip()
 
 void StoreTests::saveEntityReopen()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -253,7 +252,7 @@ void StoreTests::saveEntityReopen()
 
 void StoreTests::saveProjectRoundTrip()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -294,7 +293,7 @@ void StoreTests::saveProjectRoundTrip()
 
 void StoreTests::deleteEntityFile()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -353,7 +352,7 @@ void StoreTests::deleteEntityFile()
 
 void StoreTests::commitAndHistory()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -421,7 +420,7 @@ void StoreTests::commitAndHistory()
 
 void StoreTests::assetImportCommit()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -440,35 +439,47 @@ void StoreTests::assetImportCommit()
 
     const auto asset = store->assets().importFile(pngPath, &error);
     QVERIFY2(asset.has_value(), qPrintable(error));
+    const QString assetDirectory =
+        QStringLiteral("assets/") + asset->hash;
+    QVERIFY(QFileInfo(asset->directory).isDir());
     QVERIFY(QFileInfo(asset->directory + QStringLiteral("/asset.json")).isFile());
 
     QVERIFY2(store->commit(QStringLiteral("pvf: import asset"), &error),
              qPrintable(error));
 
-    const QString assetDirectory =
-        QStringLiteral("assets/") + asset->hash;
+    const CommandResult tracked =
+        runGit(store->root(),
+               {QStringLiteral("ls-files"), QStringLiteral("--"),
+                QStringLiteral("assets")});
+    QCOMPARE(tracked.exitCode, 0);
+    QVERIFY2(tracked.out.trimmed().isEmpty(), qPrintable(tracked.out));
+
+    const CommandResult status =
+        runGit(store->root(),
+               {QStringLiteral("status"), QStringLiteral("--porcelain"),
+                QStringLiteral("--untracked-files=all")});
+    QCOMPARE(status.exitCode, 0);
+    QVERIFY2(!status.out.contains(QStringLiteral("assets/")),
+             qPrintable(status.out));
+
+    const CommandResult ignored =
+        runGit(store->root(),
+               {QStringLiteral("check-ignore"), QStringLiteral("-q"),
+                assetDirectory + QStringLiteral("/asset.json")});
+    QCOMPARE(ignored.exitCode, 0);
+
     const CommandResult show =
         runGit(store->root(),
                {QStringLiteral("show"), QStringLiteral("--name-only"),
                 QStringLiteral("--format="), QStringLiteral("HEAD")});
     QCOMPARE(show.exitCode, 0);
-    QVERIFY2(show.out.contains(assetDirectory + QStringLiteral("/asset.json")),
+    QVERIFY2(!show.out.contains(QStringLiteral("assets/")),
              qPrintable(show.out));
-
-    const CommandResult blob =
-        runGit(store->root(),
-               {QStringLiteral("show"),
-                QStringLiteral("HEAD:") + assetDirectory
-                    + QStringLiteral("/content.png")});
-    QCOMPARE(blob.exitCode, 0);
-    QVERIFY2(blob.out.startsWith(
-                 QStringLiteral("version https://git-lfs.github.com/spec/v1")),
-             qPrintable(blob.out.left(120)));
 }
 
 void StoreTests::commitFailureReportsStderr()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -508,7 +519,7 @@ void StoreTests::commitFailureReportsStderr()
 
 void StoreTests::undoRedo()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -590,7 +601,7 @@ void StoreTests::undoRedo()
 
 void StoreTests::corruptProjectJson()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -627,7 +638,7 @@ void StoreTests::corruptProjectJson()
 
 void StoreTests::corruptEntityJson()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -662,7 +673,7 @@ void StoreTests::corruptEntityJson()
 
 void StoreTests::nonGitDirectoryRejected()
 {
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -701,38 +712,6 @@ void StoreTests::missingGitToolReportsError()
     QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
 }
 
-void StoreTests::missingGitLfsReportsError()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    const QString binDir = temp.filePath(QStringLiteral("bin"));
-    QVERIFY(QDir().mkpath(binDir));
-    const QString fakeGit = binDir + QStringLiteral("/git");
-    QVERIFY(writeText(fakeGit,
-                      QStringLiteral("#!/bin/sh\n"
-                                     "if [ \"$1\" = \"--version\" ]; then\n"
-                                     "  echo \"git version 2.0.0\"\n"
-                                     "  exit 0\n"
-                                     "fi\n"
-                                     "echo \"git: 'lfs' is not a git command\" >&2\n"
-                                     "exit 1\n")));
-    QVERIFY(QFile::setPermissions(
-        fakeGit,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
-            | QFileDevice::ReadGroup | QFileDevice::ExeGroup
-            | QFileDevice::ReadOther | QFileDevice::ExeOther));
-
-    PathGuard guard;
-    QVERIFY(qputenv("PATH", binDir.toUtf8()));
-
-    QString error;
-    auto created = ProjectStore::create(temp.filePath(QStringLiteral("Demo.pvproj")),
-                                        model::ProjectSettings(), &error);
-    QVERIFY(!created.has_value());
-    QVERIFY2(error.contains(QStringLiteral("git-lfs")), qPrintable(error));
-}
-
 void StoreTests::createRejectsInvalidInput()
 {
     QTemporaryDir temp;
@@ -749,7 +728,7 @@ void StoreTests::createRejectsInvalidInput()
     QVERIFY(!ProjectStore::create(QString(), model::ProjectSettings(), &error));
     QVERIFY(!error.isEmpty());
 
-    SKIP_WITHOUT_GIT_LFS();
+    SKIP_WITHOUT_GIT();
 
     const QString nonEmpty = temp.filePath(QStringLiteral("full.pvproj"));
     QVERIFY(QDir().mkpath(nonEmpty));

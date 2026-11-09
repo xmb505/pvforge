@@ -25,14 +25,17 @@ struct GitCommit
 // Layout:
 //   project.json
 //   entities/<uuid>.json
-//   assets/                 (owned by assets::AssetStore)
-//   .gitattributes
+//   assets/                 (owned by assets::AssetStore, ignored by git)
+//   .cache/                 (local caches, ignored by git)
 //   .gitignore
 //
+// Git only manages text project data. Media in assets/ and any cache files are
+// local to the machine and never committed.
+//
 // The store keeps the in-memory model and the files in sync. Writes are
-// atomic (QSaveFile). commit() stages only project paths owned by the
-// application (project.json, the entity files touched through this store, and
-// assets/); unrelated files the user changed are never included.
+// atomic (QSaveFile). commit() stages only text paths owned by the
+// application (project.json and the entity files touched through this store);
+// unrelated files the user changed are never included.
 //
 // undo()/redo() are implemented with git revert, one operation commit at a
 // time. The undo/redo stacks are rebuilt from the pvf: commit log when a
