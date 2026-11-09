@@ -51,6 +51,10 @@ if(BUILD_TESTING)
         nonGitDirectoryRejected
         missingGitToolReportsError
         createRejectsInvalidInput
+        cleanProjectHasNoDirtyText
+        dirtyTextDetectedOnOpen
+        commitRecoveredTextCreatesCommit
+        discardDirtyTextRestores
     )
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)

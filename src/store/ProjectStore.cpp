@@ -432,6 +432,87 @@ bool commitOnlyPaths(const QString& root, const QString& message,
     return true;
 }
 
+bool isProjectTextPath(const QString& relativePath)
+{
+    if (relativePath == QLatin1String("project.json")
+        || relativePath == QLatin1String(".gitignore"))
+    {
+        return true;
+    }
+    return relativePath.startsWith(QLatin1String("entities/"))
+           && relativePath.endsWith(QLatin1String(".json"));
+}
+
+QString porcelainStatusName(QChar index, QChar worktree)
+{
+    if (index == QLatin1Char('?') && worktree == QLatin1Char('?'))
+        return QStringLiteral("added");
+    if (index == QLatin1Char('R') || worktree == QLatin1Char('R'))
+        return QStringLiteral("renamed");
+    if (index == QLatin1Char('C') || worktree == QLatin1Char('C'))
+        return QStringLiteral("copied");
+    if (index == QLatin1Char('U') || worktree == QLatin1Char('U')
+        || (index == QLatin1Char('A') && worktree == QLatin1Char('A'))
+        || (index == QLatin1Char('D') && worktree == QLatin1Char('D')))
+    {
+        return QStringLiteral("conflict");
+    }
+    if (index == QLatin1Char('A'))
+        return QStringLiteral("added");
+    if (index == QLatin1Char('D') || worktree == QLatin1Char('D'))
+        return QStringLiteral("deleted");
+    if (index == QLatin1Char('T') || worktree == QLatin1Char('T'))
+        return QStringLiteral("typechange");
+    return QStringLiteral("modified");
+}
+
+struct RawDirtyText
+{
+    QString path;
+    QString sourcePath; // rename/copy source; empty otherwise
+    QChar index;
+    QChar worktree;
+};
+
+// `git status --porcelain=v1 -z` entries. For renames/copies the source path
+// follows the destination as an extra NUL-separated token.
+QVector<RawDirtyText> scanRawDirtyText(const QString& root, QString* error)
+{
+    const ProcessResult result = runGit(
+        root, {QStringLiteral("status"), QStringLiteral("--porcelain=v1"),
+               QStringLiteral("-z"), QStringLiteral("--untracked-files=all")});
+    if (result.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git status 失败：%1").arg(processFailure(result)));
+        return {};
+    }
+
+    QVector<RawDirtyText> entries;
+    const QStringList tokens = result.out.split(QLatin1Char('\0'));
+    for (int i = 0; i < tokens.size(); ++i)
+    {
+        const QString& token = tokens.at(i);
+        if (token.size() < 4)
+            continue;
+
+        RawDirtyText entry;
+        entry.index = token.at(0);
+        entry.worktree = token.at(1);
+        entry.path = token.mid(3);
+
+        const bool hasSource =
+            entry.index == QLatin1Char('R') || entry.worktree == QLatin1Char('R')
+            || entry.index == QLatin1Char('C')
+            || entry.worktree == QLatin1Char('C');
+        if (hasSource && i + 1 < tokens.size())
+            entry.sourcePath = tokens.at(++i);
+
+        entries.append(entry);
+    }
+    return entries;
+}
+
 const char kGitIgnore[] = R"(# PVForge versions text project data only; media and caches stay local.
 assets/
 .cache/
@@ -583,7 +664,13 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
 
     // The in-memory undo/redo history starts empty after opening a project;
     // across sessions git history is the cold backup.
-    return ProjectStore(root, std::move(project));
+    ProjectStore store(root, std::move(project));
+
+    // Scan once so the caller can offer recover/discard. A transient git
+    // failure (for example a stale index.lock) must not block opening; the
+    // caller can rescan with dirtyTextFiles().
+    store.refreshDirtyText();
+    return std::move(store);
 }
 
 bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
@@ -851,6 +938,189 @@ QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
     return commits;
 }
 
+QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const
+{
+    QVector<DirtyText> files;
+    const QVector<RawDirtyText> entries = scanRawDirtyText(m_root, error);
+    files.reserve(entries.size());
+    for (const RawDirtyText& entry : entries)
+    {
+        if (isProjectTextPath(entry.path))
+        {
+            files.append(DirtyText{entry.path,
+                                   porcelainStatusName(entry.index,
+                                                       entry.worktree)});
+        }
+        // A rename/copy deletes the source path; include it so recovery covers
+        // both sides of the move.
+        if (!entry.sourcePath.isEmpty()
+            && isProjectTextPath(entry.sourcePath))
+        {
+            files.append(
+                DirtyText{entry.sourcePath, QStringLiteral("deleted")});
+        }
+    }
+
+    std::sort(files.begin(), files.end(),
+              [](const DirtyText& a, const DirtyText& b) {
+                  return a.path < b.path;
+              });
+    return files;
+}
+
+bool ProjectStore::commitRecoveredText(QString* error)
+{
+    QString scanError;
+    const QVector<DirtyText> dirty = dirtyTextFiles(&scanError);
+    if (!scanError.isEmpty())
+    {
+        setError(error, scanError);
+        return false;
+    }
+
+    QStringList paths;
+    paths.reserve(dirty.size());
+    for (const DirtyText& item : dirty)
+    {
+        if (!paths.contains(item.path))
+            paths << item.path;
+    }
+    if (paths.isEmpty())
+    {
+        m_dirtyText.clear();
+        return true;
+    }
+
+    // Untracked files must enter the index before `commit --only` can name
+    // them; tracked deletions are picked up by -A as well.
+    QStringList addArguments{QStringLiteral("add"), QStringLiteral("-A"),
+                             QStringLiteral("--")};
+    addArguments += paths;
+    const ProcessResult add = runGit(m_root, addArguments);
+    if (add.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git add 失败：%1").arg(processFailure(add)));
+        return false;
+    }
+
+    QString hash;
+    if (!commitOnlyPaths(m_root, QStringLiteral("pvf: recover"), paths, &hash,
+                         error))
+    {
+        return false;
+    }
+
+    m_dirtyText.clear();
+    return true;
+}
+
+bool ProjectStore::discardDirtyText(QString* error)
+{
+    QString scanError;
+    const QVector<RawDirtyText> entries = scanRawDirtyText(m_root, &scanError);
+    if (!scanError.isEmpty())
+    {
+        setError(error, scanError);
+        return false;
+    }
+
+    // A crash between `git add` and `git commit` leaves text changes in the
+    // index. Reset only our text paths first so the index matches HEAD:
+    // tracked files can then be checked out, staged additions become
+    // untracked and get deleted.
+    if (hasHead(m_root))
+    {
+        QStringList staged;
+        for (const RawDirtyText& entry : entries)
+        {
+            if (isProjectTextPath(entry.path)
+                && entry.index != QLatin1Char(' ')
+                && entry.index != QLatin1Char('?'))
+            {
+                staged << entry.path;
+            }
+            if (!entry.sourcePath.isEmpty()
+                && isProjectTextPath(entry.sourcePath))
+            {
+                staged << entry.sourcePath;
+            }
+        }
+
+        if (!staged.isEmpty())
+        {
+            QStringList arguments{QStringLiteral("reset"), QStringLiteral("-q"),
+                                  QStringLiteral("--")};
+            arguments += staged;
+            const ProcessResult reset = runGit(m_root, arguments);
+            if (reset.exitCode != 0)
+            {
+                setError(error,
+                         QStringLiteral("git reset 失败：%1")
+                             .arg(processFailure(reset)));
+                return false;
+            }
+        }
+    }
+
+    for (const RawDirtyText& entry : entries)
+    {
+        QStringList paths{entry.path};
+        if (!entry.sourcePath.isEmpty())
+            paths << entry.sourcePath;
+
+        for (const QString& relativePath : std::as_const(paths))
+        {
+            if (!isProjectTextPath(relativePath))
+                continue;
+
+            if (isTracked(m_root, relativePath))
+            {
+                const ProcessResult checkout = runGit(
+                    m_root, {QStringLiteral("checkout"), QStringLiteral("--"),
+                             relativePath});
+                if (checkout.exitCode != 0)
+                {
+                    setError(error,
+                             QStringLiteral("git checkout 失败：%1")
+                                 .arg(processFailure(checkout)));
+                    return false;
+                }
+                continue;
+            }
+
+            const QString path = absolutePath(m_root, relativePath);
+            const QFileInfo info(path);
+            if (!info.exists())
+                continue;
+            const bool removed = info.isDir()
+                                     ? QDir(path).removeRecursively()
+                                     : QFile::remove(path);
+            if (!removed)
+            {
+                setError(error,
+                         QStringLiteral("无法删除未提交文件 %1").arg(path));
+                return false;
+            }
+        }
+    }
+
+    clearDirty();
+    m_dirtyText.clear();
+    return true;
+}
+
+bool ProjectStore::reloadAfterDiscard(QString* error)
+{
+    return reload(error);
+}
+
+void ProjectStore::refreshDirtyText()
+{
+    QString ignored;
+    m_dirtyText = dirtyTextFiles(&ignored);
+}
+
 bool ProjectStore::reload(QString* error)
 {
     model::Project project;
@@ -859,6 +1129,7 @@ bool ProjectStore::reload(QString* error)
 
     m_project = std::move(project);
     clearDirty();
+    refreshDirtyText();
     return true;
 }
 

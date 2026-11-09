@@ -127,6 +127,10 @@ private slots:
     void nonGitDirectoryRejected();
     void missingGitToolReportsError();
     void createRejectsInvalidInput();
+    void cleanProjectHasNoDirtyText();
+    void dirtyTextDetectedOnOpen();
+    void commitRecoveredTextCreatesCommit();
+    void discardDirtyTextRestores();
 };
 
 void StoreTests::createOpenRoundTrip()
@@ -916,6 +920,247 @@ void StoreTests::createRejectsInvalidInput()
     error.clear();
     QVERIFY(!ProjectStore::create(nonEmpty, model::ProjectSettings(), &error));
     QVERIFY2(error.contains(QStringLiteral("不为空")), qPrintable(error));
+}
+
+void StoreTests::cleanProjectHasNoDirtyText()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+    QVERIFY(store->dirtyTextFiles(&error).isEmpty());
+    QVERIFY(store->dirtyText().isEmpty());
+
+    auto opened = ProjectStore::open(path, &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY2(opened->dirtyTextFiles(&error).isEmpty(), qPrintable(error));
+    QVERIFY(opened->dirtyText().isEmpty());
+}
+
+void StoreTests::dirtyTextDetectedOnOpen()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity entity = makeEntity(QStringLiteral("标题"));
+    const QString relativePath =
+        QStringLiteral("entities/") + entity.uuid + QStringLiteral(".json");
+    const QString entityPath = path + QLatin1Char('/') + relativePath;
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: create entity"), &error),
+             qPrintable(error));
+
+    // Changed on disk without a commit, as after a crash.
+    QVERIFY(writeText(entityPath, readText(entityPath) + QStringLiteral("\n")));
+
+    auto opened = ProjectStore::open(path, &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QCOMPARE(opened->dirtyText().size(), 1);
+    QCOMPARE(opened->dirtyText().first().path, relativePath);
+    QCOMPARE(opened->dirtyText().first().status, QStringLiteral("modified"));
+
+    const QVector<DirtyText> dirty = opened->dirtyTextFiles(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(dirty.size(), 1);
+    QCOMPARE(dirty.first().path, relativePath);
+    QCOMPARE(dirty.first().status, QStringLiteral("modified"));
+
+    // A deleted tracked file is reported as deleted.
+    QVERIFY(QFile::remove(entityPath));
+    auto reopened = ProjectStore::open(path, &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    const QVector<DirtyText> deleted = reopened->dirtyTextFiles(&error);
+    QCOMPARE(deleted.size(), 1);
+    QCOMPARE(deleted.first().path, relativePath);
+    QCOMPARE(deleted.first().status, QStringLiteral("deleted"));
+}
+
+void StoreTests::commitRecoveredTextCreatesCommit()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity tracked = makeEntity(QStringLiteral("已提交"));
+    const QString trackedRelative =
+        QStringLiteral("entities/") + tracked.uuid + QStringLiteral(".json");
+    const QString trackedPath = path + QLatin1Char('/') + trackedRelative;
+    store->mutableProject().entities.insert(tracked.uuid, tracked);
+    QVERIFY2(store->saveEntity(tracked.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: create entity"), &error),
+             qPrintable(error));
+
+    QVERIFY(writeText(trackedPath,
+                      readText(trackedPath) + QStringLiteral("\n")));
+
+    model::Entity added = makeEntity(QStringLiteral("崩溃时新增"));
+    const QString addedRelative =
+        QStringLiteral("entities/") + added.uuid + QStringLiteral(".json");
+    const QString addedPath = path + QLatin1Char('/') + addedRelative;
+    QVERIFY(writeText(addedPath,
+                      QString::fromUtf8(
+                          QJsonDocument(model::toJson(added)).toJson())));
+
+    auto opened = ProjectStore::open(path, &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QCOMPARE(opened->dirtyText().size(), 2);
+
+    const int before = opened->history(50, &error).size();
+    error.clear();
+    QVERIFY2(opened->commitRecoveredText(&error), qPrintable(error));
+
+    const QVector<GitCommit> history = opened->history(50, &error);
+    QCOMPARE(history.size(), before + 1);
+    QCOMPARE(history.first().message, QStringLiteral("pvf: recover"));
+    QVERIFY(opened->dirtyText().isEmpty());
+    error.clear();
+    QVERIFY2(opened->dirtyTextFiles(&error).isEmpty(), qPrintable(error));
+
+    const CommandResult show =
+        runGit(opened->root(),
+               {QStringLiteral("show"), QStringLiteral("--name-only"),
+                QStringLiteral("--format="), QStringLiteral("HEAD")});
+    QCOMPARE(show.exitCode, 0);
+    QVERIFY2(show.out.contains(trackedRelative), qPrintable(show.out));
+    QVERIFY2(show.out.contains(addedRelative), qPrintable(show.out));
+
+    const CommandResult status =
+        runGit(opened->root(),
+               {QStringLiteral("status"), QStringLiteral("--porcelain")});
+    QVERIFY2(!status.out.contains(QStringLiteral("entities/")),
+             qPrintable(status.out));
+}
+
+void StoreTests::discardDirtyTextRestores()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity kept = makeEntity(QStringLiteral("保留甲"));
+    model::Entity removed = makeEntity(QStringLiteral("删除乙"));
+    model::Entity staged = makeEntity(QStringLiteral("暂存丙"));
+    store->mutableProject().entities.insert(kept.uuid, kept);
+    store->mutableProject().entities.insert(removed.uuid, removed);
+    store->mutableProject().entities.insert(staged.uuid, staged);
+    QVERIFY2(store->saveEntity(kept.uuid, &error), qPrintable(error));
+    QVERIFY2(store->saveEntity(removed.uuid, &error), qPrintable(error));
+    QVERIFY2(store->saveEntity(staged.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: add entities"), &error),
+             qPrintable(error));
+
+    const auto entityPath = [&path](const model::Entity& entity) {
+        return path + QStringLiteral("/entities/") + entity.uuid
+               + QStringLiteral(".json");
+    };
+    const QString keptPath = entityPath(kept);
+    const QString removedPath = entityPath(removed);
+    const QString stagedPath = entityPath(staged);
+    const QString keptBytes = readText(keptPath);
+    const QString removedBytes = readText(removedPath);
+    const QString stagedBytes = readText(stagedPath);
+
+    // Unstaged edit, unstaged deletion, and a change staged by an incomplete
+    // commit (crash between `git add` and `git commit`).
+    QVERIFY(writeText(keptPath, keptBytes + QStringLiteral("\n")));
+    QVERIFY(QFile::remove(removedPath));
+    QVERIFY(writeText(stagedPath, stagedBytes + QStringLiteral("\n")));
+    QCOMPARE(runGit(path, {QStringLiteral("add"),
+                           QStringLiteral("entities/") + staged.uuid
+                               + QStringLiteral(".json")})
+                 .exitCode,
+             0);
+
+    // An untracked entity written just before the crash.
+    model::Entity untracked = makeEntity(QStringLiteral("新增丁"));
+    const QString untrackedPath = entityPath(untracked);
+    QVERIFY(writeText(untrackedPath,
+                      QString::fromUtf8(
+                          QJsonDocument(model::toJson(untracked)).toJson())));
+
+    // Ignored media/cache and an unrelated user file must survive discard.
+    const QString assetPath =
+        path + QStringLiteral("/assets/deadbeef/asset.json");
+    const QString cachePath = path + QStringLiteral("/.cache/frame.webp");
+    const QString notesPath = path + QStringLiteral("/notes.txt");
+    QVERIFY(writeText(assetPath, QStringLiteral("local media\n")));
+    QVERIFY(writeText(cachePath, QStringLiteral("cache\n")));
+    QVERIFY(writeText(notesPath, QStringLiteral("user notes\n")));
+
+    auto opened = ProjectStore::open(path, &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QCOMPARE(opened->dirtyText().size(), 4);
+
+    const QVector<DirtyText> dirty = opened->dirtyTextFiles(&error);
+    QCOMPARE(dirty.size(), 4);
+    QStringList paths;
+    for (const DirtyText& item : dirty)
+        paths << item.path;
+    QVERIFY(paths.contains(QStringLiteral("entities/") + kept.uuid
+                           + QStringLiteral(".json")));
+    QVERIFY(paths.contains(QStringLiteral("entities/") + removed.uuid
+                           + QStringLiteral(".json")));
+    QVERIFY(paths.contains(QStringLiteral("entities/") + staged.uuid
+                           + QStringLiteral(".json")));
+    QVERIFY(paths.contains(QStringLiteral("entities/") + untracked.uuid
+                           + QStringLiteral(".json")));
+    for (const DirtyText& item : dirty)
+    {
+        QVERIFY(!item.path.startsWith(QStringLiteral("assets/")));
+        QVERIFY(!item.path.startsWith(QStringLiteral(".cache/")));
+    }
+
+    error.clear();
+    QVERIFY2(opened->discardDirtyText(&error), qPrintable(error));
+
+    QCOMPARE(readText(keptPath), keptBytes);
+    QCOMPARE(readText(removedPath), removedBytes);
+    QCOMPARE(readText(stagedPath), stagedBytes);
+    QVERIFY(!QFileInfo::exists(untrackedPath));
+    QVERIFY(QFileInfo::exists(assetPath));
+    QVERIFY(QFileInfo::exists(cachePath));
+    QVERIFY(QFileInfo::exists(notesPath));
+
+    QVERIFY(opened->dirtyText().isEmpty());
+    error.clear();
+    QVERIFY2(opened->dirtyTextFiles(&error).isEmpty(), qPrintable(error));
+
+    QVERIFY2(opened->reloadAfterDiscard(&error), qPrintable(error));
+    QVERIFY(opened->project().entities.contains(kept.uuid));
+    QVERIFY(opened->project().entities.contains(removed.uuid));
+    QVERIFY(opened->project().entities.contains(staged.uuid));
+    QVERIFY(!opened->project().entities.contains(untracked.uuid));
+    QCOMPARE(opened->project().entities.value(kept.uuid).name,
+             QStringLiteral("保留甲"));
+    QCOMPARE(opened->project().entities.value(removed.uuid).name,
+             QStringLiteral("删除乙"));
+    QCOMPARE(opened->project().entities.value(staged.uuid).name,
+             QStringLiteral("暂存丙"));
 }
 
 QTEST_GUILESS_MAIN(StoreTests)

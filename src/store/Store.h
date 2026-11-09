@@ -22,6 +22,16 @@ struct GitCommit
     QDateTime time;
 };
 
+// One uncommitted text path left behind by a previous session (crash
+// recovery). `path` is relative to the project root; `status` is a readable
+// summary of the git porcelain status: "modified", "added", "deleted",
+// "renamed", "copied", "typechange" or "conflict".
+struct DirtyText
+{
+    QString path;
+    QString status;
+};
+
 // One in-memory undo step. Paths are relative to the project root and only
 // cover text project data (project.json, entities/*.json); assets never enter
 // the stack. An empty byte array means "the file did not exist".
@@ -77,6 +87,28 @@ public:
     bool redo(QString* error = nullptr);
     QVector<GitCommit> history(int limit = 50, QString* error = nullptr) const;
 
+    // Uncommitted text project changes seen when the project was opened.
+    // open() scans once; nothing is recovered or discarded automatically.
+    const QVector<DirtyText>& dirtyText() const { return m_dirtyText; }
+
+    // Scans `git status` for uncommitted text project paths (project.json,
+    // entities/*.json, .gitignore). assets/ and .cache/ are ignored by git and
+    // never reported.
+    QVector<DirtyText> dirtyTextFiles(QString* error = nullptr) const;
+
+    // Commits the current uncommitted text paths as "pvf: recover". Files the
+    // user staged outside the text project paths stay staged and uncommitted.
+    bool commitRecoveredText(QString* error = nullptr);
+
+    // Discards uncommitted text changes: tracked files are restored from HEAD
+    // and untracked new text files are deleted. assets/, .cache/ and unrelated
+    // files are never touched.
+    bool discardDirtyText(QString* error = nullptr);
+
+    // Reloads the in-memory project from disk after discarding (or when the
+    // files changed externally). Refreshes dirtyText().
+    bool reloadAfterDiscard(QString* error = nullptr);
+
     int undoDepth() const { return int(m_undoStack.size()); }
     int redoDepth() const { return int(m_redoStack.size()); }
 
@@ -91,6 +123,7 @@ private:
     ProjectStore(QString root, model::Project project);
 
     bool reload(QString* error);
+    void refreshDirtyText();
     void clearDirty();
     void notePath(const QString& relativePath);
     void pushUndo(UndoEntry entry);
@@ -103,6 +136,7 @@ private:
     std::optional<assets::AssetStore> m_assets;
     QVector<UndoEntry> m_undoStack;
     QVector<UndoEntry> m_redoStack;
+    QVector<DirtyText> m_dirtyText;
     // Paths touched since the last successful commit, with the bytes they had
     // before the first touch (empty when the file did not exist).
     QHash<QString, QByteArray> m_txnBefore;
