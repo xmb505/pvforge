@@ -5,6 +5,7 @@
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 #include "next/app/ExportDialog.h"
+#include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
@@ -307,6 +308,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
 
 NextWindow::~NextWindow()
 {
+    resetMediaServices();
     if (m_playback)
         m_playback->setDocument(nullptr);
     stopMcpServer();
@@ -362,6 +364,10 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
         m_playback->setDocument(nullptr);
     stopMcpServer();
     closeAllPrivateTimelines();
+
+    // The media services hold a raw ProjectDocument* and their HTML threads
+    // must stop before the document goes away.
+    resetMediaServices();
 
     // Remove the old panels before the old document is destroyed: every panel
     // holds a raw Document*.
@@ -768,6 +774,7 @@ void NextWindow::buildEditor()
         m_viewport->setShowGizmo(m_gizmoCheck->isChecked());
 
     rebuildCameras();
+    ensureMediaServices();
 }
 
 void NextWindow::buildWelcome()
@@ -863,6 +870,7 @@ void NextWindow::connectDocument()
 
 void NextWindow::refreshAll()
 {
+    ensureMediaServices();
     if (m_assetPanel)
         m_assetPanel->refresh();
     if (m_propertiesPanel)
@@ -876,6 +884,70 @@ void NextWindow::refreshAll()
     rebuildCameras();
     updateActions();
     updateStatus();
+}
+
+void NextWindow::ensureMediaServices()
+{
+    if (!m_document) {
+        resetMediaServices();
+        return;
+    }
+
+    if (!m_media) {
+        m_media = std::make_unique<MediaServices>(m_document, m_settings);
+        connect(m_media.get(), &MediaServices::htmlFrameReady, this, [this] {
+            if (m_viewport)
+                m_viewport->refresh();
+        }, Qt::QueuedConnection);
+        connect(m_media.get(), &MediaServices::htmlServiceFailed, this,
+                [this](const QString& message) {
+                    const QString text = tr("HTML 服务未启动：%1").arg(message);
+                    statusBar()->showMessage(text, 8000);
+                    qWarning().noquote() << text;
+                    if (m_mcpLogPanel)
+                        m_mcpLogPanel->addSystemEvent(tr("HTML 服务启动失败"),
+                                                      message);
+                });
+        // Failures surface through the htmlServiceFailed signal; the video
+        // providers keep working when Chrome is missing.
+        QString ignored;
+        m_media->start(&ignored);
+        m_mediaProvidersAttached = false;
+    }
+
+    if (!m_mediaProvidersAttached)
+        attachMediaProviders();
+}
+
+void NextWindow::resetMediaServices()
+{
+    if (m_viewport) {
+        m_viewport->setVideoFrameProvider({});
+        m_viewport->setHtmlFrameProvider({});
+    }
+    m_mediaProvidersAttached = false;
+    if (m_media) {
+        m_media->stop();
+        m_media.reset();
+    }
+}
+
+void NextWindow::attachMediaProviders()
+{
+    if (!m_viewport)
+        return;
+
+    m_viewport->setVideoFrameProvider(
+        [this](const Uuid& entityUuid, double projectFrame) {
+            return m_media ? m_media->videoFrame(entityUuid, projectFrame)
+                           : QImage();
+        });
+    m_viewport->setHtmlFrameProvider(
+        [this](const Uuid& entityUuid, double projectFrame) {
+            return m_media ? m_media->htmlFrame(entityUuid, projectFrame)
+                           : QImage();
+        });
+    m_mediaProvidersAttached = true;
 }
 
 void NextWindow::rebuildCameras()
@@ -1250,6 +1322,12 @@ void NextWindow::applyHumanCommitDelay()
 void NextWindow::applySettings(const AppSettings& previous)
 {
     applyHumanCommitDelay();
+
+    if (m_media) {
+        m_media->applySettings(m_settings);
+        if (m_viewport)
+            m_viewport->refresh();
+    }
 
     const bool portChanged = previous.mcpPort != m_settings.mcpPort;
     if (portChanged && !m_document) {

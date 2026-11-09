@@ -27,6 +27,7 @@ namespace pvf::next {
 
 class AssetPanel;
 class McpLogPanel;
+class MediaServices;
 class PlaybackController;
 class ProjectDocument;
 class PropertiesPanel;
@@ -66,6 +67,7 @@ public:
 
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
+    MediaServices* mediaServicesForTest() const { return m_media.get(); }
 
     // Settings are loaded from QSettings at construction.  The test accessor
     // returns the currently applied snapshot, not the store's next load().
@@ -130,6 +132,9 @@ private:
     void buildEditor();
     void buildWelcome();
     void connectDocument();
+    void ensureMediaServices();
+    void resetMediaServices();
+    void attachMediaProviders();
     void updateActions();
     void updatePlaybackAction();
     void updateStatus();
@@ -156,6 +161,8 @@ private:
     std::unique_ptr<mcp2::Service> m_mcpService;
     std::unique_ptr<mcp2::HttpServer> m_mcpServer;
     std::unique_ptr<PlaybackController> m_playback;
+    std::unique_ptr<MediaServices> m_media;
+    bool m_mediaProvidersAttached = false;
     QString m_mcpConfigPath;
     QString m_mcpStatus;
     QString m_mcpError;

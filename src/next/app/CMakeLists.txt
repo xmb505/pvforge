@@ -69,11 +69,18 @@ if(NOT TARGET pvf_html2)
                      ${CMAKE_CURRENT_BINARY_DIR}/html2_dep)
 endif()
 
+if(NOT TARGET pvf_video2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../video2
+                     ${CMAKE_CURRENT_BINARY_DIR}/video2_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
     NextWindow.cpp
     NextWindow.h
+    MediaServices.cpp
+    MediaServices.h
     ExportDialog.cpp
     ExportDialog.h
     PlaybackController.cpp
@@ -98,6 +105,7 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_next_settings
     pvf_next_mcp_log
     pvf_html2
+    pvf_video2
     Qt6::Core
     Qt6::Widgets
     Qt6::Concurrent
@@ -122,6 +130,7 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_next_settings
     pvf_next_mcp_log
     pvf_html2
+    pvf_video2
     Qt6::Widgets
     Qt6::Concurrent
 )
@@ -141,5 +150,11 @@ if(BUILD_TESTING)
         PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
     set_tests_properties(next.window_shell PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+
+    add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
+    target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_app Qt6::Test)
+    add_test(NAME next.media_services COMMAND pvf_media_services_tests)
+    set_tests_properties(next.media_services PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()
