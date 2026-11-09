@@ -101,6 +101,45 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
     return true;
 }
 
+bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& message,
+                                     QString* error)
+{
+    for (const Uuid& uuid : uuids)
+    {
+        if (!m_store->deleteEntity(uuid, error))
+            return false;
+        if (uuid == m_selection)
+            m_selection.clear();
+    }
+    if (!m_store->commit(message, error))
+        return false;
+    emit changed();
+    return true;
+}
+
+bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
+                                    const QVector<Uuid>& deletes,
+                                    const QString& message,
+                                    QString* error)
+{
+    for (const Uuid& uuid : upserts)
+    {
+        if (!m_store->saveEntity(uuid, error))
+            return false;
+    }
+    for (const Uuid& uuid : deletes)
+    {
+        if (!m_store->deleteEntity(uuid, error))
+            return false;
+        if (uuid == m_selection)
+            m_selection.clear();
+    }
+    if (!m_store->commit(message, error))
+        return false;
+    emit changed();
+    return true;
+}
+
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
     if (!m_store->saveProject(error))

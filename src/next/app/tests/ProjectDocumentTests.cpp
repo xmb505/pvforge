@@ -84,6 +84,41 @@ private slots:
         QVERIFY2(document->redo(&error), qPrintable(error));
         QVERIFY(document->project().entities.contains(entity.uuid));
     }
+
+    void commitChangesUpsertsAndDeletesAtomically()
+    {
+        if (!gitLfsAvailable())
+            QSKIP("git-lfs is not available; store creation requires it");
+
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString projectDir = temp.path() + QStringLiteral("/changes.pvproj");
+
+        ProjectSettings settings;
+        settings.name = QStringLiteral("changes");
+        QString error;
+        auto document = ProjectDocument::create(projectDir, settings, &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity keep = makeEntity(QStringLiteral("keep"), 0, 30);
+        Entity drop = makeEntity(QStringLiteral("drop"), 0, 30);
+        document->mutableProject().entities.insert(keep.uuid, keep);
+        document->mutableProject().entities.insert(drop.uuid, drop);
+        QVERIFY2(document->commitEntities({keep.uuid, drop.uuid},
+                                          QStringLiteral("pvf: create two"), &error),
+                 qPrintable(error));
+
+        const int before = document->store()->history(100).size();
+        document->mutableProject().entities[keep.uuid].name = QStringLiteral("kept");
+        QVERIFY2(document->commitChanges({keep.uuid}, {drop.uuid},
+                                         QStringLiteral("pvf: trim"), &error),
+                 qPrintable(error));
+
+        QCOMPARE(document->store()->history(100).size(), before + 1);
+        QVERIFY(document->project().entities.contains(keep.uuid));
+        QVERIFY(!document->project().entities.contains(drop.uuid));
+        QCOMPARE(document->project().entities.value(keep.uuid).name, QStringLiteral("kept"));
+    }
 };
 
 QTEST_MAIN(ProjectDocumentTests)

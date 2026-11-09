@@ -41,6 +41,16 @@ public:
     // it with one atomic commit.
     virtual bool commitEntities(const QVector<Uuid>& uuids, const QString& message,
                                 QString* error = nullptr);
+    // Deletes several entities and commits them as one operation. Default is
+    // unsupported; ProjectDocument overrides it atomically.
+    virtual bool deleteEntities(const QVector<Uuid>& uuids, const QString& message,
+                                QString* error = nullptr);
+    // Saves upserts and deletes in one operation/commit. Default is two separate
+    // operations; ProjectDocument overrides it atomically.
+    virtual bool commitChanges(const QVector<Uuid>& upserts,
+                               const QVector<Uuid>& deletes,
+                               const QString& message,
+                               QString* error = nullptr);
     virtual bool commitProject(const QString& message, QString* error = nullptr) = 0;
 
     virtual bool undo(QString* error = nullptr) = 0;
