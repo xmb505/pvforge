@@ -145,6 +145,8 @@ private slots:
     void videoImportShowsProgressAndCancel();
     void videoImportCompletesAndHides();
     void videoExtractionFailuresStackAndClose();
+    void videoExtractionUsesConfiguredOptions();
+    void missingVideoBackfillQueuesOnlyMissing();
 };
 
 void AssetPanelTest::importPngAppears()
@@ -597,6 +599,117 @@ void AssetPanelTest::videoExtractionFailuresStackAndClose()
     QVERIFY(closeLast);
     closeLast->click();
     QTRY_COMPARE(panel.progressRowCount(), 0);
+}
+
+void AssetPanelTest::videoExtractionUsesConfiguredOptions()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    document.mutableProject().settings.fps = 30;
+    AssetPanel panel(&document);
+
+    QCOMPARE(panel.videoExtractionWidth(), 960);
+    QCOMPARE(panel.videoExtractionDiskBudget(), 2LL * 1024 * 1024 * 1024);
+
+    panel.setVideoExtractionOptions(320, 512LL * 1024 * 1024);
+    QCOMPARE(panel.videoExtractionWidth(), 320);
+    QCOMPARE(panel.videoExtractionDiskBudget(), 512LL * 1024 * 1024);
+
+    // Invalid values are ignored instead of corrupting later jobs.
+    panel.setVideoExtractionOptions(0, 0);
+    QCOMPARE(panel.videoExtractionWidth(), 320);
+    QCOMPARE(panel.videoExtractionDiskBudget(), 512LL * 1024 * 1024);
+
+    const QString video = makeVideo(directory.path() + QStringLiteral("/option.mp4"), 3);
+    if (video.isEmpty())
+        QSKIP("ffmpeg 不可用或无法生成测试视频");
+
+    QString error;
+    QVERIFY2(panel.importPaths({video}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 1);
+    const QString hash = panel.assetHashAt(0);
+
+    auto* queue = panel.findChild<pvf::video2::VideoExtractionQueue*>();
+    QVERIFY(queue);
+    pvf::video2::ExtractionJob job;
+    QVERIFY(queue->jobFor(hash, &job));
+    QCOMPARE(job.maxWidth, 320);
+    QCOMPARE(job.diskBudget, 512LL * 1024 * 1024);
+    QCOMPARE(job.projectFps, 30);
+
+    // The worker creates <cache>/<hash>/<fps>/<maxWidth>/ before extracting.
+    const QString widthDirectory =
+        QFileInfo(indexFileFor(directory.path(), hash, 30, 320)).absolutePath();
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(widthDirectory).isDir(), 15000);
+
+    queue->cancelAll();
+}
+
+void AssetPanelTest::missingVideoBackfillQueuesOnlyMissing()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    document.mutableProject().settings.fps = 30;
+
+    const QString cachedVideo =
+        makeVideo(directory.path() + QStringLiteral("/cached.mp4"), 1);
+    const QString missingVideo =
+        makeVideo(directory.path() + QStringLiteral("/missing.mp4"), 8);
+    if (cachedVideo.isEmpty() || missingVideo.isEmpty())
+        QSKIP("ffmpeg 不可用或无法生成测试视频");
+
+    AssetPanel panel(&document);
+    QString error;
+    QVERIFY2(panel.importPaths({cachedVideo, missingVideo}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 2);
+
+    QString cachedHash;
+    QString missingHash;
+    for (int i = 0; i < panel.assetCount(); ++i)
+    {
+        if (panel.assetNameAt(i) == QStringLiteral("cached.mp4"))
+            cachedHash = panel.assetHashAt(i);
+        else if (panel.assetNameAt(i) == QStringLiteral("missing.mp4"))
+            missingHash = panel.assetHashAt(i);
+    }
+    QVERIFY(!cachedHash.isEmpty());
+    QVERIFY(!missingHash.isEmpty());
+
+    // Stop the imports' own extractions so the backfill starts from a clean
+    // queue and only the fabricated index decides what is cached.
+    auto* queue = panel.findChild<pvf::video2::VideoExtractionQueue*>();
+    QVERIFY(queue);
+    queue->cancelAll();
+    QTRY_VERIFY_WITH_TIMEOUT(!queue->isRunning(cachedHash) && !queue->isRunning(missingHash)
+                                 && queue->pendingCount() == 0,
+                             30000);
+
+    // "cached.mp4" gets a complete index at the default 960 px extraction
+    // width; indexComplete() only requires totalFrames == frames.size().
+    const QString cachedIndex = indexFileFor(directory.path(), cachedHash);
+    QVERIFY(QDir().mkpath(QFileInfo(cachedIndex).absolutePath()));
+    QJsonObject frames;
+    frames.insert(QStringLiteral("deadbeef"), QStringLiteral("deadbeef.webp"));
+    QJsonObject root;
+    root.insert(QStringLiteral("totalFrames"), 1);
+    root.insert(QStringLiteral("frames"), frames);
+    QFile indexFile(cachedIndex);
+    QVERIFY(indexFile.open(QIODevice::WriteOnly));
+    QVERIFY(indexFile.write(QJsonDocument(root).toJson()) > 0);
+    indexFile.close();
+
+    panel.enqueueMissingVideoExtractions();
+
+    pvf::video2::ExtractionJob cachedJob;
+    QVERIFY(!queue->jobFor(cachedHash, &cachedJob));
+    pvf::video2::ExtractionJob missingJob;
+    QVERIFY(queue->jobFor(missingHash, &missingJob));
+    QCOMPARE(missingJob.maxWidth, 960);
+    QCOMPARE(missingJob.diskBudget, 2LL * 1024 * 1024 * 1024);
+
+    queue->cancelAll();
 }
 
 QTEST_MAIN(AssetPanelTest)

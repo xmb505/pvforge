@@ -56,6 +56,11 @@ public:
     bool isQueued(const AssetHash& assetHash) const;
     int pendingCount() const;
 
+    // Copies the pending or running job for `assetHash` into `job`. Returns
+    // false when the hash is neither queued nor running, or when `job` is null.
+    // Read-only; lets callers verify the effective maxWidth/diskBudget.
+    bool jobFor(const AssetHash& assetHash, ExtractionJob* job) const;
+
 signals:
     void started(const QString& hash, int total);
     void progress(const QString& hash, int done, int total);

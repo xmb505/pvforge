@@ -974,30 +974,88 @@ QPixmap AssetPanel::iconFor(const Entry& entry)
     return pixmap;
 }
 
-void AssetPanel::enqueueVideoExtraction(const assets::StoredAsset& asset)
+void AssetPanel::setVideoExtractionOptions(int maxWidth, qint64 diskBudgetBytes)
 {
-    if (!m_document || !m_extractionQueue)
-        return;
+    if (maxWidth > 0)
+        m_videoExtractionWidth = maxWidth;
+    if (diskBudgetBytes > 0)
+        m_videoExtractionDiskBudget = diskBudgetBytes;
+}
+
+int AssetPanel::videoExtractionWidth() const
+{
+    return m_videoExtractionWidth;
+}
+
+qint64 AssetPanel::videoExtractionDiskBudget() const
+{
+    return m_videoExtractionDiskBudget;
+}
+
+bool AssetPanel::buildExtractionJob(const assets::StoredAsset& asset,
+                                    video2::ExtractionJob* job) const
+{
+    if (!m_document || !job || asset.type != AssetType::Video)
+        return false;
 
     const int fps = m_document->project().settings.fps;
     if (fps <= 0)
-        return;
+        return false;
 
     const QStringList contentFiles = QDir(asset.directory).entryList(
         {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
     if (contentFiles.isEmpty())
-        return;
+        return false;
 
     const QString projectRoot =
         QFileInfo(m_document->assets().assetsDirectory()).absolutePath();
 
+    job->assetHash = asset.hash;
+    job->videoPath = asset.directory + QLatin1Char('/') + contentFiles.first();
+    job->projectFps = fps;
+    job->maxWidth = m_videoExtractionWidth;
+    job->diskBudget = m_videoExtractionDiskBudget;
+    job->cacheRoot = QDir(projectRoot).filePath(QStringLiteral(".cache/video"));
+    return true;
+}
+
+void AssetPanel::enqueueVideoExtraction(const assets::StoredAsset& asset)
+{
+    if (!m_extractionQueue)
+        return;
+
     video2::ExtractionJob job;
-    job.assetHash = asset.hash;
-    job.videoPath = asset.directory + QLatin1Char('/') + contentFiles.first();
-    job.projectFps = fps;
-    job.maxWidth = 960;
-    job.cacheRoot = QDir(projectRoot).filePath(QStringLiteral(".cache/video"));
+    if (!buildExtractionJob(asset, &job))
+        return;
     m_extractionQueue->enqueue(job);
+}
+
+void AssetPanel::enqueueMissingVideoExtractions()
+{
+    if (!m_document || !m_extractionQueue)
+        return;
+
+    int queued = 0;
+    for (const assets::StoredAsset& asset : m_document->assets().list())
+    {
+        if (asset.type != AssetType::Video)
+            continue;
+        if (m_extractionQueue->isRunning(asset.hash)
+            || m_extractionQueue->isQueued(asset.hash))
+            continue;
+
+        video2::ExtractionJob job;
+        if (!buildExtractionJob(asset, &job))
+            continue;
+        m_extractionQueue->enqueue(job);
+        // enqueue() silently skips jobs with a complete cache index.
+        if (m_extractionQueue->isQueued(asset.hash)
+            || m_extractionQueue->isRunning(asset.hash))
+            ++queued;
+    }
+
+    if (queued > 0)
+        setStatus(tr("已排队补抽 %1 个视频的帧").arg(queued));
 }
 
 bool AssetPanel::importPaths(const QStringList& paths, QString* error)

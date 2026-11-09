@@ -23,6 +23,7 @@ class QVBoxLayout;
 
 namespace pvf::video2 {
 class VideoExtractionQueue;
+struct ExtractionJob;
 }
 
 namespace pvf::next {
@@ -60,6 +61,22 @@ public:
     int progressRowCount() const;
     QString progressTextAt(int index) const;
     QPushButton* progressCancelButtonAt(int index) const;
+
+    // Background video extraction options. The values are captured into each
+    // job when it is enqueued: imports that happen after the call use the new
+    // values, running jobs are not interrupted. They only affect the WebP frame
+    // cache under .cache/video, never the video preview proxy. Defaults are
+    // 960 px and 2 GiB.
+    void setVideoExtractionOptions(int maxWidth, qint64 diskBudgetBytes);
+    int videoExtractionWidth() const;
+    qint64 videoExtractionDiskBudget() const;
+
+    // Queues every video asset in the project whose frame cache index at the
+    // current project fps and extraction width is missing or does not cover
+    // all frames. The queue skips complete indexes and duplicate hashes, so
+    // calling this repeatedly is cheap for finished videos. Hosts call it once
+    // after opening a project; refresh() deliberately never rescans the cache.
+    void enqueueMissingVideoExtractions();
 
     // Imports files or .pvhtml directories/zips. Deduplicates through the
     // store, refreshes the list and commits once. Returns false if any path
@@ -117,6 +134,8 @@ private:
     int referenceCount(const AssetHash& hash) const;
 
     void enqueueVideoExtraction(const assets::StoredAsset& asset);
+    bool buildExtractionJob(const assets::StoredAsset& asset,
+                            video2::ExtractionJob* job) const;
     void ensureProgressRow(const AssetHash& hash);
     void updateProgressRow(const AssetHash& hash, int done, int total);
     void finishProgressRow(const AssetHash& hash);
@@ -138,6 +157,8 @@ private:
     QVBoxLayout* m_progressLayout = nullptr;
     QVector<ProgressRow*> m_progressRows;
     video2::VideoExtractionQueue* m_extractionQueue = nullptr;
+    int m_videoExtractionWidth = 960;
+    qint64 m_videoExtractionDiskBudget = 2LL * 1024 * 1024 * 1024;
     QVector<Entry> m_entries;
     QHash<AssetHash, QPixmap> m_iconCache;
     QString m_lastImportDir;

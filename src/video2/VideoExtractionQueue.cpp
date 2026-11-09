@@ -212,6 +212,27 @@ public:
         return m_pending.size();
     }
 
+    bool jobFor(const AssetHash& assetHash, ExtractionJob* job) const
+    {
+        if (!job || assetHash.isEmpty())
+            return false;
+        QMutexLocker locker(&m_mutex);
+        if (m_runningHash == assetHash)
+        {
+            *job = m_runningJob;
+            return true;
+        }
+        for (const ExtractionJob& pending : m_pending)
+        {
+            if (pending.assetHash == assetHash)
+            {
+                *job = pending;
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool stopRequested()
     {
         QMutexLocker locker(&m_mutex);
@@ -232,6 +253,7 @@ protected:
                     break;
                 job = m_pending.takeFirst();
                 m_runningHash = job.assetHash;
+                m_runningJob = job;
                 m_cancelRequested = false;
             }
 
@@ -276,6 +298,7 @@ protected:
                 stopping = m_stop;
                 m_current.reset();
                 m_runningHash.clear();
+                m_runningJob = ExtractionJob{};
                 m_cancelRequested = false;
             }
 
@@ -302,6 +325,7 @@ private:
     QVector<ExtractionJob> m_pending;
     std::shared_ptr<VideoSequenceService> m_current;
     AssetHash m_runningHash;
+    ExtractionJob m_runningJob;
     bool m_cancelRequested = false;
     bool m_stop = false;
 };
@@ -359,6 +383,12 @@ bool VideoExtractionQueue::isQueued(const AssetHash& assetHash) const
 int VideoExtractionQueue::pendingCount() const
 {
     return m_worker->pendingCount();
+}
+
+bool VideoExtractionQueue::jobFor(const AssetHash& assetHash,
+                                  ExtractionJob* job) const
+{
+    return m_worker->jobFor(assetHash, job);
 }
 
 } // namespace pvf::video2
