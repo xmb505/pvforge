@@ -11,6 +11,7 @@ struct PvhtmlManifest
     QString entry = QStringLiteral("index.html");
     QSize logicalSize{800, 120};
     QVariantMap variables;
+    bool timeDependent = true;
 };
 
 // Copies a .pvhtml bundle from a directory or a zip archive into `destDir`

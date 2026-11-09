@@ -263,6 +263,17 @@ bool readManifest(const QString& bundleRoot, PvhtmlManifest* manifest, QString* 
         result.variables = variables.toObject().toVariantMap();
     }
 
+    const QJsonValue timeDependent = object.value(QStringLiteral("timeDependent"));
+    if (!timeDependent.isUndefined())
+    {
+        if (!timeDependent.isBool())
+        {
+            setError(error, QStringLiteral("pvhtml.json 的 timeDependent 必须是布尔值"));
+            return false;
+        }
+        result.timeDependent = timeDependent.toBool();
+    }
+
     *manifest = result;
     return true;
 }

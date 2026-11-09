@@ -587,6 +587,7 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
     metadata.insert(QStringLiteral("height"), manifest.logicalSize.height());
     metadata.insert(QStringLiteral("entry"), manifest.entry);
     metadata.insert(QStringLiteral("variables"), QJsonObject::fromVariantMap(manifest.variables));
+    metadata.insert(QStringLiteral("timeDependent"), manifest.timeDependent);
     if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), metadata, error))
     {
         QDir(finalDirectory).removeRecursively();

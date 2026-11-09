@@ -648,7 +648,7 @@ void AssetsTest::pvhtmlDirectoryImport()
     QVERIFY(writeText(bundle + QStringLiteral("/index.html"), "<html>hi</html>"));
     QVERIFY(writeText(bundle + QStringLiteral("/style.css"), "body{}"));
     QVERIFY(writeText(bundle + QStringLiteral("/pvhtml.json"),
-                      R"({"entry":"index.html","logicalSize":{"width":640,"height":360},"variables":{"speed":1.5,"label":"x"}})"));
+                      R"({"entry":"index.html","logicalSize":{"width":640,"height":360},"variables":{"speed":1.5,"label":"x"},"timeDependent":false})"));
 
     pvf::assets::AssetStore store(temporary.filePath(QStringLiteral("project")));
     QString error;
@@ -665,6 +665,7 @@ void AssetsTest::pvhtmlDirectoryImport()
                  .value(QStringLiteral("speed"))
                  .toDouble(),
              1.5);
+    QCOMPARE(asset->metadata.value(QStringLiteral("timeDependent")).toBool(false), false);
 
     QVERIFY(isFile(asset->directory + QStringLiteral("/bundle/index.html")));
     QVERIFY(isFile(asset->directory + QStringLiteral("/bundle/style.css")));
