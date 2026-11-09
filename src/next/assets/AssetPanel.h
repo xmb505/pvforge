@@ -12,6 +12,7 @@
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -27,7 +28,7 @@ class VideoExtractionQueue;
 namespace pvf::next {
 
 // Asset bin for the new UI. Lists assets from the content-addressed store,
-// shows missing assets referenced by entities, and renames/deletes/imports
+// shows missing assets referenced by entities, and renames/tags/deletes/imports
 // through the shared Document so every operation commits to git.
 class AssetPanel : public QWidget
 {
@@ -46,7 +47,13 @@ public:
     int assetCount() const;
     QString assetNameAt(int index) const;
     QString assetHashAt(int index) const;
+    QStringList assetTagsAt(int index) const;
     bool assetMissingAt(int index) const;
+
+    // Tag filter above the list. tagFilters() excludes the "all tags" entry.
+    QStringList tagFilters() const;
+    void setTagFilter(const QString& tag);
+    QString tagFilter() const;
 
     // Background video extraction rows at the bottom of the panel. Rows are
     // ordered by enqueue time; completed rows disappear after two seconds.
@@ -62,6 +69,8 @@ public:
     // Business operations without dialogs. Both refresh and commit.
     bool renameAsset(const AssetHash& hash, const QString& newName,
                      QString* error = nullptr);
+    bool setAssetTags(const AssetHash& hash, const QStringList& tags,
+                      QString* error = nullptr);
     bool deleteAsset(const AssetHash& hash, QString* error = nullptr);
 
     // MIME data for dragging an asset out to the timeline. Caller owns it.
@@ -84,6 +93,7 @@ private:
         QString directory;
         QString content;
         AssetType type = AssetType::Image;
+        QStringList tags;
         bool missing = false;
         bool hasAudio = false;
     };
@@ -91,11 +101,13 @@ private:
     class ProgressRow;
 
     void rebuildEntries();
+    void rebuildTagFilter();
     void applyFilter();
     void updateSelectionState();
     void chooseImportFiles();
     void chooseImportPvhtml();
     void renameSelected();
+    void editSelectedTags();
     void deleteSelected();
     void showContextMenu(const QPoint& pos);
     void setStatus(const QString& text);
@@ -115,9 +127,11 @@ private:
 
     Document* m_document = nullptr;
     QLineEdit* m_search = nullptr;
+    QComboBox* m_tagFilter = nullptr;
     QPushButton* m_importButton = nullptr;
     QListWidget* m_list = nullptr;
     QPushButton* m_renameButton = nullptr;
+    QPushButton* m_tagButton = nullptr;
     QPushButton* m_deleteButton = nullptr;
     QLabel* m_status = nullptr;
     QWidget* m_progressArea = nullptr;

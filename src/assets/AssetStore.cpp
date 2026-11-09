@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -25,10 +26,26 @@ namespace pvf::assets {
 
 namespace {
 
+constexpr int kMaxTags = 32;
+constexpr int kMaxTagLength = 64;
+
 void setError(QString* error, const QString& message)
 {
     if (error)
         *error = message;
+}
+
+QStringList tagsFromMetadata(const QJsonObject& metadata)
+{
+    QStringList tags;
+    const QJsonArray array = metadata.value(QStringLiteral("tags")).toArray();
+    for (const QJsonValue& value : array)
+    {
+        const QString tag = value.toString().trimmed();
+        if (!tag.isEmpty() && !tags.contains(tag))
+            tags.append(tag);
+    }
+    return tags;
 }
 
 bool isValidHash(const QString& hash)
@@ -156,6 +173,7 @@ std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash) const
     asset.type = *type;
     asset.name = metadata->value(QStringLiteral("name")).toString(hash);
     asset.directory = directory;
+    asset.tags = tagsFromMetadata(*metadata);
     asset.metadata = *metadata;
 
     if (asset.type == AssetType::Html)
@@ -194,6 +212,51 @@ QVector<StoredAsset> AssetStore::list() const
         return a.hash < b.hash;
     });
     return assets;
+}
+
+bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString* error)
+{
+    if (!isValidHash(hash))
+    {
+        setError(error, QStringLiteral("非法的素材哈希: %1").arg(hash));
+        return false;
+    }
+
+    QStringList normalized;
+    normalized.reserve(tags.size());
+    for (const QString& raw : tags)
+    {
+        const QString tag = raw.trimmed();
+        if (tag.isEmpty())
+            continue;
+        if (tag.size() > kMaxTagLength)
+        {
+            setError(error, QStringLiteral("标签过长（最多 %1 个字符）: %2")
+                                .arg(kMaxTagLength)
+                                .arg(tag));
+            return false;
+        }
+        if (!normalized.contains(tag))
+            normalized.append(tag);
+    }
+    if (normalized.size() > kMaxTags)
+    {
+        setError(error, QStringLiteral("标签最多 %1 个，当前 %2 个")
+                            .arg(kMaxTags)
+                            .arg(normalized.size()));
+        return false;
+    }
+
+    const auto asset = getByHash(hash);
+    if (!asset)
+    {
+        setError(error, QStringLiteral("素材不存在或内容缺失: %1").arg(hash));
+        return false;
+    }
+
+    QJsonObject metadata = asset->metadata;
+    metadata.insert(QStringLiteral("tags"), QJsonArray::fromStringList(normalized));
+    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata, error);
 }
 
 bool AssetStore::remove(const AssetHash& hash, QString* error)
@@ -301,6 +364,7 @@ std::optional<StoredAsset> AssetStore::importFileImpl(const QString& path,
     metadata.insert(QStringLiteral("type"), assetTypeName(*type));
     metadata.insert(QStringLiteral("name"), info.fileName());
     metadata.insert(QStringLiteral("mime"), mime.name());
+    metadata.insert(QStringLiteral("tags"), QJsonArray());
 
     switch (*type)
     {
@@ -518,6 +582,7 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
     metadata.insert(QStringLiteral("type"), assetTypeName(AssetType::Html));
     metadata.insert(QStringLiteral("name"), name);
     metadata.insert(QStringLiteral("mime"), QStringLiteral("text/html"));
+    metadata.insert(QStringLiteral("tags"), QJsonArray());
     metadata.insert(QStringLiteral("width"), manifest.logicalSize.width());
     metadata.insert(QStringLiteral("height"), manifest.logicalSize.height());
     metadata.insert(QStringLiteral("entry"), manifest.entry);

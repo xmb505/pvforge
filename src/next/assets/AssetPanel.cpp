@@ -4,6 +4,7 @@
 #include "video2/VideoExtractionQueue.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -48,6 +49,7 @@ namespace {
 constexpr int kHashRole = Qt::UserRole;
 constexpr int kMissingRole = Qt::UserRole + 1;
 constexpr int kNameRole = Qt::UserRole + 2;
+constexpr int kTagsRole = Qt::UserRole + 3;
 constexpr char kAssetMimeType[] = "application/x-pvforge-asset";
 
 const QSize kThumbSize(56, 40);
@@ -279,6 +281,18 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
         QPushButton:hover { background: #2a3341; }
         QPushButton:pressed { background: #1a2029; }
         QPushButton:disabled { color: #626d7e; border-color: #262d38; }
+        QComboBox {
+            background: #0d1015;
+            border: 1px solid #2b323e;
+            padding: 4px 7px;
+            color: #e4e9f1;
+        }
+        QComboBox QAbstractItemView {
+            background: #1b2029;
+            border: 1px solid #333d4c;
+            color: #e4e9f1;
+            selection-background-color: #24405c;
+        }
         QListWidget {
             background: #10141a;
             border: 1px solid #262e3a;
@@ -338,6 +352,18 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
     top->addWidget(m_importButton);
     root->addLayout(top);
 
+    auto* filterRow = new QHBoxLayout;
+    filterRow->setSpacing(6);
+    auto* filterLabel = new QLabel(tr("标签"), this);
+    filterLabel->setObjectName(QStringLiteral("AssetPanelStatus"));
+    filterRow->addWidget(filterLabel);
+    m_tagFilter = new QComboBox(this);
+    m_tagFilter->setObjectName(QStringLiteral("AssetTagFilter"));
+    m_tagFilter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_tagFilter->addItem(tr("全部标签"), QString());
+    filterRow->addWidget(m_tagFilter, 1);
+    root->addLayout(filterRow);
+
     auto* list = new AssetListWidget(this);
     list->mimeFactory = [this](const QString& hash) { return assetMimeData(hash); };
     m_list = list;
@@ -364,6 +390,11 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
     m_renameButton->setEnabled(false);
     connect(m_renameButton, &QPushButton::clicked, this, &AssetPanel::renameSelected);
     bottom->addWidget(m_renameButton);
+
+    m_tagButton = new QPushButton(tr("标签…"), this);
+    m_tagButton->setEnabled(false);
+    connect(m_tagButton, &QPushButton::clicked, this, &AssetPanel::editSelectedTags);
+    bottom->addWidget(m_tagButton);
 
     m_deleteButton = new QPushButton(tr("删除"), this);
     m_deleteButton->setEnabled(false);
@@ -396,6 +427,8 @@ AssetPanel::AssetPanel(Document* document, QWidget* parent)
             [this](const QString& hash) { removeProgressRow(hash); });
 
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) { applyFilter(); });
+    connect(m_tagFilter, &QComboBox::currentIndexChanged, this,
+            [this](int) { applyFilter(); });
     connect(m_list, &QListWidget::itemSelectionChanged, this,
             &AssetPanel::updateSelectionState);
     connect(m_list, &QWidget::customContextMenuRequested, this,
@@ -421,6 +454,7 @@ AssetPanel::~AssetPanel()
 void AssetPanel::refresh()
 {
     rebuildEntries();
+    rebuildTagFilter();
     applyFilter();
 }
 
@@ -453,6 +487,37 @@ QString AssetPanel::assetHashAt(int index) const
     if (!m_list || index < 0 || index >= m_list->count())
         return {};
     return m_list->item(index)->data(kHashRole).toString();
+}
+
+QStringList AssetPanel::assetTagsAt(int index) const
+{
+    if (!m_list || index < 0 || index >= m_list->count())
+        return {};
+    return m_list->item(index)->data(kTagsRole).toStringList();
+}
+
+QStringList AssetPanel::tagFilters() const
+{
+    QStringList tags;
+    if (!m_tagFilter)
+        return tags;
+    for (int i = 1; i < m_tagFilter->count(); ++i)
+        tags.append(m_tagFilter->itemText(i));
+    return tags;
+}
+
+void AssetPanel::setTagFilter(const QString& tag)
+{
+    if (!m_tagFilter)
+        return;
+    const int index = tag.isEmpty() ? 0 : m_tagFilter->findData(tag);
+    m_tagFilter->setCurrentIndex(index > 0 ? index : 0);
+    applyFilter();
+}
+
+QString AssetPanel::tagFilter() const
+{
+    return m_tagFilter ? m_tagFilter->currentData().toString() : QString();
 }
 
 bool AssetPanel::assetMissingAt(int index) const
@@ -603,6 +668,7 @@ void AssetPanel::rebuildEntries()
         entry.name = asset.name.isEmpty() ? shortHash(asset.hash) : asset.name;
         entry.directory = asset.directory;
         entry.type = asset.type;
+        entry.tags = asset.tags;
         entry.hasAudio = !asset.metadata.value(QStringLiteral("audioHash")).toString().isEmpty();
 
         const QStringList contentFiles = QDir(asset.directory).entryList(
@@ -653,21 +719,72 @@ void AssetPanel::rebuildEntries()
     });
 }
 
+void AssetPanel::rebuildTagFilter()
+{
+    if (!m_tagFilter)
+        return;
+
+    const QString current = m_tagFilter->currentData().toString();
+    QStringList tags;
+    for (const Entry& entry : m_entries)
+    {
+        for (const QString& tag : entry.tags)
+        {
+            const bool exists = std::any_of(tags.cbegin(), tags.cend(),
+                                            [&tag](const QString& seen) {
+                                                return QString::compare(seen, tag,
+                                                                        Qt::CaseInsensitive)
+                                                       == 0;
+                                            });
+            if (!exists)
+                tags.append(tag);
+        }
+    }
+    std::sort(tags.begin(), tags.end(), [](const QString& a, const QString& b) {
+        return QString::compare(a, b, Qt::CaseInsensitive) < 0;
+    });
+
+    QSignalBlocker blocker(m_tagFilter);
+    m_tagFilter->clear();
+    m_tagFilter->addItem(tr("全部标签"), QString());
+    for (const QString& tag : tags)
+        m_tagFilter->addItem(tag, tag);
+
+    const int index = current.isEmpty() ? 0 : m_tagFilter->findData(current);
+    m_tagFilter->setCurrentIndex(index > 0 ? index : 0);
+}
+
 void AssetPanel::applyFilter()
 {
     if (!m_list)
         return;
 
     const QString filter = m_search ? m_search->text().trimmed() : QString();
+    const QString tagFilter = m_tagFilter ? m_tagFilter->currentData().toString() : QString();
     const QString selected = selectedHash();
 
     QSignalBlocker blocker(m_list);
     m_list->clear();
     for (const Entry& entry : m_entries)
     {
-        if (!filter.isEmpty()
-            && !entry.name.contains(filter, Qt::CaseInsensitive)
-            && !entry.hash.contains(filter, Qt::CaseInsensitive))
+        if (!filter.isEmpty())
+        {
+            const bool matchesName = entry.name.contains(filter, Qt::CaseInsensitive);
+            const bool matchesHash = entry.hash.contains(filter, Qt::CaseInsensitive);
+            const bool matchesTag = std::any_of(
+                entry.tags.cbegin(), entry.tags.cend(), [&filter](const QString& tag) {
+                    return tag.contains(filter, Qt::CaseInsensitive);
+                });
+            if (!matchesName && !matchesHash && !matchesTag)
+                continue;
+        }
+        if (!tagFilter.isEmpty()
+            && std::none_of(entry.tags.cbegin(), entry.tags.cend(),
+                            [&tagFilter](const QString& tag) {
+                                return QString::compare(tag, tagFilter,
+                                                        Qt::CaseInsensitive)
+                                       == 0;
+                            }))
         {
             continue;
         }
@@ -697,6 +814,8 @@ void AssetPanel::updateSelectionState()
     const bool actionable = !hash.isEmpty() && !missing;
     if (m_renameButton)
         m_renameButton->setEnabled(actionable);
+    if (m_tagButton)
+        m_tagButton->setEnabled(actionable);
     if (m_deleteButton)
         m_deleteButton->setEnabled(actionable);
 }
@@ -721,17 +840,28 @@ QListWidgetItem* AssetPanel::makeItem(const Entry& entry)
     QString secondLine = typeLabel(entry.type) + QStringLiteral(" · ") + shortHash(entry.hash);
     if (entry.hasAudio)
         secondLine += QStringLiteral(" · 含音频");
+    if (!entry.tags.isEmpty())
+    {
+        QStringList decorated;
+        decorated.reserve(entry.tags.size());
+        for (const QString& tag : entry.tags)
+            decorated.append(QLatin1Char('#') + tag);
+        secondLine += QStringLiteral(" · ") + decorated.join(QStringLiteral(", "));
+    }
     item->setText(firstLine + QLatin1Char('\n') + secondLine);
 
     item->setData(kHashRole, entry.hash);
     item->setData(kMissingRole, entry.missing);
     item->setData(kNameRole, entry.name);
+    item->setData(kTagsRole, entry.tags);
 
     if (entry.missing)
         item->setForeground(QColor(QStringLiteral("#ff9a9a")));
 
     QString tooltip = QStringLiteral("名称：%1\n类型：%2\n哈希：%3")
                           .arg(entry.name, typeLabel(entry.type), entry.hash);
+    tooltip += QStringLiteral("\n标签：%1").arg(
+        entry.tags.isEmpty() ? tr("（无）") : entry.tags.join(QStringLiteral(", ")));
     if (!entry.directory.isEmpty())
         tooltip += QStringLiteral("\n路径：%1").arg(entry.directory);
     if (entry.missing)
@@ -1047,6 +1177,50 @@ bool AssetPanel::renameAsset(const AssetHash& hash, const QString& newName,
     return true;
 }
 
+bool AssetPanel::setAssetTags(const AssetHash& hash, const QStringList& tags,
+                              QString* error)
+{
+    if (!m_document)
+    {
+        if (error)
+            *error = tr("没有打开的工程");
+        return false;
+    }
+
+    const auto asset = m_document->assets().get(hash);
+    if (!asset)
+    {
+        if (error)
+            *error = tr("素材不存在或内容缺失：%1").arg(hash);
+        return false;
+    }
+
+    QString tagsError;
+    if (!m_document->assets().setTags(hash, tags, &tagsError))
+    {
+        if (error)
+            *error = tagsError.isEmpty() ? tr("无法写入素材标签：%1").arg(hash)
+                                         : tagsError;
+        return false;
+    }
+
+    QString commitError;
+    const bool committed = m_document->commitProject(
+        QStringLiteral("pvf: edit asset tags \"%1\"").arg(asset->name), &commitError);
+
+    refresh();
+    emit assetsChanged();
+    setStatus(tr("已更新素材 \"%1\" 的标签").arg(asset->name));
+
+    if (!committed)
+    {
+        if (error)
+            *error = tr("标签已写入，但提交失败：%1").arg(commitError);
+        return false;
+    }
+    return true;
+}
+
 bool AssetPanel::deleteAsset(const AssetHash& hash, QString* error)
 {
     if (!m_document)
@@ -1169,6 +1343,41 @@ void AssetPanel::renameSelected()
         QMessageBox::warning(this, tr("重命名失败"), error);
 }
 
+void AssetPanel::editSelectedTags()
+{
+    QListWidgetItem* item = m_list ? m_list->currentItem() : nullptr;
+    if (!item || item->data(kMissingRole).toBool())
+        return;
+
+    const QString hash = item->data(kHashRole).toString();
+    QString initial;
+    if (m_document)
+    {
+        if (const auto asset = m_document->assets().get(hash))
+            initial = asset->tags.join(QStringLiteral(", "));
+    }
+
+    bool ok = false;
+    QString text = QInputDialog::getText(this, tr("编辑标签"),
+                                         tr("标签（用逗号分隔，最多 32 个）："),
+                                         QLineEdit::Normal, initial, &ok);
+    if (!ok)
+        return;
+
+    text.replace(QChar(0xFF0C), QLatin1Char(',')); // full-width comma
+    QStringList tags;
+    for (const QString& part : text.split(QLatin1Char(',')))
+    {
+        const QString tag = part.trimmed();
+        if (!tag.isEmpty())
+            tags.append(tag);
+    }
+
+    QString error;
+    if (!setAssetTags(hash, tags, &error) && !error.isEmpty())
+        QMessageBox::warning(this, tr("编辑标签失败"), error);
+}
+
 void AssetPanel::deleteSelected()
 {
     QListWidgetItem* item = m_list ? m_list->currentItem() : nullptr;
@@ -1215,13 +1424,17 @@ void AssetPanel::showContextMenu(const QPoint& pos)
 
     QMenu menu(this);
     QAction* renameAction = menu.addAction(tr("重命名…"));
+    QAction* tagsAction = menu.addAction(tr("编辑标签…"));
     QAction* deleteAction = menu.addAction(tr("删除…"));
     renameAction->setEnabled(!missing);
+    tagsAction->setEnabled(!missing);
     deleteAction->setEnabled(!missing);
 
     QAction* chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
     if (chosen == renameAction)
         renameSelected();
+    else if (chosen == tagsAction)
+        editSelectedTags();
     else if (chosen == deleteAction)
         deleteSelected();
 }

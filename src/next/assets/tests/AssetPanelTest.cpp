@@ -134,6 +134,10 @@ class AssetPanelTest : public QObject
 private slots:
     void importPngAppears();
     void searchFilters();
+    void tagsShowInListAndSearch();
+    void tagFilterShowsMatchingOnly();
+    void editTagsCommitsOnce();
+    void missingAssetTagsNotEditable();
     void dragOutMimeHasHash();
     void renameUpdatesName();
     void deleteRemovesFromList();
@@ -193,6 +197,190 @@ void AssetPanelTest::searchFilters()
 
     panel.setSearchText(QString());
     QCOMPARE(panel.assetCount(), 2);
+}
+
+void AssetPanelTest::tagsShowInListAndSearch()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    AssetPanel panel(&document);
+
+    const QString cat = directory.path() + QStringLiteral("/cat.png");
+    const QString dog = directory.path() + QStringLiteral("/dog.png");
+    QVERIFY(writePng(cat, Qt::red));
+    QVERIFY(writePng(dog, Qt::blue));
+
+    QString error;
+    QVERIFY2(panel.importPaths({cat, dog}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 2);
+
+    auto rowFor = [&panel](const QString& name) {
+        for (int i = 0; i < panel.assetCount(); ++i)
+        {
+            if (panel.assetNameAt(i) == name)
+                return i;
+        }
+        return -1;
+    };
+
+    const int catRow = rowFor(QStringLiteral("cat.png"));
+    QVERIFY(catRow >= 0);
+    const QString catHash = panel.assetHashAt(catRow);
+    QVERIFY2(panel.setAssetTags(catHash, {QStringLiteral("宠物"), QStringLiteral("hero")},
+                                &error),
+             qPrintable(error));
+
+    const int taggedRow = rowFor(QStringLiteral("cat.png"));
+    QVERIFY(taggedRow >= 0);
+    QCOMPARE(panel.assetTagsAt(taggedRow),
+             QStringList({QStringLiteral("宠物"), QStringLiteral("hero")}));
+
+    auto* list = panel.findChild<QListWidget*>();
+    QVERIFY(list);
+    QVERIFY(list->item(taggedRow)->text().contains(QStringLiteral("#宠物")));
+    QVERIFY(list->item(taggedRow)->text().contains(QStringLiteral("hero")));
+
+    panel.setSearchText(QStringLiteral("宠物"));
+    QCOMPARE(panel.assetCount(), 1);
+    QCOMPARE(panel.assetNameAt(0), QStringLiteral("cat.png"));
+
+    panel.setSearchText(QStringLiteral("HERO"));
+    QCOMPARE(panel.assetCount(), 1);
+    QCOMPARE(panel.assetNameAt(0), QStringLiteral("cat.png"));
+
+    panel.setSearchText(QStringLiteral("dog"));
+    QCOMPARE(panel.assetCount(), 1);
+    QCOMPARE(panel.assetNameAt(0), QStringLiteral("dog.png"));
+
+    panel.setSearchText(QString());
+    QCOMPARE(panel.assetCount(), 2);
+
+    FakeDocument reopened(directory.path());
+    const auto stored = reopened.assets().get(catHash);
+    QVERIFY(stored.has_value());
+    QCOMPARE(stored->tags, QStringList({QStringLiteral("宠物"), QStringLiteral("hero")}));
+}
+
+void AssetPanelTest::tagFilterShowsMatchingOnly()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    AssetPanel panel(&document);
+
+    const QString cat = directory.path() + QStringLiteral("/cat.png");
+    const QString dog = directory.path() + QStringLiteral("/dog.png");
+    QVERIFY(writePng(cat, Qt::red));
+    QVERIFY(writePng(dog, Qt::blue));
+
+    QString error;
+    QVERIFY2(panel.importPaths({cat, dog}, &error), qPrintable(error));
+
+    QString catHash;
+    QString dogHash;
+    for (int i = 0; i < panel.assetCount(); ++i)
+    {
+        if (panel.assetNameAt(i) == QStringLiteral("cat.png"))
+            catHash = panel.assetHashAt(i);
+        else if (panel.assetNameAt(i) == QStringLiteral("dog.png"))
+            dogHash = panel.assetHashAt(i);
+    }
+    QVERIFY(!catHash.isEmpty());
+    QVERIFY(!dogHash.isEmpty());
+
+    QVERIFY2(panel.setAssetTags(catHash, {QStringLiteral("宠物")}, &error), qPrintable(error));
+    QVERIFY2(panel.setAssetTags(dogHash, {QStringLiteral("动物")}, &error), qPrintable(error));
+
+    QVERIFY(panel.tagFilters().contains(QStringLiteral("宠物")));
+    QVERIFY(panel.tagFilters().contains(QStringLiteral("动物")));
+    QCOMPARE(panel.tagFilters().size(), 2);
+
+    panel.setTagFilter(QStringLiteral("宠物"));
+    QCOMPARE(panel.tagFilter(), QStringLiteral("宠物"));
+    QCOMPARE(panel.assetCount(), 1);
+    QCOMPARE(panel.assetNameAt(0), QStringLiteral("cat.png"));
+
+    panel.setTagFilter(QStringLiteral("动物"));
+    QCOMPARE(panel.assetCount(), 1);
+    QCOMPARE(panel.assetNameAt(0), QStringLiteral("dog.png"));
+
+    // Search and tag filter combine.
+    panel.setSearchText(QStringLiteral("cat"));
+    QCOMPARE(panel.assetCount(), 0);
+
+    panel.setSearchText(QString());
+    panel.setTagFilter(QString());
+    QCOMPARE(panel.tagFilter(), QString());
+    QCOMPARE(panel.assetCount(), 2);
+
+    // An unknown tag falls back to "all tags".
+    panel.setTagFilter(QStringLiteral("不存在"));
+    QCOMPARE(panel.tagFilter(), QString());
+    QCOMPARE(panel.assetCount(), 2);
+}
+
+void AssetPanelTest::editTagsCommitsOnce()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    AssetPanel panel(&document);
+
+    const QString path = directory.path() + QStringLiteral("/tag.png");
+    QVERIFY(writePng(path, Qt::magenta));
+    QString error;
+    QVERIFY2(panel.importPaths({path}, &error), qPrintable(error));
+
+    const QString hash = panel.assetHashAt(0);
+    const int before = document.commits().size();
+    QVERIFY2(panel.setAssetTags(hash, {QStringLiteral("a"), QStringLiteral("b")}, &error),
+             qPrintable(error));
+
+    QCOMPARE(document.commits().size(), before + 1);
+    const QString message = document.commits().last();
+    QVERIFY(message.startsWith(QStringLiteral("pvf: edit asset tags \"")));
+    QVERIFY(message.contains(QStringLiteral("tag.png")));
+    QCOMPARE(panel.assetTagsAt(0),
+             QStringList({QStringLiteral("a"), QStringLiteral("b")}));
+    QVERIFY(document.assets().get(hash)->tags
+            == QStringList({QStringLiteral("a"), QStringLiteral("b")}));
+}
+
+void AssetPanelTest::missingAssetTagsNotEditable()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+
+    const QString hash = QStringLiteral("b").repeated(64);
+    pvf::model::Entity entity;
+    entity.uuid = QStringLiteral("entity-missing-tags");
+    entity.name = QStringLiteral("missing");
+    entity.content.kind = pvf::ContentKind::Asset;
+    entity.content.asset.hash = hash;
+    entity.content.asset.type = pvf::AssetType::Image;
+    document.mutableProject().entities.insert(entity.uuid, entity);
+
+    AssetPanel panel(&document);
+    QCOMPARE(panel.assetCount(), 1);
+    QVERIFY(panel.assetMissingAt(0));
+
+    QString error;
+    QVERIFY(!panel.setAssetTags(hash, {QStringLiteral("x")}, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(document.commits().isEmpty());
+
+    bool foundTagButton = false;
+    for (QPushButton* button : panel.findChildren<QPushButton*>())
+    {
+        if (button->text().startsWith(QStringLiteral("标签")))
+        {
+            foundTagButton = true;
+            QVERIFY(!button->isEnabled());
+        }
+    }
+    QVERIFY(foundTagButton);
 }
 
 void AssetPanelTest::dragOutMimeHasHash()

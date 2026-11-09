@@ -6,6 +6,9 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -28,6 +31,19 @@ bool writeBytes(const QString& path, const QByteArray& bytes)
 bool writeText(const QString& path, const QByteArray& text)
 {
     return writeBytes(path, text);
+}
+
+QJsonObject readJsonObject(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
+bool writeJsonObject(const QString& path, const QJsonObject& object)
+{
+    return writeBytes(path, QJsonDocument(object).toJson(QJsonDocument::Indented));
 }
 
 bool isFile(const QString& path)
@@ -176,6 +192,9 @@ private slots:
     void importFileDeduplicates();
     void storeGetListRemove();
     void missingAssetReturnsEmpty();
+    void assetTagsRoundTrip();
+    void assetTagsRejectInvalid();
+    void legacyMetadataWithoutTags();
     void pvhtmlDirectoryImport();
     void pvhtmlZipImport();
     void pvhtmlRejectsMissingEntry();
@@ -485,6 +504,138 @@ void AssetsTest::missingAssetReturnsEmpty()
     QVERIFY(!store.get(QStringLiteral("../escape")).has_value());
     QVERIFY(!store.get(QString()).has_value());
     QVERIFY(store.list().isEmpty());
+}
+
+void AssetsTest::assetTagsRoundTrip()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    pvf::assets::AssetStore store(temporary.filePath(QStringLiteral("project")));
+
+    const QString path = temporary.filePath(QStringLiteral("tagged.png"));
+    QImage image(20, 10, QImage::Format_ARGB32);
+    image.fill(Qt::magenta);
+    QVERIFY(image.save(path));
+
+    QString error;
+    const auto imported = store.importFile(path, &error);
+    QVERIFY(error.isEmpty());
+    QVERIFY(imported.has_value());
+    QVERIFY(imported->tags.isEmpty());
+
+    const QString metadataPath = imported->directory + QStringLiteral("/asset.json");
+    QVERIFY(readJsonObject(metadataPath).value(QStringLiteral("tags")).toArray().isEmpty());
+
+    QVERIFY2(store.setTags(imported->hash,
+                           {QStringLiteral("  hero "), QStringLiteral("背景"),
+                            QStringLiteral("hero"), QStringLiteral("   "),
+                            QStringLiteral("背景")},
+                           &error),
+             qPrintable(error));
+    QVERIFY(error.isEmpty());
+
+    const QStringList expected{QStringLiteral("hero"), QStringLiteral("背景")};
+    const auto fetched = store.get(imported->hash);
+    QVERIFY(fetched.has_value());
+    QCOMPARE(fetched->tags, expected);
+    QCOMPARE(readJsonObject(metadataPath).value(QStringLiteral("tags")).toArray(),
+             QJsonArray::fromStringList(expected));
+    QCOMPARE(store.list().first().tags, expected);
+
+    pvf::assets::AssetStore reopened(temporary.filePath(QStringLiteral("project")));
+    const auto reloaded = reopened.get(imported->hash);
+    QVERIFY(reloaded.has_value());
+    QCOMPARE(reloaded->tags, expected);
+
+    // Replacing with an empty list clears tags.
+    QVERIFY2(store.setTags(imported->hash, {}, &error), qPrintable(error));
+    const auto cleared = store.get(imported->hash);
+    QVERIFY(cleared.has_value());
+    QVERIFY(cleared->tags.isEmpty());
+}
+
+void AssetsTest::assetTagsRejectInvalid()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    pvf::assets::AssetStore store(temporary.filePath(QStringLiteral("project")));
+
+    const QString path = temporary.filePath(QStringLiteral("tagged.png"));
+    QImage image(10, 10, QImage::Format_ARGB32);
+    image.fill(Qt::darkGreen);
+    QVERIFY(image.save(path));
+
+    QString error;
+    const auto imported = store.importFile(path, &error);
+    QVERIFY(error.isEmpty());
+    QVERIFY(imported.has_value());
+    const pvf::AssetHash hash = imported->hash;
+
+    const QString tooLong(65, QLatin1Char('x'));
+    error.clear();
+    QVERIFY(!store.setTags(hash, {QStringLiteral("ok"), tooLong}, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(store.get(hash)->tags.isEmpty());
+
+    QStringList many;
+    for (int i = 0; i < 33; ++i)
+        many.append(QStringLiteral("tag%1").arg(i));
+    error.clear();
+    QVERIFY(!store.setTags(hash, many, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(store.get(hash)->tags.isEmpty());
+
+    // Exactly 32 tags is allowed.
+    error.clear();
+    QVERIFY2(store.setTags(hash, many.mid(0, 32), &error), qPrintable(error));
+    const auto filled = store.get(hash);
+    QVERIFY(filled.has_value());
+    QCOMPARE(filled->tags.size(), 32);
+
+    // Unknown or malformed hashes are rejected.
+    error.clear();
+    QVERIFY(!store.setTags(QString(64, QLatin1Char('0')), {QStringLiteral("x")}, &error));
+    QVERIFY(!error.isEmpty());
+    error.clear();
+    QVERIFY(!store.setTags(QStringLiteral("../escape"), {QStringLiteral("x")}, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void AssetsTest::legacyMetadataWithoutTags()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    pvf::assets::AssetStore store(temporary.filePath(QStringLiteral("project")));
+
+    const QString path = temporary.filePath(QStringLiteral("legacy.png"));
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::gray);
+    QVERIFY(image.save(path));
+
+    QString error;
+    const auto imported = store.importFile(path, &error);
+    QVERIFY(error.isEmpty());
+    QVERIFY(imported.has_value());
+    const QString metadataPath = imported->directory + QStringLiteral("/asset.json");
+
+    QJsonObject metadata = readJsonObject(metadataPath);
+    QVERIFY(metadata.contains(QStringLiteral("tags")));
+    metadata.remove(QStringLiteral("tags"));
+    QVERIFY(writeJsonObject(metadataPath, metadata));
+
+    const auto legacy = store.get(imported->hash);
+    QVERIFY(legacy.has_value());
+    QVERIFY(legacy->tags.isEmpty());
+    QVERIFY(store.list().first().tags.isEmpty());
+
+    QVERIFY2(store.setTags(imported->hash, {QStringLiteral("legacy")}, &error),
+             qPrintable(error));
+    const auto upgraded = store.get(imported->hash);
+    QVERIFY(upgraded.has_value());
+    QCOMPARE(upgraded->tags, QStringList{QStringLiteral("legacy")});
 }
 
 void AssetsTest::pvhtmlDirectoryImport()

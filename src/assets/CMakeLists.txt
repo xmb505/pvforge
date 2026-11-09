@@ -45,6 +45,9 @@ set(PVF_ASSET_TEST_CASES
     importFileDeduplicates
     storeGetListRemove
     missingAssetReturnsEmpty
+    assetTagsRoundTrip
+    assetTagsRejectInvalid
+    legacyMetadataWithoutTags
     pvhtmlDirectoryImport
     pvhtmlZipImport
     pvhtmlRejectsMissingEntry

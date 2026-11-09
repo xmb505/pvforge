@@ -4,6 +4,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <optional>
@@ -16,6 +17,7 @@ struct StoredAsset
     AssetType type = AssetType::Image;
     QString name;
     QString directory;   // absolute path of assets/<sha256>
+    QStringList tags;    // stored in asset.json as "tags"; empty for old assets
     QJsonObject metadata;
 };
 
@@ -43,6 +45,8 @@ struct VideoImport
 // Stored metadata includes hash/type/name/mime plus width/height for visual
 // assets, durationSeconds/sampleRate/channels for timed media, and
 // durationFrames computed from <projectRoot>/project.json fps (fallback 30).
+// Tags live in asset.json under "tags"; assets imported by older versions have
+// no such field and are treated as untagged.
 //
 // Video behaviour: importFile() stores the video and, when the file has an
 // audio stream, also extracts a 48 kHz stereo WAV asset and records its hash
@@ -68,6 +72,13 @@ public:
 
     // All valid assets, sorted by name then hash.
     QVector<StoredAsset> list() const;
+
+    // Replaces the asset's tags in asset.json. Tags are trimmed, empty entries
+    // dropped and duplicates removed. Tags longer than 64 characters and lists
+    // with more than 32 unique tags are rejected. Returns false with an error
+    // for a missing asset or invalid tags.
+    bool setTags(const AssetHash& hash, const QStringList& tags,
+                 QString* error = nullptr);
 
     // Removes the asset directory. Returns false if it does not exist.
     bool remove(const AssetHash& hash, QString* error = nullptr);
