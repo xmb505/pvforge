@@ -19,9 +19,31 @@ if(NOT TARGET pvf_store)
                      ${CMAKE_CURRENT_BINARY_DIR}/store_dep)
 endif()
 
+if(NOT TARGET pvf_next_assets)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../assets
+                     ${CMAKE_CURRENT_BINARY_DIR}/assets_dep)
+endif()
+
+if(NOT TARGET pvf_next_viewport)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../viewport
+                     ${CMAKE_CURRENT_BINARY_DIR}/viewport_dep)
+endif()
+
+if(NOT TARGET pvf_next_properties)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../properties
+                     ${CMAKE_CURRENT_BINARY_DIR}/properties_dep)
+endif()
+
+if(NOT TARGET pvf_next_timeline)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../timeline
+                     ${CMAKE_CURRENT_BINARY_DIR}/timeline_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
+    NextWindow.cpp
+    NextWindow.h
 )
 
 target_include_directories(pvf_next_app PUBLIC
@@ -31,11 +53,30 @@ target_include_directories(pvf_next_app PUBLIC
 target_link_libraries(pvf_next_app PUBLIC
     pvf_next_core
     pvf_store
+    pvf_next_assets
+    pvf_next_viewport
+    pvf_next_properties
+    pvf_next_timeline
+    pvf_render2
     Qt6::Core
     Qt6::Widgets
 )
 
 target_compile_features(pvf_next_app PUBLIC cxx_std_20)
+
+add_executable(pvforge-next main.cpp)
+
+target_link_libraries(pvforge-next PRIVATE
+    pvf_next_app
+    pvf_next_core
+    pvf_next_assets
+    pvf_next_viewport
+    pvf_next_properties
+    pvf_next_timeline
+    pvf_render2
+    pvf_store
+    Qt6::Widgets
+)
 
 include(CTest)
 
@@ -44,5 +85,11 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_next_app_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_app_tests)
     set_tests_properties(next.project_document PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH}")
+
+    add_executable(pvf_next_window_tests tests/NextWindowTests.cpp)
+    target_link_libraries(pvf_next_window_tests PRIVATE pvf_next_app Qt6::Test)
+    add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
+    set_tests_properties(next.window_shell PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH}")
 endif()
