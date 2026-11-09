@@ -2,7 +2,7 @@
 
 > 日期：2026-11-10  
 > 分支：`new-entity-model`  
-> 最新已提交：`2ba02cc feat: pause playback when html frames stall`  
+> 最新已提交：`a15d237 fix: keep paint cache-only and share media with MCP preview`  
 > 设计主文档：`docs/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/INTEGRATION_PLAN.md`  
@@ -124,41 +124,49 @@
 | Gizmo | `src/gizmo` | 四角旋转/Office 缩放/中心四象限；10 组 265 断言 |
 | Store | `src/store` | 文本-only git、内存 undo、debounce、崩溃恢复扫描；21 测试 |
 | Anim | `src/anim` | 普通/求解段/父子/可见性/小数帧；12 测试 |
-| Renderer2 | `src/render2` | 图/矢量/文字/相机/占位/provider；11 测试 |
-| Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率；10 CTest |
+| Renderer2 | `src/render2` | 图/矢量/文字/相机/占位/provider；14 测试 |
+| Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率；11 CTest |
 | Audio2 | `src/audio2` | 混音 + QAudioSink 播放；8 测试 |
 | HTML cache | `src/htmlcache` | 内存 QImage LRU + 磁盘 WebP LRU；13 测试 |
-| HTML2 | `src/html2` | `.pvhtml` 本地服务器/Chrome/三浏览器/异步；14 测试 |
-| Video2 | `src/video2` | 取帧/代理/全量抽图/队列；25 测试 |
-| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览；40 测试 |
+| HTML2 | `src/html2` | `.pvhtml` 本地服务器/Chrome/三浏览器/异步/8192 上限；16 测试 |
+| Video2 | `src/video2` | 取帧/代理/全量抽图/队列/设置；25 测试 |
+| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider；40 测试 |
 | Next core | `src/next/core` | Document 接口 |
-| Next app | `src/next/app` | ProjectDocument/NextWindow/Playback+看门狗/MediaServices/Export/MCP log；5 CTest |
+| Next app | `src/next/app` | ProjectDocument/NextWindow/Playback+看门狗/MediaServices/Export/崩溃恢复/MCP log；5 CTest |
 | Timeline | `src/next/timeline` | 行/裁剪/关键帧/拖放/浮层信号；30 测试 |
 | Properties | `src/next/properties` | 属性/auto-key/求解段创建/轨迹预览；29 + 11 测试 |
-| AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度；15 测试 |
+| AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度/补抽；17 测试 |
 | Viewport | `src/next/viewport` | 渲染/gizmo/provider；15 测试 |
 | Settings | `src/next/settings` | 3 页 QSettings；14 测试 |
 | MCP log | `src/next/mcp` | 日志/急停/恢复；15 测试 |
 
 根 CMake 已包含全部新模块；`pvforge-next` 可链接。
 
+### 3.1 端到端验收（2026-11-10）
+
+在 `/tmp/pvfe2e` 生成 7 实体工程（摄像机/文字/矢量/图片/视频/音频/HTML，640×360@30），用 `QT_QPA_PLATFORM=offscreen` 启动 `pvforge-next --open`，通过真实 HTTP MCP 验证：
+
+- `tools/list` 返回 46 个工具；`project.get`/`view.state` 正常。
+- `entity.create`、`keyframes.set`、`entity.update`、`solver.create`（gravity）、`markers.set`、`asset.setTags` 成功并各自产生 commit。
+- `project.update` 改 fps 被 `conflict` 拒绝。
+- `preview.render_frame` 的 PNG 同时包含 HTML 红色层和视频/图片像素（说明 provider 已接入 MCP 预览）。
+- `history.undo/redo` 恢复 marker，且不新增 git commit。
+- 播放/缓存只有真实帧才喂看门狗；HTML 低清 miss 最多等 300 ms，paint 内只查缓存。
+
 ## 4. 当前未完成 / 已知缺口
 
-1. **崩溃恢复 UI 未接**：Store 已提供 `dirtyTextFiles/commitRecoveredText/discardDirtyText`；NextWindow 打开工程时弹窗“恢复/丢弃/提交”未做。
-2. **导出最终 HTML/视频 provider**：Export2 支持 provider，ExportDialog 的高帧率/分辨率字段和 MediaServices 的 finalFrame/原片解码正在接。
-3. **视频抽图队列设置**：AssetPanel 队列固定 960 宽/2GB；正在加 `setVideoExtractionOptions` 和历史视频补抽接口，主窗口接线随后。
-4. **HTML 服务设置**：MediaServices 已传缓存预算/Chrome 路径；运行中改 Chrome 路径会重建服务。
-5. **HTML 看门狗**：已接（MediaServices pending + PlaybackController 3s + 真实帧喂狗）；阈值跟设置。
-6. **HTML Chrome 升级抽样校验**未实现（版本进 key，未抽样清资产缓存）。
-7. **HTML finalFrame 线程**：导出线程调用 finalFrame 的线程模型未验证；ExportDialog 需要固定线程。
-8. **视频最终 provider**：导出需原片解码，不能只用序列；正在加 export-specific VideoFrames。
-9. **Asset tags MCP**：`asset.setTags` 已加；MCP 文档工具数 46 需再核对。
-10. **Timeline 实体多选/框选**：第一版单选；关键帧多选已做。
-11. **Timeline 私有浮层**：App 已接 `privateTimelineRequested`；主时间轴双击打 key、+ 打开浮层。
-12. **旧 app 删除**：`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。
-13. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
-14. **崩溃恢复扫描白名单**：只认 `project.json`、`entities/*.json`、`.gitignore`；未来新增独立文本文件需扩展。
-15. **内存 undo 不持久化**：重开工程只靠 git 历史冷恢复；符合设计。
+1. **导出 GUI 未做整链路自动化**：Export2 + provider + 对话框 getter 已测，但“点导出按钮 → 2x/HTML 高清 → 成片”仍靠人工验收。
+2. **HTML 8192 实际渲染**：边界校验和 4000×100 实渲染已测；8192×4320 的 Chrome 内存/耗时未压测。
+3. **HTML Chrome 升级抽样校验**未实现（版本进 key，未抽样清资产缓存）。
+4. **视频导出 4x 8K**：8192 上限已放开，但 7680×4320 的内存/编码速度未压测。
+5. **AI 并发写入**：导出期间未阻止 MCP 写操作；export2 用工程快照，MediaServices provider 读实时文档。
+6. **内存 undo 不覆盖素材标签/素材文件**：标签在 `assets/*/asset.json`，属于素材元数据；undo/redo 只恢复文本工程。
+7. **崩溃恢复扫描白名单**：只认 `project.json`、`entities/*.json`、`.gitignore`；未来新增独立文本文件需扩展。
+8. **崩溃恢复弹窗**只用注入 handler 测业务分支，真实模态框未自动化。
+9. **Timeline 实体多选/框选**：第一版单选；关键帧多选已做。
+10. **旧 app 删除**：`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。
+11. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
+12. **求解段递归守卫**：现在同一实体在求解中重新求值会退回无求解的 plain pose；跨实体循环仍由父链/目标校验拦截。
 
 ## 5. 构建 / 测试
 
@@ -198,8 +206,8 @@ ctest --test-dir /tmp/pvf-store-build --output-on-failure
 
 ## 7. 下一步建议顺序
 
-1. 接 ExportDialog：输出 fps（1x/2x/4x）、分辨率（1x/2x/4x）、音频、最终 provider。
-2. 接崩溃恢复弹窗（恢复/丢弃/提交）。
-3. 把 Settings 的视频抽图宽度/预算传给 AssetPanel 队列，并补抽历史视频。
-4. 端到端验收工程：矢量/文字/图片/视频/HTML/音频/相机；播放、拖拽、裁剪、关键帧、求解段、MCP、导出。
-5. 删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
+1. 人工验收导出：2x/4x fps、2x/4x 分辨率、HTML 高清 finalFrame、音频成片。
+2. 压测 8192 宽 HTML/4x 8K 导出的内存与耗时；必要时限制并提示。
+3. 播放/watchdog 人工验收：HTML 慢页面 3s 暂停、手动恢复。
+4. 删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
+5. 补充 MCP 预览 provider 的自动化测试（当前由端到端脚本覆盖）。
