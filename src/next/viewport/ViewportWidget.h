@@ -2,6 +2,7 @@
 
 #include "common/Types.h"
 #include "gizmo/Gizmo.h"
+#include "render2/Render.h"
 
 #include <QImage>
 #include <QPointF>
@@ -55,6 +56,11 @@ public:
 
     void setCameraUuid(const Uuid& uuid);
     Uuid cameraUuid() const { return m_cameraUuid; }
+
+    // Optional decoded-frame sources for video and HTML assets.  An unset
+    // provider leaves render2's placeholder visible.
+    void setVideoFrameProvider(render2::FrameProvider provider);
+    void setHtmlFrameProvider(render2::FrameProvider provider);
 
     void setShowGizmo(bool show);
     bool showGizmo() const { return m_showGizmo; }
@@ -152,6 +158,9 @@ private:
     double m_dragAngleCenter = 0.0;
     QPointF m_dragGrabOffset;
     bool m_dragChanged = false;
+
+    render2::FrameProvider m_videoFrameProvider;
+    render2::FrameProvider m_htmlFrameProvider;
 
     QImage m_sceneImage;
     QSize m_sceneSize;

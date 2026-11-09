@@ -121,6 +121,24 @@ public:
         return uuid;
     }
 
+    // Asset entity centered on the project canvas.
+    Uuid addAsset(const QString& name, AssetType type, const QString& hash)
+    {
+        model::Entity entity;
+        entity.uuid = model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 30;
+        entity.transform.x = 160.0;
+        entity.transform.y = 90.0;
+        entity.content.kind = ContentKind::Asset;
+        entity.content.asset.type = type;
+        entity.content.asset.hash = hash;
+        const Uuid uuid = entity.uuid;
+        m_project.entities.insert(uuid, entity);
+        return uuid;
+    }
+
     int entityCommits() const { return m_entityCommits; }
     int projectCommits() const { return m_projectCommits; }
     QString lastMessage() const { return m_lastMessage; }
@@ -141,6 +159,18 @@ void showWidget(ViewportWidget& view)
     view.resize(640, 360);
     view.show();
     QTest::qWait(10);
+}
+
+QImage redFrame()
+{
+    QImage image(100, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::red);
+    return image;
+}
+
+bool isRed(const QColor& color)
+{
+    return color.red() > 200 && color.green() < 60 && color.blue() < 60;
 }
 
 gizmo::Transform gizmoTransformOf(const model::Entity& entity)
@@ -214,6 +244,10 @@ private slots:
     void lockedEntityIgnoresGizmo();
     void hiddenEntityStillSelectable();
     void negativeCameraScaleRenders();
+    void htmlProviderRendersFrame();
+    void videoProviderRendersFrame();
+    void providerReceivesProjectFrame();
+    void noProviderKeepsPlaceholder();
 };
 
 void ViewportWidgetTest::projectCanvasRenders()
@@ -448,6 +482,94 @@ void ViewportWidgetTest::negativeCameraScaleRenders()
     QVERIFY(std::isfinite(roundTrip.x()));
     QVERIFY(std::isfinite(roundTrip.y()));
     QVERIFY(QLineF(roundTrip, center).length() < 0.01);
+}
+
+void ViewportWidgetTest::htmlProviderRendersFrame()
+{
+    FakeDocument document;
+    document.addAsset(QStringLiteral("Html"), AssetType::Html,
+                      QStringLiteral("html-hash"));
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const QImage placeholder = view.grabFrame();
+    QCOMPARE(placeholder.size(), QSize(320, 180));
+    QVERIFY(!isRed(placeholder.pixelColor(160, 90)));
+
+    view.setHtmlFrameProvider([](const Uuid&, double) { return redFrame(); });
+
+    const QImage frame = view.grabFrame();
+    QCOMPARE(frame.size(), QSize(320, 180));
+    QVERIFY(isRed(frame.pixelColor(160, 90)));
+
+    // The widget paint path goes through ensureSceneImage and must also see
+    // the provider installed after the first placeholder render.
+    const QImage painted = view.grab().toImage();
+    QVERIFY(isRed(painted.pixelColor(painted.width() / 2,
+                                     painted.height() / 2)));
+}
+
+void ViewportWidgetTest::videoProviderRendersFrame()
+{
+    FakeDocument document;
+    document.addAsset(QStringLiteral("Video"), AssetType::Video,
+                      QStringLiteral("video-hash"));
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    QVERIFY(!isRed(view.grabFrame().pixelColor(160, 90)));
+
+    view.setVideoFrameProvider([](const Uuid&, double) { return redFrame(); });
+
+    const QImage frame = view.grabFrame();
+    QVERIFY(isRed(frame.pixelColor(160, 90)));
+}
+
+void ViewportWidgetTest::providerReceivesProjectFrame()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addAsset(QStringLiteral("Video"),
+                                        AssetType::Video,
+                                        QStringLiteral("video-hash"));
+    document.setPlayhead(7);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    Uuid receivedUuid;
+    double receivedFrame = -1.0;
+    view.setVideoFrameProvider([&](const Uuid& entityUuid, double projectFrame) {
+        receivedUuid = entityUuid;
+        receivedFrame = projectFrame;
+        return redFrame();
+    });
+
+    QVERIFY(isRed(view.grabFrame().pixelColor(160, 90)));
+    QCOMPARE(receivedUuid, uuid);
+    QCOMPARE(receivedFrame, 7.0);
+}
+
+void ViewportWidgetTest::noProviderKeepsPlaceholder()
+{
+    FakeDocument document;
+    document.addAsset(QStringLiteral("Html"), AssetType::Html,
+                      QStringLiteral("html-hash"));
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const QImage frame = view.grabFrame();
+    QCOMPARE(frame.size(), QSize(320, 180));
+    QVERIFY(!isRed(frame.pixelColor(160, 90)));
+    QVERIFY(!view.grab().isNull());
+
+    // Clearing an installed provider falls back to the placeholder.
+    view.setHtmlFrameProvider([](const Uuid&, double) { return redFrame(); });
+    QVERIFY(isRed(view.grabFrame().pixelColor(160, 90)));
+    view.setHtmlFrameProvider({});
+    QVERIFY(!isRed(view.grabFrame().pixelColor(160, 90)));
 }
 
 QTEST_MAIN(ViewportWidgetTest)

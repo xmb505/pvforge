@@ -17,6 +17,8 @@ set(PVF_EXPORT2_TEST_CASES
     missingCamera
     cancelRemovesFile
     oversizedOutput
+    frameProviders
+    noFrameProviderPlaceholder
 )
 
 foreach(test_case IN LISTS PVF_EXPORT2_TEST_CASES)

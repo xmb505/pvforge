@@ -3,6 +3,7 @@
 #include "assets/AssetStore.h"
 #include "common/Types.h"
 #include "model/Project.h"
+#include "render2/Render.h"
 
 #include <QSize>
 #include <QString>
@@ -60,6 +61,11 @@ struct Options
     int resolutionScale = 1; // 1, 2 or 4
     int crf = 18;
     bool includeAudio = true;
+
+    // Optional decoded-frame sources for video and HTML assets, forwarded to
+    // render2::Options for every frame.  Unset providers render placeholders.
+    render2::FrameProvider videoFrame;
+    render2::FrameProvider htmlFrame;
 };
 
 struct Result

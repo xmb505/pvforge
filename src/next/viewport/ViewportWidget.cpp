@@ -22,6 +22,7 @@
 #include <cmath>
 #include <functional>
 #include <numbers>
+#include <utility>
 
 namespace pvf::next {
 
@@ -247,6 +248,20 @@ void ViewportWidget::setCameraUuid(const Uuid& uuid)
     update();
 }
 
+void ViewportWidget::setVideoFrameProvider(render2::FrameProvider provider)
+{
+    m_videoFrameProvider = std::move(provider);
+    invalidateScene();
+    update();
+}
+
+void ViewportWidget::setHtmlFrameProvider(render2::FrameProvider provider)
+{
+    m_htmlFrameProvider = std::move(provider);
+    invalidateScene();
+    update();
+}
+
 void ViewportWidget::setShowGizmo(bool show)
 {
     if (m_showGizmo == show)
@@ -274,6 +289,8 @@ QImage ViewportWidget::grabFrame() const
     options.projectFrame = m_document->playhead();
     options.cameraUuid = m_cameraUuid;
     options.outputSize = output;
+    options.videoFrame = m_videoFrameProvider;
+    options.htmlFrame = m_htmlFrameProvider;
 
     render2::SceneWorld world(project, m_document->assets());
     anim::Cache cache;
@@ -843,6 +860,8 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
     options.projectFrame = frame;
     options.cameraUuid = m_cameraUuid;
     options.outputSize = clamped;
+    options.videoFrame = m_videoFrameProvider;
+    options.htmlFrame = m_htmlFrameProvider;
 
     render2::SceneWorld world(project, m_document->assets());
     anim::Cache cache;

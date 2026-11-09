@@ -831,6 +831,8 @@ Result exportVideo(const model::Project& project,
     renderOptions.cameraUuid = options.cameraUuid;
     renderOptions.outputSize = contentSize;
     renderOptions.background = background;
+    renderOptions.videoFrame = options.videoFrame;
+    renderOptions.htmlFrame = options.htmlFrame;
 
     const QPoint contentOffset((outputSize.width() - contentSize.width()) / 2,
                                (outputSize.height() - contentSize.height()) / 2);
