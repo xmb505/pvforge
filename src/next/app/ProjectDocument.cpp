@@ -87,6 +87,20 @@ bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
     return true;
 }
 
+bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& message,
+                                     QString* error)
+{
+    for (const Uuid& uuid : uuids)
+    {
+        if (!m_store->saveEntity(uuid, error))
+            return false;
+    }
+    if (!m_store->commit(message, error))
+        return false;
+    emit changed();
+    return true;
+}
+
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
     if (!m_store->saveProject(error))

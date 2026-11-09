@@ -1,0 +1,1182 @@
+#include "next/timeline/TimelineWidget.h"
+
+#include "next/core/Document.h"
+
+#include <QFont>
+#include <QFontMetrics>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPalette>
+#include <QPolygonF>
+#include <QResizeEvent>
+#include <QScrollBar>
+#include <QSet>
+#include <QSignalBlocker>
+#include <QWheelEvent>
+
+#include <algorithm>
+#include <cmath>
+#include <climits>
+
+namespace pvf::next {
+
+namespace {
+
+QColor contentColor(const model::Entity& entity)
+{
+    switch (entity.content.kind)
+    {
+    case ContentKind::Text:
+        return QColor(242, 153, 74);
+    case ContentKind::Vector:
+        return QColor(176, 132, 255);
+    case ContentKind::Camera:
+        return QColor(88, 196, 221);
+    case ContentKind::Asset:
+        switch (entity.content.asset.type)
+        {
+        case AssetType::Image:
+            return QColor(74, 144, 226);
+        case AssetType::Video:
+            return QColor(235, 87, 87);
+        case AssetType::Audio:
+            return QColor(92, 204, 142);
+        case AssetType::Html:
+            return QColor(242, 201, 76);
+        }
+        break;
+    case ContentKind::Empty:
+        break;
+    }
+    return QColor(132, 138, 148);
+}
+
+QColor solverColor(SolverEffect effect)
+{
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+        return QColor(63, 167, 214);
+    case SolverEffect::Orbit:
+        return QColor(166, 94, 234);
+    case SolverEffect::Spin:
+        return QColor(245, 166, 35);
+    case SolverEffect::BlackHole:
+        return QColor(91, 72, 140);
+    }
+    return QColor(63, 167, 214);
+}
+
+QColor withAlpha(QColor color, int alpha)
+{
+    color.setAlpha(alpha);
+    return color;
+}
+
+QColor contrastText(const QColor& background)
+{
+    return background.lightness() > 150 ? QColor(20, 22, 26)
+                                        : QColor(255, 255, 255);
+}
+
+// Solver segments drive x/y for gravity/orbit/blackhole and rotation for
+// spin. Normal keys on those tracks are hidden inside the segment.
+bool trackDrivenAt(const model::Entity& entity, const QString& track, int frame)
+{
+    for (const auto& solver : entity.solvers)
+    {
+        const int first = std::max(0, solver.startFrame);
+        const int last = solver.endFrame < 0
+                             ? entity.duration() - 1
+                             : std::min(entity.duration() - 1, solver.endFrame);
+        if (frame < first || frame > last)
+            continue;
+
+        const bool positionDriven = solver.effect == SolverEffect::Gravity
+                                    || solver.effect == SolverEffect::Orbit
+                                    || solver.effect == SolverEffect::BlackHole;
+        if (positionDriven
+            && (track == QStringLiteral("x") || track == QStringLiteral("y")))
+            return true;
+        if (solver.effect == SolverEffect::Spin
+            && track == QStringLiteral("rotation"))
+            return true;
+    }
+    return false;
+}
+
+void drawBadge(QPainter& painter, const QRect& bar, const QString& text, int slot)
+{
+    const int size = 12;
+    const QRect badge(bar.right() - 4 - size * (slot + 1), bar.top() + 4, size,
+                      size);
+    if (badge.left() <= bar.left() + 3)
+        return;
+
+    painter.save();
+    painter.fillRect(badge, QColor(16, 18, 22, 190));
+    QFont font = painter.font();
+    font.setPixelSize(9);
+    font.setBold(true);
+    painter.setFont(font);
+    painter.setPen(QColor(240, 242, 248));
+    painter.drawText(badge, Qt::AlignCenter, text);
+    painter.restore();
+}
+
+} // namespace
+
+TimelineWidget::TimelineWidget(Document* document, QWidget* parent)
+    : QWidget(parent)
+    , m_document(document)
+{
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+    setMinimumSize(240, 140);
+
+    m_hScroll = new QScrollBar(Qt::Horizontal, this);
+    m_hScroll->setObjectName(QStringLiteral("timelineScrollBar"));
+    m_hScroll->setGeometry(0, height() - kScrollBarHeight, width(),
+                           kScrollBarHeight);
+    m_hScroll->setRange(0, 0);
+    connect(m_hScroll, &QScrollBar::valueChanged, this,
+            &TimelineWidget::onScrollBarValueChanged);
+
+    if (m_document)
+    {
+        m_playhead = std::max(0, m_document->playhead());
+        connect(m_document, &Document::changed, this, &TimelineWidget::refresh);
+        connect(m_document, &Document::selectionChanged, this,
+                [this]() { update(); });
+        connect(m_document, &Document::playheadChanged, this,
+                &TimelineWidget::onPlayheadChanged);
+    }
+
+    updateScrollBar();
+}
+
+TimelineWidget::~TimelineWidget() = default;
+
+void TimelineWidget::setParentUuid(const Uuid& parentUuid)
+{
+    if (m_parentUuid == parentUuid)
+        return;
+
+    m_parentUuid = parentUuid;
+    if (m_document && !m_parentUuid.isEmpty()
+        && !m_document->project().entities.contains(m_parentUuid))
+        m_parentUuid.clear();
+
+    m_dragMode = DragMode::None;
+    m_dragEntity.clear();
+    m_dragChanged = false;
+
+    // Start the private timeline at its owner instead of frame 0, so children
+    // of a parent that starts late are visible immediately.
+    double startFrame = 0.0;
+    if (m_document && !m_parentUuid.isEmpty())
+    {
+        const auto owner =
+            m_document->project().entities.constFind(m_parentUuid);
+        if (owner != m_document->project().entities.constEnd())
+            startFrame = std::max(0, owner.value().start);
+    }
+    m_scrollX = std::max(0, int(std::lround(startFrame * m_pixelsPerFrame)) - 8);
+
+    updateScrollBar();
+    update();
+}
+
+void TimelineWidget::setPixelsPerFrame(double pixelsPerFrame)
+{
+    const double clamped = std::clamp(pixelsPerFrame, 0.25, 64.0);
+    if (qFuzzyCompare(clamped, m_pixelsPerFrame))
+        return;
+
+    m_pixelsPerFrame = clamped;
+    updateScrollBar();
+    update();
+}
+
+void TimelineWidget::setPlayhead(int frame)
+{
+    const int clamped = std::max(0, frame);
+    if (m_document)
+        m_document->setPlayhead(clamped);
+    m_playhead = clamped;
+    updateScrollBar();
+    ensureFrameVisible(clamped);
+    update();
+}
+
+int TimelineWidget::playhead() const
+{
+    if (m_document)
+        return std::max(0, m_document->playhead());
+    return std::max(0, m_playhead);
+}
+
+void TimelineWidget::refresh()
+{
+    // A private timeline whose owner was deleted falls back to the root.
+    if (m_document && !m_parentUuid.isEmpty()
+        && !m_document->project().entities.contains(m_parentUuid))
+        m_parentUuid.clear();
+
+    updateScrollBar();
+    update();
+}
+
+int TimelineWidget::xFromFrame(int frame) const
+{
+    return int(std::lround(frame * m_pixelsPerFrame)) - m_scrollX;
+}
+
+int TimelineWidget::frameFromX(int x) const
+{
+    if (m_pixelsPerFrame <= 0.0)
+        return 0;
+    return int(std::lround((x + m_scrollX) / m_pixelsPerFrame));
+}
+
+QRect TimelineWidget::rulerRect() const
+{
+    return QRect(0, kToolbarHeight, width(), kRulerHeight);
+}
+
+QRect TimelineWidget::breadcrumbRect() const
+{
+    return QRect(0, 0, std::min(width(), 440), kToolbarHeight);
+}
+
+QRect TimelineWidget::entityBarRect(const Uuid& uuid) const
+{
+    if (!m_document)
+        return QRect();
+
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd())
+        return QRect();
+    const model::Entity& entity = it.value();
+    if (entity.parentUuid != m_parentUuid)
+        return QRect();
+
+    const int top = rowTop(std::max(0, entity.row));
+    const int left = xFromFrame(entity.start);
+    const int right = xFromFrame(entity.end);
+    const int widthPixels = std::max(3, right - left);
+    return QRect(left, top + 3, widthPixels, kRowHeight - 6);
+}
+
+QVector<Uuid> TimelineWidget::visibleEntities() const
+{
+    if (!m_document)
+        return {};
+    return model::childrenOf(m_document->project(), m_parentUuid);
+}
+
+int TimelineWidget::rowTop(int row) const
+{
+    const QRect body = bodyRect();
+    return body.bottom() - (row + 1) * kRowHeight + 1;
+}
+
+QRect TimelineWidget::bodyRect() const
+{
+    const int top = kToolbarHeight + kRulerHeight;
+    const int bottom = height() - kScrollBarHeight;
+    return QRect(0, top, width(), std::max(0, bottom - top));
+}
+
+QRect TimelineWidget::toolbarRect() const
+{
+    return QRect(0, 0, width(), kToolbarHeight);
+}
+
+int TimelineWidget::labelFrameStep() const
+{
+    static constexpr int steps[] = {1,    2,     5,     10,    20,    25,
+                                    50,   100,   200,   250,   500,   1000,
+                                    2000, 2500,  5000,  10000, 20000, 50000};
+    for (int step : steps)
+    {
+        if (step * m_pixelsPerFrame >= 60.0)
+            return step;
+    }
+    return 50000;
+}
+
+void TimelineWidget::updateScrollBar()
+{
+    if (!m_hScroll)
+        return;
+
+    double contentEnd = 0.0;
+    if (m_document)
+    {
+        const model::Project& project = m_document->project();
+        for (auto it = project.entities.constBegin();
+             it != project.entities.constEnd(); ++it)
+            contentEnd = std::max(contentEnd, double(it.value().end));
+        for (const auto& marker : project.markers)
+            contentEnd = std::max(contentEnd, double(marker.frame));
+    }
+    contentEnd = std::max(contentEnd, double(playhead() + 1));
+    contentEnd += std::max(1.0, width() / m_pixelsPerFrame);
+
+    const int maximum = std::max(
+        0, int(std::ceil(contentEnd * m_pixelsPerFrame)) - width());
+
+    QSignalBlocker blocker(m_hScroll);
+    m_hScroll->setRange(0, maximum);
+    m_hScroll->setPageStep(std::max(1, width()));
+    m_hScroll->setSingleStep(
+        std::max(1, int(std::lround(m_pixelsPerFrame * 5.0))));
+    m_scrollX = std::clamp(m_scrollX, 0, maximum);
+    m_hScroll->setValue(m_scrollX);
+}
+
+void TimelineWidget::setScrollX(int value)
+{
+    if (!m_hScroll)
+    {
+        m_scrollX = std::max(0, value);
+        update();
+        return;
+    }
+    m_hScroll->setValue(std::max(0, value));
+}
+
+void TimelineWidget::ensureFrameVisible(int frame)
+{
+    const int x = xFromFrame(frame);
+    if (x >= 0 && x < width())
+        return;
+
+    const int target = int(std::lround(frame * m_pixelsPerFrame)) - width() / 2;
+    setScrollX(target);
+}
+
+void TimelineWidget::onPlayheadChanged()
+{
+    const int frame = playhead();
+    updateScrollBar();
+    ensureFrameVisible(frame);
+    update();
+}
+
+void TimelineWidget::onScrollBarValueChanged(int value)
+{
+    if (m_scrollX == value)
+        return;
+    m_scrollX = value;
+    update();
+}
+
+void TimelineWidget::paintEvent(QPaintEvent*)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.fillRect(rect(), palette().color(QPalette::Base));
+
+    paintToolbar(painter);
+    paintRuler(painter);
+    paintRows(painter);
+    paintGrid(painter);
+    paintMarkers(painter);
+    paintEntities(painter);
+    paintPlayhead(painter);
+    paintEmptyHint(painter);
+}
+
+void TimelineWidget::paintToolbar(QPainter& painter)
+{
+    const QRect bar = toolbarRect();
+    const QPalette pal = palette();
+    painter.fillRect(bar, pal.color(QPalette::AlternateBase).darker(105));
+    painter.setPen(QPen(pal.color(QPalette::Mid), 1));
+    painter.drawLine(0, bar.bottom(), width(), bar.bottom());
+
+    QFont font = painter.font();
+    font.setBold(true);
+    painter.setFont(font);
+    const QFontMetrics metrics(font);
+
+    int x = 8;
+    if (!m_parentUuid.isEmpty())
+    {
+        const int centerY = bar.center().y();
+        const QColor accent = pal.color(QPalette::Highlight);
+        painter.setPen(QPen(accent, 1.6));
+        painter.drawLine(x, centerY, x + 9, centerY);
+        painter.drawLine(x, centerY, x + 4, centerY - 3);
+        painter.drawLine(x, centerY, x + 4, centerY + 3);
+        x += 15;
+    }
+
+    const QString rootLabel = QStringLiteral("根时间线");
+    painter.setPen(m_parentUuid.isEmpty() ? pal.color(QPalette::Text)
+                                          : pal.color(QPalette::Highlight));
+    painter.drawText(QRect(x, bar.top(), metrics.horizontalAdvance(rootLabel) + 2,
+                           bar.height()),
+                     Qt::AlignLeft | Qt::AlignVCenter, rootLabel);
+    x += metrics.horizontalAdvance(rootLabel);
+
+    if (m_parentUuid.isEmpty())
+        return;
+
+    painter.setPen(pal.color(QPalette::Mid));
+    const QString separator = QStringLiteral(" / ");
+    painter.drawText(QRect(x, bar.top(), metrics.horizontalAdvance(separator) + 2,
+                           bar.height()),
+                     Qt::AlignLeft | Qt::AlignVCenter, separator);
+    x += metrics.horizontalAdvance(separator);
+
+    QString parentName = m_parentUuid;
+    if (m_document)
+    {
+        const auto it = m_document->project().entities.constFind(m_parentUuid);
+        if (it != m_document->project().entities.constEnd()
+            && !it.value().name.isEmpty())
+            parentName = it.value().name;
+    }
+
+    const int available = breadcrumbRect().right() - x - 8;
+    painter.setPen(pal.color(QPalette::Text));
+    painter.drawText(QRect(x, bar.top(), std::max(0, available), bar.height()),
+                     Qt::AlignLeft | Qt::AlignVCenter,
+                     metrics.elidedText(parentName, Qt::ElideRight,
+                                        std::max(0, available)));
+}
+
+void TimelineWidget::paintRuler(QPainter& painter)
+{
+    const QRect ruler = rulerRect();
+    const QPalette pal = palette();
+    painter.fillRect(ruler, pal.color(QPalette::AlternateBase));
+    painter.setPen(QPen(pal.color(QPalette::Mid), 1));
+    painter.drawLine(0, ruler.bottom(), width(), ruler.bottom());
+
+    const int step = labelFrameStep();
+    const int lastFrame = std::max(0, frameFromX(width())) + step;
+    const int firstFrame = (std::max(0, frameFromX(0)) / step) * step;
+
+    QFont small = painter.font();
+    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
+    painter.setFont(small);
+
+    // Minor ticks make the ruler readable when the label step is coarse.
+    const int minorStep = std::max(1, step / 5);
+    if (minorStep != step && minorStep * m_pixelsPerFrame >= 5.0)
+    {
+        const int firstMinor = (std::max(0, frameFromX(0)) / minorStep)
+                               * minorStep;
+        for (int frame = firstMinor; frame <= lastFrame; frame += minorStep)
+        {
+            if (frame % step == 0)
+                continue;
+            const int x = xFromFrame(frame);
+            if (x < 0 || x > width())
+                continue;
+            painter.setPen(QPen(pal.color(QPalette::Mid), 1));
+            painter.drawLine(x, ruler.bottom() - 3, x, ruler.bottom());
+        }
+    }
+
+    for (int frame = firstFrame; frame <= lastFrame; frame += step)
+    {
+        const int x = xFromFrame(frame);
+        if (x < -1 || x > width() + 1)
+            continue;
+
+        painter.setPen(QPen(pal.color(QPalette::Mid), 1));
+        painter.drawLine(x, ruler.bottom() - 8, x, ruler.bottom());
+        painter.setPen(pal.color(QPalette::Text));
+        painter.drawText(QRect(x + 3, ruler.top() + 14, 90, ruler.height() - 14),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QString::number(frame));
+    }
+}
+
+void TimelineWidget::paintRows(QPainter& painter)
+{
+    const QRect body = bodyRect();
+    if (body.isEmpty())
+        return;
+
+    const QPalette pal = palette();
+    painter.save();
+    painter.setClipRect(body);
+
+    const int maxRow = body.height() / kRowHeight + 2;
+    for (int row = 0; row <= maxRow; ++row)
+    {
+        const int top = rowTop(row);
+        if (top > body.bottom() || top + kRowHeight <= body.top())
+            continue;
+
+        const QRect rowRect(0, top, width(), kRowHeight);
+        if (row % 2 == 1)
+        {
+            QColor stripe = pal.color(QPalette::AlternateBase);
+            stripe.setAlpha(90);
+            painter.fillRect(rowRect, stripe);
+        }
+
+        QColor line = pal.color(QPalette::Mid);
+        line.setAlpha(60);
+        painter.setPen(QPen(line, 1));
+        painter.drawLine(0, top, width(), top);
+    }
+    painter.restore();
+}
+
+void TimelineWidget::paintGrid(QPainter& painter)
+{
+    const QRect body = bodyRect();
+    if (body.isEmpty())
+        return;
+
+    const int step = labelFrameStep();
+    const int lastFrame = std::max(0, frameFromX(width())) + step;
+    const int firstFrame = (std::max(0, frameFromX(0)) / step) * step;
+
+    QColor line = palette().color(QPalette::Mid);
+    line.setAlpha(45);
+
+    painter.save();
+    painter.setClipRect(body);
+    painter.setPen(QPen(line, 1));
+    for (int frame = firstFrame; frame <= lastFrame; frame += step)
+    {
+        const int x = xFromFrame(frame);
+        if (x < 0 || x > width())
+            continue;
+        painter.drawLine(x, body.top(), x, body.bottom());
+    }
+    painter.restore();
+}
+
+void TimelineWidget::paintMarkers(QPainter& painter)
+{
+    if (!m_document)
+        return;
+
+    const model::Project& project = m_document->project();
+    if (project.markers.isEmpty())
+        return;
+
+    const QRect ruler = rulerRect();
+    const QRect body = bodyRect();
+
+    QFont small = painter.font();
+    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 2.0));
+    const QFontMetrics metrics(small);
+
+    // Guide lines sit below the clips.
+    painter.save();
+    painter.setClipRect(body);
+    for (const auto& marker : project.markers)
+    {
+        const int x = xFromFrame(marker.frame);
+        if (x < -1 || x > width() + 1)
+            continue;
+        QColor color(marker.color);
+        if (!color.isValid())
+            color = QColor(255, 190, 60);
+        painter.setPen(QPen(withAlpha(color, 120), 1, Qt::DashLine));
+        painter.drawLine(x, body.top(), x, body.bottom());
+    }
+    painter.restore();
+
+    painter.save();
+    painter.setFont(small);
+    for (const auto& marker : project.markers)
+    {
+        const int x = xFromFrame(marker.frame);
+        if (x < -1 || x > width() + 1)
+            continue;
+
+        QColor color(marker.color);
+        if (!color.isValid())
+            color = QColor(255, 190, 60);
+
+        painter.setPen(QPen(color, 1));
+        painter.drawLine(x, ruler.top(), x, ruler.bottom());
+
+        const QString title = marker.title.isEmpty() ? QStringLiteral("标记")
+                                                     : marker.title;
+        const int labelWidth =
+            std::min(150, metrics.horizontalAdvance(title) + 10);
+        QRect label(x + 3, ruler.top() + 1, labelWidth, 13);
+        if (label.right() > width() - 2)
+            label.translate(width() - 2 - label.right(), 0);
+        if (label.left() < 2)
+            label.translate(2 - label.left(), 0);
+
+        painter.fillRect(label, withAlpha(color, 230));
+        painter.setPen(contrastText(color));
+        painter.drawText(label.adjusted(4, 0, -2, 0),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         metrics.elidedText(title, Qt::ElideRight,
+                                            std::max(0, label.width() - 6)));
+    }
+    painter.restore();
+}
+
+void TimelineWidget::paintEntities(QPainter& painter)
+{
+    if (!m_document)
+        return;
+
+    const QRect body = bodyRect();
+    if (body.isEmpty())
+        return;
+
+    painter.save();
+    painter.setClipRect(body);
+    for (const Uuid& uuid : visibleEntities())
+        paintEntity(painter, uuid);
+    painter.restore();
+}
+
+void TimelineWidget::paintEntity(QPainter& painter, const Uuid& uuid)
+{
+    if (!m_document)
+        return;
+
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd())
+        return;
+
+    const model::Entity& entity = it.value();
+    const QRect bar = entityBarRect(uuid);
+    if (bar.isEmpty() || !bar.intersects(bodyRect()))
+        return;
+
+    const QColor color = contentColor(entity);
+    const bool selected = m_document->selection() == uuid;
+    const QPalette pal = palette();
+
+    painter.save();
+    painter.fillRect(bar, withAlpha(color, entity.hidden ? 90 : 235));
+    painter.setPen(QPen(color.darker(170), 1));
+    painter.drawRect(bar.adjusted(0, 0, -1, -1));
+
+    paintSolverBands(painter, entity, bar);
+    paintKeyframes(painter, entity, bar);
+
+    const int badges = (entity.hidden ? 14 : 0) + (entity.locked ? 14 : 0);
+    const int textLeft = bar.left() + 7;
+    const int textRight = bar.right() - 7 - badges;
+    if (textRight - textLeft > 8 && bar.height() >= 14)
+    {
+        QFont font = painter.font();
+        font.setBold(selected);
+        painter.setFont(font);
+        const QFontMetrics metrics(font);
+        const QString name = entity.name.isEmpty() ? uuid : entity.name;
+        painter.setPen(contrastText(color));
+        painter.drawText(
+            QRect(textLeft, bar.top(), textRight - textLeft, bar.height()),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            metrics.elidedText(name, Qt::ElideRight, textRight - textLeft));
+    }
+
+    if (entity.hidden)
+        drawBadge(painter, bar, QStringLiteral("H"), 0);
+    if (entity.locked)
+        drawBadge(painter, bar, QStringLiteral("L"), entity.hidden ? 1 : 0);
+
+    if (selected)
+    {
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(pal.color(QPalette::Highlight), 2));
+        painter.drawRect(bar.adjusted(1, 1, -3, -3));
+    }
+    painter.restore();
+}
+
+void TimelineWidget::paintSolverBands(QPainter& painter,
+                                      const model::Entity& entity,
+                                      const QRect& bar)
+{
+    const int duration = entity.duration();
+    if (duration <= 0 || entity.solvers.isEmpty())
+        return;
+
+    painter.save();
+    painter.setClipRect(bar.adjusted(1, 1, -1, -1));
+
+    for (const auto& solver : entity.solvers)
+    {
+        const int relativeStart = std::clamp(solver.startFrame, 0, duration);
+        const int relativeEnd =
+            solver.endFrame < 0
+                ? duration
+                : std::clamp(solver.endFrame + 1, 0, duration);
+        if (relativeEnd <= relativeStart)
+            continue;
+
+        const int x0 =
+            std::max(bar.left(), xFromFrame(entity.start + relativeStart));
+        const int x1 =
+            std::min(bar.right() + 1, xFromFrame(entity.start + relativeEnd));
+        if (x1 <= x0)
+            continue;
+
+        const QColor color = solverColor(solver.effect);
+        const int bandTop = bar.top() + bar.height() / 2;
+        painter.fillRect(QRect(x0, bandTop, x1 - x0, bar.bottom() - bandTop),
+                         withAlpha(color, 110));
+        painter.fillRect(QRect(x0, bar.bottom() - 3, x1 - x0, 3), color);
+        painter.fillRect(QRect(x0, bar.top() + 1, 2, bar.height() - 2), color);
+        painter.fillRect(QRect(x1 - 2, bar.top() + 1, 2, bar.height() - 2),
+                         color);
+
+        // Start marker: right-pointing triangle. End marker: square.
+        QPolygonF startMark;
+        startMark << QPointF(x0 + 2, bar.top() + 2)
+                  << QPointF(x0 + 10, bar.top() + 6)
+                  << QPointF(x0 + 2, bar.top() + 10);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawPolygon(startMark);
+        painter.fillRect(QRect(x1 - 9, bar.top() + 2, 6, 6), color);
+    }
+
+    painter.restore();
+}
+
+void TimelineWidget::paintKeyframes(QPainter& painter,
+                                    const model::Entity& entity,
+                                    const QRect& bar)
+{
+    if (!m_document || m_document->selection() != entity.uuid)
+        return;
+
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return;
+
+    QSet<int> frames;
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd();
+         ++it)
+    {
+        for (const auto& key : it.value().keys)
+        {
+            if (key.frame < 0 || key.frame >= duration)
+                continue;
+            if (trackDrivenAt(entity, it.key(), key.frame))
+                continue;
+            frames.insert(entity.start + key.frame);
+        }
+    }
+    if (frames.isEmpty())
+        return;
+
+    painter.save();
+    painter.setClipRect(bar.adjusted(1, 1, -1, -1));
+    painter.setPen(QPen(QColor(15, 17, 22, 220), 1.2));
+    painter.setBrush(QColor(250, 251, 255));
+
+    const int centerY = bar.center().y();
+    const double radius = 4.2;
+    for (int frame : frames)
+    {
+        const int x = xFromFrame(frame);
+        if (x < bar.left() - 6 || x > bar.right() + 6)
+            continue;
+
+        QPolygonF diamond;
+        diamond << QPointF(x, centerY - radius)
+                << QPointF(x + radius, centerY)
+                << QPointF(x, centerY + radius)
+                << QPointF(x - radius, centerY);
+        painter.drawPolygon(diamond);
+    }
+    painter.restore();
+}
+
+void TimelineWidget::paintPlayhead(QPainter& painter)
+{
+    const int x = xFromFrame(playhead());
+    if (x < -1 || x > width() + 1)
+        return;
+
+    const QRect ruler = rulerRect();
+    const QRect body = bodyRect();
+    const QColor accent = palette().color(QPalette::Highlight);
+
+    painter.save();
+    painter.setPen(QPen(accent, 1.5));
+    painter.drawLine(x, ruler.top(), x, body.bottom());
+
+    QPolygonF head;
+    head << QPointF(x - 5, ruler.top()) << QPointF(x + 5, ruler.top())
+         << QPointF(x, ruler.top() + 7);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(accent);
+    painter.drawPolygon(head);
+    painter.restore();
+}
+
+void TimelineWidget::paintEmptyHint(QPainter& painter)
+{
+    const QRect body = bodyRect();
+    if (body.isEmpty())
+        return;
+
+    QString text;
+    if (!m_document)
+        text = QStringLiteral("未打开工程");
+    else if (visibleEntities().isEmpty())
+        text = m_parentUuid.isEmpty() ? QStringLiteral("没有根实体")
+                                      : QStringLiteral("该父级没有子实体");
+    else
+        return;
+
+    painter.setPen(palette().color(QPalette::PlaceholderText));
+    painter.drawText(body, Qt::AlignCenter, text);
+}
+
+TimelineWidget::Hit TimelineWidget::hitTest(const QPoint& pos) const
+{
+    Hit hit;
+    if (!m_document || !bodyRect().contains(pos))
+        return hit;
+
+    const QVector<Uuid> entities = visibleEntities();
+    for (int i = entities.size() - 1; i >= 0; --i)
+    {
+        const Uuid& uuid = entities.at(i);
+        const QRect bar = entityBarRect(uuid);
+        if (!bar.contains(pos))
+            continue;
+
+        hit.uuid = uuid;
+        if (pos.x() <= bar.left() + kEdgeGrabPixels)
+            hit.zone = HitZone::LeftEdge;
+        else if (pos.x() >= bar.right() - kEdgeGrabPixels + 1)
+            hit.zone = HitZone::RightEdge;
+        else
+            hit.zone = HitZone::Body;
+        break;
+    }
+    return hit;
+}
+
+void TimelineWidget::updateHoverCursor(const QPoint& pos)
+{
+    if (!m_document)
+    {
+        unsetCursor();
+        return;
+    }
+
+    const Hit hit = hitTest(pos);
+    if (hit.uuid.isEmpty())
+    {
+        unsetCursor();
+        return;
+    }
+
+    const auto it = m_document->project().entities.constFind(hit.uuid);
+    if (it != m_document->project().entities.constEnd()
+        && it.value().locked)
+    {
+        unsetCursor();
+        return;
+    }
+
+    if (hit.zone == HitZone::LeftEdge || hit.zone == HitZone::RightEdge)
+        setCursor(Qt::SizeHorCursor);
+    else
+        setCursor(Qt::OpenHandCursor);
+}
+
+void TimelineWidget::mousePressEvent(QMouseEvent* event)
+{
+    if (!m_document || event->button() != Qt::LeftButton)
+        return;
+
+    setFocus(Qt::MouseFocusReason);
+    const QPoint pos = event->position().toPoint();
+
+    if (!m_parentUuid.isEmpty() && breadcrumbRect().contains(pos))
+    {
+        setParentUuid(Uuid());
+        return;
+    }
+
+    if (rulerRect().contains(pos))
+    {
+        m_dragMode = DragMode::Scrub;
+        m_dragEntity.clear();
+        m_dragChanged = false;
+        setPlayhead(frameFromX(pos.x()));
+        return;
+    }
+
+    const Hit hit = hitTest(pos);
+    if (hit.uuid.isEmpty())
+    {
+        m_dragMode = DragMode::None;
+        m_dragEntity.clear();
+        m_dragChanged = false;
+        m_document->setSelection(Uuid());
+        update();
+        return;
+    }
+
+    const auto it = m_document->project().entities.constFind(hit.uuid);
+    if (it == m_document->project().entities.constEnd())
+        return;
+
+    m_document->setSelection(hit.uuid);
+    m_dragEntity = hit.uuid;
+    m_dragPressPos = pos;
+    m_dragOriginalStart = it.value().start;
+    m_dragOriginalEnd = it.value().end;
+    m_dragChanged = false;
+
+    if (it.value().locked)
+    {
+        m_dragMode = DragMode::None;
+        setCursor(Qt::ArrowCursor);
+    }
+    else if (hit.zone == HitZone::LeftEdge)
+    {
+        m_dragMode = DragMode::TrimStart;
+        setCursor(Qt::SizeHorCursor);
+    }
+    else if (hit.zone == HitZone::RightEdge)
+    {
+        m_dragMode = DragMode::TrimEnd;
+        setCursor(Qt::SizeHorCursor);
+    }
+    else
+    {
+        m_dragMode = DragMode::Move;
+        setCursor(Qt::ClosedHandCursor);
+    }
+    update();
+}
+
+void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    if (!m_document)
+        return;
+
+    const QPoint pos = event->position().toPoint();
+    if (m_dragMode == DragMode::Scrub)
+    {
+        setPlayhead(frameFromX(pos.x()));
+        return;
+    }
+
+    if (m_dragMode == DragMode::Move || m_dragMode == DragMode::TrimStart
+        || m_dragMode == DragMode::TrimEnd)
+    {
+        applyDrag(pos);
+        return;
+    }
+
+    updateHoverCursor(pos);
+}
+
+void TimelineWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() != Qt::LeftButton)
+        return;
+
+    finishDrag();
+    updateHoverCursor(event->position().toPoint());
+    update();
+}
+
+void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (!m_document || event->button() != Qt::LeftButton)
+        return;
+
+    const QPoint pos = event->position().toPoint();
+    if (rulerRect().contains(pos) || toolbarRect().contains(pos))
+        return;
+
+    const Hit hit = hitTest(pos);
+    if (hit.uuid.isEmpty())
+        return;
+
+    m_dragMode = DragMode::None;
+    m_dragEntity.clear();
+    m_dragChanged = false;
+    m_document->setSelection(hit.uuid);
+    setParentUuid(hit.uuid);
+    event->accept();
+}
+
+void TimelineWidget::wheelEvent(QWheelEvent* event)
+{
+    if (event->modifiers() & Qt::ControlModifier)
+    {
+        const int delta = event->angleDelta().y();
+        if (delta == 0)
+        {
+            event->ignore();
+            return;
+        }
+
+        const int cursorX = int(event->position().x());
+        const double frame =
+            (cursorX + m_scrollX) / std::max(0.0001, m_pixelsPerFrame);
+        const double factor = std::pow(1.2, delta / 120.0);
+        setPixelsPerFrame(m_pixelsPerFrame * factor);
+        setScrollX(int(std::lround(frame * m_pixelsPerFrame - cursorX)));
+        event->accept();
+        return;
+    }
+
+    int delta = event->angleDelta().x();
+    if (delta == 0)
+        delta = event->angleDelta().y();
+    if (delta == 0)
+    {
+        event->ignore();
+        return;
+    }
+
+    setScrollX(m_scrollX - delta);
+    event->accept();
+}
+
+void TimelineWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    if (m_hScroll)
+    {
+        m_hScroll->setGeometry(0, height() - kScrollBarHeight, width(),
+                               kScrollBarHeight);
+    }
+    updateScrollBar();
+}
+
+void TimelineWidget::applyDrag(const QPoint& pos)
+{
+    if (!m_document || m_dragEntity.isEmpty())
+        return;
+
+    auto it = m_document->mutableProject().entities.find(m_dragEntity);
+    if (it == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = it.value();
+    const int delta = frameFromX(pos.x()) - frameFromX(m_dragPressPos.x());
+    const int duration = std::max(1, m_dragOriginalEnd - m_dragOriginalStart);
+
+    int minStart = 0;
+    int maxEnd = INT_MAX;
+    if (!entity.parentUuid.isEmpty())
+    {
+        const auto parent =
+            m_document->project().entities.constFind(entity.parentUuid);
+        if (parent != m_document->project().entities.constEnd())
+        {
+            minStart = parent.value().start;
+            maxEnd = parent.value().end;
+        }
+    }
+
+    switch (m_dragMode)
+    {
+    case DragMode::Move:
+    {
+        const int lastStart = maxEnd == INT_MAX ? INT_MAX : maxEnd - duration;
+        const int newStart =
+            std::clamp(m_dragOriginalStart + delta, minStart,
+                       std::max(minStart, lastStart));
+        const int newEnd = newStart + duration;
+        if (newStart != entity.start || newEnd != entity.end)
+        {
+            entity.start = newStart;
+            entity.end = newEnd;
+            m_dragChanged = true;
+        }
+        // TODO(timeline): moving a parent must also shift all descendants by
+        // the same delta (time is absolute in the entity model).
+        break;
+    }
+    case DragMode::TrimStart:
+    {
+        const int lastStart = std::min(m_dragOriginalEnd - 1,
+                                       maxEnd == INT_MAX ? INT_MAX : maxEnd - 1);
+        const int newStart = std::clamp(m_dragOriginalStart + delta, minStart,
+                                        std::max(minStart, lastStart));
+        if (newStart != entity.start)
+        {
+            entity.start = newStart;
+            m_dragChanged = true;
+        }
+        // TODO(timeline): trimming start must shift keyframes relative to the
+        // new start, delete keys that fall before it, adjust asset sourceIn and
+        // drop/clip solver segments that start before the new start. The first
+        // pass only changes start/end.
+        break;
+    }
+    case DragMode::TrimEnd:
+    {
+        const int firstEnd = m_dragOriginalStart + 1;
+        const int newEnd = std::max(
+            firstEnd, std::min(m_dragOriginalEnd + delta,
+                               maxEnd == INT_MAX ? INT_MAX : maxEnd));
+        if (newEnd != entity.end)
+        {
+            entity.end = newEnd;
+            m_dragChanged = true;
+        }
+        // TODO(timeline): deleting keys at/after the new duration and clipping
+        // solver end markers is deferred to the keyframe editing pass.
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (m_dragChanged)
+    {
+        updateScrollBar();
+        update();
+    }
+}
+
+void TimelineWidget::finishDrag()
+{
+    const DragMode mode = m_dragMode;
+    const Uuid uuid = m_dragEntity;
+    const bool changed = m_dragChanged;
+
+    m_dragMode = DragMode::None;
+    m_dragEntity.clear();
+    m_dragChanged = false;
+
+    if (!m_document || !changed || uuid.isEmpty())
+        return;
+
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd())
+        return;
+    if (it.value().start == m_dragOriginalStart
+        && it.value().end == m_dragOriginalEnd)
+        return;
+
+    const QString name = it.value().name.isEmpty() ? uuid : it.value().name;
+    const QString message =
+        mode == DragMode::Move
+            ? QStringLiteral("pvf: move entity \"%1\"").arg(name)
+            : QStringLiteral("pvf: trim entity \"%1\"").arg(name);
+    m_document->commitEntity(uuid, message);
+    updateScrollBar();
+    update();
+}
+
+} // namespace pvf::next

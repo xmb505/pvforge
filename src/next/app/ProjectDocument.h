@@ -34,6 +34,8 @@ public:
 
     bool commitEntity(const Uuid& uuid, const QString& message,
                       QString* error = nullptr) override;
+    bool commitEntities(const QVector<Uuid>& uuids, const QString& message,
+                        QString* error = nullptr) override;
     bool commitProject(const QString& message, QString* error = nullptr) override;
 
     bool undo(QString* error = nullptr) override;

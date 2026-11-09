@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVector>
 
 namespace pvf::next {
 
@@ -35,6 +36,11 @@ public:
 
     virtual bool commitEntity(const Uuid& uuid, const QString& message,
                               QString* error = nullptr) = 0;
+    // Saves several entities and commits them as one operation. The default
+    // implementation commits each entity separately; ProjectDocument overrides
+    // it with one atomic commit.
+    virtual bool commitEntities(const QVector<Uuid>& uuids, const QString& message,
+                                QString* error = nullptr);
     virtual bool commitProject(const QString& message, QString* error = nullptr) = 0;
 
     virtual bool undo(QString* error = nullptr) = 0;
