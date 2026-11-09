@@ -12,6 +12,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QFontComboBox;
+class QGridLayout;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
@@ -34,10 +35,31 @@ class PropertiesPanel : public QWidget
 public:
     explicit PropertiesPanel(Document* document, QWidget* parent = nullptr);
 
+    // Auto-key is on by default: numeric transform/content edits also insert or
+    // update a keyframe at the playhead's entity-relative frame.
+    void setAutoKey(bool on);
+    bool autoKey() const;
+
+    // Writes easing to the keyframe at the current playhead frame on `track`
+    // (entity-relative). Returns false when there is no key or the save failed.
+    // The custom-bezier dialog calls this after collecting its four handles.
+    bool setTrackEasing(const QString& track, const model::EasingSpec& easing);
+
 public slots:
     void refresh();
 
 private:
+    struct KeyframeRow
+    {
+        QString track;
+        bool step = false;
+        bool hasKey = false;
+        QLabel* name = nullptr;
+        QPushButton* diamond = nullptr;
+        QDoubleSpinBox* value = nullptr;
+        QComboBox* easing = nullptr;
+    };
+
     struct SolverCard
     {
         Uuid id;
@@ -54,11 +76,14 @@ private:
     void buildUi();
     void buildBasicSection();
     void buildTransformSection();
+    void buildKeyframeSection();
     void buildContentSection();
     void buildSolverSection();
 
     void reloadBasic(const model::Entity& entity);
     void reloadTransform(const model::Entity& entity);
+    void reloadKeyframes(const model::Entity& entity);
+    void rebuildKeyframeRows(const model::Entity& entity);
     void reloadContent(const model::Entity& entity);
     void updateSolverCards(const model::Entity& entity);
     void rebuildSolverCards(const QVector<model::SolverSegment>& solvers);
@@ -70,13 +95,19 @@ private:
     void deleteSolverSegment(const Uuid& solverId);
     SolverEffect selectedSolverEffect() const;
 
+    void toggleKeyframe(const QString& track);
+    void editKeyframeValue(const QString& track, double value);
+    void applyAutoKey(model::Entity& entity, const QString& track, double value);
+    void promptCustomEasing(const QString& track);
+
     void applyEditingState();
+    void applyKeyframeEnabledState();
     void applySolverEnabledState();
 
     model::Entity* selectedEntity() const;
     bool editable() const;
 
-    void commitEdit(const QString& what,
+    bool commitEdit(const QString& what,
                     const std::function<bool(model::Entity&)>& mutate,
                     bool ignoreLock = false);
     void bindTransform(QDoubleSpinBox* spin, const QString& field,
@@ -119,6 +150,14 @@ private:
     QDoubleSpinBox* m_pivotXSpin = nullptr;
     QDoubleSpinBox* m_pivotYSpin = nullptr;
     QDoubleSpinBox* m_opacitySpin = nullptr;
+
+    // Keyframes
+    QGroupBox* m_keyframeGroup = nullptr;
+    QGridLayout* m_keyframeGrid = nullptr;
+    QCheckBox* m_autoKeyCheck = nullptr;
+    QVector<KeyframeRow> m_keyframeRows;
+    Uuid m_keyframeUuid;
+    bool m_autoKey = true;
 
     // Content
     QGroupBox* m_contentGroup = nullptr;

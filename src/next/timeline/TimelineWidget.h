@@ -7,12 +7,14 @@
 #include <QPair>
 #include <QPoint>
 #include <QRect>
+#include <QSet>
 #include <QVector>
 #include <QWidget>
 
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
+class QKeyEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QPainter;
@@ -40,10 +42,14 @@ class Document;
 //
 // The widget edits the Document in place while dragging and commits one
 // entity operation on mouse release (“pvf: move entity ...” / “pvf: trim
-// entity ...”). Assets can be dropped from the asset panel. Double-clicking an
-// entity emits privateTimelineRequested() for the shell to open an overlay;
-// this widget never switches its own parent. Multi-select, rubber-band
-// selection and keyframe dragging are intentionally left to a later pass.
+// entity ...”). Assets can be dropped from the asset panel. The “+” button on
+// the left of an entity bar emits privateTimelineRequested() for the shell to
+// open an overlay; this widget never switches its own parent. Double-clicking
+// an entity bar writes/updates keyframes at that frame. When the selected
+// entity has keyframes, merged diamonds can be selected (Ctrl/Shift for
+// multiple frames), dragged, deleted and copied/pasted as one operation.
+// Multi-select and rubber-band entity selection are intentionally left to a
+// later pass.
 class TimelineWidget : public QWidget
 {
     Q_OBJECT
@@ -70,11 +76,14 @@ public:
     QRect rulerRect() const;
     QRect breadcrumbRect() const;
     QRect entityBarRect(const Uuid& uuid) const;
+    // Small “+” button inside the left side of an entity bar. Empty when the
+    // bar is too narrow to draw it.
+    QRect addButtonRect(const Uuid& uuid) const;
     QVector<Uuid> visibleEntities() const;
 
 signals:
-    // Double-clicking an entity asks the shell to open its private timeline
-    // in an overlay. The main timeline itself never changes parent.
+    // The “+” button asks the shell to open an entity's private timeline in an
+    // overlay. The main timeline itself never changes parent.
     void privateTimelineRequested(const Uuid& parentUuid);
     // Emitted for drop problems that should surface in the shell status bar.
     void statusMessage(const QString& message);
@@ -85,6 +94,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -98,7 +108,8 @@ private:
         Scrub,
         Move,
         TrimStart,
-        TrimEnd
+        TrimEnd,
+        Keyframes
     };
 
     enum class HitZone
@@ -130,6 +141,18 @@ private:
     void updateHoverCursor(const QPoint& pos);
     void applyDrag(const QPoint& pos);
     void finishDrag();
+
+    // Merged keyframe diamonds: one frame can hold keys on several tracks.
+    QSet<int> mergedKeyFrames(const model::Entity& entity) const;
+    int keyframeAt(const QPoint& pos) const;
+    void clearKeyframeSelection();
+    void insertKeyframesAt(const Uuid& uuid, int relativeFrame);
+    void applyKeyframeDrag(const QPoint& pos);
+    void deleteSelectedKeyframes();
+    void copySelectedKeyframes();
+    void pasteKeyframes();
+    Uuid keyframeSelectionEntity() const;
+    QString entityDisplayName(const model::Entity& entity) const;
 
     int assetDurationFrames(const assets::StoredAsset& asset) const;
     int dropRowFor(int y, int startFrame, int endFrame) const;
@@ -176,6 +199,30 @@ private:
     // sourceIn and solver edits run once on release from this snapshot.
     model::Project m_dragProjectSnapshot;
     bool m_dragHasSnapshot = false;
+
+    // Merged keyframe frame selection. Frames are entity-relative and belong to
+    // m_keyframeSelectionUuid; a selection elsewhere is dropped.
+    Uuid m_keyframeSelectionUuid;
+    QSet<int> m_selectedKeyframes;
+
+    // Keyframe drag preview: tracks are snapshotted on press so every mouse
+    // move is “original + delta”, never cumulative.
+    QHash<QString, QVector<model::Keyframe>> m_dragKeyTracks;
+    QSet<int> m_dragKeyFrames;
+    int m_dragKeyPressFrame = 0;
+    int m_dragKeyDelta = 0;
+    bool m_dragKeyConflict = false;
+
+    struct CopiedKey
+    {
+        QString track;
+        int frame = 0;
+        double value = 0.0;
+        model::EasingSpec easing;
+        QString note;
+    };
+    QVector<CopiedKey> m_keyClipboard;
+    Uuid m_keyClipboardUuid;
 
     static constexpr int kToolbarHeight = 24;
     static constexpr int kRulerHeight = 32;

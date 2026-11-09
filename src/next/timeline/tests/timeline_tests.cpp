@@ -160,6 +160,12 @@ void addKey(FakeDocument& document, const Uuid& uuid, const QString& trackName,
     document.mutableProject().entities[uuid].tracks[trackName].keys.append(key);
 }
 
+QPoint diamondPoint(TimelineWidget& widget, const Uuid& uuid, int absoluteFrame)
+{
+    const QRect bar = widget.entityBarRect(uuid);
+    return QPoint(widget.xFromFrame(absoluteFrame), bar.center().y());
+}
+
 void trimLeftEdge(TimelineWidget& widget, const Uuid& uuid, int deltaFrames)
 {
     const QRect bar = widget.entityBarRect(uuid);
@@ -277,7 +283,15 @@ private slots:
     void trimFailureRestoresSnapshot();
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
-    void doubleClickRequestsPrivateTimeline();
+    void plusButtonRequestsPrivateTimeline();
+    void doubleClickInsertsGenericKeys();
+    void doubleClickKeepsExistingTracks();
+    void keyframeDiamondDragMovesAllTracks();
+    void keyframeShiftMultiSelectDrag();
+    void keyframeDeleteRemovesSelection();
+    void keyframeCopyPasteSameEntity();
+    void lockedEntityRejectsKeyframeEdits();
+    void solverSegmentRejectsKeyframeMove();
     void dropAssetCreatesEntity();
     void dropOntoOccupiedRowUsesNextRow();
     void dropVideoCreatesAudioEntity();
@@ -753,7 +767,7 @@ void TimelineWidgetTest::privateTimelineShowsOnlyChildren()
     QVERIFY(!widget.entityBarRect(child).isValid());
 }
 
-void TimelineWidgetTest::doubleClickRequestsPrivateTimeline()
+void TimelineWidgetTest::plusButtonRequestsPrivateTimeline()
 {
     FakeDocument document;
     const Uuid parent = addEntity(document, QStringLiteral("parent"), 0, 90, 0);
@@ -766,16 +780,320 @@ void TimelineWidgetTest::doubleClickRequestsPrivateTimeline()
     QVERIFY(bar.isValid());
     QVERIFY(widget.breadcrumbRect().isEmpty());
 
-    QSignalSpy spy(&widget, &TimelineWidget::privateTimelineRequested);
-    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier, bar.center());
+    const QRect addRect = widget.addButtonRect(parent);
+    QVERIFY(addRect.isValid());
+    QVERIFY(bar.contains(addRect.center()));
 
+    QSignalSpy spy(&widget, &TimelineWidget::privateTimelineRequested);
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      addRect.center());
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.at(0).at(0).toString(), parent);
-    QVERIFY(widget.parentUuid().isEmpty());
     QCOMPARE(document.selection(), parent);
-    QVERIFY(widget.entityBarRect(parent).isValid());
-    QVERIFY(!widget.entityBarRect(child).isValid());
+    QVERIFY(widget.parentUuid().isEmpty());
+    QCOMPARE(document.commitCount, 0);
+
+    // Double-clicking the bar body writes keys instead of opening the overlay.
+    spy.clear();
+    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier, bar.center());
+    QCOMPARE(spy.count(), 0);
+    QVERIFY(widget.parentUuid().isEmpty());
+    QVERIFY(widget.entityBarRect(child).isEmpty());
     QVERIFY(widget.breadcrumbRect().isEmpty());
+}
+
+void TimelineWidgetTest::doubleClickInsertsGenericKeys()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 10, 40, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.transform.x = 5.0;
+    entity.transform.y = 7.0;
+    entity.transform.rotation = 30.0;
+    entity.transform.scaleX = 2.0;
+    entity.transform.scaleY = 0.5;
+    entity.transform.opacity = 0.8;
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                       diamondPoint(widget, uuid, 20));
+
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.lastCommitUuid, uuid);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: set keyframes")));
+
+    const pvf::model::Entity written =
+        document.project().entities.value(uuid);
+    QCOMPARE(written.tracks.size(), 6);
+    const QStringList expected = {QStringLiteral("x"), QStringLiteral("y"),
+                                  QStringLiteral("rotation"),
+                                  QStringLiteral("scaleX"),
+                                  QStringLiteral("scaleY"),
+                                  QStringLiteral("opacity")};
+    for (const QString& trackName : expected)
+    {
+        const auto keys = written.tracks.value(trackName).keys;
+        QCOMPARE(keys.size(), 1);
+        QCOMPARE(keys.at(0).frame, 10);
+    }
+    QCOMPARE(written.tracks.value(QStringLiteral("x")).keys.at(0).value, 5.0);
+    QCOMPARE(written.tracks.value(QStringLiteral("y")).keys.at(0).value, 7.0);
+    QCOMPARE(written.tracks.value(QStringLiteral("rotation")).keys.at(0).value,
+             30.0);
+    QCOMPARE(written.tracks.value(QStringLiteral("scaleX")).keys.at(0).value,
+             2.0);
+    QCOMPARE(written.tracks.value(QStringLiteral("scaleY")).keys.at(0).value,
+             0.5);
+    QCOMPARE(written.tracks.value(QStringLiteral("opacity")).keys.at(0).value,
+             0.8);
+}
+
+void TimelineWidgetTest::doubleClickKeepsExistingTracks()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 100.0);
+    addKey(document, uuid, QStringLiteral("y"), 0, 5.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                       diamondPoint(widget, uuid, 5));
+
+    QCOMPARE(document.commitCount, 1);
+    const pvf::model::Entity written =
+        document.project().entities.value(uuid);
+    QCOMPARE(written.tracks.size(), 2);
+    QVERIFY(!written.tracks.contains(QStringLiteral("rotation")));
+    QVERIFY(!written.tracks.contains(QStringLiteral("scaleX")));
+
+    const auto xKeys = written.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(xKeys.size(), 3);
+    QCOMPARE(xKeys.at(1).frame, 5);
+    QCOMPARE(xKeys.at(1).value, 50.0);
+
+    const auto yKeys = written.tracks.value(QStringLiteral("y")).keys;
+    QCOMPARE(yKeys.size(), 2);
+    QCOMPARE(yKeys.at(1).frame, 5);
+    QCOMPARE(yKeys.at(1).value, 5.0);
+}
+
+void TimelineWidgetTest::keyframeDiamondDragMovesAllTracks()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 10.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 20.0);
+    addKey(document, uuid, QStringLiteral("y"), 5, 30.0);
+    addKey(document, uuid, QStringLiteral("opacity"), 10, 0.5);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::ControlModifier,
+                      diamondPoint(widget, uuid, 10));
+
+    const QPoint from = diamondPoint(widget, uuid, 5);
+    const QPoint to = from + QPoint(int(3 * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    QCOMPARE(document.commitCount, 1);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: move keyframes")));
+
+    const pvf::model::Entity moved = document.project().entities.value(uuid);
+    QSet<int> xFrames;
+    for (const auto& key : moved.tracks.value(QStringLiteral("x")).keys)
+        xFrames.insert(key.frame);
+    QCOMPARE(xFrames, (QSet<int>{8, 13}));
+
+    const auto yKeys = moved.tracks.value(QStringLiteral("y")).keys;
+    QCOMPARE(yKeys.size(), 1);
+    QCOMPARE(yKeys.at(0).frame, 8);
+    QCOMPARE(yKeys.at(0).value, 30.0);
+
+    const auto opacityKeys = moved.tracks.value(QStringLiteral("opacity")).keys;
+    QCOMPARE(opacityKeys.size(), 1);
+    QCOMPARE(opacityKeys.at(0).frame, 13);
+    QCOMPARE(opacityKeys.at(0).value, 0.5);
+}
+
+void TimelineWidgetTest::keyframeShiftMultiSelectDrag()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 40, 0);
+    addKey(document, uuid, QStringLiteral("x"), 4, 1.0);
+    addKey(document, uuid, QStringLiteral("y"), 12, 2.0);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 4));
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::ShiftModifier,
+                      diamondPoint(widget, uuid, 12));
+
+    const QPoint from = diamondPoint(widget, uuid, 4);
+    const QPoint to = from + QPoint(int(-2 * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    QCOMPARE(document.commitCount, 1);
+    const pvf::model::Entity moved = document.project().entities.value(uuid);
+    QCOMPARE(moved.tracks.value(QStringLiteral("x")).keys.at(0).frame, 2);
+    QCOMPARE(moved.tracks.value(QStringLiteral("y")).keys.at(0).frame, 10);
+}
+
+void TimelineWidgetTest::keyframeDeleteRemovesSelection()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 1.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 2.0);
+    addKey(document, uuid, QStringLiteral("x"), 20, 3.0);
+    addKey(document, uuid, QStringLiteral("y"), 5, 4.0);
+    addKey(document, uuid, QStringLiteral("opacity"), 10, 0.5);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::ControlModifier,
+                      diamondPoint(widget, uuid, 10));
+    QTest::keyClick(&widget, Qt::Key_Delete);
+
+    QCOMPARE(document.commitCount, 1);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: delete keyframes")));
+
+    const pvf::model::Entity deleted = document.project().entities.value(uuid);
+    const auto xKeys = deleted.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(xKeys.size(), 1);
+    QCOMPARE(xKeys.at(0).frame, 20);
+    QVERIFY(!deleted.tracks.contains(QStringLiteral("y")));
+    QVERIFY(!deleted.tracks.contains(QStringLiteral("opacity")));
+}
+
+void TimelineWidgetTest::keyframeCopyPasteSameEntity()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 60, 0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 42.0);
+    addKey(document, uuid, QStringLiteral("y"), 5, 7.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 99.0);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+    QTest::keyClick(&widget, Qt::Key_C, Qt::ControlModifier);
+    widget.setPlayhead(20);
+    QTest::keyClick(&widget, Qt::Key_V, Qt::ControlModifier);
+
+    QCOMPARE(document.commitCount, 1);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: paste keyframes")));
+
+    const pvf::model::Entity pasted = document.project().entities.value(uuid);
+    QCOMPARE(pasted.tracks.value(QStringLiteral("x")).keys.size(), 3);
+    QCOMPARE(pasted.tracks.value(QStringLiteral("y")).keys.size(), 2);
+
+    double pastedX = 0.0;
+    for (const auto& key : pasted.tracks.value(QStringLiteral("x")).keys)
+    {
+        if (key.frame == 20)
+            pastedX = key.value;
+    }
+    QCOMPARE(pastedX, 42.0);
+
+    double pastedY = 0.0;
+    for (const auto& key : pasted.tracks.value(QStringLiteral("y")).keys)
+    {
+        if (key.frame == 20)
+            pastedY = key.value;
+    }
+    QCOMPARE(pastedY, 7.0);
+}
+
+void TimelineWidgetTest::lockedEntityRejectsKeyframeEdits()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("locked"), 0, 30, 0);
+    document.mutableProject().entities[uuid].locked = true;
+    addKey(document, uuid, QStringLiteral("x"), 5, 1.0);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+
+    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                       diamondPoint(widget, uuid, 10));
+    QCOMPARE(document.commitCount, 0);
+    QCOMPARE(document.project()
+                 .entities.value(uuid)
+                 .tracks.value(QStringLiteral("x"))
+                 .keys.size(),
+             1);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(QStringLiteral("锁定")));
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+    QCOMPARE(document.commitCount, 0);
+    QCOMPARE(spy.count(), 2);
+}
+
+void TimelineWidgetTest::solverSegmentRejectsKeyframeMove()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 60, 0);
+    pvf::model::SolverSegment solver;
+    solver.id = pvf::model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 10;
+    solver.endFrame = 30;
+    document.mutableProject().entities[uuid].solvers.append(solver);
+    addKey(document, uuid, QStringLiteral("x"), 5, 1.0);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+
+    const QPoint from = diamondPoint(widget, uuid, 5);
+    const QPoint to = from + QPoint(int(15 * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    QCOMPARE(document.commitCount, 0);
+    const pvf::model::Entity kept = document.project().entities.value(uuid);
+    QCOMPARE(kept.tracks.value(QStringLiteral("x")).keys.size(), 1);
+    QCOMPARE(kept.tracks.value(QStringLiteral("x")).keys.at(0).frame, 5);
+    QCOMPARE(kept.tracks.value(QStringLiteral("x")).keys.at(0).value, 1.0);
+    QVERIFY(spy.count() >= 1);
+    QVERIFY(spy.at(spy.count() - 1).at(0).toString().contains(
+        QStringLiteral("求解段")));
 }
 
 void TimelineWidgetTest::dropAssetCreatesEntity()

@@ -58,7 +58,15 @@ if(BUILD_TESTING)
         trimFailureRestoresSnapshot
         solverBandPaints
         privateTimelineShowsOnlyChildren
-        doubleClickRequestsPrivateTimeline
+        plusButtonRequestsPrivateTimeline
+        doubleClickInsertsGenericKeys
+        doubleClickKeepsExistingTracks
+        keyframeDiamondDragMovesAllTracks
+        keyframeShiftMultiSelectDrag
+        keyframeDeleteRemovesSelection
+        keyframeCopyPasteSameEntity
+        lockedEntityRejectsKeyframeEdits
+        solverSegmentRejectsKeyframeMove
         dropAssetCreatesEntity
         dropOntoOccupiedRowUsesNextRow
         dropVideoCreatesAudioEntity

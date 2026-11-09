@@ -98,6 +98,31 @@ public:
         return uuid;
     }
 
+    Uuid addVectorEntity(const QString& name, int start = 0, int end = 60)
+    {
+        const Uuid uuid = addEntity(name, start, end);
+        model::Entity& entity = m_project.entities[uuid];
+        entity.content.kind = ContentKind::Vector;
+        return uuid;
+    }
+
+    Uuid addAudioEntity(const QString& name, int start = 0, int end = 60)
+    {
+        const Uuid uuid = addEntity(name, start, end);
+        model::Entity& entity = m_project.entities[uuid];
+        entity.content.kind = ContentKind::Asset;
+        entity.content.asset.type = AssetType::Audio;
+        entity.content.asset.hash = QStringLiteral("test-audio-hash");
+        return uuid;
+    }
+
+    Uuid addCameraEntity(const QString& name, int start = 0, int end = 60)
+    {
+        const Uuid uuid = addEntity(name, start, end);
+        m_project.entities[uuid].content.kind = ContentKind::Camera;
+        return uuid;
+    }
+
     model::Entity& entity(const Uuid& uuid) { return m_project.entities[uuid]; }
 
     void addKey(const Uuid& uuid, const QString& trackName, int frame, double value)
@@ -158,6 +183,16 @@ private slots:
     void lockedEntityDisablesSolverControls();
     void switchingSelectionDoesNotLeak();
     void invalidRangeIsRejected();
+    void diamondTogglesKeyframe();
+    void diamondOutsideRangeIsRejected();
+    void diamondFailureRestoresEntity();
+    void autoKeyWritesKeyOrStatic();
+    void typedContentEditAutoKeys();
+    void keyframeValueEditUpdatesExistingKeyWhenAutoKeyOff();
+    void keyframeRowsFollowContentKind();
+    void keyframeEasingPresetAndBezier();
+    void keyframeRowsDoNotLeakBetweenEntities();
+    void lockedEntityDisablesKeyframeControls();
 };
 
 void PropertiesPanelTest::showsBasicFields()
@@ -682,6 +717,323 @@ void PropertiesPanelTest::invalidRangeIsRejected()
     QCOMPARE(document.entity(uuid).end, 50);
     QCOMPARE(document.entityCommits(), 0);
     QCOMPARE(end->value(), 50);
+}
+
+void PropertiesPanelTest::diamondTogglesKeyframe()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 10, 70);
+    document.entity(uuid).transform.x = 5.0;
+    document.setPlayhead(25);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    QVERIFY(diamond);
+    QCOMPARE(diamond->text(), QStringLiteral("◇"));
+
+    diamond->click();
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(diamond->text(), QStringLiteral("◆"));
+    const model::Track track = document.entity(uuid).tracks.value(QStringLiteral("x"));
+    QCOMPARE(track.keys.size(), 1);
+    QCOMPARE(track.keys.at(0).frame, 15);
+    QCOMPARE(track.keys.at(0).value, 5.0);
+
+    diamond->click();
+    QCOMPARE(document.entityCommits(), 2);
+    QCOMPARE(diamond->text(), QStringLiteral("◇"));
+    QVERIFY(!document.entity(uuid).tracks.contains(QStringLiteral("x")));
+}
+
+void PropertiesPanelTest::diamondOutsideRangeIsRejected()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 10, 70);
+    document.setPlayhead(5);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(diamond);
+    QVERIFY(status);
+    diamond->click();
+
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(document.entity(uuid).tracks.isEmpty());
+    QVERIFY(status->text().contains(QStringLiteral("播放头不在实体范围内")));
+}
+
+void PropertiesPanelTest::diamondFailureRestoresEntity()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 0, 60);
+    document.setFailCommit(true);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(diamond);
+    QVERIFY(status);
+    diamond->click();
+
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(document.entity(uuid).tracks.isEmpty());
+    QCOMPARE(diamond->text(), QStringLiteral("◇"));
+    QVERIFY(status->text().contains(QStringLiteral("保存失败")));
+}
+
+void PropertiesPanelTest::autoKeyWritesKeyOrStatic()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 10, 70);
+    document.setPlayhead(25);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    QVERIFY(panel.autoKey());
+
+    auto* x = findWidget<QDoubleSpinBox>(panel, "transformXSpin");
+    QVERIFY(x);
+    x->setValue(42.5);
+    QVERIFY(fireEditingFinished(x));
+
+    QCOMPARE(document.entity(uuid).transform.x, 42.5);
+    QCOMPARE(document.entityCommits(), 1);
+    const model::Track track = document.entity(uuid).tracks.value(QStringLiteral("x"));
+    QCOMPARE(track.keys.size(), 1);
+    QCOMPARE(track.keys.at(0).frame, 15);
+    QCOMPARE(track.keys.at(0).value, 42.5);
+
+    panel.setAutoKey(false);
+    QVERIFY(!panel.autoKey());
+    x->setValue(50.0);
+    QVERIFY(fireEditingFinished(x));
+
+    QCOMPARE(document.entity(uuid).transform.x, 50.0);
+    QCOMPARE(document.entityCommits(), 2);
+    const model::Track unchanged =
+        document.entity(uuid).tracks.value(QStringLiteral("x"));
+    QCOMPARE(unchanged.keys.size(), 1);
+    QCOMPARE(unchanged.keys.at(0).value, 42.5);
+}
+
+void PropertiesPanelTest::typedContentEditAutoKeys()
+{
+    {
+        FakeDocument document;
+        const Uuid uuid =
+            document.addTextEntity(QStringLiteral("文字实体"), QStringLiteral("你好"));
+        document.setPlayhead(12);
+
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        auto* fontSize = findWidget<QSpinBox>(panel, "textPixelSizeSpin");
+        QVERIFY(fontSize);
+        fontSize->setValue(77);
+        QVERIFY(fireEditingFinished(fontSize));
+
+        QCOMPARE(document.entityCommits(), 1);
+        QCOMPARE(document.entity(uuid).content.text.pixelSize, 77);
+        const model::Track track =
+            document.entity(uuid).tracks.value(QStringLiteral("fontSize"));
+        QCOMPARE(track.keys.size(), 1);
+        QCOMPARE(track.keys.at(0).frame, 12);
+        QCOMPARE(track.keys.at(0).value, 77.0);
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addVectorEntity(QStringLiteral("矢量实体"));
+        document.setPlayhead(20);
+
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        auto* width = findWidget<QDoubleSpinBox>(panel, "vectorWidthSpin");
+        QVERIFY(width);
+        width->setValue(640.0);
+        QVERIFY(fireEditingFinished(width));
+
+        QCOMPARE(document.entityCommits(), 1);
+        QCOMPARE(document.entity(uuid).content.vector.width, 640.0);
+        const model::Track track =
+            document.entity(uuid).tracks.value(QStringLiteral("width"));
+        QCOMPARE(track.keys.size(), 1);
+        QCOMPARE(track.keys.at(0).frame, 20);
+        QCOMPARE(track.keys.at(0).value, 640.0);
+    }
+}
+
+void PropertiesPanelTest::keyframeValueEditUpdatesExistingKeyWhenAutoKeyOff()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 0, 60);
+    document.addKey(uuid, QStringLiteral("x"), 10, 1.0);
+    document.setPlayhead(10);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    panel.setAutoKey(false);
+
+    auto* value = findWidget<QDoubleSpinBox>(panel, "keyValue_x");
+    QVERIFY(value);
+    value->setValue(9.0);
+    QVERIFY(fireEditingFinished(value));
+
+    QCOMPARE(document.entityCommits(), 1);
+    const model::Track track = document.entity(uuid).tracks.value(QStringLiteral("x"));
+    QCOMPARE(track.keys.size(), 1);
+    QCOMPARE(track.keys.at(0).frame, 10);
+    QCOMPARE(track.keys.at(0).value, 9.0);
+}
+
+void PropertiesPanelTest::keyframeRowsFollowContentKind()
+{
+    {
+        FakeDocument document;
+        const Uuid uuid =
+            document.addTextEntity(QStringLiteral("文字实体"), QStringLiteral("你好"));
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_fontSize"));
+        QVERIFY(findWidget<QDoubleSpinBox>(panel, "keyValue_lineHeight"));
+        QVERIFY(findWidget<QComboBox>(panel, "keyEasing_letterSpacing"));
+        QVERIFY(findWidget<QDoubleSpinBox>(panel, "keyValue_padding"));
+        QVERIFY(findWidget<QDoubleSpinBox>(panel, "keyValue_boxWidth"));
+        QVERIFY(!findWidget<QPushButton>(panel, "keyDiamond_width"));
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addVectorEntity(QStringLiteral("矢量实体"));
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_width"));
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_height"));
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_cornerRadius"));
+        QVERIFY(!findWidget<QPushButton>(panel, "keyDiamond_fontSize"));
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addAudioEntity(QStringLiteral("音频实体"));
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_volume"));
+        QVERIFY(findWidget<QDoubleSpinBox>(panel, "keyValue_volume"));
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addCameraEntity(QStringLiteral("摄像机"));
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_x"));
+        QVERIFY(findWidget<QPushButton>(panel, "keyDiamond_scaleX"));
+        QVERIFY(!findWidget<QPushButton>(panel, "keyDiamond_opacity"));
+    }
+}
+
+void PropertiesPanelTest::keyframeEasingPresetAndBezier()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 0, 60);
+    document.addKey(uuid, QStringLiteral("x"), 20, 3.0);
+    document.setPlayhead(20);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* easing = findWidget<QComboBox>(panel, "keyEasing_x");
+    QVERIFY(easing);
+    const int easeIn = easing->findData(QStringLiteral("easeIn"));
+    QVERIFY(easeIn >= 0);
+    easing->setCurrentIndex(easeIn);
+
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(document.entity(uuid).tracks.value(QStringLiteral("x")).keys.at(0).easing.type,
+             QStringLiteral("easeIn"));
+
+    model::EasingSpec bezier;
+    bezier.type = QStringLiteral("bezier");
+    bezier.inX = 0.2;
+    bezier.inY = 0.1;
+    bezier.outX = 0.8;
+    bezier.outY = 0.9;
+    QVERIFY(panel.setTrackEasing(QStringLiteral("x"), bezier));
+
+    QCOMPARE(document.entityCommits(), 2);
+    const model::EasingSpec saved =
+        document.entity(uuid).tracks.value(QStringLiteral("x")).keys.at(0).easing;
+    QCOMPARE(saved.type, QStringLiteral("bezier"));
+    QCOMPARE(saved.inX, 0.2);
+    QCOMPARE(saved.inY, 0.1);
+    QCOMPARE(saved.outX, 0.8);
+    QCOMPARE(saved.outY, 0.9);
+}
+
+void PropertiesPanelTest::keyframeRowsDoNotLeakBetweenEntities()
+{
+    FakeDocument document;
+    const Uuid first = document.addEntity(QStringLiteral("甲"), 0, 60);
+    const Uuid second = document.addEntity(QStringLiteral("乙"), 0, 60);
+    document.entity(first).transform.x = 4.0;
+    document.addKey(first, QStringLiteral("x"), 0, 4.0);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(first);
+
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    auto* value = findWidget<QDoubleSpinBox>(panel, "keyValue_x");
+    auto* easing = findWidget<QComboBox>(panel, "keyEasing_x");
+    QVERIFY(diamond);
+    QVERIFY(value);
+    QVERIFY(easing);
+    QCOMPARE(diamond->text(), QStringLiteral("◆"));
+    QCOMPARE(value->value(), 4.0);
+    QCOMPARE(easing->currentData().toString(), QStringLiteral("linear"));
+
+    document.setSelection(second);
+
+    diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    value = findWidget<QDoubleSpinBox>(panel, "keyValue_x");
+    easing = findWidget<QComboBox>(panel, "keyEasing_x");
+    QVERIFY(diamond);
+    QVERIFY(value);
+    QVERIFY(easing);
+    QCOMPARE(diamond->text(), QStringLiteral("◇"));
+    QCOMPARE(value->value(), 0.0);
+    QCOMPARE(easing->currentIndex(), -1);
+    QVERIFY(document.entity(second).tracks.isEmpty());
+    QCOMPARE(document.entityCommits(), 0);
+}
+
+void PropertiesPanelTest::lockedEntityDisablesKeyframeControls()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 0, 60);
+    document.entity(uuid).locked = true;
+    document.addKey(uuid, QStringLiteral("x"), 0, 1.0);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_x");
+    auto* value = findWidget<QDoubleSpinBox>(panel, "keyValue_x");
+    auto* easing = findWidget<QComboBox>(panel, "keyEasing_x");
+    QVERIFY(diamond);
+    QVERIFY(value);
+    QVERIFY(easing);
+    QVERIFY(!diamond->isEnabled());
+    QVERIFY(!value->isEnabled());
+    QVERIFY(!easing->isEnabled());
 }
 
 QTEST_MAIN(PropertiesPanelTest)

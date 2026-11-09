@@ -7,6 +7,7 @@
 #include <QDropEvent>
 #include <QFont>
 #include <QFontMetrics>
+#include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -128,16 +129,20 @@ QColor contrastText(const QColor& background)
 }
 
 // Solver segments drive x/y for gravity/orbit/blackhole and rotation for
-// spin. Normal keys on those tracks are hidden inside the segment.
-bool trackDrivenAt(const model::Entity& entity, const QString& track, int frame)
+// spin. Inside a segment (startFrame, effectiveEnd] normal keys are forbidden;
+// the start frame itself holds the segment's initial key and stays editable.
+bool trackBlockedAt(const model::Entity& entity, const QString& track, int frame)
 {
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return false;
+
     for (const auto& solver : entity.solvers)
     {
-        const int first = std::max(0, solver.startFrame);
         const int last = solver.endFrame < 0
-                             ? entity.duration() - 1
-                             : std::min(entity.duration() - 1, solver.endFrame);
-        if (frame < first || frame > last)
+                             ? duration - 1
+                             : std::min(duration - 1, solver.endFrame);
+        if (frame <= solver.startFrame || frame > last)
             continue;
 
         const bool positionDriven = solver.effect == SolverEffect::Gravity
@@ -151,6 +156,79 @@ bool trackDrivenAt(const model::Entity& entity, const QString& track, int frame)
             return true;
     }
     return false;
+}
+
+QStringList genericTransformTracks()
+{
+    return {QStringLiteral("x"),        QStringLiteral("y"),
+            QStringLiteral("rotation"), QStringLiteral("scaleX"),
+            QStringLiteral("scaleY"),   QStringLiteral("opacity")};
+}
+
+bool isStepTrack(const QString& track)
+{
+    return track == QStringLiteral("visible")
+           || track == QStringLiteral("physicsInteract");
+}
+
+double staticTrackValue(const model::Entity& entity, const QString& track)
+{
+    const model::Transform& transform = entity.transform;
+    if (track == QStringLiteral("x"))
+        return transform.x;
+    if (track == QStringLiteral("y"))
+        return transform.y;
+    if (track == QStringLiteral("rotation"))
+        return transform.rotation;
+    if (track == QStringLiteral("scaleX"))
+        return transform.scaleX;
+    if (track == QStringLiteral("scaleY"))
+        return transform.scaleY;
+    if (track == QStringLiteral("opacity"))
+        return transform.opacity;
+    if (track == QStringLiteral("pivotX"))
+        return transform.pivotX;
+    if (track == QStringLiteral("pivotY"))
+        return transform.pivotY;
+    if (track == QStringLiteral("visible"))
+        return entity.visible ? 1.0 : 0.0;
+    if (track == QStringLiteral("physicsInteract"))
+        return entity.physicsInteract ? 1.0 : 0.0;
+    return 0.0;
+}
+
+void setKeyframeValue(model::Track& track, int frame, double value)
+{
+    for (model::Keyframe& key : track.keys)
+    {
+        if (key.frame == frame)
+        {
+            key.value = value;
+            return;
+        }
+    }
+
+    model::Keyframe key;
+    key.frame = frame;
+    key.value = value;
+    track.keys.append(key);
+}
+
+void removeKeyframeAt(model::Track& track, int frame)
+{
+    for (int i = track.keys.size() - 1; i >= 0; --i)
+    {
+        if (track.keys.at(i).frame == frame)
+            track.keys.removeAt(i);
+    }
+}
+
+void sortTrack(model::Track& track)
+{
+    std::sort(track.keys.begin(), track.keys.end(),
+              [](const model::Keyframe& a, const model::Keyframe& b) {
+                  return a.frame < b.frame;
+              });
 }
 
 void collectSubtree(const model::Project& project, const Uuid& uuid,
@@ -206,8 +284,11 @@ TimelineWidget::TimelineWidget(Document* document, QWidget* parent)
     {
         m_playhead = std::max(0, m_document->playhead());
         connect(m_document, &Document::changed, this, &TimelineWidget::refresh);
-        connect(m_document, &Document::selectionChanged, this,
-                [this]() { update(); });
+        connect(m_document, &Document::selectionChanged, this, [this]() {
+            if (m_document->selection() != m_keyframeSelectionUuid)
+                clearKeyframeSelection();
+            update();
+        });
         connect(m_document, &Document::playheadChanged, this,
                 &TimelineWidget::onPlayheadChanged);
     }
@@ -234,6 +315,11 @@ void TimelineWidget::setParentUuid(const Uuid& parentUuid)
     m_dragProjectSnapshot = model::Project();
     m_dragHasSnapshot = false;
     m_dragChanged = false;
+    clearKeyframeSelection();
+    m_dragKeyTracks.clear();
+    m_dragKeyFrames.clear();
+    m_dragKeyDelta = 0;
+    m_dragKeyConflict = false;
 
     // Start the private timeline at its owner instead of frame 0, so children
     // of a parent that starts late are visible immediately.
@@ -285,7 +371,10 @@ void TimelineWidget::refresh()
     // A private timeline whose owner was deleted falls back to the root.
     if (m_document && !m_parentUuid.isEmpty()
         && !m_document->project().entities.contains(m_parentUuid))
+    {
         m_parentUuid.clear();
+        clearKeyframeSelection();
+    }
 
     updateScrollBar();
     update();
@@ -333,6 +422,14 @@ QRect TimelineWidget::entityBarRect(const Uuid& uuid) const
     const int right = xFromFrame(entity.end);
     const int widthPixels = std::max(3, right - left);
     return QRect(left, top + 3, widthPixels, kRowHeight - 6);
+}
+
+QRect TimelineWidget::addButtonRect(const Uuid& uuid) const
+{
+    const QRect bar = entityBarRect(uuid);
+    if (bar.isEmpty() || bar.width() < 24 || bar.height() < 14)
+        return QRect();
+    return QRect(bar.left() + kEdgeGrabPixels + 2, bar.top() + 1, 11, 10);
 }
 
 QVector<Uuid> TimelineWidget::visibleEntities() const
@@ -738,8 +835,22 @@ void TimelineWidget::paintEntity(QPainter& painter, const Uuid& uuid)
     paintSolverBands(painter, entity, bar);
     paintKeyframes(painter, entity, bar);
 
+    const QRect addRect = addButtonRect(uuid);
+    if (!addRect.isEmpty())
+    {
+        const QColor glyph = contrastText(color);
+        painter.fillRect(addRect, QColor(16, 18, 22, 120));
+        painter.setPen(QPen(glyph, 1));
+        painter.drawRect(addRect.adjusted(0, 0, -1, -1));
+        const int cx = addRect.center().x();
+        const int cy = addRect.center().y();
+        painter.drawLine(cx - 3, cy, cx + 3, cy);
+        painter.drawLine(cx, cy - 3, cx, cy + 3);
+    }
+
     const int badges = (entity.hidden ? 14 : 0) + (entity.locked ? 14 : 0);
-    const int textLeft = bar.left() + 7;
+    const int textLeft =
+        addRect.isEmpty() ? bar.left() + 7 : addRect.right() + 5;
     const int textRight = bar.right() - 7 - badges;
     if (textRight - textLeft > 8 && bar.height() >= 14)
     {
@@ -827,11 +938,48 @@ void TimelineWidget::paintKeyframes(QPainter& painter,
     if (!m_document || m_document->selection() != entity.uuid)
         return;
 
-    const int duration = entity.duration();
-    if (duration <= 0)
+    const QSet<int> frames = mergedKeyFrames(entity);
+    if (frames.isEmpty())
         return;
 
+    const bool framesSelected = m_keyframeSelectionUuid == entity.uuid;
+
+    painter.save();
+    painter.setClipRect(bar.adjusted(1, 1, -1, -1));
+
+    const QColor accent = palette().color(QPalette::Highlight);
+    const int centerY = bar.center().y();
+    for (int frame : frames)
+    {
+        const int x = xFromFrame(entity.start + frame);
+        if (x < bar.left() - 6 || x > bar.right() + 6)
+            continue;
+
+        const bool selected = framesSelected && m_selectedKeyframes.contains(frame);
+        const double radius = selected ? 5.4 : 4.2;
+
+        QPolygonF diamond;
+        diamond << QPointF(x, centerY - radius)
+                << QPointF(x + radius, centerY)
+                << QPointF(x, centerY + radius)
+                << QPointF(x - radius, centerY);
+
+        painter.setPen(QPen(selected ? accent.darker(150)
+                                     : QColor(15, 17, 22, 220),
+                            selected ? 1.6 : 1.2));
+        painter.setBrush(selected ? accent : QColor(250, 251, 255));
+        painter.drawPolygon(diamond);
+    }
+    painter.restore();
+}
+
+QSet<int> TimelineWidget::mergedKeyFrames(const model::Entity& entity) const
+{
     QSet<int> frames;
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return frames;
+
     for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd();
          ++it)
     {
@@ -839,35 +987,12 @@ void TimelineWidget::paintKeyframes(QPainter& painter,
         {
             if (key.frame < 0 || key.frame >= duration)
                 continue;
-            if (trackDrivenAt(entity, it.key(), key.frame))
+            if (trackBlockedAt(entity, it.key(), key.frame))
                 continue;
-            frames.insert(entity.start + key.frame);
+            frames.insert(key.frame);
         }
     }
-    if (frames.isEmpty())
-        return;
-
-    painter.save();
-    painter.setClipRect(bar.adjusted(1, 1, -1, -1));
-    painter.setPen(QPen(QColor(15, 17, 22, 220), 1.2));
-    painter.setBrush(QColor(250, 251, 255));
-
-    const int centerY = bar.center().y();
-    const double radius = 4.2;
-    for (int frame : frames)
-    {
-        const int x = xFromFrame(frame);
-        if (x < bar.left() - 6 || x > bar.right() + 6)
-            continue;
-
-        QPolygonF diamond;
-        diamond << QPointF(x, centerY - radius)
-                << QPointF(x + radius, centerY)
-                << QPointF(x, centerY + radius)
-                << QPointF(x - radius, centerY);
-        painter.drawPolygon(diamond);
-    }
-    painter.restore();
+    return frames;
 }
 
 void TimelineWidget::paintPlayhead(QPainter& painter)
@@ -912,6 +1037,64 @@ void TimelineWidget::paintEmptyHint(QPainter& painter)
     painter.drawText(body, Qt::AlignCenter, text);
 }
 
+int TimelineWidget::keyframeAt(const QPoint& pos) const
+{
+    if (!m_document)
+        return -1;
+
+    const Uuid uuid = m_document->selection();
+    if (uuid.isEmpty())
+        return -1;
+
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd())
+        return -1;
+
+    const model::Entity& entity = it.value();
+    const QRect bar = entityBarRect(uuid);
+    if (bar.isEmpty() || !bar.contains(pos))
+        return -1;
+
+    // Diamonds sit on the vertical centre; keep the hit lane narrow enough to
+    // leave the “+” button and trim edges usable.
+    if (std::abs(pos.y() - bar.center().y()) > 5)
+        return -1;
+
+    int bestFrame = -1;
+    int bestDistance = 6;
+    for (int frame : mergedKeyFrames(entity))
+    {
+        const int x = xFromFrame(entity.start + frame);
+        const int distance = std::abs(pos.x() - x);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestFrame = frame;
+        }
+    }
+    return bestFrame;
+}
+
+void TimelineWidget::clearKeyframeSelection()
+{
+    m_keyframeSelectionUuid.clear();
+    m_selectedKeyframes.clear();
+}
+
+Uuid TimelineWidget::keyframeSelectionEntity() const
+{
+    if (!m_document)
+        return Uuid();
+    return m_document->selection() == m_keyframeSelectionUuid
+               ? m_keyframeSelectionUuid
+               : Uuid();
+}
+
+QString TimelineWidget::entityDisplayName(const model::Entity& entity) const
+{
+    return entity.name.isEmpty() ? entity.uuid : entity.name;
+}
+
 TimelineWidget::Hit TimelineWidget::hitTest(const QPoint& pos) const
 {
     Hit hit;
@@ -943,6 +1126,21 @@ void TimelineWidget::updateHoverCursor(const QPoint& pos)
     if (!m_document)
     {
         unsetCursor();
+        return;
+    }
+
+    for (const Uuid& uuid : visibleEntities())
+    {
+        const QRect addRect = addButtonRect(uuid);
+        if (!addRect.isEmpty() && addRect.contains(pos))
+        {
+            setCursor(Qt::PointingHandCursor);
+            return;
+        }
+    }
+    if (keyframeAt(pos) >= 0)
+    {
+        setCursor(Qt::PointingHandCursor);
         return;
     }
 
@@ -978,6 +1176,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     m_dragOriginalRanges.clear();
     m_dragProjectSnapshot = model::Project();
     m_dragHasSnapshot = false;
+    m_dragKeyTracks.clear();
+    m_dragKeyFrames.clear();
+    m_dragKeyDelta = 0;
+    m_dragKeyConflict = false;
 
     if (!m_parentUuid.isEmpty() && breadcrumbRect().contains(pos))
     {
@@ -993,6 +1195,74 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         setPlayhead(frameFromX(pos.x()));
         return;
     }
+
+    // The “+” button on the left of an entity bar opens its private timeline.
+    for (const Uuid& uuid : visibleEntities())
+    {
+        const QRect addRect = addButtonRect(uuid);
+        if (addRect.isEmpty() || !addRect.contains(pos))
+            continue;
+
+        m_dragMode = DragMode::None;
+        m_dragEntity.clear();
+        m_dragChanged = false;
+        m_document->setSelection(uuid);
+        emit privateTimelineRequested(uuid);
+        return;
+    }
+
+    // Merged keyframe diamonds of the selected entity.
+    const int keyFrame = keyframeAt(pos);
+    if (keyFrame >= 0)
+    {
+        const auto entityIt =
+            m_document->project().entities.constFind(m_document->selection());
+        if (entityIt == m_document->project().entities.constEnd())
+            return;
+
+        const model::Entity& entity = entityIt.value();
+        if (entity.locked)
+        {
+            emit statusMessage(
+                tr("实体已锁定：%1").arg(entityDisplayName(entity)));
+            return;
+        }
+
+        if (m_keyframeSelectionUuid != entity.uuid)
+        {
+            m_keyframeSelectionUuid = entity.uuid;
+            m_selectedKeyframes.clear();
+        }
+
+        const bool toggle = event->modifiers()
+                            & (Qt::ControlModifier | Qt::ShiftModifier);
+        if (toggle)
+        {
+            if (m_selectedKeyframes.contains(keyFrame))
+                m_selectedKeyframes.remove(keyFrame);
+            else
+                m_selectedKeyframes.insert(keyFrame);
+        }
+        else if (!m_selectedKeyframes.contains(keyFrame))
+        {
+            m_selectedKeyframes = QSet<int>{keyFrame};
+        }
+
+        m_dragMode = DragMode::Keyframes;
+        m_dragEntity = entity.uuid;
+        m_dragPressPos = pos;
+        m_dragKeyPressFrame = keyFrame;
+        m_dragKeyFrames = m_selectedKeyframes;
+        for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd();
+             ++it)
+            m_dragKeyTracks.insert(it.key(), it.value().keys);
+        m_dragChanged = false;
+        update();
+        return;
+    }
+
+    // A click that is not on a diamond drops the frame selection.
+    clearKeyframeSelection();
 
     const Hit hit = hitTest(pos);
     if (hit.uuid.isEmpty())
@@ -1069,6 +1339,12 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+    if (m_dragMode == DragMode::Keyframes)
+    {
+        applyKeyframeDrag(pos);
+        return;
+    }
+
     if (m_dragMode == DragMode::Move || m_dragMode == DragMode::TrimStart
         || m_dragMode == DragMode::TrimEnd)
     {
@@ -1099,7 +1375,16 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
         return;
 
     const Hit hit = hitTest(pos);
-    if (hit.uuid.isEmpty())
+    if (hit.uuid.isEmpty() || hit.zone != HitZone::Body)
+        return;
+
+    // The “+” button never writes keys.
+    const QRect addRect = addButtonRect(hit.uuid);
+    if (!addRect.isEmpty() && addRect.contains(pos))
+        return;
+
+    const auto it = m_document->project().entities.constFind(hit.uuid);
+    if (it == m_document->project().entities.constEnd())
         return;
 
     m_dragMode = DragMode::None;
@@ -1109,9 +1394,344 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
     m_dragProjectSnapshot = model::Project();
     m_dragHasSnapshot = false;
     m_dragChanged = false;
+    m_dragKeyTracks.clear();
+    m_dragKeyFrames.clear();
+    m_dragKeyDelta = 0;
+    m_dragKeyConflict = false;
+
     m_document->setSelection(hit.uuid);
-    emit privateTimelineRequested(hit.uuid);
+    clearKeyframeSelection();
+
+    const int duration = it.value().duration();
+    if (duration <= 0)
+        return;
+
+    const int relativeFrame =
+        std::clamp(frameFromX(pos.x()) - it.value().start, 0, duration - 1);
+    insertKeyframesAt(hit.uuid, relativeFrame);
     event->accept();
+}
+
+void TimelineWidget::insertKeyframesAt(const Uuid& uuid, int relativeFrame)
+{
+    if (!m_document)
+        return;
+
+    auto entityIt = m_document->mutableProject().entities.find(uuid);
+    if (entityIt == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = entityIt.value();
+    if (entity.locked)
+    {
+        emit statusMessage(
+            tr("实体已锁定：%1").arg(entityDisplayName(entity)));
+        return;
+    }
+
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return;
+    const int frame = std::clamp(relativeFrame, 0, duration - 1);
+
+    // Prefer the tracks that already animate this entity; only fall back to
+    // the generic transform tracks when no track has keys yet.
+    QStringList targets;
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd();
+         ++it)
+    {
+        if (!it.value().keys.isEmpty())
+            targets.append(it.key());
+    }
+    const bool animated = !targets.isEmpty();
+    if (!animated)
+        targets = genericTransformTracks();
+
+    const QHash<QString, model::Track> before = entity.tracks;
+
+    int written = 0;
+    int blocked = 0;
+    for (const QString& trackName : targets)
+    {
+        if (trackBlockedAt(entity, trackName, frame))
+        {
+            ++blocked;
+            continue;
+        }
+
+        double value = staticTrackValue(entity, trackName);
+        const auto trackIt = entity.tracks.constFind(trackName);
+        if (animated && trackIt != entity.tracks.constEnd())
+        {
+            if (const auto evaluated =
+                    trackIt.value().valueAt(frame, isStepTrack(trackName)))
+                value = *evaluated;
+        }
+
+        setKeyframeValue(entity.tracks[trackName], frame, value);
+        sortTrack(entity.tracks[trackName]);
+        ++written;
+    }
+
+    if (written == 0)
+    {
+        entity.tracks = before;
+        emit statusMessage(tr("该帧由求解段驱动，不能写入普通关键帧"));
+        update();
+        return;
+    }
+
+    const QString name = entityDisplayName(entity);
+    QString error;
+    const bool ok = m_document->commitEntity(
+        uuid, QStringLiteral("pvf: set keyframes \"%1\"").arg(name), &error);
+    if (!ok)
+    {
+        auto restoreIt = m_document->mutableProject().entities.find(uuid);
+        if (restoreIt != m_document->mutableProject().entities.end())
+            restoreIt.value().tracks = before;
+        emit statusMessage(error.isEmpty()
+                               ? tr("关键帧写入失败")
+                               : tr("关键帧写入失败：%1").arg(error));
+    }
+
+    if (blocked > 0 && written > 0)
+    {
+        emit statusMessage(
+            tr("求解段内的轨道已跳过，写入 %1 条轨道").arg(written));
+    }
+
+    update();
+}
+
+void TimelineWidget::keyPressEvent(QKeyEvent* event)
+{
+    if (!m_document)
+    {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+
+    const bool ctrl = event->modifiers() & Qt::ControlModifier;
+    if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)
+    {
+        if (!m_selectedKeyframes.isEmpty())
+        {
+            deleteSelectedKeyframes();
+            event->accept();
+            return;
+        }
+    }
+    else if (ctrl && event->key() == Qt::Key_C)
+    {
+        copySelectedKeyframes();
+        event->accept();
+        return;
+    }
+    else if (ctrl && event->key() == Qt::Key_V)
+    {
+        pasteKeyframes();
+        event->accept();
+        return;
+    }
+
+    QWidget::keyPressEvent(event);
+}
+
+void TimelineWidget::deleteSelectedKeyframes()
+{
+    const Uuid uuid = keyframeSelectionEntity();
+    if (uuid.isEmpty() || m_selectedKeyframes.isEmpty())
+        return;
+
+    auto entityIt = m_document->mutableProject().entities.find(uuid);
+    if (entityIt == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = entityIt.value();
+    if (entity.locked)
+    {
+        emit statusMessage(
+            tr("实体已锁定：%1").arg(entityDisplayName(entity)));
+        return;
+    }
+
+    const QHash<QString, model::Track> before = entity.tracks;
+    bool changed = false;
+    for (auto it = entity.tracks.begin(); it != entity.tracks.end();)
+    {
+        QVector<model::Keyframe> kept;
+        kept.reserve(it.value().keys.size());
+        for (const model::Keyframe& key : it.value().keys)
+        {
+            if (m_selectedKeyframes.contains(key.frame))
+                changed = true;
+            else
+                kept.append(key);
+        }
+
+        if (kept.isEmpty())
+            it = entity.tracks.erase(it);
+        else
+        {
+            it.value().keys = kept;
+            ++it;
+        }
+    }
+
+    if (!changed)
+        return;
+
+    const QString name = entityDisplayName(entity);
+    QString error;
+    const bool ok = m_document->commitEntity(
+        uuid, QStringLiteral("pvf: delete keyframes \"%1\"").arg(name), &error);
+    if (!ok)
+    {
+        auto restoreIt = m_document->mutableProject().entities.find(uuid);
+        if (restoreIt != m_document->mutableProject().entities.end())
+            restoreIt.value().tracks = before;
+        emit statusMessage(error.isEmpty()
+                               ? tr("关键帧删除失败")
+                               : tr("关键帧删除失败：%1").arg(error));
+    }
+
+    clearKeyframeSelection();
+    update();
+}
+
+void TimelineWidget::copySelectedKeyframes()
+{
+    const Uuid uuid = keyframeSelectionEntity();
+    if (uuid.isEmpty() || m_selectedKeyframes.isEmpty())
+        return;
+
+    const auto entityIt = m_document->project().entities.constFind(uuid);
+    if (entityIt == m_document->project().entities.constEnd())
+        return;
+
+    m_keyClipboard.clear();
+    m_keyClipboardUuid = uuid;
+    for (auto it = entityIt.value().tracks.constBegin();
+         it != entityIt.value().tracks.constEnd(); ++it)
+    {
+        for (const model::Keyframe& key : it.value().keys)
+        {
+            if (!m_selectedKeyframes.contains(key.frame))
+                continue;
+            CopiedKey copied;
+            copied.track = it.key();
+            copied.frame = key.frame;
+            copied.value = key.value;
+            copied.easing = key.easing;
+            copied.note = key.note;
+            m_keyClipboard.append(copied);
+        }
+    }
+
+    if (m_keyClipboard.isEmpty())
+        return;
+    emit statusMessage(
+        tr("已复制 %1 个关键帧").arg(m_keyClipboard.size()));
+}
+
+void TimelineWidget::pasteKeyframes()
+{
+    if (!m_document || m_keyClipboard.isEmpty())
+        return;
+
+    const Uuid uuid = m_document->selection();
+    if (uuid.isEmpty())
+        return;
+    if (uuid != m_keyClipboardUuid)
+    {
+        emit statusMessage(tr("关键帧只能粘贴回原实体"));
+        return;
+    }
+
+    auto entityIt = m_document->mutableProject().entities.find(uuid);
+    if (entityIt == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = entityIt.value();
+    if (entity.locked)
+    {
+        emit statusMessage(
+            tr("实体已锁定：%1").arg(entityDisplayName(entity)));
+        return;
+    }
+
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return;
+
+    int firstFrame = m_keyClipboard.first().frame;
+    int lastFrame = firstFrame;
+    for (const CopiedKey& copied : m_keyClipboard)
+    {
+        firstFrame = std::min(firstFrame, copied.frame);
+        lastFrame = std::max(lastFrame, copied.frame);
+    }
+
+    const int span = lastFrame - firstFrame;
+    if (span >= duration)
+    {
+        emit statusMessage(tr("关键帧片段超出实体时长，无法粘贴"));
+        return;
+    }
+
+    const int base = std::clamp(
+        playhead() - entity.start, 0, std::max(0, duration - 1 - span));
+
+    QVector<CopiedKey> placed;
+    placed.reserve(m_keyClipboard.size());
+    for (const CopiedKey& copied : m_keyClipboard)
+    {
+        CopiedKey target = copied;
+        target.frame = base + (copied.frame - firstFrame);
+        if (trackBlockedAt(entity, target.track, target.frame))
+        {
+            emit statusMessage(tr("粘贴目标落在求解段驱动的区间，已取消"));
+            return;
+        }
+        placed.append(target);
+    }
+
+    const QHash<QString, model::Track> before = entity.tracks;
+    QSet<int> pastedFrames;
+    for (const CopiedKey& target : placed)
+    {
+        model::Track& track = entity.tracks[target.track];
+        removeKeyframeAt(track, target.frame);
+        model::Keyframe key;
+        key.frame = target.frame;
+        key.value = target.value;
+        key.easing = target.easing;
+        key.note = target.note;
+        track.keys.append(key);
+        sortTrack(track);
+        pastedFrames.insert(target.frame);
+    }
+
+    const QString name = entityDisplayName(entity);
+    QString error;
+    const bool ok = m_document->commitEntity(
+        uuid, QStringLiteral("pvf: paste keyframes \"%1\"").arg(name), &error);
+    if (!ok)
+    {
+        auto restoreIt = m_document->mutableProject().entities.find(uuid);
+        if (restoreIt != m_document->mutableProject().entities.end())
+            restoreIt.value().tracks = before;
+        emit statusMessage(error.isEmpty()
+                               ? tr("关键帧粘贴失败")
+                               : tr("关键帧粘贴失败：%1").arg(error));
+        update();
+        return;
+    }
+
+    m_keyframeSelectionUuid = uuid;
+    m_selectedKeyframes = pastedFrames;
+    update();
 }
 
 void TimelineWidget::wheelEvent(QWheelEvent* event)
@@ -1488,6 +2108,120 @@ void TimelineWidget::trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
     }
 }
 
+void TimelineWidget::applyKeyframeDrag(const QPoint& pos)
+{
+    if (!m_document || m_dragEntity.isEmpty() || m_dragKeyFrames.isEmpty())
+        return;
+
+    auto it = m_document->mutableProject().entities.find(m_dragEntity);
+    if (it == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = it.value();
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return;
+
+    int minFrame = INT_MAX;
+    int maxFrame = INT_MIN;
+    for (int frame : m_dragKeyFrames)
+    {
+        minFrame = std::min(minFrame, frame);
+        maxFrame = std::max(maxFrame, frame);
+    }
+
+    int delta = frameFromX(pos.x()) - m_dragKeyPressFrame;
+    delta = std::clamp(delta, -minFrame, duration - 1 - maxFrame);
+    if (delta == m_dragKeyDelta)
+        return;
+
+    // Every preview starts from the press snapshot, so dragging back and forth
+    // never accumulates rounding or overwritten keys.
+    entity.tracks.clear();
+    for (auto trackIt = m_dragKeyTracks.constBegin();
+         trackIt != m_dragKeyTracks.constEnd(); ++trackIt)
+    {
+        model::Track track;
+        track.keys = trackIt.value();
+        entity.tracks.insert(trackIt.key(), track);
+    }
+
+    bool conflict = false;
+    for (auto trackIt = m_dragKeyTracks.constBegin();
+         trackIt != m_dragKeyTracks.constEnd() && !conflict; ++trackIt)
+    {
+        for (const model::Keyframe& key : trackIt.value())
+        {
+            if (!m_dragKeyFrames.contains(key.frame))
+                continue;
+            if (trackBlockedAt(entity, trackIt.key(), key.frame + delta))
+            {
+                conflict = true;
+                break;
+            }
+        }
+    }
+
+    m_dragKeyDelta = delta;
+    m_dragKeyConflict = conflict;
+    if (conflict)
+    {
+        m_dragChanged = false;
+        update();
+        return;
+    }
+
+    for (auto trackIt = m_dragKeyTracks.constBegin();
+         trackIt != m_dragKeyTracks.constEnd(); ++trackIt)
+    {
+        QSet<int> destinations;
+        QVector<model::Keyframe> kept;
+        QVector<model::Keyframe> moved;
+        kept.reserve(trackIt.value().size());
+        moved.reserve(trackIt.value().size());
+
+        for (const model::Keyframe& key : trackIt.value())
+        {
+            if (!m_dragKeyFrames.contains(key.frame))
+            {
+                kept.append(key);
+                continue;
+            }
+            model::Keyframe shifted = key;
+            shifted.frame = key.frame + delta;
+            moved.append(shifted);
+            destinations.insert(shifted.frame);
+        }
+        if (moved.isEmpty())
+            continue;
+
+        // Moving onto a frame that already has a key on the same track
+        // overwrites it, matching normal keyframe editing behaviour.
+        QVector<model::Keyframe> finalKeys;
+        finalKeys.reserve(kept.size() + moved.size());
+        for (const model::Keyframe& key : kept)
+        {
+            if (!destinations.contains(key.frame))
+                finalKeys.append(key);
+        }
+        finalKeys += moved;
+        std::sort(finalKeys.begin(), finalKeys.end(),
+                  [](const model::Keyframe& a, const model::Keyframe& b) {
+                      return a.frame < b.frame;
+                  });
+
+        entity.tracks[trackIt.key()].keys = finalKeys;
+    }
+
+    QSet<int> shiftedSelection;
+    for (int frame : m_dragKeyFrames)
+        shiftedSelection.insert(frame + delta);
+    m_selectedKeyframes = shiftedSelection;
+    m_keyframeSelectionUuid = m_dragEntity;
+    m_dragChanged = delta != 0;
+    update();
+}
+
 void TimelineWidget::applyDrag(const QPoint& pos)
 {
     if (!m_document || m_dragEntity.isEmpty())
@@ -1609,6 +2343,10 @@ void TimelineWidget::finishDrag()
     const QHash<Uuid, QPair<int, int>> moveRanges = m_dragOriginalRanges;
     const model::Project trimSnapshot = m_dragProjectSnapshot;
     const bool hasTrimSnapshot = m_dragHasSnapshot;
+    const QHash<QString, QVector<model::Keyframe>> keyTracks = m_dragKeyTracks;
+    const QSet<int> keyFrames = m_dragKeyFrames;
+    const int keyDelta = m_dragKeyDelta;
+    const bool keyConflict = m_dragKeyConflict;
 
     int previewStart = 0;
     int previewEnd = 0;
@@ -1632,8 +2370,68 @@ void TimelineWidget::finishDrag()
     m_dragProjectSnapshot = model::Project();
     m_dragHasSnapshot = false;
     m_dragChanged = false;
+    m_dragKeyTracks.clear();
+    m_dragKeyFrames.clear();
+    m_dragKeyDelta = 0;
+    m_dragKeyConflict = false;
 
-    if (!m_document || !changed || uuid.isEmpty())
+    if (!m_document || uuid.isEmpty())
+        return;
+
+    if (mode == DragMode::Keyframes)
+    {
+        auto it = m_document->mutableProject().entities.find(uuid);
+        if (it == m_document->mutableProject().entities.end())
+            return;
+
+        auto restoreTracks = [this, &uuid, &keyTracks]() {
+            auto restoreIt = m_document->mutableProject().entities.find(uuid);
+            if (restoreIt == m_document->mutableProject().entities.end())
+                return;
+            restoreIt.value().tracks.clear();
+            for (auto trackIt = keyTracks.constBegin();
+                 trackIt != keyTracks.constEnd(); ++trackIt)
+            {
+                model::Track track;
+                track.keys = trackIt.value();
+                restoreIt.value().tracks.insert(trackIt.key(), track);
+            }
+        };
+
+        if (keyConflict)
+        {
+            restoreTracks();
+            m_keyframeSelectionUuid = uuid;
+            m_selectedKeyframes = keyFrames;
+            emit statusMessage(tr("关键帧不能移入求解段驱动的区间"));
+            update();
+            return;
+        }
+        if (!changed || keyDelta == 0)
+        {
+            update();
+            return;
+        }
+
+        const QString name = entityDisplayName(it.value());
+        QString error;
+        const bool ok = m_document->commitEntity(
+            uuid, QStringLiteral("pvf: move keyframes \"%1\"").arg(name),
+            &error);
+        if (!ok)
+        {
+            restoreTracks();
+            m_keyframeSelectionUuid = uuid;
+            m_selectedKeyframes = keyFrames;
+            emit statusMessage(error.isEmpty()
+                                   ? tr("关键帧移动失败")
+                                   : tr("关键帧移动失败：%1").arg(error));
+        }
+        update();
+        return;
+    }
+
+    if (!changed)
         return;
 
     if (mode == DragMode::Move)
