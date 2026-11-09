@@ -290,6 +290,13 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
                 updatePlaybackAction();
                 updateStatus();
             });
+    connect(m_playback.get(), &PlaybackController::stalled, this,
+            [this](const QString& message) {
+                statusBar()->showMessage(message, 8000);
+                if (m_mcpLogPanel)
+                    m_mcpLogPanel->addSystemEvent(tr("播放已暂停"), message);
+            });
+    m_playback->setWatchdogMs(m_settings.watchdogMs);
 
     if (m_document) {
         connectDocument();
@@ -896,6 +903,8 @@ void NextWindow::ensureMediaServices()
     if (!m_media) {
         m_media = std::make_unique<MediaServices>(m_document, m_settings);
         connect(m_media.get(), &MediaServices::htmlFrameReady, this, [this] {
+            if (m_playback)
+                m_playback->noteFramePresented();
             if (m_viewport)
                 m_viewport->refresh();
         }, Qt::QueuedConnection);
@@ -915,12 +924,19 @@ void NextWindow::ensureMediaServices()
         m_mediaProvidersAttached = false;
     }
 
+    if (m_playback) {
+        m_playback->setMediaPendingProvider(
+            [this] { return m_media && m_media->htmlPending(); });
+    }
+
     if (!m_mediaProvidersAttached)
         attachMediaProviders();
 }
 
 void NextWindow::resetMediaServices()
 {
+    if (m_playback)
+        m_playback->setMediaPendingProvider({});
     if (m_viewport) {
         m_viewport->setVideoFrameProvider({});
         m_viewport->setHtmlFrameProvider({});
@@ -1322,6 +1338,8 @@ void NextWindow::applyHumanCommitDelay()
 void NextWindow::applySettings(const AppSettings& previous)
 {
     applyHumanCommitDelay();
+    if (m_playback)
+        m_playback->setWatchdogMs(m_settings.watchdogMs);
 
     if (m_media) {
         m_media->applySettings(m_settings);

@@ -56,7 +56,10 @@ MediaServices::MediaServices(ProjectDocument* document, const AppSettings& setti
     // frameReady is already emitted through a queued invocation; the extra
     // queued hop keeps the viewport refresh out of the render completion stack.
     connect(m_html.get(), &html2::HtmlFrameService::frameReady, this,
-            [this](const AssetHash&, int, const QImage&) { emit htmlFrameReady(); },
+            [this](const AssetHash&, int, const QImage&) {
+                m_htmlPending = false;
+                emit htmlFrameReady();
+            },
             Qt::QueuedConnection);
 }
 
@@ -91,6 +94,7 @@ void MediaServices::stop()
     if (m_html)
         m_html->stop();
     m_htmlInFlight = false;
+    m_htmlPending = false;
 }
 
 void MediaServices::applySettings(const AppSettings& settings)
@@ -110,9 +114,13 @@ void MediaServices::applySettings(const AppSettings& settings)
             settings.htmlMemoryBytes, settings.htmlDiskBytes);
         m_html->setChromeExecutable(settings.chromeExecutable);
         connect(m_html.get(), &html2::HtmlFrameService::frameReady, this,
-                [this](const AssetHash&, int, const QImage&) { emit htmlFrameReady(); },
+                [this](const AssetHash&, int, const QImage&) {
+                    m_htmlPending = false;
+                    emit htmlFrameReady();
+                },
                 Qt::QueuedConnection);
         m_htmlInFlight = false;
+        m_htmlPending = false;
         m_htmlStartFailed = false;
         m_htmlError.clear();
         if (projectHasHtml())
@@ -292,6 +300,9 @@ QImage MediaServices::htmlFrame(const Uuid& entityUuid, double projectFrame)
     m_htmlInFlight = true;
     QImage image = m_html->lowResWait(request, kHtmlLowResWaitMs);
     m_htmlInFlight = false;
+    // Null means cache miss or the 300 ms timeout: the frontend keeps
+    // rendering in the background and htmlFrameReady will clear the flag.
+    m_htmlPending = image.isNull();
     return image;
 }
 

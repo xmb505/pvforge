@@ -6,6 +6,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <utility>
 
 namespace pvf::next {
 
@@ -15,6 +16,11 @@ PlaybackController::PlaybackController(QObject* parent)
 {
     m_timer->setTimerType(Qt::PreciseTimer);
     connect(m_timer, &QTimer::timeout, this, &PlaybackController::tick);
+
+    m_watchdog.setTimerType(Qt::PreciseTimer);
+    m_watchdog.setInterval(100);
+    connect(&m_watchdog, &QTimer::timeout, this,
+            &PlaybackController::checkWatchdog);
 }
 
 PlaybackController::~PlaybackController()
@@ -73,6 +79,8 @@ void PlaybackController::play()
     m_playing = true;
     m_timer->setInterval(std::max(1, 1000 / m_fps));
     m_timer->start();
+    m_lastFrame.start();
+    m_watchdog.start();
 
     if (m_audio) {
         QString error;
@@ -89,10 +97,48 @@ void PlaybackController::pause()
     const bool wasPlaying = m_playing;
     m_playing = false;
     m_timer->stop();
+    m_watchdog.stop();
     if (m_audio)
         m_audio->stop();
     if (wasPlaying)
         emit playbackStateChanged(false);
+}
+
+void PlaybackController::noteFramePresented()
+{
+    m_lastFrame.restart();
+}
+
+void PlaybackController::setMediaPendingProvider(std::function<bool()> provider)
+{
+    m_mediaPending = std::move(provider);
+}
+
+void PlaybackController::setWatchdogMs(int ms)
+{
+    m_watchdogMs = std::max(1, ms);
+}
+
+void PlaybackController::checkWatchdog()
+{
+    if (!m_playing)
+    {
+        m_watchdog.stop();
+        return;
+    }
+
+    // No media layer is late, so the clock is not blocked: feed it every tick.
+    if (!m_mediaPending || !m_mediaPending())
+    {
+        noteFramePresented();
+        return;
+    }
+
+    if (m_lastFrame.isValid() && m_lastFrame.elapsed() > m_watchdogMs)
+    {
+        pause();
+        emit stalled(tr("帧渲染超时，已暂停"));
+    }
 }
 
 void PlaybackController::toggle()
@@ -139,7 +185,12 @@ void PlaybackController::restartAudio(int frame)
 
 void PlaybackController::onPlayheadChanged()
 {
-    if (!m_playing || m_advancing || !m_document)
+    if (!m_document || m_advancing)
+        return;
+
+    // A manual seek/playhead set restarts the stall clock.
+    noteFramePresented();
+    if (!m_playing)
         return;
 
     const int frame = m_document->playhead();

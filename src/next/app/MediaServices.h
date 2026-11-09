@@ -73,6 +73,10 @@ public:
 
     QString cacheRoot() const { return m_cacheRoot; }
     bool htmlRunning() const;
+    // True while the latest htmlFrame() missed the cache and timed out: the
+    // frontend browser is still rendering it and htmlFrameReady will follow.
+    // The playback watchdog treats this as "no frame on screen yet".
+    bool htmlPending() const { return m_htmlPending; }
     bool htmlStartFailed() const { return m_htmlStartFailed; }
     QString htmlError() const { return m_htmlError; }
 
@@ -115,6 +119,8 @@ private:
     // Guards against a queued update() re-entering htmlFrame() while
     // lowResWait() pumps a nested event loop inside paintEvent().
     bool m_htmlInFlight = false;
+    // Set by a missed htmlFrame() request, cleared by htmlFrameReady.
+    bool m_htmlPending = false;
 };
 
 } // namespace pvf::next

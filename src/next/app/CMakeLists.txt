@@ -157,4 +157,10 @@ if(BUILD_TESTING)
     add_test(NAME next.media_services COMMAND pvf_media_services_tests)
     set_tests_properties(next.media_services PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+
+    add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
+    target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_app Qt6::Test)
+    add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
+    set_tests_properties(next.playback_controller PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

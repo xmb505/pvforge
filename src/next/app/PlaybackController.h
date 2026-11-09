@@ -1,10 +1,12 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
+#include <QString>
+#include <QTimer>
 
+#include <functional>
 #include <memory>
-
-class QTimer;
 
 namespace pvf::audio2 {
 class Playback;
@@ -38,10 +40,25 @@ public:
     // Highest end frame among root entities.  0 means no content.
     int contentEnd() const;
 
+    // Frame watchdog (docs/ENTITY_MODEL.md 6.5).  While playing, a real frame
+    // reaching the screen must call noteFramePresented(); when the media
+    // provider says a frame is still pending and none has arrived for longer
+    // than watchdogMs(), playback pauses and stalled() fires.
+    void noteFramePresented();
+    // Empty provider means "no media is pending": every watchdog tick feeds the
+    // clock.  The provider is queried on the UI thread only.
+    void setMediaPendingProvider(std::function<bool()> provider);
+    void setWatchdogMs(int ms);
+    int watchdogMs() const { return m_watchdogMs; }
+
 signals:
     void playbackStateChanged(bool playing);
+    // Playback paused because no frame reached the screen within watchdogMs().
+    // The manual play command is required to resume; nothing restarts itself.
+    void stalled(const QString& message);
 
 private:
+    void checkWatchdog();
     void tick();
     void restartAudio(int frame);
     void onPlayheadChanged();
@@ -49,11 +66,15 @@ private:
     Document* m_document = nullptr;
     std::unique_ptr<audio2::Playback> m_audio;
     QTimer* m_timer = nullptr;
+    QTimer m_watchdog;
+    QElapsedTimer m_lastFrame;
+    std::function<bool()> m_mediaPending;
     QMetaObject::Connection m_playheadConnection;
     bool m_playing = false;
     bool m_advancing = false;
     int m_endFrame = 0;
     int m_fps = 30;
+    int m_watchdogMs = 3000;
 };
 
 } // namespace pvf::next
