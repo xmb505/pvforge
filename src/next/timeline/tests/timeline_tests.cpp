@@ -75,6 +75,28 @@ public:
         return true;
     }
 
+    bool commitChanges(const QVector<Uuid>& upserts,
+                       const QVector<Uuid>& deletes, const QString& message,
+                       QString* error) override
+    {
+        ++commitCount;
+        ++commitChangesCount;
+        lastUpserts = upserts;
+        lastDeletes = deletes;
+        lastCommitUuids = upserts;
+        lastCommitUuid = upserts.isEmpty() ? Uuid() : upserts.first();
+        lastCommitMessage = message;
+        if (failCommitChanges)
+        {
+            if (error)
+                *error = QStringLiteral("forced failure");
+            return false;
+        }
+        for (const Uuid& uuid : deletes)
+            m_project.entities.remove(uuid);
+        return true;
+    }
+
     bool commitProject(const QString& message, QString* error) override
     {
         Q_UNUSED(error);
@@ -98,8 +120,12 @@ public:
 
     int commitCount = 0;
     int commitEntitiesCount = 0;
+    int commitChangesCount = 0;
+    bool failCommitChanges = false;
     Uuid lastCommitUuid;
     QVector<Uuid> lastCommitUuids;
+    QVector<Uuid> lastUpserts;
+    QVector<Uuid> lastDeletes;
     QString lastCommitMessage;
 
 private:
@@ -123,6 +149,37 @@ Uuid addEntity(FakeDocument& document, const QString& name, int start, int end,
     entity.content.kind = kind;
     document.mutableProject().entities.insert(entity.uuid, entity);
     return entity.uuid;
+}
+
+void addKey(FakeDocument& document, const Uuid& uuid, const QString& trackName,
+            int frame, double value)
+{
+    pvf::model::Keyframe key;
+    key.frame = frame;
+    key.value = value;
+    document.mutableProject().entities[uuid].tracks[trackName].keys.append(key);
+}
+
+void trimLeftEdge(TimelineWidget& widget, const Uuid& uuid, int deltaFrames)
+{
+    const QRect bar = widget.entityBarRect(uuid);
+    const QPoint from(bar.left() + 2, bar.center().y());
+    const QPoint to =
+        from + QPoint(int(deltaFrames * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+}
+
+void trimRightEdge(TimelineWidget& widget, const Uuid& uuid, int deltaFrames)
+{
+    const QRect bar = widget.entityBarRect(uuid);
+    const QPoint from(bar.right() - 2, bar.center().y());
+    const QPoint to =
+        from + QPoint(int(deltaFrames * widget.pixelsPerFrame()), 0);
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
 }
 
 QImage renderWidget(TimelineWidget& widget, const QSize& size = QSize(800, 300))
@@ -210,6 +267,14 @@ private slots:
     void dragParentMovesDescendants();
     void dragParentClampsAtZero();
     void dragLeftEdgeTrimsStart();
+    void trimStartShiftsKeys();
+    void trimEndDropsKeys();
+    void trimParentClipsChild();
+    void trimParentDeletesChild();
+    void trimExpandShiftsKeysAndSourceIn();
+    void trimSolverStartCutsSegment();
+    void trimSolverEndClamps();
+    void trimFailureRestoresSnapshot();
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
     void doubleClickRequestsPrivateTimeline();
@@ -389,9 +454,244 @@ void TimelineWidgetTest::dragLeftEdgeTrimsStart()
     QCOMPARE(entity.start, 18);
     QCOMPARE(entity.end, 30);
     QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.commitChangesCount, 1);
     QCOMPARE(document.lastCommitUuid, uuid);
+    QVERIFY(document.lastUpserts.contains(uuid));
+    QVERIFY(document.lastDeletes.isEmpty());
     QVERIFY(document.lastCommitMessage.startsWith(
         QStringLiteral("pvf: trim entity")));
+}
+
+void TimelineWidgetTest::trimStartShiftsKeys()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("trim"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 10.0);
+    addKey(document, uuid, QStringLiteral("x"), 20, 20.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimLeftEdge(widget, uuid, 10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 10);
+    QCOMPARE(entity.end, 30);
+    QCOMPARE(entity.duration(), 20);
+
+    const auto keys = entity.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 2);
+    QCOMPARE(keys.at(0).frame, 0);
+    QCOMPARE(keys.at(0).value, 10.0);
+    QCOMPARE(keys.at(1).frame, 10);
+    QCOMPARE(keys.at(1).value, 20.0);
+    QCOMPARE(document.commitChangesCount, 1);
+    QVERIFY(document.lastUpserts.contains(uuid));
+    QVERIFY(document.lastDeletes.isEmpty());
+}
+
+void TimelineWidgetTest::trimEndDropsKeys()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("trim"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 10.0);
+    addKey(document, uuid, QStringLiteral("x"), 20, 20.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimRightEdge(widget, uuid, -10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 0);
+    QCOMPARE(entity.end, 20);
+    QCOMPARE(entity.duration(), 20);
+
+    const auto keys = entity.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 3);
+    QCOMPARE(keys.at(0).frame, 0);
+    QCOMPARE(keys.at(1).frame, 5);
+    QCOMPARE(keys.at(2).frame, 10);
+    QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimParentClipsChild()
+{
+    FakeDocument document;
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 10, 30, 0);
+    const Uuid child = addEntity(document, QStringLiteral("child"), 12, 28, 0,
+                                 parent);
+    addKey(document, child, QStringLiteral("x"), 0, 0.0);
+    addKey(document, child, QStringLiteral("x"), 5, 5.0);
+    addKey(document, child, QStringLiteral("x"), 10, 10.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimLeftEdge(widget, parent, 10);
+
+    const pvf::model::Entity movedParent =
+        document.project().entities.value(parent);
+    const pvf::model::Entity movedChild =
+        document.project().entities.value(child);
+    QCOMPARE(movedParent.start, 20);
+    QCOMPARE(movedParent.end, 30);
+    QCOMPARE(movedChild.start, 20);
+    QCOMPARE(movedChild.end, 28);
+
+    const auto keys = movedChild.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.at(0).frame, 2);
+    QCOMPARE(keys.at(0).value, 10.0);
+
+    QCOMPARE(document.commitChangesCount, 1);
+    QCOMPARE(document.lastUpserts.size(), 2);
+    QVERIFY(document.lastUpserts.contains(parent));
+    QVERIFY(document.lastUpserts.contains(child));
+    QVERIFY(document.lastDeletes.isEmpty());
+}
+
+void TimelineWidgetTest::trimParentDeletesChild()
+{
+    FakeDocument document;
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 10, 30, 0);
+    const Uuid child = addEntity(document, QStringLiteral("child"), 12, 18, 0,
+                                 parent);
+    const Uuid grandchild = addEntity(document, QStringLiteral("grandchild"),
+                                      13, 17, 0, child);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimLeftEdge(widget, parent, 10);
+
+    const pvf::model::Entity movedParent =
+        document.project().entities.value(parent);
+    QCOMPARE(movedParent.start, 20);
+    QCOMPARE(movedParent.end, 30);
+    QCOMPARE(document.commitChangesCount, 1);
+    QCOMPARE(document.lastUpserts.size(), 1);
+    QVERIFY(document.lastUpserts.contains(parent));
+    QCOMPARE(document.lastDeletes.size(), 2);
+    QVERIFY(document.lastDeletes.contains(child));
+    QVERIFY(document.lastDeletes.contains(grandchild));
+    QVERIFY(!document.project().entities.contains(child));
+    QVERIFY(!document.project().entities.contains(grandchild));
+}
+
+void TimelineWidgetTest::trimExpandShiftsKeysAndSourceIn()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("expand"), 10, 20, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Video;
+    entity.content.asset.sourceIn = 3;
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 2, 2.0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimLeftEdge(widget, uuid, -5);
+
+    const pvf::model::Entity expanded =
+        document.project().entities.value(uuid);
+    QCOMPARE(expanded.start, 5);
+    QCOMPARE(expanded.end, 20);
+    QCOMPARE(expanded.duration(), 15);
+    QCOMPARE(expanded.content.asset.sourceIn, 0);
+
+    const auto keys = expanded.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 3);
+    QCOMPARE(keys.at(0).frame, 5);
+    QCOMPARE(keys.at(1).frame, 7);
+    QCOMPARE(keys.at(2).frame, 10);
+    QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimSolverStartCutsSegment()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 30, 0);
+    pvf::model::SolverSegment solver;
+    solver.id = pvf::model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 5;
+    solver.endFrame = 20;
+    document.mutableProject().entities[uuid].solvers.append(solver);
+    addKey(document, uuid, QStringLiteral("x"), 5, 42.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimLeftEdge(widget, uuid, 10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 10);
+    QCOMPARE(entity.end, 30);
+    QVERIFY(entity.solvers.isEmpty());
+
+    const auto keys = entity.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.at(0).frame, 0);
+    QCOMPARE(keys.at(0).value, 42.0);
+    QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimSolverEndClamps()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 30, 0);
+    pvf::model::SolverSegment solver;
+    solver.id = pvf::model::newUuid();
+    solver.effect = SolverEffect::Gravity;
+    solver.startFrame = 5;
+    solver.endFrame = 25;
+    document.mutableProject().entities[uuid].solvers.append(solver);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimRightEdge(widget, uuid, -10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 0);
+    QCOMPARE(entity.end, 20);
+    QCOMPARE(entity.solvers.size(), 1);
+    QCOMPARE(entity.solvers.at(0).startFrame, 5);
+    QCOMPARE(entity.solvers.at(0).endFrame, 19);
+    QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimFailureRestoresSnapshot()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("trim"), 0, 30, 0);
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
+    addKey(document, uuid, QStringLiteral("x"), 10, 10.0);
+    addKey(document, uuid, QStringLiteral("x"), 20, 20.0);
+    document.failCommitChanges = true;
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+    trimLeftEdge(widget, uuid, 10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 0);
+    QCOMPARE(entity.end, 30);
+    const auto keys = entity.tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 4);
+    QCOMPARE(keys.at(0).frame, 0);
+    QCOMPARE(keys.at(1).frame, 5);
+    QCOMPARE(keys.at(2).frame, 10);
+    QCOMPARE(keys.at(3).frame, 20);
+    QCOMPARE(document.commitChangesCount, 1);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(
+        QStringLiteral("forced failure")));
 }
 
 void TimelineWidgetTest::solverBandPaints()

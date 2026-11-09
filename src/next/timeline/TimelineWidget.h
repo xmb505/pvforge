@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
+#include "model/Project.h"
 
 #include <QHash>
 #include <QPair>
@@ -135,6 +136,9 @@ private:
     QVector<Uuid> createEntitiesForAsset(const assets::StoredAsset& asset,
                                          int startFrame, int row);
 
+    void trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
+                        QVector<Uuid>& upserts, QVector<Uuid>& deletes);
+
     void paintToolbar(QPainter& painter);
     void paintRuler(QPainter& painter);
     void paintRows(QPainter& painter);
@@ -167,6 +171,11 @@ private:
     // every mouse move can be applied as original + delta.
     QVector<Uuid> m_dragMoveUuids;
     QHash<Uuid, QPair<int, int>> m_dragOriginalRanges;
+
+    // Trim previews only shift start/end in memory. The destructive keyframe,
+    // sourceIn and solver edits run once on release from this snapshot.
+    model::Project m_dragProjectSnapshot;
+    bool m_dragHasSnapshot = false;
 
     static constexpr int kToolbarHeight = 24;
     static constexpr int kRulerHeight = 32;

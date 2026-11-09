@@ -38,6 +38,38 @@ bool rangesOverlap(int aStart, int aEnd, int bStart, int bEnd)
     return aStart < bEnd && bStart < aEnd;
 }
 
+QStringList drivenTracks(SolverEffect effect)
+{
+    if (effect == SolverEffect::Spin)
+        return {QStringLiteral("rotation")};
+    return {QStringLiteral("x"), QStringLiteral("y")};
+}
+
+double keyValueAt(const model::Track& track, int frame)
+{
+    for (const auto& key : track.keys)
+    {
+        if (key.frame == frame)
+            return key.value;
+    }
+    if (const auto value = track.valueAt(frame))
+        return *value;
+    return 0.0;
+}
+
+void collectSubtree(const model::Project& project, const Uuid& uuid,
+                    QVector<Uuid>& out, QSet<Uuid>& visited);
+
+void appendSubtreeDeletes(const model::Project& project, const Uuid& uuid,
+                          QVector<Uuid>& deletes)
+{
+    QVector<Uuid> doomed;
+    QSet<Uuid> visited;
+    collectSubtree(project, uuid, doomed, visited);
+    for (const Uuid& id : doomed)
+        deletes.append(id);
+}
+
 QColor contentColor(const model::Entity& entity)
 {
     switch (entity.content.kind)
@@ -199,6 +231,8 @@ void TimelineWidget::setParentUuid(const Uuid& parentUuid)
     m_dragEntity.clear();
     m_dragMoveUuids.clear();
     m_dragOriginalRanges.clear();
+    m_dragProjectSnapshot = model::Project();
+    m_dragHasSnapshot = false;
     m_dragChanged = false;
 
     // Start the private timeline at its owner instead of frame 0, so children
@@ -942,6 +976,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     const QPoint pos = event->position().toPoint();
     m_dragMoveUuids.clear();
     m_dragOriginalRanges.clear();
+    m_dragProjectSnapshot = model::Project();
+    m_dragHasSnapshot = false;
 
     if (!m_parentUuid.isEmpty() && breadcrumbRect().contains(pos))
     {
@@ -1011,6 +1047,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         }
         setCursor(Qt::ClosedHandCursor);
     }
+
+    if (m_dragMode == DragMode::TrimStart
+        || m_dragMode == DragMode::TrimEnd)
+    {
+        m_dragProjectSnapshot = m_document->project();
+        m_dragHasSnapshot = true;
+    }
     update();
 }
 
@@ -1063,6 +1106,8 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
     m_dragEntity.clear();
     m_dragMoveUuids.clear();
     m_dragOriginalRanges.clear();
+    m_dragProjectSnapshot = model::Project();
+    m_dragHasSnapshot = false;
     m_dragChanged = false;
     m_document->setSelection(hit.uuid);
     emit privateTimelineRequested(hit.uuid);
@@ -1277,6 +1322,172 @@ void TimelineWidget::dropEvent(QDropEvent* event)
     event->acceptProposedAction();
 }
 
+void TimelineWidget::trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
+                                    QVector<Uuid>& upserts,
+                                    QVector<Uuid>& deletes)
+{
+    if (!m_document || newStart >= newEnd)
+        return;
+
+    auto entityIt = m_document->mutableProject().entities.find(uuid);
+    if (entityIt == m_document->mutableProject().entities.end())
+        return;
+
+    model::Entity& entity = entityIt.value();
+    const int oldStart = entity.start;
+    const int oldEnd = entity.end;
+
+    // The whole subtree is outside the new range: delete it explicitly.
+    if (oldStart >= newEnd || oldEnd <= newStart)
+    {
+        appendSubtreeDeletes(m_document->project(), uuid, deletes);
+        return;
+    }
+
+    // A child fully inside the parent's new range is untouched.
+    if (newStart == oldStart && newEnd == oldEnd)
+        return;
+
+    const int oldDuration = std::max(1, oldEnd - oldStart);
+    const int deltaStart = newStart - oldStart;
+    const int newDuration = newEnd - newStart;
+
+    // Solver frames are entity-relative. Work on a copy first so a segment cut
+    // by the new start can contribute its start key before keys are shifted.
+    QVector<model::SolverSegment> shiftedSolvers;
+    QVector<QPair<QString, double>> cutKeys;
+    for (const model::SolverSegment& oldSolver : entity.solvers)
+    {
+        const int oldEffectiveEnd =
+            oldSolver.endFrame < 0 ? oldDuration - 1 : oldSolver.endFrame;
+        if (deltaStart > 0 && oldSolver.startFrame < deltaStart
+            && deltaStart <= oldEffectiveEnd)
+        {
+            // Crop start cuts into this segment. The segment dies; approximate
+            // the frozen pose with the normal key at the segment start.
+            // TODO(solver-timeline): replace this with the exact evaluated
+            // pose from anim::evaluateEntity at the cut frame.
+            for (const QString& track : drivenTracks(oldSolver.effect))
+            {
+                const auto trackIt = entity.tracks.constFind(track);
+                const double value =
+                    trackIt == entity.tracks.constEnd()
+                        ? 0.0
+                        : keyValueAt(trackIt.value(), oldSolver.startFrame);
+                cutKeys.append(qMakePair(track, value));
+            }
+            continue;
+        }
+
+        model::SolverSegment shifted = oldSolver;
+        shifted.startFrame -= deltaStart;
+        if (shifted.endFrame != -1)
+            shifted.endFrame -= deltaStart;
+
+        const int shiftedEnd =
+            shifted.endFrame < 0 ? newDuration - 1 : shifted.endFrame;
+        if (shiftedEnd < 0)
+            continue; // segment ended before the new start
+        shiftedSolvers.append(shifted);
+    }
+
+    // Shift / crop every normal track.
+    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
+         ++trackIt)
+    {
+        QVector<model::Keyframe> kept;
+        kept.reserve(trackIt.value().keys.size());
+        for (model::Keyframe key : trackIt.value().keys)
+        {
+            if (deltaStart > 0)
+            {
+                if (key.frame < deltaStart)
+                    continue;
+                key.frame -= deltaStart;
+            }
+            else if (deltaStart < 0)
+            {
+                key.frame += -deltaStart;
+            }
+            if (key.frame < 0 || key.frame >= newDuration)
+                continue;
+            kept.append(key);
+        }
+        trackIt.value().keys = kept;
+    }
+
+    // A segment cut by the new start freezes at frame 0.
+    for (const auto& cut : cutKeys)
+    {
+        model::Track& track = entity.tracks[cut.first];
+        for (int i = track.keys.size() - 1; i >= 0; --i)
+        {
+            if (track.keys.at(i).frame == 0)
+                track.keys.removeAt(i);
+        }
+        model::Keyframe key;
+        key.frame = 0;
+        key.value = cut.second;
+        track.keys.append(key);
+    }
+
+    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
+         ++trackIt)
+    {
+        std::sort(trackIt.value().keys.begin(), trackIt.value().keys.end(),
+                  [](const model::Keyframe& a, const model::Keyframe& b) {
+                      return a.frame < b.frame;
+                  });
+    }
+
+    if (entity.content.kind == ContentKind::Asset
+        && (entity.content.asset.type == AssetType::Video
+            || entity.content.asset.type == AssetType::Audio))
+    {
+        entity.content.asset.sourceIn += deltaStart;
+        // Expanding before the first material frame clamps at the material
+        // boundary; no source frames exist before sourceIn 0.
+        if (entity.content.asset.sourceIn < 0)
+            entity.content.asset.sourceIn = 0;
+    }
+
+    QVector<model::SolverSegment> finalSolvers;
+    for (model::SolverSegment solver : shiftedSolvers)
+    {
+        if (solver.startFrame >= newDuration)
+            continue;
+        if (solver.endFrame != -1 && solver.endFrame >= newDuration)
+            solver.endFrame = newDuration - 1;
+        if (solver.endFrame != -1 && solver.endFrame < solver.startFrame)
+            continue;
+        finalSolvers.append(solver);
+    }
+    entity.solvers = finalSolvers;
+
+    entity.start = newStart;
+    entity.end = newEnd;
+    upserts.append(uuid);
+
+    const QVector<Uuid> children =
+        model::childrenOf(m_document->project(), uuid);
+    for (const Uuid& child : children)
+    {
+        const auto childIt =
+            m_document->mutableProject().entities.constFind(child);
+        if (childIt == m_document->mutableProject().entities.constEnd())
+            continue;
+
+        const int childStart = std::max(childIt.value().start, newStart);
+        const int childEnd = std::min(childIt.value().end, newEnd);
+        if (childStart >= childEnd)
+        {
+            appendSubtreeDeletes(m_document->project(), child, deletes);
+            continue;
+        }
+        trimEntityTree(child, childStart, childEnd, upserts, deletes);
+    }
+}
+
 void TimelineWidget::applyDrag(const QPoint& pos)
 {
     if (!m_document || m_dragEntity.isEmpty())
@@ -1360,10 +1571,8 @@ void TimelineWidget::applyDrag(const QPoint& pos)
             entity.start = newStart;
             m_dragChanged = true;
         }
-        // TODO(timeline): trimming start must shift keyframes relative to the
-        // new start, delete keys that fall before it, adjust asset sourceIn and
-        // drop/clip solver segments that start before the new start. The first
-        // pass only changes start/end.
+        // Preview only moves the visible edge. Keyframes, sourceIn and solver
+        // segments are trimmed destructively once, on release.
         break;
     }
     case DragMode::TrimEnd:
@@ -1377,8 +1586,7 @@ void TimelineWidget::applyDrag(const QPoint& pos)
             entity.end = newEnd;
             m_dragChanged = true;
         }
-        // TODO(timeline): deleting keys at/after the new duration and clipping
-        // solver end markers is deferred to the keyframe editing pass.
+        // Preview only; see TrimStart above.
         break;
     }
     default:
@@ -1399,24 +1607,42 @@ void TimelineWidget::finishDrag()
     const bool changed = m_dragChanged;
     const QVector<Uuid> moveUuids = m_dragMoveUuids;
     const QHash<Uuid, QPair<int, int>> moveRanges = m_dragOriginalRanges;
+    const model::Project trimSnapshot = m_dragProjectSnapshot;
+    const bool hasTrimSnapshot = m_dragHasSnapshot;
+
+    int previewStart = 0;
+    int previewEnd = 0;
+    bool hasPreview = false;
+    if (m_document && !uuid.isEmpty()
+        && (mode == DragMode::TrimStart || mode == DragMode::TrimEnd))
+    {
+        const auto preview = m_document->project().entities.constFind(uuid);
+        if (preview != m_document->project().entities.constEnd())
+        {
+            previewStart = preview.value().start;
+            previewEnd = preview.value().end;
+            hasPreview = true;
+        }
+    }
 
     m_dragMode = DragMode::None;
     m_dragEntity.clear();
     m_dragMoveUuids.clear();
     m_dragOriginalRanges.clear();
+    m_dragProjectSnapshot = model::Project();
+    m_dragHasSnapshot = false;
     m_dragChanged = false;
 
     if (!m_document || !changed || uuid.isEmpty())
         return;
 
-    const auto it = m_document->project().entities.constFind(uuid);
-    if (it == m_document->project().entities.constEnd())
-        return;
-
-    const QString name = it.value().name.isEmpty() ? uuid : it.value().name;
-
     if (mode == DragMode::Move)
     {
+        const auto it = m_document->project().entities.constFind(uuid);
+        if (it == m_document->project().entities.constEnd())
+            return;
+        const QString name = it.value().name.isEmpty() ? uuid : it.value().name;
+
         QVector<Uuid> commitUuids;
         bool differs = false;
         for (const Uuid& moved : moveUuids)
@@ -1438,19 +1664,42 @@ void TimelineWidget::finishDrag()
 
         m_document->commitEntities(
             commitUuids, QStringLiteral("pvf: move entity \"%1\"").arg(name));
-    }
-    else if (mode == DragMode::TrimStart || mode == DragMode::TrimEnd)
-    {
-        if (it.value().start == m_dragOriginalStart
-            && it.value().end == m_dragOriginalEnd)
-            return;
-
-        m_document->commitEntity(
-            uuid, QStringLiteral("pvf: trim entity \"%1\"").arg(name));
-    }
-    else
-    {
+        updateScrollBar();
+        update();
         return;
+    }
+
+    if (mode != DragMode::TrimStart && mode != DragMode::TrimEnd)
+        return;
+    if (!hasTrimSnapshot || !hasPreview)
+        return;
+    if (previewStart == m_dragOriginalStart && previewEnd == m_dragOriginalEnd)
+        return;
+
+    const auto snapshotEntity = trimSnapshot.entities.constFind(uuid);
+    if (snapshotEntity == trimSnapshot.entities.constEnd())
+        return;
+    const QString name =
+        snapshotEntity.value().name.isEmpty() ? uuid : snapshotEntity.value().name;
+
+    // Rebuild the destructive trim from the pre-drag snapshot; the mouse-move
+    // preview only changed start/end in memory.
+    m_document->mutableProject() = trimSnapshot;
+
+    QVector<Uuid> upserts;
+    QVector<Uuid> deletes;
+    trimEntityTree(uuid, previewStart, previewEnd, upserts, deletes);
+
+    QString error;
+    const bool committed = m_document->commitChanges(
+        upserts, deletes,
+        QStringLiteral("pvf: trim entity \"%1\"").arg(name), &error);
+    if (!committed)
+    {
+        m_document->mutableProject() = trimSnapshot;
+        emit statusMessage(
+            error.isEmpty() ? tr("裁剪提交失败")
+                            : tr("裁剪提交失败：%1").arg(error));
     }
 
     updateScrollBar();

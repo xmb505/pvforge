@@ -48,6 +48,14 @@ if(BUILD_TESTING)
         dragParentMovesDescendants
         dragParentClampsAtZero
         dragLeftEdgeTrimsStart
+        trimStartShiftsKeys
+        trimEndDropsKeys
+        trimParentClipsChild
+        trimParentDeletesChild
+        trimExpandShiftsKeysAndSourceIn
+        trimSolverStartCutsSegment
+        trimSolverEndClamps
+        trimFailureRestoresSnapshot
         solverBandPaints
         privateTimelineShowsOnlyChildren
         doubleClickRequestsPrivateTimeline
