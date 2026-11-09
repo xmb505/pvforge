@@ -3,7 +3,7 @@
 > 面向通过 MCP 操作 PVForge 的 AI 客户端。
 >
 > 本文定义 **新实体模型**（见 [ENTITY_MODEL.md](ENTITY_MODEL.md)）的 MCP 契约：工具名、参数、返回、错误码和完整工作流。
-> 当前分支的 `src/mcp/` 仍是旧模型实现；新工具落地时以本文、`tools/list` 和 `schema.get` 为准。
+> 实现位于 `src/mcp2/`；以本文、`tools/list` 和 `schema.get` 为准。
 > 旧模型的 `timeline.get`、`assets.list`、`easing.set`、`entities.retire`、`scene.*`、`batch.run` 不属于新接口，不要混用。
 
 ---
@@ -318,6 +318,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
   "channels": 0,
   "entry": null,
   "variables": null,
+  "tags": ["片头", "season-1"],
   "usedBy": ["uuid1"],
   "missing": false,
   "path": "/project/assets/9f2c.../content.mp4"
@@ -328,6 +329,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 - `durationFrames`：视频/音频的帧数；图片/HTML 为 0。
 - `sampleRate` / `channels`：仅音频。
 - `entry` / `variables`：仅 HTML。
+- `tags`：素材标签，字符串数组；最多 32 个，单个 1..64 字符。
 - `usedBy`：引用该素材的实体 UUID。
 - `missing`：素材文件不存在时为 `true`。
 
@@ -359,7 +361,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | `entity` | `create`、`createTree`、`createMany`、`get`、`list`、`update`、`updateMany`、`move`、`trim`、`reparent`、`duplicate`、`delete`、`deleteMany` | 13 | 部分 | 写工具各 1 个 | `delete`、`deleteMany`；`trim` 级联删子实体时 |
 | `keyframes` | `get`、`set`、`setMany`、`remove`、`move`、`clear`、`setEasing` | 7 | 部分 | 写工具各 1 个 | 否 |
 | `solver` | `create`、`update`、`delete`、`list`、`evaluate` | 5 | 部分 | 写工具各 1 个 | 否 |
-| `asset` | `import`、`list`、`get`、`assign`、`unassign`、`rename`、`delete` | 7 | 部分 | 写工具各 1 个 | `delete` |
+| `asset` | `import`、`list`、`get`、`assign`、`unassign`、`rename`、`setTags`、`delete` | 8 | 部分 | 写工具各 1 个 | `delete` |
 | `markers` | `list`、`set`、`remove` | 3 | 部分 | 写工具各 1 个 | 否 |
 | `preview` | `render_frame` | 1 | 否 | 无 | 否 |
 | `view` | `state` | 1 | 否 | 无 | 否 |
@@ -367,7 +369,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | `guide` | `get` | 1 | 否 | 无 | 否 |
 | `history` | `undo`、`redo`、`log` | 3 | 部分 | `undo`/`redo` 有 | 否 |
 
-合计 **45 个工具**。表中 `entity` / `keyframes` / `solver` / `asset` / `markers` / `history` 行省略了家族前缀，完整名为 `entity.create`、`keyframes.set` 等。
+合计 **46 个工具**。表中 `entity` / `keyframes` / `solver` / `asset` / `markers` / `history` 行省略了家族前缀，完整名为 `entity.create`、`keyframes.set` 等。
 
 写工具的通用前置检查：
 
@@ -1916,7 +1918,34 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 { "hash": "9f2c...", "name": "片头 v2" }
 ```
 
-### 6.7 `asset.delete` — 写 · 需要 confirm
+### 6.7 `asset.setTags` — 写
+
+设置素材标签；传空数组清除。
+
+**参数**：
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `hash` | string | **是** | — | 素材 hash |
+| `tags` | array | **是** | — | 字符串数组；最多 32 个，单个 1..64 字符 |
+
+**规则**：
+
+- 标签自动 trim、去重、丢弃空白项。
+- 超过 32 个或单标签超过 64 字符 → `invalid_argument`，不改素材。
+- 标签存在工程 `assets/<hash>/asset.json`，不进 git。
+
+**返回 `data`**：素材对象（含新的 `tags`）。
+
+**错误**：`invalid_argument`、`permission_denied`。
+
+**示例**：
+
+```json
+{ "hash": "9f2c...", "tags": ["片头", "season-1"] }
+```
+
+### 6.8 `asset.delete` — 写 · 需要 confirm
 
 删除素材文件。**不删除引用它的实体。**
 
