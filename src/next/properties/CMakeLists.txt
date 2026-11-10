@@ -34,6 +34,8 @@ add_library(pvf_next_properties STATIC
     PropertiesPanel.h
     SolverPreviewWidget.cpp
     SolverPreviewWidget.h
+    TextLayoutDialog.cpp
+    TextLayoutDialog.h
 )
 
 target_include_directories(pvf_next_properties PUBLIC

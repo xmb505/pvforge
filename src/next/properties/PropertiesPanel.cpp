@@ -1,6 +1,7 @@
 #include "PropertiesPanel.h"
 
 #include "SolverPreviewWidget.h"
+#include "TextLayoutDialog.h"
 #include "model/Easing.h"
 
 #include <QCheckBox>
@@ -1384,6 +1385,17 @@ void PropertiesPanel::buildContentSection()
             return true;
         });
     });
+
+    m_textLayoutButton = new QPushButton(QStringLiteral("排版…"), m_textPage);
+    m_textLayoutButton->setObjectName(QStringLiteral("textLayoutButton"));
+    m_textLayoutButton->setToolTip(
+        QStringLiteral("打开文字排版：多行文本、字体、描边、粗体/斜体/下划线、"
+                       "对齐、行高/字距/内边距、框宽高、竖排，并实时预览。"
+                       "确定后一次性写回。"));
+    textForm->addRow(m_textLayoutButton);
+    addEditable(m_textLayoutButton);
+    connect(m_textLayoutButton, &QPushButton::clicked, this,
+            &PropertiesPanel::openTextLayoutDialog);
 
     // vector
     QFormLayout* vectorForm = addPage(QStringLiteral("vectorPage"));
@@ -2967,6 +2979,63 @@ bool PropertiesPanel::replaceAsset(const AssetHash& hash, QString* error)
                                : QString()));
     }
     return ok;
+}
+
+void PropertiesPanel::openTextLayoutDialog()
+{
+    if (m_loading || !m_document)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity || entity->locked || entity->content.kind != ContentKind::Text)
+        return;
+
+    const Uuid uuid = entity->uuid;
+    TextLayoutDialog dialog(entity->content.text, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    // The modal dialog cannot change selection through the UI, but guard
+    // against a document signal having replaced the selected entity.
+    model::Entity* current = selectedEntity();
+    if (!current || current->uuid != uuid)
+        return;
+
+    const model::TextContent content = dialog.content();
+    const QJsonObject before = model::toJson(*current);
+    const model::Entity original = *current;
+    model::Entity updated = *current;
+    updated.content.text = content;
+
+    QString error;
+    if (!model::validateEntity(updated, &error))
+    {
+        setStatus(QStringLiteral("未修改：%1").arg(error));
+        refresh();
+        return;
+    }
+    if (model::toJson(updated) == before)
+        return;
+
+    *current = updated;
+    m_committing = true;
+    const bool ok =
+        m_document->commitEntity(uuid, QStringLiteral("pvf: edit text layout"),
+                                 &error);
+    m_committing = false;
+
+    if (!ok)
+    {
+        model::Entity* latest = selectedEntity();
+        if (latest && latest->uuid == original.uuid)
+            *latest = original;
+        showSaveError(error);
+        refresh();
+        return;
+    }
+
+    setStatus(QStringLiteral("已保存：文字排版"));
+    refresh();
 }
 
 void PropertiesPanel::chooseReplacementAsset()

@@ -139,6 +139,9 @@ private:
     SolverEffect selectedSolverEffect() const;
 
     void chooseReplacementAsset();
+    // Opens the modal TextLayoutDialog and writes the whole edited
+    // model::TextContent back in one commit ("pvf: edit text layout").
+    void openTextLayoutDialog();
     // Decoded 320 px thumbnail cached by content hash; assets are immutable so
     // the cache never needs invalidation. Returns a null pixmap for
     // non-image/missing content.
@@ -226,6 +229,7 @@ private:
     QDoubleSpinBox* m_textLineHeight = nullptr;
     QDoubleSpinBox* m_textLetterSpacing = nullptr;
     QDoubleSpinBox* m_textStrokeWidth = nullptr;
+    QPushButton* m_textLayoutButton = nullptr;
     QColor m_textColorValue = Qt::white;
 
     QComboBox* m_vectorShape = nullptr;

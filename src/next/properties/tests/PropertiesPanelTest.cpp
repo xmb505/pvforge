@@ -1,6 +1,7 @@
 #include "next/properties/PropertiesPanel.h"
 
 #include "model/Easing.h"
+#include "next/properties/TextLayoutDialog.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -10,6 +11,7 @@
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
+#include <QFont>
 #include <QGroupBox>
 #include <QImage>
 #include <QJsonDocument>
@@ -17,6 +19,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPlainTextEdit>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -308,6 +312,10 @@ private slots:
     void replaceWithShorterVideoTrimsEnd();
     void missingAssetDisablesReplaceButton();
     void assetPickerFiltersAndShowsPreview();
+    void textLayoutDialogReadsExistingFields();
+    void textLayoutDialogAppliesInOneCommit();
+    void textLayoutDialogCancelDoesNotWrite();
+    void textLayoutPreviewRendersTextAndPlaceholder();
 };
 
 void PropertiesPanelTest::showsBasicFields()
@@ -421,6 +429,251 @@ void PropertiesPanelTest::textEntityShowsTextControls()
     QVERIFY(fireEditingFinished(text));
     QCOMPARE(document.entity(uuid).content.text.text, QStringLiteral("世界"));
     QCOMPARE(document.entityCommits(), 1);
+}
+
+void PropertiesPanelTest::textLayoutDialogReadsExistingFields()
+{
+    model::TextContent content;
+    content.text = QStringLiteral("第一行\n第二行");
+    content.fontFamily = QFont().family();
+    content.pixelSize = 72;
+    content.color = QStringLiteral("#ff0000");
+    content.strokeColor = QStringLiteral("#8000ff00");
+    content.strokeWidth = 3.5;
+    content.align = int(Qt::AlignRight) | int(Qt::AlignTop);
+    content.lineHeight = 1.4;
+    content.letterSpacing = 2.5;
+    content.padding = 9.0;
+    content.boxWidth = 300.0;
+    content.boxHeight = 120.0;
+    content.bold = true;
+    content.italic = true;
+    content.underline = true;
+    content.vertical = true;
+    content.verticalRtl = false;
+
+    TextLayoutDialog dialog(content);
+
+    auto* text = findWidget<QPlainTextEdit>(dialog, "layoutContent");
+    auto* size = findWidget<QSpinBox>(dialog, "layoutSize");
+    auto* color = findWidget<QPushButton>(dialog, "layoutColor");
+    auto* strokeColor = findWidget<QPushButton>(dialog, "layoutStrokeColor");
+    auto* strokeWidth = findWidget<QDoubleSpinBox>(dialog, "layoutStrokeWidth");
+    auto* bold = findWidget<QCheckBox>(dialog, "layoutBold");
+    auto* italic = findWidget<QCheckBox>(dialog, "layoutItalic");
+    auto* underline = findWidget<QCheckBox>(dialog, "layoutUnderline");
+    auto* alignH = findWidget<QComboBox>(dialog, "layoutAlignH");
+    auto* alignV = findWidget<QComboBox>(dialog, "layoutAlignV");
+    auto* lineHeight = findWidget<QDoubleSpinBox>(dialog, "layoutLineHeight");
+    auto* letterSpacing = findWidget<QDoubleSpinBox>(dialog, "layoutLetterSpacing");
+    auto* padding = findWidget<QDoubleSpinBox>(dialog, "layoutPadding");
+    auto* boxWidth = findWidget<QDoubleSpinBox>(dialog, "layoutBoxWidth");
+    auto* boxHeight = findWidget<QDoubleSpinBox>(dialog, "layoutBoxHeight");
+    auto* direction = findWidget<QComboBox>(dialog, "layoutDirection");
+
+    QVERIFY(text);
+    QVERIFY(size);
+    QVERIFY(color);
+    QVERIFY(strokeColor);
+    QVERIFY(strokeWidth);
+    QVERIFY(bold);
+    QVERIFY(italic);
+    QVERIFY(underline);
+    QVERIFY(alignH);
+    QVERIFY(alignV);
+    QVERIFY(lineHeight);
+    QVERIFY(letterSpacing);
+    QVERIFY(padding);
+    QVERIFY(boxWidth);
+    QVERIFY(boxHeight);
+    QVERIFY(direction);
+
+    QCOMPARE(text->toPlainText(), content.text);
+    QCOMPARE(size->value(), 72);
+    QCOMPARE(QColor(color->text()), QColor(QStringLiteral("#ff0000")));
+    QCOMPARE(QColor(strokeColor->text()), QColor(QStringLiteral("#8000ff00")));
+    QCOMPARE(strokeWidth->value(), 3.5);
+    QVERIFY(bold->isChecked());
+    QVERIFY(italic->isChecked());
+    QVERIFY(underline->isChecked());
+    QCOMPARE(alignH->currentData().toInt(), int(Qt::AlignRight));
+    QCOMPARE(alignV->currentData().toInt(), int(Qt::AlignTop));
+    QCOMPARE(lineHeight->value(), 1.4);
+    QCOMPARE(letterSpacing->value(), 2.5);
+    QCOMPARE(padding->value(), 9.0);
+    QCOMPARE(boxWidth->value(), 300.0);
+    QCOMPARE(boxHeight->value(), 120.0);
+    QCOMPARE(direction->currentIndex(), 2);
+
+    const model::TextContent roundTrip = dialog.content();
+    QCOMPARE(roundTrip.text, content.text);
+    QCOMPARE(roundTrip.fontFamily, content.fontFamily);
+    QCOMPARE(roundTrip.pixelSize, content.pixelSize);
+    QCOMPARE(QColor(roundTrip.color), QColor(content.color));
+    QCOMPARE(QColor(roundTrip.strokeColor), QColor(content.strokeColor));
+    QCOMPARE(roundTrip.strokeWidth, content.strokeWidth);
+    QCOMPARE(roundTrip.align, content.align);
+    QCOMPARE(roundTrip.lineHeight, content.lineHeight);
+    QCOMPARE(roundTrip.letterSpacing, content.letterSpacing);
+    QCOMPARE(roundTrip.padding, content.padding);
+    QCOMPARE(roundTrip.boxWidth, content.boxWidth);
+    QCOMPARE(roundTrip.boxHeight, content.boxHeight);
+    QCOMPARE(roundTrip.bold, true);
+    QCOMPARE(roundTrip.italic, true);
+    QCOMPARE(roundTrip.underline, true);
+    QCOMPARE(roundTrip.vertical, true);
+    QCOMPARE(roundTrip.verticalRtl, false);
+}
+
+void PropertiesPanelTest::textLayoutDialogAppliesInOneCommit()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addTextEntity(QStringLiteral("文字实体"),
+                                             QStringLiteral("旧文本"));
+    document.entity(uuid).content.text.pixelSize = 64;
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* button = findWidget<QPushButton>(panel, "textLayoutButton");
+    QVERIFY(button);
+    QVERIFY(button->isEnabled());
+
+    bool readExisting = false;
+    bool previewOk = false;
+    QTimer::singleShot(0, &panel, [&] {
+        auto* dialog =
+            qobject_cast<TextLayoutDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        auto* text = findWidget<QPlainTextEdit>(*dialog, "layoutContent");
+        auto* size = findWidget<QSpinBox>(*dialog, "layoutSize");
+        auto* strokeWidth =
+            findWidget<QDoubleSpinBox>(*dialog, "layoutStrokeWidth");
+        auto* bold = findWidget<QCheckBox>(*dialog, "layoutBold");
+        auto* direction = findWidget<QComboBox>(*dialog, "layoutDirection");
+        auto* preview = findWidget<QLabel>(*dialog, "layoutPreview");
+        auto* info = findWidget<QLabel>(*dialog, "layoutPreviewInfo");
+        if (!text || !size || !strokeWidth || !bold || !direction || !preview
+            || !info)
+        {
+            dialog->reject();
+            return;
+        }
+
+        readExisting = text->toPlainText() == QStringLiteral("旧文本")
+            && size->value() == 64;
+
+        text->setPlainText(QStringLiteral("新\n文本"));
+        size->setValue(48);
+        strokeWidth->setValue(2.5);
+        bold->setChecked(true);
+        direction->setCurrentIndex(1);
+
+        previewOk = !preview->pixmap().isNull()
+            && !info->text().contains(QStringLiteral("—"));
+        dialog->accept();
+    });
+
+    button->click();
+
+    QVERIFY(readExisting);
+    QVERIFY(previewOk);
+    QCOMPARE(document.entityCommits(), 1);
+
+    const model::TextContent& text = document.entity(uuid).content.text;
+    QCOMPARE(text.text, QStringLiteral("新\n文本"));
+    QCOMPARE(text.pixelSize, 48);
+    QCOMPARE(text.strokeWidth, 2.5);
+    QCOMPARE(text.bold, true);
+    QCOMPARE(text.vertical, true);
+    QCOMPARE(text.verticalRtl, true);
+}
+
+void PropertiesPanelTest::textLayoutDialogCancelDoesNotWrite()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addTextEntity(QStringLiteral("文字实体"),
+                                             QStringLiteral("原样"));
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* button = findWidget<QPushButton>(panel, "textLayoutButton");
+    QVERIFY(button);
+
+    bool sawDialog = false;
+    QTimer::singleShot(0, &panel, [&] {
+        auto* dialog =
+            qobject_cast<TextLayoutDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        auto* size = findWidget<QSpinBox>(*dialog, "layoutSize");
+        auto* text = findWidget<QPlainTextEdit>(*dialog, "layoutContent");
+        if (!size || !text)
+        {
+            dialog->reject();
+            return;
+        }
+        size->setValue(200);
+        text->setPlainText(QStringLiteral("不应保存"));
+        sawDialog = true;
+        dialog->reject();
+    });
+
+    button->click();
+
+    QVERIFY(sawDialog);
+    QCOMPARE(document.entityCommits(), 0);
+    const model::TextContent& text = document.entity(uuid).content.text;
+    QCOMPARE(text.pixelSize, 96);
+    QCOMPARE(text.text, QStringLiteral("原样"));
+}
+
+void PropertiesPanelTest::textLayoutPreviewRendersTextAndPlaceholder()
+{
+    model::TextContent content;
+    content.text = QStringLiteral("Preview");
+    content.pixelSize = 96;
+
+    TextLayoutDialog dialog(content);
+    auto* preview = findWidget<QLabel>(dialog, "layoutPreview");
+    auto* info = findWidget<QLabel>(dialog, "layoutPreviewInfo");
+    QVERIFY(preview);
+    QVERIFY(info);
+
+    const QPixmap pixmap = preview->pixmap();
+    QVERIFY(!pixmap.isNull());
+    QCOMPARE(pixmap.size(), preview->size());
+    QVERIFY(!info->text().contains(QStringLiteral("—")));
+
+    // White glyphs must leave bright pixels on the dark checkerboard.
+    const QImage image = pixmap.toImage();
+    QVERIFY(!image.isNull());
+    bool hasInk = false;
+    for (int y = 0; y < image.height() && !hasInk; ++y)
+    {
+        for (int x = 0; x < image.width(); ++x)
+        {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.red() > 200 && pixel.green() > 200 && pixel.blue() > 200)
+            {
+                hasInk = true;
+                break;
+            }
+        }
+    }
+    QVERIFY(hasInk);
+
+    model::TextContent empty;
+    empty.text = QString();
+    TextLayoutDialog emptyDialog(empty);
+    auto* emptyPreview = findWidget<QLabel>(emptyDialog, "layoutPreview");
+    auto* emptyInfo = findWidget<QLabel>(emptyDialog, "layoutPreviewInfo");
+    QVERIFY(emptyPreview);
+    QVERIFY(emptyInfo);
+    QVERIFY(!emptyPreview->pixmap().isNull());
+    QCOMPARE(emptyInfo->text(), QStringLiteral("排版尺寸：—"));
 }
 
 void PropertiesPanelTest::solverSectionShowsEffectAndParams()
