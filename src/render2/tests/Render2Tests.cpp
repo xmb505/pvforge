@@ -5,8 +5,11 @@
 
 #include <QColor>
 #include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSize>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -99,6 +102,75 @@ bool nearColor(const QColor& actual, const QColor& expected, int tolerance = 3)
     return std::abs(actual.red() - expected.red()) <= tolerance
            && std::abs(actual.green() - expected.green()) <= tolerance
            && std::abs(actual.blue() - expected.blue()) <= tolerance;
+}
+
+int countRedBorderPixels(const QImage& image)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        for (int x = 0; x < image.width(); ++x)
+        {
+            const QColor color = image.pixelColor(x, y);
+            if (color.red() >= 150 && color.green() <= 100
+                && color.blue() <= 100 && color.red() - color.green() >= 60)
+                ++count;
+        }
+    }
+    return count;
+}
+
+bool hasBrightPixel(const QImage& image, const QRect& area, int minimum = 200)
+{
+    const QRect clipped = area.intersected(image.rect());
+    for (int y = clipped.top(); y <= clipped.bottom(); ++y)
+    {
+        for (int x = clipped.left(); x <= clipped.right(); ++x)
+        {
+            const QColor color = image.pixelColor(x, y);
+            if (color.red() >= minimum && color.green() >= minimum
+                && color.blue() >= minimum)
+                return true;
+        }
+    }
+    return false;
+}
+
+bool writeAssetFiles(const QString& projectRoot, const AssetHash& hash,
+                     const QString& type, const QByteArray& content,
+                     int width = 0, int height = 0)
+{
+    const QString directory = projectRoot + QStringLiteral("/assets/") + hash;
+    if (!QDir().mkpath(directory))
+        return false;
+
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("hash"), hash);
+    metadata.insert(QStringLiteral("type"), type);
+    metadata.insert(QStringLiteral("name"), QStringLiteral("broken"));
+    if (width > 0)
+        metadata.insert(QStringLiteral("width"), width);
+    if (height > 0)
+        metadata.insert(QStringLiteral("height"), height);
+
+    QFile json(directory + QStringLiteral("/asset.json"));
+    if (!json.open(QIODevice::WriteOnly))
+        return false;
+    json.write(QJsonDocument(metadata).toJson());
+
+    QFile file(directory + QStringLiteral("/content.bin"));
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    return file.write(content) == content.size();
+}
+
+Entity makeAssetEntity(const Uuid& uuid, AssetType type, const AssetHash& hash)
+{
+    Entity entity = makeEntity(uuid);
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = type;
+    entity.content.asset.hash = hash;
+    return entity;
 }
 
 void testRedVectorCenterPixel()
@@ -264,6 +336,210 @@ void testMissingAssetCheckerboard()
     CHECK(first != second);
     CHECK(first != background);
     CHECK(second != background);
+}
+
+void testMissingImageCard()
+{
+    const AssetHash hash(64, QLatin1Char('a'));
+    Project project = makeProject(320, 180);
+    Entity entity = makeAssetEntity(QStringLiteral("offline-image"),
+                                    AssetType::Image, hash);
+    entity.transform.x = 160.0;
+    entity.transform.y = 90.0;
+    add(project, entity);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QImage image = render(project, store);
+
+    CHECK(countRedBorderPixels(image) > 20);
+    CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
+    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+          == QStringLiteral("素材丢失"));
+}
+
+void testMissingVideoAndHtmlCards()
+{
+    const AssetHash hash(64, QLatin1Char('b'));
+    const QVector<AssetType> types = {AssetType::Video, AssetType::Html};
+
+    for (const AssetType type : types)
+    {
+        Project project = makeProject(320, 180);
+        Entity entity = makeAssetEntity(QStringLiteral("offline"), type, hash);
+        entity.transform.x = 160.0;
+        entity.transform.y = 90.0;
+        add(project, entity);
+
+        QTemporaryDir directory;
+        assets::AssetStore store(directory.path());
+
+        // A stale provider frame must not hide a genuinely missing asset.
+        QImage stale(20, 20, QImage::Format_ARGB32_Premultiplied);
+        stale.fill(QColor(0, 255, 0));
+        render2::Options options;
+        options.videoFrame = [&](const Uuid&, double) { return stale; };
+        options.htmlFrame = [&](const Uuid&, double) { return stale; };
+        render2::SceneWorld world(project, store);
+        anim::Cache cache;
+        const QImage image =
+            render2::renderFrame(project, store, options, world, cache);
+
+        CHECK(countRedBorderPixels(image) > 20);
+        CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
+        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+              == QStringLiteral("素材丢失"));
+    }
+}
+
+void testPresentAssetKeepsPendingPlaceholder()
+{
+    QTemporaryDir directory;
+    QImage source(20, 20, QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(0, 255, 0));
+    const QString path = directory.path() + QStringLiteral("/picture.png");
+    CHECK(source.save(path));
+
+    assets::AssetStore store(directory.path());
+    QString error;
+    const auto stored = store.importFile(path, &error);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    {
+        Project project = makeProject(320, 180);
+        Entity entity = makeAssetEntity(QStringLiteral("pending-video"),
+                                        AssetType::Video, stored->hash);
+        entity.transform.x = 160.0;
+        entity.transform.y = 90.0;
+        add(project, entity);
+
+        render2::Options options;
+        options.videoFrame = [](const Uuid&, double) { return QImage(); };
+        render2::SceneWorld world(project, store);
+        anim::Cache cache;
+        const QImage image =
+            render2::renderFrame(project, store, options, world, cache);
+
+        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+              == QStringLiteral("视频"));
+        CHECK(countRedBorderPixels(image) == 0);
+        CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
+    }
+
+    {
+        Project project = makeProject(320, 180);
+        Entity entity = makeAssetEntity(QStringLiteral("pending-html"),
+                                        AssetType::Html, stored->hash);
+        entity.transform.x = 160.0;
+        entity.transform.y = 90.0;
+        add(project, entity);
+
+        render2::Options options;
+        options.htmlFrame = [](const Uuid&, double) { return QImage(); };
+        render2::SceneWorld world(project, store);
+        anim::Cache cache;
+        const QImage image =
+            render2::renderFrame(project, store, options, world, cache);
+
+        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+              == QStringLiteral("HTML"));
+        CHECK(countRedBorderPixels(image) == 0);
+        CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
+    }
+}
+
+void testCorruptImageShowsMissingCard()
+{
+    QTemporaryDir directory;
+    const AssetHash hash(64, QLatin1Char('c'));
+    CHECK(writeAssetFiles(directory.path(), hash, QStringLiteral("image"),
+                          QByteArrayLiteral("not an image"), 200, 100));
+
+    Project project = makeProject(320, 180);
+    Entity entity = makeAssetEntity(QStringLiteral("corrupt"),
+                                    AssetType::Image, hash);
+    entity.transform.x = 160.0;
+    entity.transform.y = 90.0;
+    add(project, entity);
+
+    assets::AssetStore store(directory.path());
+    const QImage image = render(project, store);
+
+    CHECK(store.get(hash).has_value());
+    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+          == QStringLiteral("素材丢失"));
+    CHECK(countRedBorderPixels(image) > 20);
+    CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
+}
+
+void testSmallMissingRectDoesNotOverflow()
+{
+    QTemporaryDir directory;
+    const AssetHash hash(64, QLatin1Char('d'));
+    CHECK(writeAssetFiles(directory.path(), hash, QStringLiteral("image"),
+                          QByteArrayLiteral("not an image"), 60, 30));
+
+    Project project = makeProject(200, 200);
+    Entity entity = makeAssetEntity(QStringLiteral("tiny"),
+                                    AssetType::Image, hash);
+    entity.transform.x = 100.0;
+    entity.transform.y = 100.0;
+    add(project, entity);
+
+    assets::AssetStore store(directory.path());
+    const QImage image = render(project, store);
+
+    CHECK(countRedBorderPixels(image) > 10);
+    // 60x30 content: only the headline fits.  Nothing bright may leak out.
+    const QRect inside(70, 85, 60, 30);
+    CHECK(hasBrightPixel(image, inside));
+    const QRect outsideLeft(0, 0, 70, 200);
+    const QRect outsideRight(130, 0, 70, 200);
+    CHECK(!hasBrightPixel(image, outsideLeft));
+    CHECK(!hasBrightPixel(image, outsideRight));
+}
+
+void testReimportSameHashRestoresImage()
+{
+    QTemporaryDir directory;
+    QImage source(20, 20, QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(0, 255, 0));
+    const QString path = directory.path() + QStringLiteral("/picture.png");
+    CHECK(source.save(path));
+
+    assets::AssetStore store(directory.path());
+    QString error;
+    const auto stored = store.importFile(path, &error);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(400, 300);
+    Entity entity = makeAssetEntity(QStringLiteral("image"),
+                                    AssetType::Image, stored->hash);
+    entity.transform.x = 200.0;
+    entity.transform.y = 150.0;
+    add(project, entity);
+
+    const QImage imported = render(project, store);
+    CHECK(nearColor(imported.pixelColor(200, 150), QColor(0, 255, 0)));
+    CHECK(countRedBorderPixels(imported) == 0);
+
+    CHECK(store.remove(stored->hash));
+    const QImage offline = render(project, store);
+    CHECK(!nearColor(offline.pixelColor(200, 150), QColor(0, 255, 0)));
+    CHECK(countRedBorderPixels(offline) > 20);
+    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+          == QStringLiteral("素材丢失"));
+
+    const auto restored = store.importFile(path, &error);
+    CHECK(restored.has_value());
+    CHECK(restored && restored->hash == stored->hash);
+    const QImage online = render(project, store);
+    CHECK(nearColor(online.pixelColor(200, 150), QColor(0, 255, 0)));
+    CHECK(countRedBorderPixels(online) == 0);
 }
 
 void testCameraCrop()
@@ -497,6 +773,16 @@ int main(int argc, char** argv)
         {QStringLiteral("hiddenAndInvisible"), testHiddenAndInvisible},
         {QStringLiteral("opacityHalfBlend"), testOpacityHalfBlend},
         {QStringLiteral("missingAssetCheckerboard"), testMissingAssetCheckerboard},
+        {QStringLiteral("missingImageCard"), testMissingImageCard},
+        {QStringLiteral("missingVideoAndHtmlCards"), testMissingVideoAndHtmlCards},
+        {QStringLiteral("presentAssetKeepsPendingPlaceholder"),
+         testPresentAssetKeepsPendingPlaceholder},
+        {QStringLiteral("corruptImageShowsMissingCard"),
+         testCorruptImageShowsMissingCard},
+        {QStringLiteral("smallMissingRectDoesNotOverflow"),
+         testSmallMissingRectDoesNotOverflow},
+        {QStringLiteral("reimportSameHashRestoresImage"),
+         testReimportSameHashRestoresImage},
         {QStringLiteral("cameraCrop"), testCameraCrop},
         {QStringLiteral("cameraKeepsCanvasCoordinates"),
          testCameraKeepsCanvasCoordinates},

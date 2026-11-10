@@ -7,6 +7,7 @@
 #include <QBrush>
 #include <QDir>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QImage>
 #include <QPainter>
 #include <QPen>
@@ -30,6 +31,10 @@ constexpr int kDefaultVisualWidth = 320;
 constexpr int kDefaultVisualHeight = 180;
 constexpr int kDefaultHtmlWidth = 800;
 constexpr int kDefaultHtmlHeight = 120;
+
+const QColor kMissingCardBorder(0xc0, 0x39, 0x2b);
+const QColor kMissingCardBase(26, 26, 30);
+const QColor kMissingCardAlternate(38, 38, 44);
 
 QColor colorOr(const QString& value, const QColor& fallback)
 {
@@ -141,14 +146,17 @@ QRectF centeredRect(const QSize& size)
     return centeredRect(QSizeF(size));
 }
 
-void paintCheckerboard(QPainter& painter, const QRectF& rect)
+void paintCheckerboard(QPainter& painter, const QRectF& rect,
+                       const QColor& base = QColor(64, 64, 64),
+                       const QColor& alternate = QColor(96, 96, 96),
+                       const QColor& borderColor = QColor(145, 145, 145))
 {
     painter.save();
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(64, 64, 64));
+    painter.setBrush(base);
     painter.drawRect(rect);
 
-    painter.setBrush(QColor(96, 96, 96));
+    painter.setBrush(alternate);
     const int columns = int(std::ceil(rect.width() / kCheckerCell));
     const int rows = int(std::ceil(rect.height() / kCheckerCell));
     for (int row = 0; row < rows; ++row)
@@ -164,11 +172,109 @@ void paintCheckerboard(QPainter& painter, const QRectF& rect)
         }
     }
 
-    QPen border(QColor(145, 145, 145));
+    QPen border(borderColor);
     border.setWidthF(2.0);
     painter.setPen(border);
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(rect);
+    painter.restore();
+}
+
+bool isAssetMissing(const assets::AssetStore& store,
+                    const model::AssetContent& content)
+{
+    return !store.get(content.hash).has_value();
+}
+
+QString assetTypeTag(AssetType type)
+{
+    switch (type)
+    {
+    case AssetType::Image:
+        return QStringLiteral("IMAGE");
+    case AssetType::Video:
+        return QStringLiteral("VIDEO");
+    case AssetType::Html:
+        return QStringLiteral("HTML");
+    case AssetType::Audio:
+        return QStringLiteral("AUDIO");
+    }
+    return QStringLiteral("ASSET");
+}
+
+// PR-style offline card: dark checkerboard, 2px red frame, "素材丢失" headline
+// and a compact MEDIA OFFLINE line with the short hash and asset type.  The
+// caller's transform/opacity are already applied, so this only paints in local
+// content coordinates and never adds rotation.
+void paintMissingAssetCard(QPainter& painter, const QRectF& rect,
+                           const model::AssetContent& content)
+{
+    const QRectF area = rect.normalized();
+    if (area.width() < 1.0 || area.height() < 1.0)
+        return;
+
+    paintCheckerboard(painter, area, kMissingCardBase, kMissingCardAlternate,
+                      kMissingCardBase);
+
+    painter.save();
+    QPen border(kMissingCardBorder);
+    border.setWidthF(2.0);
+    border.setJoinStyle(Qt::MiterJoin);
+    painter.setPen(border);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(area.adjusted(1.0, 1.0, -1.0, -1.0));
+
+    if (area.width() < 28.0 || area.height() < 14.0)
+    {
+        painter.restore();
+        return;
+    }
+
+    const bool detailed = area.width() >= 160.0 && area.height() >= 52.0;
+
+    int mainSize = int(std::clamp(area.height() * (detailed ? 0.17 : 0.30),
+                                  9.0, 56.0));
+    mainSize = std::min(mainSize, int(area.width() / 4.8));
+    mainSize = std::max(6, mainSize);
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPixelSize(mainSize);
+    painter.setFont(font);
+    painter.setPen(QColor(240, 240, 240));
+
+    const QRectF mainRect =
+        detailed ? QRectF(area.left(), area.top() + area.height() * 0.14,
+                          area.width(), area.height() * 0.44)
+                 : area;
+    painter.drawText(mainRect, Qt::AlignCenter, QStringLiteral("素材丢失"));
+
+    if (detailed)
+    {
+        QFont secondary = font;
+        secondary.setBold(false);
+        const int secondarySize = std::max(
+            7, int(std::clamp(area.height() * 0.075, 7.0, 14.0)));
+        secondary.setPixelSize(secondarySize);
+        painter.setFont(secondary);
+        painter.setPen(QColor(168, 168, 174));
+
+        QString detail = QStringLiteral("MEDIA OFFLINE");
+        const QString shortHash = content.hash.left(8);
+        if (!shortHash.isEmpty())
+            detail += QStringLiteral("  ·  ") + shortHash;
+        detail += QStringLiteral("  ·  ") + assetTypeTag(content.type);
+
+        const QRectF detailRect(area.left() + 6.0,
+                                area.top() + area.height() * 0.62,
+                                std::max(1.0, area.width() - 12.0),
+                                area.height() * 0.22);
+        const QFontMetricsF metrics(secondary);
+        const QString elided = metrics.elidedText(detail, Qt::ElideRight,
+                                                  detailRect.width());
+        painter.drawText(detailRect, Qt::AlignCenter, elided);
+    }
+
     painter.restore();
 }
 
@@ -280,17 +386,31 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         }
         else
         {
-            paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                             QStringLiteral("素材缺失"));
+            // Missing metadata and unreadable files both count as offline: the
+            // entity keeps existing, but there is nothing usable to draw.
+            paintMissingAssetCard(painter,
+                                  centeredRect(placeholderSize(store, asset)),
+                                  asset);
         }
         return;
     }
 
     case AssetType::Video:
     {
+        // Invoke the provider even for offline assets: previews rely on the
+        // callback contract and may warm caches, but a stale frame must not
+        // mask the missing-asset card.
         const QImage frame = options.videoFrame
                 ? options.videoFrame(entity.uuid, projectFrame)
                 : QImage();
+        if (isAssetMissing(store, asset))
+        {
+            paintMissingAssetCard(painter,
+                                  centeredRect(placeholderSize(store, asset)),
+                                  asset);
+            return;
+        }
+
         if (!frame.isNull())
         {
             const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
@@ -300,6 +420,7 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         }
         else
         {
+            // The asset exists; the provider simply has no decoded frame yet.
             paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
                              QStringLiteral("视频"));
         }
@@ -311,6 +432,14 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         const QImage frame = options.htmlFrame
                 ? options.htmlFrame(entity.uuid, projectFrame)
                 : QImage();
+        if (isAssetMissing(store, asset))
+        {
+            paintMissingAssetCard(painter,
+                                  centeredRect(placeholderSize(store, asset)),
+                                  asset);
+            return;
+        }
+
         if (!frame.isNull())
         {
             const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
@@ -320,6 +449,7 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         }
         else
         {
+            // Asset present but Chrome has not produced a frame yet.
             paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
                              QStringLiteral("HTML"));
         }
@@ -569,6 +699,28 @@ QImage renderFrame(const model::Project& project,
                  cache, visited, options);
     painter.end();
     return image;
+}
+
+QString placeholderLabelForTest(const assets::AssetStore& store,
+                                const model::AssetContent& content)
+{
+    if (isAssetMissing(store, content))
+        return QStringLiteral("素材丢失");
+
+    switch (content.type)
+    {
+    case AssetType::Image:
+        return loadPicture(store, content.hash).isValid()
+                   ? QString()
+                   : QStringLiteral("素材丢失");
+    case AssetType::Video:
+        return QStringLiteral("视频");
+    case AssetType::Html:
+        return QStringLiteral("HTML");
+    case AssetType::Audio:
+        return {};
+    }
+    return {};
 }
 
 } // namespace pvf::render2

@@ -58,4 +58,10 @@ private:
 QImage renderFrame(const model::Project& project, const assets::AssetStore& assets,
                    const Options& options, anim::World& world, anim::Cache& cache);
 
+// Test hook: label shown when an asset entity has no drawable picture, or
+// "素材丢失" when the asset metadata/content is gone.  An empty string means
+// the image asset is drawable.
+QString placeholderLabelForTest(const assets::AssetStore& store,
+                                const model::AssetContent& content);
+
 } // namespace pvf::render2

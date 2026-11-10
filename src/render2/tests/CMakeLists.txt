@@ -15,6 +15,12 @@ set(PVF_RENDER2_TEST_CASES
     hiddenAndInvisible
     opacityHalfBlend
     missingAssetCheckerboard
+    missingImageCard
+    missingVideoAndHtmlCards
+    presentAssetKeepsPendingPlaceholder
+    corruptImageShowsMissingCard
+    smallMissingRectDoesNotOverflow
+    reimportSameHashRestoresImage
     cameraCrop
     cameraKeepsCanvasCoordinates
     cameraNegativeScaleFlips
