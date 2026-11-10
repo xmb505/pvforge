@@ -76,10 +76,11 @@ QJsonObject toJson(const Keyframe& keyframe)
     object.insert(QStringLiteral("frame"), keyframe.frame);
     object.insert(QStringLiteral("value"), keyframe.value);
 
-    if (keyframe.easing.type == QLatin1String("bezier"))
+    const QString type = canonicalEasingName(keyframe.easing.type);
+    if (type == QLatin1String("bezier"))
     {
         QJsonObject easing;
-        easing.insert(QStringLiteral("type"), keyframe.easing.type);
+        easing.insert(QStringLiteral("type"), type);
         easing.insert(QStringLiteral("inX"), keyframe.easing.inX);
         easing.insert(QStringLiteral("inY"), keyframe.easing.inY);
         easing.insert(QStringLiteral("outX"), keyframe.easing.outX);
@@ -88,9 +89,6 @@ QJsonObject toJson(const Keyframe& keyframe)
     }
     else
     {
-        const QString type = keyframe.easing.type.isEmpty()
-                                 ? QStringLiteral("linear")
-                                 : keyframe.easing.type;
         object.insert(QStringLiteral("easing"), type);
     }
 
@@ -114,13 +112,13 @@ std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
     }
     else if (easingValue.isString())
     {
-        keyframe.easing.type = easingValue.toString();
+        keyframe.easing.type = canonicalEasingName(easingValue.toString());
     }
     else if (easingValue.isObject())
     {
         const QJsonObject easingObject = easingValue.toObject();
-        keyframe.easing.type = detail::jsonString(
-            easingObject, QStringLiteral("type"), QStringLiteral("bezier"));
+        keyframe.easing.type = canonicalEasingName(detail::jsonString(
+            easingObject, QStringLiteral("type"), QStringLiteral("bezier")));
         keyframe.easing.inX = detail::jsonDouble(
             easingObject, QStringLiteral("inX"), keyframe.easing.inX);
         keyframe.easing.inY = detail::jsonDouble(

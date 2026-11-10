@@ -8,6 +8,7 @@
 #include <QUuid>
 
 #include <cmath>
+#include <utility>
 
 using namespace pvf;
 using namespace pvf::model;
@@ -503,6 +504,195 @@ void testFractionalTrackEvaluation()
     CHECK(value.has_value() && nearly(*value, 1.0));
     value = evaluateTrack(step, 2.5, false);
     CHECK(value.has_value() && nearly(*value, 0.5));
+}
+
+void testEasingPresets()
+{
+    const QStringList presets = easingPresetNames();
+    CHECK(presets.size() == 30);
+    CHECK(presets.first() == QStringLiteral("easeinquad"));
+    CHECK(presets.last() == QStringLiteral("easeinoutbounce"));
+    CHECK(presets.indexOf(QStringLiteral("easeoutsine")) == 13);
+
+    EasingSpec spec;
+    for (const QString& name : presets)
+    {
+        spec.type = name;
+        CHECK_DETAIL(nearly(easedProgress(spec, 0.0), 0.0), name);
+        CHECK_DETAIL(nearly(easedProgress(spec, 1.0), 1.0), name);
+
+        for (const double t : {0.001, 0.25, 0.5, 0.75, 0.999})
+        {
+            const double value = easedProgress(spec, t);
+            CHECK_DETAIL(std::isfinite(value), name);
+            // Elastic/back/bounce overshoot, but only modestly.
+            CHECK_DETAIL(value >= -0.6 && value <= 1.6, name);
+        }
+    }
+
+    // Non-overshooting families must be monotonic. Elastic/back/bounce dip or
+    // overshoot on purpose, so they are excluded.
+    const QStringList monotonic = {
+        QStringLiteral("easeinquad"),        QStringLiteral("easeoutquad"),
+        QStringLiteral("easeinoutquad"),     QStringLiteral("easeincubic"),
+        QStringLiteral("easeoutcubic"),      QStringLiteral("easeinoutcubic"),
+        QStringLiteral("easeinquart"),       QStringLiteral("easeoutquart"),
+        QStringLiteral("easeinoutquart"),    QStringLiteral("easeinquint"),
+        QStringLiteral("easeoutquint"),      QStringLiteral("easeinoutquint"),
+        QStringLiteral("easeinsine"),        QStringLiteral("easeoutsine"),
+        QStringLiteral("easeinoutsine"),     QStringLiteral("easeinexpo"),
+        QStringLiteral("easeoutexpo"),       QStringLiteral("easeinoutexpo"),
+        QStringLiteral("easeincirc"),        QStringLiteral("easeoutcirc"),
+        QStringLiteral("easeinoutcirc"),
+    };
+    for (const QString& name : monotonic)
+    {
+        spec.type = name;
+        double previous = 0.0;
+        bool nonDecreasing = true;
+        for (int i = 1; i <= 200; ++i)
+        {
+            const double value = easedProgress(spec, i / 200.0);
+            if (value + 1e-12 < previous)
+                nonDecreasing = false;
+            previous = value;
+        }
+        CHECK_DETAIL(nonDecreasing, name);
+    }
+
+    // Representative curves, values taken from the legacy implementation.
+    struct Sample
+    {
+        const char* name;
+        double t;
+        double expected;
+    };
+    const Sample samples[] = {
+        {"linear", 0.25, 0.25},
+        {"easeinquad", 0.5, 0.25},
+        {"easeoutcubic", 0.5, 0.875},
+        {"easeinoutquad", 0.25, 0.125},
+        {"easeinoutsine", 0.25, 0.14644660940672624},
+        {"easeinexpo", 0.5, 0.03125},
+        {"easeoutcirc", 0.5, 0.86602540378443865},
+        {"easeoutbounce", 0.5, 0.765625},
+        {"easeoutelastic", 0.5, 1.015625},
+        {"easeinback", 0.1, -0.01431422},
+        {"easeoutback", 0.7, 1.08019954},
+    };
+    for (const Sample& sample : samples)
+    {
+        spec.type = QString::fromLatin1(sample.name);
+        CHECK_DETAIL(nearly(easedProgress(spec, sample.t), sample.expected, 1e-7),
+                     QString::fromLatin1(sample.name));
+    }
+
+    // Legacy aliases map onto the same curves.
+    EasingSpec legacy;
+    EasingSpec canonical;
+    for (const auto& pair : {std::pair{"easeIn", "easeinquad"},
+                             std::pair{"easeOut", "easeoutquad"},
+                             std::pair{"easeInOut", "easeinoutquad"}})
+    {
+        legacy.type = QString::fromLatin1(pair.first);
+        canonical.type = QString::fromLatin1(pair.second);
+        CHECK_DETAIL(nearly(easedProgress(legacy, 0.31),
+                            easedProgress(canonical, 0.31)),
+                     QString::fromLatin1(pair.first));
+    }
+
+    spec.type = QStringLiteral("instant");
+    CHECK(nearly(easedProgress(spec, 0.5), 0.0));
+    spec.type = QStringLiteral("step");
+    CHECK(nearly(easedProgress(spec, 0.5), 0.0));
+    spec.type = QStringLiteral("bogus");
+    CHECK(nearly(easedProgress(spec, 0.31), 0.31));
+}
+
+void testEasingJson()
+{
+    QString error;
+
+    for (const QString& name : easingPresetNames())
+    {
+        Keyframe keyframe = keyAt(0, 1.0);
+        keyframe.easing.type = name;
+
+        const QJsonObject json = toJson(keyframe);
+        CHECK_DETAIL(json.value(QStringLiteral("easing")).toString() == name,
+                     name);
+
+        const auto parsed = keyframeFromJson(json, &error);
+        CHECK_DETAIL(parsed.has_value(), error);
+        if (parsed)
+        {
+            CHECK_DETAIL(parsed->easing.type == name, name);
+            CHECK_DETAIL(toJson(*parsed) == json, name);
+        }
+    }
+
+    // Camel-case legacy names normalise to the lowercase quadrant presets.
+    Keyframe camel = keyAt(0, 1.0);
+    camel.easing.type = QStringLiteral("easeIn");
+    CHECK(toJson(camel).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("easeinquad"));
+    camel.easing.type = QStringLiteral("easeInOut");
+    CHECK(toJson(camel).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("easeinoutquad"));
+    camel.easing.type = QStringLiteral("EaseOutBounce");
+    CHECK(toJson(camel).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("easeoutbounce"));
+
+    // Reading old lowercase JSON is accepted unchanged.
+    QJsonObject legacy = toJson(keyAt(0, 0.0));
+    legacy.insert(QStringLiteral("easing"), QStringLiteral("easeinquart"));
+    auto parsed = keyframeFromJson(legacy, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+        CHECK(parsed->easing.type == QStringLiteral("easeinquart"));
+
+    // Any casing is accepted and rewritten in canonical form.
+    legacy.insert(QStringLiteral("easing"), QStringLiteral("EASEOUTSINE"));
+    parsed = keyframeFromJson(legacy, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+        CHECK(parsed->easing.type == QStringLiteral("easeoutsine"));
+
+    // step is an alias for instant.
+    Keyframe step = keyAt(0, 0.0);
+    step.easing.type = QStringLiteral("step");
+    CHECK(toJson(step).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("instant"));
+    legacy.insert(QStringLiteral("easing"), QStringLiteral("step"));
+    parsed = keyframeFromJson(legacy, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+        CHECK(parsed->easing.type == QStringLiteral("instant"));
+
+    // Empty types are written as linear.
+    Keyframe empty = keyAt(0, 0.0);
+    empty.easing.type.clear();
+    CHECK(toJson(empty).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("linear"));
+
+    // Equality compares canonical curves, not the stored spelling.
+    Keyframe aliasA = keyAt(0, 0.0);
+    aliasA.easing.type = QStringLiteral("easeInOut");
+    Keyframe aliasB = keyAt(0, 0.0);
+    aliasB.easing.type = QStringLiteral("easeinoutquad");
+    CHECK(aliasA == aliasB);
+
+    // Unknown names are preserved but evaluate as linear.
+    Keyframe unknown = keyAt(0, 0.0);
+    unknown.easing.type = QStringLiteral("bogus");
+    CHECK(toJson(unknown).value(QStringLiteral("easing")).toString()
+          == QStringLiteral("bogus"));
+    CHECK(nearly(easedProgress(unknown.easing, 0.37), 0.37));
+
+    // Bezier keeps its object form and default handles.
+    EasingSpec bezier;
+    bezier.type = QStringLiteral("bezier");
+    CHECK(nearly(easedProgress(bezier, 0.5), 0.5, 1e-6));
 }
 
 void testEntityValidation()
@@ -1010,6 +1200,8 @@ const TestCase kTests[] = {
     {"project-json-roundtrip", testProjectJsonRoundTrip},
     {"track-evaluation", testTrackEvaluation},
     {"track-evaluation-fractional", testFractionalTrackEvaluation},
+    {"easing-presets", testEasingPresets},
+    {"easing-json", testEasingJson},
     {"entity-validation", testEntityValidation},
     {"solver-validation", testSolverValidation},
     {"solver-targets", testSolverTargets},
