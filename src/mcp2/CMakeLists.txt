@@ -69,6 +69,7 @@ if(BUILD_TESTING)
         keyframesSetRespectsDuration
         solverDrivenTrackRejectsNormalKeys
         trimSolverRules
+        trimSolverCutPose
         moveTrimReparentValidation
         reparentPreserveWorldKeepsPosition
         lockedEntityRejectsWrite

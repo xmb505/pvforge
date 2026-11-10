@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QTransform>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -455,8 +456,60 @@ double trackValueAt(const model::Entity& entity, const QString& track, int frame
     return value ? *value : fallback;
 }
 
+// Solver samples drive local x/y (parent space) or rotation.  Evaluation adds
+// pivot/scale and every parent transform, so probe with a neutral scale/pivot
+// to recover exactly the values the solver wrote into the driven tracks.
+struct SolvedPose
+{
+    double x = 0.0;
+    double y = 0.0;
+    double rotation = 0.0;
+};
+
+std::optional<SolvedPose> solvedPoseAt(const model::Project& project,
+                                       const assets::AssetStore& assets,
+                                       const Uuid& uuid, int projectFrame)
+{
+    model::Project probe = project;
+    const auto it = probe.entities.find(uuid);
+    if (it == probe.entities.end())
+        return std::nullopt;
+
+    model::Entity& entity = it.value();
+    entity.transform.scaleX = 1.0;
+    entity.transform.scaleY = 1.0;
+    entity.transform.pivotX = 0.0;
+    entity.transform.pivotY = 0.0;
+    entity.tracks.remove(QStringLiteral("scaleX"));
+    entity.tracks.remove(QStringLiteral("scaleY"));
+    entity.tracks.remove(QStringLiteral("pivotX"));
+    entity.tracks.remove(QStringLiteral("pivotY"));
+
+    render2::SceneWorld world(probe, assets);
+    QTransform local =
+        anim::evaluateEntity(probe, uuid, projectFrame, world).world;
+    if (!entity.parentUuid.isEmpty()
+        && probe.entities.contains(entity.parentUuid))
+    {
+        const QTransform parent =
+            anim::evaluateEntity(probe, entity.parentUuid, projectFrame, world)
+                .world;
+        bool invertible = false;
+        const QTransform inverse = parent.inverted(&invertible);
+        if (invertible)
+            local = local * inverse;
+    }
+
+    SolvedPose pose;
+    pose.x = local.dx();
+    pose.y = local.dy();
+    pose.rotation = qRadiansToDegrees(std::atan2(local.m12(), local.m11()));
+    return pose;
+}
+
 QStringList trimSolvers(model::Entity& entity, const model::Entity& old,
-                        int deltaStart, int newDuration, bool addFallback)
+                        int deltaStart, int newDuration,
+                        const std::optional<SolvedPose>& cutPose)
 {
     QStringList removedIds;
     QVector<model::SolverSegment> kept;
@@ -470,17 +523,21 @@ QStringList trimSolvers(model::Entity& entity, const model::Entity& old,
         if (startRel < 0)
         {
             removedIds << segment.id;
-            // The new clip start lands inside this segment (or after it). The
-            // solver module is not linked in Phase A, so freeze the segment's
-            // initial pose at frame 0 as the normal keyframe value.
-            const bool inside = endRel >= 0;
-            if (inside && addFallback)
+            // The new clip start lands inside this segment.  Freeze the pose
+            // the solver produced at the cut frame as an ordinary key so the
+            // trimmed clip starts exactly where the segment used to be.
+            if (endRel >= 0 && cutPose)
             {
                 for (const QString& track : drivenTracks(segment.effect))
                 {
                     model::Keyframe key;
                     key.frame = 0;
-                    key.value = trackValueAt(old, track, segment.startFrame, 0.0);
+                    if (track == QLatin1String("x"))
+                        key.value = cutPose->x;
+                    else if (track == QLatin1String("y"))
+                        key.value = cutPose->y;
+                    else
+                        key.value = cutPose->rotation;
                     key.easing.type = QStringLiteral("linear");
                     model::Track target = entity.tracks.value(track);
                     target.keys.erase(
@@ -623,13 +680,39 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("裁剪后时长必须大于 0"));
 
+    // A start trim that lands inside a solver segment freezes the pose the
+    // solver produced at the cut frame.  Probe the untouched project first:
+    // once the tracks shift, that pose is no longer recoverable.
+    std::optional<SolvedPose> cutPose;
+    if (deltaStart > 0)
+    {
+        bool cutsSegment = false;
+        for (const model::SolverSegment& segment : old.solvers)
+        {
+            if (segment.startFrame < deltaStart
+                && deltaStart <= solverEffectiveEnd(old, segment))
+            {
+                cutsSegment = true;
+                break;
+            }
+        }
+        if (cutsSegment)
+        {
+            cutPose = solvedPoseAt(tx.p(), tx.store->assets(), uuid, newStart);
+            if (!cutPose)
+                return failure(QStringLiteral("invalid_argument"),
+                               QStringLiteral("实体不存在：%1").arg(uuid));
+        }
+    }
+
     if (old.content.kind == ContentKind::Asset)
         entity->content.asset.sourceIn = newSourceIn;
 
     for (auto it = entity->tracks.begin(); it != entity->tracks.end(); ++it)
         stats->removedKeyframes += trimTrack(it.value(), deltaStart, newDuration);
 
-    stats->removedSolvers += trimSolvers(*entity, old, deltaStart, newDuration, true);
+    stats->removedSolvers +=
+        trimSolvers(*entity, old, deltaStart, newDuration, cutPose);
 
     entity->start = newStart;
     entity->end = adjustedEnd;

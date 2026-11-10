@@ -1,6 +1,8 @@
 #include "mcp2/Service.h"
 
+#include "anim/Anim.h"
 #include "model/Model.h"
+#include "render2/Render.h"
 #include "store/Store.h"
 
 #include <QColor>
@@ -14,6 +16,8 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QTemporaryDir>
+#include <QTransform>
+#include <QtMath>
 #include <QtTest>
 
 #include <cmath>
@@ -166,6 +170,7 @@ private slots:
     void keyframesSetRespectsDuration();
     void solverDrivenTrackRejectsNormalKeys();
     void trimSolverRules();
+    void trimSolverCutPose();
     void moveTrimReparentValidation();
     void reparentPreserveWorldKeepsPosition();
     void lockedEntityRejectsWrite();
@@ -428,23 +433,38 @@ void Mcp2Tests::trimSolverRules()
 
     {
         model::Entity& entity = fixture.store->mutableProject().entities[ball];
-        model::Track track;
+        model::Track xTrack;
+        model::Track yTrack;
         model::Keyframe key;
-        key.frame = 0;
-        key.value = -360;
-        track.keys.append(key);
-        entity.tracks.insert(QStringLiteral("x"), track);
-        entity.tracks.insert(QStringLiteral("y"), track);
+        key.frame = 5;
+        key.value = 42.0;
+        xTrack.keys.append(key);
+        key.value = 0.0;
+        yTrack.keys.append(key);
+        model::Keyframe after;
+        after.frame = 25;
+        after.value = 100.0;
+        xTrack.keys.append(after);
+        entity.tracks.insert(QStringLiteral("x"), xTrack);
+        entity.tracks.insert(QStringLiteral("y"), yTrack);
         model::SolverSegment segment;
         segment.id = model::newUuid();
         segment.effect = SolverEffect::Gravity;
-        segment.startFrame = 0;
-        segment.endFrame = 40;
+        segment.startFrame = 5;
+        segment.endFrame = 20;
+        segment.initialVelocity = QPointF(60.0, 0.0);
         segment.params.insert(QStringLiteral("targetUuid"), target);
         entity.solvers.append(segment);
         QString error;
         QVERIFY2(fixture.store->saveEntity(ball, &error), qPrintable(error));
     }
+
+    const model::Project before = fixture.store->project();
+    pvf::render2::SceneWorld world(before, fixture.store->assets());
+    const QTransform cutPose =
+        pvf::anim::evaluateEntity(before, ball, 10, world).world;
+    // The solved pose moved away from the segment start pose (42, 0).
+    QVERIFY(qAbs(cutPose.dx() - 42.0) > 1.0);
 
     QJsonObject result =
         fixture.call(QStringLiteral("entity.trim"),
@@ -460,9 +480,15 @@ void Mcp2Tests::trimSolverRules()
     const model::Entity& trimmed = fixture.store->project().entities.value(ball);
     QVERIFY(trimmed.solvers.isEmpty());
     const auto xTrack = trimmed.tracks.value(QStringLiteral("x")).keys;
-    QCOMPARE(xTrack.size(), 1);
+    QCOMPARE(xTrack.size(), 2);
     QCOMPARE(xTrack.first().frame, 0);
-    QCOMPARE(xTrack.first().value, -360.0);
+    QVERIFY(qAbs(xTrack.first().value - cutPose.dx()) < 1e-9);
+    QCOMPARE(xTrack.last().frame, 15);
+    QCOMPARE(xTrack.last().value, 100.0);
+    const auto yTrack = trimmed.tracks.value(QStringLiteral("y")).keys;
+    QCOMPARE(yTrack.size(), 1);
+    QCOMPARE(yTrack.first().frame, 0);
+    QVERIFY(qAbs(yTrack.first().value - cutPose.dy()) < 1e-9);
 
     // A trim that cuts into the end keeps the segment but freezes it at the
     // new clip end instead of dropping the marker.
@@ -498,6 +524,85 @@ void Mcp2Tests::trimSolverRules()
     const model::Entity& frozen = fixture.store->project().entities.value(ball2);
     QCOMPARE(frozen.solvers.size(), 1);
     QCOMPARE(frozen.solvers.first().endFrame, 29);
+
+    // Extending the clip again must not revive the pinned open segment.
+    result = fixture.call(QStringLiteral("entity.trim"),
+                          QJsonObject{{QStringLiteral("uuid"), ball2},
+                                      {QStringLiteral("end"), 40}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toObject()
+                            .value(QStringLiteral("message")).toString()));
+    const model::Entity& extended = fixture.store->project().entities.value(ball2);
+    QCOMPARE(extended.end, 40);
+    QCOMPARE(extended.solvers.size(), 1);
+    QCOMPARE(extended.solvers.first().startFrame, 0);
+    QCOMPARE(extended.solvers.first().endFrame, 29);
+}
+
+void Mcp2Tests::trimSolverCutPose()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString target =
+        uuidOf(fixture.call(QStringLiteral("entity.create"),
+                            entityArgs(QStringLiteral("地面"), 0, 60)));
+    const QString spinner =
+        uuidOf(fixture.call(QStringLiteral("entity.create"),
+                            entityArgs(QStringLiteral("旋转体"), 0, 30)));
+    QVERIFY(!target.isEmpty() && !spinner.isEmpty());
+
+    {
+        model::Entity& entity =
+            fixture.store->mutableProject().entities[spinner];
+        model::Track track;
+        model::Keyframe key;
+        key.frame = 5;
+        key.value = 0.0;
+        track.keys.append(key);
+        model::Keyframe after;
+        after.frame = 25;
+        after.value = 90.0;
+        track.keys.append(after);
+        entity.tracks.insert(QStringLiteral("rotation"), track);
+        model::SolverSegment segment;
+        segment.id = model::newUuid();
+        segment.effect = SolverEffect::Spin;
+        segment.startFrame = 5;
+        segment.endFrame = 20;
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        entity.solvers.append(segment);
+        QString error;
+        QVERIFY2(fixture.store->saveEntity(spinner, &error), qPrintable(error));
+    }
+
+    const model::Project before = fixture.store->project();
+    pvf::render2::SceneWorld world(before, fixture.store->assets());
+    const QTransform cutPose =
+        pvf::anim::evaluateEntity(before, spinner, 10, world).world;
+    const double expectedRotation =
+        qRadiansToDegrees(std::atan2(cutPose.m12(), cutPose.m11()));
+    // Spin defaults to 6 degrees per frame, so frame 10 of a segment starting
+    // at 5 holds 30 degrees; the naive segment-start pose would be 0.
+    QVERIFY(qAbs(expectedRotation - 30.0) < 1e-9);
+
+    QJsonObject result =
+        fixture.call(QStringLiteral("entity.trim"),
+                     QJsonObject{{QStringLiteral("uuid"), spinner},
+                                 {QStringLiteral("start"), 10}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toObject()
+                            .value(QStringLiteral("message")).toString()));
+
+    const model::Entity& trimmed =
+        fixture.store->project().entities.value(spinner);
+    QVERIFY(trimmed.solvers.isEmpty());
+    const auto keys = trimmed.tracks.value(QStringLiteral("rotation")).keys;
+    QCOMPARE(keys.size(), 2);
+    QCOMPARE(keys.first().frame, 0);
+    QVERIFY(qAbs(keys.first().value - expectedRotation) < 1e-9);
+    QCOMPARE(keys.last().frame, 15);
+    QCOMPARE(keys.last().value, 90.0);
 }
 
 void Mcp2Tests::moveTrimReparentValidation()
