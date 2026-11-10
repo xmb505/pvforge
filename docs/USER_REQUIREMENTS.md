@@ -126,6 +126,8 @@
 
 ## 9. 设置 / UI
 
+- **保留旧 pvforge 的 UI、布局、面板、快捷键和交互**；不是新壳模仿旧 UI，更不是删旧 app。新实体模型/Store/渲染/MCP/工作台缓存只换底层。
+- `src/next/app` 的新壳只作参考/试验，不作为交付主程序；交付以旧 `src/app`、`src/ui` 为壳。
 - 功能设置全局（QSettings）：HTML 清晰度/缓存/看门狗/Chrome、视频代理、工作台缓存、MCP 端口/token、Git 开关、人类 commit debounce。
 - 工程设置单工程：fps、分辨率、背景色、markers；fps/分辨率锁定，名称/背景色可改。
 - 旧 pvforge 深色主题；不做像素风改造。
