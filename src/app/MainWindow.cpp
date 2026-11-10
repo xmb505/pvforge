@@ -1653,7 +1653,6 @@ void MainWindow::wireSessionMcpServer()
 void MainWindow::onSessionMcpToolStarted(const QString& name,
                                          const QString& argsJson, bool write)
 {
-    ++m_sessionActiveToolCalls;
     m_sessionRunningToolArgs.insert(name, argsJson);
     if (write)
     {
@@ -1674,8 +1673,6 @@ void MainWindow::onSessionMcpToolFinished(const QString& name,
                                           const QString& resultJson, qint64 ms,
                                           bool ok)
 {
-    if (m_sessionActiveToolCalls > 0)
-        --m_sessionActiveToolCalls;
     const QString argsJson = m_sessionRunningToolArgs.take(name);
     const bool write = mcp2::Service::isWriteTool(name);
     if (write)
@@ -1744,16 +1741,6 @@ void MainWindow::refreshSessionAiLock()
     }
     updateSessionMcpStatus();
     updateSessionStatus();
-}
-
-void MainWindow::resetSessionAiLock()
-{
-    m_sessionAiStopped = false;
-    m_sessionActiveToolCalls = 0;
-    m_sessionAiBusyWrites = 0;
-    m_sessionRunningWrites.clear();
-    m_sessionRunningToolArgs.clear();
-    refreshSessionAiLock();
 }
 
 void MainWindow::setHumanEditingEnabled(bool enabled)

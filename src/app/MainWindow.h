@@ -266,7 +266,6 @@ private:
                                   qint64 ms, bool ok);
     void onSessionMcpStoppedChanged(bool stopped);
     void refreshSessionAiLock();
-    void resetSessionAiLock();
     void setHumanEditingEnabled(bool enabled);
     void updateSessionActionStates();
     void refreshSessionAfterExternalChange();
@@ -358,7 +357,6 @@ private:
     next::HistoryPanel* m_sessionHistory = nullptr;
     SettingsDialog* m_sessionSettingsDialog = nullptr;
     bool m_sessionAiStopped = false;
-    int m_sessionActiveToolCalls = 0;
     int m_sessionAiBusyWrites = 0;
     QHash<QString, int> m_sessionRunningWrites;
     QHash<QString, QString> m_sessionRunningToolArgs;
