@@ -61,6 +61,11 @@ if(BUILD_TESTING)
         restoreCommitRejectsInvalidHash
         restoreCommitClearsStacksAndKeepsAssets
         restoreCommitRollsBackOnCommitFailure
+        createWithoutGit
+        openWithoutGitRepoAndGitRequested
+        enableGitLater
+        disableGitThenCommitStillUndoable
+        setGitEnabledReportsMissingGit
     )
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)

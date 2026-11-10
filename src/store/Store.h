@@ -42,7 +42,11 @@ struct UndoEntry
     QString message;
 };
 
-// A .pvproj directory backed by git.
+// A .pvproj directory, optionally backed by git.
+//
+// Git is optional. With git disabled (or unavailable) the store still writes
+// text project data atomically and keeps the in-memory undo/redo stack, but it
+// never runs git and no history survives a restart.
 //
 // Layout:
 //   project.json
@@ -69,11 +73,28 @@ struct UndoEntry
 class ProjectStore
 {
 public:
+    // `useGit` only expresses intent. create(useGit=true) requires a git
+    // binary and fails without one; open(useGit=true) falls back to a plain
+    // text store when git is missing or the directory has no .git.
     static std::optional<ProjectStore> create(const QString& projectDir,
                                               const model::ProjectSettings& settings,
-                                              QString* error = nullptr);
+                                              QString* error = nullptr,
+                                              bool useGit = true);
     static std::optional<ProjectStore> open(const QString& projectDir,
-                                            QString* error = nullptr);
+                                            QString* error = nullptr,
+                                            bool useGit = true);
+
+    // Whether this store is actually using git right now.
+    bool gitEnabled() const { return m_gitEnabled; }
+
+    // True when a `git --version` probe succeeds; `version` receives its
+    // trimmed output when provided.
+    static bool gitBinaryAvailable(QString* version = nullptr);
+
+    // Enables git for this project. When the project has no repository yet,
+    // writes .gitignore (if missing), runs git init and creates the initial
+    // "pvf: init" commit. Disabling never deletes .git or the undo stack.
+    bool setGitEnabled(bool enabled, QString* error = nullptr);
 
     const model::Project& project() const { return m_project; }
     model::Project& mutableProject() { return m_project; }
@@ -134,6 +155,7 @@ private:
     void refreshDirtyText();
     void clearDirty();
     void notePath(const QString& relativePath);
+    void recordTxnUndo(const QString& message);
     void pushUndo(UndoEntry entry);
     void trimStack(QVector<UndoEntry>& stack);
     bool applySnapshot(const QHash<QString, QByteArray>& snapshot,
@@ -149,6 +171,7 @@ private:
     // before the first touch (empty when the file did not exist).
     QHash<QString, QByteArray> m_txnBefore;
     QSet<QString> m_txnPaths;
+    bool m_gitEnabled = false;
     int m_undoLimit = 200;
     qint64 m_undoByteLimit = 512LL * 1024 * 1024;
 };

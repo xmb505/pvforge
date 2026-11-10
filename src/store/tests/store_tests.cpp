@@ -137,6 +137,11 @@ private slots:
     void restoreCommitRejectsInvalidHash();
     void restoreCommitClearsStacksAndKeepsAssets();
     void restoreCommitRollsBackOnCommitFailure();
+    void createWithoutGit();
+    void openWithoutGitRepoAndGitRequested();
+    void enableGitLater();
+    void disableGitThenCommitStillUndoable();
+    void setGitEnabledReportsMissingGit();
 };
 
 void StoreTests::createOpenRoundTrip()
@@ -862,8 +867,8 @@ void StoreTests::corruptEntityJson()
 
 void StoreTests::nonGitDirectoryRejected()
 {
-    SKIP_WITHOUT_GIT();
-
+    // Opening a non-git project with the default useGit=true now succeeds with
+    // git disabled instead of rejecting the directory.
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -874,8 +879,10 @@ void StoreTests::nonGitDirectoryRejected()
                       QString::fromUtf8(json)));
 
     QString error;
-    QVERIFY(!ProjectStore::open(temp.path(), &error));
-    QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
+    auto opened = ProjectStore::open(temp.path(), &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(!opened->gitEnabled());
+    QVERIFY(!QFileInfo::exists(temp.filePath(QStringLiteral(".git"))));
 
     error.clear();
     QVERIFY(!ProjectStore::open(temp.filePath(QStringLiteral("missing")), &error));
@@ -887,18 +894,28 @@ void StoreTests::missingGitToolReportsError()
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
+    QString error;
+    const QString path = temp.filePath(QStringLiteral("Demo.pvproj"));
+    auto created = ProjectStore::create(path, model::ProjectSettings(), &error,
+                                        false);
+    QVERIFY2(created.has_value(), qPrintable(error));
+
     PathGuard guard;
     QVERIFY(qputenv("PATH", QByteArray("/nonexistent")));
 
-    QString error;
-    auto created = ProjectStore::create(temp.filePath(QStringLiteral("Demo.pvproj")),
-                                        model::ProjectSettings(), &error);
-    QVERIFY(!created.has_value());
+    // Creating with an explicit git request still fails without git.
+    error.clear();
+    auto rejected = ProjectStore::create(
+        temp.filePath(QStringLiteral("WithGit.pvproj")),
+        model::ProjectSettings(), &error);
+    QVERIFY(!rejected.has_value());
     QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
 
+    // Opening falls back to a plain text store.
     error.clear();
-    QVERIFY(!ProjectStore::open(temp.path(), &error));
-    QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
+    auto opened = ProjectStore::open(path, &error);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(!opened->gitEnabled());
 }
 
 void StoreTests::createRejectsInvalidInput()
@@ -1504,6 +1521,257 @@ void StoreTests::restoreCommitRollsBackOnCommitFailure()
                {QStringLiteral("diff"), QStringLiteral("--cached"),
                 QStringLiteral("--name-only")});
     QVERIFY2(staged.out.trimmed().isEmpty(), qPrintable(staged.out));
+}
+
+void StoreTests::createWithoutGit()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto created = ProjectStore::create(path, model::ProjectSettings(), &error,
+                                        false);
+    QVERIFY2(created.has_value(), qPrintable(error));
+    QVERIFY(!created->gitEnabled());
+    QVERIFY(!QFileInfo::exists(path + QStringLiteral("/.git")));
+    QVERIFY(QFileInfo::exists(path + QStringLiteral("/project.json")));
+    QVERIFY(QFileInfo::exists(path + QStringLiteral("/.gitignore")));
+    QVERIFY(QFileInfo(path + QStringLiteral("/entities")).isDir());
+    QVERIFY(QFileInfo(path + QStringLiteral("/assets")).isDir());
+
+    model::Entity entity = makeEntity(QStringLiteral("原标题"));
+    const QString entityPath =
+        path + QStringLiteral("/entities/") + entity.uuid + QStringLiteral(".json");
+    created->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(created->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(created->commit(QStringLiteral("pvf: create"), &error),
+             qPrintable(error));
+    QCOMPARE(created->undoDepth(), 1);
+
+    entity.name = QStringLiteral("新标题");
+    created->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(created->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(created->commit(QStringLiteral("pvf: rename"), &error),
+             qPrintable(error));
+    QCOMPARE(created->undoDepth(), 2);
+
+    QVERIFY2(created->undo(&error), qPrintable(error));
+    QCOMPARE(created->project().entities.value(entity.uuid).name,
+             QStringLiteral("原标题"));
+    QVERIFY2(readText(entityPath).contains(QStringLiteral("原标题")),
+             qPrintable(readText(entityPath)));
+
+    error.clear();
+    QVERIFY(created->history(50, &error).isEmpty());
+    QVERIFY2(error.contains(QStringLiteral("Git 未启用")), qPrintable(error));
+    error.clear();
+    QVERIFY(!created->restoreCommit(QStringLiteral("deadbeef"), &error));
+    QVERIFY2(error.contains(QStringLiteral("Git 未启用")), qPrintable(error));
+    error.clear();
+    QVERIFY(!created->commitRecoveredText(&error));
+    QVERIFY2(error.contains(QStringLiteral("Git 未启用")), qPrintable(error));
+    error.clear();
+    QVERIFY(!created->discardDirtyText(&error));
+    QVERIFY2(error.contains(QStringLiteral("Git 未启用")), qPrintable(error));
+    QVERIFY(created->dirtyText().isEmpty());
+
+    error.clear();
+    QVERIFY(created->dirtyTextFiles(&error).isEmpty());
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    error.clear();
+    auto opened = ProjectStore::open(path, &error, false);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(!opened->gitEnabled());
+    QCOMPARE(opened->project().entities.value(entity.uuid).name,
+             QStringLiteral("原标题"));
+    QCOMPARE(opened->undoDepth(), 0);
+    error.clear();
+    QVERIFY(!opened->undo(&error));
+}
+
+void StoreTests::openWithoutGitRepoAndGitRequested()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    model::Project project;
+    const QByteArray json =
+        QJsonDocument(model::toJson(project)).toJson(QJsonDocument::Indented);
+    QVERIFY(writeText(temp.filePath(QStringLiteral("project.json")),
+                      QString::fromUtf8(json)));
+
+    QString error;
+    auto opened = ProjectStore::open(temp.path(), &error, true);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(!opened->gitEnabled());
+    QVERIFY(!QFileInfo::exists(temp.filePath(QStringLiteral(".git"))));
+    QVERIFY(opened->dirtyText().isEmpty());
+
+    error.clear();
+    auto plain = ProjectStore::open(temp.path(), &error, false);
+    QVERIFY2(plain.has_value(), qPrintable(error));
+    QVERIFY(!plain->gitEnabled());
+}
+
+void StoreTests::enableGitLater()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error,
+                                      false);
+    QVERIFY2(store.has_value(), qPrintable(error));
+    QVERIFY(!store->gitEnabled());
+
+    const QString assetPath = path + QStringLiteral("/assets/local/asset.json");
+    const QString cachePath = path + QStringLiteral("/.cache/frame.webp");
+    QVERIFY(writeText(assetPath, QStringLiteral("local media\n")));
+    QVERIFY(writeText(cachePath, QStringLiteral("cache\n")));
+
+    model::Entity entity = makeEntity(QStringLiteral("启用前"));
+    const QString entityPath =
+        path + QStringLiteral("/entities/") + entity.uuid + QStringLiteral(".json");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: before git"), &error),
+             qPrintable(error));
+
+    error.clear();
+    QVERIFY2(store->setGitEnabled(true, &error), qPrintable(error));
+    QVERIFY(store->gitEnabled());
+    QVERIFY(QFileInfo(path + QStringLiteral("/.git")).isDir());
+    QVERIFY(QFileInfo::exists(path + QStringLiteral("/.gitignore")));
+
+    QVector<GitCommit> history = store->history(50, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(history.size() >= 1);
+    QCOMPARE(history.first().message, QStringLiteral("pvf: init"));
+    const QString initHash = history.first().hash;
+
+    const CommandResult tracked =
+        runGit(store->root(),
+               {QStringLiteral("ls-files"), QStringLiteral("--")});
+    QCOMPARE(tracked.exitCode, 0);
+    QVERIFY2(tracked.out.contains(QStringLiteral("project.json")),
+             qPrintable(tracked.out));
+    QVERIFY2(tracked.out.contains(QStringLiteral("entities/") + entity.uuid
+                                  + QStringLiteral(".json")),
+             qPrintable(tracked.out));
+    QVERIFY2(!tracked.out.contains(QStringLiteral("assets/")),
+             qPrintable(tracked.out));
+    QVERIFY2(!tracked.out.contains(QStringLiteral(".cache/")),
+             qPrintable(tracked.out));
+
+    const CommandResult status =
+        runGit(store->root(),
+               {QStringLiteral("status"), QStringLiteral("--porcelain"),
+                QStringLiteral("--untracked-files=all")});
+    QCOMPARE(status.exitCode, 0);
+    QVERIFY2(!status.out.contains(QStringLiteral("assets/")),
+             qPrintable(status.out));
+    QVERIFY2(!status.out.contains(QStringLiteral(".cache/")),
+             qPrintable(status.out));
+
+    const int before = history.size();
+    entity.name = QStringLiteral("启用后");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: after git"), &error),
+             qPrintable(error));
+    history = store->history(50, &error);
+    QCOMPARE(history.size(), before + 1);
+    QCOMPARE(history.first().message, QStringLiteral("pvf: after git"));
+
+    error.clear();
+    QVERIFY2(store->restoreCommit(initHash, &error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("启用前"));
+    QVERIFY2(readText(entityPath).contains(QStringLiteral("启用前")),
+             qPrintable(readText(entityPath)));
+    QVERIFY(QFileInfo::exists(assetPath));
+    QVERIFY(QFileInfo::exists(cachePath));
+}
+
+void StoreTests::disableGitThenCommitStillUndoable()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+    QVERIFY(store->gitEnabled());
+
+    model::Entity entity = makeEntity(QStringLiteral("v1"));
+    const QString entityPath =
+        path + QStringLiteral("/entities/") + entity.uuid + QStringLiteral(".json");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v1"), &error), qPrintable(error));
+
+    const QString countBefore =
+        runGit(store->root(),
+               {QStringLiteral("rev-list"), QStringLiteral("--count"),
+                QStringLiteral("HEAD")})
+            .out.trimmed();
+
+    QVERIFY2(store->setGitEnabled(false, &error), qPrintable(error));
+    QVERIFY(!store->gitEnabled());
+    QVERIFY(store->dirtyText().isEmpty());
+
+    entity.name = QStringLiteral("v2");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: v2"), &error),
+             qPrintable(error));
+
+    const CommandResult countAfter =
+        runGit(store->root(),
+               {QStringLiteral("rev-list"), QStringLiteral("--count"),
+                QStringLiteral("HEAD")});
+    QCOMPARE(countAfter.exitCode, 0);
+    QCOMPARE(countAfter.out.trimmed(), countBefore);
+
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v1"));
+    QVERIFY2(readText(entityPath).contains(QStringLiteral("v1")),
+             qPrintable(readText(entityPath)));
+
+    QVERIFY2(store->redo(&error), qPrintable(error));
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v2"));
+}
+
+void StoreTests::setGitEnabledReportsMissingGit()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error,
+                                      false);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    PathGuard guard;
+    QVERIFY(qputenv("PATH", QByteArray("/nonexistent")));
+
+    QVERIFY(!ProjectStore::gitBinaryAvailable());
+    error.clear();
+    QVERIFY(!store->setGitEnabled(true, &error));
+    QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
+    QVERIFY(!store->gitEnabled());
+    QVERIFY(!QFileInfo::exists(path + QStringLiteral("/.git")));
 }
 
 QTEST_GUILESS_MAIN(StoreTests)

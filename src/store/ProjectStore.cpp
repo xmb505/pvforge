@@ -768,9 +768,24 @@ ProjectStore::ProjectStore(QString root, model::Project project)
     m_assets.emplace(m_root);
 }
 
+bool ProjectStore::gitBinaryAvailable(QString* version)
+{
+    const ProcessResult git = runProcess(QStringLiteral("git"),
+                                         {QStringLiteral("--version")});
+    if (!git.started || git.exitCode != 0)
+    {
+        if (version)
+            version->clear();
+        return false;
+    }
+    if (version)
+        *version = git.out.trimmed();
+    return true;
+}
+
 std::optional<ProjectStore> ProjectStore::create(
     const QString& projectDir, const model::ProjectSettings& settings,
-    QString* error)
+    QString* error, bool useGit)
 {
     if (projectDir.trimmed().isEmpty())
     {
@@ -783,7 +798,7 @@ std::optional<ProjectStore> ProjectStore::create(
     if (!model::validateProject(initialProject, error))
         return std::nullopt;
 
-    if (!checkGit(error))
+    if (useGit && !checkGit(error))
         return std::nullopt;
 
     const QString root =
@@ -822,43 +837,49 @@ std::optional<ProjectStore> ProjectStore::create(
         return std::nullopt;
     }
 
-    const ProcessResult init =
-        runGit(root, {QStringLiteral("init")});
-    if (init.exitCode != 0)
+    if (useGit)
     {
-        setError(error,
-                 QStringLiteral("git init 失败：%1").arg(processFailure(init)));
-        return std::nullopt;
+        const ProcessResult init =
+            runGit(root, {QStringLiteral("init")});
+        if (init.exitCode != 0)
+        {
+            setError(error,
+                     QStringLiteral("git init 失败：%1")
+                         .arg(processFailure(init)));
+            return std::nullopt;
+        }
+
+        if (!ensureGitIdentity(root, error))
+            return std::nullopt;
+
+        const ProcessResult add = runGit(
+            root, {QStringLiteral("add"), QStringLiteral("--"),
+                   QStringLiteral(".gitignore"), QStringLiteral("project.json")});
+        if (add.exitCode != 0)
+        {
+            setError(error,
+                     QStringLiteral("git add 初始文件失败：%1")
+                         .arg(processFailure(add)));
+            return std::nullopt;
+        }
+
+        QString ignoredHash;
+        if (!commitOnlyPaths(
+                root, QString::fromLatin1(kInitMessage),
+                {QStringLiteral(".gitignore"), QStringLiteral("project.json")},
+                &ignoredHash, error))
+        {
+            return std::nullopt;
+        }
     }
 
-    if (!ensureGitIdentity(root, error))
-        return std::nullopt;
-
-    const ProcessResult add = runGit(
-        root, {QStringLiteral("add"), QStringLiteral("--"),
-               QStringLiteral(".gitignore"), QStringLiteral("project.json")});
-    if (add.exitCode != 0)
-    {
-        setError(error,
-                 QStringLiteral("git add 初始文件失败：%1")
-                     .arg(processFailure(add)));
-        return std::nullopt;
-    }
-
-    QString ignoredHash;
-    if (!commitOnlyPaths(
-            root, QString::fromLatin1(kInitMessage),
-            {QStringLiteral(".gitignore"), QStringLiteral("project.json")},
-            &ignoredHash, error))
-    {
-        return std::nullopt;
-    }
-
-    return ProjectStore(root, std::move(initialProject));
+    ProjectStore store(root, std::move(initialProject));
+    store.m_gitEnabled = useGit;
+    return std::move(store);
 }
 
 std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
-                                               QString* error)
+                                               QString* error, bool useGit)
 {
     if (projectDir.trimmed().isEmpty())
     {
@@ -875,15 +896,12 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
         return std::nullopt;
     }
 
-    if (!checkGit(error))
-        return std::nullopt;
-
-    if (!QFileInfo::exists(absolutePath(root, QStringLiteral(".git"))))
-    {
-        setError(error,
-                 QStringLiteral("%1 不是 git 仓库（缺少 .git）").arg(root));
-        return std::nullopt;
-    }
+    // Missing git or a missing repository is not an error: the project opens
+    // as a plain text store. Only explicit useGit=false skips the probe.
+    const bool useRepo =
+        useGit
+        && gitBinaryAvailable()
+        && QFileInfo::exists(absolutePath(root, QStringLiteral(".git")));
 
     model::Project project;
     if (!loadProjectData(root, &project, error))
@@ -892,12 +910,89 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
     // The in-memory undo/redo history starts empty after opening a project;
     // across sessions git history is the cold backup.
     ProjectStore store(root, std::move(project));
+    store.m_gitEnabled = useRepo;
 
     // Scan once so the caller can offer recover/discard. A transient git
     // failure (for example a stale index.lock) must not block opening; the
     // caller can rescan with dirtyTextFiles().
-    store.refreshDirtyText();
+    if (store.m_gitEnabled)
+        store.refreshDirtyText();
     return std::move(store);
+}
+
+bool ProjectStore::setGitEnabled(bool enabled, QString* error)
+{
+    if (!enabled)
+    {
+        m_gitEnabled = false;
+        m_dirtyText.clear();
+        return true;
+    }
+
+    if (!checkGit(error))
+        return false;
+
+    const QString gitDirectory =
+        absolutePath(m_root, QStringLiteral(".git"));
+    if (m_gitEnabled && QFileInfo::exists(gitDirectory))
+    {
+        refreshDirtyText();
+        return true;
+    }
+
+    if (!QFileInfo::exists(gitDirectory))
+    {
+        const QString ignorePath =
+            absolutePath(m_root, QStringLiteral(".gitignore"));
+        if (!QFileInfo::exists(ignorePath)
+            && !writeTextFile(ignorePath, QString::fromLatin1(kGitIgnore), error))
+        {
+            return false;
+        }
+
+        const ProcessResult init = runGit(m_root, {QStringLiteral("init")});
+        if (init.exitCode != 0)
+        {
+            setError(error,
+                     QStringLiteral("git init 失败：%1")
+                         .arg(processFailure(init)));
+            return false;
+        }
+
+        if (!ensureGitIdentity(m_root, error))
+            return false;
+
+        QStringList paths{QStringLiteral(".gitignore"),
+                          QStringLiteral("project.json")};
+        const QFileInfoList entityFiles =
+            QDir(absolutePath(m_root, QStringLiteral("entities")))
+                .entryInfoList({QStringLiteral("*.json")}, QDir::Files,
+                               QDir::Name);
+        for (const QFileInfo& fileInfo : entityFiles)
+            paths << QStringLiteral("entities/") + fileInfo.fileName();
+
+        QStringList addArguments{QStringLiteral("add"), QStringLiteral("--")};
+        addArguments += paths;
+        const ProcessResult add = runGit(m_root, addArguments);
+        if (add.exitCode != 0)
+        {
+            setError(error,
+                     QStringLiteral("git add 初始文件失败：%1")
+                         .arg(processFailure(add)));
+            return false;
+        }
+
+        QString hash;
+        if (!commitOnlyPaths(m_root, QStringLiteral("pvf: init"), paths, &hash,
+                             error))
+        {
+            return false;
+        }
+    }
+
+    m_gitEnabled = true;
+    refreshDirtyText();
+    return true;
 }
 
 bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
@@ -974,6 +1069,14 @@ bool ProjectStore::commit(const QString& message, QString* error)
 {
     const QString normalized = normalizedMessage(message);
 
+    // Without git the commit is purely an in-memory undo step.
+    if (!m_gitEnabled)
+    {
+        recordTxnUndo(normalized);
+        clearDirty();
+        return true;
+    }
+
     // Git backs up text project data only. assets/ and .cache/ are local and
     // ignored, so they are never staged here.
     QStringList candidates = m_txnPaths.values();
@@ -1033,20 +1136,7 @@ bool ProjectStore::commit(const QString& message, QString* error)
 
     // The cold backup now exists; remember exactly what it changed so undo
     // can restore it without touching git.
-    UndoEntry entry;
-    entry.message = normalized;
-    for (const QString& relativePath : std::as_const(candidates))
-    {
-        const QByteArray before = m_txnBefore.value(relativePath);
-        const QByteArray after =
-            readFileBytes(absolutePath(m_root, relativePath));
-        if (before == after)
-            continue;
-        entry.before.insert(relativePath, before);
-        entry.after.insert(relativePath, after);
-    }
-    if (!entry.before.isEmpty())
-        pushUndo(std::move(entry));
+    recordTxnUndo(normalized);
 
     clearDirty();
     return true;
@@ -1122,6 +1212,11 @@ bool ProjectStore::redo(QString* error)
 
 QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
 {
+    if (!m_gitEnabled)
+    {
+        setError(error, QStringLiteral("Git 未启用"));
+        return {};
+    }
     if (!hasHead(m_root))
         return {};
 
@@ -1167,6 +1262,12 @@ QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
 
 bool ProjectStore::restoreCommit(const QString& hash, QString* error)
 {
+    if (!m_gitEnabled)
+    {
+        setError(error, QStringLiteral("Git 未启用"));
+        return false;
+    }
+
     QString commit;
     if (!resolveCommit(m_root, hash, &commit, error))
         return false;
@@ -1263,6 +1364,9 @@ bool ProjectStore::restoreCommit(const QString& hash, QString* error)
 QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const
 {
     QVector<DirtyText> files;
+    if (!m_gitEnabled)
+        return files; // No repository, so nothing can be dirty.
+
     const QVector<RawDirtyText> entries = scanRawDirtyText(m_root, error);
     files.reserve(entries.size());
     for (const RawDirtyText& entry : entries)
@@ -1292,6 +1396,12 @@ QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const
 
 bool ProjectStore::commitRecoveredText(QString* error)
 {
+    if (!m_gitEnabled)
+    {
+        setError(error, QStringLiteral("Git 未启用"));
+        return false;
+    }
+
     QString scanError;
     const QVector<DirtyText> dirty = dirtyTextFiles(&scanError);
     if (!scanError.isEmpty())
@@ -1339,6 +1449,12 @@ bool ProjectStore::commitRecoveredText(QString* error)
 
 bool ProjectStore::discardDirtyText(QString* error)
 {
+    if (!m_gitEnabled)
+    {
+        setError(error, QStringLiteral("Git 未启用"));
+        return false;
+    }
+
     QString scanError;
     const QVector<RawDirtyText> entries = scanRawDirtyText(m_root, &scanError);
     if (!scanError.isEmpty())
@@ -1439,6 +1555,11 @@ bool ProjectStore::reloadAfterDiscard(QString* error)
 
 void ProjectStore::refreshDirtyText()
 {
+    if (!m_gitEnabled)
+    {
+        m_dirtyText.clear();
+        return;
+    }
     QString ignored;
     m_dirtyText = dirtyTextFiles(&ignored);
 }
@@ -1470,6 +1591,27 @@ void ProjectStore::notePath(const QString& relativePath)
     m_txnBefore.insert(relativePath,
                        readFileBytes(absolutePath(m_root, relativePath)));
     m_txnPaths.insert(relativePath);
+}
+
+void ProjectStore::recordTxnUndo(const QString& message)
+{
+    QStringList candidates = m_txnPaths.values();
+    std::sort(candidates.begin(), candidates.end());
+
+    UndoEntry entry;
+    entry.message = message;
+    for (const QString& relativePath : std::as_const(candidates))
+    {
+        const QByteArray before = m_txnBefore.value(relativePath);
+        const QByteArray after =
+            readFileBytes(absolutePath(m_root, relativePath));
+        if (before == after)
+            continue;
+        entry.before.insert(relativePath, before);
+        entry.after.insert(relativePath, after);
+    }
+    if (!entry.before.isEmpty())
+        pushUndo(std::move(entry));
 }
 
 void ProjectStore::pushUndo(UndoEntry entry)
