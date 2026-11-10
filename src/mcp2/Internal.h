@@ -31,6 +31,13 @@ struct Tx
     QSet<Uuid> dirty;
     QSet<Uuid> deleted;
     bool projectDirty = false;
+    // Snapshot of Service::writesEnabled()/isStopped(); read-only tools report
+    // the real permission state instead of pretending writes are available.
+    bool writesEnabled = true;
+    bool stopped = false;
+    // Preview rate limiter supplied by Service. Returns false when the caller
+    // exceeded roughly two renders per second.
+    std::function<bool()> previewSlot;
     // Set by Service::execute. Previews use the editor's media providers so
     // HTML and video layers match the viewport instead of render2 placeholders.
     std::function<QImage(const Uuid&, double)> videoFrameProvider;

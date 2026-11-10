@@ -43,6 +43,7 @@ struct ViewState
     Uuid timelineParent;   // empty = root timeline
     Uuid cameraUuid;       // empty = whole canvas
     QRect viewRect;        // visible project range, may be empty
+    double viewScale = 1.0; // timeline zoom, exposed as view.scale
 };
 using ViewStateProvider = std::function<ViewState()>;
 
@@ -97,16 +98,25 @@ public:
     using BatchCheckpoint = std::function<void()>;
     void setBatchCheckpoint(BatchCheckpoint checkpoint);
 
+    // Wall clock override for the preview rate limiter. Tests and embedders use
+    // it to make limit_exceeded deterministic; the default is the system clock.
+    void setClock(std::function<qint64()> clock);
+
     // MCP tools/list payload: { "tools": [ {name, description, inputSchema} ] }.
     QJsonObject listTools() const;
 
 private:
+    bool takePreviewSlot();
+
     store::ProjectStore* m_store = nullptr;
     assets::AssetStore* m_assets = nullptr;
     ViewStateProvider m_viewStateProvider;
     FrameProvider m_videoFrameProvider;
     FrameProvider m_htmlFrameProvider;
     BatchCheckpoint m_batchCheckpoint;
+    std::function<qint64()> m_clock;
+    std::atomic<qint64> m_previewWindowStart{0};
+    std::atomic<int> m_previewWindowCount{0};
     std::atomic<bool> m_writesEnabled{true};
     std::atomic<bool> m_stopped{false};
 };

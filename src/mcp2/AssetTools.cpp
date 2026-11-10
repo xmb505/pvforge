@@ -18,6 +18,7 @@ namespace pvf::mcp2::detail {
 namespace {
 
 constexpr int kMaxBatch = 200;
+constexpr qint64 kMaxAssetBytes = 2LL * 1024LL * 1024LL * 1024LL;
 
 std::optional<AssetType> assetTypeFromName(const QString& name)
 {
@@ -169,6 +170,14 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     if (!source.exists())
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("路径不存在：%1").arg(path));
+    if (source.isFile() && source.size() > kMaxAssetBytes)
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("maxBytes"), double(kMaxAssetBytes));
+        details.insert(QStringLiteral("size"), double(source.size()));
+        return failure(QStringLiteral("limit_exceeded"),
+                       QStringLiteral("素材文件超过 2GB 上限"), details);
+    }
 
     QString name;
     if (!readString(args, "name", &name, &error))
@@ -243,7 +252,11 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     }
 
     if (!stored)
+    {
+        if (importError.contains(QStringLiteral("上限")))
+            return failure(QStringLiteral("limit_exceeded"), importError);
         return failure(QStringLiteral("invalid_argument"), importError);
+    }
 
     if (!audioError.isEmpty())
     {
@@ -320,7 +333,7 @@ Result assetList(Tx& tx, const QJsonObject& args)
                        QStringLiteral("分页参数非法（limit 1..500）"));
 
     QVector<assets::StoredAsset> assets;
-    for (const assets::StoredAsset& asset : tx.store->assets().list())
+    for (const assets::StoredAsset& asset : tx.store->assets().listIncludingMissing())
     {
         if (type && asset.type != *type)
             continue;
@@ -346,7 +359,7 @@ Result assetGet(Tx& tx, const QJsonObject& args)
     QString hash;
     if (!readString(args, "hash", &hash, &error, true))
         return error;
-    const auto asset = tx.store->assets().get(hash);
+    const auto asset = tx.store->assets().getIncludingMissing(hash);
     if (!asset)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("素材不存在：%1").arg(hash));
@@ -399,9 +412,6 @@ Result assetAssign(Tx& tx, const QJsonObject& args)
                        : 0;
     if (!readInt(args, "sourceIn", &sourceIn, &error))
         return error;
-    if (sourceIn < 0)
-        return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("sourceIn 不能小于 0"));
 
     double volume = current == ContentKind::Asset
                         ? entity->content.asset.volume
@@ -412,7 +422,12 @@ Result assetAssign(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("volume 不能小于 0"));
 
-    if (!isTimed(asset->type))
+    if (isTimed(asset->type))
+    {
+        const int maxSourceIn = std::max(0, assetFrames(*asset) - 1);
+        sourceIn = std::clamp(sourceIn, 0, maxSourceIn);
+    }
+    else
         sourceIn = 0;
 
     int removedKeyframes = 0;

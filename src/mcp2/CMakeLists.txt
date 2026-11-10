@@ -91,6 +91,17 @@ if(BUILD_TESTING)
         previewRenderFrameWritesPng
         previewRejectsOversize
         solverEvaluateNestedEntity
+        moveRowOnlyAndGetDefaults
+        entityGetIncludesSolvers
+        textualContentCanBecomeEmpty
+        writeFlagsReflectService
+        previewDocumentContract
+        previewRateLimit
+        assetSourceInClamped
+        assetMissingContentStillListed
+        deleteReportsSolverDependencies
+        reparentPreserveWorldRejectsKeyframes
+        assetImportRejectsOversize
         stopBlocksWrites
         stopKeepsReadsWorking
         resumeRestoresWrites

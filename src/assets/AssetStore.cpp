@@ -151,10 +151,18 @@ std::optional<StoredAsset> AssetStore::get(const AssetHash& hash) const
 {
     if (!isValidHash(hash))
         return std::nullopt;
-    return getByHash(hash);
+    return getByHash(hash, true);
 }
 
-std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash) const
+std::optional<StoredAsset> AssetStore::getIncludingMissing(const AssetHash& hash) const
+{
+    if (!isValidHash(hash))
+        return std::nullopt;
+    return getByHash(hash, false);
+}
+
+std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash,
+                                                  bool requireContent) const
 {
     const QString directory = m_assetsDir + QLatin1Char('/') + hash;
     if (!QFileInfo(directory).isDir())
@@ -176,18 +184,8 @@ std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash) const
     asset.tags = tagsFromMetadata(*metadata);
     asset.metadata = *metadata;
 
-    if (asset.type == AssetType::Html)
-    {
-        QString entry = metadata->value(QStringLiteral("entry")).toString();
-        if (entry.isEmpty())
-            entry = QStringLiteral("index.html");
-        if (!QFileInfo(directory + QStringLiteral("/bundle/") + entry).isFile())
-            return std::nullopt;
-    }
-    else if (contentFiles(directory).isEmpty())
-    {
+    if (requireContent && missingContent(asset))
         return std::nullopt;
-    }
 
     return asset;
 }
@@ -201,7 +199,7 @@ QVector<StoredAsset> AssetStore::list() const
     {
         if (!isValidHash(name))
             continue;
-        if (const auto asset = getByHash(name))
+        if (const auto asset = getByHash(name, true))
             assets.append(*asset);
     }
 
@@ -212,6 +210,41 @@ QVector<StoredAsset> AssetStore::list() const
         return a.hash < b.hash;
     });
     return assets;
+}
+
+QVector<StoredAsset> AssetStore::listIncludingMissing() const
+{
+    QVector<StoredAsset> assets;
+    const QStringList names = QDir(m_assetsDir).entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden, QDir::Name);
+    for (const QString& name : names)
+    {
+        if (!isValidHash(name))
+            continue;
+        if (const auto asset = getByHash(name, false))
+            assets.append(*asset);
+    }
+
+    std::sort(assets.begin(), assets.end(), [](const StoredAsset& a, const StoredAsset& b) {
+        const int byName = QString::compare(a.name, b.name, Qt::CaseInsensitive);
+        if (byName != 0)
+            return byName < 0;
+        return a.hash < b.hash;
+    });
+    return assets;
+}
+
+bool missingContent(const StoredAsset& asset)
+{
+    if (asset.type == AssetType::Html)
+    {
+        QString entry = asset.metadata.value(QStringLiteral("entry")).toString();
+        if (entry.isEmpty())
+            entry = QStringLiteral("index.html");
+        return !QFileInfo(asset.directory + QStringLiteral("/bundle/") + entry)
+                    .isFile();
+    }
+    return contentFiles(asset.directory).isEmpty();
 }
 
 bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString* error)

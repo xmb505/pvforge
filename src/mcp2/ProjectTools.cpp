@@ -127,8 +127,8 @@ Result projectGet(Tx& tx, const QJsonObject& args)
     counts.insert(QStringLiteral("markers"), project.markers.size());
 
     QJsonObject write;
-    write.insert(QStringLiteral("enabled"), true);
-    write.insert(QStringLiteral("stopped"), false);
+    write.insert(QStringLiteral("enabled"), tx.writesEnabled);
+    write.insert(QStringLiteral("stopped"), tx.stopped);
 
     QJsonObject data;
     data.insert(QStringLiteral("settings"), settingsJson(project.settings));
@@ -167,7 +167,8 @@ Result projectSummary(Tx& tx, const QJsonObject& args)
                 tx.viewState.cameraUuid.isEmpty()
                     ? QJsonValue(QJsonValue::Null)
                     : QJsonValue(tx.viewState.cameraUuid));
-    data.insert(QStringLiteral("writeEnabled"), true);
+    data.insert(QStringLiteral("writeEnabled"),
+                tx.writesEnabled && !tx.stopped);
     return success(data);
 }
 

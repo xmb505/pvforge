@@ -8,10 +8,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <cmath>
 
 namespace pvf::mcp2::detail {
 
@@ -37,14 +39,48 @@ QJsonValue viewRectValue(const QRect& rect)
     return object;
 }
 
-void insertViewState(QJsonObject* data, const ViewState& state)
+void insertViewState(QJsonObject* data, const ViewState& state,
+                     bool writesEnabled, bool stopped)
 {
     data->insert(QStringLiteral("playhead"), state.playhead);
+    data->insert(QStringLiteral("playheadFrame"), state.playhead);
+
     data->insert(QStringLiteral("selection"), uuidValue(state.selection));
+    QJsonArray selectedUuids;
+    if (!state.selection.isEmpty())
+        selectedUuids.append(state.selection);
+    data->insert(QStringLiteral("selectedUuids"), selectedUuids);
+
     data->insert(QStringLiteral("timelineParent"),
                  uuidValue(state.timelineParent));
+    data->insert(QStringLiteral("openTimelineOwnerUuid"),
+                 uuidValue(state.timelineParent));
     data->insert(QStringLiteral("cameraUuid"), uuidValue(state.cameraUuid));
+    data->insert(QStringLiteral("activeCameraUuid"),
+                 uuidValue(state.cameraUuid));
     data->insert(QStringLiteral("viewRect"), viewRectValue(state.viewRect));
+
+    QJsonObject view;
+    view.insert(QStringLiteral("startFrame"),
+                state.viewRect.isEmpty() ? 0 : state.viewRect.x());
+    view.insert(QStringLiteral("endFrame"),
+                state.viewRect.isEmpty()
+                    ? 0
+                    : state.viewRect.x() + state.viewRect.width());
+    view.insert(QStringLiteral("scale"),
+                state.viewScale > 0.0 ? state.viewScale : 1.0);
+    data->insert(QStringLiteral("view"), view);
+
+    data->insert(QStringLiteral("writeEnabled"), writesEnabled);
+    data->insert(QStringLiteral("stopped"), stopped);
+}
+
+bool validCamera(const model::Project& project, const Uuid& cameraUuid)
+{
+    if (cameraUuid.isEmpty())
+        return true;
+    const model::Entity* camera = findEntity(project, cameraUuid);
+    return camera && camera->content.kind == ContentKind::Camera;
 }
 
 } // namespace
@@ -55,10 +91,11 @@ Result viewStateGet(Tx& tx, const QJsonObject& args)
     const model::Project& project = tx.p();
 
     QJsonObject data;
-    insertViewState(&data, tx.viewState);
+    insertViewState(&data, tx.viewState, tx.writesEnabled, tx.stopped);
     data.insert(QStringLiteral("fps"), project.settings.fps);
     data.insert(QStringLiteral("width"), project.settings.width);
     data.insert(QStringLiteral("height"), project.settings.height);
+    data.insert(QStringLiteral("entityCount"), project.entities.size());
     data.insert(QStringLiteral("root"), tx.store->root());
 
     QJsonObject summary;
@@ -73,9 +110,9 @@ Result viewStateGet(Tx& tx, const QJsonObject& args)
 Result previewRenderFrame(Tx& tx, const QJsonObject& args)
 {
     static const QStringList allowed = {
-        QStringLiteral("frame"),      QStringLiteral("cameraUuid"),
-        QStringLiteral("width"),      QStringLiteral("height"),
-        QStringLiteral("background"),
+        QStringLiteral("frame"),         QStringLiteral("cameraUuid"),
+        QStringLiteral("width"),         QStringLiteral("height"),
+        QStringLiteral("background"),    QStringLiteral("includeBase64"),
     };
     for (auto it = args.constBegin(); it != args.constEnd(); ++it)
     {
@@ -97,6 +134,14 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
     Uuid cameraUuid = tx.viewState.cameraUuid;
     if (!readUuid(args, "cameraUuid", &cameraUuid, &error, false, true))
         return error;
+    if (!validCamera(project, cameraUuid))
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("cameraUuid"), cameraUuid);
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("cameraUuid 必须是已存在的摄像机实体"),
+                       details);
+    }
 
     const auto dimension = [&](const char* key, int fallback, int* out) {
         *out = std::clamp(fallback, 1, kMaxPreviewSide);
@@ -116,11 +161,27 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
         return true;
     };
 
+    const bool hasWidth = args.contains(QStringLiteral("width"));
+    const bool hasHeight = args.contains(QStringLiteral("height"));
     int width = 0;
     int height = 0;
     if (!dimension("width", project.settings.width, &width)
         || !dimension("height", project.settings.height, &height))
         return error;
+
+    // Keep the project aspect ratio when only one side is supplied.
+    if (hasWidth && !hasHeight && project.settings.width > 0)
+    {
+        height = int(std::lround(double(width) * project.settings.height
+                                 / project.settings.width));
+        height = std::clamp(height, 1, kMaxPreviewSide);
+    }
+    else if (hasHeight && !hasWidth && project.settings.height > 0)
+    {
+        width = int(std::lround(double(height) * project.settings.width
+                                / project.settings.height));
+        width = std::clamp(width, 1, kMaxPreviewSide);
+    }
 
     QColor background;
     if (args.contains(QStringLiteral("background")))
@@ -132,6 +193,19 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
         if (!background.isValid())
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("background 必须是 CSS 颜色"));
+    }
+
+    bool includeBase64 = false;
+    if (!readBool(args, "includeBase64", &includeBase64, &error))
+        return error;
+
+    if (tx.previewSlot && !tx.previewSlot())
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("limitPerSecond"), 2);
+        return failure(QStringLiteral("limit_exceeded"),
+                       QStringLiteral("预览渲染限流：约 2 次/秒，请稍后重试"),
+                       details);
     }
 
     render2::SceneWorld world(project, tx.store->assets());
@@ -174,12 +248,22 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
 
     QJsonObject data;
     data.insert(QStringLiteral("path"), path);
+    data.insert(QStringLiteral("mimeType"), QStringLiteral("image/png"));
     data.insert(QStringLiteral("width"), image.width());
     data.insert(QStringLiteral("height"), image.height());
     data.insert(QStringLiteral("frame"), frame);
-    insertViewState(&data, tx.viewState);
-    data.insert(QStringLiteral("cameraUuid"),
-                uuidValue(cameraUuid));
+    insertViewState(&data, tx.viewState, tx.writesEnabled, tx.stopped);
+    data.insert(QStringLiteral("cameraUuid"), uuidValue(cameraUuid));
+
+    if (includeBase64)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("无法读取预览 PNG"));
+        data.insert(QStringLiteral("base64"),
+                    QString::fromLatin1(file.readAll().toBase64()));
+    }
     return success(data);
 }
 

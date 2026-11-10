@@ -1,8 +1,12 @@
 #include "mcp2/Internal.h"
 
+#include "anim/Anim.h"
+#include "render2/Render.h"
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
+#include <QTransform>
 
 #include <algorithm>
 #include <cmath>
@@ -641,6 +645,37 @@ struct DeleteStats
     QJsonArray disabledSolvers;
 };
 
+QJsonArray dependentSolvers(const model::Project& project,
+                            const QSet<Uuid>& referenced)
+{
+    QJsonArray dependencies;
+    QVector<Uuid> remaining = project.entities.keys();
+    std::sort(remaining.begin(), remaining.end());
+    for (const Uuid& uuid : std::as_const(remaining))
+    {
+        if (referenced.contains(uuid))
+            continue;
+        const model::Entity& entity = project.entities.value(uuid);
+        for (const model::SolverSegment& segment : entity.solvers)
+        {
+            if (segment.effect == SolverEffect::Spin)
+                continue;
+            const QString target =
+                segment.params.value(QStringLiteral("targetUuid")).toString();
+            if (!referenced.contains(target))
+                continue;
+            QJsonObject item;
+            item.insert(QStringLiteral("entityUuid"), uuid);
+            item.insert(QStringLiteral("solverId"), segment.id);
+            item.insert(QStringLiteral("effect"),
+                        solverEffectName(segment.effect));
+            item.insert(QStringLiteral("targetUuid"), target);
+            dependencies.append(item);
+        }
+    }
+    return dependencies;
+}
+
 void collectDisabledSolvers(Tx& tx, const QSet<Uuid>& removed, DeleteStats* stats)
 {
     QVector<Uuid> remaining = tx.p().entities.keys();
@@ -1025,6 +1060,7 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             const bool allowedChange =
                 (current == ContentKind::Empty)
                 || (isTextual(current) && isTextual(target))
+                || (isTextual(current) && target == ContentKind::Empty)
                 || (current == ContentKind::Camera
                     && target == ContentKind::Empty);
             if (!allowedChange)
@@ -1308,7 +1344,7 @@ Result entityGet(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("实体不存在：%1").arg(uuid));
 
-    int frame = entity->start;
+    int frame = tx.viewState.playhead;
     if (!readInt(args, "frame", &frame, &error))
         return error;
     if (frame < 0 || frame > kMaxFrame)
@@ -1320,52 +1356,69 @@ Result entityGet(Tx& tx, const QJsonObject& args)
         return error;
 
     const int relative = frame - entity->start;
-    const model::SolverSegment* activeSolver = nullptr;
-    for (const model::SolverSegment& segment : entity->solvers)
-    {
-        if (relative >= segment.startFrame
-            && relative <= solverEffectiveEnd(*entity, segment))
-        {
-            activeSolver = &segment;
-            break;
-        }
-    }
+    const model::SolverSegment* activeSolver = anim::solverAt(*entity, relative);
 
-    const auto valueOf = [&](const QString& track, double fallback,
-                             bool step = false) {
+    // Evaluate through anim so solver segments (gravity/orbit/spin/blackhole)
+    // are included. The pose is world-space; invert the parent transform to
+    // report the entity-local values the rest of the API uses.
+    render2::SceneWorld world(tx.p(), tx.store->assets());
+    anim::Cache cache;
+    const anim::Pose pose =
+        anim::evaluateEntity(tx.p(), uuid, frame, world, cache);
+
+    QTransform parentWorld;
+    if (!entity->parentUuid.isEmpty()
+        && findEntity(tx.p(), entity->parentUuid))
+    {
+        parentWorld =
+            anim::evaluateEntity(tx.p(), entity->parentUuid, frame, world, cache)
+                .world;
+    }
+    bool invertible = false;
+    const QTransform inverse = parentWorld.inverted(&invertible);
+    const QTransform local =
+        invertible ? pose.world * inverse : pose.world;
+
+    const double a00 = local.m11();
+    const double a01 = local.m21();
+    const double a10 = local.m12();
+    const double a11 = local.m22();
+    const double determinant = a00 * a11 - a01 * a10;
+    const double scaleX = std::hypot(a00, a10);
+    const double scaleY =
+        scaleX > 1e-12 ? determinant / scaleX : std::hypot(a01, a11);
+    const double rotation = std::atan2(a10, a00) * 180.0 / kPi;
+
+    const auto trackValue = [&](const QString& track, double fallback,
+                                bool step = false) {
         const auto it = entity->tracks.constFind(track);
         if (it == entity->tracks.constEnd())
             return fallback;
-        const int evaluateAt =
-            activeSolver && drivenTracks(activeSolver->effect).contains(track)
-                ? activeSolver->startFrame
-                : relative;
-        const auto value = model::evaluateTrack(it.value(), evaluateAt, step);
+        const auto value = model::evaluateTrack(it.value(), relative, step);
         return value ? *value : fallback;
     };
+    const double pivotX =
+        trackValue(QStringLiteral("pivotX"), entity->transform.pivotX);
+    const double pivotY =
+        trackValue(QStringLiteral("pivotY"), entity->transform.pivotY);
 
     QJsonObject evaluated;
-    evaluated.insert(QStringLiteral("x"),
-                     valueOf(QStringLiteral("x"), entity->transform.x));
-    evaluated.insert(QStringLiteral("y"),
-                     valueOf(QStringLiteral("y"), entity->transform.y));
-    evaluated.insert(QStringLiteral("rotation"),
-                     valueOf(QStringLiteral("rotation"), entity->transform.rotation));
-    evaluated.insert(QStringLiteral("scaleX"),
-                     valueOf(QStringLiteral("scaleX"), entity->transform.scaleX));
-    evaluated.insert(QStringLiteral("scaleY"),
-                     valueOf(QStringLiteral("scaleY"), entity->transform.scaleY));
-    evaluated.insert(QStringLiteral("opacity"),
-                     valueOf(QStringLiteral("opacity"), entity->transform.opacity));
-    evaluated.insert(QStringLiteral("visible"),
-                     valueOf(QStringLiteral("visible"), entity->visible ? 1.0 : 0.0,
-                             true)
-                         >= 0.5);
+    evaluated.insert(
+        QStringLiteral("x"),
+        local.dx() - pivotX + (a00 * pivotX + a01 * pivotY));
+    evaluated.insert(
+        QStringLiteral("y"),
+        local.dy() - pivotY + (a10 * pivotX + a11 * pivotY));
+    evaluated.insert(QStringLiteral("rotation"), rotation);
+    evaluated.insert(QStringLiteral("scaleX"), scaleX);
+    evaluated.insert(QStringLiteral("scaleY"), scaleY);
+    evaluated.insert(QStringLiteral("opacity"), pose.opacity);
+    evaluated.insert(QStringLiteral("visible"), pose.visible);
     if (entity->content.kind == ContentKind::Asset
         && entity->content.asset.type == AssetType::Audio)
         evaluated.insert(QStringLiteral("volume"),
-                         valueOf(QStringLiteral("volume"),
-                                 entity->content.asset.volume));
+                         trackValue(QStringLiteral("volume"),
+                                    entity->content.asset.volume));
 
     QJsonObject data = entityFull(*entity);
     data.insert(QStringLiteral("evaluated"), evaluated);
@@ -1588,9 +1641,9 @@ Result entityMove(Tx& tx, const QJsonObject& args)
     const bool hasStart = args.contains(QStringLiteral("start"));
     const bool hasDelta = args.contains(QStringLiteral("delta"));
     const bool hasRow = args.contains(QStringLiteral("row"));
-    if (hasStart == hasDelta)
+    if (hasStart && hasDelta)
         return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("start 与 delta 必须且只能给一个"));
+                       QStringLiteral("start 与 delta 只能给一个"));
     if (!hasStart && !hasDelta && !hasRow)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("至少要修改 start/delta 或 row"));
@@ -1826,6 +1879,56 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
         row = defaultRow(tx.p(), newParent, entity->start, entity->end);
     }
 
+    QSet<Uuid> moved{uuid};
+    for (const Uuid& descendant : subtree(tx.p(), uuid))
+        moved.insert(descendant);
+    const QJsonArray dependencies = dependentSolvers(tx.p(), moved);
+    if (!dependencies.isEmpty() && !confirmed(args))
+    {
+        QJsonObject affectedObject;
+        affectedObject.insert(QStringLiteral("solverDependencies"),
+                              dependencies);
+        QJsonObject details;
+        details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
+        details.insert(QStringLiteral("affected"), affectedObject);
+        details.insert(QStringLiteral("hint"),
+                       QStringLiteral("先改相关求解段的 targetUuid，或带 confirm:true 继续"));
+        return failure(QStringLiteral("confirm_required"),
+                       QStringLiteral("换父级会影响引用该实体的求解段，需要 confirm"),
+                       details);
+    }
+
+    if (mode == QLatin1String("preserveWorld"))
+    {
+        static const QStringList transformTracks = {
+            QStringLiteral("x"),        QStringLiteral("y"),
+            QStringLiteral("rotation"), QStringLiteral("scaleX"),
+            QStringLiteral("scaleY"),   QStringLiteral("pivotX"),
+            QStringLiteral("pivotY"),
+        };
+        QStringList animatedTracks;
+        for (const QString& track : transformTracks)
+        {
+            const auto it = entity->tracks.constFind(track);
+            if (it != entity->tracks.constEnd() && !it.value().keys.isEmpty())
+                animatedTracks << track;
+        }
+        if (!animatedTracks.isEmpty())
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("tracks"),
+                           QJsonArray::fromStringList(animatedTracks));
+            details.insert(
+                QStringLiteral("hint"),
+                QStringLiteral("preserveWorld 只改静态 transform，会与关键帧冲突；"
+                               "请先移除这些关键帧，或改用 keepLocal"));
+            return failure(
+                QStringLiteral("conflict"),
+                QStringLiteral("实体有 transform 关键帧，不能用 preserveWorld 换父级"),
+                details);
+        }
+    }
+
     if (mode == QLatin1String("preserveWorld"))
     {
         const Affine oldWorld = worldAffine(tx.p(), uuid, entity->start);
@@ -2020,11 +2123,16 @@ Result entityDelete(Tx& tx, const QJsonObject& args)
         std::sort(ids.begin(), ids.end());
         affectedObject.insert(QStringLiteral("deletedUuids"),
                               QJsonArray::fromStringList(ids));
+        const QJsonArray dependencies = dependentSolvers(tx.p(), affected);
+        affectedObject.insert(QStringLiteral("solverDependencies"), dependencies);
         QJsonObject details;
         details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
         details.insert(QStringLiteral("affected"), affectedObject);
         return failure(QStringLiteral("confirm_required"),
-                       QStringLiteral("删除实体需要 confirm"), details);
+                       dependencies.isEmpty()
+                           ? QStringLiteral("删除实体需要 confirm")
+                           : QStringLiteral("删除实体会移除依赖求解段，需要 confirm"),
+                       details);
     }
 
     DeleteStats stats;
@@ -2093,11 +2201,16 @@ Result entityDeleteMany(Tx& tx, const QJsonObject& args)
         QJsonObject affectedObject;
         affectedObject.insert(QStringLiteral("deletedUuids"),
                               QJsonArray::fromStringList(ids));
+        const QJsonArray dependencies = dependentSolvers(tx.p(), affected);
+        affectedObject.insert(QStringLiteral("solverDependencies"), dependencies);
         QJsonObject details;
         details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
         details.insert(QStringLiteral("affected"), affectedObject);
         return failure(QStringLiteral("confirm_required"),
-                       QStringLiteral("批量删除需要 confirm"), details);
+                       dependencies.isEmpty()
+                           ? QStringLiteral("批量删除需要 confirm")
+                           : QStringLiteral("批量删除会移除依赖求解段，需要 confirm"),
+                       details);
     }
 
     DeleteStats stats;

@@ -21,6 +21,11 @@ struct StoredAsset
     QJsonObject metadata;
 };
 
+// True when asset.json and the directory exist but the content file (or the
+// HTML bundle entry) is gone. Kept separate so get()/list() keep rejecting
+// broken entries and only the *IncludingMissing variants return them.
+bool missingContent(const StoredAsset& asset);
+
 // Result of importVideoWithAudio: the stored video plus the WAV asset that was
 // split out of its audio track. `audio` is empty when the video has no audio
 // stream; `audioError` is set when there was an audio stream but extracting or
@@ -70,8 +75,16 @@ public:
     // Returns std::nullopt when the asset directory or its content is missing.
     std::optional<StoredAsset> get(const AssetHash& hash) const;
 
+    // Like get(), but keeps an asset whose directory and asset.json exist while
+    // the content file (or HTML bundle entry) is missing. Callers detect that
+    // state with StoredAsset::missingContent().
+    std::optional<StoredAsset> getIncludingMissing(const AssetHash& hash) const;
+
     // All valid assets, sorted by name then hash.
     QVector<StoredAsset> list() const;
+
+    // Like list(), but also returns assets whose content file is missing.
+    QVector<StoredAsset> listIncludingMissing() const;
 
     // Replaces the asset's tags in asset.json. Tags are trimmed, empty entries
     // dropped and duplicates removed. Tags longer than 64 characters and lists
@@ -91,7 +104,8 @@ private:
                                               QString* audioError,
                                               QString* error);
     std::optional<StoredAsset> ensureAudio(const StoredAsset& video, QString* error);
-    std::optional<StoredAsset> getByHash(const AssetHash& hash) const;
+    std::optional<StoredAsset> getByHash(const AssetHash& hash,
+                                         bool requireContent = true) const;
 
     QString m_root;
     QString m_assetsDir;

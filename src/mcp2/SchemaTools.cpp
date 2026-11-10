@@ -380,9 +380,10 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("entities"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个"))}},
                      {QStringLiteral("entities")})));
     tools.append(toolSchema(
-        QStringLiteral("entity.get"), QStringLiteral("读取实体完整状态和指定帧求值"),
+        QStringLiteral("entity.get"),
+        QStringLiteral("读取实体完整状态和指定帧求值（默认播放头，含求解段）"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("默认当前播放头"))},
                       {QStringLiteral("includeChildren"), prop(QStringLiteral("boolean"), QString())}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
@@ -402,7 +403,8 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,patch}"))}},
                      {QStringLiteral("items")})));
     tools.append(toolSchema(
-        QStringLiteral("entity.move"), QStringLiteral("平移实体/子树或改行号，不改时长和关键帧"),
+        QStringLiteral("entity.move"),
+        QStringLiteral("平移实体/子树或仅改行号；start/delta 二选一，row 可单独给"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("与 delta 二选一"))},
                       {QStringLiteral("delta"), prop(QStringLiteral("integer"), QStringLiteral("与 start 二选一"))},
@@ -416,11 +418,14 @@ QJsonObject listTools()
                       {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
-        QStringLiteral("entity.reparent"), QStringLiteral("换父级；mode 必填且无默认"),
+        QStringLiteral("entity.reparent"),
+        QStringLiteral("换父级；preserveWorld 拒绝带 transform 关键帧的实体；"
+                       "引用该实体的求解段会列入 confirm_required"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
                       {QStringLiteral("mode"), prop(QStringLiteral("string"), QStringLiteral("preserveWorld|keepLocal"))},
-                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QStringLiteral("有求解段依赖时必须为 true"))}},
                      {QStringLiteral("uuid"), QStringLiteral("parentUuid"), QStringLiteral("mode")})));
     tools.append(toolSchema(
         QStringLiteral("entity.duplicate"), QStringLiteral("复制实体/子树，生成新 UUID"),
@@ -432,7 +437,8 @@ QJsonObject listTools()
                       {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
-        QStringLiteral("entity.delete"), QStringLiteral("删除实体及后代，必须 confirm"),
+        QStringLiteral("entity.delete"),
+        QStringLiteral("删除实体及后代，必须 confirm；依赖求解段列入 affected.solverDependencies"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QStringLiteral("必须为 true"))}},
                      {QStringLiteral("uuid"), QStringLiteral("confirm")})));
@@ -521,39 +527,45 @@ QJsonObject listTools()
                      {QStringLiteral("entityUuid")})));
 
     tools.append(toolSchema(
-        QStringLiteral("preview.render_frame"), QStringLiteral("渲染指定帧到临时 PNG（只读）"),
+        QStringLiteral("preview.render_frame"),
+        QStringLiteral("渲染指定帧到临时 PNG（只读，约 2 次/秒）"),
         objectSchema({{QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("默认播放头"))},
-                      {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("默认 view.state 摄像机"))},
-                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096"))},
+                      {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("必须是摄像机实体；默认 view.state 摄像机"))},
+                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，只给一边时按工程比例补另一边"))},
                       {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096"))},
-                      {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))}})));
+                      {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
+                      {QStringLiteral("includeBase64"), prop(QStringLiteral("boolean"), QStringLiteral("返回 PNG base64"))}})));
     tools.append(toolSchema(
-        QStringLiteral("view.state"), QStringLiteral("读取播放头、选中实体、时间线、摄像机和视口状态"),
+        QStringLiteral("view.state"),
+        QStringLiteral("读取 playheadFrame/selectedUuids/openTimelineOwnerUuid/view 及写权限"),
         empty));
 
     tools.append(toolSchema(
         QStringLiteral("asset.import"),
-        QStringLiteral("把本地文件/目录复制进工程素材库，视频自动拆 WAV；素材不进 git，纯素材导入可能没有 commit"),
+        QStringLiteral("把本地文件/目录复制进工程素材库（单文件/包上限 2GB），视频自动拆 WAV"),
         objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径"))},
                       {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("type"), prop(QStringLiteral("string"), QStringLiteral("image|video|audio|html"))},
                       {QStringLiteral("extractAudio"), prop(QStringLiteral("boolean"), QStringLiteral("视频默认 true"))}},
                      {QStringLiteral("path")})));
     tools.append(toolSchema(
-        QStringLiteral("asset.list"), QStringLiteral("分页列出素材"),
+        QStringLiteral("asset.list"),
+        QStringLiteral("分页列出素材；内容文件缺失的素材仍返回，missing=true"),
         objectSchema({{QStringLiteral("type"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("query"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500"))}})));
     tools.append(toolSchema(
-        QStringLiteral("asset.get"), QStringLiteral("读取素材及引用列表"),
+        QStringLiteral("asset.get"),
+        QStringLiteral("读取素材及引用列表；内容缺失时仍返回素材，missing=true"),
         objectSchema({{QStringLiteral("hash"), prop(QStringLiteral("string"), QString())}},
                      {QStringLiteral("hash")})));
     tools.append(toolSchema(
-        QStringLiteral("asset.assign"), QStringLiteral("给实体换素材/内容"),
+        QStringLiteral("asset.assign"),
+        QStringLiteral("给实体换素材/内容；sourceIn 自动夹到 0..durationFrames-1"),
         objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("assetHash"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("sourceIn"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("sourceIn"), prop(QStringLiteral("integer"), QStringLiteral("夹到 0..max(0,durationFrames-1)"))},
                       {QStringLiteral("volume"), prop(QStringLiteral("number"), QString())}},
                      {QStringLiteral("entityUuid"), QStringLiteral("assetHash")})));
     tools.append(toolSchema(

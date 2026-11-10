@@ -473,8 +473,7 @@ QJsonObject assetJson(const assets::AssetStore& assetStore,
         tagArray.append(tag);
     object.insert(QStringLiteral("tags"), tagArray);
     object.insert(QStringLiteral("usedBy"), usedBy);
-    object.insert(QStringLiteral("missing"),
-                  !QFileInfo::exists(asset.directory));
+    object.insert(QStringLiteral("missing"), assets::missingContent(asset));
     object.insert(QStringLiteral("path"), path);
     return object;
 }

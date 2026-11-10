@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -15,6 +16,11 @@
 namespace pvf::assets {
 
 namespace {
+
+// Guard rails for untrusted .pvhtml archives. The cap matches asset.import's
+// single-file limit; a bundle is a collection of small web assets.
+constexpr int kMaxBundleFiles = 10000;
+constexpr qint64 kMaxBundleBytes = 2LL * 1024LL * 1024LL * 1024LL;
 
 void setError(QString* error, const QString& message)
 {
@@ -52,7 +58,9 @@ bool copyFile(const QString& source, const QString& target, QString* error)
     return true;
 }
 
-bool copyTreeContents(const QString& sourceDir, const QString& destDir, QString* error)
+bool copyTreeContents(const QString& sourceDir, const QString& destDir,
+                      QString* error, qint64* totalBytes = nullptr,
+                      int* fileCount = nullptr)
 {
     if (!QDir().mkpath(destDir))
     {
@@ -75,12 +83,31 @@ bool copyTreeContents(const QString& sourceDir, const QString& destDir, QString*
         const QString target = destDir + QLatin1Char('/') + entry.fileName();
         if (entry.isDir())
         {
-            if (!copyTreeContents(entry.absoluteFilePath(), target, error))
+            if (!copyTreeContents(entry.absoluteFilePath(), target, error,
+                                  totalBytes, fileCount))
                 return false;
         }
-        else if (!copyFile(entry.absoluteFilePath(), target, error))
+        else
         {
-            return false;
+            if (fileCount && ++(*fileCount) > kMaxBundleFiles)
+            {
+                setError(error, QStringLiteral("pvhtml 包文件数超过上限 %1")
+                                    .arg(kMaxBundleFiles));
+                return false;
+            }
+            if (totalBytes)
+            {
+                *totalBytes += entry.size();
+                if (*totalBytes > kMaxBundleBytes)
+                {
+                    setError(error,
+                             QStringLiteral("pvhtml 包总大小超过上限 %1 字节")
+                                 .arg(kMaxBundleBytes));
+                    return false;
+                }
+            }
+            if (!copyFile(entry.absoluteFilePath(), target, error))
+                return false;
         }
     }
     return true;
@@ -106,6 +133,7 @@ bool validateZipEntries(const QString& zipPath, QString* error)
     }
 
     const QList<QByteArray> lines = list.readAllStandardOutput().split('\n');
+    int entryCount = 0;
     for (const QByteArray& rawLine : lines)
     {
         QString entry = QString::fromLocal8Bit(rawLine).trimmed();
@@ -115,6 +143,50 @@ bool validateZipEntries(const QString& zipPath, QString* error)
         if (!isSafeRelativePath(entry))
         {
             setError(error, QStringLiteral("zip 包含不安全的路径: %1").arg(entry));
+            return false;
+        }
+        if (++entryCount > kMaxBundleFiles)
+        {
+            setError(error, QStringLiteral("zip 文件数超过上限 %1")
+                                .arg(kMaxBundleFiles));
+            return false;
+        }
+    }
+
+    // Reject zip bombs before extraction. `unzip -Z -l` prints one line per
+    // entry plus a trailer; the uncompressed size is the fourth field.
+    QProcess info;
+    info.start(unzip, {QStringLiteral("-Z"), QStringLiteral("-l"), zipPath});
+    if (!info.waitForFinished(120000)
+        || info.exitStatus() != QProcess::NormalExit || info.exitCode() != 0)
+    {
+        setError(error, QStringLiteral("无法读取 zip 大小: %1")
+                            .arg(QString::fromLocal8Bit(
+                                     info.readAllStandardError())
+                                     .trimmed()));
+        return false;
+    }
+    qint64 totalBytes = 0;
+    const QList<QByteArray> infoLines = info.readAllStandardOutput().split('\n');
+    for (const QByteArray& rawLine : infoLines)
+    {
+        const QString line = QString::fromLocal8Bit(rawLine).trimmed();
+        if (line.isEmpty() || (line[0] != QLatin1Char('-')
+                               && line[0] != QLatin1Char('d')))
+            continue;
+        const QStringList fields = line.split(QRegularExpression(QStringLiteral("\\s+")),
+                                              Qt::SkipEmptyParts);
+        if (fields.size() < 4)
+            continue;
+        bool ok = false;
+        const qint64 size = fields.at(3).toLongLong(&ok);
+        if (!ok)
+            continue;
+        totalBytes += size;
+        if (totalBytes > kMaxBundleBytes)
+        {
+            setError(error, QStringLiteral("zip 解包后总大小超过上限 %1 字节")
+                                .arg(kMaxBundleBytes));
             return false;
         }
     }
@@ -362,7 +434,9 @@ bool importPvhtml(const QString& sourceDirOrZip, const QString& destDir,
         return false;
     }
 
-    if (!copyTreeContents(bundleRoot, destDir, error))
+    qint64 totalBytes = 0;
+    int fileCount = 0;
+    if (!copyTreeContents(bundleRoot, destDir, error, &totalBytes, &fileCount))
         return false;
 
     if (manifest)

@@ -4,6 +4,7 @@
 #include "store/Store.h"
 
 #include <QColor>
+#include <QDataStream>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -123,6 +124,35 @@ QByteArray fileBytes(const QString& path)
     return file.readAll();
 }
 
+bool writeWav(const QString& path, double seconds, int sampleRate)
+{
+    const int frameCount = int(sampleRate * seconds);
+    const quint32 dataSize = quint32(frameCount * 2);
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream.writeRawData("RIFF", 4);
+    stream << quint32(36 + dataSize);
+    stream.writeRawData("WAVE", 4);
+    stream.writeRawData("fmt ", 4);
+    stream << quint32(16) << quint16(1) << quint16(1) << quint32(sampleRate)
+           << quint32(sampleRate * 2) << quint16(2) << quint16(16);
+    stream.writeRawData("data", 4);
+    stream << dataSize;
+    for (int frame = 0; frame < frameCount; ++frame)
+        stream << qint16(0);
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly)
+           && file.write(bytes) == bytes.size();
+}
+
+QString createEntity(Fixture& fixture, const QString& name, int start, int end,
+                     const Uuid& parent = QString())
+{
+    return uuidOf(fixture.call(QStringLiteral("entity.create"),
+                               entityArgs(name, start, end, parent)));
+}
+
 } // namespace
 
 class Mcp2Tests : public QObject
@@ -158,6 +188,18 @@ private slots:
     void previewRenderFrameWritesPng();
     void previewRejectsOversize();
     void solverEvaluateNestedEntity();
+
+    void moveRowOnlyAndGetDefaults();
+    void entityGetIncludesSolvers();
+    void textualContentCanBecomeEmpty();
+    void writeFlagsReflectService();
+    void previewDocumentContract();
+    void previewRateLimit();
+    void assetSourceInClamped();
+    void assetMissingContentStillListed();
+    void deleteReportsSolverDependencies();
+    void reparentPreserveWorldRejectsKeyframes();
+    void assetImportRejectsOversize();
 
     void stopBlocksWrites();
     void stopKeepsReadsWorking();
@@ -1928,6 +1970,552 @@ void Mcp2Tests::writeToolClassification()
     QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("view.state")));
     QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("solver.evaluate")));
     QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("schema.get")));
+}
+
+void Mcp2Tests::moveRowOnlyAndGetDefaults()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString plain = createEntity(fixture, QStringLiteral("行"), 10, 40);
+    QJsonObject result = fixture.call(
+        QStringLiteral("entity.move"),
+        QJsonObject{{QStringLiteral("uuid"), plain},
+                    {QStringLiteral("row"), 5}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("start")).toInt(),
+             10);
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("end")).toInt(),
+             40);
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("row")).toInt(),
+             5);
+
+    result = fixture.call(QStringLiteral("entity.move"),
+                          QJsonObject{{QStringLiteral("uuid"), plain}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    QJsonObject parentArgs = entityArgs(QStringLiteral("父"), 0, 60);
+    parentArgs.insert(QStringLiteral("transform"),
+                      QJsonObject{{QStringLiteral("x"), 100.0}});
+    const QString parent =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), parentArgs));
+    QJsonObject childArgs = entityArgs(QStringLiteral("子"), 0, 60, parent);
+    childArgs.insert(QStringLiteral("transform"),
+                     QJsonObject{{QStringLiteral("x"), 10.0}});
+    const QString child =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), child}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QVERIFY(std::abs(result.value(QStringLiteral("data")).toObject()
+                         .value(QStringLiteral("evaluated")).toObject()
+                         .value(QStringLiteral("x")).toDouble()
+                     - 10.0)
+            < 1e-6);
+
+    QJsonObject animatedArgs = entityArgs(QStringLiteral("动画"), 0, 60);
+    animatedArgs.insert(QStringLiteral("keyframes"),
+                        QJsonObject{{QStringLiteral("x"),
+                                     keys({{0, 0.0}, {30, 300.0}})}});
+    const QString animated =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), animatedArgs));
+    QVERIFY(!animated.isEmpty());
+
+    pvf::mcp2::ViewState state;
+    state.playhead = 15;
+    fixture.service->setViewStateProvider([state] { return state; });
+
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), animated}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const double defaultX = result.value(QStringLiteral("data")).toObject()
+                                .value(QStringLiteral("evaluated")).toObject()
+                                .value(QStringLiteral("x")).toDouble();
+    QVERIFY2(std::abs(defaultX - 150.0) < 1e-6, qPrintable(QString::number(defaultX)));
+
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), animated},
+                                      {QStringLiteral("frame"), 30}});
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("evaluated")).toObject()
+                 .value(QStringLiteral("x")).toDouble(),
+             300.0);
+}
+
+void Mcp2Tests::entityGetIncludesSolvers()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString ground = createEntity(fixture, QStringLiteral("地面"), 0, 120);
+    QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
+    ballArgs.insert(QStringLiteral("keyframes"),
+                    QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
+                                {QStringLiteral("y"), keys({{0, -400.0}})}});
+    const QString ball =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
+    QVERIFY(!ground.isEmpty() && !ball.isEmpty());
+
+    QJsonObject createArgs;
+    createArgs.insert(QStringLiteral("entityUuid"), ball);
+    createArgs.insert(QStringLiteral("effect"), QStringLiteral("gravity"));
+    createArgs.insert(QStringLiteral("startFrame"), 0);
+    createArgs.insert(QStringLiteral("endFrame"), 59);
+    createArgs.insert(QStringLiteral("initialVelocity"),
+                      QJsonObject{{QStringLiteral("x"), 50.0},
+                                  {QStringLiteral("y"), -100.0}});
+    createArgs.insert(
+        QStringLiteral("params"),
+        QJsonObject{{QStringLiteral("targetUuid"), ground},
+                    {QStringLiteral("strength"), 980.0}});
+    QJsonObject result = fixture.call(QStringLiteral("solver.create"), createArgs);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString solverId = result.value(QStringLiteral("data")).toObject()
+                                 .value(QStringLiteral("solver")).toObject()
+                                 .value(QStringLiteral("id")).toString();
+    QVERIFY(!solverId.isEmpty());
+
+    result = fixture.call(QStringLiteral("solver.evaluate"),
+                          QJsonObject{{QStringLiteral("entityUuid"), ball},
+                                      {QStringLiteral("frames"),
+                                       QJsonArray{30}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QJsonObject sample = result.value(QStringLiteral("data")).toObject()
+                                   .value(QStringLiteral("results")).toArray()
+                                   .at(0).toObject()
+                                   .value(QStringLiteral("samples")).toArray()
+                                   .at(0).toObject();
+
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), ball},
+                                      {QStringLiteral("frame"), 30}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QJsonObject evaluated = result.value(QStringLiteral("data")).toObject()
+                                      .value(QStringLiteral("evaluated")).toObject();
+    QVERIFY(std::abs(evaluated.value(QStringLiteral("x")).toDouble()
+                     - sample.value(QStringLiteral("x")).toDouble())
+            < 1e-3);
+    QVERIFY(std::abs(evaluated.value(QStringLiteral("y")).toDouble()
+                     - sample.value(QStringLiteral("y")).toDouble())
+            < 1e-3);
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("activeSolverId")).toString(),
+             solverId);
+}
+
+void Mcp2Tests::textualContentCanBecomeEmpty()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString imagePath = fixture.temp.filePath(QStringLiteral("text.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(imagePath));
+    QJsonObject result =
+        fixture.call(QStringLiteral("asset.import"),
+                     QJsonObject{{QStringLiteral("path"), imagePath}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString hash = result.value(QStringLiteral("data")).toObject()
+                             .value(QStringLiteral("asset")).toObject()
+                             .value(QStringLiteral("hash")).toString();
+    QVERIFY(!hash.isEmpty());
+
+    const auto check = [&](const QString& kind, const QJsonObject& content) {
+        QJsonObject args = entityArgs(QStringLiteral("内容 %1").arg(kind), 0, 60);
+        args.insert(QStringLiteral("content"), content);
+        const QString uuid =
+            uuidOf(fixture.call(QStringLiteral("entity.create"), args));
+        QVERIFY(!uuid.isEmpty());
+
+        QJsonObject update = fixture.call(
+            QStringLiteral("entity.update"),
+            QJsonObject{{QStringLiteral("uuid"), uuid},
+                        {QStringLiteral("patch"),
+                         QJsonObject{{QStringLiteral("content"),
+                                      QJsonObject{{QStringLiteral("kind"),
+                                                   QStringLiteral("empty")}}}}}});
+        QVERIFY2(update.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(update)));
+        QCOMPARE(fixture.store->project().entities.value(uuid).content.kind,
+                 ContentKind::Empty);
+
+        QJsonObject assigned = fixture.call(
+            QStringLiteral("asset.assign"),
+            QJsonObject{{QStringLiteral("entityUuid"), uuid},
+                        {QStringLiteral("assetHash"), hash}});
+        QVERIFY2(assigned.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(assigned)));
+        QCOMPARE(fixture.store->project().entities.value(uuid).content.kind,
+                 ContentKind::Asset);
+    };
+
+    check(QStringLiteral("text"),
+          QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                      {QStringLiteral("text"),
+                       QJsonObject{{QStringLiteral("text"), QStringLiteral("A")}}}});
+    check(QStringLiteral("vector"),
+          QJsonObject{{QStringLiteral("kind"), QStringLiteral("vector")}});
+}
+
+void Mcp2Tests::writeFlagsReflectService()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    QJsonObject result = fixture.call(QStringLiteral("project.get"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QJsonObject write = result.value(QStringLiteral("data")).toObject()
+                            .value(QStringLiteral("write")).toObject();
+    QCOMPARE(write.value(QStringLiteral("enabled")).toBool(), true);
+    QCOMPARE(write.value(QStringLiteral("stopped")).toBool(), false);
+    QCOMPARE(fixture.call(QStringLiteral("project.summary"))
+                 .value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("writeEnabled")).toBool(),
+             true);
+
+    fixture.service->setWritesEnabled(false);
+    result = fixture.call(QStringLiteral("project.get"));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("write")).toObject()
+                 .value(QStringLiteral("enabled")).toBool(),
+             false);
+    QCOMPARE(fixture.call(QStringLiteral("project.summary"))
+                 .value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("writeEnabled")).toBool(),
+             false);
+
+    fixture.service->setWritesEnabled(true);
+    fixture.service->requestStop();
+    result = fixture.call(QStringLiteral("project.get"));
+    write = result.value(QStringLiteral("data")).toObject()
+                .value(QStringLiteral("write")).toObject();
+    QCOMPARE(write.value(QStringLiteral("enabled")).toBool(), true);
+    QCOMPARE(write.value(QStringLiteral("stopped")).toBool(), true);
+    QCOMPARE(fixture.call(QStringLiteral("project.summary"))
+                 .value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("writeEnabled")).toBool(),
+             false);
+
+    result = fixture.call(QStringLiteral("view.state"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("writeEnabled")).toBool(),
+             true);
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("stopped")).toBool(),
+             true);
+}
+
+void Mcp2Tests::previewDocumentContract()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    QJsonObject cameraArgs = entityArgs(QStringLiteral("摄像机"), 0, 60);
+    cameraArgs.insert(QStringLiteral("content"),
+                      QJsonObject{{QStringLiteral("kind"),
+                                   QStringLiteral("camera")}});
+    const QString camera =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), cameraArgs));
+    const QString selection = createEntity(fixture, QStringLiteral("选中"), 0, 60);
+    const QString owner = createEntity(fixture, QStringLiteral("私有时间线"), 0, 120);
+    QVERIFY(!camera.isEmpty() && !selection.isEmpty() && !owner.isEmpty());
+
+    pvf::mcp2::ViewState state;
+    state.playhead = 12;
+    state.selection = selection;
+    state.timelineParent = owner;
+    state.cameraUuid = camera;
+    state.viewRect = QRect(5, 0, 120, 80);
+    state.viewScale = 2.0;
+    fixture.service->setViewStateProvider([state] { return state; });
+
+    QJsonObject result = fixture.call(
+        QStringLiteral("preview.render_frame"),
+        QJsonObject{{QStringLiteral("width"), 320},
+                    {QStringLiteral("includeBase64"), true}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QJsonObject data = result.value(QStringLiteral("data")).toObject();
+    QCOMPARE(data.value(QStringLiteral("width")).toInt(), 320);
+    QCOMPARE(data.value(QStringLiteral("height")).toInt(), 180);
+    QCOMPARE(data.value(QStringLiteral("frame")).toInt(), 12);
+    QCOMPARE(data.value(QStringLiteral("playheadFrame")).toInt(), 12);
+    QCOMPARE(data.value(QStringLiteral("mimeType")).toString(),
+             QStringLiteral("image/png"));
+    QCOMPARE(data.value(QStringLiteral("selectedUuids")).toArray().size(), 1);
+    QCOMPARE(data.value(QStringLiteral("selectedUuids")).toArray().at(0).toString(),
+             selection);
+    QCOMPARE(data.value(QStringLiteral("openTimelineOwnerUuid")).toString(), owner);
+    QCOMPARE(data.value(QStringLiteral("cameraUuid")).toString(), camera);
+    QCOMPARE(data.value(QStringLiteral("view")).toObject()
+                 .value(QStringLiteral("startFrame")).toInt(),
+             5);
+    QCOMPARE(data.value(QStringLiteral("view")).toObject()
+                 .value(QStringLiteral("endFrame")).toInt(),
+             125);
+    QCOMPARE(data.value(QStringLiteral("view")).toObject()
+                 .value(QStringLiteral("scale")).toDouble(),
+             2.0);
+    QCOMPARE(data.value(QStringLiteral("writeEnabled")).toBool(), true);
+    QCOMPARE(data.value(QStringLiteral("stopped")).toBool(), false);
+    const QByteArray png =
+        QByteArray::fromBase64(data.value(QStringLiteral("base64"))
+                                   .toString()
+                                   .toLatin1());
+    QVERIFY(png.startsWith("\x89PNG"));
+
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("height"), 180}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("width")).toInt(),
+             320);
+    QVERIFY(!result.value(QStringLiteral("data")).toObject()
+                 .contains(QStringLiteral("base64")));
+
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("cameraUuid"), selection}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+}
+
+void Mcp2Tests::previewRateLimit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    qint64 now = 1000;
+    fixture.service->setClock([&now] { return now; });
+
+    QJsonObject result = fixture.call(QStringLiteral("preview.render_frame"),
+                                      QJsonObject{{QStringLiteral("frame"), 0}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("frame"), 1}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("frame"), 2}});
+    QCOMPARE(errorCode(result), QStringLiteral("limit_exceeded"));
+
+    now += 1000;
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("frame"), 3}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::assetSourceInClamped()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString wavPath = fixture.temp.filePath(QStringLiteral("clamp.wav"));
+    QVERIFY(writeWav(wavPath, 0.2, 44100));
+    QJsonObject result =
+        fixture.call(QStringLiteral("asset.import"),
+                     QJsonObject{{QStringLiteral("path"), wavPath}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString hash = result.value(QStringLiteral("data")).toObject()
+                             .value(QStringLiteral("asset")).toObject()
+                             .value(QStringLiteral("hash")).toString();
+    const int frames = result.value(QStringLiteral("data")).toObject()
+                           .value(QStringLiteral("asset")).toObject()
+                           .value(QStringLiteral("durationFrames")).toInt();
+    QVERIFY(!hash.isEmpty());
+    QVERIFY(frames > 1);
+
+    const QString high = createEntity(fixture, QStringLiteral("高偏移"), 0, 60);
+    result = fixture.call(QStringLiteral("asset.assign"),
+                          QJsonObject{{QStringLiteral("entityUuid"), high},
+                                      {QStringLiteral("assetHash"), hash},
+                                      {QStringLiteral("sourceIn"), 100000}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("adjusted")).toObject()
+                 .value(QStringLiteral("sourceIn")).toInt(),
+             frames - 1);
+
+    const QString low = createEntity(fixture, QStringLiteral("负偏移"), 0, 60);
+    result = fixture.call(QStringLiteral("asset.assign"),
+                          QJsonObject{{QStringLiteral("entityUuid"), low},
+                                      {QStringLiteral("assetHash"), hash},
+                                      {QStringLiteral("sourceIn"), -100000}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("adjusted")).toObject()
+                 .value(QStringLiteral("sourceIn")).toInt(),
+             0);
+}
+
+void Mcp2Tests::assetMissingContentStillListed()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString imagePath = fixture.temp.filePath(QStringLiteral("lost.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::magenta);
+    QVERIFY(image.save(imagePath));
+    QJsonObject result =
+        fixture.call(QStringLiteral("asset.import"),
+                     QJsonObject{{QStringLiteral("path"), imagePath}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString hash = result.value(QStringLiteral("data")).toObject()
+                             .value(QStringLiteral("asset")).toObject()
+                             .value(QStringLiteral("hash")).toString();
+    QVERIFY(!hash.isEmpty());
+
+    const QString directory = fixture.store->root() + QStringLiteral("/assets/")
+                              + hash;
+    const QStringList contents = QDir(directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    QCOMPARE(contents.size(), 1);
+    QVERIFY(QFile::remove(directory + QLatin1Char('/') + contents.first()));
+
+    QVERIFY(!fixture.store->assets().get(hash).has_value());
+    QVERIFY(fixture.store->assets().getIncludingMissing(hash).has_value());
+
+    result = fixture.call(QStringLiteral("asset.get"),
+                          QJsonObject{{QStringLiteral("hash"), hash}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("missing")).toBool(),
+             true);
+
+    result = fixture.call(QStringLiteral("asset.list"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QJsonArray assets = result.value(QStringLiteral("data")).toObject()
+                                  .value(QStringLiteral("assets")).toArray();
+    QCOMPARE(assets.size(), 1);
+    QCOMPARE(assets.at(0).toObject().value(QStringLiteral("missing")).toBool(),
+             true);
+    QCOMPARE(assets.at(0).toObject().value(QStringLiteral("hash")).toString(), hash);
+}
+
+void Mcp2Tests::deleteReportsSolverDependencies()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString ground = createEntity(fixture, QStringLiteral("地面"), 0, 120);
+    QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
+    ballArgs.insert(QStringLiteral("keyframes"),
+                    QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
+                                {QStringLiteral("y"), keys({{0, -400.0}})}});
+    const QString ball =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
+    QJsonObject solverArgs;
+    solverArgs.insert(QStringLiteral("entityUuid"), ball);
+    solverArgs.insert(QStringLiteral("effect"), QStringLiteral("gravity"));
+    solverArgs.insert(QStringLiteral("startFrame"), 0);
+    solverArgs.insert(QStringLiteral("endFrame"), 59);
+    solverArgs.insert(QStringLiteral("params"),
+                      QJsonObject{{QStringLiteral("targetUuid"), ground},
+                                  {QStringLiteral("strength"), 980.0}});
+    QJsonObject result = fixture.call(QStringLiteral("solver.create"), solverArgs);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    const QString newParent = createEntity(fixture, QStringLiteral("新父级"), 0, 120);
+    result = fixture.call(QStringLiteral("entity.reparent"),
+                          QJsonObject{{QStringLiteral("uuid"), ground},
+                                      {QStringLiteral("parentUuid"), newParent},
+                                      {QStringLiteral("mode"),
+                                       QStringLiteral("keepLocal")}});
+    QCOMPARE(errorCode(result), QStringLiteral("confirm_required"));
+    QCOMPARE(result.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("details")).toObject()
+                 .value(QStringLiteral("affected")).toObject()
+                 .value(QStringLiteral("solverDependencies")).toArray().size(),
+             1);
+
+    result = fixture.call(QStringLiteral("entity.reparent"),
+                          QJsonObject{{QStringLiteral("uuid"), ground},
+                                      {QStringLiteral("parentUuid"), newParent},
+                                      {QStringLiteral("mode"),
+                                       QStringLiteral("keepLocal")},
+                                      {QStringLiteral("confirm"), true}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    result = fixture.call(QStringLiteral("entity.delete"),
+                          QJsonObject{{QStringLiteral("uuid"), ground}});
+    QCOMPARE(errorCode(result), QStringLiteral("confirm_required"));
+    const QJsonArray dependencies = result.value(QStringLiteral("error")).toObject()
+                                        .value(QStringLiteral("details")).toObject()
+                                        .value(QStringLiteral("affected")).toObject()
+                                        .value(QStringLiteral("solverDependencies"))
+                                        .toArray();
+    QCOMPARE(dependencies.size(), 1);
+    QCOMPARE(dependencies.at(0).toObject()
+                 .value(QStringLiteral("targetUuid")).toString(),
+             ground);
+
+    result = fixture.call(QStringLiteral("entity.delete"),
+                          QJsonObject{{QStringLiteral("uuid"), ground},
+                                      {QStringLiteral("confirm"), true}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("disabledSolvers")).toArray().size(),
+             1);
+    QVERIFY(fixture.store->project().entities.value(ball).solvers.isEmpty());
+}
+
+void Mcp2Tests::reparentPreserveWorldRejectsKeyframes()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    QJsonObject parentArgs = entityArgs(QStringLiteral("父"), 0, 100);
+    parentArgs.insert(QStringLiteral("transform"),
+                      QJsonObject{{QStringLiteral("x"), 100.0}});
+    const QString parent =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), parentArgs));
+    QJsonObject childArgs = entityArgs(QStringLiteral("子"), 0, 100, parent);
+    childArgs.insert(QStringLiteral("keyframes"),
+                     QJsonObject{{QStringLiteral("x"),
+                                  keys({{0, 10.0}, {10, 20.0}})}});
+    const QString child =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
+    QVERIFY(!parent.isEmpty() && !child.isEmpty());
+
+    QJsonObject result = fixture.call(
+        QStringLiteral("entity.reparent"),
+        QJsonObject{{QStringLiteral("uuid"), child},
+                    {QStringLiteral("parentUuid"), QJsonValue(QJsonValue::Null)},
+                    {QStringLiteral("mode"), QStringLiteral("preserveWorld")}});
+    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
+    const QJsonArray tracks = result.value(QStringLiteral("error")).toObject()
+                                  .value(QStringLiteral("details")).toObject()
+                                  .value(QStringLiteral("tracks")).toArray();
+    QCOMPARE(tracks.size(), 1);
+    QCOMPARE(tracks.at(0).toString(), QStringLiteral("x"));
+    QCOMPARE(fixture.store->project().entities.value(child).parentUuid, parent);
+
+    result = fixture.call(
+        QStringLiteral("entity.reparent"),
+        QJsonObject{{QStringLiteral("uuid"), child},
+                    {QStringLiteral("parentUuid"), QJsonValue(QJsonValue::Null)},
+                    {QStringLiteral("mode"), QStringLiteral("keepLocal")}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(child).parentUuid, QString());
+}
+
+void Mcp2Tests::assetImportRejectsOversize()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString bigPath = fixture.temp.filePath(QStringLiteral("big.bin"));
+    QFile big(bigPath);
+    QVERIFY(big.open(QIODevice::WriteOnly));
+    QVERIFY(big.resize(2LL * 1024LL * 1024LL * 1024LL + 1));
+    big.close();
+
+    const QJsonObject result =
+        fixture.call(QStringLiteral("asset.import"),
+                     QJsonObject{{QStringLiteral("path"), bigPath}});
+    QCOMPARE(errorCode(result), QStringLiteral("limit_exceeded"));
 }
 
 int main(int argc, char** argv)

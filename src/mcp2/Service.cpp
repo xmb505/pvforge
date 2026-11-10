@@ -2,6 +2,7 @@
 
 #include "mcp2/Internal.h"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
@@ -141,6 +142,29 @@ void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
     m_batchCheckpoint = std::move(checkpoint);
 }
 
+void Service::setClock(std::function<qint64()> clock)
+{
+    m_clock = std::move(clock);
+}
+
+bool Service::takePreviewSlot()
+{
+    const qint64 now = m_clock ? m_clock() : QDateTime::currentMSecsSinceEpoch();
+    qint64 windowStart = m_previewWindowStart.load(std::memory_order_relaxed);
+    if (windowStart == 0 || now - windowStart >= 1000)
+    {
+        m_previewWindowStart.store(now, std::memory_order_relaxed);
+        m_previewWindowCount.store(0, std::memory_order_relaxed);
+    }
+    // Allow a burst of two per one-second window: light enough for a
+    // start/middle/end check, still stops tight render loops.
+    const int count = m_previewWindowCount.load(std::memory_order_relaxed);
+    if (count >= 2)
+        return false;
+    m_previewWindowCount.store(count + 1, std::memory_order_relaxed);
+    return true;
+}
+
 void Service::setWritesEnabled(bool enabled)
 {
     m_writesEnabled.store(enabled, std::memory_order_relaxed);
@@ -230,6 +254,9 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
             tx.viewState = m_viewStateProvider();
         tx.videoFrameProvider = m_videoFrameProvider;
         tx.htmlFrameProvider = m_htmlFrameProvider;
+        tx.writesEnabled = writesEnabled();
+        tx.stopped = isStopped();
+        tx.previewSlot = [this] { return takePreviewSlot(); };
         tx.stopCheck = [this] {
             if (m_batchCheckpoint)
                 m_batchCheckpoint();
