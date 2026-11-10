@@ -31,10 +31,10 @@ QString sha1Hex(const QByteArray& bytes)
         QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
 }
 
-// Options-only directory key.  Project fps/size are part of FrameMeta, so a
-// project change still invalidates every frame even when the directories are
-// shared.  renderSignature() remains the project-wide key exposed to callers
-// that want to nest the cache root per project.
+// Options-only directory key.  Project fps/size/background are part of
+// FrameMeta, so a project change still invalidates every frame even when the
+// directories are shared.  renderSignature() remains the project-wide key
+// exposed to callers that want to nest the cache root per project.
 QString directorySignature(const Options& options)
 {
     QByteArray payload;
@@ -187,7 +187,6 @@ struct Cache::Impl
     {
         QSqlDatabase db = database();
         QVector<int> staleRows;
-        QVector<QString> staleFiles;
 
         {
             QSqlQuery query(db);
@@ -211,8 +210,6 @@ struct Cache::Impl
                 if (!info.exists() || !info.isFile() || info.size() <= 0)
                 {
                     staleRows.append(frame);
-                    if (info.exists())
-                        staleFiles.append(path);
                     continue;
                 }
 
@@ -227,8 +224,21 @@ struct Cache::Impl
 
         for (const int frame : staleRows)
             deleteRow(frame);
-        for (const QString& path : staleFiles)
-            QFile::remove(path);
+
+        // A WebP without an index row is a leftover from an interrupted
+        // store.  Nothing will ever look it up, so it would only escape the
+        // disk accounting and the LRU budget.
+        QSet<QString> indexedFiles;
+        for (auto it = entries.constBegin(); it != entries.constEnd(); ++it)
+            indexedFiles.insert(QFileInfo(framePath(it.key())).fileName());
+
+        const QFileInfoList files = QDir(directory).entryInfoList(
+            QStringList{QStringLiteral("*.webp")}, QDir::Files);
+        for (const QFileInfo& info : files)
+        {
+            if (!indexedFiles.contains(info.fileName()))
+                QFile::remove(info.absoluteFilePath());
+        }
 
         enforceDisk();
         return true;

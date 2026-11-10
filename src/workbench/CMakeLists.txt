@@ -49,6 +49,7 @@ if(BUILD_TESTING)
         metaTracksMissingAsset
         metaTracksCameraBackgroundAndTarget
         metaTracksHtmlVariables
+        metaTracksHtmlTimeline
         metaTracksGenerativeContent
         signatureAndSize
         renderRectAndExpandedSize
@@ -60,6 +61,7 @@ if(BUILD_TESTING)
         cacheDiskLru
         cacheMemoryBudget
         cacheClear
+        cacheCleansOrphanWebp
         cachePerCameraDirectories
         prewarmInitialScan
         prewarmSkipsCachedFrames

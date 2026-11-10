@@ -29,6 +29,8 @@ struct CacheStats
 // Frames are stored as <frame>.webp plus an index.sqlite row holding the full
 // FrameMeta.  A lookup only hits when the current meta is byte-identical to the
 // stored one; stale images are left in place until store() overwrites them.
+// Loading the index also drops rows whose file disappeared and deletes WebP
+// files that have no row (leftovers from an interrupted store).
 //
 // Not thread-safe: the background scan worker owns its instance and the UI
 // thread owns another one.  QSqlDatabase connections are bound to the thread

@@ -18,7 +18,7 @@
 namespace pvf::workbench {
 namespace {
 
-constexpr quint32 kMetaFormat = 2;
+constexpr quint32 kMetaFormat = 3;
 
 // Explicit, ordered QVariant serialisation.  QVariant's own stream operator is
 // stable for a given Qt build but depends on the exact stored type, while
@@ -206,16 +206,16 @@ void writeContent(QDataStream& out, const model::Content& content)
 }
 
 void writeAssetDetails(QDataStream& out, const model::Entity& entity, int frame,
-                       const assets::StoredAsset* stored)
+                       int fps, const assets::StoredAsset* stored)
 {
     const model::AssetContent& asset = entity.content.asset;
     out << asset.sourceIn << asset.volume;
     out << bool(stored != nullptr);
 
-    // Actual source frame requested from a video asset.  Audio has no picture
-    // and images ignore sourceIn, so they get -1.
+    // Actual source frame requested from a timed asset.  Video and audio share
+    // the sourceIn + (frame - start) rule; images ignore sourceIn.
     qint64 sourceFrame = -1;
-    if (asset.type == AssetType::Video)
+    if (asset.type == AssetType::Video || asset.type == AssetType::Audio)
         sourceFrame = qint64(asset.sourceIn) + (frame - entity.start);
     out << sourceFrame;
 
@@ -223,14 +223,27 @@ void writeAssetDetails(QDataStream& out, const model::Entity& entity, int frame,
     QVariantMap overrides;
     if (asset.type == AssetType::Html)
     {
-        if (stored)
-        {
-            defaults = stored->metadata.value(QStringLiteral("variables"))
-                           .toObject()
-                           .toVariantMap();
-        }
+        const QJsonObject metadata = stored ? stored->metadata : QJsonObject();
+        defaults = metadata.value(QStringLiteral("variables"))
+                       .toObject()
+                       .toVariantMap();
 
-        const double relativeFrame = double(frame - entity.start);
+        // Mirrors the request MediaServices builds for HtmlFrameService: the
+        // entity-relative frame and time select the page state.  When the
+        // manifest marks the page timeDependent=false the service normalises
+        // both to 0, so moving the entity must not invalidate it.
+        const int localFrame = frame - entity.start;
+        const bool timeDependent =
+            metadata.value(QStringLiteral("timeDependent")).toBool(true);
+        const int requestedFrame = timeDependent ? localFrame : 0;
+        const double requestedTime =
+            double(requestedFrame) / double(std::max(1, fps));
+        out << requestedFrame << requestedTime << timeDependent
+            << metadata.value(QStringLiteral("entry")).toString();
+
+        // Variable tracks still follow the entity-relative frame: a static
+        // page may expose controls that the timeline drives.
+        const double relativeFrame = double(localFrame);
         for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
         {
             if (!it.key().startsWith(QStringLiteral("var."), Qt::CaseInsensitive))
@@ -344,7 +357,8 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
         if (entity.content.kind == ContentKind::Asset)
         {
             const auto stored = m_assets.get(entity.content.asset.hash);
-            writeAssetDetails(out, entity, frame, stored ? &*stored : nullptr);
+            writeAssetDetails(out, entity, frame, m_project.settings.fps,
+                              stored ? &*stored : nullptr);
         }
 
         writeSolvers(out, entity);

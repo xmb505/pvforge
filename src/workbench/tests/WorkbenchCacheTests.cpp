@@ -150,6 +150,7 @@ private slots:
     void metaTracksMissingAsset();
     void metaTracksCameraBackgroundAndTarget();
     void metaTracksHtmlVariables();
+    void metaTracksHtmlTimeline();
     void metaTracksGenerativeContent();
     void signatureAndSize();
     void renderRectAndExpandedSize();
@@ -161,6 +162,7 @@ private slots:
     void cacheDiskLru();
     void cacheMemoryBudget();
     void cacheClear();
+    void cacheCleansOrphanWebp();
     void cachePerCameraDirectories();
     void prewarmInitialScan();
     void prewarmSkipsCachedFrames();
@@ -431,6 +433,81 @@ void WorkbenchCacheTests::metaTracksHtmlVariables()
 
     const workbench::FrameMeta afterDefault = builder.build(50, QString(), options);
     QVERIFY(!afterTrack.equals(afterDefault));
+}
+
+void WorkbenchCacheTests::metaTracksHtmlTimeline()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    const QString source = QDir(root.path()).filePath(QStringLiteral("html"));
+    QVERIFY(QDir().mkpath(source));
+    writeTextFile(QDir(source).filePath(QStringLiteral("index.html")),
+                  QByteArrayLiteral("<html><body></body></html>"));
+    writeTextFile(QDir(source).filePath(QStringLiteral("pvhtml.json")),
+                  QByteArrayLiteral(
+                      "{\"entry\":\"index.html\",\"variables\":{\"progress\":0}}"));
+
+    const auto stored = assets.importPvhtml(source);
+    QVERIFY2(stored.has_value(), "pvhtml import failed");
+
+    model::Project project;
+    project.settings.fps = 30;
+    model::Entity entity = textEntity(QStringLiteral("html"), 0, 100);
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.hash = stored->hash;
+    entity.content.asset.type = AssetType::Html;
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+
+    const QString metadataPath =
+        QDir(stored->directory).filePath(QStringLiteral("asset.json"));
+    const auto editMetadata =
+        [&](const std::function<void(QJsonObject&)>& change) {
+            QFile file(metadataPath);
+            if (!file.open(QIODevice::ReadOnly))
+                return false;
+            QJsonObject metadata =
+                QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            change(metadata);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                return false;
+            const bool written = file.write(QJsonDocument(metadata).toJson()) > 0;
+            file.close();
+            return written;
+        };
+
+    // timeDependent defaults to true: the entity-relative frame and time are
+    // part of the meta, so moving the clip invalidates every frame.
+    const workbench::FrameMeta atZero = builder.build(50, QString(), options);
+    project.entities[QStringLiteral("html")].start = 10;
+    const workbench::FrameMeta moved = builder.build(50, QString(), options);
+    QVERIFY(!atZero.equals(moved));
+
+    // timeDependent=false always requests localFrame 0/time 0, so the same
+    // move must not change the meta (pose and variables are unchanged here).
+    QVERIFY(editMetadata([](QJsonObject& metadata) {
+        metadata.insert(QStringLiteral("timeDependent"), false);
+    }));
+    project.entities[QStringLiteral("html")].start = 0;
+    const workbench::FrameMeta staticAtZero = builder.build(50, QString(), options);
+    project.entities[QStringLiteral("html")].start = 10;
+    const workbench::FrameMeta staticMoved = builder.build(50, QString(), options);
+    QVERIFY(staticAtZero.equals(staticMoved));
+
+    // A missing metadata field keeps the documented default of true.
+    QVERIFY(editMetadata([](QJsonObject& metadata) {
+        metadata.remove(QStringLiteral("timeDependent"));
+    }));
+    project.entities[QStringLiteral("html")].start = 0;
+    const workbench::FrameMeta defaultAtZero = builder.build(50, QString(), options);
+    project.entities[QStringLiteral("html")].start = 10;
+    const workbench::FrameMeta defaultMoved = builder.build(50, QString(), options);
+    QVERIFY(!defaultAtZero.equals(defaultMoved));
 }
 
 void WorkbenchCacheTests::metaTracksGenerativeContent()
@@ -882,6 +959,42 @@ void WorkbenchCacheTests::cacheClear()
     bool hit = true;
     QVERIFY(cache.lookup(1, builder.build(1, QString(), options), &hit).isNull());
     QVERIFY(!hit);
+}
+
+void WorkbenchCacheTests::cacheCleansOrphanWebp()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const QString cacheRoot = QDir(root.path()).filePath(QStringLiteral("cache"));
+
+    QString directory;
+    {
+        workbench::Cache cache(cacheRoot, QString(), options);
+        QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+        QVERIFY(cache.store(3, builder.build(3, QString(), options),
+                            testImage(QSize(640, 360))));
+        directory = cache.directory();
+    }
+
+    const QString keptPath = QDir(directory).filePath(QStringLiteral("3.webp"));
+    const QString orphanPath = QDir(directory).filePath(QStringLiteral("99.webp"));
+    QVERIFY(QFileInfo::exists(keptPath));
+    writeTextFile(orphanPath, QByteArrayLiteral("not in the index"));
+
+    workbench::Cache reopened(cacheRoot, QString(), options);
+    QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
+    QCOMPARE(reopened.cachedFrames(), QSet<int>{3});
+    QVERIFY(QFileInfo::exists(keptPath));
+    QVERIFY(!QFileInfo::exists(orphanPath));
+    QVERIFY(reopened.stats().diskBytes > 0);
 }
 
 void WorkbenchCacheTests::cachePerCameraDirectories()
