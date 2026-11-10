@@ -30,6 +30,8 @@ endif()
 add_library(pvf_audio2 STATIC
     Audio2.h
     AudioMix.cpp
+    Peaks.h
+    Peaks.cpp
     Playback.cpp
 )
 

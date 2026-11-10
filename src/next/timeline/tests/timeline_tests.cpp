@@ -1,4 +1,5 @@
 #include "next/core/Document.h"
+#include "next/timeline/MarkerDialog.h"
 #include "next/timeline/TimelineWidget.h"
 
 #include <QApplication>
@@ -11,6 +12,7 @@
 #include <QJsonObject>
 #include <QMimeData>
 #include <QPainter>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -211,6 +213,34 @@ bool writePng(const QString& path, const QColor& color)
     return image.save(path, "PNG");
 }
 
+// One second of 440 Hz, quiet first half and loud second half so the peak
+// envelope has a visible shape. Returns an empty string when ffmpeg is missing.
+QString writeToneWav(const QString& path)
+{
+    QProcess process;
+    process.start(
+        QStringLiteral("ffmpeg"),
+        {QStringLiteral("-y"), QStringLiteral("-hide_banner"),
+         QStringLiteral("-loglevel"), QStringLiteral("error"),
+         QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+         QStringLiteral("sine=frequency=440:duration=1"), QStringLiteral("-af"),
+         QStringLiteral("volume='if(lt(t,0.5),0.2,6.0)':eval=frame"),
+         QStringLiteral("-ar"), QStringLiteral("48000"), QStringLiteral("-ac"),
+         QStringLiteral("1"), path});
+    if (!process.waitForStarted(5000))
+        return {};
+    if (!process.waitForFinished(30000))
+    {
+        process.kill();
+        process.waitForFinished(1000);
+        return {};
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0)
+        return {};
+    return QFile::exists(path) ? path : QString();
+}
+
 bool writeFakeAsset(const QString& projectRoot, const QString& hash,
                     const QString& type, const QString& name,
                     int durationFrames = 0,
@@ -296,6 +326,12 @@ private slots:
     void dropOntoOccupiedRowUsesNextRow();
     void dropVideoCreatesAudioEntity();
     void dragEnterRejectsUnknownMime();
+    void markersAddEditDelete();
+    void markerDragChangesFrame();
+    void markerValidationRejects();
+    void markerShortcutAdds();
+    void waveformPaintsForAudioEntity();
+    void waveformMissingAssetPaintsFlat();
 };
 
 void TimelineWidgetTest::rowsAreBottomUp()
@@ -1224,6 +1260,186 @@ void TimelineWidgetTest::dragEnterRejectsUnknownMime()
                                Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&widget, &assetEvent);
     QVERIFY(assetEvent.isAccepted());
+}
+
+void TimelineWidgetTest::markersAddEditDelete()
+{
+    FakeDocument document;
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    widget.setPlayhead(42);
+
+    widget.addMarkerAtPlayhead();
+    QCOMPARE(document.commitCount, 1);
+    QCOMPARE(document.project().markers.size(), 1);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: add marker")));
+
+    const pvf::model::Marker added = document.project().markers.at(0);
+    QCOMPARE(added.frame, 42);
+    QVERIFY(!added.id.isEmpty());
+    QVERIFY(!added.title.isEmpty());
+
+    pvf::model::Marker edited = added;
+    edited.title = QStringLiteral("副歌");
+    edited.color = QStringLiteral("#00ff00");
+    edited.note = QStringLiteral("段落备注");
+    edited.tags = {QStringLiteral("music"), QStringLiteral("chorus")};
+
+    QString error;
+    QVERIFY2(widget.updateMarker(added.id, edited, &error),
+             qPrintable(error));
+    QCOMPARE(document.commitCount, 2);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: edit marker")));
+
+    const pvf::model::Marker stored = document.project().markers.at(0);
+    QCOMPARE(stored.id, added.id);
+    QCOMPARE(stored.title, QStringLiteral("副歌"));
+    QCOMPARE(stored.color, QStringLiteral("#00ff00"));
+    QCOMPARE(stored.note, QStringLiteral("段落备注"));
+    QCOMPARE(stored.tags.size(), 2);
+    QCOMPARE(stored.frame, 42);
+
+    QVERIFY2(widget.deleteMarker(added.id, &error), qPrintable(error));
+    QCOMPARE(document.commitCount, 3);
+    QVERIFY(document.project().markers.isEmpty());
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: delete marker")));
+}
+
+void TimelineWidgetTest::markerDragChangesFrame()
+{
+    FakeDocument document;
+    pvf::model::Marker marker;
+    marker.id = pvf::model::newUuid();
+    marker.frame = 10;
+    marker.title = QStringLiteral("intro");
+    marker.color = QStringLiteral("#ffbe3c");
+    document.mutableProject().markers.append(marker);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    widget.setPixelsPerFrame(4.0);
+
+    const QRect lane = widget.markerLaneRect();
+    const QPoint from(widget.xFromFrame(10), lane.center().y());
+    const QPoint to(widget.xFromFrame(30), lane.center().y());
+    QCOMPARE(widget.markerIdAt(from), marker.id);
+
+    QTest::mousePress(&widget, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&widget, to, 10);
+    QTest::mouseRelease(&widget, Qt::LeftButton, Qt::NoModifier, to);
+
+    QCOMPARE(document.project().markers.size(), 1);
+    QCOMPARE(document.project().markers.at(0).frame, 30);
+    QCOMPARE(document.commitCount, 1);
+    QVERIFY(document.lastCommitMessage.startsWith(
+        QStringLiteral("pvf: move marker")));
+}
+
+void TimelineWidgetTest::markerValidationRejects()
+{
+    QString error;
+    pvf::model::Marker marker;
+    marker.id = pvf::model::newUuid();
+    marker.title = QStringLiteral("   ");
+    QVERIFY(!pvf::next::normalizeMarker(marker, &error));
+    QVERIFY(!error.isEmpty());
+
+    marker.title = QStringLiteral("ok");
+    marker.note = QString(4097, QLatin1Char('x'));
+    QVERIFY(!pvf::next::normalizeMarker(marker, &error));
+
+    marker.note.clear();
+    for (int i = 0; i < 33; ++i)
+        marker.tags.append(QStringLiteral("tag%1").arg(i));
+    QVERIFY(!pvf::next::normalizeMarker(marker, &error));
+
+    marker.tags = {QString(65, QLatin1Char('a'))};
+    QVERIFY(!pvf::next::normalizeMarker(marker, &error));
+
+    FakeDocument document;
+    TimelineWidget widget(&document);
+    pvf::model::Marker invalid;
+    invalid.title.clear();
+    QVERIFY(!widget.insertMarker(invalid, &error));
+    QCOMPARE(document.commitCount, 0);
+    QVERIFY(document.project().markers.isEmpty());
+}
+
+void TimelineWidgetTest::markerShortcutAdds()
+{
+    FakeDocument document;
+    document.setPlayhead(12);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    widget.setFocus();
+
+    QTest::keyClick(&widget, Qt::Key_M);
+    QCOMPARE(document.project().markers.size(), 1);
+    QCOMPARE(document.project().markers.at(0).frame, 12);
+    QCOMPARE(document.commitCount, 1);
+}
+
+void TimelineWidgetTest::waveformPaintsForAudioEntity()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString wav = writeToneWav(directory.filePath(QStringLiteral("tone.wav")));
+    if (wav.isEmpty())
+        QSKIP("ffmpeg 不可用");
+
+    FakeDocument document(directory.path());
+    QString error;
+    const auto asset = document.assets().importFile(wav, &error);
+    QVERIFY2(asset.has_value(), qPrintable(error));
+
+    const Uuid uuid = addEntity(document, QStringLiteral("tone"), 0, 30, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Audio;
+    entity.content.asset.hash = asset->hash;
+    entity.content.asset.sourceIn = 0;
+
+    TimelineWidget widget(&document);
+    const QImage image = renderWidget(widget);
+    QVERIFY(!image.isNull());
+    QCOMPARE(widget.waveformCacheSize(), 1);
+
+    const QRect bar = widget.entityBarRect(uuid);
+    QVERIFY(bar.isValid());
+    QVERIFY(bar.width() > 40);
+
+    // Quiet first half: y = center - 5 stays on the bar fill. Loud second
+    // half: the waveform reaches that row, so the pixels differ.
+    const QColor quiet = image.pixelColor(bar.left() + bar.width() / 4,
+                                          bar.center().y() - 5);
+    const QColor loud = image.pixelColor(bar.right() - bar.width() / 4,
+                                         bar.center().y() - 5);
+    QVERIFY(quiet.isValid());
+    QVERIFY(loud.isValid());
+    QVERIFY(quiet != loud);
+}
+
+void TimelineWidgetTest::waveformMissingAssetPaintsFlat()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("missing"), 0, 30, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Audio;
+    entity.content.asset.hash = QStringLiteral("deadbeef");
+
+    TimelineWidget widget(&document);
+    const QImage image = renderWidget(widget);
+    QVERIFY(!image.isNull());
+    QCOMPARE(widget.waveformCacheSize(), 0);
+
+    const QRect bar = widget.entityBarRect(uuid);
+    QVERIFY(bar.isValid());
+    QVERIFY(image.pixelColor(bar.center()).isValid());
 }
 
 int main(int argc, char* argv[])

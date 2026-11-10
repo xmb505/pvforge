@@ -14,7 +14,14 @@ if(NOT TARGET pvf_next_core)
                      ${CMAKE_CURRENT_BINARY_DIR}/core_dep)
 endif()
 
+if(NOT TARGET pvf_audio2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../audio2
+                     ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
+endif()
+
 add_library(pvf_next_timeline STATIC
+    MarkerDialog.cpp
+    MarkerDialog.h
     TimelineWidget.cpp
     TimelineWidget.h
 )
@@ -25,6 +32,7 @@ target_include_directories(pvf_next_timeline PUBLIC
 
 target_link_libraries(pvf_next_timeline PUBLIC
     pvf_next_core
+    pvf_audio2
     Qt6::Widgets
     Qt6::Test
 )
@@ -71,6 +79,12 @@ if(BUILD_TESTING)
         dropOntoOccupiedRowUsesNextRow
         dropVideoCreatesAudioEntity
         dragEnterRejectsUnknownMime
+        markersAddEditDelete
+        markerDragChangesFrame
+        markerValidationRejects
+        markerShortcutAdds
+        waveformPaintsForAudioEntity
+        waveformMissingAssetPaintsFlat
     )
 
     foreach(test_case IN LISTS PVF_TIMELINE_TEST_CASES)

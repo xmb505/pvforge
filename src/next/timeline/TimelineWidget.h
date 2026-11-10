@@ -11,6 +11,7 @@
 #include <QVector>
 #include <QWidget>
 
+class QContextMenuEvent;
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
@@ -75,11 +76,35 @@ public:
     int frameFromX(int x) const;
     QRect rulerRect() const;
     QRect breadcrumbRect() const;
+    // Marker strip directly below the ruler. Markers are global project
+    // annotations: they never occupy rows and never limit the timeline length.
+    QRect markerLaneRect() const;
+    // Clickable flag/label rectangle of a marker in the lane.
+    QRect markerHitRect(const model::Marker& marker) const;
+    // Marker under the cursor (lane flag/label, or a body guide line), empty
+    // when there is none.
+    QString markerIdAt(const QPoint& pos) const;
     QRect entityBarRect(const Uuid& uuid) const;
     // Small “+” button inside the left side of an entity bar. Empty when the
     // bar is too narrow to draw it.
     QRect addButtonRect(const Uuid& uuid) const;
     QVector<Uuid> visibleEntities() const;
+
+    // Marker editing. Every successful edit writes project.markers and calls
+    // Document::commitProject() exactly once (“pvf: ...”).
+    void addMarkerAtPlayhead();
+    bool insertMarker(const model::Marker& marker, QString* error = nullptr);
+    bool updateMarker(const QString& markerId, const model::Marker& marker,
+                      QString* error = nullptr);
+    bool deleteMarker(const QString& markerId, QString* error = nullptr);
+    // Dialog helpers used by the context menu and marker double-click.
+    void openNewMarkerDialog();
+    void openMarkerEditor(const QString& markerId);
+
+    // Waveform peak cache diagnostics; the cache is memory-only and cleared
+    // when the project root changes.
+    void clearWaveformCache();
+    int waveformCacheSize() const { return m_peakCache.size(); }
 
 signals:
     // The “+” button asks the shell to open an entity's private timeline in an
@@ -94,6 +119,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -109,7 +135,8 @@ private:
         Move,
         TrimStart,
         TrimEnd,
-        Keyframes
+        Keyframes,
+        Marker
     };
 
     enum class HitZone
@@ -153,6 +180,16 @@ private:
     void pasteKeyframes();
     Uuid keyframeSelectionEntity() const;
     QString entityDisplayName(const model::Entity& entity) const;
+
+    int markerIndex(const QString& markerId) const;
+    void deleteMarkerWithConfirm(const QString& markerId);
+    bool commitMarkers(const QVector<model::Marker>& before,
+                       const QString& message, QString* error);
+
+    void paintWaveform(QPainter& painter, const model::Entity& entity,
+                       const QRect& bar);
+    QVector<float> peaksForAsset(const assets::StoredAsset& asset,
+                                 QString* error);
 
     int assetDurationFrames(const assets::StoredAsset& asset) const;
     int dropRowFor(int y, int startFrame, int endFrame) const;
@@ -213,6 +250,15 @@ private:
     int m_dragKeyDelta = 0;
     bool m_dragKeyConflict = false;
 
+    // Marker drag preview. The whole marker vector is snapshotted on press so
+    // a failed commit can restore it.
+    QString m_dragMarkerId;
+    QVector<model::Marker> m_dragMarkerSnapshot;
+
+    // Decoded peak envelopes keyed by "<assetHash>:<buckets>". Memory only.
+    QHash<QString, QVector<float>> m_peakCache;
+    QString m_peakCacheRoot;
+
     struct CopiedKey
     {
         QString track;
@@ -226,9 +272,13 @@ private:
 
     static constexpr int kToolbarHeight = 24;
     static constexpr int kRulerHeight = 32;
+    static constexpr int kMarkerLaneHeight = 16;
     static constexpr int kRowHeight = 30;
     static constexpr int kScrollBarHeight = 14;
     static constexpr int kEdgeGrabPixels = 5;
+    // Peak resolution cached per asset. Entity bars sample this envelope and
+    // fold it down to one value per painted pixel.
+    static constexpr int kPeakBuckets = 2048;
 };
 
 } // namespace pvf::next

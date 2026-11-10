@@ -1,13 +1,20 @@
 #include "next/timeline/TimelineWidget.h"
 
+#include "audio2/Peaks.h"
 #include "next/core/Document.h"
+#include "next/timeline/MarkerDialog.h"
 
+#include <QContextMenuEvent>
+#include <QDialog>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QKeyEvent>
+#include <QMenu>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -320,6 +327,8 @@ void TimelineWidget::setParentUuid(const Uuid& parentUuid)
     m_dragKeyFrames.clear();
     m_dragKeyDelta = 0;
     m_dragKeyConflict = false;
+    m_dragMarkerId.clear();
+    m_dragMarkerSnapshot.clear();
 
     // Start the private timeline at its owner instead of frame 0, so children
     // of a parent that starts late are visible immediately.
@@ -398,6 +407,12 @@ QRect TimelineWidget::rulerRect() const
     return QRect(0, top, width(), kRulerHeight);
 }
 
+QRect TimelineWidget::markerLaneRect() const
+{
+    const QRect ruler = rulerRect();
+    return QRect(0, ruler.bottom() + 1, width(), kMarkerLaneHeight);
+}
+
 QRect TimelineWidget::breadcrumbRect() const
 {
     if (m_parentUuid.isEmpty())
@@ -447,7 +462,7 @@ int TimelineWidget::rowTop(int row) const
 
 QRect TimelineWidget::bodyRect() const
 {
-    const int top = rulerRect().top() + kRulerHeight;
+    const int top = markerLaneRect().bottom() + 1;
     const int bottom = height() - kScrollBarHeight;
     return QRect(0, top, width(), std::max(0, bottom - top));
 }
@@ -731,12 +746,20 @@ void TimelineWidget::paintMarkers(QPainter& painter)
     if (!m_document)
         return;
 
+    const QRect lane = markerLaneRect();
+    const QRect body = bodyRect();
+    const QPalette pal = palette();
+
+    painter.save();
+    QColor laneColor = pal.color(QPalette::AlternateBase).darker(112);
+    painter.fillRect(lane, laneColor);
+    painter.setPen(QPen(pal.color(QPalette::Mid), 1));
+    painter.drawLine(0, lane.bottom(), width(), lane.bottom());
+    painter.restore();
+
     const model::Project& project = m_document->project();
     if (project.markers.isEmpty())
         return;
-
-    const QRect ruler = rulerRect();
-    const QRect body = bodyRect();
 
     QFont small = painter.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 2.0));
@@ -770,27 +793,259 @@ void TimelineWidget::paintMarkers(QPainter& painter)
         if (!color.isValid())
             color = QColor(255, 190, 60);
 
-        painter.setPen(QPen(color, 1));
-        painter.drawLine(x, ruler.top(), x, ruler.bottom());
+        painter.setPen(QPen(withAlpha(color, 220), 1));
+        painter.drawLine(x, lane.top(), x, lane.bottom());
 
-        const QString title = marker.title.isEmpty() ? QStringLiteral("标记")
+        QPolygonF flag;
+        flag << QPointF(x, lane.top() + 1) << QPointF(x + 7, lane.top() + 5)
+             << QPointF(x, lane.top() + 9);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawPolygon(flag);
+
+        const QString title = marker.title.isEmpty() ? tr("标记")
                                                      : marker.title;
         const int labelWidth =
-            std::min(150, metrics.horizontalAdvance(title) + 10);
-        QRect label(x + 3, ruler.top() + 1, labelWidth, 13);
+            std::min(160, metrics.horizontalAdvance(title) + 12);
+        QRect label(x + 9, lane.top() + 1, labelWidth, lane.height() - 2);
         if (label.right() > width() - 2)
             label.translate(width() - 2 - label.right(), 0);
         if (label.left() < 2)
             label.translate(2 - label.left(), 0);
 
-        painter.fillRect(label, withAlpha(color, 230));
+        painter.fillRect(label, withAlpha(color, 225));
         painter.setPen(contrastText(color));
-        painter.drawText(label.adjusted(4, 0, -2, 0),
+        painter.drawText(label.adjusted(5, 0, -3, 0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          metrics.elidedText(title, Qt::ElideRight,
-                                            std::max(0, label.width() - 6)));
+                                            std::max(0, label.width() - 8)));
     }
     painter.restore();
+}
+
+QRect TimelineWidget::markerHitRect(const model::Marker& marker) const
+{
+    const int x = xFromFrame(marker.frame);
+    QFont small = font();
+    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 2.0));
+    const QFontMetrics metrics(small);
+    const QString title = marker.title.isEmpty() ? tr("标记") : marker.title;
+    const int labelWidth = std::min(160, metrics.horizontalAdvance(title) + 12);
+    const QRect lane = markerLaneRect();
+
+    QRect rect(x + 9, lane.top() + 1, labelWidth, lane.height() - 2);
+    if (rect.right() > width() - 2)
+        rect.translate(width() - 2 - rect.right(), 0);
+    if (rect.left() < 2)
+        rect.translate(2 - rect.left(), 0);
+    return rect.united(QRect(x - 2, lane.top(), 7, lane.height()));
+}
+
+QString TimelineWidget::markerIdAt(const QPoint& pos) const
+{
+    if (!m_document)
+        return {};
+
+    const QRect lane = markerLaneRect();
+    const QRect body = bodyRect();
+    if (!lane.contains(pos) && !body.contains(pos))
+        return {};
+
+    // Later markers are painted on top, so hit-test them first.
+    const QVector<model::Marker>& markers = m_document->project().markers;
+    for (int i = markers.size() - 1; i >= 0; --i)
+    {
+        const model::Marker& marker = markers.at(i);
+        if (marker.id.isEmpty())
+            continue;
+
+        const int x = xFromFrame(marker.frame);
+        if (lane.contains(pos))
+        {
+            if (markerHitRect(marker).contains(pos))
+                return marker.id;
+            if (std::abs(pos.x() - x) <= 4)
+                return marker.id;
+        }
+        else if (std::abs(pos.x() - x) <= 3)
+        {
+            return marker.id;
+        }
+    }
+    return {};
+}
+
+int TimelineWidget::markerIndex(const QString& markerId) const
+{
+    if (!m_document || markerId.isEmpty())
+        return -1;
+    const QVector<model::Marker>& markers = m_document->project().markers;
+    for (int i = 0; i < markers.size(); ++i)
+    {
+        if (markers.at(i).id == markerId)
+            return i;
+    }
+    return -1;
+}
+
+bool TimelineWidget::commitMarkers(const QVector<model::Marker>& before,
+                                   const QString& message, QString* error)
+{
+    if (!m_document)
+    {
+        if (error)
+            *error = tr("未打开工程");
+        return false;
+    }
+
+    QString commitError;
+    if (!m_document->commitProject(message, &commitError))
+    {
+        m_document->mutableProject().markers = before;
+        const QString failure =
+            commitError.isEmpty() ? tr("标记保存失败") : commitError;
+        if (error)
+            *error = failure;
+        emit statusMessage(tr("标记保存失败：%1").arg(failure));
+        return false;
+    }
+
+    if (error)
+        error->clear();
+    updateScrollBar();
+    update();
+    return true;
+}
+
+bool TimelineWidget::insertMarker(const model::Marker& marker, QString* error)
+{
+    if (!m_document)
+    {
+        if (error)
+            *error = tr("未打开工程");
+        return false;
+    }
+
+    model::Marker candidate = marker;
+    if (candidate.id.isEmpty())
+        candidate.id = model::newUuid();
+    candidate.frame = std::max(0, candidate.frame);
+    if (!normalizeMarker(candidate, error))
+        return false;
+
+    const QVector<model::Marker> before = m_document->project().markers;
+    m_document->mutableProject().markers.append(candidate);
+    return commitMarkers(
+        before, tr("pvf: add marker \"%1\"").arg(candidate.title), error);
+}
+
+void TimelineWidget::addMarkerAtPlayhead()
+{
+    model::Marker marker;
+    marker.id = model::newUuid();
+    marker.frame = std::max(0, playhead());
+    marker.title = tr("标记 %1").arg(marker.frame);
+    marker.color = QStringLiteral("#ffbe3c");
+    insertMarker(marker);
+}
+
+bool TimelineWidget::updateMarker(const QString& markerId,
+                                  const model::Marker& marker, QString* error)
+{
+    const int index = markerIndex(markerId);
+    if (index < 0)
+    {
+        if (error)
+            *error = tr("标记不存在");
+        return false;
+    }
+
+    model::Marker candidate = marker;
+    candidate.id = markerId; // ids are stable; only fields are editable.
+    if (!normalizeMarker(candidate, error))
+        return false;
+
+    const QVector<model::Marker> before = m_document->project().markers;
+    m_document->mutableProject().markers[index] = candidate;
+    return commitMarkers(
+        before, tr("pvf: edit marker \"%1\"").arg(candidate.title), error);
+}
+
+bool TimelineWidget::deleteMarker(const QString& markerId, QString* error)
+{
+    const int index = markerIndex(markerId);
+    if (index < 0)
+    {
+        if (error)
+            *error = tr("标记不存在");
+        return false;
+    }
+
+    const QVector<model::Marker> before = m_document->project().markers;
+    const QString title = before.at(index).title;
+    m_document->mutableProject().markers.removeAt(index);
+    return commitMarkers(
+        before,
+        tr("pvf: delete marker \"%1\"").arg(title.isEmpty() ? markerId : title),
+        error);
+}
+
+void TimelineWidget::deleteMarkerWithConfirm(const QString& markerId)
+{
+    const int index = markerIndex(markerId);
+    if (index < 0)
+        return;
+
+    const QString title = m_document->project().markers.at(index).title;
+    const auto answer = QMessageBox::question(
+        this, tr("删除标记"),
+        tr("确定删除标记 \"%1\"？").arg(title.isEmpty() ? markerId : title),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    QString error;
+    if (!deleteMarker(markerId, &error) && !error.isEmpty())
+        QMessageBox::warning(this, tr("标记"), error);
+}
+
+void TimelineWidget::openNewMarkerDialog()
+{
+    if (!m_document)
+        return;
+
+    model::Marker marker;
+    marker.id = model::newUuid();
+    marker.frame = std::max(0, playhead());
+    marker.title = tr("标记 %1").arg(marker.frame);
+    marker.color = QStringLiteral("#ffbe3c");
+
+    MarkerDialog dialog(this);
+    dialog.setWindowTitle(tr("添加标记"));
+    dialog.setMarker(marker);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    if (!insertMarker(dialog.marker(), &error) && !error.isEmpty())
+        QMessageBox::warning(this, tr("标记"), error);
+}
+
+void TimelineWidget::openMarkerEditor(const QString& markerId)
+{
+    const int index = markerIndex(markerId);
+    if (index < 0)
+        return;
+
+    MarkerDialog dialog(this);
+    dialog.setWindowTitle(tr("编辑标记"));
+    dialog.setMarker(m_document->project().markers.at(index));
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    if (!updateMarker(markerId, dialog.marker(), &error) && !error.isEmpty())
+        QMessageBox::warning(this, tr("标记"), error);
 }
 
 void TimelineWidget::paintEntities(QPainter& painter)
@@ -832,6 +1087,7 @@ void TimelineWidget::paintEntity(QPainter& painter, const Uuid& uuid)
     painter.setPen(QPen(color.darker(170), 1));
     painter.drawRect(bar.adjusted(0, 0, -1, -1));
 
+    paintWaveform(painter, entity, bar);
     paintSolverBands(painter, entity, bar);
     paintKeyframes(painter, entity, bar);
 
@@ -878,6 +1134,148 @@ void TimelineWidget::paintEntity(QPainter& painter, const Uuid& uuid)
         painter.drawRect(bar.adjusted(1, 1, -3, -3));
     }
     painter.restore();
+}
+
+void TimelineWidget::paintWaveform(QPainter& painter,
+                                   const model::Entity& entity,
+                                   const QRect& bar)
+{
+    if (!m_document || entity.content.kind != ContentKind::Asset
+        || entity.content.asset.type != AssetType::Audio)
+        return;
+
+    const QRect inner = bar.adjusted(2, 2, -2, -2);
+    if (inner.width() < 2 || inner.height() < 6)
+        return;
+
+    QString error;
+    QVector<float> peaks;
+    const auto stored = m_document->assets().get(entity.content.asset.hash);
+    if (stored)
+        peaks = peaksForAsset(*stored, &error);
+
+    const QColor ink = contrastText(contentColor(entity));
+    const int centerY = inner.center().y();
+    const int half = std::max(2, inner.height() / 2 - 2);
+
+    painter.save();
+    painter.setClipRect(inner);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    if (peaks.isEmpty())
+    {
+        painter.setPen(QPen(withAlpha(ink, 110), 1));
+        painter.drawLine(inner.left(), centerY, inner.right(), centerY);
+        if (inner.width() >= 72 && inner.height() >= 16)
+        {
+            QFont font = painter.font();
+            font.setPointSizeF(std::max(7.0, font.pointSizeF() - 2.0));
+            painter.setFont(font);
+            painter.setPen(withAlpha(ink, 150));
+            painter.drawText(inner, Qt::AlignCenter, tr("波形不可用"));
+        }
+        painter.restore();
+        return;
+    }
+
+    const int fps = std::max(1, m_document->project().settings.fps);
+    double assetSeconds = 0.0;
+    if (stored)
+    {
+        assetSeconds = stored->metadata
+                           .value(QStringLiteral("durationSeconds"))
+                           .toDouble(0.0);
+        if (assetSeconds <= 0.0)
+        {
+            const int frames = stored->metadata
+                                   .value(QStringLiteral("durationFrames"))
+                                   .toInt(0);
+            if (frames > 0)
+                assetSeconds = double(frames) / double(fps);
+        }
+    }
+
+    const double entitySeconds =
+        double(std::max(1, entity.duration())) / double(fps);
+    const double sourceStart =
+        double(std::max(0, entity.content.asset.sourceIn)) / double(fps);
+    if (assetSeconds <= 0.0)
+        assetSeconds = sourceStart + entitySeconds;
+
+    const int x0 = std::max(inner.left(), 0);
+    const int x1 = std::min(inner.right(), width() - 1);
+    const int span = std::max(1, inner.width());
+    const int peakCount = peaks.size();
+
+    painter.setPen(QPen(withAlpha(ink, 170), 1));
+    for (int x = x0; x <= x1; ++x)
+    {
+        const double t0 =
+            sourceStart + entitySeconds * double(x - inner.left()) / span;
+        const double t1 =
+            sourceStart + entitySeconds * double(x - inner.left() + 1) / span;
+
+        int i0 = int(std::floor(t0 / assetSeconds * peakCount));
+        int i1 = int(std::ceil(t1 / assetSeconds * peakCount));
+        i0 = std::clamp(i0, 0, peakCount);
+        i1 = std::clamp(i1, i0, peakCount);
+
+        float value = 0.0f;
+        for (int i = i0; i < i1; ++i)
+            value = std::max(value, peaks.at(i));
+
+        const int amplitude =
+            int(std::lround(std::clamp(double(value), 0.0, 1.0) * half));
+        painter.drawLine(x, centerY - amplitude, x, centerY + amplitude);
+    }
+    painter.restore();
+}
+
+QVector<float> TimelineWidget::peaksForAsset(const assets::StoredAsset& asset,
+                                             QString* error)
+{
+    if (!m_document)
+    {
+        if (error)
+            *error = tr("未打开工程");
+        return {};
+    }
+
+    // Projects are content-addressed, so a cache hit stays valid for the whole
+    // project. Switching project roots drops everything.
+    const QString root = m_document->assets().projectRoot();
+    if (m_peakCacheRoot != root)
+    {
+        m_peakCache.clear();
+        m_peakCacheRoot = root;
+    }
+
+    const QString key =
+        asset.hash + QLatin1Char(':') + QString::number(kPeakBuckets);
+    const auto cached = m_peakCache.constFind(key);
+    if (cached != m_peakCache.constEnd())
+        return cached.value();
+
+    const QStringList files = QDir(asset.directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    if (files.isEmpty())
+    {
+        if (error)
+            *error = tr("素材内容文件缺失");
+        return {};
+    }
+
+    const QString path = asset.directory + QLatin1Char('/') + files.first();
+    const QVector<float> peaks = audio2::audioPeaks(path, kPeakBuckets, error);
+    m_peakCache.insert(key, peaks);
+    return peaks;
+}
+
+void TimelineWidget::clearWaveformCache()
+{
+    m_peakCache.clear();
+    m_peakCacheRoot.clear();
+    update();
 }
 
 void TimelineWidget::paintSolverBands(QPainter& painter,
@@ -1129,6 +1527,12 @@ void TimelineWidget::updateHoverCursor(const QPoint& pos)
         return;
     }
 
+    if (markerLaneRect().contains(pos) && !markerIdAt(pos).isEmpty())
+    {
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
+
     for (const Uuid& uuid : visibleEntities())
     {
         const QRect addRect = addButtonRect(uuid);
@@ -1180,6 +1584,25 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     m_dragKeyFrames.clear();
     m_dragKeyDelta = 0;
     m_dragKeyConflict = false;
+    m_dragMarkerId.clear();
+    m_dragMarkerSnapshot.clear();
+
+    const QString pressedMarker =
+        markerLaneRect().contains(pos) ? markerIdAt(pos) : QString();
+    if (!pressedMarker.isEmpty())
+    {
+        const int index = markerIndex(pressedMarker);
+        m_dragMode = DragMode::Marker;
+        m_dragMarkerId = pressedMarker;
+        m_dragMarkerSnapshot = m_document->project().markers;
+        m_dragPressPos = pos;
+        m_dragChanged = false;
+        if (index >= 0)
+            m_document->setPlayhead(
+                std::max(0, m_document->project().markers.at(index).frame));
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
 
     if (!m_parentUuid.isEmpty() && breadcrumbRect().contains(pos))
     {
@@ -1187,7 +1610,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    if (rulerRect().contains(pos))
+    if (rulerRect().contains(pos) || markerLaneRect().contains(pos))
     {
         m_dragMode = DragMode::Scrub;
         m_dragEntity.clear();
@@ -1339,6 +1762,24 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+    if (m_dragMode == DragMode::Marker)
+    {
+        const int index = markerIndex(m_dragMarkerId);
+        if (index < 0)
+            return;
+        const int frame = std::max(0, frameFromX(pos.x()));
+        model::Marker& marker =
+            m_document->mutableProject().markers[index];
+        if (marker.frame != frame)
+        {
+            marker.frame = frame;
+            m_dragChanged = true;
+            updateScrollBar();
+            update();
+        }
+        return;
+    }
+
     if (m_dragMode == DragMode::Keyframes)
     {
         applyKeyframeDrag(pos);
@@ -1371,6 +1812,17 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
         return;
 
     const QPoint pos = event->position().toPoint();
+    if (markerLaneRect().contains(pos))
+    {
+        const QString markerId = markerIdAt(pos);
+        if (!markerId.isEmpty())
+        {
+            openMarkerEditor(markerId);
+            event->accept();
+        }
+        return;
+    }
+
     if (rulerRect().contains(pos) || toolbarRect().contains(pos))
         return;
 
@@ -1398,6 +1850,8 @@ void TimelineWidget::mouseDoubleClickEvent(QMouseEvent* event)
     m_dragKeyFrames.clear();
     m_dragKeyDelta = 0;
     m_dragKeyConflict = false;
+    m_dragMarkerId.clear();
+    m_dragMarkerSnapshot.clear();
 
     m_document->setSelection(hit.uuid);
     clearKeyframeSelection();
@@ -1504,6 +1958,45 @@ void TimelineWidget::insertKeyframesAt(const Uuid& uuid, int relativeFrame)
     update();
 }
 
+void TimelineWidget::contextMenuEvent(QContextMenuEvent* event)
+{
+    if (!m_document)
+    {
+        QWidget::contextMenuEvent(event);
+        return;
+    }
+
+    const QPoint pos = event->pos();
+    const bool onRuler =
+        rulerRect().contains(pos) || markerLaneRect().contains(pos);
+    const QString markerId = markerIdAt(pos);
+    if (!onRuler && markerId.isEmpty())
+    {
+        QWidget::contextMenuEvent(event);
+        return;
+    }
+
+    QMenu menu(this);
+    QAction* addAction = menu.addAction(tr("在播放头添加标记…"));
+    QAction* editAction = nullptr;
+    QAction* deleteAction = nullptr;
+    if (!markerId.isEmpty())
+    {
+        menu.addSeparator();
+        editAction = menu.addAction(tr("编辑标记…"));
+        deleteAction = menu.addAction(tr("删除标记"));
+    }
+
+    QAction* chosen = menu.exec(event->globalPos());
+    if (chosen == addAction)
+        openNewMarkerDialog();
+    else if (chosen == editAction)
+        openMarkerEditor(markerId);
+    else if (chosen == deleteAction)
+        deleteMarkerWithConfirm(markerId);
+    event->accept();
+}
+
 void TimelineWidget::keyPressEvent(QKeyEvent* event)
 {
     if (!m_document)
@@ -1513,6 +2006,14 @@ void TimelineWidget::keyPressEvent(QKeyEvent* event)
     }
 
     const bool ctrl = event->modifiers() & Qt::ControlModifier;
+    if ((event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier
+        && event->key() == Qt::Key_M)
+    {
+        addMarkerAtPlayhead();
+        event->accept();
+        return;
+    }
+
     if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)
     {
         if (!m_selectedKeyframes.isEmpty())
@@ -2347,6 +2848,8 @@ void TimelineWidget::finishDrag()
     const QSet<int> keyFrames = m_dragKeyFrames;
     const int keyDelta = m_dragKeyDelta;
     const bool keyConflict = m_dragKeyConflict;
+    const QString dragMarkerId = m_dragMarkerId;
+    const QVector<model::Marker> markerSnapshot = m_dragMarkerSnapshot;
 
     int previewStart = 0;
     int previewEnd = 0;
@@ -2374,8 +2877,30 @@ void TimelineWidget::finishDrag()
     m_dragKeyFrames.clear();
     m_dragKeyDelta = 0;
     m_dragKeyConflict = false;
+    m_dragMarkerId.clear();
+    m_dragMarkerSnapshot.clear();
 
-    if (!m_document || uuid.isEmpty())
+    if (!m_document)
+        return;
+
+    if (mode == DragMode::Marker)
+    {
+        if (!changed || dragMarkerId.isEmpty())
+            return;
+        const int index = markerIndex(dragMarkerId);
+        if (index < 0)
+            return;
+
+        const QString title = m_document->project().markers.at(index).title;
+        QString error;
+        commitMarkers(markerSnapshot,
+                      tr("pvf: move marker \"%1\"")
+                          .arg(title.isEmpty() ? dragMarkerId : title),
+                      &error);
+        return;
+    }
+
+    if (uuid.isEmpty())
         return;
 
     if (mode == DragMode::Keyframes)

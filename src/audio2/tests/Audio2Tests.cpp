@@ -1,4 +1,5 @@
 #include "audio2/Audio2.h"
+#include "audio2/Peaks.h"
 
 #include "assets/Assets.h"
 #include "model/Model.h"
@@ -8,6 +9,7 @@
 #include <QDataStream>
 #include <QFile>
 #include <QMediaDevices>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <QTextStream>
 
@@ -500,6 +502,87 @@ void testPlaybackNoDevice()
     playback.stop();
 }
 
+bool makePeaksFixture(const QString& path)
+{
+    QProcess process;
+    process.start(
+        QStringLiteral("ffmpeg"),
+        {QStringLiteral("-y"), QStringLiteral("-hide_banner"),
+         QStringLiteral("-loglevel"), QStringLiteral("error"),
+         QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+         QStringLiteral("sine=frequency=440:duration=1"), QStringLiteral("-af"),
+         QStringLiteral("volume='if(lt(t,0.5),0.2,6.0)':eval=frame"),
+         QStringLiteral("-ar"), QStringLiteral("48000"), QStringLiteral("-ac"),
+         QStringLiteral("1"), path});
+    if (!process.waitForStarted(5000))
+        return false;
+    if (!process.waitForFinished(30000))
+    {
+        process.kill();
+        process.waitForFinished(1000);
+        return false;
+    }
+    return process.exitStatus() == QProcess::NormalExit
+           && process.exitCode() == 0 && QFile::exists(path);
+}
+
+void testPeaks()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+
+    const QString path =
+        directory.path() + QStringLiteral("/peaks.wav");
+    if (!makePeaksFixture(path))
+    {
+        QTextStream(stderr) << QStringLiteral("ffmpeg 不可用，跳过 peaks 测试\n");
+        return;
+    }
+
+    QString error = QStringLiteral("stale");
+    const QVector<float> peaks = audio2::audioPeaks(path, 64, &error);
+    CHECK(!peaks.isEmpty());
+    CHECK(error.isEmpty());
+    CHECK(peaks.size() == 64);
+
+    float low = 1.0f;
+    float high = 0.0f;
+    bool inRange = true;
+    for (float value : peaks)
+    {
+        inRange = inRange && value >= 0.0f && value <= 1.0f;
+        low = std::min(low, value);
+        high = std::max(high, value);
+    }
+    CHECK(inRange);
+    CHECK(high > 0.5f);
+    CHECK(low < 0.3f);
+    CHECK(high - low > 0.2f);
+
+    // The second-half window sees only the loud part.
+    error.clear();
+    const QVector<float> second =
+        audio2::audioPeaks(path, 16, 0.5, 0.5, &error);
+    CHECK(error.isEmpty());
+    CHECK(second.size() == 16);
+    float secondLow = 1.0f;
+    for (float value : second)
+        secondLow = std::min(secondLow, value);
+    CHECK(secondLow > 0.5f);
+
+    // Missing file and invalid bucket count fail without crashing.
+    error.clear();
+    const QVector<float> missing =
+        audio2::audioPeaks(directory.path() + QStringLiteral("/missing.wav"),
+                           8, &error);
+    CHECK(missing.isEmpty());
+    CHECK(!error.isEmpty());
+
+    error.clear();
+    CHECK(audio2::audioPeaks(path, 0, &error).isEmpty());
+    CHECK(!error.isEmpty());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -551,6 +634,11 @@ int main(int argc, char** argv)
     {
         known = true;
         testPlaybackNoDevice();
+    }
+    if (run("peaks"))
+    {
+        known = true;
+        testPeaks();
     }
 
     if (!known)

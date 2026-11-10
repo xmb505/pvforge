@@ -16,6 +16,7 @@ set(PVF_AUDIO2_TEST_CASES
     hiddenAndInvisible
     playbackNoAudio
     playbackNoDevice
+    peaks
 )
 
 foreach(test_case IN LISTS PVF_AUDIO2_TEST_CASES)
