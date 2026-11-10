@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QMainWindow>
+#include <QStringList>
 #include <QVector>
 
 #include <functional>
@@ -103,6 +104,11 @@ public:
     QDockWidget* mcpLogDockForTest() const { return m_mcpLogDock; }
     QAction* mcpLogActionForTest() const { return m_mcpLogAction; }
 
+    // Recent projects persisted under the QSettings key "recent/projects".
+    int recentProjectCountForTest() const;
+    QString recentProjectForTest(int index) const;
+    void openRecentForTest(int index);
+
     // Playback test hooks: the same path as the Space shortcut.
     void togglePlaybackForTest();
     bool isPlayingForTest() const;
@@ -155,6 +161,13 @@ private:
     void buildEditor();
     void buildWelcome();
     void connectDocument();
+    void loadRecentProjects();
+    void saveRecentProjects() const;
+    void pruneRecentProjects();
+    void recordRecentProject(const QString& path);
+    void removeRecentProject(const QString& path);
+    void openRecentProject(const QString& path);
+    QString recentProjectName(const QString& path) const;
     void ensureMediaServices();
     void configureVideoExtraction();
     CrashRecoveryChoice askCrashRecovery(
@@ -252,6 +265,7 @@ private:
     QHash<Uuid, QDialog*> m_privateTimelines;
 
     QString m_lastBrowseDir;
+    QStringList m_recentProjects;
     CrashRecoveryHandler m_crashRecoveryHandler;
 };
 

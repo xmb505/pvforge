@@ -27,8 +27,10 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
@@ -128,6 +130,45 @@ bool rewriteEntityName(const QString& projectDir, const Uuid& uuid,
     return file.write(bytes) == bytes.size() && file.flush();
 }
 
+// Recent projects live in the same PVForge/PVForge QSettings file as the app
+// preferences; XDG_CONFIG_HOME isolates it per test binary.
+void clearRecentProjectsSetting()
+{
+    QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+    settings.remove(QStringLiteral("recent/projects"));
+    settings.sync();
+}
+
+QStringList storedRecentProjects()
+{
+    QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+    return settings.value(QStringLiteral("recent/projects")).toStringList();
+}
+
+void writeRecentProjectsSetting(const QStringList& paths)
+{
+    QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+    settings.setValue(QStringLiteral("recent/projects"), paths);
+    settings.sync();
+}
+
+// Creates a project directory on disk and returns its absolute path (empty on
+// failure).
+QString createRecentProject(const QString& projectDir, const QString& name)
+{
+    ProjectSettings settings;
+    settings.name = name;
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 24;
+
+    QString error;
+    auto document = ProjectDocument::create(projectDir, settings, &error);
+    if (!document)
+        return QString();
+    return document->root();
+}
+
 } // namespace
 
 class NextWindowTests : public QObject
@@ -135,6 +176,12 @@ class NextWindowTests : public QObject
     Q_OBJECT
 
 private slots:
+    // QSettings outlives one test function; start every case with no recents.
+    void init()
+    {
+        clearRecentProjectsSetting();
+    }
+
     void shellExposesPanels()
     {
         QTemporaryDir temp;
@@ -1204,6 +1251,199 @@ private slots:
         QVERIFY(window->propertiesPanelForTest()->isEnabled());
         QVERIFY(window->viewportForTest()->isEnabled());
         QVERIFY(statusAi->isHidden());
+    }
+
+    void recentProjectsStartEmpty()
+    {
+        NextWindow window(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 0);
+
+        auto* empty =
+            window.findChild<QLabel*>(QStringLiteral("recentProjectsEmpty"));
+        QVERIFY(empty != nullptr);
+        QCOMPARE(empty->text(), QStringLiteral("暂无最近项目"));
+        QVERIFY(storedRecentProjects().isEmpty());
+    }
+
+    void recentProjectsRecordOpenAndCreate()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        const QString opened = createRecentProject(
+            temp.path() + QStringLiteral("/opened.pvproj"),
+            QStringLiteral("打开的"));
+        QVERIFY(!opened.isEmpty());
+
+        NextWindow window(nullptr);
+        QString error;
+        QVERIFY2(window.openProject(opened, &error), qPrintable(error));
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+        QCOMPARE(window.recentProjectForTest(0), opened);
+        QCOMPARE(storedRecentProjects(), QStringList{opened});
+
+        // chooseNewProject() also ends in setDocument(); drive that seam
+        // directly so no modal new-project dialog is needed.
+        const QString createdDir =
+            temp.path() + QStringLiteral("/created.pvproj");
+        ProjectSettings settings;
+        settings.name = QStringLiteral("新建的");
+        auto created = ProjectDocument::create(createdDir, settings, &error);
+        QVERIFY2(created != nullptr, qPrintable(error));
+        window.setDocument(std::move(created));
+
+        QCOMPARE(window.recentProjectCountForTest(), 2);
+        QCOMPARE(window.recentProjectForTest(0),
+                 QFileInfo(createdDir).absoluteFilePath());
+        QCOMPARE(window.recentProjectForTest(1), opened);
+    }
+
+    void recentProjectsOrderDedupeAndLimit()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        QStringList dirs;
+        for (int i = 0; i < 11; ++i) {
+            const QString dir = createRecentProject(
+                temp.path() + QStringLiteral("/p%1.pvproj").arg(i),
+                QStringLiteral("P%1").arg(i));
+            QVERIFY(!dir.isEmpty());
+            dirs.append(dir);
+        }
+
+        NextWindow window(nullptr);
+        QString error;
+        for (const QString& dir : dirs)
+            QVERIFY2(window.openProject(dir, &error), qPrintable(error));
+
+        QCOMPARE(window.recentProjectCountForTest(), 10);
+        QCOMPARE(window.recentProjectForTest(0), dirs.last());
+        QCOMPARE(window.recentProjectForTest(9), dirs.at(1));
+        QVERIFY(!storedRecentProjects().contains(dirs.first()));
+
+        // Re-opening an older project moves it to the front, no duplicates.
+        QVERIFY2(window.openProject(dirs.at(5), &error), qPrintable(error));
+        QCOMPARE(window.recentProjectCountForTest(), 10);
+        QCOMPARE(window.recentProjectForTest(0), dirs.at(5));
+        QCOMPARE(window.recentProjectForTest(1), dirs.last());
+
+        const QStringList stored = storedRecentProjects();
+        QCOMPARE(stored.size(), 10);
+        QCOMPARE(QSet<QString>(stored.begin(), stored.end()).size(),
+                 stored.size());
+    }
+
+    void recentProjectsPruneMissingPaths()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        const QString kept = createRecentProject(
+            temp.path() + QStringLiteral("/kept.pvproj"),
+            QStringLiteral("保留"));
+        QVERIFY(!kept.isEmpty());
+        const QString missing =
+            temp.path() + QStringLiteral("/missing.pvproj");
+
+        // Missing paths are dropped before the welcome page is built.
+        writeRecentProjectsSetting({missing, kept, kept});
+        NextWindow window(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+        QCOMPARE(window.recentProjectForTest(0), kept);
+        QCOMPARE(storedRecentProjects(), QStringList{kept});
+
+        // A project deleted after being recorded is dropped on failed open.
+        QString error;
+        QVERIFY2(window.openProject(kept, &error), qPrintable(error));
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+
+        QVERIFY(QDir(kept).removeRecursively());
+        QVERIFY(!window.openProject(kept, &error));
+        QVERIFY(error.contains(QStringLiteral("路径不存在")));
+        QCOMPARE(window.recentProjectCountForTest(), 0);
+        QVERIFY(storedRecentProjects().isEmpty());
+    }
+
+    void recentProjectsDoubleClickOpens()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString dir = createRecentProject(
+            temp.path() + QStringLiteral("/named.pvproj"),
+            QStringLiteral("双击打开"));
+        QVERIFY(!dir.isEmpty());
+
+        writeRecentProjectsSetting({dir});
+        NextWindow window(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+
+        auto* row =
+            window.findChild<QWidget*>(QStringLiteral("recentProjectRow"));
+        QVERIFY(row != nullptr);
+        auto* name =
+            row->findChild<QLabel*>(QStringLiteral("recentProjectName"));
+        QVERIFY(name != nullptr);
+        QCOMPARE(name->text(), QStringLiteral("双击打开"));
+        auto* pathLabel =
+            row->findChild<QLabel*>(QStringLiteral("recentProjectPath"));
+        QVERIFY(pathLabel != nullptr);
+        QCOMPARE(pathLabel->toolTip(), QDir::toNativeSeparators(dir));
+        QVERIFY(row->findChild<QPushButton*>(
+                    QStringLiteral("recentProjectOpenButton"))
+                != nullptr);
+        QVERIFY(row->findChild<QPushButton*>(
+                    QStringLiteral("recentProjectRemoveButton"))
+                != nullptr);
+
+        QTest::mouseDClick(row, Qt::LeftButton);
+        QTRY_VERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()->root(), dir);
+
+        // Back to the welcome page; the "打开" button takes the same path.
+        window.setDocument(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+        auto* openButton = window.findChild<QPushButton*>(
+            QStringLiteral("recentProjectOpenButton"));
+        QVERIFY(openButton != nullptr);
+        openButton->click();
+        QTRY_VERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()->root(), dir);
+
+        // ... and so does the test accessor.
+        window.setDocument(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+        window.openRecentForTest(0);
+        QVERIFY(window.document() != nullptr);
+        QCOMPARE(window.document()->root(), dir);
+    }
+
+    void recentProjectsRemoveButtonDropsEntry()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString dir = createRecentProject(
+            temp.path() + QStringLiteral("/removable.pvproj"),
+            QStringLiteral("可移除"));
+        QVERIFY(!dir.isEmpty());
+
+        writeRecentProjectsSetting({dir});
+        NextWindow window(nullptr);
+        QCOMPARE(window.recentProjectCountForTest(), 1);
+        QVERIFY(window.findChild<QWidget*>(
+                    QStringLiteral("recentProjectsEmpty"))
+                == nullptr);
+
+        auto* removeButton = window.findChild<QPushButton*>(
+            QStringLiteral("recentProjectRemoveButton"));
+        QVERIFY(removeButton != nullptr);
+        removeButton->click();
+
+        QTRY_COMPARE(window.recentProjectCountForTest(), 0);
+        QTRY_VERIFY(window.findChild<QWidget*>(
+                        QStringLiteral("recentProjectsEmpty"))
+                    != nullptr);
+        QVERIFY(storedRecentProjects().isEmpty());
     }
 
     void appWordingHasNoGitLfs()

@@ -21,6 +21,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
@@ -28,24 +29,30 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QDockWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
+#include <QFrame>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSet>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSpinBox>
@@ -61,11 +68,107 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <memory>
+#include <utility>
 
 namespace pvf::next {
 
 namespace {
+
+constexpr int kMaxRecentProjects = 10;
+
+// One row of the welcome page's recent-project list.  Callbacks are used
+// instead of signals so the row needs no moc; the window defers the action by
+// one event-loop turn, because opening/removing rebuilds the welcome page and
+// would otherwise delete the widget that is still emitting.
+class RecentProjectRow : public QFrame
+{
+public:
+    RecentProjectRow(const QString& name, const QString& path,
+                     std::function<void()> open, std::function<void()> remove,
+                     QWidget* parent)
+        : QFrame(parent)
+        , m_open(std::move(open))
+        , m_remove(std::move(remove))
+    {
+        setObjectName(QStringLiteral("recentProjectRow"));
+        setAttribute(Qt::WA_StyledBackground, true);
+        setCursor(Qt::PointingHandCursor);
+        setToolTip(QDir::toNativeSeparators(path));
+
+        auto* layout = new QHBoxLayout(this);
+        layout->setContentsMargins(12, 8, 8, 8);
+        layout->setSpacing(10);
+
+        auto* text = new QVBoxLayout;
+        text->setSpacing(2);
+
+        auto* nameLabel = new QLabel(name, this);
+        nameLabel->setObjectName(QStringLiteral("recentProjectName"));
+        nameLabel->setToolTip(QDir::toNativeSeparators(path));
+        QFont nameFont = nameLabel->font();
+        nameFont.setBold(true);
+        nameLabel->setFont(nameFont);
+        text->addWidget(nameLabel);
+
+        auto* pathLabel = new QLabel(QDir::toNativeSeparators(path), this);
+        pathLabel->setObjectName(QStringLiteral("recentProjectPath"));
+        pathLabel->setToolTip(QDir::toNativeSeparators(path));
+        QFont pathFont = pathLabel->font();
+        pathFont.setPointSizeF(pathFont.pointSizeF() * 0.9);
+        pathLabel->setFont(pathFont);
+        text->addWidget(pathLabel);
+        layout->addLayout(text, 1);
+
+        auto* openButton = new QPushButton(NextWindow::tr("打开"), this);
+        openButton->setObjectName(QStringLiteral("recentProjectOpenButton"));
+        connect(openButton, &QPushButton::clicked, this, [this] {
+            if (m_open)
+                m_open();
+        });
+        layout->addWidget(openButton);
+
+        auto* removeButton = new QPushButton(NextWindow::tr("移除"), this);
+        removeButton->setObjectName(QStringLiteral("recentProjectRemoveButton"));
+        removeButton->setToolTip(
+            NextWindow::tr("从最近项目列表移除此项"));
+        connect(removeButton, &QPushButton::clicked, this, [this] {
+            if (m_remove)
+                m_remove();
+        });
+        layout->addWidget(removeButton);
+    }
+
+protected:
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton && m_open) {
+            m_open();
+            event->accept();
+            return;
+        }
+        QFrame::mouseDoubleClickEvent(event);
+    }
+
+    void contextMenuEvent(QContextMenuEvent* event) override
+    {
+        QMenu menu(this);
+        QAction* openAction = menu.addAction(NextWindow::tr("打开"));
+        menu.addSeparator();
+        QAction* removeAction =
+            menu.addAction(NextWindow::tr("从最近项目移除"));
+        QAction* chosen = menu.exec(event->globalPos());
+        if (chosen == openAction && m_open)
+            m_open();
+        else if (chosen == removeAction && m_remove)
+            m_remove();
+    }
+
+private:
+    std::function<void()> m_open;
+    std::function<void()> m_remove;
+};
 
 class NewProjectDialog : public QDialog
 {
@@ -285,6 +388,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
 
     m_settingsStore = std::make_unique<SettingsStore>();
     m_settings = m_settingsStore->load();
+    loadRecentProjects();
 
     buildUi();
     connect(m_playback.get(), &PlaybackController::playbackStateChanged, this,
@@ -405,6 +509,11 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 
     m_ownedDocument = std::move(document);
     m_document = m_ownedDocument.get();
+
+    // A newly created or opened project becomes the most recent one.  This is
+    // the common tail of chooseNewProject() and openProject().
+    if (m_document)
+        recordRecentProject(m_document->root());
 
     if (m_autoKeyCheck) {
         QSignalBlocker blocker(m_autoKeyCheck);
@@ -804,8 +913,39 @@ void NextWindow::buildEditor()
 
 void NextWindow::buildWelcome()
 {
+    pruneRecentProjects();
+
     auto* welcome = new QWidget;
     welcome->setObjectName(QStringLiteral("welcomePage"));
+    welcome->setStyleSheet(QStringLiteral(R"(
+        #recentProjectRow {
+            background: #151920;
+            border: 1px solid #262e3a;
+        }
+        #recentProjectRow:hover {
+            background: #1b222c;
+            border-color: #333d4c;
+        }
+        #recentProjectName { color: #e4e9f1; }
+        #recentProjectPath { color: #8b96a8; }
+        #recentProjectsTitle { color: #c9d3e0; }
+        #recentProjectsEmpty { color: #8b96a8; }
+        QPushButton#recentProjectOpenButton,
+        QPushButton#recentProjectRemoveButton {
+            background: #212834;
+            border: 1px solid #333d4c;
+            color: #e4e9f1;
+            padding: 4px 12px;
+        }
+        QPushButton#recentProjectOpenButton:hover,
+        QPushButton#recentProjectRemoveButton:hover {
+            background: #2a3341;
+        }
+        QPushButton#recentProjectOpenButton:pressed,
+        QPushButton#recentProjectRemoveButton:pressed {
+            background: #1a2029;
+        }
+    )"));
 
     auto* root = new QVBoxLayout(welcome);
     root->setContentsMargins(48, 48, 48, 48);
@@ -841,6 +981,47 @@ void NextWindow::buildWelcome()
     buttons->addWidget(openButton);
     buttons->addStretch(1);
     root->addLayout(buttons);
+
+    root->addSpacing(16);
+    auto* recentTitle = new QLabel(tr("最近项目"), welcome);
+    recentTitle->setObjectName(QStringLiteral("recentProjectsTitle"));
+    QFont recentTitleFont = recentTitle->font();
+    recentTitleFont.setBold(true);
+    recentTitle->setFont(recentTitleFont);
+    recentTitle->setAlignment(Qt::AlignCenter);
+    root->addWidget(recentTitle);
+
+    auto* recentBody = new QWidget(welcome);
+    recentBody->setMaximumWidth(720);
+    auto* recentList = new QVBoxLayout(recentBody);
+    recentList->setContentsMargins(0, 0, 0, 0);
+    recentList->setSpacing(6);
+
+    if (m_recentProjects.isEmpty()) {
+        auto* empty = new QLabel(tr("暂无最近项目"), recentBody);
+        empty->setObjectName(QStringLiteral("recentProjectsEmpty"));
+        empty->setAlignment(Qt::AlignCenter);
+        recentList->addWidget(empty);
+    } else {
+        for (const QString& path : std::as_const(m_recentProjects)) {
+            auto* row = new RecentProjectRow(
+                recentProjectName(path), path,
+                [this, path] {
+                    QTimer::singleShot(0, this,
+                                       [this, path] { openRecentProject(path); });
+                },
+                [this, path] {
+                    QTimer::singleShot(0, this, [this, path] {
+                        removeRecentProject(path);
+                        if (!m_document)
+                            buildWelcome();
+                    });
+                },
+                recentBody);
+            recentList->addWidget(row);
+        }
+    }
+    root->addWidget(recentBody, 0, Qt::AlignHCenter);
 
     auto* hint = new QLabel(
         tr("也可以使用命令行：pvforge-next --open <工程目录>"), welcome);
@@ -2146,9 +2327,10 @@ bool NextWindow::openProject(const QString& path, QString* error)
         return fail(tr("视频导出中，请稍后再打开工程"));
 
     const QFileInfo info(path);
-    if (!info.exists())
+    if (!info.exists()) {
+        removeRecentProject(path);
         return fail(tr("路径不存在：%1").arg(path));
-
+    }
     if (info.isFile()) {
         if (info.suffix().compare(QStringLiteral("pvproj"), Qt::CaseInsensitive) == 0)
             return fail(tr("旧工程格式已废弃：%1 是单文件 .pvproj。"
@@ -2224,6 +2406,115 @@ bool NextWindow::openProject(const QString& path, QString* error)
     if (!recoveryStatus.isEmpty())
         statusBar()->showMessage(recoveryStatus, 8000);
     return true;
+}
+
+void NextWindow::loadRecentProjects()
+{
+    QSettings store(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+    m_recentProjects =
+        store.value(QStringLiteral("recent/projects")).toStringList();
+}
+
+void NextWindow::saveRecentProjects() const
+{
+    QSettings store(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+    store.setValue(QStringLiteral("recent/projects"), m_recentProjects);
+    store.sync();
+}
+
+void NextWindow::pruneRecentProjects()
+{
+    QStringList kept;
+    for (const QString& path : std::as_const(m_recentProjects)) {
+        if (path.isEmpty() || kept.contains(path) || !QFileInfo::exists(path))
+            continue;
+        kept.append(path);
+        if (kept.size() >= kMaxRecentProjects)
+            break;
+    }
+    if (kept == m_recentProjects)
+        return;
+    m_recentProjects = kept;
+    saveRecentProjects();
+}
+
+void NextWindow::recordRecentProject(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+
+    const QString absolute = QFileInfo(path).absoluteFilePath();
+    QStringList updated = m_recentProjects;
+    updated.removeAll(absolute);
+    updated.prepend(absolute);
+    while (updated.size() > kMaxRecentProjects)
+        updated.removeLast();
+    if (updated == m_recentProjects)
+        return;
+
+    m_recentProjects = updated;
+    saveRecentProjects();
+}
+
+void NextWindow::removeRecentProject(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+    if (m_recentProjects.removeAll(QFileInfo(path).absoluteFilePath()) > 0)
+        saveRecentProjects();
+}
+
+void NextWindow::openRecentProject(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+
+    QString error;
+    if (!openProject(path, &error)) {
+        // An empty error means the human cancelled the crash-recovery dialog;
+        // that is not a failure worth a warning box.
+        if (!error.isEmpty())
+            QMessageBox::warning(this, tr("打开工程失败"), error);
+        if (!m_document)
+            buildWelcome();
+        return;
+    }
+
+    m_lastBrowseDir = QFileInfo(path).absolutePath();
+}
+
+QString NextWindow::recentProjectName(const QString& path) const
+{
+    QFile file(QDir(path).filePath(QStringLiteral("project.json")));
+    if (file.open(QIODevice::ReadOnly)) {
+        const QString name = QJsonDocument::fromJson(file.readAll())
+                                 .object()
+                                 .value(QStringLiteral("name"))
+                                 .toString()
+                                 .trimmed();
+        if (!name.isEmpty())
+            return name;
+    }
+
+    const QString dirName = QFileInfo(path).fileName();
+    return dirName.isEmpty() ? QDir::toNativeSeparators(path) : dirName;
+}
+
+int NextWindow::recentProjectCountForTest() const
+{
+    return m_recentProjects.size();
+}
+
+QString NextWindow::recentProjectForTest(int index) const
+{
+    if (index < 0 || index >= m_recentProjects.size())
+        return QString();
+    return m_recentProjects.at(index);
+}
+
+void NextWindow::openRecentForTest(int index)
+{
+    openRecentProject(recentProjectForTest(index));
 }
 
 void NextWindow::undo()
