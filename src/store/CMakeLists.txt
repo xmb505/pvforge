@@ -55,6 +55,12 @@ if(BUILD_TESTING)
         dirtyTextDetectedOnOpen
         commitRecoveredTextCreatesCommit
         discardDirtyTextRestores
+        restoreCommitRewindsText
+        restoreCommitDeletesNewEntities
+        restoreCommitRejectsDirtyText
+        restoreCommitRejectsInvalidHash
+        restoreCommitClearsStacksAndKeepsAssets
+        restoreCommitRollsBackOnCommitFailure
     )
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)

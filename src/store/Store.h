@@ -87,6 +87,14 @@ public:
     bool redo(QString* error = nullptr);
     QVector<GitCommit> history(int limit = 50, QString* error = nullptr) const;
 
+    // Makes the tracked text tree (project.json, entities/*.json, .gitignore)
+    // identical to `hash`, then records it as a new commit
+    // "pvf: restore <short>". The text working tree must be clean; dirty text
+    // paths make this fail without discarding anything. The in-memory
+    // undo/redo stacks are cleared and the project reloaded. Only a new commit
+    // is created: HEAD never moves backwards and no reset is performed.
+    bool restoreCommit(const QString& hash, QString* error = nullptr);
+
     // Uncommitted text project changes seen when the project was opened.
     // open() scans once; nothing is recovered or discarded automatically.
     const QVector<DirtyText>& dirtyText() const { return m_dirtyText; }

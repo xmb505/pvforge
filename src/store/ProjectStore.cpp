@@ -412,7 +412,8 @@ bool commitOnlyPaths(const QString& root, const QString& message,
     }
 
     QStringList arguments{QStringLiteral("commit"), QStringLiteral("--only"),
-                          QStringLiteral("-m"), message, QStringLiteral("--")};
+                          QStringLiteral("--allow-empty"), QStringLiteral("-m"),
+                          message, QStringLiteral("--")};
     arguments += paths;
     const ProcessResult commit = runGit(root, arguments);
     if (commit.exitCode != 0)
@@ -441,6 +442,232 @@ bool isProjectTextPath(const QString& relativePath)
     }
     return relativePath.startsWith(QLatin1String("entities/"))
            && relativePath.endsWith(QLatin1String(".json"));
+}
+
+bool resolveCommit(const QString& root, const QString& hash, QString* fullHash,
+                   QString* error)
+{
+    const QString requested = hash.trimmed();
+    if (requested.isEmpty())
+    {
+        setError(error, QStringLiteral("无效的提交：hash 不能为空"));
+        return false;
+    }
+    // Keep a revision from being parsed as a git option.
+    if (requested.startsWith(QLatin1Char('-')))
+    {
+        setError(error, QStringLiteral("无效的提交：%1").arg(hash));
+        return false;
+    }
+
+    const ProcessResult type = runGit(
+        root, {QStringLiteral("cat-file"), QStringLiteral("-t"), requested});
+    if (type.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("无效的提交：%1（%2）")
+                     .arg(requested, processFailure(type)));
+        return false;
+    }
+
+    const QString objectType = type.out.trimmed();
+    if (objectType != QLatin1String("commit"))
+    {
+        setError(error,
+                 QStringLiteral("无效的提交：%1 不是 commit（类型：%2）")
+                     .arg(requested, objectType));
+        return false;
+    }
+
+    const ProcessResult resolved = runGit(
+        root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+               requested + QStringLiteral("^{commit}")});
+    if (resolved.exitCode != 0 || resolved.out.trimmed().isEmpty())
+    {
+        setError(error,
+                 QStringLiteral("无效的提交：%1（%2）")
+                     .arg(requested, processFailure(resolved)));
+        return false;
+    }
+
+    *fullHash = resolved.out.trimmed();
+    return true;
+}
+
+bool listTreeFiles(const QString& root, const QString& commit,
+                   const QStringList& paths, QStringList* files, QString* error)
+{
+    QStringList arguments{QStringLiteral("ls-tree"), QStringLiteral("-r"),
+                          QStringLiteral("--name-only"), QStringLiteral("-z"),
+                          commit, QStringLiteral("--")};
+    arguments += paths;
+    const ProcessResult result = runGit(root, arguments);
+    if (result.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git ls-tree 失败：%1")
+                     .arg(processFailure(result)));
+        return false;
+    }
+    *files = splitNul(result.out);
+    return true;
+}
+
+bool listTrackedFiles(const QString& root, const QString& path,
+                      QStringList* files, QString* error)
+{
+    const ProcessResult result = runGit(
+        root, {QStringLiteral("ls-files"), QStringLiteral("-z"),
+               QStringLiteral("--"), path});
+    if (result.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git ls-files 失败：%1")
+                     .arg(processFailure(result)));
+        return false;
+    }
+    *files = splitNul(result.out);
+    return true;
+}
+
+// Text paths currently present on disk or in the index. Paths absent from
+// both are omitted because `git add` rejects unmatched pathspecs.
+QStringList textPathsForState(const QString& root)
+{
+    QStringList paths;
+    const auto add = [&](const QString& relativePath) {
+        if (QFileInfo::exists(absolutePath(root, relativePath))
+            || isTracked(root, relativePath))
+        {
+            paths << relativePath;
+        }
+    };
+    add(QStringLiteral("project.json"));
+    add(QStringLiteral("entities"));
+    add(QStringLiteral(".gitignore"));
+    return paths;
+}
+
+bool stageTextPaths(const QString& root, QString* error)
+{
+    const QStringList paths = textPathsForState(root);
+    if (paths.isEmpty())
+        return true;
+
+    QStringList arguments{QStringLiteral("add"), QStringLiteral("-A"),
+                          QStringLiteral("--")};
+    arguments += paths;
+    const ProcessResult add = runGit(root, arguments);
+    if (add.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git add 失败：%1").arg(processFailure(add)));
+        return false;
+    }
+    return true;
+}
+
+// Makes the working tree of project.json, entities/*.json and .gitignore match
+// `commit`. Entity files absent from the target are deleted; files outside the
+// text project paths are never touched. Does not stage or commit.
+bool syncTextTreeToCommit(const QString& root, const QString& commit,
+                          QString* error)
+{
+    QStringList targetFiles;
+    if (!listTreeFiles(root, commit,
+                       {QStringLiteral("project.json"),
+                        QStringLiteral("entities"),
+                        QStringLiteral(".gitignore")},
+                       &targetFiles, error))
+    {
+        return false;
+    }
+
+    bool hasProject = false;
+    bool hasEntities = false;
+    bool hasIgnore = false;
+    QSet<QString> targetSet;
+    for (const QString& path : std::as_const(targetFiles))
+    {
+        targetSet.insert(path);
+        if (path == QLatin1String("project.json"))
+            hasProject = true;
+        else if (path == QLatin1String(".gitignore"))
+            hasIgnore = true;
+        else if (path.startsWith(QLatin1String("entities/")))
+            hasEntities = true;
+    }
+
+    if (!hasProject)
+    {
+        setError(error,
+                 QStringLiteral("目标提交缺少 project.json：%1").arg(commit));
+        return false;
+    }
+
+    QStringList checkoutPaths{QStringLiteral("project.json")};
+    if (hasEntities)
+        checkoutPaths << QStringLiteral("entities");
+    if (hasIgnore)
+        checkoutPaths << QStringLiteral(".gitignore");
+
+    QStringList arguments{QStringLiteral("checkout"), commit, QStringLiteral("--")};
+    arguments += checkoutPaths;
+    const ProcessResult checkout = runGit(root, arguments);
+    if (checkout.exitCode != 0)
+    {
+        setError(error,
+                 QStringLiteral("git checkout 失败：%1")
+                     .arg(processFailure(checkout)));
+        return false;
+    }
+
+    QStringList currentEntities;
+    if (!listTrackedFiles(root, QStringLiteral("entities"), &currentEntities,
+                          error))
+    {
+        return false;
+    }
+
+    for (const QString& relativePath : std::as_const(currentEntities))
+    {
+        if (!relativePath.startsWith(QLatin1String("entities/"))
+            || !relativePath.endsWith(QLatin1String(".json"))
+            || targetSet.contains(relativePath))
+        {
+            continue;
+        }
+
+        const QString path = absolutePath(root, relativePath);
+        if (QFileInfo::exists(path) && !QFile::remove(path))
+        {
+            setError(error,
+                     QStringLiteral("无法删除目标提交中不存在的实体 %1").arg(path));
+            return false;
+        }
+    }
+
+    if (!hasIgnore)
+    {
+        const QString path = absolutePath(root, QStringLiteral(".gitignore"));
+        if (QFileInfo::exists(path) && !QFile::remove(path))
+        {
+            setError(error, QStringLiteral("无法删除 %1").arg(path));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Syncs back to `commit` and stages the result, restoring both the working
+// tree and the index to the pre-failure state. Used when a restore fails
+// after it already changed files.
+bool restoreTextTreeToCommit(const QString& root, const QString& commit,
+                             QString* error)
+{
+    if (!syncTextTreeToCommit(root, commit, error))
+        return false;
+    return stageTextPaths(root, error);
 }
 
 QString porcelainStatusName(QChar index, QChar worktree)
@@ -936,6 +1163,101 @@ QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
         commits.append(commit);
     }
     return commits;
+}
+
+bool ProjectStore::restoreCommit(const QString& hash, QString* error)
+{
+    QString commit;
+    if (!resolveCommit(m_root, hash, &commit, error))
+        return false;
+
+    QString scanError;
+    const QVector<DirtyText> dirty = dirtyTextFiles(&scanError);
+    if (!scanError.isEmpty())
+    {
+        setError(error, scanError);
+        return false;
+    }
+    if (!dirty.isEmpty())
+    {
+        m_dirtyText = dirty;
+        QStringList paths;
+        paths.reserve(dirty.size());
+        for (const DirtyText& item : dirty)
+            paths << QStringLiteral("%1（%2）").arg(item.path, item.status);
+        setError(error,
+                 QStringLiteral("工作区有未提交的文本改动，无法恢复：%1。"
+                                "请先提交或丢弃这些改动。")
+                     .arg(paths.join(QStringLiteral("、"))));
+        return false;
+    }
+
+    const QString originalHead = headHash(m_root);
+    if (originalHead.isEmpty())
+    {
+        setError(error, QStringLiteral("工程没有 HEAD 提交，无法恢复"));
+        return false;
+    }
+
+    // Any failure after this point restores the pre-call text tree and index,
+    // which is exactly the state the clean-worktree check above observed.
+    const auto rollback = [&](const QString& reason) {
+        QString rollbackError;
+        if (restoreTextTreeToCommit(m_root, originalHead, &rollbackError))
+            return reason;
+        return reason
+               + QStringLiteral("；回滚到原 HEAD 失败：%1").arg(rollbackError);
+    };
+
+    QString syncError;
+    if (!syncTextTreeToCommit(m_root, commit, &syncError))
+    {
+        setError(error, rollback(syncError));
+        return false;
+    }
+
+    // Validate the target data before creating a commit: a restore into an
+    // unreadable project must leave the repository untouched.
+    model::Project check;
+    QString loadError;
+    if (!loadProjectData(m_root, &check, &loadError))
+    {
+        setError(error,
+                 rollback(QStringLiteral("目标提交的工程数据无效：%1").arg(loadError)));
+        return false;
+    }
+
+    QString stageError;
+    if (!stageTextPaths(m_root, &stageError))
+    {
+        setError(error, rollback(stageError));
+        return false;
+    }
+
+    const QString message =
+        QStringLiteral("pvf: restore %1").arg(commit.left(7));
+    QString newHash;
+    QString commitError;
+    if (!commitOnlyPaths(m_root, message, textPathsForState(m_root), &newHash,
+                         &commitError))
+    {
+        setError(error, rollback(commitError));
+        return false;
+    }
+
+    clearDirty();
+    m_undoStack.clear();
+    m_redoStack.clear();
+
+    QString reloadError;
+    if (!reload(&reloadError))
+    {
+        setError(error,
+                 QStringLiteral("恢复已提交（%1），但重新加载工程失败：%2")
+                     .arg(newHash.left(7), reloadError));
+        return false;
+    }
+    return true;
 }
 
 QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const

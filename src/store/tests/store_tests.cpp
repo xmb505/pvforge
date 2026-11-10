@@ -131,6 +131,12 @@ private slots:
     void dirtyTextDetectedOnOpen();
     void commitRecoveredTextCreatesCommit();
     void discardDirtyTextRestores();
+    void restoreCommitRewindsText();
+    void restoreCommitDeletesNewEntities();
+    void restoreCommitRejectsDirtyText();
+    void restoreCommitRejectsInvalidHash();
+    void restoreCommitClearsStacksAndKeepsAssets();
+    void restoreCommitRollsBackOnCommitFailure();
 };
 
 void StoreTests::createOpenRoundTrip()
@@ -1161,6 +1167,343 @@ void StoreTests::discardDirtyTextRestores()
              QStringLiteral("删除乙"));
     QCOMPARE(opened->project().entities.value(staged.uuid).name,
              QStringLiteral("暂存丙"));
+}
+
+void StoreTests::restoreCommitRewindsText()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity entity = makeEntity(QStringLiteral("提交 A 的实体"));
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit A"), &error),
+             qPrintable(error));
+
+    QVector<GitCommit> history = store->history(1, &error);
+    QCOMPARE(history.size(), 1);
+    const QString commitA = history.first().hash;
+    const QString entityRelative =
+        QStringLiteral("entities/") + entity.uuid + QStringLiteral(".json");
+    const QString entityPath = path + QLatin1Char('/') + entityRelative;
+    const QString bytesA = readText(entityPath);
+
+    entity.name = QStringLiteral("提交 B 的实体");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit B"), &error),
+             qPrintable(error));
+
+    history = store->history(1, &error);
+    QCOMPARE(history.size(), 1);
+    const QString headB = history.first().hash;
+    QVERIFY(headB != commitA);
+    const int commits = store->history(50, &error).size();
+
+    error.clear();
+    QVERIFY2(store->restoreCommit(commitA, &error), qPrintable(error));
+
+    QCOMPARE(readText(entityPath), bytesA);
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("提交 A 的实体"));
+
+    history = store->history(50, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(history.size(), commits + 1);
+    QCOMPARE(history.first().message,
+             QStringLiteral("pvf: restore ") + commitA.left(7));
+    QVERIFY(history.first().hash != headB);
+
+    const CommandResult head =
+        runGit(store->root(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QCOMPARE(head.exitCode, 0);
+    QCOMPARE(head.out.trimmed(), history.first().hash);
+
+    const CommandResult status =
+        runGit(store->root(),
+               {QStringLiteral("status"), QStringLiteral("--porcelain")});
+    QCOMPARE(status.exitCode, 0);
+    QVERIFY2(status.out.trimmed().isEmpty(), qPrintable(status.out));
+}
+
+void StoreTests::restoreCommitDeletesNewEntities()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity kept = makeEntity(QStringLiteral("旧实体"));
+    store->mutableProject().entities.insert(kept.uuid, kept);
+    QVERIFY2(store->saveEntity(kept.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit A"), &error),
+             qPrintable(error));
+    const QString commitA = store->history(1, &error).first().hash;
+
+    model::Entity added = makeEntity(QStringLiteral("后来新增"));
+    store->mutableProject().entities.insert(added.uuid, added);
+    QVERIFY2(store->saveEntity(added.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: add entity"), &error),
+             qPrintable(error));
+
+    const QString keptPath = path + QStringLiteral("/entities/") + kept.uuid
+                             + QStringLiteral(".json");
+    const QString addedPath = path + QStringLiteral("/entities/") + added.uuid
+                              + QStringLiteral(".json");
+    QVERIFY(QFileInfo::exists(keptPath));
+    QVERIFY(QFileInfo::exists(addedPath));
+
+    error.clear();
+    QVERIFY2(store->restoreCommit(commitA, &error), qPrintable(error));
+
+    QVERIFY(!QFileInfo::exists(addedPath));
+    QVERIFY(!store->project().entities.contains(added.uuid));
+    QVERIFY(QFileInfo::exists(keptPath));
+    QVERIFY(store->project().entities.contains(kept.uuid));
+
+    const CommandResult lsTree =
+        runGit(store->root(),
+               {QStringLiteral("ls-tree"), QStringLiteral("-r"),
+                QStringLiteral("--name-only"), QStringLiteral("HEAD"),
+                QStringLiteral("--"), QStringLiteral("entities")});
+    QCOMPARE(lsTree.exitCode, 0);
+    QVERIFY2(!lsTree.out.contains(added.uuid), qPrintable(lsTree.out));
+}
+
+void StoreTests::restoreCommitRejectsDirtyText()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity entity = makeEntity(QStringLiteral("实体"));
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit A"), &error),
+             qPrintable(error));
+    const QString commitA = store->history(1, &error).first().hash;
+
+    const QString relativePath =
+        QStringLiteral("entities/") + entity.uuid + QStringLiteral(".json");
+    const QString entityPath = path + QLatin1Char('/') + relativePath;
+    const QString original = readText(entityPath);
+    QVERIFY(writeText(entityPath, original + QStringLiteral("\n")));
+    const QString dirtyBytes = readText(entityPath);
+
+    const QString headBefore =
+        runGit(store->root(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})
+            .out.trimmed();
+    const int commits = store->history(50, &error).size();
+
+    error.clear();
+    QVERIFY(!store->restoreCommit(commitA, &error));
+    QVERIFY2(error.contains(relativePath), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("未提交")), qPrintable(error));
+
+    // Nothing was discarded or committed.
+    QCOMPARE(readText(entityPath), dirtyBytes);
+    QCOMPARE(store->history(50, &error).size(), commits);
+    QCOMPARE(runGit(store->root(),
+                    {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})
+                 .out.trimmed(),
+             headBefore);
+}
+
+void StoreTests::restoreCommitRejectsInvalidHash()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    const QString headBefore =
+        runGit(store->root(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})
+            .out.trimmed();
+    const int commits = store->history(50, &error).size();
+    const QString missing =
+        QStringLiteral("0123456789abcdef0123456789abcdef01234567");
+
+    error.clear();
+    QVERIFY(!store->restoreCommit(missing, &error));
+    QVERIFY2(error.contains(QStringLiteral("无效")), qPrintable(error));
+
+    error.clear();
+    QVERIFY(!store->restoreCommit(QString(), &error));
+    QVERIFY(!error.isEmpty());
+
+    // An existing object that is not a commit must be rejected too.
+    QVERIFY(writeText(path + QStringLiteral("/blob.txt"),
+                      QStringLiteral("not a commit\n")));
+    const CommandResult blob =
+        runGit(store->root(),
+               {QStringLiteral("hash-object"), QStringLiteral("-w"),
+                QStringLiteral("blob.txt")});
+    QCOMPARE(blob.exitCode, 0);
+    error.clear();
+    QVERIFY(!store->restoreCommit(blob.out.trimmed(), &error));
+    QVERIFY2(error.contains(QStringLiteral("不是 commit")), qPrintable(error));
+
+    QCOMPARE(store->history(50, &error).size(), commits);
+    QCOMPARE(runGit(store->root(),
+                    {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})
+                 .out.trimmed(),
+             headBefore);
+}
+
+void StoreTests::restoreCommitClearsStacksAndKeepsAssets()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    // Ignored media and cache files must survive a restore.
+    const QString assetPath = path + QStringLiteral("/assets/deadbeef/asset.json");
+    const QString cachePath = path + QStringLiteral("/.cache/frame.webp");
+    QVERIFY(writeText(assetPath, QStringLiteral("local media\n")));
+    QVERIFY(writeText(cachePath, QStringLiteral("cache\n")));
+
+    model::Entity entity = makeEntity(QStringLiteral("v1"));
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit A"), &error),
+             qPrintable(error));
+    const QString commitA = store->history(1, &error).first().hash;
+    const QString entityPath = path + QStringLiteral("/entities/") + entity.uuid
+                               + QStringLiteral(".json");
+    const QString bytesA = readText(entityPath);
+
+    entity.name = QStringLiteral("v2");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit B"), &error),
+             qPrintable(error));
+
+    entity.name = QStringLiteral("v3");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit C"), &error),
+             qPrintable(error));
+
+    // Undo leaves an in-memory redo entry and a dirty text tree; discard the
+    // dirty bytes so the restore may proceed, then check both stacks are
+    // cleared by it.
+    QVERIFY2(store->undo(&error), qPrintable(error));
+    QVERIFY(store->undoDepth() > 0);
+    QVERIFY(store->redoDepth() > 0);
+    QVERIFY2(store->discardDirtyText(&error), qPrintable(error));
+    QVERIFY2(store->reloadAfterDiscard(&error), qPrintable(error));
+    QVERIFY(store->undoDepth() > 0);
+    QVERIFY(store->redoDepth() > 0);
+
+    error.clear();
+    QVERIFY2(store->restoreCommit(commitA, &error), qPrintable(error));
+
+    QCOMPARE(store->undoDepth(), 0);
+    QCOMPARE(store->redoDepth(), 0);
+    error.clear();
+    QVERIFY(!store->undo(&error));
+    error.clear();
+    QVERIFY(!store->redo(&error));
+
+    QCOMPARE(readText(entityPath), bytesA);
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v1"));
+    QVERIFY(QFileInfo::exists(assetPath));
+    QVERIFY(QFileInfo::exists(cachePath));
+}
+
+void StoreTests::restoreCommitRollsBackOnCommitFailure()
+{
+    SKIP_WITHOUT_GIT();
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
+    QVERIFY2(store.has_value(), qPrintable(error));
+
+    model::Entity entity = makeEntity(QStringLiteral("v1"));
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit A"), &error),
+             qPrintable(error));
+    const QString commitA = store->history(1, &error).first().hash;
+
+    entity.name = QStringLiteral("v2");
+    store->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(store->commit(QStringLiteral("pvf: commit B"), &error),
+             qPrintable(error));
+
+    const QString headB = store->history(1, &error).first().hash;
+    const int commits = store->history(50, &error).size();
+    const QString entityPath = path + QStringLiteral("/entities/") + entity.uuid
+                               + QStringLiteral(".json");
+    const QString bytesB = readText(entityPath);
+
+    const QString hookPath =
+        store->root() + QStringLiteral("/.git/hooks/pre-commit");
+    QVERIFY(writeText(hookPath,
+                      QStringLiteral("#!/bin/sh\n"
+                                     "echo hook-boom >&2\n"
+                                     "exit 1\n")));
+    QVERIFY(QFile::setPermissions(
+        hookPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+            | QFileDevice::ReadGroup | QFileDevice::ExeGroup
+            | QFileDevice::ReadOther | QFileDevice::ExeOther));
+
+    error.clear();
+    QVERIFY(!store->restoreCommit(commitA, &error));
+    QVERIFY2(error.contains(QStringLiteral("hook-boom")), qPrintable(error));
+
+    // The failed restore rolled the text tree, index and HEAD back.
+    QCOMPARE(readText(entityPath), bytesB);
+    QCOMPARE(store->project().entities.value(entity.uuid).name,
+             QStringLiteral("v2"));
+    QCOMPARE(store->history(50, &error).size(), commits);
+    QCOMPARE(store->history(1, &error).first().hash, headB);
+
+    const CommandResult status =
+        runGit(store->root(),
+               {QStringLiteral("status"), QStringLiteral("--porcelain")});
+    QVERIFY2(status.out.trimmed().isEmpty(), qPrintable(status.out));
+    const CommandResult staged =
+        runGit(store->root(),
+               {QStringLiteral("diff"), QStringLiteral("--cached"),
+                QStringLiteral("--name-only")});
+    QVERIFY2(staged.out.trimmed().isEmpty(), qPrintable(staged.out));
 }
 
 QTEST_GUILESS_MAIN(StoreTests)
