@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSize>
 #include <QVBoxLayout>
@@ -146,8 +147,11 @@ ExportDialog::ExportDialog(const model::Project& project, const Uuid& preferredC
     connect(m_outputEdit, &QLineEdit::textChanged, this,
             [this](const QString&) { updateStartEnabled(); });
     connect(buttons, &QDialogButtonBox::accepted, this, [this] {
-        if (!cameraUuid().isEmpty() && !outputPath().isEmpty())
-            accept();
+        if (cameraUuid().isEmpty() || outputPath().isEmpty())
+            return;
+        if (!confirmLargeExport())
+            return;
+        accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
@@ -217,6 +221,25 @@ void ExportDialog::updateStartEnabled()
 {
     if (m_startButton)
         m_startButton->setEnabled(!cameraUuid().isEmpty() && !outputPath().isEmpty());
+}
+
+bool ExportDialog::confirmLargeExport()
+{
+    const int scale = resolutionScale();
+    const int width = m_project.settings.width * scale;
+    const int height = m_project.settings.height * scale;
+    if (scale < 4 || m_skipLargeWarning
+        || (width <= 4096 && height <= 4096))
+        return true;
+
+    return QMessageBox::warning(
+               this, tr("导出尺寸很大"),
+               tr("4x 输出为 %1 × %2，可能非常慢并占用大量内存。\n\n"
+                  "继续导出？")
+                   .arg(width)
+                   .arg(height),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+           == QMessageBox::Yes;
 }
 
 } // namespace pvf::next

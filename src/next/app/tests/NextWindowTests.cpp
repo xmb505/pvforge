@@ -17,6 +17,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QFile>
@@ -25,7 +26,6 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
-#include <QProcess>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -40,13 +40,6 @@ using namespace pvf::next;
 using namespace pvf::model;
 
 namespace {
-
-bool gitLfsAvailable()
-{
-    QProcess process;
-    process.start(QStringLiteral("git-lfs"), {QStringLiteral("version")});
-    return process.waitForFinished(5000) && process.exitCode() == 0;
-}
 
 std::unique_ptr<NextWindow> makeWindow(QTemporaryDir& temp, QString* error)
 {
@@ -144,9 +137,6 @@ class NextWindowTests : public QObject
 private slots:
     void shellExposesPanels()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -164,9 +154,6 @@ private slots:
 
     void playheadSyncsBothWays()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -185,9 +172,6 @@ private slots:
 
     void cameraComboListsCameraEntities()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -223,9 +207,6 @@ private slots:
 
     void createEntityActionsPickDefaults()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -295,9 +276,6 @@ private slots:
 
     void createEntityRowsAndPrivateParent()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -332,9 +310,6 @@ private slots:
 
     void createEntityClampsToPrivateParent()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -394,9 +369,6 @@ private slots:
 
     void createEntityKeepsSaveWhenCommitFails()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -442,9 +414,6 @@ private slots:
 
     void privateTimelineOverlayOpensAndCloses()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -512,9 +481,6 @@ private slots:
 
     void exportActionAndDialog()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -566,13 +532,25 @@ private slots:
         fps->setCurrentIndex(2);
         QCOMPARE(dialog.outputFps(), 96);
         QCOMPARE(fps->currentText(), QStringLiteral("96（4x）"));
+
+        // A 1280x720 project at 4x is 5120x2880: the dialog asks before
+        // exporting.  The test hook skips the modal warning.
+        Project wide = window->document()->project();
+        wide.settings.width = 1280;
+        wide.settings.height = 720;
+        ExportDialog wideDialog(wide, cameraUuid);
+        wideDialog.setConfirmLargeExportForTest(true);
+        wideDialog.resolutionComboBoxForTest()->setCurrentIndex(2);
+        QCOMPARE(wideDialog.resolutionScale(), 4);
+        auto* buttons = wideDialog.findChild<QDialogButtonBox*>();
+        QVERIFY(buttons != nullptr);
+        QTest::mouseClick(buttons->button(QDialogButtonBox::Ok),
+                          Qt::LeftButton);
+        QCOMPARE(wideDialog.result(), int(QDialog::Accepted));
     }
 
     void mcpServerStartsAndReportsViewState()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         const QString projectDir = temp.path() + QStringLiteral("/mcp.pvproj");
@@ -641,9 +619,6 @@ private slots:
 
     void playbackEmptyProjectIsNoOp()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -659,9 +634,6 @@ private slots:
 
     void playbackAdvancesAndPauses()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -696,9 +668,6 @@ private slots:
 
     void playbackStopsAtContentEnd()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -724,9 +693,6 @@ private slots:
 
     void deleteCascadesSelectedSubtreeInOneCommit()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -771,9 +737,6 @@ private slots:
 
     void deleteLeafRemovesOnlyItself()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -799,9 +762,6 @@ private slots:
 
     void deleteLockedEntityIsRejected()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -830,9 +790,6 @@ private slots:
 
     void autoKeyDefaultsOnAndResetsAfterProjectSwitch()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -860,9 +817,6 @@ private slots:
 
     void undoRedoActionsDoNotCrash()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -894,9 +848,6 @@ private slots:
 
     void closingWindowDoesNotCrash()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -910,9 +861,6 @@ private slots:
 
     void switchingProjectFlushesPendingCommit()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -958,9 +906,6 @@ private slots:
 
     void cleanProjectSkipsCrashRecoveryHandler()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -986,9 +931,6 @@ private slots:
 
     void crashRecoveryRestoreOpensDirtyDiskContent()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -1027,9 +969,6 @@ private slots:
 
     void crashRecoveryDiscardRestoresCommittedText()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -1059,9 +998,6 @@ private slots:
 
     void crashRecoveryCommitCreatesRecoverCommit()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -1097,9 +1033,6 @@ private slots:
 
     void crashRecoveryCancelLeavesProjectClosed()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -1127,9 +1060,6 @@ private slots:
 
     void videoExtractionUsesProxyWidthSetting()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         CrashFixture fixture;
@@ -1156,9 +1086,6 @@ private slots:
 
     void settingsDialogAppliesAndPersists()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -1201,9 +1128,6 @@ private slots:
 
     void mcpLogDockTracksToolCallsAndEmergencyStop()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;

@@ -39,15 +39,19 @@ public:
     QComboBox* cameraComboBoxForTest() const { return m_cameraCombo; }
     QComboBox* resolutionComboBoxForTest() const { return m_resolutionCombo; }
     QComboBox* fpsComboBoxForTest() const { return m_fpsCombo; }
+    // Tests can skip the modal 4x warning.
+    void setConfirmLargeExportForTest(bool skip) { m_skipLargeWarning = skip; }
 
 private:
     void updateCameraInfo();
     void chooseOutputPath();
     void updateStartEnabled();
+    bool confirmLargeExport();
 
     model::Project m_project;
     int m_startFrame = 0;
     int m_endFrame = 0;
+    bool m_skipLargeWarning = false;
 
     QComboBox* m_cameraCombo = nullptr;
     QLabel* m_rangeLabel = nullptr;

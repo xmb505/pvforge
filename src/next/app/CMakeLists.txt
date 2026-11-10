@@ -142,7 +142,7 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_next_app_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_app_tests)
     set_tests_properties(next.project_document PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
     add_executable(pvf_next_window_tests tests/NextWindowTests.cpp)
     target_link_libraries(pvf_next_window_tests PRIVATE pvf_next_app Qt6::Test)
@@ -150,17 +150,17 @@ if(BUILD_TESTING)
         PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
     set_tests_properties(next.window_shell PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
     add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
     target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.media_services COMMAND pvf_media_services_tests)
     set_tests_properties(next.media_services PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
     add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
     target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
     set_tests_properties(next.playback_controller PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=/tmp/opencode/gitlfs/root/usr/bin:$ENV{PATH};XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

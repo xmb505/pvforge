@@ -2,7 +2,6 @@
 
 #include <QCoreApplication>
 #include <QDir>
-#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -12,13 +11,6 @@ using namespace pvf::next;
 using namespace pvf::model;
 
 namespace {
-
-bool gitLfsAvailable()
-{
-    QProcess process;
-    process.start(QStringLiteral("git-lfs"), {QStringLiteral("version")});
-    return process.waitForFinished(5000) && process.exitCode() == 0;
-}
 
 Entity makeEntity(const QString& name, int start, int end)
 {
@@ -39,9 +31,6 @@ class ProjectDocumentTests : public QObject
 private slots:
     void createCommitOpenUndoRedo()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         const QString projectDir = temp.path() + QStringLiteral("/test.pvproj");
@@ -90,9 +79,6 @@ private slots:
 
     void commitChangesUpsertsAndDeletesAtomically()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         const QString projectDir = temp.path() + QStringLiteral("/changes.pvproj");
@@ -129,9 +115,6 @@ private slots:
 
     void humanEditDebouncesIntoOneCommit()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -160,9 +143,6 @@ private slots:
 
     void rapidHumanEditsCoalesceIntoOneCommit()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -189,9 +169,6 @@ private slots:
 
     void aiCommitIsImmediateAndNotDebounced()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -225,9 +202,6 @@ private slots:
 
     void undoRedoUseMemoryHistory()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -258,9 +232,6 @@ private slots:
 
     void undoDropsPendingDebounce()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
@@ -292,9 +263,6 @@ private slots:
 
     void commitFailureIsReportedThroughSignal()
     {
-        if (!gitLfsAvailable())
-            QSKIP("git-lfs is not available; store creation requires it");
-
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
