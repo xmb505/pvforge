@@ -1100,7 +1100,9 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
                 QStringLiteral("PVForge MCP：写工具默认可用；工具结果是结构化 JSON，"
                                "失败时返回 {ok:false,error:{code,message}}。"
                                "人类急停期间写工具返回 stopped_by_human，"
-                               "只读工具仍可用；等人类恢复后再继续。"));
+                               "只读工具仍可用；等人类恢复后再继续。"
+                               "没有启用 Git 时 MCP 只读，写工具返回 permission_denied"
+                               "（details.reason=git_disabled）。"));
 
             const QByteArray extra =
                 QByteArrayLiteral("Mcp-Session-Id: ") + m_sessionId

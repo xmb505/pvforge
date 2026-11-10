@@ -112,6 +112,16 @@ QJsonArray keys(std::initializer_list<QPair<int, double>> values)
 }
 
 constexpr char kSkipMessage[] = "git/git-lfs 不可用，跳过依赖 git 的测试";
+constexpr char kReadOnlyMessage[] =
+    "Git 未启用，MCP 当前只读；请先在设置中启用 Git";
+
+QByteArray fileBytes(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QByteArray();
+    return file.readAll();
+}
 
 } // namespace
 
@@ -152,6 +162,9 @@ private slots:
     void stopBlocksWrites();
     void stopKeepsReadsWorking();
     void resumeRestoresWrites();
+    void writesDisabledBlocksWrites();
+    void writesEnabledAgain();
+    void stopAndReadOnlyInteraction();
     void createManyAbortsMidBatch();
     void writeToolClassification();
 };
@@ -1736,6 +1749,131 @@ void Mcp2Tests::resumeRestoresWrites()
                           QJsonObject{{QStringLiteral("uuid"),
                                        uuidOf(result)}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::writesDisabledBlocksWrites()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    fixture.service->setWritesEnabled(false);
+    QVERIFY(!fixture.service->writesEnabled());
+
+    const QString projectPath =
+        fixture.store->root() + QStringLiteral("/project.json");
+    const QByteArray projectBefore = fileBytes(projectPath);
+    QVERIFY(!projectBefore.isEmpty());
+    const int historyBefore = fixture.historySize();
+
+    QJsonObject result = fixture.call(QStringLiteral("entity.create"),
+                                      entityArgs(QStringLiteral("只读拒绝"), 0, 30));
+    QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(errorCode(result), QStringLiteral("permission_denied"));
+    const QJsonObject error = result.value(QStringLiteral("error")).toObject();
+    QCOMPARE(error.value(QStringLiteral("message")).toString(),
+             QString::fromUtf8(kReadOnlyMessage));
+    QCOMPARE(error.value(QStringLiteral("details"))
+                 .toObject()
+                 .value(QStringLiteral("reason"))
+                 .toString(),
+             QStringLiteral("git_disabled"));
+
+    QVERIFY(fixture.store->project().entities.isEmpty());
+    QCOMPARE(fixture.historySize(), historyBefore);
+    QCOMPARE(fileBytes(projectPath), projectBefore);
+
+    result = fixture.call(QStringLiteral("project.get"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("entity.list"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    // tools/list still advertises write tools so the client can show them.
+    const QJsonArray tools = fixture.service->listTools()
+                                 .value(QStringLiteral("tools"))
+                                 .toArray();
+    bool hasCreate = false;
+    for (const QJsonValue& value : tools)
+        hasCreate = hasCreate
+            || value.toObject().value(QStringLiteral("name")).toString()
+                == QLatin1String("entity.create");
+    QVERIFY(hasCreate);
+}
+
+void Mcp2Tests::writesEnabledAgain()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    fixture.service->setWritesEnabled(false);
+    QJsonObject result = fixture.call(QStringLiteral("entity.create"),
+                                      entityArgs(QStringLiteral("拒绝"), 0, 30));
+    QCOMPARE(errorCode(result), QStringLiteral("permission_denied"));
+    QVERIFY(fixture.store->project().entities.isEmpty());
+
+    const int historyBefore = fixture.historySize();
+    fixture.service->setWritesEnabled(true);
+    QVERIFY(fixture.service->writesEnabled());
+
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("恢复"), 0, 30));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.size(), 1);
+    QCOMPARE(fixture.historySize(), historyBefore + 1);
+
+    const QString uuid = uuidOf(result);
+    QVERIFY(!uuid.isEmpty());
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+}
+
+void Mcp2Tests::stopAndReadOnlyInteraction()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    fixture.service->requestStop();
+    fixture.service->setWritesEnabled(false);
+    QVERIFY(fixture.service->isStopped());
+    QVERIFY(!fixture.service->writesEnabled());
+
+    const int historyBefore = fixture.historySize();
+
+    // Read-only wins over the stop flag.
+    QJsonObject result = fixture.call(QStringLiteral("entity.create"),
+                                      entityArgs(QStringLiteral("双重拒绝"), 0, 30));
+    QVERIFY(!result.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(errorCode(result), QStringLiteral("permission_denied"));
+    QCOMPARE(result.value(QStringLiteral("error"))
+                 .toObject()
+                 .value(QStringLiteral("details"))
+                 .toObject()
+                 .value(QStringLiteral("reason"))
+                 .toString(),
+             QStringLiteral("git_disabled"));
+
+    // Read tools work under both conditions.
+    result = fixture.call(QStringLiteral("project.get"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("view.state"));
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    // Resuming writes does not clear read-only mode.
+    fixture.service->resumeWrites();
+    QVERIFY(!fixture.service->isStopped());
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("仍只读"), 0, 30));
+    QCOMPARE(errorCode(result), QStringLiteral("permission_denied"));
+
+    // Re-enabling Git writes while stopped restores the stop envelope.
+    fixture.service->setWritesEnabled(true);
+    fixture.service->requestStop();
+    result = fixture.call(QStringLiteral("entity.create"),
+                          entityArgs(QStringLiteral("急停"), 0, 30));
+    QCOMPARE(errorCode(result), QStringLiteral("stopped_by_human"));
+
+    QVERIFY(fixture.store->project().entities.isEmpty());
+    QCOMPARE(fixture.historySize(), historyBefore);
 }
 
 void Mcp2Tests::createManyAbortsMidBatch()

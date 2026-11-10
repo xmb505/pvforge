@@ -41,6 +41,15 @@ namespace {
 
 using Handler = Result (*)(detail::Tx&, const QJsonObject&);
 
+Result gitDisabledReadOnly()
+{
+    QJsonObject details;
+    details.insert(QStringLiteral("reason"), QStringLiteral("git_disabled"));
+    return detail::failure(
+        QStringLiteral("permission_denied"),
+        QStringLiteral("Git 未启用，MCP 当前只读；请先在设置中启用 Git"), details);
+}
+
 struct ToolEntry
 {
     const char* name;
@@ -132,6 +141,16 @@ void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
     m_batchCheckpoint = std::move(checkpoint);
 }
 
+void Service::setWritesEnabled(bool enabled)
+{
+    m_writesEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool Service::writesEnabled() const
+{
+    return m_writesEnabled.load(std::memory_order_relaxed);
+}
+
 void Service::requestStop()
 {
     m_stopped.store(true, std::memory_order_relaxed);
@@ -173,6 +192,11 @@ bool Service::isWriteTool(const QString& tool)
 
 QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
 {
+    // Read-only mode wins over the emergency stop: when Git is unavailable the
+    // AI must be told to enable Git instead of waiting for a human resume.
+    if (isWriteTool(tool) && !writesEnabled())
+        return gitDisabledReadOnly().toJson();
+
     if (!m_store)
         return detail::failure(QStringLiteral("not_available"),
                                QStringLiteral("工程未打开"))

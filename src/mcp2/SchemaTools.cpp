@@ -158,7 +158,7 @@ QJsonObject schemaTopic(const QString& topic)
                            QStringLiteral("allowedTracks"), QStringLiteral("missing"),
                            QStringLiteral("index"), QStringLiteral("lockedBy"),
                            QStringLiteral("conflicts"), QStringLiteral("requires"),
-                           QStringLiteral("affected")}));
+                           QStringLiteral("affected"), QStringLiteral("reason")}));
         return schema;
     }
     if (topic == QLatin1String("solver"))
@@ -224,6 +224,7 @@ QString guideMarkdown(const QString& topic)
             "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration-1`。\n"
             "- 一次工具调用只做一个逻辑操作；有文本 diff 的写工具各自产生一个 commit。\n"
             "- git 只管理文本；素材不进 git，纯素材导入可能没有 commit。\n"
+            "- 没有启用 Git 时 MCP 只读；写工具返回 `permission_denied`（details.reason=`git_disabled`），不要重试，先让人类启用 Git。\n"
             "- 批量工具全成功或全回滚。\n"
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"

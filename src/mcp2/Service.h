@@ -70,10 +70,18 @@ public:
     // structured failure envelope; the method never throws.
     QJsonObject execute(const QString& tool, const QJsonObject& args);
 
+    // Global read-only switch. When disabled (Git not enabled or git binary
+    // missing), every write tool fails with errorCode "permission_denied" and
+    // details.reason "git_disabled" without touching the store; read-only tools
+    // keep working. Defaults to enabled. Independent of the emergency stop.
+    void setWritesEnabled(bool enabled);
+    bool writesEnabled() const;
+
     // Human emergency stop. While stopped, write tools fail with
     // errorCode "stopped_by_human" and touch nothing; read-only tools keep
     // working so the AI can inspect state. Already committed history stays.
-    // Writes resume only through resumeWrites().
+    // Writes resume only through resumeWrites(). When the service is also
+    // read-only, the permission_denied envelope takes precedence.
     void requestStop();
     void resumeWrites();
     bool isStopped() const;
@@ -99,6 +107,7 @@ private:
     FrameProvider m_videoFrameProvider;
     FrameProvider m_htmlFrameProvider;
     BatchCheckpoint m_batchCheckpoint;
+    std::atomic<bool> m_writesEnabled{true};
     std::atomic<bool> m_stopped{false};
 };
 
