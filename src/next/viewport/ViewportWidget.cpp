@@ -341,9 +341,10 @@ QImage ViewportWidget::grabFrame() const
     const int frame = m_document->playhead();
     // A gizmo drag edits mutableProject() directly and does not emit
     // Document::changed until release, so the cache meta for this frame is
-    // still the pre-drag one.  Draw and keep the live preview uncached.
+    // still the pre-drag one.  Draw and keep the live preview uncached; a
+    // click that only shows the gizmo still uses the cache.
     const bool liveEdit = m_dragKind != DragKind::None
-                          && m_dragKind != DragKind::Pan;
+                          && m_dragKind != DragKind::Pan && m_dragChanged;
 
     if (m_sceneLookup && !liveEdit) {
         bool hit = false;
@@ -1111,9 +1112,10 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
         return m_sceneImage;
 
     // See grabFrame(): live gizmo edits are not representable by the stored
-    // frame meta until the drag commits.
+    // frame meta until the drag commits. A plain click that only shows the
+    // gizmo must keep using the cached frame; only actual movement bypasses it.
     const bool liveEdit = m_dragKind != DragKind::None
-                          && m_dragKind != DragKind::Pan;
+                          && m_dragKind != DragKind::Pan && m_dragChanged;
 
     // The workbench cache stores whole frames, possibly at a lower resolution
     // than the viewport; drawImage() scales it back up.

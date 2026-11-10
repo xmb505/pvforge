@@ -895,22 +895,25 @@ void ViewportWidgetTest::sceneCacheBypassedDuringGizmoDrag()
 
     QVERIFY(isGreen(view.grabFrame().pixelColor(160, 90)));
 
-    // A drag edits mutableProject() before the commit that clears the meta
-    // cache; the scene must come from render2 until release, otherwise the
-    // gizmo would freeze on the pre-drag picture.
     const model::Entity entity = document.project().entities.value(uuid);
     const QPointF handle =
         handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+
+    // A click that only shows the gizmo keeps the cached frame.
     QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
                       handle.toPoint());
+    QVERIFY(isGreen(view.grabFrame().pixelColor(160, 90)));
 
+    // Actual movement edits mutableProject() before the commit that clears the
+    // meta cache; the scene must come from render2 until release.
     const int lookupsBeforeDrag = lookups;
+    QTest::mouseMove(&view, (handle + QPointF(24.0, 0.0)).toPoint());
     const QImage live = view.grabFrame();
     QCOMPARE(lookups, lookupsBeforeDrag);
     QVERIFY(isRed(live.pixelColor(160, 90)));
 
     QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
-                        handle.toPoint());
+                        (handle + QPointF(24.0, 0.0)).toPoint());
     QCOMPARE(stores, 0);
 }
 
