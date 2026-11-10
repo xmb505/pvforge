@@ -40,6 +40,14 @@ void check(bool condition, const char* expression, const char* file, int line)
 }
 
 #define CHECK(condition) check((condition), #condition, __FILE__, __LINE__)
+#define CHECK_DETAIL(condition, detail)                                      \
+    do                                                                       \
+    {                                                                        \
+        if (!(condition))                                                    \
+            QTextStream(stderr) << QStringLiteral("  detail: ") << (detail)  \
+                                << '\n';                                     \
+        check((condition), #condition, __FILE__, __LINE__);                  \
+    } while (0)
 
 Project makeProject(int width = 100, int height = 100)
 {
@@ -102,6 +110,116 @@ bool nearColor(const QColor& actual, const QColor& expected, int tolerance = 3)
     return std::abs(actual.red() - expected.red()) <= tolerance
            && std::abs(actual.green() - expected.green()) <= tolerance
            && std::abs(actual.blue() - expected.blue()) <= tolerance;
+}
+
+int countInkPixels(const QImage& image, const QColor& background)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        for (int x = 0; x < image.width(); ++x)
+        {
+            if (image.pixelColor(x, y) != background)
+                ++count;
+        }
+    }
+    return count;
+}
+
+QRect inkBounds(const QImage& image, const QColor& background)
+{
+    int left = image.width();
+    int top = image.height();
+    int right = -1;
+    int bottom = -1;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        for (int x = 0; x < image.width(); ++x)
+        {
+            if (image.pixelColor(x, y) == background)
+                continue;
+            left = std::min(left, x);
+            top = std::min(top, y);
+            right = std::max(right, x);
+            bottom = std::max(bottom, y);
+        }
+    }
+    if (right < left)
+        return {};
+    return QRect(QPoint(left, top), QPoint(right, bottom));
+}
+
+// Strongest "ink" covered by any pixel: 255 for black on white, 0 for white.
+int maxInkStrength(const QImage& image)
+{
+    int best = 0;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        for (int x = 0; x < image.width(); ++x)
+        {
+            const QColor color = image.pixelColor(x, y);
+            const int ink = 255 - std::min({color.red(), color.green(),
+                                            color.blue()});
+            best = std::max(best, ink);
+        }
+    }
+    return best;
+}
+
+Entity makeSpecialEntity(ContentKind kind, const Uuid& uuid)
+{
+    Entity entity = makeEntity(uuid);
+    entity.transform.x = 320.0;
+    entity.transform.y = 180.0;
+
+    switch (kind)
+    {
+    case ContentKind::ComicText:
+        entity.content.kind = kind;
+        entity.content.comic.text = QStringLiteral("PV");
+        entity.content.comic.pixelSize = 56;
+        entity.content.comic.color = QStringLiteral("#000000");
+        entity.content.comic.shape = QStringLiteral("rect");
+        entity.content.comic.boxWidth = 260.0;
+        entity.content.comic.boxHeight = 150.0;
+        entity.content.comic.cornerRadius = 24.0;
+        entity.content.comic.tail = false;
+        entity.content.comic.fillColor = QStringLiteral("#ffffff");
+        entity.content.comic.bubbleStrokeColor = QStringLiteral("#000000");
+        entity.content.comic.bubbleStrokeWidth = 6.0;
+        break;
+    case ContentKind::RadialLines:
+        entity.content.kind = kind;
+        entity.content.radial.count = 24;
+        entity.content.radial.radius = 130.0;
+        entity.content.radial.innerRatio = 0.1;
+        entity.content.radial.width = 8.0;
+        entity.content.radial.color = QStringLiteral("#ff0000");
+        break;
+    case ContentKind::FlowLines:
+        entity.content.kind = kind;
+        entity.content.flow.count = 14;
+        entity.content.flow.length = 240.0;
+        entity.content.flow.spacing = 20.0;
+        entity.content.flow.thickness = 5.0;
+        entity.content.flow.area = 280.0;
+        entity.content.flow.bend = 40.0;
+        entity.content.flow.angle = 10.0;
+        entity.content.flow.color = QStringLiteral("#ff0000");
+        break;
+    case ContentKind::HalftoneDots:
+        entity.content.kind = kind;
+        entity.content.halftone.layout = QStringLiteral("grid");
+        entity.content.halftone.area = 220.0;
+        entity.content.halftone.spacing = 14.0;
+        entity.content.halftone.dotSize = 5.5;
+        entity.content.halftone.minRatio = 0.6;
+        entity.content.halftone.color = QStringLiteral("#ff0000");
+        break;
+    default:
+        break;
+    }
+    return entity;
 }
 
 int countRedBorderPixels(const QImage& image)
@@ -757,6 +875,110 @@ void testFrameProviderReceivesFractionalFrame()
     CHECK(std::abs(received - 5.5) < 1e-12);
 }
 
+void testSpecialContentRender()
+{
+    const QVector<QPair<ContentKind, QString>> kinds = {
+        {ContentKind::ComicText, QStringLiteral("comicText")},
+        {ContentKind::RadialLines, QStringLiteral("radialLines")},
+        {ContentKind::FlowLines, QStringLiteral("flowLines")},
+        {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
+    };
+
+    for (const auto& entry : kinds)
+    {
+        Project project = makeProject(640, 360);
+        add(project, makeSpecialEntity(entry.first, QStringLiteral("special")));
+
+        QTemporaryDir directory;
+        assets::AssetStore store(directory.path());
+        const QImage image =
+            render(project, store, 0, Uuid(), QSize(), QColor(Qt::white));
+
+        const QString name = entry.second;
+        const QRect bounds = inkBounds(image, Qt::white);
+        CHECK_DETAIL(!bounds.isEmpty(), name);
+        CHECK_DETAIL(countInkPixels(image, Qt::white) > 100, name);
+        CHECK_DETAIL(bounds.width() >= 80, name);
+        CHECK_DETAIL(bounds.height() >= 40, name);
+        CHECK_DETAIL(bounds.width() <= 600, name);
+        CHECK_DETAIL(bounds.height() <= 340, name);
+        CHECK_DETAIL(bounds.intersects(QRect(280, 140, 80, 80)), name);
+
+        if (entry.first == ContentKind::ComicText
+            || entry.first == ContentKind::RadialLines)
+        {
+            CHECK_DETAIL(std::abs(bounds.center().x() - 320) <= 8, name);
+            CHECK_DETAIL(std::abs(bounds.center().y() - 180) <= 8, name);
+        }
+        else if (entry.first == ContentKind::HalftoneDots)
+        {
+            CHECK_DETAIL(std::abs(bounds.center().x() - 320) <= 15, name);
+            CHECK_DETAIL(std::abs(bounds.center().y() - 180) <= 15, name);
+        }
+    }
+}
+
+void testSpecialContentOpacity()
+{
+    const QVector<QPair<ContentKind, QString>> kinds = {
+        {ContentKind::ComicText, QStringLiteral("comicText")},
+        {ContentKind::RadialLines, QStringLiteral("radialLines")},
+        {ContentKind::FlowLines, QStringLiteral("flowLines")},
+        {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
+    };
+
+    for (const auto& entry : kinds)
+    {
+        QTemporaryDir directory;
+        assets::AssetStore store(directory.path());
+
+        const auto renderOpacity = [&](double opacity) {
+            Project project = makeProject(640, 360);
+            Entity entity = makeSpecialEntity(entry.first,
+                                              QStringLiteral("special"));
+            entity.transform.opacity = opacity;
+            add(project, entity);
+            return render(project, store, 0, Uuid(), QSize(),
+                          QColor(Qt::white));
+        };
+
+        const QImage opaque = renderOpacity(1.0);
+        const QImage half = renderOpacity(0.5);
+        const QImage transparent = renderOpacity(0.0);
+
+        const QString name = entry.second;
+        CHECK_DETAIL(countInkPixels(transparent, Qt::white) == 0, name);
+        CHECK_DETAIL(maxInkStrength(opaque) > maxInkStrength(half) + 60, name);
+    }
+}
+
+void testSpecialContentFollowsParent()
+{
+    Project project = makeProject(400, 300);
+
+    Entity parent = makeEntity(QStringLiteral("parent"));
+    parent.transform.x = 200.0;
+    parent.transform.y = 150.0;
+    add(project, parent);
+
+    Entity child =
+        makeSpecialEntity(ContentKind::RadialLines, QStringLiteral("child"));
+    child.parentUuid = parent.uuid;
+    child.transform.x = 0.0;
+    child.transform.y = 0.0;
+    add(project, child);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QImage image =
+        render(project, store, 0, Uuid(), QSize(), QColor(Qt::white));
+
+    const QRect bounds = inkBounds(image, Qt::white);
+    CHECK(!bounds.isEmpty());
+    CHECK(std::abs(bounds.center().x() - 200) <= 8);
+    CHECK(std::abs(bounds.center().y() - 150) <= 8);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -794,6 +1016,10 @@ int main(int argc, char** argv)
         {QStringLiteral("fractionalProjectFrame"), testFractionalProjectFrame},
         {QStringLiteral("frameProviderReceivesFractionalFrame"),
          testFrameProviderReceivesFractionalFrame},
+        {QStringLiteral("specialContentRender"), testSpecialContentRender},
+        {QStringLiteral("specialContentOpacity"), testSpecialContentOpacity},
+        {QStringLiteral("specialContentFollowsParent"),
+         testSpecialContentFollowsParent},
     };
 
     QString requested;

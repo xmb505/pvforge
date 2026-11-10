@@ -2,6 +2,8 @@
 
 #include "JsonUtil.h"
 
+#include <cmath>
+
 namespace pvf::model {
 
 namespace {
@@ -18,7 +20,57 @@ std::optional<ContentKind> contentKindFromName(const QString& name)
         return ContentKind::Camera;
     if (name == QLatin1String("asset"))
         return ContentKind::Asset;
+    if (name == QLatin1String("comicText"))
+        return ContentKind::ComicText;
+    if (name == QLatin1String("radialLines"))
+        return ContentKind::RadialLines;
+    if (name == QLatin1String("flowLines"))
+        return ContentKind::FlowLines;
+    if (name == QLatin1String("halftoneDots"))
+        return ContentKind::HalftoneDots;
     return std::nullopt;
+}
+
+bool isComicShape(const QString& name)
+{
+    return name == QLatin1String("ellipse") || name == QLatin1String("rect")
+           || name == QLatin1String("cloud") || name == QLatin1String("burst");
+}
+
+bool isHalftoneLayout(const QString& name)
+{
+    return name == QLatin1String("grid") || name == QLatin1String("radial");
+}
+
+bool finiteNumber(double value, const QString& label, QString* error)
+{
+    if (std::isfinite(value))
+        return true;
+    detail::setError(error,
+                     QStringLiteral("%1 必须是有限数值").arg(label));
+    return false;
+}
+
+bool numberInRange(double value, double minimum, double maximum,
+                   const QString& label, QString* error)
+{
+    if (!std::isfinite(value))
+    {
+        detail::setError(error,
+                         QStringLiteral("%1 必须是有限数值").arg(label));
+        return false;
+    }
+    if (value < minimum || value > maximum)
+    {
+        detail::setError(error,
+                         QStringLiteral("%1 必须在 %2..%3 之间（当前 %4）")
+                             .arg(label)
+                             .arg(minimum)
+                             .arg(maximum)
+                             .arg(value));
+        return false;
+    }
+    return true;
 }
 
 std::optional<AssetType> assetTypeFromName(const QString& name)
@@ -131,6 +183,193 @@ VectorContent vectorFromJson(const QJsonObject& object)
     return vector;
 }
 
+QJsonObject comicToJson(const ComicTextContent& comic)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("text"), comic.text);
+    object.insert(QStringLiteral("fontFamily"), comic.fontFamily);
+    object.insert(QStringLiteral("pixelSize"), comic.pixelSize);
+    object.insert(QStringLiteral("color"), comic.color);
+    object.insert(QStringLiteral("strokeColor"), comic.strokeColor);
+    object.insert(QStringLiteral("strokeWidth"), comic.strokeWidth);
+    object.insert(QStringLiteral("align"), comic.align);
+    object.insert(QStringLiteral("lineHeight"), comic.lineHeight);
+    object.insert(QStringLiteral("bold"), comic.bold);
+    object.insert(QStringLiteral("italic"), comic.italic);
+    object.insert(QStringLiteral("shape"), comic.shape);
+    object.insert(QStringLiteral("boxWidth"), comic.boxWidth);
+    object.insert(QStringLiteral("boxHeight"), comic.boxHeight);
+    object.insert(QStringLiteral("fillColor"), comic.fillColor);
+    object.insert(QStringLiteral("bubbleStrokeColor"), comic.bubbleStrokeColor);
+    object.insert(QStringLiteral("bubbleStrokeWidth"), comic.bubbleStrokeWidth);
+    object.insert(QStringLiteral("cornerRadius"), comic.cornerRadius);
+    object.insert(QStringLiteral("tail"), comic.tail);
+    object.insert(QStringLiteral("tailX"), comic.tailX);
+    object.insert(QStringLiteral("tailY"), comic.tailY);
+    object.insert(QStringLiteral("rotation"), comic.rotation);
+    object.insert(QStringLiteral("padding"), comic.padding);
+    object.insert(QStringLiteral("seed"), comic.seed);
+    return object;
+}
+
+ComicTextContent comicFromJson(const QJsonObject& object)
+{
+    ComicTextContent comic;
+    comic.text = detail::jsonString(object, QStringLiteral("text"), comic.text);
+    comic.fontFamily = detail::jsonString(
+        object, QStringLiteral("fontFamily"), comic.fontFamily);
+    comic.pixelSize = detail::jsonInt(
+        object, QStringLiteral("pixelSize"), comic.pixelSize);
+    comic.color = detail::jsonString(object, QStringLiteral("color"), comic.color);
+    comic.strokeColor = detail::jsonString(
+        object, QStringLiteral("strokeColor"), comic.strokeColor);
+    comic.strokeWidth = detail::jsonDouble(
+        object, QStringLiteral("strokeWidth"), comic.strokeWidth);
+    comic.align = detail::jsonInt(object, QStringLiteral("align"), comic.align);
+    comic.lineHeight = detail::jsonDouble(
+        object, QStringLiteral("lineHeight"), comic.lineHeight);
+    comic.bold = detail::jsonBool(object, QStringLiteral("bold"), comic.bold);
+    comic.italic = detail::jsonBool(
+        object, QStringLiteral("italic"), comic.italic);
+    comic.shape = detail::jsonString(
+        object, QStringLiteral("shape"), comic.shape);
+    comic.boxWidth = detail::jsonDouble(
+        object, QStringLiteral("boxWidth"), comic.boxWidth);
+    comic.boxHeight = detail::jsonDouble(
+        object, QStringLiteral("boxHeight"), comic.boxHeight);
+    comic.fillColor = detail::jsonString(
+        object, QStringLiteral("fillColor"), comic.fillColor);
+    comic.bubbleStrokeColor = detail::jsonString(
+        object, QStringLiteral("bubbleStrokeColor"), comic.bubbleStrokeColor);
+    comic.bubbleStrokeWidth = detail::jsonDouble(
+        object, QStringLiteral("bubbleStrokeWidth"), comic.bubbleStrokeWidth);
+    comic.cornerRadius = detail::jsonDouble(
+        object, QStringLiteral("cornerRadius"), comic.cornerRadius);
+    comic.tail = detail::jsonBool(object, QStringLiteral("tail"), comic.tail);
+    comic.tailX = detail::jsonDouble(
+        object, QStringLiteral("tailX"), comic.tailX);
+    comic.tailY = detail::jsonDouble(
+        object, QStringLiteral("tailY"), comic.tailY);
+    comic.rotation = detail::jsonDouble(
+        object, QStringLiteral("rotation"), comic.rotation);
+    comic.padding = detail::jsonDouble(
+        object, QStringLiteral("padding"), comic.padding);
+    comic.seed = detail::jsonInt(object, QStringLiteral("seed"), comic.seed);
+    return comic;
+}
+
+QJsonObject radialToJson(const RadialLinesContent& radial)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("count"), radial.count);
+    object.insert(QStringLiteral("radius"), radial.radius);
+    object.insert(QStringLiteral("innerRatio"), radial.innerRatio);
+    object.insert(QStringLiteral("width"), radial.width);
+    object.insert(QStringLiteral("angle"), radial.angle);
+    object.insert(QStringLiteral("color"), radial.color);
+    object.insert(QStringLiteral("seed"), radial.seed);
+    return object;
+}
+
+RadialLinesContent radialFromJson(const QJsonObject& object)
+{
+    RadialLinesContent radial;
+    radial.count = detail::jsonInt(
+        object, QStringLiteral("count"), radial.count);
+    radial.radius = detail::jsonDouble(
+        object, QStringLiteral("radius"), radial.radius);
+    radial.innerRatio = detail::jsonDouble(
+        object, QStringLiteral("innerRatio"), radial.innerRatio);
+    radial.width = detail::jsonDouble(
+        object, QStringLiteral("width"), radial.width);
+    radial.angle = detail::jsonDouble(
+        object, QStringLiteral("angle"), radial.angle);
+    radial.color = detail::jsonString(
+        object, QStringLiteral("color"), radial.color);
+    radial.seed = detail::jsonInt(object, QStringLiteral("seed"), radial.seed);
+    return radial;
+}
+
+QJsonObject flowToJson(const FlowLinesContent& flow)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("count"), flow.count);
+    object.insert(QStringLiteral("length"), flow.length);
+    object.insert(QStringLiteral("spacing"), flow.spacing);
+    object.insert(QStringLiteral("thickness"), flow.thickness);
+    object.insert(QStringLiteral("area"), flow.area);
+    object.insert(QStringLiteral("bend"), flow.bend);
+    object.insert(QStringLiteral("angle"), flow.angle);
+    object.insert(QStringLiteral("phase"), flow.phase);
+    object.insert(QStringLiteral("color"), flow.color);
+    object.insert(QStringLiteral("seed"), flow.seed);
+    return object;
+}
+
+FlowLinesContent flowFromJson(const QJsonObject& object)
+{
+    FlowLinesContent flow;
+    flow.count = detail::jsonInt(object, QStringLiteral("count"), flow.count);
+    flow.length = detail::jsonDouble(
+        object, QStringLiteral("length"), flow.length);
+    flow.spacing = detail::jsonDouble(
+        object, QStringLiteral("spacing"), flow.spacing);
+    flow.thickness = detail::jsonDouble(
+        object, QStringLiteral("thickness"), flow.thickness);
+    flow.area = detail::jsonDouble(object, QStringLiteral("area"), flow.area);
+    flow.bend = detail::jsonDouble(object, QStringLiteral("bend"), flow.bend);
+    flow.angle = detail::jsonDouble(object, QStringLiteral("angle"), flow.angle);
+    flow.phase = detail::jsonDouble(object, QStringLiteral("phase"), flow.phase);
+    flow.color = detail::jsonString(
+        object, QStringLiteral("color"), flow.color);
+    flow.seed = detail::jsonInt(object, QStringLiteral("seed"), flow.seed);
+    return flow;
+}
+
+QJsonObject halftoneToJson(const HalftoneDotsContent& halftone)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("layout"), halftone.layout);
+    object.insert(QStringLiteral("area"), halftone.area);
+    object.insert(QStringLiteral("radius"), halftone.radius);
+    object.insert(QStringLiteral("spacing"), halftone.spacing);
+    object.insert(QStringLiteral("dotSize"), halftone.dotSize);
+    object.insert(QStringLiteral("angle"), halftone.angle);
+    object.insert(QStringLiteral("gradientAngle"), halftone.gradientAngle);
+    object.insert(QStringLiteral("minRatio"), halftone.minRatio);
+    object.insert(QStringLiteral("jitter"), halftone.jitter);
+    object.insert(QStringLiteral("color"), halftone.color);
+    object.insert(QStringLiteral("seed"), halftone.seed);
+    return object;
+}
+
+HalftoneDotsContent halftoneFromJson(const QJsonObject& object)
+{
+    HalftoneDotsContent halftone;
+    halftone.layout = detail::jsonString(
+        object, QStringLiteral("layout"), halftone.layout);
+    halftone.area = detail::jsonDouble(
+        object, QStringLiteral("area"), halftone.area);
+    halftone.radius = detail::jsonDouble(
+        object, QStringLiteral("radius"), halftone.radius);
+    halftone.spacing = detail::jsonDouble(
+        object, QStringLiteral("spacing"), halftone.spacing);
+    halftone.dotSize = detail::jsonDouble(
+        object, QStringLiteral("dotSize"), halftone.dotSize);
+    halftone.angle = detail::jsonDouble(
+        object, QStringLiteral("angle"), halftone.angle);
+    halftone.gradientAngle = detail::jsonDouble(
+        object, QStringLiteral("gradientAngle"), halftone.gradientAngle);
+    halftone.minRatio = detail::jsonDouble(
+        object, QStringLiteral("minRatio"), halftone.minRatio);
+    halftone.jitter = detail::jsonDouble(
+        object, QStringLiteral("jitter"), halftone.jitter);
+    halftone.color = detail::jsonString(
+        object, QStringLiteral("color"), halftone.color);
+    halftone.seed = detail::jsonInt(object, QStringLiteral("seed"), halftone.seed);
+    return halftone;
+}
+
 } // namespace
 
 QJsonObject toJson(const Transform& transform)
@@ -193,6 +432,21 @@ QJsonObject toJson(const Content& content)
                       assetTypeName(content.asset.type));
         object.insert(QStringLiteral("sourceIn"), content.asset.sourceIn);
         object.insert(QStringLiteral("volume"), content.asset.volume);
+        break;
+    case ContentKind::ComicText:
+        object.insert(QStringLiteral("comicText"),
+                      comicToJson(content.comic));
+        break;
+    case ContentKind::RadialLines:
+        object.insert(QStringLiteral("radialLines"),
+                      radialToJson(content.radial));
+        break;
+    case ContentKind::FlowLines:
+        object.insert(QStringLiteral("flowLines"), flowToJson(content.flow));
+        break;
+    case ContentKind::HalftoneDots:
+        object.insert(QStringLiteral("halftoneDots"),
+                      halftoneToJson(content.halftone));
         break;
     }
     return object;
@@ -270,9 +524,251 @@ std::optional<Content> contentFromJson(const QJsonObject& object,
             object, QStringLiteral("volume"), content.asset.volume);
         break;
     }
+    case ContentKind::ComicText:
+    {
+        const QJsonValue value = object.value(QStringLiteral("comicText"));
+        if (!value.isUndefined() && !value.isNull() && !value.isObject())
+        {
+            detail::setError(error, QStringLiteral("comicText 必须是对象"));
+            return std::nullopt;
+        }
+        content.comic = comicFromJson(value.toObject());
+        break;
+    }
+    case ContentKind::RadialLines:
+    {
+        const QJsonValue value = object.value(QStringLiteral("radialLines"));
+        if (!value.isUndefined() && !value.isNull() && !value.isObject())
+        {
+            detail::setError(error, QStringLiteral("radialLines 必须是对象"));
+            return std::nullopt;
+        }
+        content.radial = radialFromJson(value.toObject());
+        break;
+    }
+    case ContentKind::FlowLines:
+    {
+        const QJsonValue value = object.value(QStringLiteral("flowLines"));
+        if (!value.isUndefined() && !value.isNull() && !value.isObject())
+        {
+            detail::setError(error, QStringLiteral("flowLines 必须是对象"));
+            return std::nullopt;
+        }
+        content.flow = flowFromJson(value.toObject());
+        break;
+    }
+    case ContentKind::HalftoneDots:
+    {
+        const QJsonValue value = object.value(QStringLiteral("halftoneDots"));
+        if (!value.isUndefined() && !value.isNull() && !value.isObject())
+        {
+            detail::setError(error, QStringLiteral("halftoneDots 必须是对象"));
+            return std::nullopt;
+        }
+        content.halftone = halftoneFromJson(value.toObject());
+        break;
+    }
     }
 
+    if (!validateContent(content, error))
+        return std::nullopt;
     return content;
+}
+
+bool validateContent(const Content& content, QString* error)
+{
+    switch (content.kind)
+    {
+    case ContentKind::Empty:
+    case ContentKind::Text:
+    case ContentKind::Vector:
+    case ContentKind::Camera:
+        return true;
+
+    case ContentKind::Asset:
+        if (content.asset.hash.isEmpty())
+        {
+            detail::setError(error, QStringLiteral("素材内容缺少 assetHash"));
+            return false;
+        }
+        return true;
+
+    case ContentKind::ComicText:
+    {
+        const ComicTextContent& comic = content.comic;
+        if (!isComicShape(comic.shape))
+        {
+            detail::setError(error,
+                             QStringLiteral("漫画文字 shape 非法：%1（必须是 "
+                                            "ellipse、rect、cloud 或 burst）")
+                                 .arg(comic.shape));
+            return false;
+        }
+        if (comic.pixelSize < 1 || comic.pixelSize > 8192)
+        {
+            detail::setError(error,
+                             QStringLiteral("漫画文字 pixelSize 必须在 1..8192 "
+                                            "之间（当前 %1）")
+                                 .arg(comic.pixelSize));
+            return false;
+        }
+        if (!numberInRange(comic.boxWidth, 1.0, 1000000.0,
+                           QStringLiteral("漫画文字 boxWidth"), error))
+            return false;
+        if (!numberInRange(comic.boxHeight, 1.0, 1000000.0,
+                           QStringLiteral("漫画文字 boxHeight"), error))
+            return false;
+        if (!numberInRange(comic.padding, 0.0, 100000.0,
+                           QStringLiteral("漫画文字 padding"), error))
+            return false;
+        if (!numberInRange(comic.strokeWidth, 0.0, 1000.0,
+                           QStringLiteral("漫画文字 strokeWidth"), error))
+            return false;
+        if (!numberInRange(comic.bubbleStrokeWidth, 0.0, 1000.0,
+                           QStringLiteral("漫画文字 bubbleStrokeWidth"),
+                           error))
+            return false;
+        if (!numberInRange(comic.cornerRadius, 0.0, 1000000.0,
+                           QStringLiteral("漫画文字 cornerRadius"), error))
+            return false;
+        if (!numberInRange(comic.lineHeight, 0.1, 10.0,
+                           QStringLiteral("漫画文字 lineHeight"), error))
+            return false;
+        if (comic.align < 0 || comic.align > 0xffff)
+        {
+            detail::setError(error,
+                             QStringLiteral("漫画文字 align 必须在 0..65535 "
+                                            "之间（当前 %1）")
+                                 .arg(comic.align));
+            return false;
+        }
+        if (!numberInRange(comic.tailX, -16.0, 16.0,
+                           QStringLiteral("漫画文字 tailX"), error))
+            return false;
+        if (!numberInRange(comic.tailY, -16.0, 16.0,
+                           QStringLiteral("漫画文字 tailY"), error))
+            return false;
+        if (!finiteNumber(comic.rotation,
+                          QStringLiteral("漫画文字 rotation"), error))
+            return false;
+        return true;
+    }
+
+    case ContentKind::RadialLines:
+    {
+        const RadialLinesContent& radial = content.radial;
+        if (radial.count < 1 || radial.count > 512)
+        {
+            detail::setError(error,
+                             QStringLiteral("径向线 count 必须在 1..512 之间"
+                                            "（当前 %1）")
+                                 .arg(radial.count));
+            return false;
+        }
+        if (!numberInRange(radial.radius, 1.0, 1000000.0,
+                           QStringLiteral("径向线 radius"), error))
+            return false;
+        if (!numberInRange(radial.innerRatio, 0.0, 0.95,
+                           QStringLiteral("径向线 innerRatio"), error))
+            return false;
+        if (!numberInRange(radial.width, 0.1, 100000.0,
+                           QStringLiteral("径向线 width"), error))
+            return false;
+        if (!finiteNumber(radial.angle, QStringLiteral("径向线 angle"), error))
+            return false;
+        return true;
+    }
+
+    case ContentKind::FlowLines:
+    {
+        const FlowLinesContent& flow = content.flow;
+        if (flow.count < 1 || flow.count > 512)
+        {
+            detail::setError(error,
+                             QStringLiteral("流线 count 必须在 1..512 之间"
+                                            "（当前 %1）")
+                                 .arg(flow.count));
+            return false;
+        }
+        if (!numberInRange(flow.length, 1.0, 1000000.0,
+                           QStringLiteral("流线 length"), error))
+            return false;
+        if (!numberInRange(flow.spacing, 0.1, 1000000.0,
+                           QStringLiteral("流线 spacing"), error))
+            return false;
+        if (!numberInRange(flow.thickness, 0.1, 100000.0,
+                           QStringLiteral("流线 thickness"), error))
+            return false;
+        if (!numberInRange(flow.area, 1.0, 10000000.0,
+                           QStringLiteral("流线 area"), error))
+            return false;
+        if (!numberInRange(flow.bend, -1000000.0, 1000000.0,
+                           QStringLiteral("流线 bend"), error))
+            return false;
+        if (!numberInRange(flow.phase, 0.0, 1.0,
+                           QStringLiteral("流线 phase"), error))
+            return false;
+        if (!finiteNumber(flow.angle, QStringLiteral("流线 angle"), error))
+            return false;
+        return true;
+    }
+
+    case ContentKind::HalftoneDots:
+    {
+        const HalftoneDotsContent& halftone = content.halftone;
+        if (!isHalftoneLayout(halftone.layout))
+        {
+            detail::setError(error,
+                             QStringLiteral("点阵 layout 非法：%1（必须是 grid "
+                                            "或 radial）")
+                                 .arg(halftone.layout));
+            return false;
+        }
+        if (!numberInRange(halftone.area, 1.0, 10000000.0,
+                           QStringLiteral("点阵 area"), error))
+            return false;
+        if (!numberInRange(halftone.radius, 1.0, 1000000.0,
+                           QStringLiteral("点阵 radius"), error))
+            return false;
+        if (!numberInRange(halftone.spacing, 0.1, 100000.0,
+                           QStringLiteral("点阵 spacing"), error))
+            return false;
+        if (!numberInRange(halftone.dotSize, 0.1, 100000.0,
+                           QStringLiteral("点阵 dotSize"), error))
+            return false;
+        if (!numberInRange(halftone.minRatio, 0.0, 1.0,
+                           QStringLiteral("点阵 minRatio"), error))
+            return false;
+        if (!numberInRange(halftone.jitter, 0.0, 1.0,
+                           QStringLiteral("点阵 jitter"), error))
+            return false;
+        if (!finiteNumber(halftone.angle, QStringLiteral("点阵 angle"), error))
+            return false;
+        if (!finiteNumber(halftone.gradientAngle,
+                          QStringLiteral("点阵 gradientAngle"), error))
+            return false;
+        if (halftone.layout == QLatin1String("radial")
+            && halftone.radius / halftone.spacing > 256.0)
+        {
+            detail::setError(error,
+                             QStringLiteral("点阵过密：radius/spacing 不能超过 "
+                                            "256（当前 %1）")
+                                 .arg(halftone.radius / halftone.spacing));
+            return false;
+        }
+        if (halftone.layout != QLatin1String("radial")
+            && halftone.area / halftone.spacing > 512.0)
+        {
+            detail::setError(error,
+                             QStringLiteral("点阵过密：area/spacing 不能超过 "
+                                            "512（当前 %1）")
+                                 .arg(halftone.area / halftone.spacing));
+            return false;
+        }
+        return true;
+    }
+    }
+    return true;
 }
 
 } // namespace pvf::model

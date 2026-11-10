@@ -346,6 +346,453 @@ void paintText(QPainter& painter, const model::TextContent& text)
     block.paint(painter, QPointF());
 }
 
+constexpr double kPi = 3.14159265358979323846;
+
+// Stable pseudo random number in [0, 1), shared by the comic and decoration
+// shapes so a seed always produces the same hand drawn wobble.
+double hash1(double n)
+{
+    const double value = std::sin(n * 12.9898 + 7.233) * 43758.5453;
+    return value - std::floor(value);
+}
+
+QVector<QPointF> superEllipse(const QSizeF& size, int points, double exponent)
+{
+    QVector<QPointF> result;
+    const double a = size.width() / 2.0;
+    const double b = size.height() / 2.0;
+    const double e = 2.0 / exponent;
+    for (int index = 0; index < points; ++index)
+    {
+        const double t = -kPi / 2.0 + index * 2.0 * kPi / points;
+        const double c = std::cos(t);
+        const double s = std::sin(t);
+        result.append(QPointF(a * std::copysign(std::pow(std::fabs(c), e), c),
+                               b * std::copysign(std::pow(std::fabs(s), e), s)));
+    }
+    return result;
+}
+
+QPainterPath smoothClosedPath(const QVector<QPointF>& points)
+{
+    QPainterPath path;
+    const int count = points.size();
+    if (count == 0)
+        return path;
+    path.moveTo(points.first());
+    for (int index = 0; index < count; ++index)
+    {
+        const QPointF p1 = points[index];
+        const QPointF p2 = points[(index + 1) % count];
+        const QPointF p0 = points[(index - 1 + count) % count];
+        const QPointF p3 = points[(index + 2) % count];
+        path.cubicTo(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath comicCloudPath(const QSizeF& size, int seed)
+{
+    QVector<QPointF> points = superEllipse(size, 56, 2.62);
+    const double jitter = std::max(0.8, size.height() / 400.0);
+    for (int index = 0; index < points.size(); ++index)
+    {
+        points[index] += QPointF(
+            (hash1(index + seed * 1000.0) - 0.5) * 1.2 * jitter,
+            (hash1(index + 100 + seed * 1000.0) - 0.5) * 1.2 * jitter);
+    }
+    return smoothClosedPath(points);
+}
+
+// Spiky oval used by the "burst" balloon.  Peaks sit exactly on the box so
+// the declared box stays a truthful bounds hint.
+QPainterPath comicBurstPath(const QRectF& rect, int seed)
+{
+    QPainterPath path;
+    constexpr int spikes = 14;
+    const double a = rect.width() / 2.0;
+    const double b = rect.height() / 2.0;
+    const QPointF centre = rect.center();
+    for (int index = 0; index < spikes * 2; ++index)
+    {
+        const double t = (index / double(spikes * 2)) * 2.0 * kPi - kPi / 2.0;
+        const double factor = (index % 2 == 0) ? 1.0 : 0.78;
+        const double wobble = 1.0 + (hash1(index + seed * 37.0) - 0.5) * 0.08;
+        const QPointF point(centre.x() + a * factor * wobble * std::cos(t),
+                            centre.y() + b * factor * wobble * std::sin(t));
+        if (index == 0)
+            path.moveTo(point);
+        else
+            path.lineTo(point);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+// Triangle spike whose base lies on the balloon outline, so the union has no
+// notch where the tail meets the body.
+QPainterPath comicTailPath(const QPainterPath& body, const QRectF& rect,
+                           bool curved, const QPointF& tip, double base)
+{
+    const QPointF centre = rect.center();
+    const double halfW = rect.width() / 2.0;
+    const double halfH = rect.height() / 2.0;
+    if (halfW < 1e-6 || halfH < 1e-6)
+        return body;
+
+    QPointF base1;
+    QPointF base2;
+    if (curved)
+    {
+        const double angle = std::atan2((tip.y() - centre.y()) / halfH,
+                                        (tip.x() - centre.x()) / halfW);
+        constexpr double spread = 0.26;
+        base1 = QPointF(halfW * std::cos(angle + spread),
+                        halfH * std::sin(angle + spread));
+        base2 = QPointF(halfW * std::cos(angle - spread),
+                        halfH * std::sin(angle - spread));
+    }
+    else
+    {
+        QPointF direction = tip - centre;
+        const double length = std::hypot(direction.x(), direction.y());
+        if (length < 1e-6)
+            return body;
+        direction /= length;
+
+        const double tx = std::fabs(direction.x()) > 1e-6
+                              ? halfW / std::fabs(direction.x())
+                              : 1e9;
+        const double ty = std::fabs(direction.y()) > 1e-6
+                              ? halfH / std::fabs(direction.y())
+                              : 1e9;
+        if (ty < tx)
+        {
+            const double y = direction.y() < 0.0 ? -halfH : halfH;
+            const double x = direction.x() * ty;
+            base1 = QPointF(x - base / 2.0, y);
+            base2 = QPointF(x + base / 2.0, y);
+        }
+        else
+        {
+            const double x = direction.x() < 0.0 ? -halfW : halfW;
+            const double y = direction.y() * tx;
+            base1 = QPointF(x, y - base / 2.0);
+            base2 = QPointF(x, y + base / 2.0);
+        }
+    }
+
+    QPainterPath spike;
+    spike.moveTo(base1);
+    spike.lineTo(tip);
+    spike.lineTo(base2);
+    spike.closeSubpath();
+    return body.united(spike);
+}
+
+QPainterPath comicPath(const model::ComicTextContent& comic)
+{
+    const QRectF rect = centeredRect(QSizeF(comic.boxWidth, comic.boxHeight));
+    QPainterPath path;
+    if (comic.shape == QLatin1String("rect"))
+    {
+        path.addRoundedRect(rect, comic.cornerRadius, comic.cornerRadius);
+    }
+    else if (comic.shape == QLatin1String("cloud"))
+    {
+        path = comicCloudPath(rect.size(), comic.seed);
+    }
+    else if (comic.shape == QLatin1String("burst"))
+    {
+        path = comicBurstPath(rect, comic.seed);
+    }
+    else
+    {
+        path.addEllipse(rect);
+    }
+
+    const bool inside =
+        std::abs(comic.tailX) < 0.55 && std::abs(comic.tailY) < 0.55;
+    if (comic.tail && comic.shape != QLatin1String("burst") && !inside)
+    {
+        const QPointF tip(comic.tailX * rect.width() / 2.0,
+                          comic.tailY * rect.height() / 2.0);
+        const double base = std::min(rect.width(), rect.height()) * 0.34;
+        path = comicTailPath(path, rect, comic.shape != QLatin1String("rect"),
+                             tip, base);
+    }
+    return path;
+}
+
+void paintComicText(QPainter& painter, const model::ComicTextContent& comic)
+{
+    if (comic.boxWidth <= 0.0 || comic.boxHeight <= 0.0)
+        return;
+
+    const QPainterPath path = comicPath(comic);
+    if (path.isEmpty())
+        return;
+
+    painter.save();
+    painter.rotate(comic.rotation);
+    painter.setBrush(colorOr(comic.fillColor, Qt::white));
+    if (comic.bubbleStrokeWidth > 0.0)
+    {
+        QPen pen(colorOr(comic.bubbleStrokeColor, Qt::black));
+        pen.setWidthF(comic.bubbleStrokeWidth);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+    }
+    else
+    {
+        painter.setPen(Qt::NoPen);
+    }
+    painter.drawPath(path);
+
+    if (!comic.text.isEmpty())
+    {
+        TextStyle style;
+        style.text = comic.text;
+        style.fontFamily = comic.fontFamily;
+        style.pixelSize = comic.pixelSize;
+        style.color = colorOr(comic.color, Qt::white);
+        style.strokeColor = colorOr(comic.strokeColor, Qt::black);
+        style.strokeWidth = comic.strokeWidth;
+        style.align = comic.align;
+        style.lineHeight = comic.lineHeight;
+        style.padding = 0.0;
+        style.boxWidth = std::max(1.0, comic.boxWidth - 2.0 * comic.padding);
+        style.boxHeight = std::max(0.0, comic.boxHeight - 2.0 * comic.padding);
+        style.bold = comic.bold;
+        style.italic = comic.italic;
+
+        const TextBlock block = TextBlock::measure(style);
+        if (block.size().width() >= 1.0 && block.size().height() >= 1.0)
+            block.paint(painter, QPointF());
+    }
+    painter.restore();
+}
+
+void paintRadialLines(QPainter& painter,
+                      const model::RadialLinesContent& radial)
+{
+    if (radial.count <= 0 || radial.radius <= 0.0)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(colorOr(radial.color, Qt::white));
+
+    const double outer = radial.radius;
+    const double inner = outer * std::clamp(radial.innerRatio, 0.0, 0.95);
+    const double patternAngle = qDegreesToRadians(radial.angle);
+    const auto point = [&](double angle, double radius) {
+        return QPointF(std::cos(angle) * radius, std::sin(angle) * radius);
+    };
+
+    QPolygonF wedge;
+    for (int index = 0; index < radial.count; ++index)
+    {
+        const double base =
+            (index / double(radial.count)) * 2.0 * kPi + patternAngle;
+        const double wobble =
+            (hash1(index + radial.seed * 1000.0) - 0.5) * 0.03;
+        const double angle = base + wobble;
+        const double width =
+            radial.width
+            * (0.75 + 0.5 * hash1(index + 100 + radial.seed * 1000.0));
+        const double halfOuter = width / 2.0 / std::max(1.0, outer);
+        const double halfInner = halfOuter * 0.12;
+
+        wedge.clear();
+        wedge << point(angle - halfInner, inner)
+              << point(angle - halfOuter, outer)
+              << point(angle + halfOuter, outer)
+              << point(angle + halfInner, inner);
+        painter.drawPolygon(wedge);
+    }
+    painter.restore();
+}
+
+void paintFlowLines(QPainter& painter, const model::FlowLinesContent& flow)
+{
+    if (flow.count <= 0 || flow.area <= 0.0 || flow.spacing <= 0.0)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.rotate(flow.angle);
+    const QRectF areaRect(-flow.area / 2.0, -flow.area / 2.0, flow.area,
+                          flow.area);
+    painter.setClipRect(areaRect, Qt::IntersectClip);
+
+    QPen pen(colorOr(flow.color, Qt::white));
+    pen.setWidthF(std::max(0.1, flow.thickness));
+    pen.setCapStyle(Qt::RoundCap);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    const auto point = [&](double t, double offset) {
+        const double x = (t - 0.5) * flow.area;
+        const double y = flow.bend * 4.0 * t * (1.0 - t) + offset;
+        return QPointF(x, y);
+    };
+
+    const double span = std::clamp(flow.length / flow.area, 0.02, 1.0);
+    for (int index = 0; index < flow.count; ++index)
+    {
+        const double wobble =
+            (hash1(index + flow.seed * 1000.0) - 0.5) * 0.3;
+        const double offset =
+            (index - (flow.count - 1) / 2.0) * flow.spacing
+            + wobble * flow.spacing;
+        const double lineSpan =
+            std::clamp(span
+                           * (0.65
+                              + 0.35 * hash1(index + 100 + flow.seed * 1000.0)),
+                       0.02, 1.0);
+        const double slack = 1.0 - lineSpan;
+        const double start = std::clamp(
+            slack
+                * (0.5 + flow.phase
+                   + (hash1(index + 200 + flow.seed * 1000.0) - 0.5) * 0.4),
+            0.0, slack);
+
+        const int steps = std::clamp(int(std::ceil(lineSpan * 64.0)), 2, 64);
+        QPainterPath path;
+        path.moveTo(point(start, offset));
+        for (int step = 1; step <= steps; ++step)
+        {
+            const double t = start + lineSpan * step / steps;
+            path.lineTo(point(t, offset));
+        }
+        painter.drawPath(path);
+    }
+    painter.restore();
+}
+
+void paintHalftoneDots(QPainter& painter,
+                       const model::HalftoneDotsContent& halftone)
+{
+    if (halftone.spacing <= 0.0 || halftone.dotSize <= 0.0)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(colorOr(halftone.color, Qt::white));
+
+    const double minRatio = std::clamp(halftone.minRatio, 0.0, 1.0);
+    const double jitter = std::clamp(halftone.jitter, 0.0, 1.0);
+
+    if (halftone.layout == QLatin1String("radial"))
+    {
+        const double radius = halftone.radius;
+        if (radius <= 0.0)
+        {
+            painter.restore();
+            return;
+        }
+        const int rings = int(std::ceil(radius / halftone.spacing));
+        for (int ring = 1; ring <= rings; ++ring)
+        {
+            const double ringRadius = ring * halftone.spacing;
+            if (ringRadius > radius)
+                break;
+            const int count =
+                std::max(6, int(2.0 * kPi * ringRadius / halftone.spacing));
+            const double ratio =
+                minRatio
+                + (1.0 - minRatio) * std::clamp(1.0 - ringRadius / radius, 0.0, 1.0);
+            for (int index = 0; index < count; ++index)
+            {
+                const double angle =
+                    (index / double(count)) * 2.0 * kPi
+                    + qDegreesToRadians(halftone.angle)
+                    + (hash1(index + ring * 17.0 + halftone.seed * 1000.0)
+                       - 0.5)
+                          * 0.06;
+                QPointF pos(std::cos(angle) * ringRadius,
+                            std::sin(angle) * ringRadius);
+                pos += QPointF(
+                    (hash1(index * 3.1 + ring * 7.7 + halftone.seed * 4000.0)
+                     - 0.5)
+                        * halftone.spacing * jitter * 0.5,
+                    (hash1(index * 5.3 + ring * 9.1 + halftone.seed * 5000.0)
+                     - 0.5)
+                        * halftone.spacing * jitter * 0.5);
+                double dotRadius = halftone.dotSize * ratio;
+                dotRadius *=
+                    1.0
+                    + (hash1(index * 7.1 + ring * 3.9 + halftone.seed * 3000.0)
+                       - 0.5)
+                          * jitter;
+                if (dotRadius > 0.2)
+                    painter.drawEllipse(pos, dotRadius, dotRadius);
+            }
+        }
+        painter.restore();
+        return;
+    }
+
+    const double half = halftone.area / 2.0;
+    const QRectF clip(-half, -half, halftone.area, halftone.area);
+    painter.setClipRect(clip, Qt::IntersectClip);
+
+    const double gridAngle = qDegreesToRadians(halftone.angle);
+    const double fadeAngle = qDegreesToRadians(halftone.gradientAngle);
+    const QPointF fade(std::cos(fadeAngle), std::sin(fadeAngle));
+    const double cosA = std::cos(gridAngle);
+    const double sinA = std::sin(gridAngle);
+
+    const int count = int(std::ceil(half * 1.5 / halftone.spacing)) + 1;
+    const double reach = std::max(1.0, halftone.area);
+    for (int row = -count; row <= count; ++row)
+    {
+        for (int column = -count; column <= count; ++column)
+        {
+            const double baseX = column * halftone.spacing;
+            const double baseY = row * halftone.spacing;
+            const double wobbleX =
+                (hash1(column * 11.3 + row * 3.7 + halftone.seed * 4000.0)
+                 - 0.5)
+                * halftone.spacing * jitter * 0.6;
+            const double wobbleY =
+                (hash1(column * 7.1 + row * 13.9 + halftone.seed * 5000.0)
+                 - 0.5)
+                * halftone.spacing * jitter * 0.6;
+            const double gridX = baseX + wobbleX;
+            const double gridY = baseY + wobbleY;
+            const QPointF pos(gridX * cosA - gridY * sinA,
+                              gridX * sinA + gridY * cosA);
+            if (pos.x() < -half - halftone.dotSize
+                || pos.x() > half + halftone.dotSize
+                || pos.y() < -half - halftone.dotSize
+                || pos.y() > half + halftone.dotSize)
+                continue;
+
+            const double projection = pos.x() * fade.x() + pos.y() * fade.y();
+            const double strength =
+                std::clamp(0.5 - projection / reach, 0.0, 1.0);
+            const double ratio = minRatio + (1.0 - minRatio) * strength;
+            if (ratio <= 0.001)
+                continue;
+
+            double dotRadius = halftone.dotSize * ratio;
+            dotRadius *=
+                1.0
+                + (hash1(column * 5.3 + row * 9.7 + halftone.seed * 3000.0)
+                   - 0.5)
+                      * jitter;
+            if (dotRadius > 0.2)
+                painter.drawEllipse(pos, dotRadius, dotRadius);
+        }
+    }
+    painter.restore();
+}
+
 void paintContent(QPainter& painter, const model::Entity& entity,
                   const assets::AssetStore& store, const Options& options,
                   double projectFrame)
@@ -362,6 +809,22 @@ void paintContent(QPainter& painter, const model::Entity& entity,
 
     case ContentKind::Text:
         paintText(painter, entity.content.text);
+        return;
+
+    case ContentKind::ComicText:
+        paintComicText(painter, entity.content.comic);
+        return;
+
+    case ContentKind::RadialLines:
+        paintRadialLines(painter, entity.content.radial);
+        return;
+
+    case ContentKind::FlowLines:
+        paintFlowLines(painter, entity.content.flow);
+        return;
+
+    case ContentKind::HalftoneDots:
+        paintHalftoneDots(painter, entity.content.halftone);
         return;
 
     case ContentKind::Asset:
@@ -491,6 +954,61 @@ QSizeF contentSize(const model::Entity& entity, const assets::AssetStore& store)
         }
 
         return QSizeF(placeholderSize(store, asset));
+    }
+
+    case ContentKind::ComicText:
+    {
+        const model::ComicTextContent& comic = entity.content.comic;
+        if (comic.boxWidth <= 0.0 || comic.boxHeight <= 0.0)
+            return {};
+        QRectF bounds = comicPath(comic).boundingRect();
+        const double margin =
+            std::max(1.0, comic.bubbleStrokeWidth / 2.0 + 1.0);
+        bounds.adjust(-margin, -margin, margin, margin);
+        if (std::abs(comic.rotation) > 1e-6)
+        {
+            QTransform rotation;
+            rotation.rotate(comic.rotation);
+            bounds = rotation.mapRect(bounds);
+        }
+        return bounds.size();
+    }
+
+    case ContentKind::RadialLines:
+    {
+        const model::RadialLinesContent& radial = entity.content.radial;
+        const double extent = radial.radius + std::max(0.0, radial.width);
+        return QSizeF(std::max(1.0, extent * 2.0),
+                      std::max(1.0, extent * 2.0));
+    }
+
+    case ContentKind::FlowLines:
+    {
+        const model::FlowLinesContent& flow = entity.content.flow;
+        const double angle = qDegreesToRadians(flow.angle);
+        const double extent =
+            flow.area
+                * (std::abs(std::cos(angle)) + std::abs(std::sin(angle)))
+            + std::max(0.0, flow.thickness);
+        return QSizeF(std::max(1.0, extent), std::max(1.0, extent));
+    }
+
+    case ContentKind::HalftoneDots:
+    {
+        const model::HalftoneDotsContent& halftone = entity.content.halftone;
+        if (halftone.layout == QLatin1String("radial"))
+        {
+            const double extent =
+                halftone.radius + std::max(0.0, halftone.dotSize);
+            return QSizeF(std::max(1.0, extent * 2.0),
+                          std::max(1.0, extent * 2.0));
+        }
+        const double angle = qDegreesToRadians(halftone.angle);
+        const double extent =
+            halftone.area
+                * (std::abs(std::cos(angle)) + std::abs(std::sin(angle)))
+            + std::max(0.0, halftone.dotSize) * 2.0;
+        return QSizeF(std::max(1.0, extent), std::max(1.0, extent));
     }
 
     case ContentKind::Empty:

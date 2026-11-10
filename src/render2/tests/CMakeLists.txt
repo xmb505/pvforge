@@ -28,6 +28,9 @@ set(PVF_RENDER2_TEST_CASES
     solverSelfShapeTerminates
     fractionalProjectFrame
     frameProviderReceivesFractionalFrame
+    specialContentRender
+    specialContentOpacity
+    specialContentFollowsParent
 )
 
 foreach(test_case IN LISTS PVF_RENDER2_TEST_CASES)

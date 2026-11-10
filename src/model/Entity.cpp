@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QSet>
 
+#include <cmath>
+
 namespace pvf::model {
 
 namespace {
@@ -424,12 +426,26 @@ bool validateEntity(const Entity& entity, QString* error)
         return false;
     }
 
-    if (entity.content.kind == ContentKind::Asset
-        && entity.content.asset.hash.isEmpty())
+    if (!std::isfinite(entity.transform.opacity)
+        || entity.transform.opacity < 0.0
+        || entity.transform.opacity > 1.0)
     {
         detail::setError(
             error,
-            QStringLiteral("实体 %1 的素材内容缺少 assetHash").arg(entity.uuid));
+            QStringLiteral("实体 %1 的 transform.opacity 必须在 0..1 之间"
+                           "（当前 %2）")
+                .arg(entity.uuid)
+                .arg(entity.transform.opacity));
+        return false;
+    }
+
+    QString contentError;
+    if (!validateContent(entity.content, &contentError))
+    {
+        detail::setError(
+            error,
+            QStringLiteral("实体 %1 的内容非法：%2")
+                .arg(entity.uuid, contentError));
         return false;
     }
 

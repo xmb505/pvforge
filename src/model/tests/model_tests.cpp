@@ -152,6 +152,13 @@ void testContentJsonRoundTrip()
             entity.content.asset.sourceIn = 7;
             entity.content.asset.volume = 0.35;
             break;
+        case ContentKind::ComicText:
+        case ContentKind::RadialLines:
+        case ContentKind::FlowLines:
+        case ContentKind::HalftoneDots:
+            // Detailed round-trips for the special content live in
+            // testSpecialContentJsonRoundTrip.
+            break;
         }
 
         const QJsonObject json = toJson(entity);
@@ -189,6 +196,323 @@ void testContentJsonRoundTrip()
           == QStringLiteral("audio"));
     CHECK(assetJson.contains(QStringLiteral("sourceIn")));
     CHECK(assetJson.contains(QStringLiteral("volume")));
+}
+
+void testSpecialContentJsonRoundTrip()
+{
+    QString error;
+
+    Entity comicEntity = makeEntity(3, 53);
+    comicEntity.content.kind = ContentKind::ComicText;
+    ComicTextContent& comic = comicEntity.content.comic;
+    comic.text = QStringLiteral("咚！");
+    comic.fontFamily = QStringLiteral("Noto Sans SC");
+    comic.pixelSize = 64;
+    comic.color = QStringLiteral("#112233");
+    comic.strokeColor = QStringLiteral("#445566");
+    comic.strokeWidth = 2.5;
+    comic.align = 132;
+    comic.lineHeight = 1.2;
+    comic.bold = true;
+    comic.italic = true;
+    comic.shape = QStringLiteral("burst");
+    comic.boxWidth = 320.0;
+    comic.boxHeight = 180.0;
+    comic.fillColor = QStringLiteral("#fefefe");
+    comic.bubbleStrokeColor = QStringLiteral("#101010");
+    comic.bubbleStrokeWidth = 5.0;
+    comic.cornerRadius = 18.0;
+    comic.tail = false;
+    comic.tailX = 0.4;
+    comic.tailY = 1.6;
+    comic.rotation = 15.0;
+    comic.padding = 12.0;
+    comic.seed = 7;
+
+    const QJsonObject comicJson = toJson(comicEntity);
+    const QJsonObject comicContent =
+        comicJson.value(QStringLiteral("content")).toObject();
+    CHECK(comicContent.value(QStringLiteral("kind")).toString()
+          == QStringLiteral("comicText"));
+    CHECK(comicContent.contains(QStringLiteral("comicText")));
+    const QJsonObject comicFields =
+        comicContent.value(QStringLiteral("comicText")).toObject();
+    CHECK(comicFields.value(QStringLiteral("shape")).toString()
+          == QStringLiteral("burst"));
+    CHECK(comicFields.contains(QStringLiteral("bubbleStrokeColor")));
+    CHECK(comicFields.contains(QStringLiteral("tailX")));
+    CHECK(comicFields.contains(QStringLiteral("cornerRadius")));
+
+    const auto parsedComic = entityFromJson(comicJson, &error);
+    CHECK_DETAIL(parsedComic.has_value(), error);
+    if (parsedComic)
+    {
+        CHECK(toJson(*parsedComic) == comicJson);
+        CHECK(parsedComic->content.kind == ContentKind::ComicText);
+        CHECK(parsedComic->content.comic.text == comic.text);
+        CHECK(parsedComic->content.comic.shape == QStringLiteral("burst"));
+        CHECK(nearly(parsedComic->content.comic.bubbleStrokeWidth, 5.0));
+        CHECK(nearly(parsedComic->content.comic.tailY, 1.6));
+        CHECK(nearly(parsedComic->content.comic.rotation, 15.0));
+    }
+
+    Entity radialEntity = makeEntity(0, 10);
+    radialEntity.content.kind = ContentKind::RadialLines;
+    RadialLinesContent& radial = radialEntity.content.radial;
+    radial.count = 37;
+    radial.radius = 512.0;
+    radial.innerRatio = 0.12;
+    radial.width = 24.0;
+    radial.angle = 33.0;
+    radial.color = QStringLiteral("#abcdef");
+    radial.seed = 9;
+
+    const QJsonObject radialJson = toJson(radialEntity);
+    CHECK(radialJson.value(QStringLiteral("content"))
+              .toObject()
+              .value(QStringLiteral("kind"))
+              .toString()
+          == QStringLiteral("radialLines"));
+    const auto parsedRadial = entityFromJson(radialJson, &error);
+    CHECK_DETAIL(parsedRadial.has_value(), error);
+    if (parsedRadial)
+    {
+        CHECK(toJson(*parsedRadial) == radialJson);
+        CHECK(parsedRadial->content.radial.count == 37);
+        CHECK(nearly(parsedRadial->content.radial.radius, 512.0));
+        CHECK(nearly(parsedRadial->content.radial.innerRatio, 0.12));
+        CHECK(nearly(parsedRadial->content.radial.angle, 33.0));
+    }
+
+    Entity flowEntity = makeEntity(0, 10);
+    flowEntity.content.kind = ContentKind::FlowLines;
+    FlowLinesContent& flow = flowEntity.content.flow;
+    flow.count = 19;
+    flow.length = 360.0;
+    flow.spacing = 28.0;
+    flow.thickness = 6.5;
+    flow.area = 800.0;
+    flow.bend = -120.0;
+    flow.angle = -12.0;
+    flow.phase = 0.35;
+    flow.color = QStringLiteral("#00ff88");
+    flow.seed = 3;
+
+    const QJsonObject flowJson = toJson(flowEntity);
+    const auto parsedFlow = entityFromJson(flowJson, &error);
+    CHECK_DETAIL(parsedFlow.has_value(), error);
+    if (parsedFlow)
+    {
+        CHECK(toJson(*parsedFlow) == flowJson);
+        CHECK(parsedFlow->content.flow.count == 19);
+        CHECK(nearly(parsedFlow->content.flow.bend, -120.0));
+        CHECK(nearly(parsedFlow->content.flow.phase, 0.35));
+        CHECK(parsedFlow->content.flow.color == QStringLiteral("#00ff88"));
+    }
+
+    Entity halftoneEntity = makeEntity(0, 10);
+    halftoneEntity.content.kind = ContentKind::HalftoneDots;
+    HalftoneDotsContent& halftone = halftoneEntity.content.halftone;
+    halftone.layout = QStringLiteral("radial");
+    halftone.area = 1024.0;
+    halftone.radius = 500.0;
+    halftone.spacing = 22.0;
+    halftone.dotSize = 9.0;
+    halftone.angle = 60.0;
+    halftone.gradientAngle = 180.0;
+    halftone.minRatio = 0.25;
+    halftone.jitter = 0.4;
+    halftone.color = QStringLiteral("#222222");
+    halftone.seed = 11;
+
+    const QJsonObject halftoneJson = toJson(halftoneEntity);
+    const auto parsedHalftone = entityFromJson(halftoneJson, &error);
+    CHECK_DETAIL(parsedHalftone.has_value(), error);
+    if (parsedHalftone)
+    {
+        CHECK(toJson(*parsedHalftone) == halftoneJson);
+        CHECK(parsedHalftone->content.halftone.layout
+              == QStringLiteral("radial"));
+        CHECK(nearly(parsedHalftone->content.halftone.minRatio, 0.25));
+        CHECK(nearly(parsedHalftone->content.halftone.jitter, 0.4));
+        CHECK(parsedHalftone->content.halftone.seed == 11);
+    }
+
+    // Unknown fields in a content object are ignored, not rejected.
+    QJsonObject unknown = comicJson;
+    QJsonObject unknownContent =
+        unknown.value(QStringLiteral("content")).toObject();
+    QJsonObject futureFields =
+        unknownContent.value(QStringLiteral("comicText")).toObject();
+    futureFields.insert(QStringLiteral("speechBubbleGlow"), 0.75);
+    unknownContent.insert(QStringLiteral("comicText"), futureFields);
+    unknownContent.insert(QStringLiteral("futureKindData"), true);
+    unknown.insert(QStringLiteral("content"), unknownContent);
+    const auto parsedUnknown = entityFromJson(unknown, &error);
+    CHECK_DETAIL(parsedUnknown.has_value(), error);
+    if (parsedUnknown)
+        CHECK(toJson(*parsedUnknown) == comicJson);
+}
+
+void testSpecialContentValidation()
+{
+    const auto reject = [](const Entity& entity, const QString& field) {
+        QString error;
+        const bool valid = validateEntity(entity, &error);
+        CHECK_DETAIL(!valid, field);
+        CHECK_DETAIL(error.contains(field), error);
+    };
+
+    Entity comic = makeEntity();
+    comic.content.kind = ContentKind::ComicText;
+    CHECK(validateEntity(comic));
+
+    Entity bad = comic;
+    bad.content.comic.boxWidth = 0.0;
+    reject(bad, QStringLiteral("boxWidth"));
+
+    bad = comic;
+    bad.content.comic.boxHeight = 0.0;
+    reject(bad, QStringLiteral("boxHeight"));
+
+    bad = comic;
+    bad.content.comic.pixelSize = 0;
+    reject(bad, QStringLiteral("pixelSize"));
+
+    bad = comic;
+    bad.content.comic.lineHeight = 0.0;
+    reject(bad, QStringLiteral("lineHeight"));
+
+    bad = comic;
+    bad.content.comic.bubbleStrokeWidth = -1.0;
+    reject(bad, QStringLiteral("bubbleStrokeWidth"));
+
+    bad = comic;
+    bad.content.comic.tailX = 99.0;
+    reject(bad, QStringLiteral("tailX"));
+
+    bad = comic;
+    bad.content.comic.shape = QStringLiteral("hexagon");
+    reject(bad, QStringLiteral("shape"));
+
+    Entity radial = makeEntity();
+    radial.content.kind = ContentKind::RadialLines;
+    CHECK(validateEntity(radial));
+
+    bad = radial;
+    bad.content.radial.count = 0;
+    reject(bad, QStringLiteral("count"));
+
+    bad = radial;
+    bad.content.radial.count = 513;
+    reject(bad, QStringLiteral("count"));
+
+    bad = radial;
+    bad.content.radial.radius = 0.0;
+    reject(bad, QStringLiteral("radius"));
+
+    bad = radial;
+    bad.content.radial.innerRatio = 1.2;
+    reject(bad, QStringLiteral("innerRatio"));
+
+    bad = radial;
+    bad.content.radial.width = 0.0;
+    reject(bad, QStringLiteral("width"));
+
+    Entity flow = makeEntity();
+    flow.content.kind = ContentKind::FlowLines;
+    CHECK(validateEntity(flow));
+
+    bad = flow;
+    bad.content.flow.count = 0;
+    reject(bad, QStringLiteral("count"));
+
+    bad = flow;
+    bad.content.flow.count = 513;
+    reject(bad, QStringLiteral("count"));
+
+    bad = flow;
+    bad.content.flow.length = 0.0;
+    reject(bad, QStringLiteral("length"));
+
+    bad = flow;
+    bad.content.flow.spacing = 0.0;
+    reject(bad, QStringLiteral("spacing"));
+
+    bad = flow;
+    bad.content.flow.thickness = 0.0;
+    reject(bad, QStringLiteral("thickness"));
+
+    bad = flow;
+    bad.content.flow.area = 0.0;
+    reject(bad, QStringLiteral("area"));
+
+    bad = flow;
+    bad.content.flow.phase = 1.5;
+    reject(bad, QStringLiteral("phase"));
+
+    Entity halftone = makeEntity();
+    halftone.content.kind = ContentKind::HalftoneDots;
+    CHECK(validateEntity(halftone));
+
+    bad = halftone;
+    bad.content.halftone.layout = QStringLiteral("hexagon");
+    reject(bad, QStringLiteral("layout"));
+
+    bad = halftone;
+    bad.content.halftone.area = 0.0;
+    reject(bad, QStringLiteral("area"));
+
+    bad = halftone;
+    bad.content.halftone.radius = 0.0;
+    reject(bad, QStringLiteral("radius"));
+
+    bad = halftone;
+    bad.content.halftone.spacing = 0.0;
+    reject(bad, QStringLiteral("spacing"));
+
+    bad = halftone;
+    bad.content.halftone.dotSize = 0.0;
+    reject(bad, QStringLiteral("dotSize"));
+
+    bad = halftone;
+    bad.content.halftone.minRatio = 1.5;
+    reject(bad, QStringLiteral("minRatio"));
+
+    bad = halftone;
+    bad.content.halftone.jitter = -0.1;
+    reject(bad, QStringLiteral("jitter"));
+
+    bad = halftone;
+    bad.content.halftone.area = 10000.0;
+    bad.content.halftone.spacing = 1.0;
+    reject(bad, QStringLiteral("过密"));
+
+    bad = halftone;
+    bad.content.halftone.layout = QStringLiteral("radial");
+    bad.content.halftone.radius = 10000.0;
+    bad.content.halftone.spacing = 1.0;
+    reject(bad, QStringLiteral("过密"));
+
+    // Invalid enum names are rejected while parsing, with a specific error.
+    QString error;
+    QJsonObject badComic;
+    badComic.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
+    QJsonObject badComicFields;
+    badComicFields.insert(QStringLiteral("shape"), QStringLiteral("hexagon"));
+    badComic.insert(QStringLiteral("comicText"), badComicFields);
+    const auto parsedComic = contentFromJson(badComic, &error);
+    CHECK(!parsedComic.has_value());
+    CHECK(error.contains(QStringLiteral("shape")));
+
+    QJsonObject badHalftone;
+    badHalftone.insert(QStringLiteral("kind"), QStringLiteral("halftoneDots"));
+    QJsonObject badHalftoneFields;
+    badHalftoneFields.insert(QStringLiteral("layout"), QStringLiteral("hexagon"));
+    badHalftone.insert(QStringLiteral("halftoneDots"), badHalftoneFields);
+    const auto parsedHalftone = contentFromJson(badHalftone, &error);
+    CHECK(!parsedHalftone.has_value());
+    CHECK(error.contains(QStringLiteral("layout")));
 }
 
 void testEntityJsonRoundTrip()
@@ -727,6 +1051,19 @@ void testEntityValidation()
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
+    bad.transform.opacity = 1.5;
+    CHECK(!validateEntity(bad, &error));
+    CHECK(error.contains(QStringLiteral("opacity")));
+
+    bad = valid;
+    bad.transform.opacity = -0.1;
+    CHECK(!validateEntity(bad, &error));
+
+    bad = valid;
+    bad.transform.opacity = std::nan("");
+    CHECK(!validateEntity(bad, &error));
+
+    bad = valid;
     bad.tracks.insert(QStringLiteral("x"), Track{{keyAt(10, 5.0)}});
     CHECK(!validateEntity(bad, &error));
 
@@ -1194,6 +1531,7 @@ struct TestCase
 const TestCase kTests[] = {
     {"uuid", testUuid},
     {"content-json-roundtrip", testContentJsonRoundTrip},
+    {"special-content-json-roundtrip", testSpecialContentJsonRoundTrip},
     {"entity-json-roundtrip", testEntityJsonRoundTrip},
     {"json-determinism", testJsonDeterminism},
     {"component-json-roundtrip", testComponentJsonRoundTrip},
@@ -1203,6 +1541,7 @@ const TestCase kTests[] = {
     {"easing-presets", testEasingPresets},
     {"easing-json", testEasingJson},
     {"entity-validation", testEntityValidation},
+    {"special-content-validation", testSpecialContentValidation},
     {"solver-validation", testSolverValidation},
     {"solver-targets", testSolverTargets},
     {"project-validation", testProjectValidation},
