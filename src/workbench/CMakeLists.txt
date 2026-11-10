@@ -51,6 +51,7 @@ if(BUILD_TESTING)
         metaTracksHtmlVariables
         metaTracksHtmlTimeline
         metaTracksGenerativeContent
+        metaTracksContentTracks
         signatureAndSize
         renderRectAndExpandedSize
         metaTracksExpandAndTransparency

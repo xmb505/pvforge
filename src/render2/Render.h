@@ -43,6 +43,15 @@ struct Options
     FrameProvider htmlFrame;
 };
 
+// Content of an entity at a project frame with its numeric content tracks
+// applied.  Text: fontSize, lineHeight, letterSpacing, padding, boxWidth,
+// boxHeight, strokeWidth.  Vector: width, height, cornerRadius, strokeWidth.
+// Tracks are evaluated at the entity-relative frame; a missing or empty track
+// keeps the static value.  Colours, fonts and the text itself are not animated.
+// The renderer, hit shapes and the workbench cache all derive the picture from
+// this, so a keyed field changes both the frame and its cache metadata.
+model::Content animatedContent(const model::Entity& entity, double projectFrame);
+
 // anim::World backed by a model project and an asset store.  Poses and shapes
 // are returned in project canvas pixels.  Renderer, previews and physics all
 // share this implementation so solver collisions and drawn artwork agree.

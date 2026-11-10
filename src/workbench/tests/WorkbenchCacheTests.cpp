@@ -152,6 +152,7 @@ private slots:
     void metaTracksHtmlVariables();
     void metaTracksHtmlTimeline();
     void metaTracksGenerativeContent();
+    void metaTracksContentTracks();
     void signatureAndSize();
     void renderRectAndExpandedSize();
     void metaTracksExpandAndTransparency();
@@ -618,6 +619,68 @@ void WorkbenchCacheTests::metaTracksGenerativeContent()
                    [](model::Content& c) { c.halftone.color = QStringLiteral("#ff0000"); },
                    [](model::Content& c) { c.halftone.seed += 1; },
                });
+}
+
+void WorkbenchCacheTests::metaTracksContentTracks()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    // Every content field that can be keyed must reach the frame meta as its
+    // evaluated value.  A field dropped from animatedContent shows up here as a
+    // mutation that no longer invalidates the active frame.
+    const auto verifyTrack = [&](ContentKind kind, const QString& track,
+                                 double first, double second,
+                                 double changedSecond) {
+        model::Project project;
+        model::Entity entity = textEntity(QStringLiteral("c"), 0, 100);
+        entity.content.kind = kind;
+        addKey(entity, track, 0, first);
+        addKey(entity, track, 100, second);
+        project.entities.insert(entity.uuid, entity);
+
+        const workbench::Options options = metaOptions(project);
+        const workbench::MetaBuilder builder(project, assets);
+        const workbench::FrameMeta active = builder.build(50, QString(), options);
+        const workbench::FrameMeta inactive =
+            builder.build(150, QString(), options);
+
+        const QString label = track;
+        QVERIFY2(!active.equals(builder.build(60, QString(), options)),
+                 qPrintable(label + QStringLiteral(" made two frames identical")));
+
+        model::Project mutated = project;
+        mutated.entities[QStringLiteral("c")].tracks[track].keys[1].value =
+            changedSecond;
+        const workbench::MetaBuilder changed(mutated, assets);
+        QVERIFY2(!active.equals(changed.build(50, QString(), options)),
+                 qPrintable(label + QStringLiteral(" did not invalidate")));
+        QVERIFY2(inactive.equals(changed.build(150, QString(), options)),
+                 qPrintable(label
+                            + QStringLiteral(" invalidated an inactive frame")));
+    };
+
+    verifyTrack(ContentKind::Text, QStringLiteral("fontSize"), 20.0, 120.0,
+                400.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("lineHeight"), 1.0, 2.0, 3.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("letterSpacing"), 0.0, 10.0,
+                30.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("padding"), 2.0, 22.0, 42.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("boxWidth"), 100.0, 300.0,
+                500.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("boxHeight"), 50.0, 150.0,
+                250.0);
+    verifyTrack(ContentKind::Text, QStringLiteral("strokeWidth"), 1.0, 3.0, 5.0);
+
+    verifyTrack(ContentKind::Vector, QStringLiteral("width"), 20.0, 220.0,
+                420.0);
+    verifyTrack(ContentKind::Vector, QStringLiteral("height"), 10.0, 110.0,
+                210.0);
+    verifyTrack(ContentKind::Vector, QStringLiteral("cornerRadius"), 0.0, 40.0,
+                80.0);
+    verifyTrack(ContentKind::Vector, QStringLiteral("strokeWidth"), 0.0, 8.0,
+                16.0);
 }
 
 void WorkbenchCacheTests::signatureAndSize()

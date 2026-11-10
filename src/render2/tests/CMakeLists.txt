@@ -35,6 +35,10 @@ set(PVF_RENDER2_TEST_CASES
     specialContentRender
     specialContentOpacity
     specialContentFollowsParent
+    animatedContentFieldMapping
+    contentTrackFallback
+    textFontSizeTrackRenders
+    vectorContentTracksRender
 )
 
 foreach(test_case IN LISTS PVF_RENDER2_TEST_CASES)

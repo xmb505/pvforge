@@ -197,6 +197,14 @@ int maxInkStrength(const QImage& image)
     return best;
 }
 
+Track keyedTrack(std::initializer_list<std::pair<int, double>> keys)
+{
+    Track track;
+    for (const auto& key : keys)
+        track.keys.append(Keyframe{key.first, key.second, {}, {}});
+    return track;
+}
+
 Entity makeSpecialEntity(ContentKind kind, const Uuid& uuid)
 {
     Entity entity = makeEntity(uuid);
@@ -1122,6 +1130,215 @@ void testSpecialContentFollowsParent()
     CHECK(std::abs(bounds.center().y() - 150) <= 8);
 }
 
+void testAnimatedContentFieldMapping()
+{
+    Entity text = makeEntity(QStringLiteral("text"), 100, 400);
+    text.content.kind = ContentKind::Text;
+    text.content.text.text = QStringLiteral("PV");
+    text.content.text.pixelSize = 10;
+    text.content.text.lineHeight = 1.0;
+    text.content.text.letterSpacing = 0.0;
+    text.content.text.padding = 2.0;
+    text.content.text.boxWidth = 100.0;
+    text.content.text.boxHeight = 50.0;
+    text.content.text.strokeWidth = 1.0;
+    text.tracks.insert(QStringLiteral("fontSize"),
+                       keyedTrack({{0, 20.0}, {100, 120.0}}));
+    text.tracks.insert(QStringLiteral("lineHeight"),
+                       keyedTrack({{0, 1.0}, {100, 2.0}}));
+    text.tracks.insert(QStringLiteral("letterSpacing"),
+                       keyedTrack({{0, 0.0}, {100, 10.0}}));
+    text.tracks.insert(QStringLiteral("padding"),
+                       keyedTrack({{0, 2.0}, {100, 22.0}}));
+    text.tracks.insert(QStringLiteral("boxWidth"),
+                       keyedTrack({{0, 100.0}, {100, 300.0}}));
+    text.tracks.insert(QStringLiteral("boxHeight"),
+                       keyedTrack({{0, 50.0}, {100, 150.0}}));
+    text.tracks.insert(QStringLiteral("strokeWidth"),
+                       keyedTrack({{0, 1.0}, {100, 3.0}}));
+
+    // Keys are entity-relative: project frame 150 is relative frame 50.
+    const model::Content animated = render2::animatedContent(text, 150.0);
+    CHECK(animated.kind == ContentKind::Text);
+    CHECK(animated.text.pixelSize == 70);
+    CHECK(std::abs(animated.text.lineHeight - 1.5) < 1e-9);
+    CHECK(std::abs(animated.text.letterSpacing - 5.0) < 1e-9);
+    CHECK(std::abs(animated.text.padding - 12.0) < 1e-9);
+    CHECK(std::abs(animated.text.boxWidth - 200.0) < 1e-9);
+    CHECK(std::abs(animated.text.boxHeight - 100.0) < 1e-9);
+    CHECK(std::abs(animated.text.strokeWidth - 2.0) < 1e-9);
+    CHECK(animated.text.text == QStringLiteral("PV"));
+
+    Entity vector = makeEntity(QStringLiteral("vector"), 0, 100);
+    vector.content.kind = ContentKind::Vector;
+    vector.content.vector.width = 100.0;
+    vector.content.vector.height = 50.0;
+    vector.content.vector.cornerRadius = 10.0;
+    vector.content.vector.strokeWidth = 2.0;
+    vector.tracks.insert(QStringLiteral("width"),
+                         keyedTrack({{0, 20.0}, {10, 220.0}}));
+    vector.tracks.insert(QStringLiteral("height"),
+                         keyedTrack({{0, 10.0}, {10, 110.0}}));
+    vector.tracks.insert(QStringLiteral("cornerRadius"),
+                         keyedTrack({{0, 0.0}, {10, 40.0}}));
+    vector.tracks.insert(QStringLiteral("strokeWidth"),
+                         keyedTrack({{0, 0.0}, {10, 8.0}}));
+
+    const model::Content vectorAt = render2::animatedContent(vector, 5.0);
+    CHECK(vectorAt.kind == ContentKind::Vector);
+    CHECK(std::abs(vectorAt.vector.width - 120.0) < 1e-9);
+    CHECK(std::abs(vectorAt.vector.height - 60.0) < 1e-9);
+    CHECK(std::abs(vectorAt.vector.cornerRadius - 20.0) < 1e-9);
+    CHECK(std::abs(vectorAt.vector.strokeWidth - 4.0) < 1e-9);
+    CHECK(vectorAt.vector.fillColor == vector.content.vector.fillColor);
+}
+
+void testContentTrackFallback()
+{
+    Entity text = makeEntity(QStringLiteral("text"), 0, 100);
+    text.content.kind = ContentKind::Text;
+    text.content.text.pixelSize = 42;
+    text.content.text.lineHeight = 1.25;
+    text.content.text.padding = 7.0;
+
+    // No track at all: every field keeps its static value.
+    const model::Content plain = render2::animatedContent(text, 999.0);
+    CHECK(plain.text.pixelSize == 42);
+    CHECK(std::abs(plain.text.lineHeight - 1.25) < 1e-9);
+    CHECK(std::abs(plain.text.padding - 7.0) < 1e-9);
+
+    // An empty track (created before its first key) also falls back.
+    text.tracks.insert(QStringLiteral("fontSize"), Track());
+    const model::Content empty = render2::animatedContent(text, 50.0);
+    CHECK(empty.text.pixelSize == 42);
+
+    // A keyed track overrides the static value at the relative frame.
+    text.tracks.insert(QStringLiteral("fontSize"),
+                       keyedTrack({{0, 3.0}, {10, 13.0}}));
+    const model::Content keyed = render2::animatedContent(text, 5.0);
+    CHECK(keyed.text.pixelSize == 8);
+    CHECK(std::abs(keyed.text.padding - 7.0) < 1e-9);
+
+    Entity vector = makeEntity(QStringLiteral("vector"), 0, 100);
+    vector.content.kind = ContentKind::Vector;
+    vector.content.vector.width = 300.0;
+    vector.content.vector.height = 200.0;
+    const model::Content staticVector = render2::animatedContent(vector, 5.0);
+    CHECK(std::abs(staticVector.vector.width - 300.0) < 1e-9);
+    CHECK(std::abs(staticVector.vector.height - 200.0) < 1e-9);
+}
+
+void testTextFontSizeTrackRenders()
+{
+    Project project = makeProject(300, 300);
+    Entity entity = makeEntity(QStringLiteral("text"), 0, 200);
+    entity.transform.x = 150.0;
+    entity.transform.y = 150.0;
+    entity.content.kind = ContentKind::Text;
+    entity.content.text.text = QStringLiteral("PV");
+    entity.content.text.pixelSize = 100; // ignored while the track has keys
+    entity.content.text.bold = true;
+    entity.content.text.color = QStringLiteral("#ffffff");
+    entity.content.text.padding = 0.0;
+    entity.tracks.insert(QStringLiteral("fontSize"),
+                         keyedTrack({{0, 0.0}, {100, 100.0}}));
+    add(project, entity);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    const QImage at0 =
+        render(project, store, 0.0, Uuid(), QSize(), QColor(Qt::black));
+    const QImage at50 =
+        render(project, store, 50.0, Uuid(), QSize(), QColor(Qt::black));
+    const QImage at100 =
+        render(project, store, 100.0, Uuid(), QSize(), QColor(Qt::black));
+
+    const QRect bounds0 = inkBounds(at0, Qt::black);
+    const QRect bounds50 = inkBounds(at50, Qt::black);
+    const QRect bounds100 = inkBounds(at100, Qt::black);
+
+    CHECK_DETAIL(bounds50.height() > bounds0.height(),
+                 QStringLiteral("heights %1 / %2")
+                     .arg(bounds0.height())
+                     .arg(bounds50.height()));
+    CHECK_DETAIL(bounds100.height() > bounds50.height() + 20,
+                 QStringLiteral("heights %1 / %2")
+                     .arg(bounds50.height())
+                     .arg(bounds100.height()));
+    CHECK(countInkPixels(at100, Qt::black) > countInkPixels(at50, Qt::black));
+    CHECK(countInkPixels(at50, Qt::black) > countInkPixels(at0, Qt::black));
+
+    render2::SceneWorld world(project, store);
+    const QRectF shape0 = world.shapeOf(QStringLiteral("text"), 0).boundingRect();
+    const QRectF shape50 = world.shapeOf(QStringLiteral("text"), 50).boundingRect();
+    const QRectF shape100 =
+        world.shapeOf(QStringLiteral("text"), 100).boundingRect();
+    CHECK(shape50.height() > shape0.height());
+    CHECK(shape100.height() > shape50.height());
+}
+
+void testVectorContentTracksRender()
+{
+    Project project = makeProject(300, 300);
+    const QColor background(QStringLiteral("#101014"));
+
+    Entity bar = makeEntity(QStringLiteral("bar"), 0, 200);
+    bar.transform.x = 150.0;
+    bar.transform.y = 100.0;
+    bar.content.kind = ContentKind::Vector;
+    bar.content.vector.shape = 0;
+    bar.content.vector.width = 100.0; // ignored while the track has keys
+    bar.content.vector.height = 40.0;
+    bar.content.vector.cornerRadius = 0.0;
+    bar.content.vector.fillColor = QStringLiteral("#ff0000");
+    bar.content.vector.strokeWidth = 0.0;
+    bar.tracks.insert(QStringLiteral("width"),
+                      keyedTrack({{0, 20.0}, {100, 220.0}}));
+    add(project, bar);
+
+    Entity corner = makeEntity(QStringLiteral("corner"), 0, 200);
+    corner.transform.x = 150.0;
+    corner.transform.y = 220.0;
+    corner.content.kind = ContentKind::Vector;
+    corner.content.vector.shape = 3; // rounded rect: uses cornerRadius
+    corner.content.vector.width = 80.0;
+    corner.content.vector.height = 80.0;
+    corner.content.vector.cornerRadius = 0.0;
+    corner.content.vector.fillColor = QStringLiteral("#0000ff");
+    corner.content.vector.strokeWidth = 0.0;
+    corner.tracks.insert(QStringLiteral("cornerRadius"),
+                         keyedTrack({{0, 0.0}, {100, 40.0}}));
+    add(project, corner);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    const QImage at0 = render(project, store, 0.0);
+    const QImage at100 = render(project, store, 100.0);
+
+    // 20px wide at frame 0, 220px wide at frame 100: the row through the bar
+    // starts and stops at different places.
+    CHECK(!nearColor(at0.pixelColor(50, 100), Qt::red));
+    CHECK(nearColor(at0.pixelColor(150, 100), Qt::red));
+    CHECK(nearColor(at100.pixelColor(50, 100), Qt::red));
+    CHECK(nearColor(at100.pixelColor(150, 100), Qt::red));
+
+    // 80x80 blue square: (112,182) is near its top-left corner.  A 40px radius
+    // turns the square into an ellipse, so the corner pixel empties out.
+    CHECK(nearColor(at0.pixelColor(112, 182), QColor(Qt::blue)));
+    CHECK(nearColor(at100.pixelColor(112, 182), background));
+
+    render2::SceneWorld world(project, store);
+    const QRectF shape0 = world.shapeOf(QStringLiteral("bar"), 0).boundingRect();
+    const QRectF shape100 =
+        world.shapeOf(QStringLiteral("bar"), 100).boundingRect();
+    CHECK_DETAIL(shape100.width() > shape0.width() + 100,
+                 QStringLiteral("widths %1 / %2")
+                     .arg(shape0.width())
+                     .arg(shape100.width()));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1170,6 +1387,13 @@ int main(int argc, char** argv)
         {QStringLiteral("specialContentOpacity"), testSpecialContentOpacity},
         {QStringLiteral("specialContentFollowsParent"),
          testSpecialContentFollowsParent},
+        {QStringLiteral("animatedContentFieldMapping"),
+         testAnimatedContentFieldMapping},
+        {QStringLiteral("contentTrackFallback"), testContentTrackFallback},
+        {QStringLiteral("textFontSizeTrackRenders"),
+         testTextFontSizeTrackRenders},
+        {QStringLiteral("vectorContentTracksRender"),
+         testVectorContentTracksRender},
     };
 
     QString requested;

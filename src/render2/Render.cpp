@@ -48,6 +48,61 @@ bool activeAt(const model::Entity& entity, double projectFrame)
            && projectFrame < double(entity.end);
 }
 
+// Value of a numeric content track at the entity-relative frame, or fallback
+// when the track is missing or has no keys yet.
+double contentTrackValue(const model::Entity& entity, const char* name,
+                         double relativeFrame, double fallback)
+{
+    const auto it = entity.tracks.constFind(QLatin1String(name));
+    if (it == entity.tracks.constEnd())
+        return fallback;
+    return model::evaluateTrack(it.value(), relativeFrame).value_or(fallback);
+}
+
+model::TextContent animatedText(const model::Entity& entity, double relativeFrame)
+{
+    model::TextContent text = entity.content.text;
+    text.pixelSize = std::max(
+        1, qRound(contentTrackValue(entity, "fontSize", relativeFrame,
+                                    double(text.pixelSize))));
+    text.lineHeight = std::max(
+        0.01, contentTrackValue(entity, "lineHeight", relativeFrame,
+                                text.lineHeight));
+    text.letterSpacing = contentTrackValue(entity, "letterSpacing", relativeFrame,
+                                           text.letterSpacing);
+    text.padding =
+        std::max(0.0, contentTrackValue(entity, "padding", relativeFrame,
+                                        text.padding));
+    text.boxWidth =
+        std::max(0.0, contentTrackValue(entity, "boxWidth", relativeFrame,
+                                        text.boxWidth));
+    text.boxHeight =
+        std::max(0.0, contentTrackValue(entity, "boxHeight", relativeFrame,
+                                        text.boxHeight));
+    text.strokeWidth =
+        std::max(0.0, contentTrackValue(entity, "strokeWidth", relativeFrame,
+                                        text.strokeWidth));
+    return text;
+}
+
+model::VectorContent animatedVector(const model::Entity& entity,
+                                    double relativeFrame)
+{
+    model::VectorContent vector = entity.content.vector;
+    vector.width = std::max(1.0, contentTrackValue(entity, "width", relativeFrame,
+                                                   vector.width));
+    vector.height =
+        std::max(1.0, contentTrackValue(entity, "height", relativeFrame,
+                                        vector.height));
+    vector.cornerRadius =
+        std::max(0.0, contentTrackValue(entity, "cornerRadius", relativeFrame,
+                                        vector.cornerRadius));
+    vector.strokeWidth =
+        std::max(0.0, contentTrackValue(entity, "strokeWidth", relativeFrame,
+                                        vector.strokeWidth));
+    return vector;
+}
+
 QVariantMap textStyleData(const model::TextContent& text)
 {
     QVariantMap data;
@@ -804,11 +859,12 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         return;
 
     case ContentKind::Vector:
-        paintVector(painter, entity.content.vector);
+        paintVector(painter,
+                    animatedVector(entity, projectFrame - entity.start));
         return;
 
     case ContentKind::Text:
-        paintText(painter, entity.content.text);
+        paintText(painter, animatedText(entity, projectFrame - entity.start));
         return;
 
     case ContentKind::ComicText:
@@ -921,22 +977,26 @@ void paintContent(QPainter& painter, const model::Entity& entity,
     }
 }
 
-QSizeF contentSize(const model::Entity& entity, const assets::AssetStore& store)
+QSizeF contentSize(const model::Entity& entity, const assets::AssetStore& store,
+                   double projectFrame)
 {
     switch (entity.content.kind)
     {
     case ContentKind::Vector:
     {
-        const model::VectorContent& vector = entity.content.vector;
+        const model::VectorContent vector =
+            animatedVector(entity, projectFrame - entity.start);
         return QSizeF(std::max(1.0, vector.width), std::max(1.0, vector.height));
     }
 
     case ContentKind::Text:
     {
-        if (entity.content.text.text.isEmpty())
+        const model::TextContent text =
+            animatedText(entity, projectFrame - entity.start);
+        if (text.text.isEmpty())
             return {};
         const TextBlock block = TextBlock::measure(
-            TextStyle::fromData(textStyleData(entity.content.text)));
+            TextStyle::fromData(textStyleData(text)));
         return block.size();
     }
 
@@ -1019,11 +1079,13 @@ QSizeF contentSize(const model::Entity& entity, const assets::AssetStore& store)
 }
 
 QPainterPath localCollisionPath(const model::Entity& entity,
-                                const assets::AssetStore& store)
+                                const assets::AssetStore& store,
+                                double projectFrame)
 {
     if (entity.content.kind == ContentKind::Vector)
     {
-        const model::VectorContent& vector = entity.content.vector;
+        const model::VectorContent vector =
+            animatedVector(entity, projectFrame - entity.start);
         const QRectF rect = centeredRect(QSizeF(vector.width, vector.height));
         return VectorShape::path(vector.shape, rect, vector.cornerRadius,
                                  vector.sides, vector.innerRatio);
@@ -1033,7 +1095,7 @@ QPainterPath localCollisionPath(const model::Entity& entity,
         && entity.content.asset.type == AssetType::Audio)
         return {};
 
-    const QSizeF size = contentSize(entity, store);
+    const QSizeF size = contentSize(entity, store, projectFrame);
     if (size.width() < 1.0 || size.height() < 1.0)
         return {};
 
@@ -1142,6 +1204,24 @@ void drawChildren(QPainter& painter, const model::Project& project,
 
 } // namespace
 
+model::Content animatedContent(const model::Entity& entity, double projectFrame)
+{
+    model::Content content = entity.content;
+    const double relativeFrame = projectFrame - double(entity.start);
+    switch (content.kind)
+    {
+    case ContentKind::Text:
+        content.text = animatedText(entity, relativeFrame);
+        break;
+    case ContentKind::Vector:
+        content.vector = animatedVector(entity, relativeFrame);
+        break;
+    default:
+        break;
+    }
+    return content;
+}
+
 SceneWorld::SceneWorld(const model::Project& project,
                        const assets::AssetStore& assets)
     : m_project(project)
@@ -1168,7 +1248,8 @@ QPainterPath SceneWorld::shapeOf(const Uuid& uuid, int projectFrame) const
     if (!activeAt(it.value(), projectFrame))
         return {};
 
-    const QPainterPath local = localCollisionPath(it.value(), m_assets);
+    const QPainterPath local =
+        localCollisionPath(it.value(), m_assets, double(projectFrame));
     if (local.isEmpty())
         return {};
 

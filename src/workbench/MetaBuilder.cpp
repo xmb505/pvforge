@@ -139,8 +139,14 @@ QSet<Uuid> collectEntities(const model::Project& project, int frame)
     return result;
 }
 
-void writeContent(QDataStream& out, const model::Content& content)
+// Serialises the content as it looks at this project frame: animated content
+// fields (fontSize, box sizes, vector size, ...) are written as their
+// evaluated values, so keying them changes the frame's cache metadata exactly
+// when it changes the picture.
+void writeContent(QDataStream& out, const model::Entity& entity,
+                  double projectFrame)
 {
+    const model::Content content = render2::animatedContent(entity, projectFrame);
     out << qint32(static_cast<int>(content.kind));
     switch (content.kind)
     {
@@ -353,7 +359,7 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
             << entity.hidden << entity.visible << entity.inheritVisibility;
         out << pose.world << pose.opacity << pose.visible;
 
-        writeContent(out, entity.content);
+        writeContent(out, entity, double(frame));
         if (entity.content.kind == ContentKind::Asset)
         {
             const auto stored = m_assets.get(entity.content.asset.hash);
