@@ -49,6 +49,7 @@ if(BUILD_TESTING)
         metaTracksMissingAsset
         metaTracksCameraBackgroundAndTarget
         metaTracksHtmlVariables
+        metaTracksGenerativeContent
         signatureAndSize
         cacheStoreLookup
         cacheMetaMismatch

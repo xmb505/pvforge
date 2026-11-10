@@ -167,6 +167,41 @@ void writeContent(QDataStream& out, const model::Content& content)
         out << content.asset.hash
             << qint32(static_cast<int>(content.asset.type));
         break;
+    case ContentKind::ComicText: {
+        const model::ComicTextContent& comic = content.comic;
+        out << comic.text.toUtf8() << comic.fontFamily.toUtf8()
+            << qint32(comic.pixelSize) << comic.color.toUtf8()
+            << comic.strokeColor.toUtf8() << comic.strokeWidth
+            << qint32(comic.align) << comic.lineHeight << comic.bold
+            << comic.italic << comic.shape.toUtf8() << comic.boxWidth
+            << comic.boxHeight << comic.fillColor.toUtf8()
+            << comic.bubbleStrokeColor.toUtf8() << comic.bubbleStrokeWidth
+            << comic.cornerRadius << comic.tail << comic.tailX << comic.tailY
+            << comic.rotation << comic.padding << qint32(comic.seed);
+        break;
+    }
+    case ContentKind::RadialLines: {
+        const model::RadialLinesContent& radial = content.radial;
+        out << qint32(radial.count) << radial.radius << radial.innerRatio
+            << radial.width << radial.angle << radial.color.toUtf8()
+            << qint32(radial.seed);
+        break;
+    }
+    case ContentKind::FlowLines: {
+        const model::FlowLinesContent& flow = content.flow;
+        out << qint32(flow.count) << flow.length << flow.spacing
+            << flow.thickness << flow.area << flow.bend << flow.angle
+            << flow.phase << flow.color.toUtf8() << qint32(flow.seed);
+        break;
+    }
+    case ContentKind::HalftoneDots: {
+        const model::HalftoneDotsContent& halftone = content.halftone;
+        out << halftone.layout.toUtf8() << halftone.area << halftone.radius
+            << halftone.spacing << halftone.dotSize << halftone.angle
+            << halftone.gradientAngle << halftone.minRatio << halftone.jitter
+            << halftone.color.toUtf8() << qint32(halftone.seed);
+        break;
+    }
     }
 }
 

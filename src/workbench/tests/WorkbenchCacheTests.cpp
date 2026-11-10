@@ -147,6 +147,7 @@ private slots:
     void metaTracksMissingAsset();
     void metaTracksCameraBackgroundAndTarget();
     void metaTracksHtmlVariables();
+    void metaTracksGenerativeContent();
     void signatureAndSize();
     void cacheStoreLookup();
     void cacheMetaMismatch();
@@ -424,6 +425,116 @@ void WorkbenchCacheTests::metaTracksHtmlVariables()
 
     const workbench::FrameMeta afterDefault = builder.build(50, QString(), options);
     QVERIFY(!afterTrack.equals(afterDefault));
+}
+
+void WorkbenchCacheTests::metaTracksGenerativeContent()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    using Mutation = std::function<void(model::Content&)>;
+
+    // Every field that can change the picture must invalidate an active frame
+    // and leave an inactive frame alone.  Fields are mutated one at a time so a
+    // field missing from writeContent shows up as a specific failure.
+    const auto verifyKind = [&](ContentKind kind, const QList<Mutation>& mutations) {
+        model::Project project;
+        model::Entity entity = textEntity(QStringLiteral("g"), 0, 100);
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+
+        const workbench::Options options = metaOptions(project);
+        const workbench::MetaBuilder builder(project, assets);
+        const workbench::FrameMeta active = builder.build(50, QString(), options);
+        const workbench::FrameMeta inactive = builder.build(150, QString(), options);
+
+        const workbench::MetaBuilder repeat(project, assets);
+        QCOMPARE(repeat.build(50, QString(), options).bytes, active.bytes);
+
+        for (int i = 0; i < mutations.size(); ++i)
+        {
+            model::Project changed = project;
+            mutations.at(i)(changed.entities[QStringLiteral("g")].content);
+            const workbench::MetaBuilder changedBuilder(changed, assets);
+
+            const QString label =
+                QStringLiteral("kind %1 field %2")
+                    .arg(int(kind))
+                    .arg(i);
+            QVERIFY2(!active.equals(changedBuilder.build(50, QString(), options)),
+                     qPrintable(label + QStringLiteral(" did not invalidate")));
+            QVERIFY2(inactive.equals(changedBuilder.build(150, QString(), options)),
+                     qPrintable(label + QStringLiteral(" invalidated an inactive frame")));
+        }
+    };
+
+    verifyKind(ContentKind::ComicText,
+               {
+                   [](model::Content& c) { c.comic.text = QStringLiteral("boom"); },
+                   [](model::Content& c) { c.comic.fontFamily = QStringLiteral("Serif"); },
+                   [](model::Content& c) { c.comic.pixelSize += 1; },
+                   [](model::Content& c) { c.comic.color = QStringLiteral("#ff0000"); },
+                   [](model::Content& c) { c.comic.strokeColor = QStringLiteral("#00ff00"); },
+                   [](model::Content& c) { c.comic.strokeWidth += 1.0; },
+                   [](model::Content& c) { c.comic.align = 1; },
+                   [](model::Content& c) { c.comic.lineHeight += 0.1; },
+                   [](model::Content& c) { c.comic.bold = !c.comic.bold; },
+                   [](model::Content& c) { c.comic.italic = !c.comic.italic; },
+                   [](model::Content& c) { c.comic.shape = QStringLiteral("burst"); },
+                   [](model::Content& c) { c.comic.boxWidth += 1.0; },
+                   [](model::Content& c) { c.comic.boxHeight += 1.0; },
+                   [](model::Content& c) { c.comic.fillColor = QStringLiteral("#0000ff"); },
+                   [](model::Content& c) { c.comic.bubbleStrokeColor = QStringLiteral("#123456"); },
+                   [](model::Content& c) { c.comic.bubbleStrokeWidth += 1.0; },
+                   [](model::Content& c) { c.comic.cornerRadius += 1.0; },
+                   [](model::Content& c) { c.comic.tail = !c.comic.tail; },
+                   [](model::Content& c) { c.comic.tailX += 0.1; },
+                   [](model::Content& c) { c.comic.tailY += 0.1; },
+                   [](model::Content& c) { c.comic.rotation += 1.0; },
+                   [](model::Content& c) { c.comic.padding += 1.0; },
+                   [](model::Content& c) { c.comic.seed += 1; },
+               });
+
+    verifyKind(ContentKind::RadialLines,
+               {
+                   [](model::Content& c) { c.radial.count += 1; },
+                   [](model::Content& c) { c.radial.radius += 1.0; },
+                   [](model::Content& c) { c.radial.innerRatio += 0.01; },
+                   [](model::Content& c) { c.radial.width += 1.0; },
+                   [](model::Content& c) { c.radial.angle += 1.0; },
+                   [](model::Content& c) { c.radial.color = QStringLiteral("#ff0000"); },
+                   [](model::Content& c) { c.radial.seed += 1; },
+               });
+
+    verifyKind(ContentKind::FlowLines,
+               {
+                   [](model::Content& c) { c.flow.count += 1; },
+                   [](model::Content& c) { c.flow.length += 1.0; },
+                   [](model::Content& c) { c.flow.spacing += 1.0; },
+                   [](model::Content& c) { c.flow.thickness += 1.0; },
+                   [](model::Content& c) { c.flow.area += 1.0; },
+                   [](model::Content& c) { c.flow.bend += 1.0; },
+                   [](model::Content& c) { c.flow.angle += 1.0; },
+                   [](model::Content& c) { c.flow.phase += 0.01; },
+                   [](model::Content& c) { c.flow.color = QStringLiteral("#ff0000"); },
+                   [](model::Content& c) { c.flow.seed += 1; },
+               });
+
+    verifyKind(ContentKind::HalftoneDots,
+               {
+                   [](model::Content& c) { c.halftone.layout = QStringLiteral("radial"); },
+                   [](model::Content& c) { c.halftone.area += 1.0; },
+                   [](model::Content& c) { c.halftone.radius += 1.0; },
+                   [](model::Content& c) { c.halftone.spacing += 1.0; },
+                   [](model::Content& c) { c.halftone.dotSize += 0.5; },
+                   [](model::Content& c) { c.halftone.angle += 1.0; },
+                   [](model::Content& c) { c.halftone.gradientAngle += 1.0; },
+                   [](model::Content& c) { c.halftone.minRatio += 0.01; },
+                   [](model::Content& c) { c.halftone.jitter += 0.01; },
+                   [](model::Content& c) { c.halftone.color = QStringLiteral("#ff0000"); },
+                   [](model::Content& c) { c.halftone.seed += 1; },
+               });
 }
 
 void WorkbenchCacheTests::signatureAndSize()
