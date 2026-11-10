@@ -5,6 +5,11 @@
 #include "next/core/Document.h"
 
 #include <QApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLineF>
 #include <QMouseEvent>
 #include <QTemporaryDir>
@@ -139,6 +144,51 @@ public:
         return uuid;
     }
 
+    // Writes a minimal but real asset into the store so render2 sees it as
+    // present, and returns its content hash.
+    AssetHash registerAsset(AssetType type, const QString& name, int width,
+                            int height)
+    {
+        const AssetHash hash = QString::fromLatin1(
+            QCryptographicHash::hash(name.toUtf8(), QCryptographicHash::Sha256)
+                .toHex());
+        const QString directory =
+            m_assets.assetsDirectory() + QLatin1Char('/') + hash;
+        QDir().mkpath(directory);
+
+        QJsonObject metadata;
+        metadata.insert(QStringLiteral("hash"), hash);
+        metadata.insert(QStringLiteral("type"), assetTypeName(type));
+        metadata.insert(QStringLiteral("name"), name);
+        if (width > 0)
+            metadata.insert(QStringLiteral("width"), width);
+        if (height > 0)
+            metadata.insert(QStringLiteral("height"), height);
+
+        QFile json(directory + QStringLiteral("/asset.json"));
+        if (!json.open(QIODevice::WriteOnly))
+            return {};
+        json.write(QJsonDocument(metadata).toJson());
+        json.close();
+
+        if (type == AssetType::Html)
+        {
+            QDir().mkpath(directory + QStringLiteral("/bundle"));
+            QFile index(directory + QStringLiteral("/bundle/index.html"));
+            if (!index.open(QIODevice::WriteOnly))
+                return {};
+            index.write("<html></html>");
+        }
+        else
+        {
+            QFile content(directory + QStringLiteral("/content.bin"));
+            if (!content.open(QIODevice::WriteOnly))
+                return {};
+            content.write("x");
+        }
+        return hash;
+    }
+
     int entityCommits() const { return m_entityCommits; }
     int projectCommits() const { return m_projectCommits; }
     QString lastMessage() const { return m_lastMessage; }
@@ -228,6 +278,17 @@ void sendMouseMove(QWidget& widget, QPointF position,
     QApplication::sendEvent(&widget, &event);
 }
 
+void dragHandle(ViewportWidget& view, const model::Entity& entity,
+                gizmo::Handle handle, QPointF target,
+                Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    const QPointF pressPosition = handleWidgetPosition(view, entity, handle);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      pressPosition.toPoint());
+    sendMouseMove(view, target, modifiers);
+    QTest::mouseRelease(&view, Qt::LeftButton, modifiers, target.toPoint());
+}
+
 } // namespace
 
 class ViewportWidgetTest : public QObject
@@ -241,6 +302,11 @@ private slots:
     void cornerScaleKeepsOppositeCorner();
     void centerScaleFlipsBothAxes();
     void rotateDragAndShiftSnap();
+    void moveSnapsToCanvasCenter();
+    void moveSnapsToEntityEdge();
+    void altDisablesSnapping();
+    void rotationSnapsTo15Degrees();
+    void scaleSnapsToPixelGrid();
     void lockedEntityIgnoresGizmo();
     void hiddenEntityStillSelectable();
     void negativeCameraScaleRenders();
@@ -419,6 +485,150 @@ void ViewportWidgetTest::rotateDragAndShiftSnap()
     QVERIFY(std::abs(snapped - 15.0) < 1e-6);
 }
 
+void ViewportWidgetTest::moveSnapsToCanvasCenter()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 100.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+    QVERIFY(view.snapEnabled());
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    // 1.4 project pixels away from the canvas centre line, inside the 6 px
+    // screen threshold.
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target =
+        handle + QPointF((158.6 - entity.transform.x) * projectScale(view), 0.0);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(document.project().entities.value(uuid).transform.x, 160.0);
+}
+
+void ViewportWidgetTest::moveSnapsToEntityEdge()
+{
+    FakeDocument document;
+    // Anchor box occupies x 110..210; the mover's right edge starts at 90.
+    document.addVector(QStringLiteral("Anchor"), 160.0, 90.0, 100.0, 60.0);
+    const Uuid mover = document.addVector(QStringLiteral("Mover"), 40.0, 30.0,
+                                          100.0, 40.0);
+    document.setSelection(mover);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(mover);
+    // Raw right edge 109.4 snaps to the anchor's left edge at 110.
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target =
+        handle + QPointF((59.4 - entity.transform.x) * projectScale(view), 0.0);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+
+    QCOMPARE(document.entityCommits(), 1);
+    // The pixel grid alone would leave x at 59; the edge snap wins.
+    QCOMPARE(document.project().entities.value(mover).transform.x, 60.0);
+}
+
+void ViewportWidgetTest::altDisablesSnapping()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 100.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target =
+        handle + QPointF((158.6 - entity.transform.x) * projectScale(view), 0.0);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target, Qt::AltModifier);
+
+    // Alt turns every snap off: neither the centre line nor the pixel grid
+    // applies, so the raw drag result is kept.
+    const double x = document.project().entities.value(uuid).transform.x;
+    QVERIFY(std::abs(x - 158.6) < 1.0);
+    QVERIFY(std::abs(x - 160.0) > 1.0);
+    QVERIFY(std::abs(x - std::round(x)) > 1e-6);
+}
+
+void ViewportWidgetTest::rotationSnapsTo15Degrees()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF pivot(entity.transform.x + entity.transform.pivotX,
+                        entity.transform.y + entity.transform.pivotY);
+    const QPointF handle = handleWidgetPosition(
+        view, entity, gizmo::Handle::RotateBottomRight);
+    const QPointF handleProject = view.widgetToProject(handle);
+
+    // 16 degrees is within 3 degrees of the 15 degree grid.
+    const QPointF target =
+        view.projectToWidget(pivot + rotateVector(handleProject - pivot, 16.0));
+    dragHandle(view, entity, gizmo::Handle::RotateBottomRight, target);
+
+    QCOMPARE(document.entityCommits(), 1);
+    QVERIFY(std::abs(document.project().entities.value(uuid).transform.rotation
+                     - 15.0)
+            < 1e-6);
+}
+
+void ViewportWidgetTest::scaleSnapsToPixelGrid()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const gizmo::Bounds bounds = vectorBoundsOf(entity);
+    const QPointF handle = handleWidgetPosition(
+        view, entity, gizmo::Handle::ScaleBottomRight);
+    const QPointF target = handle + QPointF(-37.0, -21.0);
+    dragHandle(view, entity, gizmo::Handle::ScaleBottomRight, target);
+
+    const model::Entity scaled = document.project().entities.value(uuid);
+    const QPointF corner = gizmo::localToWorld(
+        gizmoTransformOf(scaled),
+        QPointF(bounds.right, bounds.bottom));
+    QVERIFY(std::abs(corner.x() - std::round(corner.x())) < 1e-6);
+    QVERIFY(std::abs(corner.y() - std::round(corner.y())) < 1e-6);
+    QCOMPARE(document.entityCommits(), 1);
+
+    // Dragging past the opposite corner flips both axes; snapping must keep
+    // the negative scale and still land the dragged corner on the grid.
+    document.mutableProject().entities[uuid] = entity;
+    const QPointF flipTarget = handle + QPointF(-260.0, -170.0);
+    dragHandle(view, entity, gizmo::Handle::ScaleBottomRight, flipTarget);
+
+    const model::Entity flipped = document.project().entities.value(uuid);
+    QVERIFY(flipped.transform.scaleX < 0.0);
+    QVERIFY(flipped.transform.scaleY < 0.0);
+    const QPointF flippedCorner = gizmo::localToWorld(
+        gizmoTransformOf(flipped),
+        QPointF(bounds.right, bounds.bottom));
+    QVERIFY(std::abs(flippedCorner.x() - std::round(flippedCorner.x())) < 1e-6);
+    QVERIFY(std::abs(flippedCorner.y() - std::round(flippedCorner.y())) < 1e-6);
+    QCOMPARE(document.entityCommits(), 2);
+}
+
 void ViewportWidgetTest::lockedEntityIgnoresGizmo()
 {
     FakeDocument document;
@@ -487,8 +697,9 @@ void ViewportWidgetTest::negativeCameraScaleRenders()
 void ViewportWidgetTest::htmlProviderRendersFrame()
 {
     FakeDocument document;
-    document.addAsset(QStringLiteral("Html"), AssetType::Html,
-                      QStringLiteral("html-hash"));
+    const AssetHash hash = document.registerAsset(AssetType::Html,
+                                                  QStringLiteral("Html"), 800, 120);
+    document.addAsset(QStringLiteral("Html"), AssetType::Html, hash);
 
     ViewportWidget view(&document);
     showWidget(view);
@@ -513,8 +724,9 @@ void ViewportWidgetTest::htmlProviderRendersFrame()
 void ViewportWidgetTest::videoProviderRendersFrame()
 {
     FakeDocument document;
-    document.addAsset(QStringLiteral("Video"), AssetType::Video,
-                      QStringLiteral("video-hash"));
+    const AssetHash hash = document.registerAsset(
+        AssetType::Video, QStringLiteral("Video"), 320, 180);
+    document.addAsset(QStringLiteral("Video"), AssetType::Video, hash);
 
     ViewportWidget view(&document);
     showWidget(view);
@@ -530,9 +742,10 @@ void ViewportWidgetTest::videoProviderRendersFrame()
 void ViewportWidgetTest::providerReceivesProjectFrame()
 {
     FakeDocument document;
+    const AssetHash hash = document.registerAsset(
+        AssetType::Video, QStringLiteral("Video"), 320, 180);
     const Uuid uuid = document.addAsset(QStringLiteral("Video"),
-                                        AssetType::Video,
-                                        QStringLiteral("video-hash"));
+                                        AssetType::Video, hash);
     document.setPlayhead(7);
 
     ViewportWidget view(&document);
@@ -554,8 +767,9 @@ void ViewportWidgetTest::providerReceivesProjectFrame()
 void ViewportWidgetTest::noProviderKeepsPlaceholder()
 {
     FakeDocument document;
-    document.addAsset(QStringLiteral("Html"), AssetType::Html,
-                      QStringLiteral("html-hash"));
+    const AssetHash hash = document.registerAsset(AssetType::Html,
+                                                  QStringLiteral("Html"), 800, 120);
+    document.addAsset(QStringLiteral("Html"), AssetType::Html, hash);
 
     ViewportWidget view(&document);
     showWidget(view);

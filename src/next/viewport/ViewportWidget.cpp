@@ -19,6 +19,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <numbers>
@@ -28,7 +29,12 @@ namespace pvf::next {
 
 namespace {
 
-constexpr double kRotateSnapDegrees = 15.0;
+// Snap radius in screen pixels for the canvas centre lines and other
+// entities' edges/midpoints.
+constexpr double kSnapThresholdPixels = 6.0;
+// A rotation result snaps when it is this close to a snapAngleDegrees()
+// multiple.  Shift forces the snap regardless of distance.
+constexpr double kSnapAngleToleranceDegrees = 3.0;
 
 const QColor kWidgetBackground(20, 22, 26);
 const QColor kCanvasBorder(78, 82, 92);
@@ -48,6 +54,31 @@ QPointF rotateVector(QPointF vector, double degrees)
 double pointDistance(QPointF a, QPointF b)
 {
     return std::hypot(a.x() - b.x(), a.y() - b.y());
+}
+
+// Closest target-feature pair within the threshold, as the offset that has to
+// be added to the moved value.  A feature is the dragged entity's AABB
+// left/centre/right (or top/middle/bottom); targets are canvas centre lines or
+// other entities' matching features.
+std::optional<double> nearestFeatureSnap(const std::array<double, 3>& features,
+                                         const QVector<double>& targets,
+                                         double threshold)
+{
+    std::optional<double> best;
+    double bestDistance = threshold;
+    for (double target : targets)
+    {
+        for (double feature : features)
+        {
+            const double distance = std::abs(target - feature);
+            if (distance <= bestDistance)
+            {
+                bestDistance = distance;
+                best = target - feature;
+            }
+        }
+    }
+    return best;
 }
 
 QVariantMap textStyleData(const model::TextContent& text)
@@ -268,6 +299,21 @@ void ViewportWidget::setShowGizmo(bool show)
         return;
     m_showGizmo = show;
     update();
+}
+
+void ViewportWidget::setSnapEnabled(bool enabled)
+{
+    m_snapEnabled = enabled;
+}
+
+void ViewportWidget::setSnapPixels(int pixels)
+{
+    m_snapPixels = std::max(0, pixels);
+}
+
+void ViewportWidget::setSnapAngleDegrees(double degrees)
+{
+    m_snapAngleDegrees = std::abs(degrees);
 }
 
 void ViewportWidget::refresh()
@@ -500,6 +546,140 @@ gizmo::Bounds ViewportWidget::gizmoBounds(const model::Entity& entity) const
     return bounds;
 }
 
+QRectF ViewportWidget::entityWorldBounds(const model::Entity& entity,
+                                         const QTransform& worldTransform) const
+{
+    // worldTransform maps the entity's local content space to project space
+    // (it already includes the entity's own transform).
+    const gizmo::Bounds bounds = gizmoBounds(entity);
+    QPolygonF polygon;
+    polygon << worldTransform.map(QPointF(bounds.left, bounds.top))
+            << worldTransform.map(QPointF(bounds.right, bounds.top))
+            << worldTransform.map(QPointF(bounds.right, bounds.bottom))
+            << worldTransform.map(QPointF(bounds.left, bounds.bottom));
+    return polygon.boundingRect();
+}
+
+void ViewportWidget::collectSnapTargets(const Uuid& draggedUuid)
+{
+    m_snapTargetsX.clear();
+    m_snapTargetsY.clear();
+    m_dragSnapRoot = false;
+    m_dragStartWorldBounds = QRectF();
+
+    if (!m_document || draggedUuid.isEmpty())
+        return;
+
+    const model::Project& project = m_document->project();
+    const auto draggedIt = project.entities.constFind(draggedUuid);
+    if (draggedIt == project.entities.constEnd())
+        return;
+
+    const model::Entity& dragged = draggedIt.value();
+    m_dragSnapRoot = dragged.parentUuid.isEmpty()
+                     || !project.entities.contains(dragged.parentUuid);
+    m_dragStartWorldBounds =
+        entityWorldBounds(dragged,
+                          parentWorldTransform(draggedUuid)
+                              * gizmo::localMatrix(gizmoTransform(dragged)));
+
+    const int frame = m_document->playhead();
+    render2::SceneWorld world(project, m_document->assets());
+    anim::Cache cache;
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (it.key() == draggedUuid || entity.content.kind == ContentKind::Camera)
+            continue;
+        if (frame < entity.start || frame >= entity.end)
+            continue;
+
+        // Children travel with the dragged entity, so their edges would just
+        // follow the drag.
+        bool descendant = false;
+        for (Uuid parent = entity.parentUuid; !parent.isEmpty();)
+        {
+            if (parent == draggedUuid)
+            {
+                descendant = true;
+                break;
+            }
+            const auto parentIt = project.entities.constFind(parent);
+            if (parentIt == project.entities.constEnd())
+                break;
+            parent = parentIt.value().parentUuid;
+        }
+        if (descendant)
+            continue;
+
+        const anim::Pose pose =
+            anim::evaluateEntity(project, it.key(), frame, world, cache);
+        if (!pose.visible)
+            continue;
+
+        const QRectF bounds = entityWorldBounds(entity, pose.world);
+        if (bounds.isEmpty())
+            continue;
+        m_snapTargetsX << bounds.left() << bounds.center().x() << bounds.right();
+        m_snapTargetsY << bounds.top() << bounds.center().y() << bounds.bottom();
+    }
+}
+
+double ViewportWidget::snapPixel(double value) const
+{
+    if (m_snapPixels <= 0)
+        return value;
+    const double step = double(m_snapPixels);
+    return std::round(value / step) * step;
+}
+
+double ViewportWidget::snapMoveAxis(double value, bool xAxis) const
+{
+    if (m_dragSnapRoot && m_document)
+    {
+        const model::Project& project = m_document->project();
+        const double startValue =
+            xAxis ? m_dragStartTransform.x : m_dragStartTransform.y;
+        const double delta = value - startValue;
+        const QRectF bounds = m_dragStartWorldBounds;
+        const std::array<double, 3> features =
+            xAxis ? std::array<double, 3>{bounds.left() + delta,
+                                          bounds.center().x() + delta,
+                                          bounds.right() + delta}
+                  : std::array<double, 3>{bounds.top() + delta,
+                                          bounds.center().y() + delta,
+                                          bounds.bottom() + delta};
+        const double threshold = kSnapThresholdPixels / m_dragViewScale;
+        const double canvasCenter =
+            xAxis ? std::max(1, project.settings.width) / 2.0
+                  : std::max(1, project.settings.height) / 2.0;
+
+        // Canvas centre lines beat other entities, which beat the pixel grid.
+        if (const auto snap =
+                nearestFeatureSnap(features, {canvasCenter}, threshold))
+            return value + *snap;
+        if (const auto snap = nearestFeatureSnap(
+                features, xAxis ? m_snapTargetsX : m_snapTargetsY, threshold))
+            return value + *snap;
+    }
+
+    return snapPixel(value);
+}
+
+double ViewportWidget::snapAngle(double degrees, bool force) const
+{
+    if (m_snapAngleDegrees <= 0.0)
+        return degrees;
+    const double snapped =
+        std::round(degrees / m_snapAngleDegrees) * m_snapAngleDegrees;
+    if (force
+        || std::abs(std::remainder(degrees - snapped, 360.0))
+               <= kSnapAngleToleranceDegrees)
+        return snapped;
+    return degrees;
+}
+
 Uuid ViewportWidget::entityAt(const QPointF& widgetPos) const
 {
     if (!m_document)
@@ -592,6 +772,7 @@ void ViewportWidget::startGizmoDrag(const Uuid& uuid, DragKind kind,
     m_dragStartBounds = gizmoBounds(it.value());
     m_dragParentToWidget = parentToWidgetTransform(uuid);
     m_dragViewScale = viewScaleFor(m_dragParentToWidget);
+    collectSnapTargets(uuid);
 
     bool invertible = false;
     const QTransform inverse = m_dragParentToWidget.inverted(&invertible);
@@ -662,6 +843,8 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
         return;
     const QPointF mouseParent = inverse.map(widgetPos);
     const QPointF parentDelta = mouseParent - m_dragStartParent;
+    const bool snapActive =
+        m_snapEnabled && !modifiers.testFlag(Qt::AltModifier);
 
     switch (m_dragKind)
     {
@@ -673,10 +856,14 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
             moveX ? QPointF(1.0, 0.0) : QPointF(0.0, 1.0),
             m_dragStartTransform.rotation);
         const double amount = parentDelta.x() * axis.x() + parentDelta.y() * axis.y();
+        double value = moveX ? m_dragStartTransform.x + amount
+                             : m_dragStartTransform.y + amount;
+        if (snapActive)
+            value = snapMoveAxis(value, moveX);
         if (moveX)
-            entity.transform.x = m_dragStartTransform.x + amount;
+            entity.transform.x = value;
         else
-            entity.transform.y = m_dragStartTransform.y + amount;
+            entity.transform.y = value;
         break;
     }
 
@@ -697,12 +884,11 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
         delta = std::remainder(delta, 2.0 * std::numbers::pi);
         double degrees = qRadiansToDegrees(delta);
 
-        if (modifiers.testFlag(Qt::ShiftModifier))
+        if (snapActive)
         {
             const double targetRotation =
-                std::round((m_dragStartTransform.rotation + degrees)
-                           / kRotateSnapDegrees)
-                * kRotateSnapDegrees;
+                snapAngle(m_dragStartTransform.rotation + degrees,
+                          modifiers.testFlag(Qt::ShiftModifier));
             degrees = targetRotation - m_dragStartTransform.rotation;
         }
 
@@ -717,9 +903,20 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
     case DragKind::Scale:
     {
         const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
-        const QPointF mouseLocal =
+        QPointF mouseLocal =
             gizmo::worldToLocal(m_dragStartTransform, mouseParent)
             + m_dragGrabOffset;
+        if (snapActive && m_dragSnapRoot && m_snapPixels > 0)
+        {
+            // Snap the dragged corner's world position so the scaled box stays
+            // on the project pixel grid.  cornerScale() keeps the opposite
+            // corner fixed and keeps the sign of the scale factors.
+            const QPointF cornerWorld =
+                gizmo::localToWorld(m_dragStartTransform, mouseLocal);
+            mouseLocal = gizmo::worldToLocal(
+                m_dragStartTransform,
+                QPointF(snapPixel(cornerWorld.x()), snapPixel(cornerWorld.y())));
+        }
         const gizmo::DragResult result = gizmo::cornerScale(
             m_dragStartTransform, m_dragStartBounds, m_dragHandle, mouseLocal,
             uniform, true);
@@ -734,8 +931,16 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
     case DragKind::CenterScale:
     {
         const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
-        const QPointF mouseLocal = gizmo::worldToLocalAxesPixels(
+        QPointF mouseLocal = gizmo::worldToLocalAxesPixels(
             m_dragStartTransform, mouseParent, m_dragViewScale);
+        if (snapActive && m_snapPixels > 0)
+        {
+            // The center handle lives in pixel-scaled local axes, so rounding
+            // here makes the handle offset a whole number of pixels while the
+            // quadrant sign still drives negative scale.
+            mouseLocal = QPointF(snapPixel(mouseLocal.x()),
+                                 snapPixel(mouseLocal.y()));
+        }
         const gizmo::DragResult result =
             gizmo::centerScale(m_dragStartTransform, mouseLocal, uniform);
         entity.transform.scaleX = result.transform.scaleX;

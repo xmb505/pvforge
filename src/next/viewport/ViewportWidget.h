@@ -10,6 +10,7 @@
 #include <QSize>
 #include <QSizeF>
 #include <QTransform>
+#include <QVector>
 #include <QWidget>
 
 #include <optional>
@@ -65,6 +66,18 @@ public:
     void setShowGizmo(bool show);
     bool showGizmo() const { return m_showGizmo; }
 
+    // Snapping is on by default and Alt turns it off for the current drag.
+    // Move drags snap the canvas centre lines first, then other entities'
+    // edges/midpoints, and fall back to the pixel grid.  Scale drags snap to
+    // the pixel grid; rotation snaps to snapAngleDegrees() multiples when the
+    // result is within 3 degrees.
+    void setSnapEnabled(bool enabled);
+    bool snapEnabled() const { return m_snapEnabled; }
+    // Pixel grid step in project pixels for moves and scales.  <= 0 disables
+    // the pixel grid.
+    void setSnapPixels(int pixels);
+    void setSnapAngleDegrees(double degrees);
+
     void refresh();
 
     // Renders the current project canvas/camera at the project resolution.
@@ -118,6 +131,13 @@ private:
                                                 const QTransform& parentToWidget,
                                                 double viewScale) const;
 
+    QRectF entityWorldBounds(const model::Entity& entity,
+                             const QTransform& worldTransform) const;
+    void collectSnapTargets(const Uuid& draggedUuid);
+    double snapMoveAxis(double value, bool xAxis) const;
+    double snapPixel(double value) const;
+    double snapAngle(double degrees, bool force) const;
+
     void startGizmoDrag(const Uuid& uuid, DragKind kind, gizmo::Handle handle,
                         const QPointF& widgetPos);
     void applyGizmoDrag(const QPointF& widgetPos, Qt::KeyboardModifiers modifiers);
@@ -136,6 +156,10 @@ private:
     Document* m_document = nullptr;
     Uuid m_cameraUuid;
     bool m_showGizmo = true;
+
+    bool m_snapEnabled = true;
+    int m_snapPixels = 1;
+    double m_snapAngleDegrees = 15.0;
 
     double m_zoom = 1.0;
     QPointF m_pan;
@@ -158,6 +182,15 @@ private:
     double m_dragAngleCenter = 0.0;
     QPointF m_dragGrabOffset;
     bool m_dragChanged = false;
+
+    // Snapshot taken on press so every mouse move snaps against a stable
+    // scene.  Only root entities get centre-line/entity snapping; parented
+    // entities only use the pixel grid because their axes can be rotated by
+    // the parent.
+    bool m_dragSnapRoot = false;
+    QRectF m_dragStartWorldBounds;
+    QVector<double> m_snapTargetsX;
+    QVector<double> m_snapTargetsY;
 
     render2::FrameProvider m_videoFrameProvider;
     render2::FrameProvider m_htmlFrameProvider;
