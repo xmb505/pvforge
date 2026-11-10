@@ -46,6 +46,11 @@ double snapHtmlScale(double value)
     return nearestOf(value, std::array<double, 4>{0.25, 0.5, 0.75, 1.0});
 }
 
+int snapWorkbenchScalePercent(int value)
+{
+    return nearestOf(value, std::array<int, 4>{25, 50, 75, 100});
+}
+
 } // namespace
 
 SettingsStore::SettingsStore(QString iniPath)
@@ -75,6 +80,13 @@ AppSettings SettingsStore::sanitized(AppSettings settings)
         nearestOf(settings.videoProxyWidth, std::array<int, 2>{960, 1280});
     settings.videoMemoryFrames =
         nearestOf(settings.videoMemoryFrames, std::array<int, 3>{32, 64, 128});
+
+    settings.workbenchCacheScalePercent =
+        snapWorkbenchScalePercent(settings.workbenchCacheScalePercent);
+    settings.workbenchCacheDiskBytes =
+        std::clamp(settings.workbenchCacheDiskBytes, kMinDiskBytes, kMaxDiskBytes);
+    settings.workbenchCacheMemoryBytes = std::clamp(
+        settings.workbenchCacheMemoryBytes, kMinMemoryBytes, kMaxMemoryBytes);
 
     settings.mcpPort = static_cast<quint16>(
         std::clamp<int>(settings.mcpPort, kMinMcpPort, kMaxMcpPort));
@@ -115,6 +127,25 @@ AppSettings SettingsStore::load() const
         m_settings.value(QStringLiteral("video/memoryFrames"), settings.videoMemoryFrames)
             .toInt();
 
+    settings.workbenchCacheEnabled =
+        m_settings
+            .value(QStringLiteral("workbench/enabled"), settings.workbenchCacheEnabled)
+            .toBool();
+    settings.workbenchCacheScalePercent =
+        m_settings
+            .value(QStringLiteral("workbench/scalePercent"),
+                   settings.workbenchCacheScalePercent)
+            .toInt();
+    settings.workbenchCacheDiskBytes =
+        m_settings
+            .value(QStringLiteral("workbench/diskBytes"), settings.workbenchCacheDiskBytes)
+            .toLongLong();
+    settings.workbenchCacheMemoryBytes =
+        m_settings
+            .value(QStringLiteral("workbench/memoryBytes"),
+                   settings.workbenchCacheMemoryBytes)
+            .toLongLong();
+
     settings.mcpPort = static_cast<quint16>(
         m_settings.value(QStringLiteral("mcp/port"), settings.mcpPort).toUInt());
     settings.humanCommitDelayMs =
@@ -145,6 +176,14 @@ void SettingsStore::save(const AppSettings& settings)
     m_settings.setValue(QStringLiteral("video/proxyEnabled"), value.videoProxyEnabled);
     m_settings.setValue(QStringLiteral("video/proxyWidth"), value.videoProxyWidth);
     m_settings.setValue(QStringLiteral("video/memoryFrames"), value.videoMemoryFrames);
+
+    m_settings.setValue(QStringLiteral("workbench/enabled"), value.workbenchCacheEnabled);
+    m_settings.setValue(QStringLiteral("workbench/scalePercent"),
+                        value.workbenchCacheScalePercent);
+    m_settings.setValue(QStringLiteral("workbench/diskBytes"),
+                        value.workbenchCacheDiskBytes);
+    m_settings.setValue(QStringLiteral("workbench/memoryBytes"),
+                        value.workbenchCacheMemoryBytes);
 
     m_settings.setValue(QStringLiteral("mcp/port"), value.mcpPort);
     m_settings.setValue(QStringLiteral("git/humanCommitDelayMs"), value.humanCommitDelayMs);

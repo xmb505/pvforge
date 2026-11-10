@@ -45,6 +45,10 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.videoProxyEnabled, expected.videoProxyEnabled);
     QCOMPARE(actual.videoProxyWidth, expected.videoProxyWidth);
     QCOMPARE(actual.videoMemoryFrames, expected.videoMemoryFrames);
+    QCOMPARE(actual.workbenchCacheEnabled, expected.workbenchCacheEnabled);
+    QCOMPARE(actual.workbenchCacheScalePercent, expected.workbenchCacheScalePercent);
+    QCOMPARE(actual.workbenchCacheDiskBytes, expected.workbenchCacheDiskBytes);
+    QCOMPARE(actual.workbenchCacheMemoryBytes, expected.workbenchCacheMemoryBytes);
     QCOMPARE(int(actual.mcpPort), int(expected.mcpPort));
     QCOMPARE(actual.humanCommitDelayMs, expected.humanCommitDelayMs);
     QCOMPARE(actual.gitEnabled, expected.gitEnabled);
@@ -63,12 +67,19 @@ private slots:
     void storeRoundTrip();
     void storeClampsLoadedValues();
     void storeSanitizesSavedValues();
+    void workbenchDefaults();
+    void workbenchStoreRoundTrip();
+    void workbenchStoreSanitizes();
 
     void detectGitFindsExecutable();
 
     void dialogDefaults();
     void dialogRoundTrip();
     void dialogClampsValues();
+    void workbenchDialogRoundTrip();
+    void workbenchDialogCancelDoesNotSave();
+    void workbenchDialogApplySaves();
+    void workbenchDialogSnapsAndClamps();
     void dialogGitCheckboxRoundTrip();
     void dialogGitCancelDoesNotSave();
     void dialogGitApplySaves();
@@ -228,6 +239,86 @@ void SettingsTests::storeSanitizesSavedValues()
     QCOMPARE(settings.humanCommitDelayMs, 200);
 }
 
+void SettingsTests::workbenchDefaults()
+{
+    const AppSettings defaults;
+    QCOMPARE(defaults.workbenchCacheEnabled, true);
+    QCOMPARE(defaults.workbenchCacheScalePercent, 50);
+    QCOMPARE(defaults.workbenchCacheDiskBytes, 8 * kGiB);
+    QCOMPARE(defaults.workbenchCacheMemoryBytes, 256 * kMiB);
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    verifySettingsEqual(store.load(), defaults);
+}
+
+void SettingsTests::workbenchStoreRoundTrip()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = temp.filePath(QStringLiteral("settings.ini"));
+    SettingsStore store(path);
+
+    AppSettings expected;
+    expected.workbenchCacheEnabled = false;
+    expected.workbenchCacheScalePercent = 75;
+    expected.workbenchCacheDiskBytes = 24 * kGiB;
+    expected.workbenchCacheMemoryBytes = 512 * kMiB;
+    store.save(expected);
+
+    SettingsStore reopened(path);
+    const AppSettings loaded = reopened.load();
+    QCOMPARE(loaded.workbenchCacheEnabled, false);
+    QCOMPARE(loaded.workbenchCacheScalePercent, 75);
+    QCOMPARE(loaded.workbenchCacheDiskBytes, 24 * kGiB);
+    QCOMPARE(loaded.workbenchCacheMemoryBytes, 512 * kMiB);
+
+    QSettings raw(path, QSettings::IniFormat);
+    QCOMPARE(raw.value(QStringLiteral("workbench/enabled")).toBool(), false);
+    QCOMPARE(raw.value(QStringLiteral("workbench/scalePercent")).toInt(), 75);
+    QCOMPARE(raw.value(QStringLiteral("workbench/diskBytes")).toLongLong(), 24 * kGiB);
+    QCOMPARE(raw.value(QStringLiteral("workbench/memoryBytes")).toLongLong(), 512 * kMiB);
+}
+
+void SettingsTests::workbenchStoreSanitizes()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = temp.filePath(QStringLiteral("settings.ini"));
+    {
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("workbench/scalePercent"), 60);
+        raw.setValue(QStringLiteral("workbench/diskBytes"), Q_INT64_C(0));
+        raw.setValue(QStringLiteral("workbench/memoryBytes"), Q_INT64_C(1));
+        raw.sync();
+    }
+
+    SettingsStore store(path);
+    const AppSettings loaded = store.load();
+    QCOMPARE(loaded.workbenchCacheScalePercent, 50);
+    QCOMPARE(loaded.workbenchCacheDiskBytes, 1 * kGiB);
+    QCOMPARE(loaded.workbenchCacheMemoryBytes, 32 * kMiB);
+
+    const auto snapped = [](int percent) {
+        AppSettings settings;
+        settings.workbenchCacheScalePercent = percent;
+        return SettingsStore::sanitized(settings).workbenchCacheScalePercent;
+    };
+    QCOMPARE(snapped(10), 25);
+    QCOMPARE(snapped(60), 50);
+    QCOMPARE(snapped(70), 75);
+    QCOMPARE(snapped(90), 100);
+    QCOMPARE(snapped(1000), 100);
+
+    AppSettings tooBig;
+    tooBig.workbenchCacheDiskBytes = 1024 * kGiB;
+    tooBig.workbenchCacheMemoryBytes = 1024 * kGiB;
+    const AppSettings clamped = SettingsStore::sanitized(tooBig);
+    QCOMPARE(clamped.workbenchCacheDiskBytes, 64 * kGiB);
+    QCOMPARE(clamped.workbenchCacheMemoryBytes, 4096 * kMiB);
+}
+
 void SettingsTests::dialogDefaults()
 {
     QTemporaryDir temp;
@@ -236,7 +327,7 @@ void SettingsTests::dialogDefaults()
     SettingsDialog dialog(&store);
 
     verifySettingsEqual(dialog.settings(), AppSettings{});
-    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 4);
+    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 5);
     QVERIFY(!findWidget<QCheckBox>(dialog, "gitEnabled")->isChecked());
     QVERIFY(!findWidget<QLabel>(dialog, "gitStatus")->text().isEmpty());
     QVERIFY(dialog.endpointPath().endsWith(
@@ -300,6 +391,99 @@ void SettingsTests::dialogClampsValues()
     QCOMPARE(settings.videoMemoryFrames, 32);
     QCOMPARE(int(settings.mcpPort), 1024);
     QCOMPARE(settings.humanCommitDelayMs, 200);
+}
+
+void SettingsTests::workbenchDialogRoundTrip()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    QVERIFY(findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 50);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 8);
+
+    AppSettings expected;
+    expected.workbenchCacheEnabled = false;
+    expected.workbenchCacheScalePercent = 100;
+    expected.workbenchCacheDiskBytes = 32 * kGiB;
+    expected.workbenchCacheMemoryBytes = 512 * kMiB;
+
+    dialog.setSettings(expected);
+    QVERIFY(!findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 100);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 32);
+    verifySettingsEqual(dialog.settings(), expected);
+}
+
+void SettingsTests::workbenchDialogCancelDoesNotSave()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->setChecked(false);
+    auto* scale = findWidget<QComboBox>(dialog, "workbenchScale");
+    scale->setCurrentIndex(scale->findData(25));
+    findWidget<QSpinBox>(dialog, "workbenchDiskGb")->setValue(2);
+    findWidget<QDialogButtonBox>(dialog, "settingsButtons")
+        ->button(QDialogButtonBox::Cancel)
+        ->click();
+
+    QCOMPARE(dialog.result(), int(QDialog::Rejected));
+    const AppSettings saved = store.load();
+    QCOMPARE(saved.workbenchCacheEnabled, true);
+    QCOMPARE(saved.workbenchCacheScalePercent, 50);
+    QCOMPARE(saved.workbenchCacheDiskBytes, 8 * kGiB);
+}
+
+void SettingsTests::workbenchDialogApplySaves()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->setChecked(false);
+    auto* scale = findWidget<QComboBox>(dialog, "workbenchScale");
+    scale->setCurrentIndex(scale->findData(25));
+    findWidget<QSpinBox>(dialog, "workbenchDiskGb")->setValue(16);
+    findWidget<QPushButton>(dialog, "applyButton")->click();
+
+    QCOMPARE(dialog.result(), 0);
+    const AppSettings saved = store.load();
+    QCOMPARE(saved.workbenchCacheEnabled, false);
+    QCOMPARE(saved.workbenchCacheScalePercent, 25);
+    QCOMPARE(saved.workbenchCacheDiskBytes, 16 * kGiB);
+    QCOMPARE(saved.workbenchCacheMemoryBytes, 256 * kMiB);
+}
+
+void SettingsTests::workbenchDialogSnapsAndClamps()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    AppSettings invalid;
+    invalid.workbenchCacheScalePercent = 60;
+    invalid.workbenchCacheDiskBytes = 0;
+    invalid.workbenchCacheMemoryBytes = -5;
+    dialog.setSettings(invalid);
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 50);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 1);
+    QCOMPARE(dialog.settings().workbenchCacheScalePercent, 50);
+    QCOMPARE(dialog.settings().workbenchCacheDiskBytes, 1 * kGiB);
+    QCOMPARE(dialog.settings().workbenchCacheMemoryBytes, 32 * kMiB);
+
+    invalid.workbenchCacheScalePercent = 70;
+    invalid.workbenchCacheDiskBytes = 100 * kGiB;
+    dialog.setSettings(invalid);
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 75);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 64);
+    QCOMPARE(dialog.settings().workbenchCacheDiskBytes, 64 * kGiB);
 }
 
 void SettingsTests::dialogGitCheckboxRoundTrip()

@@ -52,6 +52,7 @@ signals:
 
 private:
     void buildHtmlPage();
+    void buildWorkbenchPage();
     void buildVideoPage();
     void buildMcpPage();
     void buildGitPage();
@@ -72,6 +73,12 @@ private:
     QPushButton* m_chromeBrowse = nullptr;
     QPushButton* m_chromeDetect = nullptr;
     QPushButton* m_clearHtmlCache = nullptr;
+
+    QCheckBox* m_workbenchCacheEnabled = nullptr;
+    QComboBox* m_workbenchScale = nullptr;
+    QSpinBox* m_workbenchDiskGb = nullptr;
+    // Not exposed in the UI; carried through so load → edit → save keeps it.
+    qint64 m_workbenchMemoryBytes = 256LL * 1024 * 1024;
 
     QCheckBox* m_videoProxyEnabled = nullptr;
     QComboBox* m_videoProxyWidth = nullptr;

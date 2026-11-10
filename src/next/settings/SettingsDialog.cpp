@@ -57,6 +57,7 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     m_tabs->setObjectName(QStringLiteral("settingsTabs"));
 
     buildHtmlPage();
+    buildWorkbenchPage();
     buildVideoPage();
     buildMcpPage();
     buildGitPage();
@@ -169,6 +170,37 @@ void SettingsDialog::buildHtmlPage()
         page));
 
     m_tabs->addTab(page, QStringLiteral("HTML / Chrome / 缓存"));
+}
+
+void SettingsDialog::buildWorkbenchPage()
+{
+    auto* page = new QWidget(m_tabs);
+    auto* form = new QFormLayout(page);
+
+    m_workbenchCacheEnabled =
+        new QCheckBox(QStringLiteral("启用工作台缓存（整帧预渲染）"), page);
+    m_workbenchCacheEnabled->setObjectName(QStringLiteral("workbenchCacheEnabled"));
+    form->addRow(m_workbenchCacheEnabled);
+
+    m_workbenchScale = new QComboBox(page);
+    m_workbenchScale->setObjectName(QStringLiteral("workbenchScale"));
+    m_workbenchScale->addItem(QStringLiteral("25%"), 25);
+    m_workbenchScale->addItem(QStringLiteral("50%"), 50);
+    m_workbenchScale->addItem(QStringLiteral("75%"), 75);
+    m_workbenchScale->addItem(QStringLiteral("100%"), 100);
+    form->addRow(QStringLiteral("清晰度（工程分辨率比例）"), m_workbenchScale);
+
+    m_workbenchDiskGb = new QSpinBox(page);
+    m_workbenchDiskGb->setObjectName(QStringLiteral("workbenchDiskGb"));
+    m_workbenchDiskGb->setRange(1, 64);
+    m_workbenchDiskGb->setSuffix(QStringLiteral(" GB"));
+    form->addRow(QStringLiteral("磁盘上限"), m_workbenchDiskGb);
+
+    form->addRow(selectableLabel(
+        QStringLiteral("整帧预渲染缓存；命中时播放直接贴图。关闭后只实时渲染。"),
+        page));
+
+    m_tabs->addTab(page, QStringLiteral("工作台缓存"));
 }
 
 void SettingsDialog::buildVideoPage()
@@ -301,6 +333,11 @@ AppSettings SettingsDialog::settings() const
     settings.videoProxyWidth = m_videoProxyWidth->currentData().toInt();
     settings.videoMemoryFrames = m_videoMemoryFrames->currentData().toInt();
 
+    settings.workbenchCacheEnabled = m_workbenchCacheEnabled->isChecked();
+    settings.workbenchCacheScalePercent = m_workbenchScale->currentData().toInt();
+    settings.workbenchCacheDiskBytes = qint64(m_workbenchDiskGb->value()) * kGiB;
+    settings.workbenchCacheMemoryBytes = m_workbenchMemoryBytes;
+
     settings.mcpPort = static_cast<quint16>(m_mcpPort->value());
     settings.humanCommitDelayMs = m_humanCommitDelayMs->value();
     settings.gitEnabled = m_gitEnabled->isChecked();
@@ -330,6 +367,14 @@ void SettingsDialog::setSettings(const AppSettings& settings)
     const int memoryFramesIndex = m_videoMemoryFrames->findData(value.videoMemoryFrames);
     if (memoryFramesIndex >= 0)
         m_videoMemoryFrames->setCurrentIndex(memoryFramesIndex);
+
+    m_workbenchCacheEnabled->setChecked(value.workbenchCacheEnabled);
+    const int workbenchScaleIndex =
+        m_workbenchScale->findData(value.workbenchCacheScalePercent);
+    if (workbenchScaleIndex >= 0)
+        m_workbenchScale->setCurrentIndex(workbenchScaleIndex);
+    m_workbenchDiskGb->setValue(int(value.workbenchCacheDiskBytes / kGiB));
+    m_workbenchMemoryBytes = value.workbenchCacheMemoryBytes;
 
     m_mcpPort->setValue(value.mcpPort);
     m_humanCommitDelayMs->setValue(value.humanCommitDelayMs);

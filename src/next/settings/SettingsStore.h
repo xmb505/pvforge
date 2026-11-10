@@ -25,6 +25,14 @@ struct AppSettings
     int videoProxyWidth = 960;
     int videoMemoryFrames = 64;
 
+    // Workbench cache: whole-frame prerendered scene, hit during playback.
+    // Scale is snapped to 25/50/75/100 percent; the memory budget is fixed at
+    // 256 MB and intentionally not exposed in the UI.
+    bool workbenchCacheEnabled = true;
+    int workbenchCacheScalePercent = 50;
+    qint64 workbenchCacheDiskBytes = 8LL * 1024 * 1024 * 1024;
+    qint64 workbenchCacheMemoryBytes = 256LL * 1024 * 1024;
+
     // MCP/Git
     quint16 mcpPort = 47821;
     int humanCommitDelayMs = 1000;
@@ -37,9 +45,9 @@ struct AppSettings
 };
 
 // QSettings-backed store with stable keys.  load() clamps every numeric value
-// into its supported range and snaps choice values (HTML scale, proxy width,
-// memory frames) to their allowed options, so a hand-edited INI never produces
-// an unusable setting.
+// into its supported range and snaps choice values (HTML scale, workbench
+// cache scale, proxy width, memory frames) to their allowed options, so a
+// hand-edited INI never produces an unusable setting.
 class SettingsStore
 {
 public:
