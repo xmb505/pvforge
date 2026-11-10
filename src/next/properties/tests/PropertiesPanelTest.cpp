@@ -1,5 +1,7 @@
 #include "next/properties/PropertiesPanel.h"
 
+#include "model/Easing.h"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -1062,25 +1064,67 @@ void PropertiesPanelTest::keyframeEasingPresetAndBezier()
     document.setPlayhead(20);
 
     PropertiesPanel panel(&document);
+    panel.show();
     document.setSelection(uuid);
 
     auto* easing = findWidget<QComboBox>(panel, "keyEasing_x");
     QVERIFY(easing);
-    const int easeIn = easing->findData(QStringLiteral("easeIn"));
-    QVERIFY(easeIn >= 0);
-    easing->setCurrentIndex(easeIn);
 
+    // linear + instant + the 30 presets + bezier, presets in
+    // model::easingPresetNames() order.
+    const QStringList& presets = model::easingPresetNames();
+    QCOMPARE(presets.size(), 30);
+    QCOMPARE(easing->count(), presets.size() + 3);
+    QCOMPARE(easing->itemData(0).toString(), QStringLiteral("linear"));
+    QCOMPARE(easing->itemData(1).toString(), QStringLiteral("instant"));
+    for (int i = 0; i < presets.size(); ++i)
+        QCOMPARE(easing->itemData(i + 2).toString(), presets.at(i));
+    QCOMPARE(easing->itemData(easing->count() - 1).toString(), QStringLiteral("bezier"));
+    QVERIFY(!easing->toolTip().isEmpty());
+    QVERIFY(!easing->itemData(0, Qt::ToolTipRole).toString().isEmpty());
+
+    const int outCubic = easing->findData(QStringLiteral("easeoutcubic"));
+    QVERIFY(outCubic >= 0);
+    easing->setCurrentIndex(outCubic);
     QCOMPARE(document.entityCommits(), 1);
     QCOMPARE(document.entity(uuid).tracks.value(QStringLiteral("x")).keys.at(0).easing.type,
-             QStringLiteral("easeIn"));
+             QStringLiteral("easeoutcubic"));
 
-    model::EasingSpec bezier;
-    bezier.type = QStringLiteral("bezier");
-    bezier.inX = 0.2;
-    bezier.inY = 0.1;
-    bezier.outX = 0.8;
-    bezier.outY = 0.9;
-    QVERIFY(panel.setTrackEasing(QStringLiteral("x"), bezier));
+    // Legacy easeIn/easeOut/easeInOut/step keyframes resolve to their canonical
+    // items instead of falling back to linear or growing a bogus entry.
+    auto reloadAs = [&](const char* alias) {
+        document.entity(uuid).tracks[QStringLiteral("x")].keys[0].easing.type =
+            QString::fromLatin1(alias);
+        panel.refresh();
+        return easing->currentData().toString();
+    };
+    QCOMPARE(reloadAs("easeIn"), QStringLiteral("easeinquad"));
+    QCOMPARE(reloadAs("easeOut"), QStringLiteral("easeoutquad"));
+    QCOMPARE(reloadAs("easeInOut"), QStringLiteral("easeinoutquad"));
+    QCOMPARE(reloadAs("step"), QStringLiteral("instant"));
+    QCOMPARE(easing->currentText(), QStringLiteral("instant"));
+
+    // Picking bezier opens the existing custom-handle editor.
+    bool dialogChecked = false;
+    QTimer::singleShot(0, &panel, [&dialogChecked] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        const QList<QDoubleSpinBox*> spins = dialog->findChildren<QDoubleSpinBox*>();
+        if (spins.size() != 4)
+        {
+            dialog->reject();
+            return;
+        }
+        spins.at(0)->setValue(0.2);
+        spins.at(1)->setValue(0.1);
+        spins.at(2)->setValue(0.8);
+        spins.at(3)->setValue(0.9);
+        dialogChecked = true;
+        dialog->accept();
+    });
+    easing->setCurrentIndex(easing->findData(QStringLiteral("bezier")));
+    QVERIFY(dialogChecked);
 
     QCOMPARE(document.entityCommits(), 2);
     const model::EasingSpec saved =
@@ -1090,6 +1134,7 @@ void PropertiesPanelTest::keyframeEasingPresetAndBezier()
     QCOMPARE(saved.inY, 0.1);
     QCOMPARE(saved.outX, 0.8);
     QCOMPARE(saved.outY, 0.9);
+    QCOMPARE(easing->currentData().toString(), QStringLiteral("bezier"));
 }
 
 void PropertiesPanelTest::keyframeRowsDoNotLeakBetweenEntities()

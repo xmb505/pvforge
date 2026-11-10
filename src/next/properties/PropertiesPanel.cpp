@@ -1,6 +1,7 @@
 #include "PropertiesPanel.h"
 
 #include "SolverPreviewWidget.h"
+#include "model/Easing.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -1766,16 +1767,32 @@ void PropertiesPanel::rebuildKeyframeRows(const model::Entity& entity)
 
         row.easing = new QComboBox(m_keyframeGroup);
         row.easing->setObjectName(QStringLiteral("keyEasing_%1").arg(spec.name));
-        row.easing->addItem(QStringLiteral("线性"), QStringLiteral("linear"));
-        row.easing->addItem(QStringLiteral("缓入"), QStringLiteral("easeIn"));
-        row.easing->addItem(QStringLiteral("缓出"), QStringLiteral("easeOut"));
-        row.easing->addItem(QStringLiteral("缓入缓出"), QStringLiteral("easeInOut"));
-        row.easing->addItem(QStringLiteral("贝塞尔"), QStringLiteral("bezier"));
-        row.easing->addItem(QStringLiteral("自定义…"), QStringLiteral("custom"));
+        // Presets use their canonical lowercase JSON names as labels; the list
+        // order follows model::easingPresetNames(). bezier opens the custom
+        // handle editor instead of saving a preset.
+        row.easing->addItem(QStringLiteral("linear"), QStringLiteral("linear"));
+        row.easing->setItemData(0, QStringLiteral("线性：匀速变化。"), Qt::ToolTipRole);
+        row.easing->addItem(QStringLiteral("instant"), QStringLiteral("instant"));
+        row.easing->setItemData(1, QStringLiteral("立即切换：保持当前值直到下一个关键帧。"),
+                                Qt::ToolTipRole);
+        const QStringList& presets = model::easingPresetNames();
+        for (int i = 0; i < presets.size(); ++i)
+        {
+            row.easing->addItem(presets.at(i), presets.at(i));
+            row.easing->setItemData(row.easing->count() - 1,
+                                    QStringLiteral("预设缓动曲线，名称即工程 JSON 里的规范名。"),
+                                    Qt::ToolTipRole);
+        }
+        row.easing->addItem(QStringLiteral("bezier"), QStringLiteral("bezier"));
+        row.easing->setItemData(row.easing->count() - 1,
+                                QStringLiteral("打开自定义贝塞尔编辑器，调整四个控制手柄。"),
+                                Qt::ToolTipRole);
         if (spec.step)
             row.easing->setToolTip(QStringLiteral("可见/物理干涉使用 step 插值，不需要缓动。"));
         else
-            row.easing->setToolTip(QStringLiteral("设置当前帧关键帧到下一个关键帧之间的缓动。"));
+            row.easing->setToolTip(
+                QStringLiteral("设置当前帧关键帧到下一个关键帧之间的缓动。"
+                               "预设项使用英文规范名；bezier 打开自定义编辑器。"));
         m_keyframeGrid->addWidget(row.easing, gridRow, 3);
 
         const QString track = spec.name;
@@ -1793,13 +1810,13 @@ void PropertiesPanel::rebuildKeyframeRows(const model::Entity& entity)
                     if (m_loading)
                         return;
                     const QString type = combo->currentData().toString();
-                    if (type == QLatin1String("custom"))
+                    if (type == QLatin1String("bezier"))
                     {
                         promptCustomEasing(track);
                         return;
                     }
                     model::EasingSpec easing;
-                    easing.type = type;
+                    easing.type = model::canonicalEasingName(type);
                     setTrackEasing(track, easing);
                 });
 
@@ -1871,9 +1888,9 @@ void PropertiesPanel::reloadKeyframes(const model::Entity& entity)
                     {
                         if (keyframe.frame == relativeFrame)
                         {
-                            type = keyframe.easing.type.isEmpty()
-                                ? QStringLiteral("linear")
-                                : keyframe.easing.type;
+                            // Legacy aliases (easeIn/easeOut/easeInOut/step) and
+                            // any casing map onto the canonical preset item.
+                            type = model::canonicalEasingName(keyframe.easing.type);
                             break;
                         }
                     }
