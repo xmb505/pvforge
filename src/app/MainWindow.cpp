@@ -786,6 +786,16 @@ void MainWindow::buildSessionShell()
     m_sessionProps = new ProjectPropertiesPanel(m_session, this);
     m_sessionEnvironment = new EnvironmentPanel(m_session, this);
 
+    // P4a: the legacy entity properties panel comes back next to the project
+    // tab. It shows a placeholder until an entity is selected.
+    m_props = new PropertiesPanel(m_session, this);
+    m_objectTab = new QScrollArea(this);
+    m_objectTab->setObjectName(QStringLiteral("objectTab"));
+    m_objectTab->setWidgetResizable(true);
+    m_objectTab->setFrameShape(QFrame::NoFrame);
+    m_objectTab->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_objectTab->setWidget(m_props);
+
     auto* projectTab = new QWidget(this);
     auto* projectScroll = new QScrollArea(projectTab);
     projectScroll->setObjectName(QStringLiteral("projectScroll"));
@@ -821,6 +831,7 @@ void MainWindow::buildSessionShell()
     m_rightTabs->addTab(projectTab,
                         Lang::t(QStringLiteral("panel.projectTab"),
                                 QStringLiteral("项目属性")));
+    m_rightTabs->addTab(m_objectTab, QStringLiteral("属性"));
 
     top->addWidget(m_viewport);
     top->addWidget(m_rightTabs);
@@ -871,6 +882,14 @@ void MainWindow::buildSessionShell()
                     m_monitor->setProjectChanged();
                 updateSessionStatus();
             });
+    if (m_props)
+    {
+        connect(m_props, &PropertiesPanel::sessionEditFailed, this,
+                [this](const QString& message) {
+                    statusBar()->showMessage(
+                        QStringLiteral("编辑失败：%1").arg(message), 5000);
+                });
+    }
 
     if (m_session && m_session->document())
     {
@@ -911,6 +930,25 @@ void MainWindow::buildSessionShell()
                              : kInvalidEntity;
             if (m_timeline)
                 m_timeline->setSelectedEntity(m_selected);
+            if (m_props)
+            {
+                m_props->setSelectedUuid(m_session->document()->selection());
+                if (m_rightTabs && m_objectTab)
+                {
+                    const int index = m_rightTabs->indexOf(m_objectTab);
+                    const Uuid selectedUuid = m_session->document()->selection();
+                    const auto it =
+                        m_session->project().entities.constFind(selectedUuid);
+                    if (index >= 0)
+                        m_rightTabs->setTabText(
+                            index, it == m_session->project().entities.constEnd()
+                                       ? QStringLiteral("属性")
+                                       : it.value().name);
+                    m_rightTabs->setCurrentWidget(
+                        selectedUuid.isEmpty() ? m_rightTabs->widget(0)
+                                               : m_objectTab);
+                }
+            }
             // Selecting a camera makes it the framing camera and asks the
             // monitor to show it, matching the legacy interaction.
             const Uuid selected = m_session->document()->selection();
@@ -1015,6 +1053,8 @@ void MainWindow::buildSessionShell()
         m_selected = m_timeline
                          ? m_timeline->entityIdForUuid(document->selection())
                          : kInvalidEntity;
+        if (m_props)
+            m_props->setSelectedUuid(document->selection());
     }
 
     createSessionMenus();
@@ -1022,6 +1062,20 @@ void MainWindow::buildSessionShell()
     if (m_viewport)
         m_viewport->setAutoKeyEnabled(!m_autoKeyAction
                                       || m_autoKeyAction->isChecked());
+    if (m_props)
+    {
+        m_props->setAutoKey(!m_autoKeyAction || m_autoKeyAction->isChecked());
+        if (m_autoKeyAction)
+        {
+            connect(m_props, &PropertiesPanel::autoKeyToggled, this,
+                    [this](bool on) {
+                        const QSignalBlocker blocker(m_autoKeyAction);
+                        m_autoKeyAction->setChecked(on);
+                        if (m_viewport)
+                            m_viewport->setAutoKeyEnabled(on);
+                    });
+        }
+    }
     refreshSession();
     updateSessionPlaybackUi();
     updateWindowTitle();
@@ -1111,6 +1165,8 @@ void MainWindow::createSessionMenus()
     connect(m_autoKeyAction, &QAction::toggled, this, [this](bool on) {
         if (m_viewport)
             m_viewport->setAutoKeyEnabled(on);
+        if (m_props)
+            m_props->setAutoKey(on);
     });
     editMenu->addAction(m_autoKeyAction);
 
@@ -1247,6 +1303,8 @@ void MainWindow::refreshSession()
         m_sessionProps->refresh();
     if (m_sessionEnvironment)
         m_sessionEnvironment->refresh();
+    if (m_props)
+        m_props->refresh();
     if (m_viewport)
         m_viewport->refreshSession();
 

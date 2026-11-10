@@ -5,6 +5,7 @@
 #include <QString>
 #include <QVector>
 
+#include <functional>
 #include <limits>
 
 class QWidget;
@@ -132,6 +133,18 @@ public:
     bool pasteKeyframes(const Uuid& uuid, const QVector<TrackKey>& keys,
                         QString* error = nullptr);
     bool splitClip(const Uuid& uuid, int frame, QString* error = nullptr);
+
+    // One whole-entity edit built from the current document, validated as an
+    // entity and committed once.  Used by the properties panel for basic
+    // fields, transform/content values, keyframe values and solver segments.
+    // `ignoreLock` is only for toggling the entity's own locked flag.
+    bool updateEntity(const Uuid& uuid, const QString& message,
+                      const std::function<bool(model::Entity&)>& mutate,
+                      QString* error = nullptr, bool ignoreLock = false);
+    // Same path, restricted to the content block.
+    bool updateContent(const Uuid& uuid, const QString& message,
+                       const std::function<bool(model::Content&)>& mutate,
+                       QString* error = nullptr);
 
     // Writes a plan into the document and commits upserts/deletes once.
     // On failure the in-memory project is restored and no undo step exists.

@@ -1,6 +1,18 @@
 #include "PropertiesPanel.h"
 
 #include "CollapsibleSection.h"
+#include "app/EditActions.h"
+#include "app/EditorSession.h"
+#include "assets/AssetStore.h"
+#include "model/Content.h"
+#include "model/Easing.h"
+#include "model/Entity.h"
+#include "model/Query.h"
+#include "model/Uuid.h"
+#include "next/app/ProjectDocument.h"
+#include "next/core/Document.h"
+#include "next/core/EntityLock.h"
+#include "ui/BezierEditorDialog.h"
 #include "ui/EasingChooser.h"
 #include "ui/BrandWallDialog.h"
 #include "ui/TextLayoutDialog.h"
@@ -13,6 +25,7 @@
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -73,15 +86,706 @@ QString htmlFileStamp(const QString& path)
         .arg(info.lastModified().toMSecsSinceEpoch());
 }
 
+QString contentKindLabel(ContentKind kind)
+{
+    switch (kind)
+    {
+    case ContentKind::Empty:
+        return QStringLiteral("空实体");
+    case ContentKind::Text:
+        return QStringLiteral("文字");
+    case ContentKind::Vector:
+        return QStringLiteral("矢量");
+    case ContentKind::Camera:
+        return QStringLiteral("摄像机");
+    case ContentKind::Asset:
+        return QStringLiteral("素材");
+    case ContentKind::ComicText:
+        return QStringLiteral("漫画文本框");
+    case ContentKind::RadialLines:
+        return QStringLiteral("放射状线条");
+    case ContentKind::FlowLines:
+        return QStringLiteral("快速流过");
+    case ContentKind::HalftoneDots:
+        return QStringLiteral("漫画点阵");
+    case ContentKind::BrandWall:
+        return QStringLiteral("品牌瓷砖墙");
+    }
+    return QStringLiteral("空实体");
+}
+
+QString assetTypeLabel(AssetType type)
+{
+    switch (type)
+    {
+    case AssetType::Image:
+        return QStringLiteral("图片");
+    case AssetType::Video:
+        return QStringLiteral("视频");
+    case AssetType::Audio:
+        return QStringLiteral("音频");
+    case AssetType::Html:
+        return QStringLiteral("HTML");
+    }
+    return QStringLiteral("素材");
+}
+
+QString colorString(const QColor& color)
+{
+    return color.alpha() == 255 ? color.name(QColor::HexRgb)
+                                : color.name(QColor::HexArgb);
+}
+
+struct TrackSpec
+{
+    QString name;
+    QString label;
+    bool step = false;
+    double minimum = -1000000000.0;
+    double maximum = 1000000000.0;
+    double singleStep = 1.0;
+    int decimals = 2;
+    QString suffix;
+};
+
+TrackSpec numericTrack(const QString& name, const QString& label, double minimum,
+                       double maximum, double singleStep, int decimals,
+                       const QString& suffix = {})
+{
+    TrackSpec spec;
+    spec.name = name;
+    spec.label = label;
+    spec.minimum = minimum;
+    spec.maximum = maximum;
+    spec.singleStep = singleStep;
+    spec.decimals = decimals;
+    spec.suffix = suffix;
+    return spec;
+}
+
+TrackSpec stepTrackSpec(const QString& name, const QString& label)
+{
+    TrackSpec spec = numericTrack(name, label, 0.0, 1.0, 1.0, 0);
+    spec.step = true;
+    return spec;
+}
+
+QVector<TrackSpec> commonTrackSpecs(bool camera)
+{
+    QVector<TrackSpec> specs;
+    specs.append(numericTrack(QStringLiteral("x"), QStringLiteral("X"),
+                              -1000000000.0, 1000000000.0, 1.0, 2,
+                              QStringLiteral(" px")));
+    specs.append(numericTrack(QStringLiteral("y"), QStringLiteral("Y"),
+                              -1000000000.0, 1000000000.0, 1.0, 2,
+                              QStringLiteral(" px")));
+    specs.append(numericTrack(QStringLiteral("rotation"), QStringLiteral("旋转"),
+                              -36000.0, 36000.0, 1.0, 2,
+                              QStringLiteral(" °")));
+    if (camera)
+    {
+        specs.append(numericTrack(QStringLiteral("scaleX"),
+                                  QStringLiteral("取景比例"), 0.05, 1.0, 0.01,
+                                  3));
+        return specs;
+    }
+
+    specs.append(numericTrack(QStringLiteral("scaleX"), QStringLiteral("缩放 X"),
+                              -1000.0, 1000.0, 0.01, 4));
+    specs.append(numericTrack(QStringLiteral("scaleY"), QStringLiteral("缩放 Y"),
+                              -1000.0, 1000.0, 0.01, 4));
+    specs.append(numericTrack(QStringLiteral("opacity"), QStringLiteral("不透明度"),
+                              0.0, 1.0, 0.01, 3));
+    specs.append(numericTrack(QStringLiteral("pivotX"), QStringLiteral("轴心 X"),
+                              -1000000000.0, 1000000000.0, 1.0, 2,
+                              QStringLiteral(" px")));
+    specs.append(numericTrack(QStringLiteral("pivotY"), QStringLiteral("轴心 Y"),
+                              -1000000000.0, 1000000000.0, 1.0, 2,
+                              QStringLiteral(" px")));
+    specs.append(stepTrackSpec(QStringLiteral("visible"), QStringLiteral("可见")));
+    specs.append(stepTrackSpec(QStringLiteral("physicsInteract"),
+                               QStringLiteral("物理干涉")));
+    return specs;
+}
+
+QVector<TrackSpec> trackSpecsFor(const model::Entity& entity)
+{
+    const ContentKind kind = entity.content.kind;
+    QVector<TrackSpec> specs = commonTrackSpecs(kind == ContentKind::Camera);
+
+    switch (kind)
+    {
+    case ContentKind::Text:
+        specs.append(numericTrack(QStringLiteral("fontSize"), QStringLiteral("字号"),
+                                  1.0, 100000.0, 1.0, 0,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("lineHeight"), QStringLiteral("行高"),
+                                  0.01, 100.0, 0.1, 3));
+        specs.append(numericTrack(QStringLiteral("letterSpacing"), QStringLiteral("字距"),
+                                  -10000.0, 10000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("strokeWidth"),
+                                  QStringLiteral("描边宽度"), 0.0, 1000000000.0,
+                                  0.5, 2, QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("padding"), QStringLiteral("内边距"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("boxWidth"), QStringLiteral("框宽"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("boxHeight"), QStringLiteral("框高"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        break;
+    case ContentKind::Vector:
+        specs.append(numericTrack(QStringLiteral("width"), QStringLiteral("宽度"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("height"), QStringLiteral("高度"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("cornerRadius"), QStringLiteral("圆角"),
+                                  0.0, 1000000000.0, 1.0, 2,
+                                  QStringLiteral(" px")));
+        specs.append(numericTrack(QStringLiteral("strokeWidth"),
+                                  QStringLiteral("描边宽度"), 0.0, 1000000000.0,
+                                  0.5, 2, QStringLiteral(" px")));
+        break;
+    case ContentKind::Asset:
+        if (entity.content.asset.type == AssetType::Audio)
+        {
+            specs.append(numericTrack(QStringLiteral("volume"), QStringLiteral("音量"),
+                                      0.0, 2.0, 0.05, 3));
+        }
+        break;
+    case ContentKind::Empty:
+    case ContentKind::Camera:
+        break;
+    case ContentKind::ComicText:
+    case ContentKind::RadialLines:
+    case ContentKind::FlowLines:
+    case ContentKind::HalftoneDots:
+    case ContentKind::BrandWall:
+        // Special content editing is P4b.
+        break;
+    }
+    return specs;
+}
+
+bool isStepTrack(const QString& track)
+{
+    return track == QLatin1String("visible")
+        || track == QLatin1String("physicsInteract");
+}
+
+std::optional<double> staticTrackValue(const model::Entity& entity,
+                                       const QString& track)
+{
+    const model::Transform& transform = entity.transform;
+    if (track == QLatin1String("x"))
+        return transform.x;
+    if (track == QLatin1String("y"))
+        return transform.y;
+    if (track == QLatin1String("rotation"))
+        return transform.rotation;
+    if (track == QLatin1String("scaleX"))
+        return transform.scaleX;
+    if (track == QLatin1String("scaleY"))
+        return transform.scaleY;
+    if (track == QLatin1String("pivotX"))
+        return transform.pivotX;
+    if (track == QLatin1String("pivotY"))
+        return transform.pivotY;
+    if (track == QLatin1String("opacity"))
+        return transform.opacity;
+    if (track == QLatin1String("visible"))
+        return entity.visible ? 1.0 : 0.0;
+    if (track == QLatin1String("physicsInteract"))
+        return entity.physicsInteract ? 1.0 : 0.0;
+
+    const model::Content& content = entity.content;
+    if (content.kind == ContentKind::Text)
+    {
+        const model::TextContent& text = content.text;
+        if (track == QLatin1String("fontSize"))
+            return text.pixelSize;
+        if (track == QLatin1String("lineHeight"))
+            return text.lineHeight;
+        if (track == QLatin1String("letterSpacing"))
+            return text.letterSpacing;
+        if (track == QLatin1String("strokeWidth"))
+            return text.strokeWidth;
+        if (track == QLatin1String("padding"))
+            return text.padding;
+        if (track == QLatin1String("boxWidth"))
+            return text.boxWidth;
+        if (track == QLatin1String("boxHeight"))
+            return text.boxHeight;
+    }
+    else if (content.kind == ContentKind::Vector)
+    {
+        const model::VectorContent& vector = content.vector;
+        if (track == QLatin1String("width"))
+            return vector.width;
+        if (track == QLatin1String("height"))
+            return vector.height;
+        if (track == QLatin1String("cornerRadius"))
+            return vector.cornerRadius;
+        if (track == QLatin1String("strokeWidth"))
+            return vector.strokeWidth;
+    }
+    else if (content.kind == ContentKind::Asset
+             && content.asset.type == AssetType::Audio
+             && track == QLatin1String("volume"))
+    {
+        return content.asset.volume;
+    }
+    return std::nullopt;
+}
+
+bool setStaticTrackValue(model::Entity& entity, const QString& track, double value)
+{
+    model::Transform& transform = entity.transform;
+    if (track == QLatin1String("x"))
+    {
+        transform.x = value;
+        return true;
+    }
+    if (track == QLatin1String("y"))
+    {
+        transform.y = value;
+        return true;
+    }
+    if (track == QLatin1String("rotation"))
+    {
+        transform.rotation = value;
+        return true;
+    }
+    if (track == QLatin1String("scaleX"))
+    {
+        transform.scaleX = value;
+        return true;
+    }
+    if (track == QLatin1String("scaleY"))
+    {
+        transform.scaleY = value;
+        return true;
+    }
+    if (track == QLatin1String("pivotX"))
+    {
+        transform.pivotX = value;
+        return true;
+    }
+    if (track == QLatin1String("pivotY"))
+    {
+        transform.pivotY = value;
+        return true;
+    }
+    if (track == QLatin1String("opacity"))
+    {
+        transform.opacity = value;
+        return true;
+    }
+    if (track == QLatin1String("visible"))
+    {
+        entity.visible = value != 0.0;
+        return true;
+    }
+    if (track == QLatin1String("physicsInteract"))
+    {
+        entity.physicsInteract = value != 0.0;
+        return true;
+    }
+
+    model::Content& content = entity.content;
+    if (content.kind == ContentKind::Text)
+    {
+        model::TextContent& text = content.text;
+        if (track == QLatin1String("fontSize"))
+        {
+            text.pixelSize = qRound(value);
+            return true;
+        }
+        if (track == QLatin1String("lineHeight"))
+        {
+            text.lineHeight = value;
+            return true;
+        }
+        if (track == QLatin1String("letterSpacing"))
+        {
+            text.letterSpacing = value;
+            return true;
+        }
+        if (track == QLatin1String("strokeWidth"))
+        {
+            text.strokeWidth = value;
+            return true;
+        }
+        if (track == QLatin1String("padding"))
+        {
+            text.padding = value;
+            return true;
+        }
+        if (track == QLatin1String("boxWidth"))
+        {
+            text.boxWidth = value;
+            return true;
+        }
+        if (track == QLatin1String("boxHeight"))
+        {
+            text.boxHeight = value;
+            return true;
+        }
+    }
+    else if (content.kind == ContentKind::Vector)
+    {
+        model::VectorContent& vector = content.vector;
+        if (track == QLatin1String("width"))
+        {
+            vector.width = value;
+            return true;
+        }
+        if (track == QLatin1String("height"))
+        {
+            vector.height = value;
+            return true;
+        }
+        if (track == QLatin1String("cornerRadius"))
+        {
+            vector.cornerRadius = value;
+            return true;
+        }
+        if (track == QLatin1String("strokeWidth"))
+        {
+            vector.strokeWidth = value;
+            return true;
+        }
+    }
+    else if (content.kind == ContentKind::Asset
+             && content.asset.type == AssetType::Audio
+             && track == QLatin1String("volume"))
+    {
+        content.asset.volume = value;
+        return true;
+    }
+    return false;
+}
+
+bool hasKeyAt(const model::Entity& entity, const QString& trackName, int frame)
+{
+    const auto track = entity.tracks.constFind(trackName);
+    if (track == entity.tracks.constEnd())
+        return false;
+    for (const model::Keyframe& keyframe : track.value().keys)
+        if (keyframe.frame == frame)
+            return true;
+    return false;
+}
+
+void setKeyframeValue(model::Entity& entity, const QString& track, int frame,
+                      double value)
+{
+    model::Track& target = entity.tracks[track];
+    for (model::Keyframe& keyframe : target.keys)
+    {
+        if (keyframe.frame == frame)
+        {
+            keyframe.value = value;
+            return;
+        }
+    }
+    model::Keyframe keyframe;
+    keyframe.frame = frame;
+    keyframe.value = value;
+    target.keys.append(keyframe);
+}
+
+void removeKeyframeAt(model::Entity& entity, const QString& track, int frame)
+{
+    auto it = entity.tracks.find(track);
+    if (it == entity.tracks.end())
+        return;
+    QVector<model::Keyframe>& keys = it.value().keys;
+    keys.erase(std::remove_if(keys.begin(), keys.end(),
+                              [frame](const model::Keyframe& keyframe) {
+                                  return keyframe.frame == frame;
+                              }),
+               keys.end());
+    if (keys.isEmpty())
+        entity.tracks.erase(it);
+}
+
+double currentTrackValue(const model::Entity& entity, const QString& track,
+                         int relativeFrame, bool step,
+                         std::optional<double> fallback = std::nullopt)
+{
+    if (relativeFrame >= 0 && relativeFrame < entity.duration())
+    {
+        const auto it = entity.tracks.constFind(track);
+        if (it != entity.tracks.constEnd())
+        {
+            if (const auto value =
+                    model::evaluateTrack(it.value(), relativeFrame, step))
+                return *value;
+        }
+    }
+    if (fallback)
+        return *fallback;
+    return staticTrackValue(entity, track).value_or(0.0);
+}
+
+bool solverNeedsTarget(SolverEffect effect)
+{
+    return effect != SolverEffect::Spin;
+}
+
+QStringList solverDrivenTracks(SolverEffect effect)
+{
+    if (effect == SolverEffect::Spin)
+        return {QStringLiteral("rotation")};
+    return {QStringLiteral("x"), QStringLiteral("y")};
+}
+
+int solverEffectiveEnd(const model::SolverSegment& solver, int duration)
+{
+    return solver.endFrame < 0 ? duration - 1 : solver.endFrame;
+}
+
+QString solverRangeText(const model::SolverSegment& solver)
+{
+    if (solver.endFrame < 0)
+        return QStringLiteral("%1 帧 – 片段末帧").arg(solver.startFrame);
+    return QStringLiteral("%1 – %2 帧").arg(solver.startFrame).arg(solver.endFrame);
+}
+
+QString solverConflictText(const model::SolverSegment& solver, int duration)
+{
+    return QStringLiteral("%1–%2（%3）")
+        .arg(solver.startFrame)
+        .arg(solverEffectiveEnd(solver, duration))
+        .arg(solverEffectName(solver.effect));
+}
+
+bool trackBlockedAt(const model::Entity& entity, const QString& track, int frame)
+{
+    for (const model::SolverSegment& solver : entity.solvers)
+    {
+        if (!solverDrivenTracks(solver.effect).contains(track))
+            continue;
+        if (frame > solver.startFrame
+            && frame <= solverEffectiveEnd(solver, entity.duration()))
+            return true;
+    }
+    return false;
+}
+
+bool isDescendant(const model::Project& project, const Uuid& candidate,
+                  const Uuid& ancestor)
+{
+    if (candidate == ancestor)
+        return true;
+    Uuid parent = project.entities.value(candidate).parentUuid;
+    QSet<Uuid> seen;
+    while (!parent.isEmpty() && !seen.contains(parent))
+    {
+        if (parent == ancestor)
+            return true;
+        seen.insert(parent);
+        const auto it = project.entities.constFind(parent);
+        if (it == project.entities.constEnd())
+            break;
+        parent = it.value().parentUuid;
+    }
+    return false;
+}
+
+enum class ParamKind
+{
+    Number,
+    Uuid,
+    Direction
+};
+
+struct ParamSpec
+{
+    QString key;
+    QString label;
+    ParamKind kind = ParamKind::Number;
+    double defaultValue = 0.0;
+    double minimum = -1000000000.0;
+    double maximum = 1000000000.0;
+    double step = 1.0;
+    int decimals = 2;
+    QString suffix;
+};
+
+ParamSpec numberParam(const QString& key, const QString& label, double defaultValue,
+                      double minimum, double maximum, double step = 1.0,
+                      int decimals = 2, const QString& suffix = {})
+{
+    ParamSpec spec;
+    spec.key = key;
+    spec.label = label;
+    spec.kind = ParamKind::Number;
+    spec.defaultValue = defaultValue;
+    spec.minimum = minimum;
+    spec.maximum = maximum;
+    spec.step = step;
+    spec.decimals = decimals;
+    spec.suffix = suffix;
+    return spec;
+}
+
+ParamSpec uuidParam(const QString& key, const QString& label)
+{
+    ParamSpec spec;
+    spec.key = key;
+    spec.label = label;
+    spec.kind = ParamKind::Uuid;
+    return spec;
+}
+
+ParamSpec directionParam()
+{
+    ParamSpec spec;
+    spec.key = QStringLiteral("direction");
+    spec.label = QStringLiteral("方向");
+    spec.kind = ParamKind::Direction;
+    spec.defaultValue = 1.0;
+    return spec;
+}
+
+QVector<ParamSpec> solverParams(SolverEffect effect)
+{
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+        return {
+            uuidParam(QStringLiteral("targetUuid"), QStringLiteral("目标实体")),
+            numberParam(QStringLiteral("strength"), QStringLiteral("重力强度"),
+                        980.0, 0.0, 1000000.0, 10.0, 2,
+                        QStringLiteral("px/s²")),
+            numberParam(QStringLiteral("elasticity"), QStringLiteral("弹性"),
+                        0.35, 0.0, 1.0, 0.05, 3),
+            numberParam(QStringLiteral("friction"), QStringLiteral("摩擦"), 0.2, 0.0,
+                        1.0, 0.05, 3),
+            numberParam(QStringLiteral("stopThreshold"), QStringLiteral("停止阈值"),
+                        2.0, 0.0, 1000.0, 0.5, 2, QStringLiteral("px/s")),
+        };
+    case SolverEffect::Orbit:
+        return {
+            uuidParam(QStringLiteral("targetUuid"), QStringLiteral("中心实体")),
+            numberParam(QStringLiteral("aspect"), QStringLiteral("扁率"), 1.0, 0.01,
+                        1.0, 0.05, 3),
+            numberParam(QStringLiteral("angle"), QStringLiteral("椭圆角度"), 0.0,
+                        -360.0, 360.0, 1.0, 2, QStringLiteral("°")),
+            directionParam(),
+            numberParam(QStringLiteral("periodFrames"), QStringLiteral("周期"), 60.0,
+                        1.0, 1000000.0, 1.0, 0, QStringLiteral("帧")),
+        };
+    case SolverEffect::Spin:
+        return {
+            numberParam(QStringLiteral("angularVelocity"), QStringLiteral("角速度"),
+                        6.0, 0.0, 360.0, 0.5, 2, QStringLiteral("°/帧")),
+            directionParam(),
+        };
+    case SolverEffect::BlackHole:
+        return {
+            uuidParam(QStringLiteral("targetUuid"), QStringLiteral("黑洞实体")),
+            numberParam(QStringLiteral("simulationSpeed"), QStringLiteral("模拟速度"),
+                        1.0, 0.01, 20.0, 0.1, 2),
+            numberParam(QStringLiteral("mass"), QStringLiteral("质量"), 1000.0,
+                        0.0001, 1000000000.0, 10.0, 2),
+            numberParam(QStringLiteral("angularMomentum"), QStringLiteral("角动量"),
+                        0.0, -1000000.0, 1000000.0, 10.0, 2),
+            numberParam(QStringLiteral("eventHorizonRadius"),
+                        QStringLiteral("视界半径"), 80.0, 0.0, 1000000.0, 1.0, 1,
+                        QStringLiteral("px")),
+            numberParam(QStringLiteral("objectRadius"), QStringLiteral("物体半径"),
+                        40.0, 0.0, 1000000.0, 1.0, 1, QStringLiteral("px")),
+            numberParam(QStringLiteral("softening"), QStringLiteral("软化半径"), 60.0,
+                        0.0001, 1000000.0, 1.0, 1, QStringLiteral("px")),
+            numberParam(QStringLiteral("maxSpeed"), QStringLiteral("最大速度"), 4000.0,
+                        0.0001, 1000000.0, 100.0, 1, QStringLiteral("px/s")),
+        };
+    }
+    return {};
+}
+
+void selectComboData(QComboBox* combo, int value)
+{
+    int index = combo->findData(value);
+    if (index < 0)
+    {
+        combo->addItem(QStringLiteral("自定义 (%1)").arg(value), value);
+        index = combo->count() - 1;
+    }
+    combo->setCurrentIndex(index);
+}
+
+void setSpinIfIdle(QDoubleSpinBox* spin, double value)
+{
+    if (!spin || spin->hasFocus())
+        return;
+    const QSignalBlocker blocker(spin);
+    spin->setValue(value);
+}
+
+void setSpinIfIdle(QSpinBox* spin, int value)
+{
+    if (!spin || spin->hasFocus())
+        return;
+    const QSignalBlocker blocker(spin);
+    spin->setValue(value);
+}
+
 } // namespace
 
 PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
 {
+    buildUi();
+    refresh();
+}
+
+PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+    , m_sessionMode(true)
+{
+    buildUi();
+    buildSessionUi();
+
+    if (m_session && m_session->document())
+    {
+        auto* document = m_session->document();
+        connect(document, &next::Document::selectionChanged, this, [this] {
+            const Uuid selected = m_session->document()->selection();
+            if (selected != m_sessionUuid)
+            {
+                m_sessionUuid = selected;
+                refresh();
+            }
+        });
+        connect(document, &next::Document::playheadChanged, this, [this] {
+            m_frame = m_session->playhead();
+            refresh();
+        });
+        connect(document, &next::Document::changed, this, [this] {
+            if (!m_editing)
+                refresh();
+        });
+    }
+    refresh();
+}
+
+void PropertiesPanel::buildUi()
+{
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    m_rootLayout = layout;
 
     m_title = new QLabel(QStringLiteral("未选择对象"), this);
     m_title->setContentsMargins(10, 8, 10, 8);
@@ -106,6 +810,13 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     m_parentLabel = qobject_cast<QLabel*>(transformForm->labelForField(m_parentRow));
     connect(m_parent, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) {
+                if (m_sessionMode)
+                {
+                    if (m_sessionUuid.isEmpty() || m_parent->currentIndex() < 0)
+                        return;
+                    applySessionParent(m_parent->currentData().toString());
+                    return;
+                }
                 if (m_entity == kInvalidEntity || m_parent->currentIndex() < 0)
                     return;
                 emit parentEdited(
@@ -127,6 +838,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     auto* keyContent = new QWidget(this);
     auto* keyLayout = new QVBoxLayout(keyContent);
     keyLayout->setContentsMargins(10, 8, 10, 8);
+    m_keyLayout = keyLayout;
     m_keyButton = new QPushButton(QStringLiteral("在当前帧打关键帧"), keyContent);
     m_keyButton->setObjectName(QStringLiteral("keyframeButton"));
     m_keyButton->setEnabled(false);
@@ -156,6 +868,11 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     layout->addStretch(1);
 
     connect(m_keyButton, &QPushButton::clicked, this, [this] {
+        if (m_sessionMode)
+        {
+            sessionAddTransformKeys();
+            return;
+        }
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -171,6 +888,8 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     });
 
     connect(m_easeButton, &QPushButton::clicked, this, [this] {
+        if (m_sessionMode)
+            return;
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -210,8 +929,318 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
         if (EasingChooser::choose(this, current, anchor, &chosen, title))
             emit keyframeEasingEdited(m_entity, m_frame, chosen);
     });
+}
 
-    refresh();
+void PropertiesPanel::buildSessionUi()
+{
+    buildBasicSection(m_rootLayout);
+
+    // Text layout fields that only the new model exposes.
+    m_textLineHeight = new QDoubleSpinBox(this);
+    m_textLineHeight->setObjectName(QStringLiteral("textLineHeight"));
+    m_textLineHeight->setRange(0.1, 10.0);
+    m_textLineHeight->setDecimals(3);
+    m_textLineHeight->setSingleStep(0.05);
+    connect(m_textLineHeight, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("lineHeight"), value); });
+    m_textForm->addRow(QStringLiteral("行高"), m_textLineHeight);
+
+    m_textLetterSpacing = new QDoubleSpinBox(this);
+    m_textLetterSpacing->setObjectName(QStringLiteral("textLetterSpacing"));
+    m_textLetterSpacing->setRange(-1000.0, 1000.0);
+    m_textLetterSpacing->setDecimals(2);
+    m_textLetterSpacing->setSingleStep(1.0);
+    m_textLetterSpacing->setSuffix(QStringLiteral(" px"));
+    connect(m_textLetterSpacing, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) {
+                applyData(QStringLiteral("letterSpacing"), value);
+            });
+    m_textForm->addRow(QStringLiteral("字距"), m_textLetterSpacing);
+
+    m_textPadding = new QDoubleSpinBox(this);
+    m_textPadding->setObjectName(QStringLiteral("textPadding"));
+    m_textPadding->setRange(0.0, 100000.0);
+    m_textPadding->setDecimals(2);
+    m_textPadding->setSingleStep(1.0);
+    m_textPadding->setSuffix(QStringLiteral(" px"));
+    connect(m_textPadding, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("padding"), value); });
+    m_textForm->addRow(QStringLiteral("内边距"), m_textPadding);
+
+    m_textBoxWidth = new QDoubleSpinBox(this);
+    m_textBoxWidth->setObjectName(QStringLiteral("textBoxWidth"));
+    m_textBoxWidth->setRange(0.0, 100000.0);
+    m_textBoxWidth->setDecimals(2);
+    m_textBoxWidth->setSingleStep(1.0);
+    m_textBoxWidth->setSuffix(QStringLiteral(" px"));
+    connect(m_textBoxWidth, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("boxWidth"), value); });
+    m_textForm->addRow(QStringLiteral("框宽"), m_textBoxWidth);
+
+    m_textBoxHeight = new QDoubleSpinBox(this);
+    m_textBoxHeight->setObjectName(QStringLiteral("textBoxHeight"));
+    m_textBoxHeight->setRange(0.0, 100000.0);
+    m_textBoxHeight->setDecimals(2);
+    m_textBoxHeight->setSingleStep(1.0);
+    m_textBoxHeight->setSuffix(QStringLiteral(" px"));
+    connect(m_textBoxHeight, &QDoubleSpinBox::valueChanged, this,
+            [this](double value) { applyData(QStringLiteral("boxHeight"), value); });
+    m_textForm->addRow(QStringLiteral("框高"), m_textBoxHeight);
+
+    // Asset fields. The hash and type stay read-only in P4a; sourceIn and
+    // volume are the editable asset values.
+    auto* assetForm = new QFormLayout();
+    assetForm->setContentsMargins(0, 0, 0, 0);
+    assetForm->setVerticalSpacing(6);
+    m_assetHash = new QLineEdit(this);
+    m_assetHash->setObjectName(QStringLiteral("assetHash"));
+    m_assetHash->setReadOnly(true);
+    assetForm->addRow(QStringLiteral("素材 Hash"), m_assetHash);
+    m_assetType = new QLabel(this);
+    m_assetType->setObjectName(QStringLiteral("assetType"));
+    assetForm->addRow(QStringLiteral("类型"), m_assetType);
+    m_assetSourceIn = new QSpinBox(this);
+    m_assetSourceIn->setObjectName(QStringLiteral("assetSourceIn"));
+    m_assetSourceIn->setRange(0, 1000000);
+    m_assetSourceIn->setSuffix(QStringLiteral(" 帧"));
+    m_assetSourceIn->setKeyboardTracking(false);
+    m_assetSourceIn->setToolTip(QStringLiteral("从素材的第几帧开始播放；范围受素材长度限制"));
+    connect(m_assetSourceIn, &QSpinBox::valueChanged, this, [this](int value) {
+        applySessionAsset(QStringLiteral("sourceIn"), value);
+    });
+    assetForm->addRow(QStringLiteral("素材起点"), m_assetSourceIn);
+    m_assetVolume = new QDoubleSpinBox(this);
+    m_assetVolume->setObjectName(QStringLiteral("assetVolume"));
+    m_assetVolume->setRange(0.0, 2.0);
+    m_assetVolume->setDecimals(3);
+    m_assetVolume->setSingleStep(0.05);
+    m_assetVolume->setSuffix(QStringLiteral(" ×"));
+    connect(m_assetVolume, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        applySessionAsset(QStringLiteral("volume"), value);
+    });
+    assetForm->addRow(QStringLiteral("音量"), m_assetVolume);
+    m_mediaLayout->addLayout(assetForm);
+
+    buildCameraSection(m_rootLayout);
+    buildSolverSection(m_rootLayout);
+
+    m_autoKeyCheck = new QCheckBox(QStringLiteral("自动关键帧"), this);
+    m_autoKeyCheck->setObjectName(QStringLiteral("autoKeyCheck"));
+    m_autoKeyCheck->setChecked(m_autoKey);
+    m_autoKeyCheck->setToolTip(
+        QStringLiteral("修改数值时自动在播放头处插入或更新关键帧"));
+    connect(m_autoKeyCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_autoKey = on;
+        emit autoKeyToggled(on);
+    });
+    m_keyLayout->addWidget(m_autoKeyCheck);
+
+    m_trackHost = new QWidget(this);
+    m_trackHost->setObjectName(QStringLiteral("trackHost"));
+    m_trackForm = new QFormLayout(m_trackHost);
+    m_trackForm->setContentsMargins(0, 4, 0, 0);
+    m_trackForm->setVerticalSpacing(4);
+    m_trackForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    m_trackForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    m_keyLayout->addWidget(m_trackHost);
+
+    // The legacy single easing button is replaced by the per-track combo.
+    m_easeButton->hide();
+}
+
+void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* form = new QFormLayout(content);
+    form->setContentsMargins(10, 8, 10, 8);
+    form->setVerticalSpacing(6);
+
+    m_basicName = new QLineEdit(content);
+    m_basicName->setObjectName(QStringLiteral("entityName"));
+    connect(m_basicName, &QLineEdit::editingFinished, this, [this] {
+        if (!m_session || m_editing || m_sessionUuid.isEmpty())
+            return;
+        const model::Entity* entity = sessionEntity();
+        if (!entity || m_basicName->text() == entity->name)
+            return;
+        const QString name = m_basicName->text().trimmed();
+        runSessionEdit(QStringLiteral("pvf: rename entity"),
+                       [name](model::Entity& e) {
+                           e.name = name;
+                           return true;
+                       });
+    });
+    form->addRow(QStringLiteral("名称"), m_basicName);
+
+    m_basicStart = new QSpinBox(content);
+    m_basicStart->setObjectName(QStringLiteral("entityStart"));
+    m_basicStart->setRange(0, 1000000);
+    m_basicStart->setSuffix(QStringLiteral(" 帧"));
+    m_basicStart->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("开始"), m_basicStart);
+
+    m_basicEnd = new QSpinBox(content);
+    m_basicEnd->setObjectName(QStringLiteral("entityEnd"));
+    m_basicEnd->setRange(1, 1000000);
+    m_basicEnd->setSuffix(QStringLiteral(" 帧"));
+    m_basicEnd->setKeyboardTracking(false);
+    form->addRow(QStringLiteral("结束"), m_basicEnd);
+
+    auto applyRange = [this] {
+        if (!m_session || m_editing || m_sessionUuid.isEmpty())
+            return;
+        const model::Entity* entity = sessionEntity();
+        if (!entity)
+            return;
+        const int start = m_basicStart->value();
+        const int end = m_basicEnd->value();
+        if (start == entity->start && end == entity->end)
+            return;
+        m_editing = true;
+        QString error;
+        const bool ok = m_session->editActions()->trimClip(
+            m_sessionUuid, start, end, &error);
+        m_editing = false;
+        if (!ok)
+            reportSessionError(error);
+        refresh();
+    };
+    connect(m_basicStart, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [applyRange](int) { applyRange(); });
+    connect(m_basicEnd, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [applyRange](int) { applyRange(); });
+
+    m_basicRow = new QSpinBox(content);
+    m_basicRow->setObjectName(QStringLiteral("entityRow"));
+    m_basicRow->setRange(0, 1000000);
+    m_basicRow->setKeyboardTracking(false);
+    connect(m_basicRow, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int value) {
+                if (!m_session || m_editing)
+                    return;
+                const model::Entity* entity = sessionEntity();
+                if (!entity || entity->row == value)
+                    return;
+                runSessionEdit(QStringLiteral("pvf: edit entity row"),
+                               [value](model::Entity& e) {
+                                   e.row = value;
+                                   return true;
+                               });
+            });
+    form->addRow(QStringLiteral("行"), m_basicRow);
+
+    auto addFlag = [this, form, content](const QString& label, const QString& name,
+                                         bool model::Entity::*member,
+                                         bool ignoreLock = false) {
+        auto* box = new QCheckBox(label, content);
+        box->setObjectName(name);
+        connect(box, &QCheckBox::toggled, this, [this, member, ignoreLock](bool on) {
+            if (!m_sessionMode || m_editing)
+                return;
+            runSessionEdit(QStringLiteral("pvf: edit entity flags"),
+                           [member, on](model::Entity& e) {
+                               e.*member = on;
+                               return true;
+                           },
+                           ignoreLock);
+        });
+        form->addRow(box);
+        return box;
+    };
+    m_basicHidden = addFlag(QStringLiteral("隐藏"), QStringLiteral("entityHidden"),
+                            &model::Entity::hidden);
+    m_basicLocked = addFlag(QStringLiteral("锁定"), QStringLiteral("entityLocked"),
+                            &model::Entity::locked, true);
+    m_basicVisible = addFlag(QStringLiteral("可见"), QStringLiteral("entityVisible"),
+                             &model::Entity::visible);
+    m_basicInherit =
+        addFlag(QStringLiteral("继承父级可见性"),
+                QStringLiteral("entityInheritVisibility"),
+                &model::Entity::inheritVisibility);
+    m_basicPhysics =
+        addFlag(QStringLiteral("参与物理干涉"),
+                QStringLiteral("entityPhysicsInteract"),
+                &model::Entity::physicsInteract);
+
+    m_basicSection = new CollapsibleSection(QStringLiteral("实体"), content, this);
+    m_basicSection->setExpanded(true);
+    layout->insertWidget(1, m_basicSection);
+}
+
+void PropertiesPanel::buildCameraSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* box = new QVBoxLayout(content);
+    box->setContentsMargins(10, 8, 10, 8);
+    m_cameraInfo = new QLabel(content);
+    m_cameraInfo->setObjectName(QStringLiteral("cameraInfo"));
+    m_cameraInfo->setWordWrap(true);
+    m_cameraInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_cameraInfo->setText(
+        QStringLiteral("摄像机内容为只读：位置、旋转和取景比例请在变换区编辑。"
+                       "取景比例按绝对值限制在 0.05–1.0（5%–100%）。"));
+    box->addWidget(m_cameraInfo);
+    m_cameraSection = new CollapsibleSection(QStringLiteral("摄像机"), content, this);
+    m_cameraSection->setExpanded(true);
+    layout->insertWidget(3, m_cameraSection);
+}
+
+void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
+{
+    auto* content = new QWidget(this);
+    auto* box = new QVBoxLayout(content);
+    box->setContentsMargins(10, 8, 10, 8);
+    box->setSpacing(6);
+
+    auto* createBox = new QGroupBox(QStringLiteral("新建求解段"), content);
+    createBox->setObjectName(QStringLiteral("solverCreateBox"));
+    auto* createForm = new QFormLayout(createBox);
+    createForm->setContentsMargins(8, 6, 8, 6);
+    createForm->setVerticalSpacing(4);
+    createForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    m_solverEffectCombo = new QComboBox(createBox);
+    m_solverEffectCombo->setObjectName(QStringLiteral("solverEffectCombo"));
+    m_solverEffectCombo->addItem(QStringLiteral("重力"), int(SolverEffect::Gravity));
+    m_solverEffectCombo->addItem(QStringLiteral("公转"), int(SolverEffect::Orbit));
+    m_solverEffectCombo->addItem(QStringLiteral("自转"), int(SolverEffect::Spin));
+    m_solverEffectCombo->addItem(QStringLiteral("黑洞"), int(SolverEffect::BlackHole));
+    createForm->addRow(QStringLiteral("效果"), m_solverEffectCombo);
+
+    m_solverTargetCombo = new QComboBox(createBox);
+    m_solverTargetCombo->setObjectName(QStringLiteral("solverTargetCombo"));
+    createForm->addRow(QStringLiteral("目标实体"), m_solverTargetCombo);
+
+    m_solverEndSpin = new QSpinBox(createBox);
+    m_solverEndSpin->setObjectName(QStringLiteral("solverCreateEnd"));
+    m_solverEndSpin->setRange(-1, 1000000);
+    m_solverEndSpin->setSpecialValueText(QStringLiteral("片段末帧"));
+    m_solverEndSpin->setValue(-1);
+    m_solverEndSpin->setKeyboardTracking(false);
+    createForm->addRow(QStringLiteral("结束帧"), m_solverEndSpin);
+
+    m_solverCreateButton =
+        new QPushButton(QStringLiteral("将当前关键帧转换为求解开始帧"), createBox);
+    m_solverCreateButton->setObjectName(QStringLiteral("solverCreateButton"));
+    createForm->addRow(m_solverCreateButton);
+    box->addWidget(createBox);
+
+    m_solverEmpty = new QLabel(QStringLiteral("（没有求解段）"), content);
+    m_solverEmpty->setObjectName(QStringLiteral("solverEmptyLabel"));
+    box->addWidget(m_solverEmpty);
+
+    m_solverHost = new QWidget(content);
+    m_solverCardsLayout = new QVBoxLayout(m_solverHost);
+    m_solverCardsLayout->setContentsMargins(0, 0, 0, 0);
+    m_solverCardsLayout->setSpacing(6);
+    box->addWidget(m_solverHost);
+
+    connect(m_solverCreateButton, &QPushButton::clicked, this,
+            &PropertiesPanel::createSolverFromPlayhead);
+
+    m_solverSection = new CollapsibleSection(QStringLiteral("求解段"), content, this);
+    m_solverSection->setExpanded(false);
+    layout->insertWidget(layout->count() - 1, m_solverSection);
 }
 
 void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QString& prop,
@@ -237,6 +1266,11 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
     key->setToolTip(QStringLiteral("在当前帧打关键帧"));
     key->setCursor(Qt::PointingHandCursor);
     connect(key, &QToolButton::clicked, this, [this, prop] {
+        if (m_sessionMode)
+        {
+            sessionToggleKey(prop);
+            return;
+        }
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -267,6 +1301,20 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
     m_rows.append(row);
 
     connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop](double v) {
+        if (m_sessionMode)
+        {
+            double rowFactor = 1.0;
+            for (const Row& row : m_rows)
+            {
+                if (row.prop == prop)
+                {
+                    rowFactor = row.factor;
+                    break;
+                }
+            }
+            sessionSetTrackValue(prop, v * rowFactor);
+            return;
+        }
         if (m_entity == kInvalidEntity)
             return;
         double rowFactor = 1.0;
@@ -288,19 +1336,23 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     auto* form = new QFormLayout(content);
     form->setContentsMargins(10, 8, 10, 8);
     form->setVerticalSpacing(6);
+    m_textForm = form;
 
     m_textContent = new QLineEdit(content);
+    m_textContent->setObjectName(QStringLiteral("textContent"));
     connect(m_textContent, &QLineEdit::textEdited, this,
             [this](const QString& text) { applyData(QStringLiteral("text"), text); });
     form->addRow(QStringLiteral("内容"), m_textContent);
 
     m_textFont = new QFontComboBox(content);
+    m_textFont->setObjectName(QStringLiteral("textFont"));
     connect(m_textFont, &QFontComboBox::currentFontChanged, this, [this](const QFont& font) {
         applyData(QStringLiteral("font"), font.family());
     });
     form->addRow(QStringLiteral("字体"), m_textFont);
 
     m_textSize = new QSpinBox(content);
+    m_textSize->setObjectName(QStringLiteral("textSize"));
     m_textSize->setRange(8, 512);
     m_textSize->setValue(96);
     m_textSize->setSuffix(QStringLiteral(" px"));
@@ -309,6 +1361,7 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("字号"), m_textSize);
 
     m_textColorButton = new QPushButton(content);
+    m_textColorButton->setObjectName(QStringLiteral("textColor"));
     setColorButton(m_textColorButton, m_textColorValue);
     connect(m_textColorButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_textColorValue, QStringLiteral("文字颜色"));
@@ -347,6 +1400,7 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("描边颜色"), m_textStrokeColorButton);
 
     m_textAlign = new QComboBox(content);
+    m_textAlign->setObjectName(QStringLiteral("textAlign"));
     m_textAlign->addItem(QStringLiteral("居中"), int(Qt::AlignCenter));
     m_textAlign->addItem(QStringLiteral("左对齐"), int(Qt::AlignLeft | Qt::AlignVCenter));
     m_textAlign->addItem(QStringLiteral("右对齐"), int(Qt::AlignRight | Qt::AlignVCenter));
@@ -356,10 +1410,32 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("对齐"), m_textAlign);
 
     m_textDirection = new QComboBox(content);
+    m_textDirection->setObjectName(QStringLiteral("textDirection"));
     m_textDirection->addItem(QStringLiteral("横排"), 0);
     m_textDirection->addItem(QStringLiteral("竖排 · 从右到左"), 1);
     m_textDirection->addItem(QStringLiteral("竖排 · 从左到右"), 2);
     connect(m_textDirection, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (m_sessionMode)
+        {
+            QVariantMap data;
+            data.insert(QStringLiteral("vertical"), index > 0);
+            data.insert(QStringLiteral("verticalRtl"), index != 2);
+            if (!m_sessionUuid.isEmpty())
+            {
+                runSessionContentEdit(
+                    QStringLiteral("pvf: edit text direction"),
+                    [&data](model::Content& content) {
+                        if (content.kind != ContentKind::Text)
+                            return false;
+                        content.text.vertical =
+                            data.value(QStringLiteral("vertical")).toBool();
+                        content.text.verticalRtl =
+                            data.value(QStringLiteral("verticalRtl")).toBool();
+                        return true;
+                    });
+            }
+            return;
+        }
         if (m_entity == kInvalidEntity)
             return;
         QVariantMap data;
@@ -374,8 +1450,11 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     styleLayout->setContentsMargins(0, 0, 0, 0);
     styleLayout->setSpacing(10);
     m_textBold = new QCheckBox(QStringLiteral("加粗"), styleRow);
+    m_textBold->setObjectName(QStringLiteral("textBold"));
     m_textItalic = new QCheckBox(QStringLiteral("斜体"), styleRow);
+    m_textItalic->setObjectName(QStringLiteral("textItalic"));
     m_textUnderline = new QCheckBox(QStringLiteral("下划线"), styleRow);
+    m_textUnderline->setObjectName(QStringLiteral("textUnderline"));
     connect(m_textBold, &QCheckBox::toggled, this,
             [this](bool on) { applyData(QStringLiteral("bold"), on); });
     connect(m_textItalic, &QCheckBox::toggled, this,
@@ -469,6 +1548,11 @@ void PropertiesPanel::addDataColor(QFormLayout* form, const QString& label,
 
 void PropertiesPanel::emitDataEdit(const QString& key, const QVariant& value)
 {
+    if (m_sessionMode)
+    {
+        applySessionData(key, value);
+        return;
+    }
     if (m_entity == kInvalidEntity)
         return;
     QVariantMap data;
@@ -769,6 +1853,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->setVerticalSpacing(6);
 
     m_vectorShape = new QComboBox(content);
+    m_vectorShape->setObjectName(QStringLiteral("vectorShape"));
     m_vectorShape->addItem(QStringLiteral("矩形"), 0);
     m_vectorShape->addItem(QStringLiteral("圆角矩形"), 3);
     m_vectorShape->addItem(QStringLiteral("椭圆"), 1);
@@ -784,6 +1869,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("形状"), m_vectorShape);
 
     m_vectorCorner = new QDoubleSpinBox(content);
+    m_vectorCorner->setObjectName(QStringLiteral("vectorCorner"));
     m_vectorCorner->setRange(0, 2000);
     m_vectorCorner->setDecimals(1);
     m_vectorCorner->setSuffix(QStringLiteral(" px"));
@@ -792,12 +1878,14 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("圆角"), m_vectorCorner);
 
     m_vectorSides = new QSpinBox(content);
+    m_vectorSides->setObjectName(QStringLiteral("vectorSides"));
     m_vectorSides->setRange(3, 64);
     connect(m_vectorSides, &QSpinBox::valueChanged, this,
             [this](int value) { applyData(QStringLiteral("sides"), value); });
     form->addRow(QStringLiteral("边数"), m_vectorSides);
 
     m_vectorInner = new QDoubleSpinBox(content);
+    m_vectorInner->setObjectName(QStringLiteral("vectorInner"));
     m_vectorInner->setRange(0.05, 1.0);
     m_vectorInner->setSingleStep(0.05);
     m_vectorInner->setDecimals(2);
@@ -806,6 +1894,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("内径比"), m_vectorInner);
 
     m_vectorWidth = new QDoubleSpinBox(content);
+    m_vectorWidth->setObjectName(QStringLiteral("vectorWidth"));
     m_vectorWidth->setRange(1, 20000);
     m_vectorWidth->setDecimals(1);
     m_vectorWidth->setSuffix(QStringLiteral(" px"));
@@ -814,6 +1903,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("宽度"), m_vectorWidth);
 
     m_vectorHeight = new QDoubleSpinBox(content);
+    m_vectorHeight->setObjectName(QStringLiteral("vectorHeight"));
     m_vectorHeight->setRange(1, 20000);
     m_vectorHeight->setDecimals(1);
     m_vectorHeight->setSuffix(QStringLiteral(" px"));
@@ -822,6 +1912,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("高度"), m_vectorHeight);
 
     m_fillButton = new QPushButton(content);
+    m_fillButton->setObjectName(QStringLiteral("vectorFill"));
     setColorButton(m_fillButton, m_fillValue);
     connect(m_fillButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_fillValue, QStringLiteral("填充颜色"));
@@ -834,6 +1925,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("填充"), m_fillButton);
 
     m_strokeButton = new QPushButton(content);
+    m_strokeButton->setObjectName(QStringLiteral("vectorStroke"));
     setColorButton(m_strokeButton, m_strokeValue);
     connect(m_strokeButton, &QPushButton::clicked, this, [this] {
         const QColor color = pickColor(m_strokeValue, QStringLiteral("描边颜色"));
@@ -846,6 +1938,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     form->addRow(QStringLiteral("描边"), m_strokeButton);
 
     m_strokeWidth = new QDoubleSpinBox(content);
+    m_strokeWidth->setObjectName(QStringLiteral("vectorStrokeWidth"));
     m_strokeWidth->setRange(0, 200);
     m_strokeWidth->setDecimals(1);
     m_strokeWidth->setSuffix(QStringLiteral(" px"));
@@ -863,6 +1956,7 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     auto* content = new QWidget(this);
     auto* mediaLayout = new QVBoxLayout(content);
     mediaLayout->setContentsMargins(10, 8, 10, 8);
+    m_mediaLayout = mediaLayout;
     m_mediaInfo = new QLabel(content);
     m_mediaInfo->setWordWrap(true);
     m_mediaInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -1008,15 +2102,18 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     form->setVerticalSpacing(6);
 
     m_usePivot = new QCheckBox(QStringLiteral("启用自定义轴心"), content);
+    m_usePivot->setObjectName(QStringLiteral("usePivot"));
     form->addRow(m_usePivot);
 
     m_pivotX = new QDoubleSpinBox(content);
+    m_pivotX->setObjectName(QStringLiteral("pivotX"));
     m_pivotX->setRange(-10000, 10000);
     m_pivotX->setDecimals(1);
     m_pivotX->setKeyboardTracking(false);
     form->addRow(QStringLiteral("轴心 X"), m_pivotX);
 
     m_pivotY = new QDoubleSpinBox(content);
+    m_pivotY->setObjectName(QStringLiteral("pivotY"));
     m_pivotY->setRange(-10000, 10000);
     m_pivotY->setDecimals(1);
     m_pivotY->setKeyboardTracking(false);
@@ -1035,11 +2132,21 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
         refresh();
     });
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (m_sessionMode)
+        {
+            sessionSetTrackValue(QStringLiteral("pivotX"), value);
+            return;
+        }
         if (m_entity != kInvalidEntity)
             emit pivotEdited(m_entity, value,
                              m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
     });
     connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (m_sessionMode)
+        {
+            sessionSetTrackValue(QStringLiteral("pivotY"), value);
+            return;
+        }
         if (m_entity != kInvalidEntity)
             emit pivotEdited(m_entity,
                              m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame),
@@ -1053,6 +2160,11 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
 
 void PropertiesPanel::applyData(const QString& key, const QVariant& value)
 {
+    if (m_sessionMode)
+    {
+        applySessionData(key, value);
+        return;
+    }
     Entity* e = m_project->entity(m_entity);
     if (!e)
         return;
@@ -1127,6 +2239,1150 @@ void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
     emit dataEdited(m_entity, data);
 }
 
+const model::Entity* PropertiesPanel::sessionEntity() const
+{
+    if (!m_session || m_sessionUuid.isEmpty())
+        return nullptr;
+    const auto& entities = m_session->project().entities;
+    const auto it = entities.constFind(m_sessionUuid);
+    return it == entities.constEnd() ? nullptr : &it.value();
+}
+
+bool PropertiesPanel::sessionEditable() const
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !m_session)
+        return false;
+    return !next::isEntityLocked(m_session->project(), entity->uuid);
+}
+
+int PropertiesPanel::sessionRelativeFrame(const model::Entity& entity) const
+{
+    const int playhead = m_session ? m_session->playhead() : m_frame;
+    return playhead - entity.start;
+}
+
+void PropertiesPanel::reportSessionError(const QString& message)
+{
+    emit sessionEditFailed(message.isEmpty() ? QStringLiteral("未知错误") : message);
+}
+
+bool PropertiesPanel::runSessionEdit(
+    const QString& message, const std::function<bool(model::Entity&)>& mutate,
+    bool ignoreLock)
+{
+    if (!m_session || m_sessionUuid.isEmpty())
+        return false;
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->updateEntity(
+        m_sessionUuid, message, mutate, &error, ignoreLock);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+    return ok;
+}
+
+bool PropertiesPanel::runSessionContentEdit(
+    const QString& message, const std::function<bool(model::Content&)>& mutate)
+{
+    if (!m_session || m_sessionUuid.isEmpty())
+        return false;
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->updateContent(
+        m_sessionUuid, message, mutate, &error);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+    return ok;
+}
+
+void PropertiesPanel::sessionSetTrackValue(const QString& track, double value)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const bool camera = entity->content.kind == ContentKind::Camera;
+    const bool cameraScale =
+        camera && (track == QLatin1String("scaleX")
+                   || track == QLatin1String("scaleY"));
+    double stored = value;
+    if (cameraScale)
+        stored = std::clamp(std::abs(value), 0.05, 1.0);
+
+    runSessionEdit(QStringLiteral("pvf: edit %1").arg(track),
+                   [this, track, stored, cameraScale](model::Entity& e) {
+                       if (cameraScale)
+                       {
+                           e.transform.scaleX = stored;
+                           e.transform.scaleY = stored;
+                       }
+                       else if (!setStaticTrackValue(e, track, stored))
+                       {
+                           return false;
+                       }
+
+                       if (m_autoKey)
+                       {
+                           const int relative =
+                               m_session->playhead() - e.start;
+                           if (relative >= 0 && relative < e.duration()
+                               && !trackBlockedAt(e, track, relative))
+                           {
+                               setKeyframeValue(e, track, relative, stored);
+                               if (cameraScale)
+                                   setKeyframeValue(e, QStringLiteral("scaleY"),
+                                                    relative, stored);
+                           }
+                       }
+                       return true;
+                   });
+}
+
+void PropertiesPanel::sessionSetKeyValue(const QString& track, double value)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    if (relative < 0 || relative >= entity->duration())
+        return;
+    if (trackBlockedAt(*entity, track, relative))
+    {
+        reportSessionError(QStringLiteral("轨道 %1 的第 %2 帧由求解段驱动，"
+                                          "不能写入普通关键帧")
+                               .arg(track)
+                               .arg(relative));
+        return;
+    }
+
+    const bool cameraScale =
+        entity->content.kind == ContentKind::Camera
+        && (track == QLatin1String("scaleX")
+            || track == QLatin1String("scaleY"));
+    const double stored =
+        cameraScale ? std::clamp(std::abs(value), 0.05, 1.0) : value;
+
+    runSessionEdit(QStringLiteral("pvf: edit keyframe %1").arg(track),
+                   [this, track, relative, stored, cameraScale](model::Entity& e) {
+                       if (cameraScale)
+                       {
+                           e.transform.scaleX = stored;
+                           e.transform.scaleY = stored;
+                       }
+                       else if (!setStaticTrackValue(e, track, stored))
+                       {
+                           return false;
+                       }
+                       setKeyframeValue(e, track, relative, stored);
+                       if (cameraScale)
+                           setKeyframeValue(e, QStringLiteral("scaleY"), relative,
+                                            stored);
+                       return true;
+                   });
+}
+
+void PropertiesPanel::sessionToggleKey(const QString& track)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    if (relative < 0 || relative >= entity->duration())
+    {
+        reportSessionError(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
+                               .arg(relative)
+                               .arg(entity->duration() - 1));
+        return;
+    }
+    if (trackBlockedAt(*entity, track, relative))
+    {
+        reportSessionError(QStringLiteral("轨道 %1 的第 %2 帧由求解段驱动，"
+                                          "不能写入普通关键帧")
+                               .arg(track)
+                               .arg(relative));
+        return;
+    }
+
+    m_editing = true;
+    QString error;
+    bool ok = false;
+    if (hasKeyAt(*entity, track, relative))
+    {
+        ok = m_session->editActions()->deleteKeyframes(
+            {KeyRef{m_sessionUuid, track, relative}}, &error);
+    }
+    else
+    {
+        ok = m_session->editActions()->addKeyframe(m_sessionUuid, track,
+                                                   relative, &error);
+    }
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+}
+
+void PropertiesPanel::sessionAddTransformKeys()
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    if (relative < 0 || relative >= entity->duration())
+    {
+        reportSessionError(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
+                               .arg(relative)
+                               .arg(entity->duration() - 1));
+        return;
+    }
+    const bool camera = entity->content.kind == ContentKind::Camera;
+    QStringList tracks;
+    for (const Row& row : m_rows)
+    {
+        if (camera && (row.prop == QLatin1String("scaleY")
+                       || row.prop == QLatin1String("opacity")))
+            continue;
+        tracks.append(row.prop);
+    }
+
+    runSessionEdit(QStringLiteral("pvf: key transform"),
+                   [this, tracks, relative, camera](model::Entity& e) {
+                       bool changed = false;
+                       for (const QString& track : tracks)
+                       {
+                           if (trackBlockedAt(e, track, relative))
+                               continue;
+                           double value =
+                               currentTrackValue(e, track, relative,
+                                                 isStepTrack(track));
+                           if (camera && track == QLatin1String("scaleX"))
+                               value = std::clamp(std::abs(value), 0.05, 1.0);
+                           setKeyframeValue(e, track, relative, value);
+                           changed = true;
+                           if (camera && track == QLatin1String("scaleX"))
+                               setKeyframeValue(e, QStringLiteral("scaleY"),
+                                                relative, value);
+                       }
+                       return changed;
+                   });
+}
+
+void PropertiesPanel::sessionSetEasing(const QString& track,
+                                       const model::EasingSpec& easing)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    if (relative < 0 || relative >= entity->duration()
+        || !hasKeyAt(*entity, track, relative))
+        return;
+
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->setKeyframeEasing(
+        {KeyRef{m_sessionUuid, track, relative}}, easing, &error);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+}
+
+void PropertiesPanel::sessionPromptBezier(const QString& track)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity)
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    model::EasingSpec current;
+    bool found = false;
+    const auto trackIt = entity->tracks.constFind(track);
+    if (trackIt != entity->tracks.constEnd())
+    {
+        for (const model::Keyframe& keyframe : trackIt.value().keys)
+        {
+            if (keyframe.frame == relative)
+            {
+                current = keyframe.easing;
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found)
+        return;
+
+    EasingSpec legacy;
+    legacy.easing = easingFromName(model::canonicalEasingName(current.type));
+    legacy.inX = current.inX;
+    legacy.inY = current.inY;
+    legacy.outX = current.outX;
+    legacy.outY = current.outY;
+    if (legacy.easing != Easing::Bezier)
+    {
+        legacy.easing = Easing::Bezier;
+        legacy.inX = 0.42;
+        legacy.inY = 0.0;
+        legacy.outX = 0.58;
+        legacy.outY = 1.0;
+    }
+
+    BezierEditorDialog dialog(legacy, this);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        refresh();
+        return;
+    }
+    const EasingSpec edited = dialog.easing();
+    model::EasingSpec spec;
+    spec.type = easingName(edited.easing);
+    spec.inX = edited.inX;
+    spec.inY = edited.inY;
+    spec.outX = edited.outX;
+    spec.outY = edited.outY;
+    sessionSetEasing(track, spec);
+}
+
+void PropertiesPanel::applySessionData(const QString& key, const QVariant& value)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+
+    const ContentKind kind = entity->content.kind;
+    if (kind == ContentKind::Text)
+    {
+        if (key == QLatin1String("size"))
+        {
+            sessionSetTrackValue(QStringLiteral("fontSize"), value.toInt());
+            return;
+        }
+        if (key == QLatin1String("textStrokeWidth"))
+        {
+            sessionSetTrackValue(QStringLiteral("strokeWidth"),
+                                 value.toDouble());
+            return;
+        }
+        if (key == QLatin1String("lineHeight")
+            || key == QLatin1String("letterSpacing")
+            || key == QLatin1String("padding")
+            || key == QLatin1String("boxWidth")
+            || key == QLatin1String("boxHeight"))
+        {
+            sessionSetTrackValue(key, value.toDouble());
+            return;
+        }
+
+        runSessionContentEdit(QStringLiteral("pvf: edit text content"),
+                              [key, value](model::Content& content) {
+                                  if (content.kind != ContentKind::Text)
+                                      return false;
+                                  model::TextContent& text = content.text;
+                                  if (key == QLatin1String("text"))
+                                      text.text = value.toString();
+                                  else if (key == QLatin1String("font"))
+                                      text.fontFamily = value.toString();
+                                  else if (key == QLatin1String("color"))
+                                      text.color = colorString(
+                                          value.value<QColor>());
+                                  else if (key == QLatin1String("textStrokeColor"))
+                                      text.strokeColor = colorString(
+                                          value.value<QColor>());
+                                  else if (key == QLatin1String("align"))
+                                      text.align = value.toInt();
+                                  else if (key == QLatin1String("bold"))
+                                      text.bold = value.toBool();
+                                  else if (key == QLatin1String("italic"))
+                                      text.italic = value.toBool();
+                                  else if (key == QLatin1String("underline"))
+                                      text.underline = value.toBool();
+                                  else if (key == QLatin1String("vertical"))
+                                      text.vertical = value.toBool();
+                                  else if (key == QLatin1String("verticalRtl"))
+                                      text.verticalRtl = value.toBool();
+                                  else
+                                      return false;
+                                  return true;
+                              });
+        return;
+    }
+
+    if (kind == ContentKind::Vector)
+    {
+        if (key == QLatin1String("cornerRadius")
+            || key == QLatin1String("width") || key == QLatin1String("height")
+            || key == QLatin1String("strokeWidth"))
+        {
+            sessionSetTrackValue(key, value.toDouble());
+            return;
+        }
+
+        runSessionContentEdit(QStringLiteral("pvf: edit vector content"),
+                              [key, value](model::Content& content) {
+                                  if (content.kind != ContentKind::Vector)
+                                      return false;
+                                  model::VectorContent& vector = content.vector;
+                                  if (key == QLatin1String("shape"))
+                                      vector.shape = value.toInt();
+                                  else if (key == QLatin1String("sides"))
+                                      vector.sides = value.toInt();
+                                  else if (key == QLatin1String("innerRatio"))
+                                      vector.innerRatio = value.toDouble();
+                                  else if (key == QLatin1String("fill"))
+                                      vector.fillColor = colorString(
+                                          value.value<QColor>());
+                                  else if (key == QLatin1String("stroke"))
+                                      vector.strokeColor = colorString(
+                                          value.value<QColor>());
+                                  else
+                                      return false;
+                                  return true;
+                              });
+        return;
+    }
+
+    if (kind == ContentKind::Asset)
+    {
+        if (key == QLatin1String("sourceIn"))
+            applySessionAsset(QStringLiteral("sourceIn"), value);
+        else if (key == QLatin1String("volume"))
+            applySessionAsset(QStringLiteral("volume"), value);
+    }
+}
+
+void PropertiesPanel::applySessionParent(const Uuid& parent)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable() || entity->parentUuid == parent)
+        return;
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->reparent(
+        m_sessionUuid, parent, false, &error);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+}
+
+void PropertiesPanel::applySessionAsset(const QString& field, const QVariant& value)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable()
+        || entity->content.kind != ContentKind::Asset)
+        return;
+
+    int maxSourceIn = 1000000;
+    const auto stored =
+        m_session->assets().getIncludingMissing(entity->content.asset.hash);
+    if (stored)
+    {
+        const int frames =
+            stored->metadata.value(QStringLiteral("durationFrames")).toInt(0);
+        if (frames > 0)
+            maxSourceIn = std::max(0, frames - 1);
+    }
+
+    runSessionContentEdit(QStringLiteral("pvf: edit asset content"),
+                          [field, value, maxSourceIn](model::Content& content) {
+                              if (content.kind != ContentKind::Asset)
+                                  return false;
+                              if (field == QLatin1String("sourceIn"))
+                                  content.asset.sourceIn = std::clamp(
+                                      value.toInt(), 0, maxSourceIn);
+                              else if (field == QLatin1String("volume"))
+                                  content.asset.volume = std::clamp(
+                                      value.toDouble(), 0.0, 2.0);
+                              else
+                                  return false;
+                              return true;
+                          });
+}
+
+void PropertiesPanel::rebuildTrackRows(const model::Entity& entity)
+{
+    for (TrackRow& row : m_trackRows)
+    {
+        QWidget* container = row.diamond ? row.diamond->parentWidget() : nullptr;
+        if (!container)
+            container = row.name;
+        if (!container)
+            continue;
+        for (QWidget* child : container->findChildren<QWidget*>())
+            child->setObjectName(QString());
+        container->setObjectName(QString());
+        container->hide();
+        container->deleteLater();
+    }
+    m_trackRows.clear();
+    m_trackRowsEntity = entity.uuid;
+    m_trackRowsKind = entity.content.kind;
+
+    const QVector<TrackSpec> specs = trackSpecsFor(entity);
+    for (const TrackSpec& spec : specs)
+    {
+        TrackRow row;
+        row.track = spec.name;
+        row.label = spec.label;
+        row.step = spec.step;
+        row.minimum = spec.minimum;
+        row.maximum = spec.maximum;
+        row.singleStep = spec.singleStep;
+        row.decimals = spec.decimals;
+        row.suffix = spec.suffix;
+
+        auto* rowWidget = new QWidget(m_trackHost);
+        auto* rowLayout = new QVBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(2);
+
+        auto* topLine = new QHBoxLayout();
+        topLine->setContentsMargins(0, 0, 0, 0);
+        topLine->setSpacing(3);
+        auto* labelWidget = new QLabel(spec.label, rowWidget);
+        labelWidget->setObjectName(QStringLiteral("trackLabel_") + spec.name);
+        topLine->addWidget(labelWidget);
+        topLine->addStretch(1);
+
+        auto* diamond = new QToolButton(rowWidget);
+        diamond->setObjectName(QStringLiteral("trackDiamond_") + spec.name);
+        diamond->setFixedSize(18, 18);
+        diamond->setAutoRaise(true);
+        diamond->setText(QStringLiteral("◇"));
+        diamond->setCursor(Qt::PointingHandCursor);
+        topLine->addWidget(diamond);
+
+        auto* value = new QDoubleSpinBox(rowWidget);
+        value->setObjectName(QStringLiteral("trackValue_") + spec.name);
+        value->setRange(spec.minimum, spec.maximum);
+        value->setDecimals(spec.decimals);
+        value->setSingleStep(spec.singleStep);
+        if (!spec.suffix.isEmpty())
+            value->setSuffix(spec.suffix);
+        value->setKeyboardTracking(false);
+        topLine->addWidget(value, 1);
+        rowLayout->addLayout(topLine);
+
+        auto* easing = new QComboBox(rowWidget);
+        easing->setObjectName(QStringLiteral("trackEasing_") + spec.name);
+        easing->addItem(QStringLiteral("linear"), QStringLiteral("linear"));
+        easing->addItem(QStringLiteral("instant"), QStringLiteral("instant"));
+        for (const QString& preset : model::easingPresetNames())
+            easing->addItem(preset, preset);
+        easing->addItem(QStringLiteral("bezier"), QStringLiteral("bezier"));
+        rowLayout->addWidget(easing);
+
+        m_trackForm->addRow(rowWidget);
+
+        const QString track = spec.name;
+        connect(diamond, &QToolButton::clicked, this,
+                [this, track] { sessionToggleKey(track); });
+        connect(value, &QDoubleSpinBox::editingFinished, this,
+                [this, track, value] {
+                    if (!m_editing)
+                        sessionSetKeyValue(track, value->value());
+                });
+        connect(easing, &QComboBox::currentIndexChanged, this,
+                [this, track, easing](int) {
+                    if (m_editing)
+                        return;
+                    const QString type = easing->currentData().toString();
+                    if (type == QLatin1String("bezier"))
+                    {
+                        sessionPromptBezier(track);
+                        return;
+                    }
+                    model::EasingSpec spec;
+                    spec.type = model::canonicalEasingName(type);
+                    sessionSetEasing(track, spec);
+                });
+
+        row.name = labelWidget;
+        row.diamond = diamond;
+        row.value = value;
+        row.easing = easing;
+        m_trackRows.append(row);
+    }
+}
+
+void PropertiesPanel::reloadTrackRows(const model::Entity& entity)
+{
+    const QVector<TrackSpec> specs = trackSpecsFor(entity);
+    bool sameStructure = entity.uuid == m_trackRowsEntity
+        && entity.content.kind == m_trackRowsKind
+        && m_trackRows.size() == specs.size();
+    for (int i = 0; sameStructure && i < specs.size(); ++i)
+    {
+        sameStructure = m_trackRows.at(i).track == specs.at(i).name
+            && m_trackRows.at(i).step == specs.at(i).step;
+    }
+    if (!sameStructure)
+        rebuildTrackRows(entity);
+
+    const int relative = sessionRelativeFrame(entity);
+    const bool inRange = relative >= 0 && relative < entity.duration();
+    const bool editable = sessionEditable();
+    for (int i = 0; i < m_trackRows.size() && i < specs.size(); ++i)
+    {
+        TrackRow& row = m_trackRows[i];
+        const TrackSpec& spec = specs.at(i);
+        const bool hasKey = inRange && hasKeyAt(entity, row.track, relative);
+        const bool blocked =
+            inRange && trackBlockedAt(entity, row.track, relative);
+
+        row.diamond->setText(hasKey ? QStringLiteral("◆")
+                                    : QStringLiteral("◇"));
+        row.diamond->setEnabled(editable && inRange && !blocked);
+        if (!inRange)
+            row.diamond->setToolTip(
+                QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
+                    .arg(relative)
+                    .arg(entity.duration() - 1));
+        else if (blocked)
+            row.diamond->setToolTip(
+                QStringLiteral("该帧由求解段驱动，不能写入普通关键帧"));
+        else
+            row.diamond->setToolTip(
+                hasKey ? QStringLiteral("删除当前帧（%1）的「%2」关键帧")
+                             .arg(relative)
+                             .arg(spec.label)
+                       : QStringLiteral("在当前帧（%1）插入「%2」关键帧")
+                             .arg(relative)
+                             .arg(spec.label));
+
+        setSpinIfIdle(row.value, currentTrackValue(entity, row.track, relative,
+                                                   spec.step));
+        row.value->setEnabled(editable && inRange && !blocked);
+
+        {
+            const QSignalBlocker blocker(row.easing);
+            if (hasKey && !spec.step && inRange)
+            {
+                QString type = QStringLiteral("linear");
+                const auto track = entity.tracks.constFind(row.track);
+                if (track != entity.tracks.constEnd())
+                {
+                    for (const model::Keyframe& keyframe : track.value().keys)
+                    {
+                        if (keyframe.frame == relative)
+                        {
+                            type = model::canonicalEasingName(
+                                keyframe.easing.type);
+                            break;
+                        }
+                    }
+                }
+                int index = row.easing->findData(type);
+                if (index < 0)
+                {
+                    row.easing->addItem(type, type);
+                    index = row.easing->count() - 1;
+                }
+                row.easing->setCurrentIndex(index);
+            }
+            else
+            {
+                row.easing->setCurrentIndex(-1);
+            }
+        }
+        row.easing->setEnabled(editable && inRange && hasKey && !spec.step
+                               && !blocked);
+    }
+}
+
+void PropertiesPanel::reloadSolverCreate(const model::Entity& entity)
+{
+    const Uuid previous = m_solverTargetCombo->currentData().toString();
+    {
+        const QSignalBlocker blocker(m_solverTargetCombo);
+        m_solverTargetCombo->clear();
+        m_solverTargetCombo->addItem(QStringLiteral("（选择目标实体）"),
+                                     QString());
+        for (auto it = m_session->project().entities.constBegin();
+             it != m_session->project().entities.constEnd(); ++it)
+        {
+            if (it.key() == entity.uuid)
+                continue;
+            const QString label =
+                it.value().name.isEmpty()
+                    ? it.key().left(8)
+                    : QStringLiteral("%1 (%2)")
+                          .arg(it.value().name, it.key().left(8));
+            m_solverTargetCombo->addItem(label, it.key());
+        }
+        const int index = m_solverTargetCombo->findData(previous);
+        m_solverTargetCombo->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    const int duration = entity.duration();
+    m_solverEndSpin->setRange(-1, std::max(0, duration - 1));
+    if (m_solverEndSpin->value() > duration - 1)
+        m_solverEndSpin->setValue(duration - 1);
+}
+
+void PropertiesPanel::updateSolverCards(const model::Entity& entity)
+{
+    QVector<model::SolverSegment> solvers = entity.solvers;
+    std::sort(solvers.begin(), solvers.end(),
+              [](const model::SolverSegment& a, const model::SolverSegment& b) {
+                  if (a.startFrame != b.startFrame)
+                      return a.startFrame < b.startFrame;
+                  return a.id < b.id;
+              });
+
+    bool sameStructure = solvers.size() == m_solverCards.size();
+    for (int i = 0; sameStructure && i < solvers.size(); ++i)
+    {
+        sameStructure = m_solverCards.at(i).id == solvers.at(i).id
+            && m_solverCards.at(i).effect == solvers.at(i).effect;
+    }
+    if (!sameStructure)
+        rebuildSolverCards(entity.uuid, solvers);
+    else
+        for (int i = 0; i < solvers.size(); ++i)
+            fillSolverCard(m_solverCards[i], entity.uuid, solvers.at(i));
+
+    reloadSolverCreate(entity);
+    m_solverEmpty->setVisible(solvers.isEmpty());
+}
+
+void PropertiesPanel::rebuildSolverCards(
+    const Uuid& entityUuid, const QVector<model::SolverSegment>& solvers)
+{
+    for (SolverCard& card : m_solverCards)
+    {
+        if (!card.box)
+            continue;
+        m_solverCardsLayout->removeWidget(card.box);
+        card.box->setObjectName(QString());
+        for (QWidget* child : card.box->findChildren<QWidget*>())
+            child->setObjectName(QString());
+        card.box->hide();
+        card.box->deleteLater();
+    }
+    m_solverCards.clear();
+
+    for (int index = 0; index < solvers.size(); ++index)
+    {
+        const model::SolverSegment& solver = solvers.at(index);
+        SolverCard card;
+        card.id = solver.id;
+        card.effect = solver.effect;
+        card.box = new QGroupBox(m_solverHost);
+        card.box->setObjectName(QStringLiteral("solverCard%1").arg(index));
+        auto* form = new QFormLayout(card.box);
+        form->setContentsMargins(8, 6, 8, 6);
+        form->setVerticalSpacing(4);
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+        auto* effectLabel = new QLabel(solverEffectName(solver.effect), card.box);
+        effectLabel->setObjectName(QStringLiteral("solverEffect%1").arg(index));
+        form->addRow(QStringLiteral("效果"), effectLabel);
+
+        card.start = new QSpinBox(card.box);
+        card.start->setObjectName(QStringLiteral("solverStart%1").arg(index));
+        card.start->setRange(0, 1000000);
+        card.start->setKeyboardTracking(false);
+        form->addRow(QStringLiteral("开始帧"), card.start);
+
+        card.end = new QSpinBox(card.box);
+        card.end->setObjectName(QStringLiteral("solverEnd%1").arg(index));
+        card.end->setRange(-1, 1000000);
+        card.end->setSpecialValueText(QStringLiteral("片段末帧"));
+        card.end->setKeyboardTracking(false);
+        form->addRow(QStringLiteral("结束帧"), card.end);
+
+        card.velocityX = new QDoubleSpinBox(card.box);
+        card.velocityX->setObjectName(QStringLiteral("solverVelocityX%1").arg(index));
+        card.velocityX->setRange(-1000000.0, 1000000.0);
+        card.velocityX->setDecimals(1);
+        card.velocityX->setSingleStep(10.0);
+        card.velocityX->setSuffix(QStringLiteral(" px/s"));
+        card.velocityX->setKeyboardTracking(false);
+        form->addRow(QStringLiteral("初速度 X"), card.velocityX);
+
+        card.velocityY = new QDoubleSpinBox(card.box);
+        card.velocityY->setObjectName(QStringLiteral("solverVelocityY%1").arg(index));
+        card.velocityY->setRange(-1000000.0, 1000000.0);
+        card.velocityY->setDecimals(1);
+        card.velocityY->setSingleStep(10.0);
+        card.velocityY->setSuffix(QStringLiteral(" px/s"));
+        card.velocityY->setKeyboardTracking(false);
+        form->addRow(QStringLiteral("初速度 Y"), card.velocityY);
+
+        const Uuid solverId = solver.id;
+        card.remove = new QPushButton(QStringLiteral("删除求解段"), card.box);
+        card.remove->setObjectName(QStringLiteral("solverDelete%1").arg(index));
+        form->addRow(card.remove);
+        connect(card.remove, &QPushButton::clicked, this,
+                [this, solverId] { deleteSolver(solverId); });
+
+        connect(card.start, &QSpinBox::editingFinished, this,
+                [this, solverId, card] {
+                    const int value = card.start->value();
+                    updateSolver(solverId, QStringLiteral("pvf: edit solver start"),
+                                 [solverId, value](model::SolverSegment& s) {
+                                     if (s.id != solverId)
+                                         return false;
+                                     s.startFrame = value;
+                                     return true;
+                                 });
+                });
+        connect(card.end, &QSpinBox::editingFinished, this,
+                [this, solverId, card] {
+                    const int value = card.end->value();
+                    updateSolver(solverId, QStringLiteral("pvf: edit solver end"),
+                                 [solverId, value](model::SolverSegment& s) {
+                                     if (s.id != solverId)
+                                         return false;
+                                     s.endFrame = value;
+                                     return true;
+                                 });
+                });
+        connect(card.velocityX, &QDoubleSpinBox::editingFinished, this,
+                [this, solverId, card] {
+                    const double value = card.velocityX->value();
+                    updateSolver(solverId, QStringLiteral("pvf: edit solver velocity"),
+                                 [solverId, value](model::SolverSegment& s) {
+                                     if (s.id != solverId)
+                                         return false;
+                                     s.initialVelocity.setX(value);
+                                     return true;
+                                 });
+                });
+        connect(card.velocityY, &QDoubleSpinBox::editingFinished, this,
+                [this, solverId, card] {
+                    const double value = card.velocityY->value();
+                    updateSolver(solverId, QStringLiteral("pvf: edit solver velocity"),
+                                 [solverId, value](model::SolverSegment& s) {
+                                     if (s.id != solverId)
+                                         return false;
+                                     s.initialVelocity.setY(value);
+                                     return true;
+                                 });
+                });
+
+        const QVector<ParamSpec> specs = solverParams(solver.effect);
+        for (const ParamSpec& spec : specs)
+        {
+            QWidget* editor = nullptr;
+            if (spec.kind == ParamKind::Uuid)
+            {
+                auto* combo = new QComboBox(card.box);
+                combo->setObjectName(
+                    QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
+                combo->addItem(QStringLiteral("（选择目标实体）"), QString());
+                for (auto it = m_session->project().entities.constBegin();
+                     it != m_session->project().entities.constEnd(); ++it)
+                {
+                    if (it.key() == entityUuid)
+                        continue;
+                    const QString label =
+                        it.value().name.isEmpty()
+                            ? it.key().left(8)
+                            : QStringLiteral("%1 (%2)")
+                                  .arg(it.value().name, it.key().left(8));
+                    combo->addItem(label, it.key());
+                }
+                editor = combo;
+                connect(combo, &QComboBox::currentIndexChanged, this,
+                        [this, solverId, spec, combo](int) {
+                            if (m_editing)
+                                return;
+                            const QString value = combo->currentData().toString();
+                            if (value.isEmpty())
+                                return;
+                            updateSolver(
+                                solverId,
+                                QStringLiteral("pvf: edit solver %1").arg(spec.key),
+                                [solverId, spec, value](model::SolverSegment& s) {
+                                    if (s.id != solverId)
+                                        return false;
+                                    s.params.insert(spec.key, value);
+                                    return true;
+                                });
+                        });
+            }
+            else if (spec.kind == ParamKind::Direction)
+            {
+                auto* combo = new QComboBox(card.box);
+                combo->setObjectName(
+                    QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
+                combo->addItem(QStringLiteral("顺时针 (+1)"), 1);
+                combo->addItem(QStringLiteral("逆时针 (-1)"), -1);
+                editor = combo;
+                connect(combo, &QComboBox::currentIndexChanged, this,
+                        [this, solverId, spec, combo](int) {
+                            if (m_editing)
+                                return;
+                            const int value = combo->currentData().toInt();
+                            updateSolver(
+                                solverId,
+                                QStringLiteral("pvf: edit solver %1").arg(spec.key),
+                                [solverId, spec, value](model::SolverSegment& s) {
+                                    if (s.id != solverId)
+                                        return false;
+                                    s.params.insert(spec.key, value);
+                                    return true;
+                                });
+                        });
+            }
+            else
+            {
+                auto* spin = new QDoubleSpinBox(card.box);
+                spin->setObjectName(
+                    QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
+                spin->setRange(spec.minimum, spec.maximum);
+                spin->setDecimals(spec.decimals);
+                spin->setSingleStep(spec.step);
+                if (!spec.suffix.isEmpty())
+                    spin->setSuffix(QStringLiteral(" ") + spec.suffix);
+                spin->setKeyboardTracking(false);
+                editor = spin;
+                connect(spin, &QDoubleSpinBox::editingFinished, this,
+                        [this, solverId, spec, spin] {
+                            const double value = spin->value();
+                            updateSolver(
+                                solverId,
+                                QStringLiteral("pvf: edit solver %1").arg(spec.key),
+                                [solverId, spec, value](model::SolverSegment& s) {
+                                    if (s.id != solverId)
+                                        return false;
+                                    s.params.insert(spec.key, value);
+                                    return true;
+                                });
+                        });
+            }
+            form->addRow(spec.label, editor);
+            card.params.insert(spec.key, editor);
+        }
+
+        m_solverCardsLayout->addWidget(card.box);
+        fillSolverCard(card, entityUuid, solver);
+        m_solverCards.append(card);
+    }
+}
+
+void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
+                                     const model::SolverSegment& solver)
+{
+    Q_UNUSED(entityUuid);
+    card.box->setTitle(QStringLiteral("%1 · %2")
+                           .arg(solverEffectName(solver.effect),
+                                solverRangeText(solver)));
+    setSpinIfIdle(card.start, solver.startFrame);
+    setSpinIfIdle(card.end, solver.endFrame);
+    setSpinIfIdle(card.velocityX, solver.initialVelocity.x());
+    setSpinIfIdle(card.velocityY, solver.initialVelocity.y());
+
+    const bool usesVelocity = solver.effect == SolverEffect::Gravity
+        || solver.effect == SolverEffect::BlackHole;
+    card.velocityX->setEnabled(usesVelocity);
+    card.velocityY->setEnabled(usesVelocity);
+
+    const QVector<ParamSpec> specs = solverParams(solver.effect);
+    for (const ParamSpec& spec : specs)
+    {
+        QWidget* editor = card.params.value(spec.key);
+        if (!editor)
+            continue;
+        if (auto* combo = qobject_cast<QComboBox*>(editor))
+        {
+            const QSignalBlocker blocker(combo);
+            if (spec.kind == ParamKind::Uuid)
+            {
+                const QString value = solver.params.value(spec.key).toString();
+                int index = combo->findData(value);
+                combo->setCurrentIndex(index >= 0 ? index : 0);
+            }
+            else
+            {
+                const int value =
+                    solver.params.value(spec.key, int(spec.defaultValue)).toInt();
+                int index = combo->findData(value);
+                combo->setCurrentIndex(index >= 0 ? index : 0);
+            }
+        }
+        else if (auto* spin = qobject_cast<QDoubleSpinBox*>(editor))
+        {
+            setSpinIfIdle(spin,
+                          solver.params.value(spec.key, spec.defaultValue).toDouble());
+        }
+    }
+}
+
+void PropertiesPanel::createSolverFromPlayhead()
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int relative = sessionRelativeFrame(*entity);
+    const int duration = entity->duration();
+    if (relative < 0 || relative >= duration)
+    {
+        reportSessionError(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
+                               .arg(relative)
+                               .arg(duration - 1));
+        return;
+    }
+
+    const SolverEffect effect =
+        SolverEffect(m_solverEffectCombo->currentData().toInt());
+    const QStringList driven = solverDrivenTracks(effect);
+    for (const QString& track : driven)
+    {
+        if (!hasKeyAt(*entity, track, relative))
+        {
+            reportSessionError(
+                QStringLiteral("请先在播放头处给 X/Y（或旋转）打普通关键帧"));
+            return;
+        }
+    }
+
+    Uuid target;
+    if (solverNeedsTarget(effect))
+    {
+        target = m_solverTargetCombo->currentData().toString();
+        if (target.isEmpty() || target == entity->uuid
+            || !m_session->project().entities.contains(target))
+        {
+            reportSessionError(QStringLiteral("请选择有效的目标实体（不能是自己）"));
+            return;
+        }
+    }
+
+    const int endFrame = m_solverEndSpin->value();
+    if (endFrame != -1 && (endFrame < relative || endFrame >= duration))
+    {
+        reportSessionError(QStringLiteral("结束帧必须为 -1 或位于 %1..%2")
+                               .arg(relative)
+                               .arg(duration - 1));
+        return;
+    }
+    const int effectiveEnd = endFrame < 0 ? duration - 1 : endFrame;
+
+    for (const model::SolverSegment& existing : entity->solvers)
+    {
+        if (relative <= solverEffectiveEnd(existing, duration)
+            && existing.startFrame <= effectiveEnd)
+        {
+            reportSessionError(
+                QStringLiteral("新求解段与已有求解段重叠：%1")
+                    .arg(solverConflictText(existing, duration)));
+            return;
+        }
+    }
+
+    for (const QString& track : driven)
+    {
+        const auto trackIt = entity->tracks.constFind(track);
+        if (trackIt == entity->tracks.constEnd())
+            continue;
+        for (const model::Keyframe& keyframe : trackIt.value().keys)
+        {
+            if (keyframe.frame > relative && keyframe.frame <= effectiveEnd)
+            {
+                reportSessionError(
+                    QStringLiteral("求解段内不能有普通关键帧：%1@%2")
+                        .arg(track)
+                        .arg(keyframe.frame));
+                return;
+            }
+        }
+    }
+
+    model::SolverSegment segment;
+    segment.id = model::newUuid();
+    segment.effect = effect;
+    segment.startFrame = relative;
+    segment.endFrame = endFrame;
+    segment.version = 1;
+    segment.initialVelocity = QPointF(0.0, 0.0);
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        break;
+    case SolverEffect::Orbit:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("aspect"), 1.0);
+        segment.params.insert(QStringLiteral("angle"), 0.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        segment.params.insert(QStringLiteral("periodFrames"), 60);
+        break;
+    case SolverEffect::Spin:
+        segment.params.insert(QStringLiteral("angularVelocity"), 6.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        break;
+    case SolverEffect::BlackHole:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("simulationSpeed"), 1.0);
+        segment.params.insert(QStringLiteral("mass"), 1000.0);
+        segment.params.insert(QStringLiteral("angularMomentum"), 0.0);
+        segment.params.insert(QStringLiteral("eventHorizonRadius"), 80.0);
+        segment.params.insert(QStringLiteral("objectRadius"), 40.0);
+        segment.params.insert(QStringLiteral("softening"), 60.0);
+        segment.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+        break;
+    }
+
+    const Uuid solverId = segment.id;
+    const bool ok = runSessionEdit(
+        QStringLiteral("pvf: convert keyframe to solver start"),
+        [segment](model::Entity& e) {
+            e.solvers.append(segment);
+            return true;
+        });
+    if (ok)
+        m_selectedSolverId = solverId;
+    refresh();
+}
+
+void PropertiesPanel::updateSolver(
+    const Uuid& solverId, const QString& message,
+    const std::function<bool(model::SolverSegment&)>& mutate)
+{
+    if (!m_session || m_sessionUuid.isEmpty())
+        return;
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->updateEntity(
+        m_sessionUuid, message,
+        [solverId, &mutate](model::Entity& entity) {
+            for (model::SolverSegment& segment : entity.solvers)
+                if (segment.id == solverId)
+                    return mutate(segment);
+            return false;
+        },
+        &error);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    refresh();
+}
+
+void PropertiesPanel::deleteSolver(const Uuid& solverId)
+{
+    const bool ok = runSessionEdit(
+        QStringLiteral("pvf: delete solver"),
+        [solverId](model::Entity& entity) {
+            for (int i = 0; i < entity.solvers.size(); ++i)
+            {
+                if (entity.solvers.at(i).id == solverId)
+                {
+                    entity.solvers.removeAt(i);
+                    return true;
+                }
+            }
+            return false;
+        });
+    if (ok && m_selectedSolverId == solverId)
+        m_selectedSolverId.clear();
+}
+
 void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
 {
     button->setText(color.name().toUpper());
@@ -1153,8 +3409,360 @@ void PropertiesPanel::setFrame(int frame)
     refresh();
 }
 
+void PropertiesPanel::setSelectedUuid(const Uuid& uuid)
+{
+    if (!m_sessionMode)
+        return;
+    if (m_sessionUuid == uuid)
+    {
+        refresh();
+        return;
+    }
+    m_sessionUuid = uuid;
+    refresh();
+}
+
+void PropertiesPanel::setAutoKey(bool on)
+{
+    if (m_autoKey == on)
+        return;
+    m_autoKey = on;
+    if (m_autoKeyCheck)
+    {
+        const QSignalBlocker blocker(m_autoKeyCheck);
+        m_autoKeyCheck->setChecked(on);
+    }
+}
+
+void PropertiesPanel::refreshSession()
+{
+    if (m_editing)
+        return;
+    const model::Entity* entity = sessionEntity();
+    const bool valid = entity != nullptr;
+    if (!valid)
+    {
+        m_title->setText(QStringLiteral("未选择对象"));
+        for (CollapsibleSection* section :
+             {m_basicSection, m_transformSection, m_keySection, m_textSection,
+              m_comicSection, m_linesSection, m_wallSection, m_halftoneSection,
+              m_htmlSection, m_vectorSection, m_mediaSection, m_audioSection,
+              m_pivotSection, m_cameraSection, m_solverSection})
+        {
+            if (section)
+                section->hide();
+        }
+        return;
+    }
+
+    const bool editable = sessionEditable();
+    const ContentKind kind = entity->content.kind;
+    const bool camera = kind == ContentKind::Camera;
+    const bool text = kind == ContentKind::Text;
+    const bool vector = kind == ContentKind::Vector;
+    const bool asset = kind == ContentKind::Asset;
+    const bool audio = asset && entity->content.asset.type == AssetType::Audio;
+
+    m_title->setText(entity->name + QStringLiteral(" · ")
+                     + contentKindLabel(kind));
+
+    m_basicSection->show();
+    m_transformSection->show();
+    m_keySection->show();
+    m_pivotSection->setVisible(!audio);
+    m_textSection->setVisible(text);
+    m_vectorSection->setVisible(vector);
+    m_mediaSection->setVisible(asset);
+    m_audioSection->hide();
+    m_comicSection->hide();
+    m_linesSection->hide();
+    m_wallSection->hide();
+    m_halftoneSection->hide();
+    m_htmlSection->hide();
+    m_cameraSection->setVisible(camera);
+    m_solverSection->show();
+
+    m_basicSection->setEnabled(true);
+    m_transformSection->setEnabled(editable);
+    m_keySection->setEnabled(true);
+    m_pivotSection->setEnabled(editable);
+    m_textSection->setEnabled(editable);
+    m_vectorSection->setEnabled(editable);
+    m_mediaSection->setEnabled(editable);
+    m_cameraSection->setEnabled(true);
+    m_solverSection->setEnabled(editable);
+
+    if (!m_basicName->hasFocus())
+    {
+        const QSignalBlocker blocker(m_basicName);
+        m_basicName->setText(entity->name);
+    }
+    setSpinIfIdle(m_basicStart, entity->start);
+    setSpinIfIdle(m_basicEnd, entity->end);
+    setSpinIfIdle(m_basicRow, entity->row);
+    {
+        const QSignalBlocker blocker(m_basicHidden);
+        m_basicHidden->setChecked(entity->hidden);
+    }
+    {
+        const QSignalBlocker blocker(m_basicLocked);
+        m_basicLocked->setChecked(entity->locked);
+    }
+    {
+        const QSignalBlocker blocker(m_basicVisible);
+        m_basicVisible->setChecked(entity->visible);
+    }
+    {
+        const QSignalBlocker blocker(m_basicInherit);
+        m_basicInherit->setChecked(entity->inheritVisibility);
+    }
+    {
+        const QSignalBlocker blocker(m_basicPhysics);
+        m_basicPhysics->setChecked(entity->physicsInteract);
+    }
+    m_basicName->setEnabled(editable);
+    m_basicStart->setEnabled(editable);
+    m_basicEnd->setEnabled(editable);
+    m_basicRow->setEnabled(editable);
+    m_basicHidden->setEnabled(editable);
+    m_basicLocked->setEnabled(true);
+    m_basicVisible->setEnabled(editable);
+    m_basicInherit->setEnabled(editable);
+    m_basicPhysics->setEnabled(editable);
+
+    {
+        const QSignalBlocker blocker(m_parent);
+        m_parent->clear();
+        m_parent->addItem(QStringLiteral("工作台（世界坐标）"), QString());
+        const model::Project& project = m_session->project();
+        std::function<void(const Uuid&, int)> appendChildren =
+            [&](const Uuid& parent, int depth) {
+                for (const Uuid& uuid : model::childrenOf(project, parent))
+                {
+                    if (uuid == entity->uuid
+                        || isDescendant(project, uuid, entity->uuid))
+                        continue;
+                    const model::Entity& candidate = project.entities[uuid];
+                    if (camera
+                        && candidate.content.kind == ContentKind::Camera)
+                        continue;
+                    if (candidate.content.kind == ContentKind::Asset
+                        && candidate.content.asset.type == AssetType::Audio)
+                        continue;
+                    const QString prefix = QStringLiteral("  ").repeated(depth);
+                    const QString typePrefix =
+                        candidate.content.kind == ContentKind::Empty
+                            ? QStringLiteral("[空] ")
+                        : candidate.content.kind == ContentKind::Camera
+                            ? QStringLiteral("[摄像机] ")
+                            : QString();
+                    m_parent->addItem(prefix + typePrefix + candidate.name,
+                                      uuid);
+                    appendChildren(uuid, depth + 1);
+                }
+            };
+        appendChildren(Uuid(), 0);
+        const int index = m_parent->findData(entity->parentUuid);
+        m_parent->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    m_parent->setEnabled(editable);
+    m_parentRow->show();
+    if (m_parentLabel)
+        m_parentLabel->show();
+
+    const int relative = sessionRelativeFrame(*entity);
+    const bool inRange = relative >= 0 && relative < entity->duration();
+    m_keyButton->setEnabled(editable && inRange);
+
+    for (Row& row : m_rows)
+    {
+        const bool hiddenRow =
+            camera && (row.prop == QLatin1String("scaleY")
+                       || row.prop == QLatin1String("opacity"));
+        row.spin->setVisible(!hiddenRow);
+        row.label->setVisible(!hiddenRow);
+        {
+            const QSignalBlocker blocker(row.spin);
+            if (camera && row.prop == QLatin1String("scaleX"))
+            {
+                row.label->setText(QStringLiteral("取景比例"));
+                row.spin->setRange(5.0, 100.0);
+                row.spin->setDecimals(1);
+                row.spin->setSingleStep(1.0);
+                row.spin->setSuffix(QStringLiteral("%"));
+                row.spin->setToolTip(
+                    QStringLiteral("摄像机取景比例，绝对值限制 0.05–1.0"
+                                   "（5%–100%）"));
+                row.factor = 0.01;
+            }
+            else if (row.prop == QLatin1String("scaleX"))
+            {
+                row.label->setText(row.baseLabel);
+                row.spin->setRange(-100.0, 100.0);
+                row.spin->setDecimals(3);
+                row.spin->setSingleStep(0.01);
+                row.spin->setSuffix(QString());
+                row.spin->setToolTip(QString());
+                row.factor = 1.0;
+            }
+            double value = currentTrackValue(*entity, row.prop, relative,
+                                             isStepTrack(row.prop))
+                / row.factor;
+            if (camera && row.prop == QLatin1String("scaleX"))
+                value = std::abs(value);
+            if (!row.spin->hasFocus())
+                row.spin->setValue(value);
+        }
+        row.spin->setEnabled(editable && !hiddenRow);
+
+        if (row.key)
+        {
+            const bool hasKey = inRange && hasKeyAt(*entity, row.prop, relative);
+            const bool blocked =
+                inRange && trackBlockedAt(*entity, row.prop, relative);
+            row.key->setText(hasKey ? QStringLiteral("◆")
+                                    : QStringLiteral("◇"));
+            row.key->setToolTip(
+                blocked
+                    ? QStringLiteral("该帧由求解段驱动，不能写入普通关键帧")
+                    : hasKey
+                        ? QStringLiteral("删除当前帧的关键帧")
+                        : QStringLiteral("在当前帧打关键帧"));
+            row.key->setEnabled(editable && inRange && !blocked);
+        }
+    }
+
+    m_usePivot->hide();
+    setSpinIfIdle(m_pivotX, currentTrackValue(*entity, QStringLiteral("pivotX"),
+                                              relative, false));
+    setSpinIfIdle(m_pivotY, currentTrackValue(*entity, QStringLiteral("pivotY"),
+                                              relative, false));
+    m_pivotX->setEnabled(editable);
+    m_pivotY->setEnabled(editable);
+
+    if (text)
+    {
+        const model::TextContent& content = entity->content.text;
+        if (!m_textContent->hasFocus())
+        {
+            const QSignalBlocker blocker(m_textContent);
+            m_textContent->setText(content.text);
+        }
+        if (!m_textFont->hasFocus())
+        {
+            const QSignalBlocker blocker(m_textFont);
+            m_textFont->setCurrentFont(
+                content.fontFamily.isEmpty() ? QFont()
+                                             : QFont(content.fontFamily));
+        }
+        setSpinIfIdle(m_textSize, content.pixelSize);
+        m_textColorValue = QColor(content.color);
+        setColorButton(m_textColorButton, m_textColorValue);
+        setSpinIfIdle(m_textStrokeWidth, content.strokeWidth);
+        m_textStrokeColorValue = QColor(content.strokeColor);
+        setColorButton(m_textStrokeColorButton, m_textStrokeColorValue);
+        {
+            const QSignalBlocker blocker(m_textAlign);
+            selectComboData(m_textAlign, content.align);
+        }
+        {
+            const QSignalBlocker blocker(m_textDirection);
+            m_textDirection->setCurrentIndex(
+                content.vertical ? (content.verticalRtl ? 1 : 2) : 0);
+        }
+        {
+            const QSignalBlocker blocker(m_textBold);
+            m_textBold->setChecked(content.bold);
+        }
+        {
+            const QSignalBlocker blocker(m_textItalic);
+            m_textItalic->setChecked(content.italic);
+        }
+        {
+            const QSignalBlocker blocker(m_textUnderline);
+            m_textUnderline->setChecked(content.underline);
+        }
+        setSpinIfIdle(m_textLineHeight, content.lineHeight);
+        setSpinIfIdle(m_textLetterSpacing, content.letterSpacing);
+        setSpinIfIdle(m_textPadding, content.padding);
+        setSpinIfIdle(m_textBoxWidth, content.boxWidth);
+        setSpinIfIdle(m_textBoxHeight, content.boxHeight);
+    }
+
+    if (vector)
+    {
+        const model::VectorContent& content = entity->content.vector;
+        {
+            const QSignalBlocker blocker(m_vectorShape);
+            selectComboData(m_vectorShape, content.shape);
+        }
+        setSpinIfIdle(m_vectorCorner, content.cornerRadius);
+        setSpinIfIdle(m_vectorSides, content.sides);
+        setSpinIfIdle(m_vectorInner, content.innerRatio);
+        setSpinIfIdle(m_vectorWidth, content.width);
+        setSpinIfIdle(m_vectorHeight, content.height);
+        m_fillValue = QColor(content.fillColor);
+        setColorButton(m_fillButton, m_fillValue);
+        m_strokeValue = QColor(content.strokeColor);
+        setColorButton(m_strokeButton, m_strokeValue);
+        setSpinIfIdle(m_strokeWidth, content.strokeWidth);
+        m_vectorCorner->setEnabled(editable && content.shape == 3);
+        m_vectorSides->setEnabled(editable
+                                  && (content.shape == 6 || content.shape == 7));
+        m_vectorInner->setEnabled(editable && content.shape == 6);
+    }
+
+    if (asset)
+    {
+        const model::AssetContent& content = entity->content.asset;
+        m_assetHash->setText(content.hash);
+        m_assetType->setText(assetTypeLabel(content.type));
+
+        int frames = 0;
+        const auto stored = m_session->assets().getIncludingMissing(content.hash);
+        if (stored)
+            frames = stored->metadata.value(QStringLiteral("durationFrames")).toInt(0);
+        m_assetSourceIn->setMaximum(frames > 0 ? std::max(0, frames - 1)
+                                               : 1000000);
+        setSpinIfIdle(m_assetSourceIn, content.sourceIn);
+        setSpinIfIdle(m_assetVolume, content.volume);
+        m_assetSourceIn->setEnabled(editable);
+        m_assetVolume->setEnabled(editable);
+        m_replaceSource->hide();
+
+        QString info = assetTypeLabel(content.type);
+        if (!stored)
+            info += QStringLiteral(" · 素材缺失");
+        else if (!stored->name.isEmpty())
+            info += QStringLiteral(" · ") + stored->name;
+        if (frames > 0)
+            info += QStringLiteral(" · %1 帧").arg(frames);
+        m_mediaInfo->setText(info);
+        m_mediaInfo->setToolTip(content.hash);
+    }
+
+    reloadTrackRows(*entity);
+    updateSolverCards(*entity);
+    for (SolverCard& card : m_solverCards)
+        card.box->setEnabled(editable);
+    m_solverCreateButton->setEnabled(editable);
+    m_solverEffectCombo->setEnabled(editable);
+    m_solverTargetCombo->setEnabled(editable);
+    m_solverEndSpin->setEnabled(editable);
+
+    {
+        const QSignalBlocker blocker(m_autoKeyCheck);
+        m_autoKeyCheck->setChecked(m_autoKey);
+    }
+}
+
 void PropertiesPanel::refresh()
 {
+    if (m_sessionMode)
+    {
+        refreshSession();
+        return;
+    }
     const Entity* e = m_project->entity(m_entity);
     const bool valid = e != nullptr;
     const bool audio = valid && e->isAudio();

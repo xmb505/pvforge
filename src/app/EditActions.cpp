@@ -1406,6 +1406,74 @@ bool EditActions::splitClip(const Uuid& uuid, int frame, QString* error)
     return apply(plan, error);
 }
 
+bool EditActions::updateEntity(const Uuid& uuid, const QString& message,
+                               const std::function<bool(model::Entity&)>& mutate,
+                               QString* error, bool ignoreLock)
+{
+    if (error)
+        error->clear();
+    if (!isValid())
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+    if (!mutate)
+    {
+        setError(error, QStringLiteral("没有可应用的修改"));
+        return false;
+    }
+
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+    if (!ignoreLock && next::isEntityLocked(project, uuid))
+    {
+        setError(error, QStringLiteral("实体 %1 或其祖先已锁定，不能编辑")
+                            .arg(displayName(it.value())));
+        return false;
+    }
+
+    EditPlan plan;
+    plan.project = project;
+    model::Entity& entity = plan.project.entities[uuid];
+    if (!mutate(entity))
+    {
+        setError(error, QStringLiteral("没有可应用的修改"));
+        return false;
+    }
+
+    QString validationError;
+    if (!model::validateEntity(entity, &validationError))
+    {
+        setError(error, QStringLiteral("实体校验失败：%1").arg(validationError));
+        return false;
+    }
+
+    plan.upserts = {uuid};
+    plan.message = message;
+    return apply(plan, error);
+}
+
+bool EditActions::updateContent(
+    const Uuid& uuid, const QString& message,
+    const std::function<bool(model::Content&)>& mutate, QString* error)
+{
+    if (!mutate)
+    {
+        if (error)
+            *error = QStringLiteral("没有可应用的修改");
+        return false;
+    }
+    return updateEntity(
+        uuid, message,
+        [&mutate](model::Entity& entity) { return mutate(entity.content); },
+        error);
+}
+
 namespace {
 
 bool applyMarkerPlan(EditorSession* session, const model::Project& project,

@@ -330,6 +330,591 @@ int sessionTest()
     return 0;
 }
 
+int propertiesTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p4a-properties.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P4a 属性");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "properties-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int start, int end, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid target =
+        makeEntity(QStringLiteral("地面"), 0, 120, 0, pvf::ContentKind::Empty);
+    const pvf::Uuid camera =
+        makeEntity(QStringLiteral("摄像机"), 0, 120, 1, pvf::ContentKind::Camera);
+    project.entities[camera].transform.scaleX = 0.5;
+    project.entities[camera].transform.scaleY = 0.5;
+
+    const pvf::Uuid text =
+        makeEntity(QStringLiteral("标题"), 0, 90, 2, pvf::ContentKind::Text);
+    project.entities[text].transform.x = 10.0;
+    project.entities[text].transform.y = 20.0;
+    project.entities[text].transform.rotation = 5.0;
+    project.entities[text].transform.opacity = 0.8;
+    project.entities[text].content.text.text = QStringLiteral("PVForge");
+    project.entities[text].content.text.pixelSize = 96;
+
+    const pvf::Uuid vector =
+        makeEntity(QStringLiteral("矢量"), 10, 50, 3, pvf::ContentKind::Vector);
+    project.entities[vector].content.vector.width = 400.0;
+    project.entities[vector].content.vector.height = 300.0;
+    project.entities[vector].content.vector.cornerRadius = 40.0;
+
+    const pvf::Uuid image =
+        makeEntity(QStringLiteral("图片"), 0, 60, 4, pvf::ContentKind::Asset);
+    project.entities[image].content.asset.type = pvf::AssetType::Image;
+    project.entities[image].content.asset.hash = QStringLiteral("imagehash");
+    project.entities[image].content.asset.sourceIn = 2;
+    project.entities[image].content.asset.volume = 0.75;
+
+    const pvf::Uuid solverRoot =
+        makeEntity(QStringLiteral("求解物体"), 0, 60, 5, pvf::ContentKind::Empty);
+    pvf::model::Track solverX;
+    solverX.keys = {{0, 0.0, {}, {}}};
+    project.entities[solverRoot].tracks.insert(QStringLiteral("x"), solverX);
+    pvf::model::Track solverY;
+    solverY.keys = {{0, 0.0, {}, {}}};
+    project.entities[solverRoot].tracks.insert(QStringLiteral("y"), solverY);
+
+    const QVector<pvf::Uuid> all = {target, camera, text, vector, image,
+                                    solverRoot};
+    if (!session->document()->commitEntities(all, QStringLiteral("p4a setup"),
+                                             &error))
+    {
+        qCritical() << "properties-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    if (!live || !document || !panel || !panel->sessionMode())
+    {
+        qCritical() << "properties-test: session window/panel missing";
+        return 1;
+    }
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [](const QString& message) {
+                         qCritical() << "properties-test: panel edit failed"
+                                     << message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "properties-test:" << message;
+        return condition;
+    };
+    auto entity = [live](const pvf::Uuid& uuid) {
+        return live->project().entities.value(uuid);
+    };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "properties-test: flush failed" << flushError;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+
+    panel->setAutoKey(false);
+    document->setSelection(text);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* nameEdit = panel->findChild<QLineEdit*>(QStringLiteral("entityName"));
+    auto* startSpin = panel->findChild<QSpinBox*>(QStringLiteral("entityStart"));
+    auto* endSpin = panel->findChild<QSpinBox*>(QStringLiteral("entityEnd"));
+    auto* rowSpin = panel->findChild<QSpinBox*>(QStringLiteral("entityRow"));
+    auto* xSpin = panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_x"));
+    auto* opacitySpin =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_opacity"));
+    if (!check(nameEdit && startSpin && endSpin && rowSpin && xSpin
+                   && opacitySpin,
+               QStringLiteral("basic/transform widgets missing")))
+        return 1;
+    if (!check(nameEdit->text() == QStringLiteral("标题")
+                   && startSpin->value() == 0 && endSpin->value() == 90
+                   && rowSpin->value() == 2,
+               QStringLiteral("basic fields do not show the entity")))
+        return 1;
+    if (!check(std::abs(xSpin->value() - 10.0) < 1e-6
+                   && std::abs(opacitySpin->value() - 80.0) < 1e-6,
+               QStringLiteral("transform fields do not show the entity")))
+        return 1;
+
+    int before = depth();
+    nameEdit->setText(QStringLiteral("文字改名"));
+    QMetaObject::invokeMethod(nameEdit, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(text).name == QStringLiteral("文字改名"),
+               QStringLiteral("name edit did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("name edit was not one commit")))
+        return 1;
+
+    before = depth();
+    xSpin->setValue(120.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(text).transform.x - 120.0) < 1e-6,
+               QStringLiteral("x edit did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("x edit was not one commit")))
+        return 1;
+
+    auto* scaleXSpin =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_scaleX"));
+    if (!check(scaleXSpin, QStringLiteral("scale X row missing")))
+        return 1;
+    scaleXSpin->setValue(-1.5);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(text).transform.scaleX + 1.5) < 1e-6,
+               QStringLiteral("negative scale was rejected")))
+        return 1;
+
+    auto* pivotXSpin =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("pivotX"));
+    if (!check(pivotXSpin, QStringLiteral("pivot X row missing")))
+        return 1;
+    pivotXSpin->setValue(25.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(text).transform.pivotX - 25.0) < 1e-6,
+               QStringLiteral("pivot X edit did not reach the model")))
+        return 1;
+
+    // Locking disables the other fields but the lock itself stays togglable.
+    auto* locked = panel->findChild<QCheckBox*>(QStringLiteral("entityLocked"));
+    if (!check(locked, QStringLiteral("locked checkbox missing")))
+        return 1;
+    locked->setChecked(true);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(text).locked, QStringLiteral("lock did not reach the model"))
+        || !check(!xSpin->isEnabled(),
+                  QStringLiteral("locked entity fields stayed enabled")))
+        return 1;
+    locked->setChecked(false);
+    QApplication::processEvents();
+    flush();
+    if (!check(!entity(text).locked,
+               QStringLiteral("unlock did not reach the model")))
+        return 1;
+
+    // Camera framing scale: 5%..100%, stored as 0.05..1.0 absolute.
+    document->setSelection(camera);
+    QApplication::processEvents();
+    auto* cameraScale =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_scaleX"));
+    auto* cameraScaleY =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_scaleY"));
+    if (!check(cameraScale && cameraScale->minimum() == 5.0
+                   && cameraScale->maximum() == 100.0
+                   && cameraScale->suffix() == QStringLiteral("%"),
+               QStringLiteral("camera scale range/suffix wrong")))
+        return 1;
+    if (!check(cameraScale->toolTip().contains(QStringLiteral("0.05")),
+               QStringLiteral("camera scale limit hint missing")))
+        return 1;
+    if (!check(cameraScaleY && !cameraScaleY->isVisible(),
+               QStringLiteral("camera scale Y should be hidden")))
+        return 1;
+    cameraScale->setValue(50.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(camera).transform.scaleX - 0.5) < 1e-6
+                   && std::abs(entity(camera).transform.scaleY - 0.5) < 1e-6,
+               QStringLiteral("camera scale did not store 0.5")))
+        return 1;
+    cameraScale->setValue(100.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(camera).transform.scaleX - 1.0) < 1e-6,
+               QStringLiteral("camera scale upper limit wrong")))
+        return 1;
+    cameraScale->setValue(5.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(camera).transform.scaleX - 0.05) < 1e-6,
+               QStringLiteral("camera scale lower limit wrong")))
+        return 1;
+    auto* cameraInfo = panel->findChild<QLabel*>(QStringLiteral("cameraInfo"));
+    if (!check(cameraInfo && cameraInfo->isVisible()
+                   && cameraInfo->text().contains(QStringLiteral("只读")),
+               QStringLiteral("camera read-only hint missing")))
+        return 1;
+
+    // Text content fields.
+    document->setSelection(text);
+    QApplication::processEvents();
+    panel->setAutoKey(false);
+    auto* textContent = panel->findChild<QLineEdit*>(QStringLiteral("textContent"));
+    auto* textSize = panel->findChild<QSpinBox*>(QStringLiteral("textSize"));
+    auto* lineHeight =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("textLineHeight"));
+    auto* letterSpacing =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("textLetterSpacing"));
+    auto* padding = panel->findChild<QDoubleSpinBox*>(QStringLiteral("textPadding"));
+    auto* boxWidth = panel->findChild<QDoubleSpinBox*>(QStringLiteral("textBoxWidth"));
+    auto* boxHeight =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("textBoxHeight"));
+    auto* textBold = panel->findChild<QCheckBox*>(QStringLiteral("textBold"));
+    auto* textAlign = panel->findChild<QComboBox*>(QStringLiteral("textAlign"));
+    auto* textDirection =
+        panel->findChild<QComboBox*>(QStringLiteral("textDirection"));
+    auto* strokeWidth =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("textStrokeWidth"));
+    if (!check(textContent && textSize && lineHeight && letterSpacing && padding
+                   && boxWidth && boxHeight && textBold && textAlign
+                   && textDirection && strokeWidth,
+               QStringLiteral("text widgets missing")))
+        return 1;
+    QMetaObject::invokeMethod(textContent, "textEdited", Qt::DirectConnection,
+                              Q_ARG(QString, QStringLiteral("改过的文字")));
+    QApplication::processEvents();
+    textSize->setValue(120);
+    lineHeight->setValue(1.5);
+    letterSpacing->setValue(2.5);
+    padding->setValue(12.0);
+    boxWidth->setValue(500.0);
+    boxHeight->setValue(240.0);
+    textBold->setChecked(true);
+    textAlign->setCurrentIndex(
+        textAlign->findData(int(Qt::AlignLeft | Qt::AlignVCenter)));
+    textDirection->setCurrentIndex(1);
+    strokeWidth->setValue(3.5);
+    QApplication::processEvents();
+    flush();
+    {
+        const pvf::model::TextContent content = entity(text).content.text;
+        if (!check(content.text == QStringLiteral("改过的文字")
+                       && content.pixelSize == 120
+                       && std::abs(content.lineHeight - 1.5) < 1e-6
+                       && std::abs(content.letterSpacing - 2.5) < 1e-6
+                       && std::abs(content.padding - 12.0) < 1e-6
+                       && std::abs(content.boxWidth - 500.0) < 1e-6
+                       && std::abs(content.boxHeight - 240.0) < 1e-6
+                       && content.bold && content.vertical && content.verticalRtl
+                       && content.align == int(Qt::AlignLeft | Qt::AlignVCenter)
+                       && std::abs(content.strokeWidth - 3.5) < 1e-6,
+                   QStringLiteral("text fields did not reach the model")))
+            return 1;
+    }
+
+    // Vector content fields.
+    document->setSelection(vector);
+    QApplication::processEvents();
+    auto* vectorShape =
+        panel->findChild<QComboBox*>(QStringLiteral("vectorShape"));
+    auto* vectorWidth =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorWidth"));
+    auto* vectorHeight =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorHeight"));
+    auto* vectorCorner =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorCorner"));
+    auto* vectorSides = panel->findChild<QSpinBox*>(QStringLiteral("vectorSides"));
+    auto* vectorInner =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorInner"));
+    auto* vectorStroke =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorStrokeWidth"));
+    if (!check(vectorShape && vectorWidth && vectorHeight && vectorCorner
+                   && vectorSides && vectorInner && vectorStroke,
+               QStringLiteral("vector widgets missing")))
+        return 1;
+    if (!check(vectorShape->currentData().toInt() == 0
+                   && std::abs(vectorWidth->value() - 400.0) < 1e-6,
+               QStringLiteral("vector fields do not show the entity")))
+        return 1;
+    vectorWidth->setValue(500.0);
+    vectorHeight->setValue(250.0);
+    vectorCorner->setValue(12.0);
+    vectorSides->setValue(7);
+    vectorInner->setValue(0.6);
+    vectorStroke->setValue(4.0);
+    vectorShape->setCurrentIndex(vectorShape->findData(3));
+    QApplication::processEvents();
+    flush();
+    {
+        const pvf::model::VectorContent content = entity(vector).content.vector;
+        if (!check(std::abs(content.width - 500.0) < 1e-6
+                       && std::abs(content.height - 250.0) < 1e-6
+                       && std::abs(content.cornerRadius - 12.0) < 1e-6
+                       && content.sides == 7
+                       && std::abs(content.innerRatio - 0.6) < 1e-6
+                       && std::abs(content.strokeWidth - 4.0) < 1e-6
+                       && content.shape == 3,
+                   QStringLiteral("vector fields did not reach the model")))
+            return 1;
+    }
+
+    // Asset fields: hash/type read-only, sourceIn/volume editable.
+    document->setSelection(image);
+    QApplication::processEvents();
+    auto* assetHash = panel->findChild<QLineEdit*>(QStringLiteral("assetHash"));
+    auto* assetType = panel->findChild<QLabel*>(QStringLiteral("assetType"));
+    auto* assetSourceIn =
+        panel->findChild<QSpinBox*>(QStringLiteral("assetSourceIn"));
+    auto* assetVolume =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("assetVolume"));
+    if (!check(assetHash && assetType && assetSourceIn && assetVolume,
+               QStringLiteral("asset widgets missing")))
+        return 1;
+    if (!check(assetHash->isReadOnly()
+                   && assetHash->text() == QStringLiteral("imagehash")
+                   && assetType->text() == QStringLiteral("图片")
+                   && assetSourceIn->value() == 2
+                   && std::abs(assetVolume->value() - 0.75) < 1e-6,
+               QStringLiteral("asset fields do not show the entity")))
+        return 1;
+    assetSourceIn->setValue(7);
+    assetVolume->setValue(1.25);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(image).content.asset.sourceIn == 7
+                   && std::abs(entity(image).content.asset.volume - 1.25) < 1e-6,
+               QStringLiteral("asset fields did not reach the model")))
+        return 1;
+    assetVolume->setValue(3.0);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(image).content.asset.volume <= 2.0,
+               QStringLiteral("asset volume range not enforced")))
+        return 1;
+
+    // Keyframes: per-track diamond, 33 easing entries, one commit each way.
+    document->setSelection(text);
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    auto* diamond =
+        panel->findChild<QToolButton*>(QStringLiteral("trackDiamond_fontSize"));
+    auto* easing =
+        panel->findChild<QComboBox*>(QStringLiteral("trackEasing_fontSize"));
+    if (!check(diamond && easing, QStringLiteral("keyframe track row missing")))
+        return 1;
+    if (!check(easing->count() == 33, QStringLiteral("easing combo has %1 items")
+                                          .arg(easing->count())))
+        return 1;
+    if (!check(easing->findData(QStringLiteral("bezier")) >= 0,
+               QStringLiteral("bezier easing entry missing")))
+        return 1;
+
+    before = depth();
+    diamond->click();
+    QApplication::processEvents();
+    flush();
+    {
+        const auto track =
+            entity(text).tracks.value(QStringLiteral("fontSize"));
+        bool found = false;
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 10)
+                found = true;
+        if (!check(found, QStringLiteral("diamond did not add a key at frame 10"))
+            || !check(depth() == before + 1,
+                      QStringLiteral("add key was not one commit")))
+            return 1;
+    }
+    easing->setCurrentIndex(easing->findData(QStringLiteral("easeinoutcubic")));
+    QApplication::processEvents();
+    flush();
+    {
+        bool found = false;
+        const auto track = entity(text).tracks.value(QStringLiteral("fontSize"));
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 10)
+                found = key.easing.type == QStringLiteral("easeinoutcubic");
+        if (!check(found, QStringLiteral("easing preset not written")))
+            return 1;
+    }
+    before = depth();
+    diamond->click();
+    QApplication::processEvents();
+    flush();
+    {
+        bool found = false;
+        const auto track = entity(text).tracks.value(QStringLiteral("fontSize"));
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 10)
+                found = true;
+        if (!check(!found, QStringLiteral("diamond did not delete the key"))
+            || !check(depth() == before + 1,
+                      QStringLiteral("delete key was not one commit")))
+            return 1;
+    }
+
+    // Solvers: create from the playhead, edit the range, protect driven keys,
+    // then delete.
+    document->setSelection(solverRoot);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    auto* solverEffect =
+        panel->findChild<QComboBox*>(QStringLiteral("solverEffectCombo"));
+    auto* solverTarget =
+        panel->findChild<QComboBox*>(QStringLiteral("solverTargetCombo"));
+    auto* solverCreateEnd =
+        panel->findChild<QSpinBox*>(QStringLiteral("solverCreateEnd"));
+    auto* solverCreate =
+        panel->findChild<QPushButton*>(QStringLiteral("solverCreateButton"));
+    if (!check(solverEffect && solverTarget && solverCreateEnd && solverCreate,
+               QStringLiteral("solver create widgets missing")))
+        return 1;
+    solverEffect->setCurrentIndex(
+        solverEffect->findData(int(pvf::SolverEffect::Gravity)));
+    solverTarget->setCurrentIndex(solverTarget->findData(target));
+    solverCreateEnd->setValue(-1);
+    before = depth();
+    solverCreate->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(solverRoot).solvers.size() == 1,
+               QStringLiteral("solver segment was not created")))
+        return 1;
+    if (!check(entity(solverRoot).solvers.first().effect
+                       == pvf::SolverEffect::Gravity
+                   && entity(solverRoot).solvers.first().startFrame == 0
+                   && entity(solverRoot).solvers.first().endFrame == -1
+                   && entity(solverRoot)
+                          .solvers.first()
+                          .params.value(QStringLiteral("targetUuid"))
+                          .toString()
+                       == target,
+               QStringLiteral("solver defaults wrong")))
+        return 1;
+    if (!check(depth() == before + 1,
+               QStringLiteral("solver create was not one commit")))
+        return 1;
+
+    auto* solverEnd = panel->findChild<QSpinBox*>(QStringLiteral("solverEnd0"));
+    auto* solverDelete =
+        panel->findChild<QPushButton*>(QStringLiteral("solverDelete0"));
+    if (!check(solverEnd && solverDelete,
+               QStringLiteral("solver card widgets missing")))
+        return 1;
+    solverEnd->setValue(30);
+    QMetaObject::invokeMethod(solverEnd, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(solverRoot).solvers.first().endFrame == 30,
+               QStringLiteral("solver end edit did not reach the model")))
+        return 1;
+
+    live->setPlayhead(20);
+    QApplication::processEvents();
+    auto* xDiamond =
+        panel->findChild<QToolButton*>(QStringLiteral("trackDiamond_x"));
+    if (!check(xDiamond && !xDiamond->isEnabled(),
+               QStringLiteral("driven key diamond is not protected")))
+        return 1;
+    const int keysBefore =
+        entity(solverRoot).tracks.value(QStringLiteral("x")).keys.size();
+    xDiamond->click();
+    QApplication::processEvents();
+    if (!check(entity(solverRoot).tracks.value(QStringLiteral("x")).keys.size()
+                   == keysBefore,
+               QStringLiteral("protected diamond added a key")))
+        return 1;
+    error.clear();
+    if (!check(!live->editActions()->addKeyframe(solverRoot, QStringLiteral("x"),
+                                                 20, &error),
+               QStringLiteral("EditActions allowed a key inside a solver")))
+        return 1;
+
+    before = depth();
+    solverDelete->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(solverRoot).solvers.isEmpty(),
+               QStringLiteral("solver delete did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("solver delete was not one commit")))
+        return 1;
+
+    // Auto-key is a single switch shared by the menu action and the panel.
+    auto* autoKeyCheck =
+        panel->findChild<QCheckBox*>(QStringLiteral("autoKeyCheck"));
+    auto* autoKeyAction =
+        window->findChild<QAction*>(QStringLiteral("autoKeyAction"));
+    if (!check(autoKeyCheck && autoKeyAction,
+               QStringLiteral("auto-key controls missing")))
+        return 1;
+    autoKeyAction->setChecked(false);
+    QApplication::processEvents();
+    const bool actionBefore = autoKeyAction->isChecked();
+    autoKeyCheck->click();
+    QApplication::processEvents();
+    if (!check(autoKeyAction->isChecked() != actionBefore
+                   && panel->autoKey() == autoKeyAction->isChecked(),
+               QStringLiteral("panel auto-key did not reach the action")))
+        return 1;
+    autoKeyAction->setChecked(actionBefore);
+    QApplication::processEvents();
+    if (!check(panel->autoKey() == actionBefore,
+               QStringLiteral("action auto-key did not reach the panel")))
+        return 1;
+
+    // Screenshot with a text entity selected and the properties tab visible.
+    document->setSelection(text);
+    live->setPlayhead(15);
+    QApplication::processEvents();
+    QApplication::processEvents();
+    if (auto* objectTab = window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
+        objectTab->verticalScrollBar()->setValue(300);
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-p4a-properties.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "properties-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "properties-test OK: basic/transform/content/keyframes/33 easing/"
+               "solvers, screenshot"
+            << screenshot;
+    return 0;
+}
+
 int timelineTest(QApplication& app)
 {
     Q_UNUSED(app);
@@ -16702,6 +17287,8 @@ int main(int argc, char* argv[])
         return selfTest();
     if (app.arguments().contains(QStringLiteral("--session-test")))
         return sessionTest();
+    if (app.arguments().contains(QStringLiteral("--properties-test")))
+        return propertiesTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-test")))
         return timelineTest(app);
     const int viewportIndex = app.arguments().indexOf(
