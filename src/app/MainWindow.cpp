@@ -20,8 +20,6 @@
 #include "media/VideoPlayer.h"
 #include "mcp/McpCommandService.h"
 #include "mcp/McpServer.h"
-#include "render/CameraRenderer.h"
-#include "render/VideoExporter.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
@@ -1497,7 +1495,7 @@ void MainWindow::createSessionMenus()
         [this] {
             QMessageBox::about(
                 this, QStringLiteral("关于 PVForge"),
-                QStringLiteral("PVForge %1\n\n旧 UI 接入 P3a：目录工程、工程属性、可编辑时间轴、render2 视口、播放与工作台缓存已接通。")
+                QStringLiteral("PVForge %1\n\n旧 UI + 新实体模型后端：目录工程、时间轴、render2 视口、export2 导出、MCP、Git 历史与工作台缓存。")
                     .arg(QStringLiteral(PVFORGE_VERSION)));
         });
 
@@ -2548,11 +2546,6 @@ MainWindow::~MainWindow()
         disarmMcpWrites();
         m_mcpServer->stop();
     }
-    if (m_exporter)
-    {
-        m_exporter->disconnect();
-        m_exporter->cancel();
-    }
     // Renderers hold a raw pointer to the shared browser, so destroy them
     // before it. Deleting the browser closes the headless process and its
     // pages.
@@ -3042,7 +3035,7 @@ bool MainWindow::saveProjectAs()
 
 void MainWindow::scheduleHtmlPreview(bool immediate)
 {
-    if (!m_htmlPreviewTimer || m_htmlExporting)
+    if (!m_htmlPreviewTimer)
         return;
     if (htmlLayersForFrame(m_frame).isEmpty())
         return;
@@ -3055,9 +3048,6 @@ void MainWindow::scheduleHtmlPreview(bool immediate)
 
 void MainWindow::requestHtmlPreviews()
 {
-    if (m_htmlExporting)
-        return;
-
     const QVector<EntityId> layers = htmlLayersForFrame(m_frame);
     if (layers.isEmpty())
         return;
@@ -3289,7 +3279,7 @@ void MainWindow::applyHtmlFrame(EntityId id, quint64 token, const QString& cache
     m_viewport->update();
     if (m_monitor)
         m_monitor->update();
-    if (!image.isNull() && !m_htmlExporting)
+    if (!image.isNull())
         scheduleHtmlPreview(!m_playing);
 }
 
@@ -3544,207 +3534,6 @@ void MainWindow::startSessionExportForTest(
                        outputFps, resolutionScale, crf, encoder, preset,
                        overwrite);
 }
-
-#if 0 // P7b: legacy VideoExporter path, kept until the old render stack is removed.
-void MainWindow::exportVideo()
-{
-    if (m_playing)
-        togglePlayback();
-    m_audioEngine->stop();
-
-    ExportDialog dialog(*m_project, this);
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-    const ExportOptions options = dialog.options();
-    const QSize renderSize(std::max(2, options.size.width() & ~1),
-                           std::max(2, options.size.height() & ~1));
-
-    auto* progress = new ExportProgressDialog(this);
-    progress->setProgress(0, options.frameCount);
-    progress->show();
-    // Let the preview window paint before the (synchronous) audio mix.
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-
-    auto* exporter = new VideoExporter(this);
-    m_exporter = exporter;
-    connect(exporter, &VideoExporter::progress, progress,
-            &ExportProgressDialog::setProgress);
-    connect(exporter, &VideoExporter::previewFrame, progress,
-            &ExportProgressDialog::setPreview);
-    connect(progress, &ExportProgressDialog::cancelRequested, exporter,
-            &VideoExporter::cancel);
-    connect(exporter, &VideoExporter::finished, this,
-            [this, progress, exporter, options](bool success, const QString& error) {
-                progress->finish();
-                progress->deleteLater();
-                exporter->deleteLater();
-                if (m_exporter == exporter)
-                    m_exporter = nullptr;
-                m_htmlExporting = false;
-
-                // The export decoded video entities from their source files;
-                // put the preview back on the proxy at the current playhead.
-                m_lastScrubFrame = m_frame;
-                m_videoPlayer.clear();
-                setFrame(m_frame);
-
-                if (success)
-                {
-                    QMessageBox::information(
-                        this, QStringLiteral("导出完成"),
-                        QStringLiteral("已导出：\n%1").arg(options.outputPath));
-                }
-                else if (!error.isEmpty())
-                {
-                    const QString detail = m_htmlExportError.isEmpty()
-                                               ? error
-                                               : m_htmlExportError;
-                    m_htmlExportError.clear();
-                    QMessageBox::warning(this, QStringLiteral("导出失败"), detail);
-                }
-            });
-
-    const EntityId cameraId = options.cameraId;
-    m_htmlExporting = true;
-    m_htmlExportError.clear();
-    // The exporter requests one frame at a time. HTML layers are captured
-    // serially first (at output resolution), then the whole scene is
-    // composited and handed back. A failed capture answers with a null image
-    // so the exporter aborts instead of writing a placeholder.
-    auto frameProvider = [this, cameraId, renderSize](
-                             int frame, VideoExporter::FrameDone done) {
-        m_videoPlayer.update(*m_project, frame, false);
-        Camera::State state;
-        const Entity* camera = m_project->entity(cameraId);
-        if (camera && camera->isCamera())
-            state = Camera::state(*m_project, cameraId, frame);
-        if (state.size.isEmpty())
-        {
-            state.scale = 1.0;
-            state.rotation = 0.0;
-            state.center = QPointF();
-            state.size = QSizeF(m_project->width, m_project->height);
-        }
-
-        const QVector<EntityId> layers = htmlLayersForFrame(frame);
-        auto index = std::make_shared<int>(0);
-        auto next = std::make_shared<std::function<void()>>();
-
-        *next = [this, frame, layers, state, renderSize, index, next, done]() {
-            if (*index >= layers.size())
-            {
-                done(CameraRenderer::renderCameraImage(*m_project, frame, state,
-                                                       renderSize, false));
-                return;
-            }
-
-            const EntityId id = layers[(*index)++];
-            Entity* entity = m_project->entity(id);
-            if (!entity || entity->type != EntityType::HtmlLayer)
-            {
-                (*next)();
-                return;
-            }
-
-            QString assetError;
-            const html::HtmlAsset asset = htmlAssetFor(*entity, &assetError);
-            if (!assetError.isEmpty())
-            {
-                qWarning() << "HTML export failed:" << assetError;
-                m_htmlExportError =
-                    QStringLiteral("HTML 层素材无法读取：%1").arg(assetError);
-                done(QImage());
-                return;
-            }
-
-            html::HtmlRenderer* renderer = htmlRendererFor(id);
-            if (!renderer)
-            {
-                qWarning() << "HTML export failed: no renderer for layer" << id;
-                m_htmlExportError = QStringLiteral("HTML 层无法创建渲染器");
-                done(QImage());
-                return;
-            }
-
-            const QSize logical = entity->htmlLogicalSize();
-            const double scaleX =
-                renderSize.width() / std::max(1.0, state.size.width());
-            const double scaleY =
-                renderSize.height() / std::max(1.0, state.size.height());
-            QSize captureSize(qRound(logical.width() * scaleX),
-                              qRound(logical.height() * scaleY));
-            captureSize.setWidth(
-                std::clamp(captureSize.width(), 1, html::Limits::kMaxEdge));
-            captureSize.setHeight(
-                std::clamp(captureSize.height(), 1, html::Limits::kMaxEdge));
-
-            QHash<QString, double> vars;
-            for (const html::HtmlComponent& component : asset.components)
-                for (const html::HtmlVariable& variable : component.variables)
-                {
-                    const QString key =
-                        component.id + QLatin1Char('.') + variable.name;
-                    vars.insert(key, m_project->value(
-                                         id, QStringLiteral("var.") + key, frame));
-                }
-
-            html::FrameRequest request;
-            request.asset = asset;
-            request.pageSize = captureSize;
-            request.vars = vars;
-            request.frame = frame;
-            request.time = frame / double(std::max(1, m_project->fps));
-            request.deterministic = true;
-            request.timeoutMs = 2000;
-
-            const quint64 token = ++m_htmlTokens[id];
-            renderer->requestFrame(
-                request, [this, id, token, next, done](const QImage& image,
-                                                       const QString& error) {
-                    if (m_htmlTokens.value(id, 0) != token)
-                        return;   // superseded or cancelled export
-                    Entity* current = m_project->entity(id);
-                    if (!current || current->type != EntityType::HtmlLayer)
-                    {
-                        m_htmlExportError = QStringLiteral("HTML 层已被删除");
-                        done(QImage());
-                        return;
-                    }
-                    if (image.isNull())
-                    {
-                        qWarning() << "HTML export frame failed:" << error;
-                        current->htmlError = error;
-                        m_htmlExportError =
-                            QStringLiteral("HTML 层抓帧失败：%1").arg(error);
-                        done(QImage());
-                        return;
-                    }
-                    current->htmlImage = image;
-                    current->htmlError.clear();
-                    current->pixmap = QPixmap();
-                    current->thumbnail = QImage();
-                    // Export captures happen at output resolution; make the
-                    // preview recapture at its own size on the next tick.
-                    m_htmlCacheKeys.remove(id);
-                    (*next)();
-                });
-        };
-        (*next)();
-    };
-
-    QString error;
-    if (!exporter->start(*m_project, options, frameProvider, &error))
-    {
-        m_htmlExporting = false;
-        m_exporter = nullptr;
-        progress->finish();
-        progress->deleteLater();
-        exporter->deleteLater();
-        QMessageBox::warning(this, QStringLiteral("导出失败"), error);
-    }
-}
-
-#endif // legacy VideoExporter export path
 
 void MainWindow::packAllAssets()
 {

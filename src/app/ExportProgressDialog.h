@@ -12,8 +12,8 @@ class QResizeEvent;
 
 namespace pvf {
 
-// Modal window shown while VideoExporter runs: live frame preview, progress
-// and a cancel button. Closing the window is treated as a cancel request.
+// Modal window shown while export2 runs: live frame preview, progress and a
+// cancel button. Closing the window is treated as a cancel request.
 class ExportProgressDialog : public QDialog
 {
     Q_OBJECT

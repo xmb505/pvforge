@@ -70,7 +70,6 @@ add_executable(pvforge
     src/audio/AudioEngine.cpp
     src/render/SceneRenderer.cpp
     src/render/CameraRenderer.cpp
-    src/render/VideoExporter.cpp
     src/html/HtmlAsset.cpp
     src/html/HtmlRenderer.cpp
     src/html/HtmlCaptureTest.cpp
@@ -140,8 +139,8 @@ target_link_libraries(pvforge PRIVATE
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
 
 # New entity model modules. The legacy pvforge target links only the small
-# document/core/store slice (pvf_next_document); pvforge-next assembles the
-# full reference shell from the remaining libraries.
+# document/core/store slice (pvf_next_document) plus the services and panels
+# it uses; the reference shell is not a delivery target.
 add_subdirectory(src/model)
 add_subdirectory(src/assets)
 add_subdirectory(src/solver)
@@ -167,7 +166,6 @@ add_subdirectory(src/next/viewport)
 add_subdirectory(src/next/app)
 
 # P1/P2 delivery shell: link only the document slice and the shared entity
-# range helpers. `pvforge-next` (and its main.cpp) stays a separate,
-# reference-only target.
+# range helpers.
 target_link_libraries(pvforge PRIVATE pvf_next_document pvf_next_services
     pvf_mcp2 pvf_entity_range pvf_next_mcp_log pvf_next_history pvf_export2)

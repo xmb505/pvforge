@@ -60,7 +60,6 @@ class ProjectPropertiesPanel;
 class PropertiesPanel;
 class SettingsDialog;
 class TimelinePanel;
-class VideoExporter;
 class VideoProxyGenerator;
 class Viewport;
 class WaveformView;
@@ -417,9 +416,6 @@ private:
     QTimer* m_htmlPreviewTimer = nullptr;
     QElapsedTimer m_htmlPreviewClock;
     QElapsedTimer m_htmlBrowserRetryClock;
-    bool m_htmlExporting = false;
-    QString m_htmlExportError;
-    VideoExporter* m_exporter = nullptr;
     AudioEngine* m_audioEngine = nullptr;
     VideoPlayer m_videoPlayer;
     VideoProxyGenerator* m_proxyGenerator = nullptr;

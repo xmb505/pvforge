@@ -6,10 +6,7 @@
 #include "html/HtmlAsset.h"
 #include "html/HtmlBrowser.h"
 #include "html/HtmlRenderer.h"
-#include "media/VideoDecoder.h"
-#include "render/CameraRenderer.h"
 #include "render/SceneRenderer.h"
-#include "render/VideoExporter.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -24,7 +21,6 @@
 #include <QPainter>
 #include <QTemporaryDir>
 #include <QThread>
-#include <QTimer>
 
 #include <cmath>
 #include <functional>
@@ -160,25 +156,6 @@ bool waitUntil(const std::function<bool()>& predicate, int timeoutMs)
         QThread::msleep(5);
     }
     return predicate();
-}
-
-FrameRequest frameRequest(const HtmlAsset& asset, const Project& project,
-                          EntityId id, int frame, const QSize& size)
-{
-    FrameRequest request;
-    request.asset = asset;
-    request.pageSize = size;
-    request.frame = frame;
-    request.time = frame / double(std::max(1, project.fps));
-    request.timeoutMs = 3000;
-    for (const HtmlComponent& component : asset.components)
-        for (const HtmlVariable& variable : component.variables)
-        {
-            const QString key = component.id + QLatin1Char('.') + variable.name;
-            request.vars.insert(
-                key, project.value(id, QStringLiteral("var.") + key, frame));
-        }
-    return request;
 }
 
 } // namespace
@@ -384,159 +361,6 @@ int htmlLayerTest()
     }
 
     qInfo() << "html-layer-test failures" << failures;
-    return failures == 0 ? 0 : 1;
-}
-
-int htmlExportTest()
-{
-    int failures = 0;
-    if (VideoExporter::ffmpegExecutable().isEmpty())
-    {
-        qInfo().noquote() << "html-export-test: ffmpeg missing, skipped";
-        return 0;
-    }
-    if (HtmlBrowser::detectExecutable().isEmpty())
-    {
-        qInfo().noquote() << "html-export-test: no Chrome/Edge/Chromium, skipped";
-        return 0;
-    }
-
-    QTemporaryDir temp;
-    if (!temp.isValid())
-    {
-        qCritical() << "html-export-test: cannot create temp dir";
-        return 1;
-    }
-    const QString sourcePath = temp.filePath(QStringLiteral("progress.json"));
-    if (!writeFile(sourcePath, progressAssetJson()))
-    {
-        qCritical() << "html-export-test: cannot write asset";
-        return 1;
-    }
-
-    Project project;
-    project.name = QStringLiteral("html-export-test");
-    project.width = 320;
-    project.height = 180;
-    project.fps = 24;
-    project.background = QColor(10, 20, 40);
-    const QString imported = project.importHtmlAsset(sourcePath, nullptr);
-    if (imported.isEmpty())
-    {
-        qCritical() << "html-export-test: import failed";
-        return 1;
-    }
-    Entity* layer = project.addHtmlLayer(imported);
-    if (!layer)
-    {
-        qCritical() << "html-export-test: addHtmlLayer failed";
-        return 1;
-    }
-    const EntityId id = layer->id;
-    project.setValue(id, QStringLiteral("var.progress.value"), 0.0, 10.0, true);
-    project.setValue(id, QStringLiteral("var.progress.value"), 7.0, 100.0, true);
-
-    QString parseError;
-    const HtmlAsset asset = HtmlAsset::parseFile(imported, &parseError);
-    if (!parseError.isEmpty())
-    {
-        qCritical() << "html-export-test: asset parse failed" << parseError;
-        return 1;
-    }
-
-    HtmlBrowser browser;
-    QString startError;
-    if (!browser.start(QString(), &startError))
-    {
-        qCritical() << "html-export-test: browser start failed" << startError;
-        return 1;
-    }
-    HtmlRenderer renderer(&browser);
-
-    const QString outputPath = temp.filePath(QStringLiteral("html.mp4"));
-    ExportOptions options;
-    options.outputPath = outputPath;
-    options.size = QSize(320, 180);
-    options.fps = 24;
-    options.frameCount = 8;
-    options.crf = 20;
-    options.includeAudio = false;
-
-    auto provider = [&project, &asset, &renderer, id](
-                        int frame, VideoExporter::FrameDone done) {
-        const FrameRequest request =
-            frameRequest(asset, project, id, frame, QSize(320, 180));
-        renderer.requestFrame(
-            request, [&project, id, frame, done](const QImage& image,
-                                                 const QString& error) {
-                if (image.isNull())
-                {
-                    qWarning() << "html-export-test: capture failed" << error;
-                    done(QImage());
-                    return;
-                }
-                Entity* entity = project.entity(id);
-                if (entity)
-                {
-                    entity->htmlImage = image;
-                    entity->pixmap = QPixmap();
-                    entity->thumbnail = QImage();
-                }
-                Camera::State state;
-                state.scale = 1.0;
-                state.size = QSizeF(project.width, project.height);
-                done(CameraRenderer::renderCameraImage(
-                    project, frame, state, QSize(320, 180), false));
-            });
-    };
-
-    VideoExporter exporter;
-    bool reported = false;
-    bool success = false;
-    QString exportError;
-    int callbacks = 0;
-    QEventLoop loop;
-    QObject::connect(&exporter, &VideoExporter::finished, &loop,
-                     [&](bool ok, const QString& error) {
-                         reported = true;
-                         success = ok;
-                         exportError = error;
-                         loop.quit();
-                     });
-    QObject::connect(&exporter, &VideoExporter::progress, &loop,
-                     [&callbacks](int done, int) { callbacks = done; });
-    QTimer guard;
-    guard.setSingleShot(true);
-    QObject::connect(&guard, &QTimer::timeout, &loop, &QEventLoop::quit);
-
-    QString error;
-    if (!exporter.start(project, options, provider, &error))
-    {
-        qCritical() << "html-export-test: start failed" << error;
-        return 1;
-    }
-    guard.start(90000);
-    loop.exec();
-
-    if (!reported || !success || exporter.isRunning() || callbacks != 8)
-    {
-        qCritical() << "html-export-test: export failed" << reported << success
-                    << exportError << callbacks;
-        ++failures;
-    }
-
-    QString decodeError;
-    double duration = 0.0;
-    const QImage first = decodeVideoFirstFrame(outputPath, &decodeError, &duration);
-    if (first.isNull() || first.size() != QSize(320, 180)
-        || greenPixels(first) < 10 || !QFile::exists(outputPath))
-    {
-        qCritical() << "html-export-test: first frame check failed" << decodeError
-                    << first.size() << greenPixels(first) << duration;
-        ++failures;
-    }
-
-    qInfo() << "html-export-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
 

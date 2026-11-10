@@ -85,7 +85,7 @@ if(NOT TARGET pvf_workbench)
 endif()
 
 # Small document slice shared by the legacy delivery shell (P1) and the
-# reference-only NextWindow target.  Keeping it separate means the old
+# reference-only NextWindow library.  Keeping it separate means the old
 # `pvforge` target can link the document/core/store without pulling in
 # NextWindow or any of the src/next UI panels.
 add_library(pvf_next_document STATIC
@@ -176,30 +176,6 @@ target_link_libraries(pvf_next_app PUBLIC
 )
 
 target_compile_features(pvf_next_app PUBLIC cxx_std_20)
-
-add_executable(pvforge-next main.cpp)
-
-target_link_libraries(pvforge-next PRIVATE
-    pvf_next_app
-    pvf_next_core
-    pvf_next_assets
-    pvf_next_viewport
-    pvf_next_properties
-    pvf_next_timeline
-    pvf_render2
-    pvf_store
-    pvf_mcp2
-    pvf_export2
-    pvf_audio2
-    pvf_next_settings
-    pvf_next_mcp_log
-    pvf_next_history
-    pvf_html2
-    pvf_video2
-    pvf_workbench
-    Qt6::Widgets
-    Qt6::Concurrent
-)
 
 include(CTest)
 

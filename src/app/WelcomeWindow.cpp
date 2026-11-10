@@ -95,7 +95,9 @@ WelcomeWindow::WelcomeWindow(QWidget* parent)
             });
 
     auto* footer = new QHBoxLayout();
-    auto* version = new QLabel(QStringLiteral("PVForge 0.1"), central);
+    auto* version = new QLabel(
+        QStringLiteral("PVForge %1").arg(QStringLiteral(PVFORGE_VERSION)),
+        central);
     footer->addWidget(version);
     footer->addStretch(1);
     auto* quit = new QPushButton(QStringLiteral("退出"), central);
