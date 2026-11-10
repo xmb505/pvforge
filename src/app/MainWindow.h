@@ -71,6 +71,9 @@ public:
     // through this accessor instead of reaching into private members.
     EditorSession* editorSessionForTest() const { return m_session; }
     Viewport* viewportForTest() const { return m_viewport; }
+    AssetLibraryPanel* assetLibraryForTest() const { return m_library; }
+    bool replaceAssetForTest(const QString& uuid, const QString& hash,
+                             QString* error = nullptr);
     EntityId importImageFile(const QString& path);
     void goToFrame(int frame) { setFrame(frame); }
     int currentFrame() const { return m_frame; }
@@ -142,6 +145,7 @@ private:
     void applyEntityData(EntityId id, const QVariantMap& data);
     void applyComicTip(EntityId id, double tipX, double tipY);
     void replaceSourceFromDialog(EntityId id);
+    void replaceSessionAssetFromDialog(const QString& uuid);
 
     struct EntityClipboardEntry
     {

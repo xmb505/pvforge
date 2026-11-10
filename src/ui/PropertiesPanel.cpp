@@ -2460,6 +2460,12 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     m_replaceSource = new QPushButton(QStringLiteral("更换素材…"), content);
     m_replaceSource->setObjectName(QStringLiteral("replaceSourceButton"));
     connect(m_replaceSource, &QPushButton::clicked, this, [this] {
+        if (m_sessionMode)
+        {
+            if (!m_sessionUuid.isEmpty())
+                emit sessionReplaceSourceRequested(m_sessionUuid);
+            return;
+        }
         if (m_entity != kInvalidEntity)
             emit replaceSourceRequested(m_entity);
     });
@@ -4261,7 +4267,8 @@ void PropertiesPanel::refreshSession()
         setSpinIfIdle(m_assetVolume, content.volume);
         m_assetSourceIn->setEnabled(editable);
         m_assetVolume->setEnabled(editable);
-        m_replaceSource->hide();
+        m_replaceSource->show();
+        m_replaceSource->setEnabled(editable);
 
         QString info = assetTypeLabel(content.type);
         if (!stored)

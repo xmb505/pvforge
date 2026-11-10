@@ -45,4 +45,20 @@ QVector<Uuid> rootEntities(const Project& project)
     return sortedSiblings(project, Uuid{});
 }
 
+int nextAutoRow(const Project& project, const Uuid& parentUuid, int start,
+                int end)
+{
+    int highest = -1;
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        const Entity& entity = it.value();
+        if (entity.parentUuid != parentUuid)
+            continue;
+        if (entity.start < end && start < entity.end)
+            highest = std::max(highest, entity.row);
+    }
+    return std::max(0, highest + 1);
+}
+
 } // namespace pvf::model

@@ -3,6 +3,7 @@
 #include "core/Project.h"
 #include "core/TextStyle.h"
 #include "model/Content.h"
+#include "model/Entity.h"
 
 #include <QColor>
 #include <QFrame>
@@ -36,6 +37,8 @@ public:
     void showAt(const QPoint& pos);
     void hidePanel();
     void setIgnoreMouseWidget(QWidget* widget) { m_ignoreWidget = widget; }
+    // Session-mode test hook: selects a stored asset in the media page.
+    void selectSessionMediaForTest(const QString& hash) { selectSessionMedia(hash); }
 
 signals:
     void created(EntityId id);
@@ -57,6 +60,14 @@ private:
     QWidget* buildSpecialPage();
 
     void createCurrent();
+    void createSessionCurrent();
+    bool createSessionMedia();
+    bool createSessionText();
+    bool createSessionVector();
+    bool createSessionCamera();
+    bool createSessionEntity(model::Entity entity, const QString& message);
+    void refreshSessionMediaLibrary();
+    void selectSessionMedia(const QString& hash);
     EntityId createSpecial();
     EntityId createTextBox();
     void updateSpecialPreview();
@@ -80,6 +91,7 @@ private:
     // Selected media template.
     int m_mediaTemplateIndex = -1;
     QString m_mediaPath;
+    QString m_mediaHash;
     QLabel* m_mediaPreview = nullptr;
     QLabel* m_mediaInfo = nullptr;
     QListWidget* m_mediaLibrary = nullptr;

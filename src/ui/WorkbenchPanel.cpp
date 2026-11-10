@@ -1,8 +1,11 @@
 #include "WorkbenchPanel.h"
 
 #include "app/AppIcon.h"
+#include "app/EditActions.h"
 #include "app/EditorSession.h"
 #include "app/MainWindow.h"
+#include "assets/AssetStore.h"
+#include "assets/AssetTypeDetect.h"
 #include "core/BrandWall.h"
 #include "ui/BrandWallDialog.h"
 #include "core/ComicBox.h"
@@ -12,8 +15,10 @@
 #include "core/TextStyle.h"
 #include "ui/TextLayoutDialog.h"
 #include "media/MediaImporter.h"
+#include "model/Query.h"
 #include "model/Uuid.h"
 #include "next/app/ProjectDocument.h"
+#include "video2/VideoFrames.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -44,6 +49,26 @@
 #include <cmath>
 
 namespace pvf {
+
+namespace {
+
+QString assetTypeLabelForWorkbench(AssetType type)
+{
+    switch (type)
+    {
+    case AssetType::Image:
+        return QStringLiteral("图片");
+    case AssetType::Video:
+        return QStringLiteral("视频");
+    case AssetType::Audio:
+        return QStringLiteral("音频");
+    case AssetType::Html:
+        return QStringLiteral("HTML");
+    }
+    return QString();
+}
+
+} // namespace
 
 WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     : QFrame(parent)
@@ -106,11 +131,23 @@ void WorkbenchPanel::buildUi()
                          / double(m_wallContent.rows));
         m_wallContent.logoSize =
             std::clamp(fit, 1.0, m_wallContent.logoSize);
-        auto* item = new QListWidgetItem(
+        const QStringList typeNames = {
+            Lang::t(QStringLiteral("workbench.media"), QStringLiteral("媒体")),
+            Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
+            Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
             Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
-            m_types);
-        item->setSizeHint(QSize(0, 42));
+            Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
+        };
+        for (const QString& name : typeNames)
+        {
+            auto* item = new QListWidgetItem(name, m_types);
+            item->setSizeHint(QSize(0, 42));
+        }
+        m_pages->addWidget(buildMediaPage());
+        m_pages->addWidget(buildTextPage());
+        m_pages->addWidget(buildVectorPage());
         m_pages->addWidget(buildSpecialPage());
+        m_pages->addWidget(buildCameraPage());
     }
     else
     {
@@ -155,8 +192,7 @@ void WorkbenchPanel::buildUi()
     connect(m_create, &QPushButton::clicked, this, &WorkbenchPanel::createCurrent);
 
     m_types->setCurrentRow(0);
-    if (!m_session)
-        refreshMediaLibrary();
+    refreshMediaLibrary();
     updateCreateState();
 }
 
@@ -197,7 +233,10 @@ QWidget* WorkbenchPanel::buildMediaPage()
 
     connect(m_mediaLibrary, &QListWidget::itemClicked, this,
             [this](QListWidgetItem* item) {
-                selectMedia(item->data(Qt::UserRole).toInt());
+                if (m_session)
+                    selectSessionMedia(item->data(Qt::UserRole).toString());
+                else
+                    selectMedia(item->data(Qt::UserRole).toInt());
             });
 
     return page;
@@ -865,10 +904,9 @@ void WorkbenchPanel::updateVectorFields()
 
 void WorkbenchPanel::showAt(const QPoint& pos)
 {
+    refreshMediaLibrary();
     if (m_session)
         updateSessionWallSummary();
-    else
-        refreshMediaLibrary();
 
     QWidget* parent = parentWidget();
     QPoint target = pos;
@@ -944,7 +982,12 @@ void WorkbenchPanel::updateCreateState()
     const int page = m_pages ? m_pages->currentIndex() : 0;
     bool ready = true;
     if (m_session)
-        ready = !m_wallContent.logos.isEmpty();
+    {
+        if (page == 0)
+            ready = !m_mediaHash.isEmpty();
+        else if (page == 3)
+            ready = !m_wallContent.logos.isEmpty();
+    }
     else if (page == 0)
         ready = !m_mediaPath.isEmpty();
     m_create->setEnabled(ready);
@@ -957,6 +1000,47 @@ void WorkbenchPanel::refreshMediaLibrary()
 
     const QSignalBlocker blocker(m_mediaLibrary);
     m_mediaLibrary->clear();
+
+    if (m_session)
+    {
+        for (const assets::StoredAsset& asset : m_session->assets().list())
+        {
+            if (asset.type != AssetType::Image && asset.type != AssetType::Video
+                && asset.type != AssetType::Audio)
+                continue;
+            auto* item = new QListWidgetItem(asset.name, m_mediaLibrary);
+            item->setData(Qt::UserRole, asset.hash);
+            item->setToolTip(asset.directory);
+
+            const QStringList files = QDir(asset.directory).entryList(
+                {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+            if (!files.isEmpty() && asset.type == AssetType::Image)
+            {
+                const QImage image(asset.directory + QLatin1Char('/')
+                                   + files.first());
+                if (!image.isNull())
+                    item->setIcon(QIcon(QPixmap::fromImage(image).scaled(
+                        40, 40, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+            }
+            else if (!files.isEmpty() && asset.type == AssetType::Video)
+            {
+                video2::VideoFrames frames(
+                    std::max(1, m_session->appSettings().videoProxyWidth), 4);
+                video2::Request request;
+                request.path = asset.directory + QLatin1Char('/') + files.first();
+                request.sourceFrame = 0;
+                request.fps = std::max(1, m_session->settings().fps);
+                request.size = QSize(80, 80);
+                const QImage frame = frames.frame(request);
+                if (!frame.isNull())
+                    item->setIcon(QIcon(QPixmap::fromImage(frame).scaled(
+                        40, 40, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+            }
+            if (asset.hash == m_mediaHash)
+                m_mediaLibrary->setCurrentItem(item);
+        }
+        return;
+    }
 
     for (int i = 0; i < m_project->templateCount(); ++i)
     {
@@ -1009,6 +1093,59 @@ void WorkbenchPanel::selectMedia(int templateIndex)
     updateCreateState();
 }
 
+void WorkbenchPanel::selectSessionMedia(const QString& hash)
+{
+    if (!m_session || !m_mediaPreview || !m_mediaInfo)
+        return;
+    const auto asset = m_session->assets().get(hash);
+    if (!asset)
+        return;
+
+    m_mediaHash = hash;
+    m_mediaTemplateIndex = -1;
+    const QStringList files = QDir(asset->directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    m_mediaPath = files.isEmpty() ? QString()
+                                  : asset->directory + QLatin1Char('/') + files.first();
+
+    const QSize previewSize(300, 140);
+    QPixmap preview;
+    if (asset->type == AssetType::Image && !m_mediaPath.isEmpty())
+    {
+        const QImage image(m_mediaPath);
+        if (!image.isNull())
+            preview = QPixmap::fromImage(image.scaled(
+                previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    else if (asset->type == AssetType::Video && !m_mediaPath.isEmpty())
+    {
+        video2::VideoFrames frames(
+            std::max(1, m_session->appSettings().videoProxyWidth), 4);
+        video2::Request request;
+        request.path = m_mediaPath;
+        request.sourceFrame = 0;
+        request.fps = std::max(1, m_session->settings().fps);
+        request.size = previewSize;
+        const QImage frame = frames.frame(request);
+        if (!frame.isNull())
+            preview = QPixmap::fromImage(frame);
+    }
+    if (preview.isNull())
+        m_mediaPreview->setText(assetTypeLabelForWorkbench(asset->type));
+    else
+        m_mediaPreview->setPixmap(preview);
+
+    QString info = assetTypeLabelForWorkbench(asset->type)
+                   + QStringLiteral(" · ") + asset->name;
+    const double seconds =
+        asset->metadata.value(QStringLiteral("durationSeconds")).toDouble(0.0);
+    if (seconds > 0.0)
+        info += QStringLiteral(" · %1 秒").arg(seconds, 0, 'f', 2);
+    info += QStringLiteral("\n") + m_mediaPath;
+    m_mediaInfo->setText(info);
+    updateCreateState();
+}
+
 void WorkbenchPanel::pickMedia()
 {
     const QString path = QFileDialog::getOpenFileName(
@@ -1018,6 +1155,40 @@ void WorkbenchPanel::pickMedia()
                        "*.aac *.wma *.aiff *.aif *.mka);;所有文件 (*)"));
     if (path.isEmpty())
         return;
+
+    if (m_session)
+    {
+        const auto type = assets::detectType(path);
+        QString error;
+        std::optional<assets::StoredAsset> stored;
+        if (type && *type == AssetType::Video)
+        {
+            const auto video = m_session->assets().importVideoWithAudio(path, &error);
+            if (video)
+                stored = video->video;
+        }
+        else if (type)
+            stored = m_session->assets().importFile(path, &error);
+
+        if (!stored)
+        {
+            QMessageBox::warning(this, QStringLiteral("无法导入"),
+                                 error.isEmpty() ? QStringLiteral("导入失败") : error);
+            return;
+        }
+        m_session->document()->commitProject(
+            QStringLiteral("pvf: import asset \"%1\"").arg(stored->name), nullptr);
+        refreshMediaLibrary();
+        for (int row = 0; row < m_mediaLibrary->count(); ++row)
+            if (m_mediaLibrary->item(row)->data(Qt::UserRole).toString()
+                == stored->hash)
+            {
+                m_mediaLibrary->setCurrentRow(row);
+                break;
+            }
+        selectSessionMedia(stored->hash);
+        return;
+    }
 
     auto* mainWindow = qobject_cast<MainWindow*>(window());
     if (!mainWindow)
@@ -1316,11 +1487,185 @@ void WorkbenchPanel::createSessionBrandWall()
     hidePanel();
 }
 
+void WorkbenchPanel::createSessionCurrent()
+{
+    const int page = m_pages ? m_pages->currentIndex() : 0;
+    switch (page)
+    {
+    case 0:
+        createSessionMedia();
+        break;
+    case 1:
+        createSessionText();
+        break;
+    case 2:
+        createSessionVector();
+        break;
+    case 3:
+        createSessionBrandWall();
+        break;
+    case 4:
+        createSessionCamera();
+        break;
+    default:
+        break;
+    }
+}
+
+bool WorkbenchPanel::createSessionMedia()
+{
+    if (!m_session || !m_session->document() || m_mediaHash.isEmpty())
+        return false;
+
+    QString error;
+    const QVector<Uuid> created = m_session->editActions()->addAssetEntities(
+        m_mediaHash, std::max(0, m_session->playhead()), -1, Uuid(), &error);
+    if (created.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("创建失败"),
+                             error.isEmpty() ? QStringLiteral("素材无法使用")
+                                             : error);
+        return false;
+    }
+    m_session->document()->setSelection(created.first());
+    emit sessionCreated(created.first());
+    hidePanel();
+    return true;
+}
+
+bool WorkbenchPanel::createSessionText()
+{
+    if (!m_session || !m_session->document())
+        return false;
+
+    const TextStyle style = currentTextStyle();
+    model::Entity entity;
+    entity.name = style.text.isEmpty() ? QStringLiteral("文字")
+                                       : style.text.left(24);
+    const int fps = std::max(1, m_session->settings().fps);
+    entity.start = std::max(0, m_session->playhead());
+    entity.end = entity.start + fps;
+    entity.row = -1;
+    entity.content.kind = ContentKind::Text;
+    model::TextContent& text = entity.content.text;
+    text.text = style.text;
+    text.fontFamily = style.fontFamily;
+    text.pixelSize = style.pixelSize;
+    text.color = style.color.name(QColor::HexArgb);
+    text.strokeColor = style.strokeColor.name(QColor::HexArgb);
+    text.strokeWidth = style.strokeWidth;
+    text.align = style.align;
+    text.lineHeight = style.lineHeight;
+    text.letterSpacing = style.letterSpacing;
+    text.padding = style.padding;
+    text.boxWidth = style.boxWidth;
+    text.boxHeight = style.boxHeight;
+    text.bold = style.bold;
+    text.italic = style.italic;
+    text.underline = style.underline;
+    text.vertical = style.vertical;
+    text.verticalRtl = style.verticalRtl;
+
+    if (!createSessionEntity(entity, QStringLiteral("pvf: create text")))
+        return false;
+    return true;
+}
+
+bool WorkbenchPanel::createSessionVector()
+{
+    if (!m_session || !m_session->document())
+        return false;
+
+    const int shape = m_vectorShapes && m_vectorShapes->currentItem()
+                          ? m_vectorShapes->currentItem()
+                                ->data(Qt::UserRole)
+                                .toInt()
+                          : 0;
+    model::Entity entity;
+    entity.name = shape == 1 ? QStringLiteral("圆形")
+                             : shape == 2 ? QStringLiteral("直线")
+                                          : QStringLiteral("矩形");
+    const int fps = std::max(1, m_session->settings().fps);
+    entity.start = std::max(0, m_session->playhead());
+    entity.end = entity.start + fps;
+    entity.row = -1;
+    entity.content.kind = ContentKind::Vector;
+    model::VectorContent& vector = entity.content.vector;
+    vector.shape = shape;
+    vector.width = m_vectorWidth ? m_vectorWidth->value() : 400.0;
+    vector.height = m_vectorHeight ? m_vectorHeight->value() : 300.0;
+    vector.cornerRadius = m_vectorCorner ? m_vectorCorner->value() : 0.0;
+    vector.sides = m_vectorSides ? m_vectorSides->value() : 5;
+    vector.innerRatio = m_vectorInner ? m_vectorInner->value() : 0.45;
+    vector.fillColor = m_fillValue.name(QColor::HexArgb);
+    vector.strokeColor = m_strokeValue.name(QColor::HexArgb);
+    vector.strokeWidth =
+        m_vectorStrokeWidth ? m_vectorStrokeWidth->value() : 0.0;
+
+    if (!createSessionEntity(entity, QStringLiteral("pvf: create vector")))
+        return false;
+    return true;
+}
+
+bool WorkbenchPanel::createSessionCamera()
+{
+    if (!m_session || !m_session->document())
+        return false;
+
+    QString name = m_cameraName ? m_cameraName->text().trimmed() : QString();
+    if (name.isEmpty())
+    {
+        int count = 0;
+        for (const model::Entity& other : m_session->project().entities)
+            if (other.content.kind == ContentKind::Camera)
+                ++count;
+        name = QStringLiteral("摄像机 %1").arg(count + 1);
+    }
+
+    model::Entity entity;
+    entity.name = name;
+    const int fps = std::max(1, m_session->settings().fps);
+    entity.start = std::max(0, m_session->playhead());
+    entity.end = entity.start + fps;
+    entity.row = -1;
+    entity.content.kind = ContentKind::Camera;
+
+    if (!createSessionEntity(entity, QStringLiteral("pvf: create camera")))
+        return false;
+    return true;
+}
+
+bool WorkbenchPanel::createSessionEntity(model::Entity entity,
+                                         const QString& message)
+{
+    if (!m_session || !m_session->document())
+        return false;
+
+    auto* document = m_session->document();
+    entity.uuid = model::newUuid();
+    if (entity.row < 0)
+        entity.row = model::nextAutoRow(m_session->project(), Uuid{},
+                                        entity.start, entity.end);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+    QString error;
+    if (!document->commitEntity(entity.uuid, message, &error))
+    {
+        document->mutableProject().entities.remove(entity.uuid);
+        QMessageBox::warning(this, QStringLiteral("创建失败"), error);
+        return false;
+    }
+
+    document->setSelection(entity.uuid);
+    emit sessionCreated(entity.uuid);
+    hidePanel();
+    return true;
+}
+
 void WorkbenchPanel::createCurrent()
 {
     if (m_session)
     {
-        createSessionBrandWall();
+        createSessionCurrent();
         return;
     }
 

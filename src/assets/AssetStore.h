@@ -86,6 +86,10 @@ public:
     // Like list(), but also returns assets whose content file is missing.
     QVector<StoredAsset> listIncludingMissing() const;
 
+    // Replaces the asset's display name in asset.json. The name is trimmed and
+    // must not be empty. Returns false with an error for a missing asset.
+    bool rename(const AssetHash& hash, const QString& name, QString* error = nullptr);
+
     // Replaces the asset's tags in asset.json. Tags are trimmed, empty entries
     // dropped and duplicates removed. Tags longer than 64 characters and lists
     // with more than 32 unique tags are rejected. Returns false with an error

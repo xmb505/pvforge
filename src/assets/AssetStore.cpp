@@ -247,6 +247,30 @@ bool missingContent(const StoredAsset& asset)
     return contentFiles(asset.directory).isEmpty();
 }
 
+bool AssetStore::rename(const AssetHash& hash, const QString& name, QString* error)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+    {
+        setError(error, QStringLiteral("素材名称不能为空"));
+        return false;
+    }
+
+    const auto asset = getByHash(hash);
+    if (!asset)
+    {
+        setError(error, QStringLiteral("素材不存在或内容缺失: %1").arg(hash));
+        return false;
+    }
+    if (asset->name == trimmed)
+        return true;
+
+    QJsonObject metadata = asset->metadata;
+    metadata.insert(QStringLiteral("name"), trimmed);
+    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata,
+                     error);
+}
+
 bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString* error)
 {
     if (!isValidHash(hash))
@@ -457,8 +481,39 @@ std::optional<StoredAsset> AssetStore::importFileImpl(const QString& path,
     {
         if (auto raced = getByHash(hash))
             return raced;
-        setError(error, QStringLiteral("素材目录已存在但内容损坏: %1").arg(finalDirectory));
-        return std::nullopt;
+
+        // The directory and asset.json survived but the content file is
+        // missing. Re-importing the same bytes restores it in place while
+        // keeping the first import's name, tags and audio link.
+        const auto existing = getByHash(hash, false);
+        if (!existing)
+        {
+            setError(error,
+                     QStringLiteral("素材目录已存在但内容损坏: %1").arg(finalDirectory));
+            return std::nullopt;
+        }
+
+        QJsonObject repaired = metadata;
+        repaired.insert(QStringLiteral("name"), existing->name);
+        repaired.insert(QStringLiteral("tags"),
+                        QJsonArray::fromStringList(existing->tags));
+        const QString audioHash =
+            existing->metadata.value(QStringLiteral("audioHash")).toString();
+        if (!audioHash.isEmpty())
+            repaired.insert(QStringLiteral("audioHash"), audioHash);
+
+        for (const QString& file : contentFiles(finalDirectory))
+            QFile::remove(finalDirectory + QLatin1Char('/') + file);
+        if (!QFile::rename(stagedContent,
+                           finalDirectory + QLatin1Char('/') + contentName))
+        {
+            setError(error, QStringLiteral("无法恢复素材内容: %1").arg(finalDirectory));
+            return std::nullopt;
+        }
+        if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), repaired,
+                       error))
+            return std::nullopt;
+        return getByHash(hash);
     }
     if (!QDir().rename(temporary.path(), finalDirectory))
     {
@@ -593,10 +648,44 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
         name = QStringLiteral("pvhtml");
 
     const QString finalDirectory = m_assetsDir + QLatin1Char('/') + hash;
+
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("hash"), hash);
+    metadata.insert(QStringLiteral("type"), assetTypeName(AssetType::Html));
+    metadata.insert(QStringLiteral("name"), name);
+    metadata.insert(QStringLiteral("mime"), QStringLiteral("text/html"));
+    metadata.insert(QStringLiteral("tags"), QJsonArray());
+    metadata.insert(QStringLiteral("width"), manifest.logicalSize.width());
+    metadata.insert(QStringLiteral("height"), manifest.logicalSize.height());
+    metadata.insert(QStringLiteral("entry"), manifest.entry);
+    metadata.insert(QStringLiteral("variables"), QJsonObject::fromVariantMap(manifest.variables));
+    metadata.insert(QStringLiteral("timeDependent"), manifest.timeDependent);
+
     if (QFileInfo::exists(finalDirectory))
     {
-        setError(error, QStringLiteral("素材目录已存在但内容损坏: %1").arg(finalDirectory));
-        return std::nullopt;
+        // Re-importing the same bundle repairs a missing entry while keeping
+        // the first import's name and tags.
+        const auto existing = getByHash(hash, false);
+        if (!existing)
+        {
+            setError(error,
+                     QStringLiteral("素材目录已存在但内容损坏: %1").arg(finalDirectory));
+            return std::nullopt;
+        }
+        metadata.insert(QStringLiteral("name"), existing->name);
+        metadata.insert(QStringLiteral("tags"),
+                        QJsonArray::fromStringList(existing->tags));
+
+        QDir(finalDirectory + QStringLiteral("/bundle")).removeRecursively();
+        if (!QDir().rename(bundlePath, finalDirectory + QStringLiteral("/bundle")))
+        {
+            setError(error, QStringLiteral("无法恢复 HTML 素材: %1").arg(finalDirectory));
+            return std::nullopt;
+        }
+        if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), metadata,
+                       error))
+            return std::nullopt;
+        return getByHash(hash);
     }
     if (!QDir().mkpath(finalDirectory))
     {
@@ -610,17 +699,6 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
         return std::nullopt;
     }
 
-    QJsonObject metadata;
-    metadata.insert(QStringLiteral("hash"), hash);
-    metadata.insert(QStringLiteral("type"), assetTypeName(AssetType::Html));
-    metadata.insert(QStringLiteral("name"), name);
-    metadata.insert(QStringLiteral("mime"), QStringLiteral("text/html"));
-    metadata.insert(QStringLiteral("tags"), QJsonArray());
-    metadata.insert(QStringLiteral("width"), manifest.logicalSize.width());
-    metadata.insert(QStringLiteral("height"), manifest.logicalSize.height());
-    metadata.insert(QStringLiteral("entry"), manifest.entry);
-    metadata.insert(QStringLiteral("variables"), QJsonObject::fromVariantMap(manifest.variables));
-    metadata.insert(QStringLiteral("timeDependent"), manifest.timeDependent);
     if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), metadata, error))
     {
         QDir(finalDirectory).removeRecursively();

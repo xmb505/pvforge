@@ -762,8 +762,8 @@ void MainWindow::buildSessionShell()
     setMinimumSize(1000, 620);
 
     // Top split keeps the legacy shell's arrangement: large central surface on
-    // the left, project properties on the right.  Timeline/asset panels are
-    // intentionally absent until P2/P5.
+    // the left, project properties on the right.  The asset bin and timeline
+    // sit below the editing surface (P5/P2).
     auto* top = new QSplitter(Qt::Horizontal, this);
     top->setObjectName(QStringLiteral("sessionTopSplit"));
     top->setChildrenCollapsible(false);
@@ -787,6 +787,8 @@ void MainWindow::buildSessionShell()
                 [this](const Uuid& uuid) {
                     if (m_session && m_session->document())
                         m_session->document()->setSelection(uuid);
+                    if (m_library)
+                        m_library->enqueueMissingVideoExtractions();
                 });
     }
 
@@ -860,17 +862,37 @@ void MainWindow::buildSessionShell()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Legacy arrangement: the editing surface sits above the timeline.  P2a
-    // brings the old TimelinePanel back below the placeholder; the right-hand
-    // project properties tab is unchanged.
+    // Legacy arrangement: the asset box sits left of the clip timeline, below
+    // the editing surface.  P2a brought the timeline back; P5 brings the asset
+    // bin back on the new AssetStore.
     auto* mainSplit = new QSplitter(Qt::Vertical, central);
     mainSplit->setObjectName(QStringLiteral("sessionMainSplit"));
     mainSplit->setChildrenCollapsible(false);
     mainSplit->addWidget(top);
+
+    auto* bottom = new QSplitter(Qt::Horizontal, mainSplit);
+    bottom->setObjectName(QStringLiteral("sessionBottomSplit"));
+    auto* libraryHost = new QWidget(bottom);
+    libraryHost->setObjectName(QStringLiteral("libraryHost"));
+    auto* libraryLayout = new QVBoxLayout(libraryHost);
+    libraryLayout->setContentsMargins(0, 0, 0, 0);
+    libraryLayout->setSpacing(0);
+    m_library = new AssetLibraryPanel(m_session, libraryHost);
+    libraryLayout->addWidget(m_library);
+    libraryHost->setMinimumWidth(240);
+    libraryHost->setMaximumWidth(420);
+
     m_timeline = new TimelinePanel(
-        static_cast<EditorSession*>(m_session), mainSplit);
+        static_cast<EditorSession*>(m_session), bottom);
     m_timeline->setObjectName(QStringLiteral("timelinePanel"));
-    mainSplit->addWidget(m_timeline);
+    bottom->addWidget(libraryHost);
+    bottom->addWidget(m_timeline);
+    bottom->setChildrenCollapsible(false);
+    bottom->setStretchFactor(0, 0);
+    bottom->setStretchFactor(1, 1);
+    bottom->setSizes({300, 1100});
+
+    mainSplit->addWidget(bottom);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
     mainSplit->setSizes({620, 280});
@@ -905,6 +927,21 @@ void MainWindow::buildSessionShell()
                     statusBar()->showMessage(
                         QStringLiteral("编辑失败：%1").arg(message), 5000);
                 });
+        connect(m_props, &PropertiesPanel::sessionReplaceSourceRequested, this,
+                &MainWindow::replaceSessionAssetFromDialog);
+    }
+    if (m_library)
+    {
+        connect(m_library, &AssetLibraryPanel::statusMessage, this,
+                [this](const QString& message) {
+                    statusBar()->showMessage(message, 5000);
+                });
+        connect(m_library, &AssetLibraryPanel::assetsChanged, this, [this] {
+            if (m_viewport)
+                m_viewport->refreshSession();
+            if (m_monitor)
+                m_monitor->setProjectChanged();
+        });
     }
 
     if (m_session && m_session->document())
@@ -3415,6 +3452,62 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
     showImportBusy(1);
     watcher->setFuture(QtConcurrent::run(
         [file, directory] { return processMediaFile(file, directory); }));
+}
+
+void MainWindow::replaceSessionAssetFromDialog(const QString& uuid)
+{
+    if (!m_session || !m_session->document())
+        return;
+
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return;
+
+    const model::Content& content = it.value().content;
+    if (content.kind != ContentKind::Asset && content.kind != ContentKind::Empty)
+    {
+        const QString message =
+            content.kind == ContentKind::Camera
+                ? QStringLiteral("摄像机不能更换素材")
+                : QStringLiteral("生成内容实体不能直接换素材，请先清空内容");
+        QMessageBox::warning(this, QStringLiteral("更换素材失败"), message);
+        return;
+    }
+
+    const AssetType currentType =
+        content.kind == ContentKind::Asset ? content.asset.type : AssetType::Image;
+    const AssetHash currentHash =
+        content.kind == ContentKind::Asset ? content.asset.hash : AssetHash();
+    const QString hash = AssetLibraryPanel::pickAsset(
+        this, m_session, content.kind, currentType, currentHash);
+    if (hash.isEmpty())
+        return;
+
+    QString error;
+    if (!m_session->editActions()->replaceAsset(uuid, hash, &error))
+    {
+        QMessageBox::warning(this, QStringLiteral("更换素材失败"), error);
+        return;
+    }
+    statusBar()->showMessage(QStringLiteral("已更换素材"), 3000);
+    if (m_library)
+        m_library->enqueueMissingVideoExtractions();
+    if (m_viewport)
+        m_viewport->refreshSession();
+    if (m_monitor)
+        m_monitor->setProjectChanged();
+}
+
+bool MainWindow::replaceAssetForTest(const QString& uuid, const QString& hash,
+                                     QString* error)
+{
+    if (!m_session || !m_session->editActions())
+    {
+        if (error)
+            *error = QStringLiteral("没有打开的工程");
+        return false;
+    }
+    return m_session->editActions()->replaceAsset(uuid, hash, error);
 }
 
 MainWindow::EntityClipboard MainWindow::buildEntityClip(EntityId id) const

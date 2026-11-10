@@ -132,7 +132,9 @@ bool hasAssetMime(const QMimeData* mime)
            && (mime->hasFormat(
                    QStringLiteral("application/x-pvforge-asset-template"))
                || mime->hasFormat(
-                   QStringLiteral("application/x-pvforge-asset-html")));
+                   QStringLiteral("application/x-pvforge-asset-html"))
+               || mime->hasFormat(
+                   QStringLiteral("application/x-pvforge-asset")));
 }
 
 EasingSpec legacyEasing(const model::EasingSpec& spec)
@@ -3294,7 +3296,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -3307,7 +3309,7 @@ void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 
 void TimelinePanel::dragMoveEvent(QDragMoveEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -3327,7 +3329,7 @@ void TimelinePanel::dragLeaveEvent(QDragLeaveEvent* event)
 
 void TimelinePanel::dropEvent(QDropEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
     {
         m_dropActive = false;
         update();
@@ -3349,8 +3351,43 @@ void TimelinePanel::dropEvent(QDropEvent* event)
         event->acceptProposedAction();
 }
 
+EntityId TimelinePanel::dropSessionAsset(const QMimeData& mime, int frame, int row)
+{
+    if (!m_session || !m_session->document() || !hasAssetMime(&mime))
+        return kInvalidEntity;
+
+    const QString hash =
+        QString::fromUtf8(mime.data(QStringLiteral("application/x-pvforge-asset")))
+            .trimmed();
+    if (hash.isEmpty())
+        return kInvalidEntity;
+
+    frame = std::max(contentStart(), frame);
+    if (m_owner >= 0)
+        frame = std::min(frame, contentEnd() - 1);
+
+    const Uuid parent = m_owner >= 0 ? uuidForEntityId(m_owner) : Uuid();
+    QString error;
+    const QVector<Uuid> created = m_session->editActions()->addAssetEntities(
+        hash, frame, row, parent, &error);
+    if (created.isEmpty())
+    {
+        emit editFailed(error.isEmpty() ? QStringLiteral("无法添加素材") : error);
+        return kInvalidEntity;
+    }
+
+    m_session->document()->setSelection(created.first());
+    const auto asset = m_session->assets().get(hash);
+    const QString name = asset && !asset->name.isEmpty() ? asset->name : hash;
+    emit editCommitted(QStringLiteral("已添加素材 \"%1\"").arg(name));
+    refreshFromSession();
+    return entityIdForUuid(created.first());
+}
+
 EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 {
+    if (sessionMode())
+        return dropSessionAsset(mime, frame, row);
     if (!m_project || !hasAssetMime(&mime))
         return kInvalidEntity;
 

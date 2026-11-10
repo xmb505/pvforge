@@ -78,6 +78,7 @@ signals:
     // Session mode reports failures to the shell status bar and mirrors the
     // auto-key toggle with MainWindow's action.
     void sessionEditFailed(const QString& message);
+    void sessionReplaceSourceRequested(const Uuid& uuid);
     void autoKeyToggled(bool on);
 
 private:

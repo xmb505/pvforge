@@ -371,6 +371,7 @@ private:
     void autoScrollTick();
     void syncPopupGeometry();
     EntityId dropAsset(const QMimeData& mime, int frame, int row);
+    EntityId dropSessionAsset(const QMimeData& mime, int frame, int row);
 
     Project* m_project = nullptr;
     EditorSession* m_session = nullptr;   // session-backed main/popup panels

@@ -146,6 +146,22 @@ public:
                        const std::function<bool(model::Content&)>& mutate,
                        QString* error = nullptr);
 
+    // Creates the visual entity for a stored asset at startFrame and, for a
+    // video with a split audio track, its independent WAV audio entity.  row
+    // < 0 picks the model's auto row; an empty parent creates roots.  Both
+    // entities are written in one commit and the new UUIDs are returned.
+    QVector<Uuid> addAssetEntities(const AssetHash& hash, int startFrame,
+                                   int row, const Uuid& parent = Uuid(),
+                                   QString* error = nullptr);
+
+    // Replaces an entity's asset in one commit.  Visual assets (image/video/
+    // html) only swap with visual assets, audio with audio; empty entities
+    // accept any group and camera/generated content reject asset replacement.
+    // Timed assets clamp sourceIn and trim the entity end (dropping keys past
+    // the new duration); children that would fall outside are rejected.
+    bool replaceAsset(const Uuid& uuid, const AssetHash& hash,
+                      QString* error = nullptr);
+
     // Writes a plan into the document and commits upserts/deletes once.
     // On failure the in-memory project is restored and no undo step exists.
     bool apply(const EditPlan& plan, QString* error = nullptr);
