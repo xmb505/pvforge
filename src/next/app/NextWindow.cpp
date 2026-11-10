@@ -1174,6 +1174,8 @@ void NextWindow::buildUi()
     connect(m_autoKeyCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (m_propertiesPanel)
             m_propertiesPanel->setAutoKey(checked);
+        if (m_viewport)
+            m_viewport->setAutoKeyEnabled(checked);
         statusBar()->showMessage(
             checked ? tr("自动关键帧：开") : tr("自动关键帧：关"), 3000);
     });
@@ -1224,6 +1226,8 @@ void NextWindow::buildEditor()
     m_viewport = new ViewportWidget(m_document, top);
     m_viewport->setSceneExpandPercent(
         m_settings.workbenchCacheExpandPercent);
+    m_viewport->setAutoKeyEnabled(!m_autoKeyCheck
+                                  || m_autoKeyCheck->isChecked());
     applyViewportSnapSettings();
     m_propertiesPanel = new PropertiesPanel(m_document, top);
 
@@ -1240,6 +1244,8 @@ void NextWindow::buildEditor()
                     }
                     if (m_propertiesPanel)
                         m_propertiesPanel->setAutoKey(checked);
+                    if (m_viewport)
+                        m_viewport->setAutoKeyEnabled(checked);
                     statusBar()->showMessage(
                         checked ? tr("自动关键帧：开")
                                 : tr("自动关键帧：关"),
