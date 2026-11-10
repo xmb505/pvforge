@@ -14,13 +14,16 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -30,6 +33,20 @@ namespace pvf::export2 {
 namespace {
 
 constexpr int kMaxDimension = 8192;
+
+// x264 speed presets accepted by Options::preset.  "placebo" is deliberately
+// excluded: it is a debugging preset, not a sane export choice.
+const QStringList& x264Presets()
+{
+    static const QStringList presets{
+        QStringLiteral("ultrafast"), QStringLiteral("superfast"),
+        QStringLiteral("veryfast"),  QStringLiteral("faster"),
+        QStringLiteral("fast"),      QStringLiteral("medium"),
+        QStringLiteral("slow"),      QStringLiteral("slower"),
+        QStringLiteral("veryslow"),
+    };
+    return presets;
+}
 
 #if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
 // QImage ARGB32_Premultiplied stores B, G, R, A in memory on little endian.
@@ -530,6 +547,10 @@ Result exportVideo(const model::Project& project,
         return result;
     };
 
+    // The explicit argument wins; Options::progress is the fallback so callers
+    // that keep everything in the options struct also get the ETA.
+    Progress onProgress = progress ? std::move(progress) : options.progress;
+
     if (options.outputPath.trimmed().isEmpty())
         return fail(QStringLiteral("输出路径为空"));
 
@@ -541,6 +562,17 @@ Result exportVideo(const model::Project& project,
     const QString outputPath = outputInfo.absoluteFilePath();
     if (!options.overwrite && QFileInfo::exists(outputPath))
         return fail(QStringLiteral("output_exists"));
+
+    if (options.crf < 0 || options.crf > 51)
+        return fail(QStringLiteral("invalid_crf"));
+
+    const QString encoderName = options.encoder.trimmed();
+    const bool useVaapi = encoderName == QStringLiteral("h264_vaapi");
+    if (!useVaapi && encoderName != QStringLiteral("libx264"))
+        return fail(QStringLiteral("unknown_encoder"));
+
+    if (!x264Presets().contains(options.preset))
+        return fail(QStringLiteral("unknown_preset"));
 
     const int projectFps = project.settings.fps;
     if (projectFps <= 0)
@@ -582,7 +614,8 @@ Result exportVideo(const model::Project& project,
     if (start < camera.start || end > camera.end || end <= start)
         return fail(QStringLiteral("导出范围必须位于摄像机范围内"));
 
-    const int crf = std::clamp(options.crf, 0, 51);
+    // Already validated to 0..51 above.
+    const int crf = options.crf;
     const int projectFrames = end - start;
     // The export keeps the camera range's duration in seconds, not its project
     // frame count: 10 project frames at 30 fps become 20 output frames at 60.
@@ -639,21 +672,67 @@ Result exportVideo(const model::Project& project,
         format = nullptr;
     });
 
-    const AVCodec* codec = avcodec_find_encoder_by_name("libx264");
+    // Codec selection.  Software defaults to libx264 (with a generic H.264
+    // fallback); VAAPI must find the hardware encoder by name.
+    const AVCodec* codec = nullptr;
+    if (useVaapi)
+    {
+        codec = avcodec_find_encoder_by_name("h264_vaapi");
+    }
+    else
+    {
+        codec = avcodec_find_encoder_by_name("libx264");
+        if (!codec)
+            codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+    }
     if (!codec)
-        codec = avcodec_find_encoder(AV_CODEC_ID_H264);
-    if (!codec)
+    {
+        if (useVaapi)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：当前 FFmpeg 没有 h264_vaapi 编码器"));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
         return fail(QStringLiteral("找不到 H.264 编码器"));
+    }
+
+    // VAAPI needs a device and a hardware frame pool.  Both are created before
+    // avcodec_open2 so any missing driver support fails cleanly as
+    // "encoder_unavailable" instead of crashing mid-export.
+    AVBufferRef* hwDevice = nullptr;
+    const auto hwDeviceGuard = qScopeGuard([&] { av_buffer_unref(&hwDevice); });
+    if (useVaapi)
+    {
+        const int deviceStatus =
+            av_hwdevice_ctx_create(&hwDevice, AV_HWDEVICE_TYPE_VAAPI, nullptr,
+                                   nullptr, 0);
+        if (deviceStatus < 0)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法创建硬件设备：%1")
+                    .arg(ffmpegError(deviceStatus)));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
+    }
 
     AVCodecContext* codecContext = avcodec_alloc_context3(codec);
     if (!codecContext)
+    {
+        if (useVaapi)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法创建编码器上下文"));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
         return fail(QStringLiteral("无法创建编码器"));
+    }
     const auto codecGuard =
         qScopeGuard([&] { avcodec_free_context(&codecContext); });
 
     codecContext->width = outputSize.width();
     codecContext->height = outputSize.height();
-    codecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+    codecContext->pix_fmt =
+        useVaapi ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
     codecContext->time_base = AVRational{1, outputFps};
     codecContext->framerate = AVRational{outputFps, 1};
     codecContext->gop_size = std::max(1, outputFps * 2);
@@ -661,9 +740,41 @@ Result exportVideo(const model::Project& project,
     if (format->oformat->flags & AVFMT_GLOBALHEADER)
         codecContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-    if (QByteArray(codec->name) == QByteArrayLiteral("libx264"))
+    if (useVaapi)
     {
-        av_opt_set(codecContext->priv_data, "preset", "medium", 0);
+        AVBufferRef* framesRef = av_hwframe_ctx_alloc(hwDevice);
+        if (!framesRef)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法分配硬件帧池"));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
+        auto* frames = reinterpret_cast<AVHWFramesContext*>(framesRef->data);
+        frames->format = AV_PIX_FMT_VAAPI;
+        frames->sw_format = AV_PIX_FMT_NV12; // format=nv12 upload format
+        frames->width = outputSize.width();
+        frames->height = outputSize.height();
+        frames->initial_pool_size = 8;
+        const int framesStatus = av_hwframe_ctx_init(framesRef);
+        if (framesStatus < 0)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法初始化硬件帧池：%1")
+                    .arg(ffmpegError(framesStatus)));
+            av_buffer_unref(&framesRef);
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
+        // Owned by codecContext and freed with it.
+        codecContext->hw_frames_ctx = framesRef;
+        // h264_vaapi has no CRF; constant-QP with the same 0..51 scale is the
+        // closest equivalent.
+        av_opt_set(codecContext->priv_data, "rc_mode", "CQP", 0);
+        av_opt_set_int(codecContext->priv_data, "qp", crf, 0);
+    }
+    else if (QByteArray(codec->name) == QByteArrayLiteral("libx264"))
+    {
+        av_opt_set(codecContext->priv_data, "preset",
+                   options.preset.toUtf8().constData(), 0);
         av_opt_set_int(codecContext->priv_data, "crf", crf, 0);
     }
     else
@@ -675,8 +786,17 @@ Result exportVideo(const model::Project& project,
 
     status = avcodec_open2(codecContext, codec, nullptr);
     if (status < 0)
+    {
+        if (useVaapi)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法打开 h264_vaapi：%1")
+                    .arg(ffmpegError(status)));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
         return fail(QStringLiteral("无法打开 H.264 编码器：%1")
                         .arg(ffmpegError(status)));
+    }
 
     AVStream* stream = avformat_new_stream(format, nullptr);
     if (!stream)
@@ -817,10 +937,15 @@ Result exportVideo(const model::Project& project,
         return fail(QStringLiteral("无法写入 MP4 头部：%1")
                         .arg(ffmpegError(status)));
 
+    // Software frames are YUV420P for libx264.  For VAAPI the staging frame is
+    // NV12 (the format=nv12 step); av_hwframe_transfer_data then performs the
+    // upload to the hardware frame pool, equivalent to the hwupload filter.
+    const AVPixelFormat stagingFormat =
+        useVaapi ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
     SwsContext* sws = sws_getContext(
         outputSize.width(), outputSize.height(), kSourcePixelFormat,
-        outputSize.width(), outputSize.height(), AV_PIX_FMT_YUV420P,
-        SWS_BILINEAR, nullptr, nullptr, nullptr);
+        outputSize.width(), outputSize.height(), stagingFormat, SWS_BILINEAR,
+        nullptr, nullptr, nullptr);
     if (!sws)
         return fail(QStringLiteral("无法创建色彩转换上下文"));
     const auto swsGuard = qScopeGuard([&] { sws_freeContext(sws); });
@@ -829,13 +954,26 @@ Result exportVideo(const model::Project& project,
     if (!frame)
         return fail(QStringLiteral("无法创建视频帧"));
     const auto frameGuard = qScopeGuard([&] { av_frame_free(&frame); });
-    frame->format = AV_PIX_FMT_YUV420P;
+    frame->format = stagingFormat;
     frame->width = outputSize.width();
     frame->height = outputSize.height();
-    status = av_frame_get_buffer(frame, 0);
+    status = av_frame_get_buffer(frame, 32);
     if (status < 0)
         return fail(QStringLiteral("无法分配视频帧：%1")
                         .arg(ffmpegError(status)));
+
+    AVFrame* hwFrame = nullptr;
+    if (useVaapi)
+    {
+        hwFrame = av_frame_alloc();
+        if (!hwFrame)
+        {
+            result.warnings.append(
+                QStringLiteral("VAAPI：无法创建硬件帧"));
+            return fail(QStringLiteral("encoder_unavailable"));
+        }
+    }
+    const auto hwFrameGuard = qScopeGuard([&] { av_frame_free(&hwFrame); });
 
     AVPacket* packet = av_packet_alloc();
     if (!packet)
@@ -947,6 +1085,11 @@ Result exportVideo(const model::Project& project,
                                (outputSize.height() - contentSize.height()) / 2);
 
     int framesWritten = 0;
+    // ETA is the average encode time per finished output frame times the
+    // number of frames left.  The start is taken at the frame loop because
+    // audio mixing / header setup are one-off costs already paid.
+    const auto encodeStarted = std::chrono::steady_clock::now();
+    double lastEta = std::numeric_limits<double>::max();
     for (int frameIndex = 0; frameIndex < total; ++frameIndex)
     {
         // Time sampling: output frame -> project frame (fractional at 2x/4x).
@@ -986,8 +1129,32 @@ Result exportVideo(const model::Project& project,
         sws_scale(sws, sourceData, sourceStride, 0, outputSize.height(),
                   frame->data, frame->linesize);
 
-        frame->pts = frameIndex;
-        status = avcodec_send_frame(codecContext, frame);
+        AVFrame* encodeFrame = frame;
+        if (useVaapi)
+        {
+            av_frame_unref(hwFrame);
+            status = av_hwframe_get_buffer(codecContext->hw_frames_ctx,
+                                           hwFrame, 0);
+            if (status < 0)
+            {
+                result.warnings.append(
+                    QStringLiteral("VAAPI：无法分配硬件帧：%1")
+                        .arg(ffmpegError(status)));
+                return fail(QStringLiteral("encoder_unavailable"));
+            }
+            status = av_hwframe_transfer_data(hwFrame, frame, 0);
+            if (status < 0)
+            {
+                result.warnings.append(
+                    QStringLiteral("VAAPI：帧上传失败：%1")
+                        .arg(ffmpegError(status)));
+                return fail(QStringLiteral("encoder_unavailable"));
+            }
+            encodeFrame = hwFrame;
+        }
+
+        encodeFrame->pts = frameIndex;
+        status = avcodec_send_frame(codecContext, encodeFrame);
         if (status < 0)
             return fail(QStringLiteral("编码第 %1 帧失败：%2")
                             .arg(renderOptions.projectFrame)
@@ -1015,8 +1182,25 @@ Result exportVideo(const model::Project& project,
         }
 
         ++framesWritten;
-        if (progress && !progress(framesWritten, total))
-            return fail(QStringLiteral("cancelled"));
+        if (onProgress)
+        {
+            const double elapsed = std::chrono::duration<double>(
+                                       std::chrono::steady_clock::now()
+                                       - encodeStarted)
+                                       .count();
+            const int remaining = total - framesWritten;
+            double eta = remaining > 0 && framesWritten > 0
+                             ? elapsed / framesWritten * remaining
+                             : 0.0;
+            if (!std::isfinite(eta) || eta < 0.0)
+                eta = 0.0;
+            // Keep the estimate monotonic even if one frame was much slower
+            // than the previous ones.
+            eta = std::min(eta, lastEta);
+            lastEta = eta;
+            if (!onProgress(framesWritten, total, eta))
+                return fail(QStringLiteral("cancelled"));
+        }
     }
 
     if (audioEnabled)
@@ -1065,6 +1249,21 @@ Result exportVideo(const model::Project& project,
     result.error.clear();
     result.framesWritten = framesWritten;
     return result;
+}
+
+Result exportVideo(const model::Project& project,
+                   const assets::AssetStore& assets, const Options& options,
+                   LegacyProgress progress)
+{
+    Progress adapted;
+    if (progress)
+    {
+        adapted = [callback = std::move(progress)](int frame, int total,
+                                                   double) {
+            return callback(frame, total);
+        };
+    }
+    return exportVideo(project, assets, options, std::move(adapted));
 }
 
 } // namespace pvf::export2

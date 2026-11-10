@@ -16,13 +16,15 @@
 #include <QTextStream>
 #include <QVector>
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
 }
 
 using namespace pvf;
@@ -1075,6 +1077,246 @@ void testOverwriteExistingOutput()
     }
 }
 
+void testCrfRange()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+
+    for (const int crf : {0, 51})
+    {
+        const QString path =
+            directory.path() + QStringLiteral("/crf%1.mp4").arg(crf);
+        export2::Options options = makeOptions(path);
+        options.crf = crf;
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(result.ok);
+        CHECK(result.error.isEmpty());
+        CHECK(result.framesWritten == 10);
+        CHECK(QFileInfo::exists(path));
+    }
+
+    for (const int crf : {-1, 52})
+    {
+        const QString path =
+            directory.path() + QStringLiteral("/bad-crf%1.mp4").arg(crf);
+        export2::Options options = makeOptions(path);
+        options.crf = crf;
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(!result.ok);
+        CHECK(result.error == QStringLiteral("invalid_crf"));
+        CHECK(result.framesWritten == 0);
+        CHECK(!QFileInfo::exists(path));
+    }
+}
+
+void testEncoderSelection()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+
+    {
+        // Explicit libx264 keeps using the software encoder.
+        const QString path = directory.path() + QStringLiteral("/x264.mp4");
+        export2::Options options = makeOptions(path);
+        options.encoder = QStringLiteral("libx264");
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(result.ok);
+        CHECK(result.framesWritten == 10);
+        CHECK(QFileInfo::exists(path));
+    }
+
+    {
+        const QString path = directory.path() + QStringLiteral("/unknown.mp4");
+        export2::Options options = makeOptions(path);
+        options.encoder = QStringLiteral("h264_nvenc");
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(!result.ok);
+        CHECK(result.error == QStringLiteral("unknown_encoder"));
+        CHECK(!QFileInfo::exists(path));
+    }
+
+    {
+        const QString path = directory.path() + QStringLiteral("/empty.mp4");
+        export2::Options options = makeOptions(path);
+        options.encoder.clear();
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(!result.ok);
+        CHECK(result.error == QStringLiteral("unknown_encoder"));
+        CHECK(!QFileInfo::exists(path));
+    }
+}
+
+void testPresetSelection()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+
+    {
+        const QString path = directory.path() + QStringLiteral("/fast.mp4");
+        export2::Options options = makeOptions(path);
+        options.preset = QStringLiteral("ultrafast");
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(result.ok);
+        CHECK(result.framesWritten == 10);
+        CHECK(QFileInfo::exists(path));
+    }
+
+    {
+        const QString path = directory.path() + QStringLiteral("/bogus.mp4");
+        export2::Options options = makeOptions(path);
+        options.preset = QStringLiteral("insane");
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+        CHECK(!result.ok);
+        CHECK(result.error == QStringLiteral("unknown_preset"));
+        CHECK(!QFileInfo::exists(path));
+    }
+}
+
+void testEtaProgress()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/eta.mp4");
+
+    QVector<int> frames;
+    QVector<double> etas;
+    export2::Options options = makeOptions(path);
+    options.progress = [&](int frame, int total, double eta) {
+        frames.append(frame);
+        etas.append(eta);
+        CHECK(total == 10);
+        return true;
+    };
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 10);
+    CHECK(frames.size() == 10);
+    CHECK(etas.size() == frames.size());
+    if (frames.size() == 10 && etas.size() == 10)
+    {
+        CHECK(frames.last() == 10);
+        CHECK(etas.last() == 0.0);
+        for (int i = 0; i < etas.size(); ++i)
+        {
+            CHECK(etas.at(i) >= 0.0);
+            if (i > 0)
+                CHECK(etas.at(i) <= etas.at(i - 1) + 1e-9);
+        }
+    }
+}
+
+void testEtaCancel()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/eta-cancel.mp4");
+
+    int calls = 0;
+    const export2::Result result = export2::exportVideo(
+        project, store, makeOptions(path),
+        [&](int frame, int total, double eta) {
+            ++calls;
+            CHECK(frame == calls);
+            CHECK(total == 10);
+            CHECK(eta >= 0.0);
+            return calls < 2;
+        });
+
+    CHECK(!result.ok);
+    CHECK(result.error == QStringLiteral("cancelled"));
+    CHECK(calls == 2);
+    CHECK(!QFileInfo::exists(path));
+    CHECK(QDir(directory.path())
+              .entryList(QStringList{QStringLiteral("*.mp4")}, QDir::Files)
+              .isEmpty());
+}
+
+void testVaapiExport()
+{
+    if (!avcodec_find_encoder_by_name("h264_vaapi"))
+    {
+        QTextStream(stdout) << QStringLiteral("SKIP vaapi: no h264_vaapi\n");
+        return;
+    }
+
+    AVBufferRef* device = nullptr;
+    const bool deviceOk =
+        av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, nullptr,
+                               nullptr, 0)
+        >= 0;
+    av_buffer_unref(&device);
+
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/vaapi.mp4");
+
+    export2::Options options = makeOptions(path);
+    options.encoder = QStringLiteral("h264_vaapi");
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    if (!deviceOk)
+    {
+        // Without a VAAPI device the export must fail cleanly.
+        CHECK(!result.ok);
+        CHECK(result.error == QStringLiteral("encoder_unavailable"));
+        CHECK(!QFileInfo::exists(path));
+        QTextStream(stdout) << QStringLiteral("SKIP vaapi: no device\n");
+        return;
+    }
+
+    if (!result.ok)
+    {
+        // Some render nodes expose VAAPI but cannot encode H.264 (e.g. a
+        // software-only driver).  That is an environment limitation, not a
+        // broken export path.
+        CHECK(result.error == QStringLiteral("encoder_unavailable"));
+        QTextStream(stdout) << QStringLiteral("SKIP vaapi: encoder unusable\n");
+        return;
+    }
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 10);
+    CHECK(QFileInfo::exists(path));
+
+    AVFormatContext* input = openInput(path);
+    CHECK(input != nullptr);
+    if (input)
+    {
+        CHECK(input->nb_streams == 1);
+        if (input->nb_streams >= 1)
+        {
+            const AVStream* video = input->streams[0];
+            CHECK(video->codecpar->codec_type == AVMEDIA_TYPE_VIDEO);
+            CHECK(video->codecpar->codec_id == AV_CODEC_ID_H264);
+            CHECK(video->codecpar->width == 160);
+            CHECK(video->codecpar->height == 90);
+        }
+        avformat_close_input(&input);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1108,6 +1350,12 @@ int main(int argc, char** argv)
         {QStringLiteral("visibleTrackMutesRange"), testVisibleTrackMutesRange},
         {QStringLiteral("parentHiddenMutesChild"),
          testParentHiddenMutesChild},
+        {QStringLiteral("crfRange"), testCrfRange},
+        {QStringLiteral("encoderSelection"), testEncoderSelection},
+        {QStringLiteral("presetSelection"), testPresetSelection},
+        {QStringLiteral("etaProgress"), testEtaProgress},
+        {QStringLiteral("etaCancel"), testEtaCancel},
+        {QStringLiteral("vaapiExport"), testVaapiExport},
     };
 
     QString requested;

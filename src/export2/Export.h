@@ -13,6 +13,18 @@
 
 namespace pvf::export2 {
 
+// Called once after each frame has been encoded.  `frame` is 1-based, `total`
+// is the number of frames in the export, and `etaSeconds` is the estimated
+// remaining time based on the average time per finished output frame (never
+// negative, never increasing, exactly 0 on the last frame).  Returning false
+// cancels the export: the temporary file is removed and Result::error is
+// "cancelled".
+using Progress = std::function<bool(int frame, int total, double etaSeconds)>;
+
+// Legacy two-argument progress callback.  Existing callers keep working; they
+// simply do not receive the ETA.  The frame/total semantics are unchanged.
+using LegacyProgress = std::function<bool(int frame, int total)>;
+
 // Options for one synchronous MP4 export.
 //
 // The camera is mandatory: `cameraUuid` must name an entity whose content kind
@@ -33,8 +45,16 @@ namespace pvf::export2 {
 // project fps (0 = project fps).  Each output frame samples the project at
 // `outputFrame * projectFps / outputFps`, so keyframes, video and HTML are
 // time-sampled while the project data stays untouched.  `fps` is a legacy alias
-// used only when `outputFps` is 0.  `crf` is the libx264 constant-rate-factor,
-// clamped to 0..51.
+// used only when `outputFps` is 0.  `crf` is the quality factor: 0..51 is
+// accepted (lower = better), anything else fails with "invalid_crf".
+//
+// `encoder` selects the H.264 implementation: "libx264" (software, the
+// default) or "h264_vaapi" (hardware).  VAAPI converts every frame to NV12 and
+// uploads it to the device; when the FFmpeg build has no h264_vaapi encoder or
+// no usable VAAPI device the export fails with "encoder_unavailable" instead of
+// crashing.  `preset` is the libx264 speed preset, one of
+// ultrafast/superfast/veryfast/faster/fast/medium/slow/slower/veryslow;
+// unknown names fail with "unknown_preset".
 //
 // `resolutionScale` is 1, 2 or 4: without an explicit `outputSize`, the export
 // is the project canvas multiplied by that integer factor (aspect preserved,
@@ -63,12 +83,18 @@ struct Options
     int fps = 0;        // legacy alias of outputFps; 0 = project fps
     int outputFps = 0;  // 0 = project fps; otherwise 1x/2x/4x project fps
     int resolutionScale = 1; // 1, 2 or 4
-    int crf = 18;
+    int crf = 18;            // 0..51
+    QString encoder = QStringLiteral("libx264"); // libx264 | h264_vaapi
+    QString preset = QStringLiteral("medium"); // libx264 speed preset
     bool includeAudio = true;
     // When false (default), an existing output file makes the export fail with
     // error "output_exists" and the file is left untouched.  Set true only
     // after the user confirmed overwriting.
     bool overwrite = false;
+
+    // Optional progress callback; the explicit exportVideo() argument wins
+    // when both are set.  See the Progress type above.
+    Progress progress;
 
     // Optional decoded-frame sources for video and HTML assets, forwarded to
     // render2::Options for every frame.  Unset providers render placeholders.
@@ -86,17 +112,19 @@ struct Result
     QStringList warnings;
 };
 
-// Called once after each frame has been encoded.  `frame` is 1-based and
-// `total` is the number of frames in the export.  Returning false cancels the
-// export: the temporary file is removed and Result::error is "cancelled".
-using Progress = std::function<bool(int frame, int total)>;
-
 // Renders the project through render2 with the selected camera and encodes the
 // frames as H.264/yuv420p into an MP4.  The file is written to a temporary
 // sibling first and atomically renamed on success, so a failed or cancelled
 // export never leaves a partial .mp4 behind.
+//
+// The explicit `progress` argument takes precedence over Options::progress.
 Result exportVideo(const model::Project& project,
                    const assets::AssetStore& assets, const Options& options,
                    Progress progress = {});
+
+// Backwards-compatible overload for two-argument callbacks.
+Result exportVideo(const model::Project& project,
+                   const assets::AssetStore& assets, const Options& options,
+                   LegacyProgress progress);
 
 } // namespace pvf::export2
