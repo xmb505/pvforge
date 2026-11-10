@@ -8,6 +8,7 @@
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
+#include "next/app/WorkbenchPanel.h"
 #include "next/assets/AssetPanel.h"
 #include "next/history/HistoryPanel.h"
 #include "next/mcp/McpLogPanel.h"
@@ -396,8 +397,10 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
 
     buildUi();
     connect(m_playback.get(), &PlaybackController::playbackStateChanged, this,
-            [this](bool) {
+            [this](bool playing) {
                 updatePlaybackAction();
+                if (m_workbench)
+                    m_workbench->setPlaybackActive(playing);
                 updateStatus();
             });
     connect(m_playback.get(), &PlaybackController::stalled, this,
@@ -407,6 +410,14 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
                     m_mcpLogPanel->addSystemEvent(tr("播放已暂停"), message);
             });
     m_playback->setWatchdogMs(m_settings.watchdogMs);
+
+    // Polls the workbench cache counters; per-frame signals would be too
+    // chatty for a status bar label.
+    m_workbenchUiTimer = new QTimer(this);
+    m_workbenchUiTimer->setInterval(500);
+    connect(m_workbenchUiTimer, &QTimer::timeout, this,
+            &NextWindow::updateWorkbenchStatus);
+    m_workbenchUiTimer->start();
 
     if (m_document) {
         connectDocument();
@@ -420,6 +431,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     updateActions();
     updateStatus();
     rebuildCameras();
+    ensureWorkbenchServices();
     startMcpServer();
     refreshHistory();
     showOnboardingIfNeeded();
@@ -427,6 +439,7 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
 
 NextWindow::~NextWindow()
 {
+    resetWorkbenchServices();
     resetMediaServices();
     if (m_playback)
         m_playback->setDocument(nullptr);
@@ -500,7 +513,9 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     closeAllPrivateTimelines();
 
     // The media services hold a raw ProjectDocument* and their HTML threads
-    // must stop before the document goes away.
+    // must stop before the document goes away.  The workbench hooks reference
+    // the media providers, so they go first.
+    resetWorkbenchServices();
     resetMediaServices();
 
     // Remove the old panels before the old document is destroyed: every panel
@@ -539,6 +554,7 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     updateActions();
     updateStatus();
     rebuildCameras();
+    ensureWorkbenchServices();
     startMcpServer();
     refreshHistory();
     updateSettingsDialogContext();
@@ -779,6 +795,72 @@ void NextWindow::buildUi()
                 restoreHistoryCommit(hash);
             });
 
+    viewMenu->addSeparator();
+    m_workbenchAction = new QAction(tr("工作台缓存…"), this);
+    m_workbenchAction->setObjectName(QStringLiteral("showWorkbenchAction"));
+    m_workbenchAction->setCheckable(true);
+    connect(m_workbenchAction, &QAction::toggled, this, [this](bool checked) {
+        if (!m_workbenchDock)
+            return;
+        m_workbenchDock->setVisible(checked);
+        if (checked) {
+            m_workbenchDock->raise();
+            if (m_workbenchPanel)
+                m_workbenchPanel->refresh();
+        }
+    });
+    viewMenu->addAction(m_workbenchAction);
+
+    m_workbenchPanel = new WorkbenchPanel(this);
+    m_workbenchDock = new QDockWidget(tr("工作台缓存"), this);
+    m_workbenchDock->setObjectName(QStringLiteral("workbenchDock"));
+    m_workbenchDock->setAllowedAreas(Qt::RightDockWidgetArea
+                                     | Qt::BottomDockWidgetArea);
+    m_workbenchDock->setFeatures(QDockWidget::DockWidgetClosable
+                                 | QDockWidget::DockWidgetMovable
+                                 | QDockWidget::DockWidgetFloatable);
+    m_workbenchDock->setWidget(m_workbenchPanel);
+    addDockWidget(Qt::RightDockWidgetArea, m_workbenchDock);
+    m_workbenchDock->hide();
+
+    connect(m_workbenchDock, &QDockWidget::visibilityChanged, this,
+            [this](bool visible) {
+                if (!isVisible())
+                    return;
+                if (m_workbenchAction
+                    && m_workbenchAction->isChecked() != visible) {
+                    QSignalBlocker blocker(m_workbenchAction);
+                    m_workbenchAction->setChecked(visible);
+                }
+            });
+    connect(m_workbenchPanel, &WorkbenchPanel::cacheCleared, this, [this] {
+        if (m_viewport)
+            m_viewport->refresh();
+        statusBar()->showMessage(tr("已清空工作台缓存"), 5000);
+        updateWorkbenchStatus();
+    });
+
+    QMenu* cacheMenu = menuBar()->addMenu(tr("缓存(&C)"));
+    m_cacheAllAction = new QAction(tr("缓存全部"), this);
+    m_cacheAllAction->setObjectName(QStringLiteral("cacheAllFramesAction"));
+    connect(m_cacheAllAction, &QAction::triggered, this,
+            &NextWindow::cacheAllFrames);
+    cacheMenu->addAction(m_cacheAllAction);
+
+    m_cachePlayheadAction = new QAction(tr("缓存到播放头"), this);
+    m_cachePlayheadAction->setObjectName(
+        QStringLiteral("cacheToPlayheadAction"));
+    connect(m_cachePlayheadAction, &QAction::triggered, this,
+            &NextWindow::cacheToPlayhead);
+    cacheMenu->addAction(m_cachePlayheadAction);
+
+    cacheMenu->addSeparator();
+    m_cacheClearAction = new QAction(tr("清空工作台缓存"), this);
+    m_cacheClearAction->setObjectName(QStringLiteral("clearWorkbenchCacheAction"));
+    connect(m_cacheClearAction, &QAction::triggered, this,
+            &NextWindow::clearWorkbenchCache);
+    cacheMenu->addAction(m_cacheClearAction);
+
     QToolBar* toolbar = addToolBar(tr("主工具栏"));
     toolbar->setObjectName(QStringLiteral("mainToolBar"));
     toolbar->setMovable(false);
@@ -829,6 +911,7 @@ void NextWindow::buildUi()
     connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         if (m_viewport && m_cameraCombo)
             m_viewport->setCameraUuid(m_cameraCombo->currentData().toString());
+        ensureWorkbenchServices();
     });
     toolbar->addWidget(m_cameraCombo);
 
@@ -887,6 +970,12 @@ void NextWindow::buildUi()
     m_statusFps = new QLabel(tr("fps —"), this);
     m_statusFps->setObjectName(QStringLiteral("statusFps"));
     statusBar()->addPermanentWidget(m_statusFps);
+
+    m_statusWorkbench = new QLabel(this);
+    m_statusWorkbench->setObjectName(QStringLiteral("statusWorkbench"));
+    m_statusWorkbench->setToolTip(tr("工作台整帧缓存"));
+    m_statusWorkbench->hide();
+    statusBar()->addPermanentWidget(m_statusWorkbench);
 }
 
 void NextWindow::buildEditor()
@@ -957,6 +1046,7 @@ void NextWindow::buildEditor()
 
     rebuildCameras();
     ensureMediaServices();
+    ensureWorkbenchServices();
     configureVideoExtraction();
 }
 
@@ -1149,6 +1239,7 @@ void NextWindow::refreshAll()
 
     closeOrphanedPrivateTimelines();
     rebuildCameras();
+    ensureWorkbenchServices();
     updateActions();
     updateStatus();
 }
@@ -1167,6 +1258,9 @@ void NextWindow::ensureMediaServices()
                 m_playback->noteFramePresented();
             if (m_viewport)
                 m_viewport->refresh();
+            // Releases a prewarm frame held waiting for this HTML picture.
+            if (m_workbench)
+                m_workbench->notifyHtmlFrameReady();
         }, Qt::QueuedConnection);
         connect(m_media.get(), &MediaServices::htmlServiceFailed, this,
                 [this](const QString& message) {
@@ -1239,6 +1333,155 @@ void NextWindow::attachMediaProviders()
                            : QImage();
         });
     m_mediaProvidersAttached = true;
+}
+
+void NextWindow::ensureWorkbenchServices()
+{
+    if (!m_document || !m_settings.workbenchCacheEnabled) {
+        resetWorkbenchServices();
+        return;
+    }
+
+    const Uuid camera = m_viewport ? m_viewport->cameraUuid() : Uuid();
+    if (m_workbench && m_workbench->cameraUuid() == camera)
+        return;
+
+    resetWorkbenchServices();
+
+    WorkbenchServices::Providers providers;
+    providers.videoFrame = [this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->videoFrame(uuid, frame) : QImage();
+    };
+    providers.htmlFrame = [this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->htmlFrame(uuid, frame) : QImage();
+    };
+    providers.htmlPending = [this] {
+        return m_media && m_media->htmlPending();
+    };
+
+    m_workbench = std::make_unique<WorkbenchServices>(
+        m_document, m_settings, camera, providers);
+
+    if (m_viewport)
+    {
+        m_viewport->setSceneCacheHooks(
+            [this](int frame, const Uuid& cameraUuid, bool* hit) {
+                return m_workbench
+                           ? m_workbench->lookup(frame, cameraUuid, hit)
+                           : QImage();
+            },
+            [this](int frame, const Uuid& cameraUuid, const QImage& image) {
+                if (m_workbench)
+                    m_workbench->store(frame, cameraUuid, image);
+            });
+    }
+
+    if (m_workbenchPanel)
+        m_workbenchPanel->setServices(m_workbench.get());
+    if (m_playback)
+        m_workbench->setPlaybackActive(m_playback->isPlaying());
+    updateWorkbenchStatus();
+}
+
+void NextWindow::resetWorkbenchServices()
+{
+    if (m_viewport)
+        m_viewport->setSceneCacheHooks({}, {});
+    if (m_workbenchPanel)
+        m_workbenchPanel->setServices(nullptr);
+    m_workbench.reset();
+    updateWorkbenchStatus();
+}
+
+void NextWindow::updateWorkbenchStatus()
+{
+    if (!m_statusWorkbench)
+        return;
+
+    if (!m_document || !m_settings.workbenchCacheEnabled || !m_workbench) {
+        m_statusWorkbench->hide();
+        return;
+    }
+
+    const workbench::CacheStats stats = m_workbench->stats();
+    const WorkbenchPrewarmProgress progress = m_workbench->progress();
+    QString text;
+    if (progress.scanning) {
+        text = tr("缓存 %1/%2 · 预热 %3/%4")
+                   .arg(stats.entries)
+                   .arg(m_workbench->totalFrames())
+                   .arg(progress.done)
+                   .arg(progress.total);
+    } else {
+        text = tr("缓存 %1/%2 · 命中 %3 · 失效 %4")
+                   .arg(stats.entries)
+                   .arg(m_workbench->totalFrames())
+                   .arg(stats.hits)
+                   .arg(stats.misses);
+    }
+    m_statusWorkbench->setText(text);
+    m_statusWorkbench->show();
+}
+
+void NextWindow::cacheAllFrames()
+{
+    if (!m_workbench) {
+        statusBar()->showMessage(tr("工作台缓存未启用"), 4000);
+        return;
+    }
+    m_workbench->startScanNow();
+    statusBar()->showMessage(tr("正在缓存全部帧…"), 4000);
+}
+
+void NextWindow::cacheToPlayhead()
+{
+    if (!m_workbench || !m_document) {
+        statusBar()->showMessage(tr("工作台缓存未启用"), 4000);
+        return;
+    }
+    m_workbench->startScanNow(0, m_document->playhead());
+    statusBar()->showMessage(
+        tr("正在缓存到播放头（帧 %1）…").arg(m_document->playhead()), 4000);
+}
+
+void NextWindow::clearWorkbenchCache()
+{
+    if (!m_workbench) {
+        statusBar()->showMessage(tr("工作台缓存未启用"), 4000);
+        return;
+    }
+    m_workbench->clearCache();
+    if (m_viewport)
+        m_viewport->refresh();
+    statusBar()->showMessage(tr("已清空工作台缓存"), 5000);
+    updateWorkbenchStatus();
+}
+
+workbench::CacheStats NextWindow::workbenchStatsForTest() const
+{
+    return m_workbench ? m_workbench->stats() : workbench::CacheStats{};
+}
+
+QString NextWindow::workbenchCacheDirForTest() const
+{
+    return m_workbench ? m_workbench->cacheDirectory() : QString();
+}
+
+WorkbenchPrewarmProgress NextWindow::prewarmProgressForTest() const
+{
+    return m_workbench ? m_workbench->progress() : WorkbenchPrewarmProgress{};
+}
+
+QImage NextWindow::lookupForTest(int frame, const Uuid& cameraUuid)
+{
+    return m_workbench ? m_workbench->lookupForTest(frame, cameraUuid)
+                       : QImage();
+}
+
+void NextWindow::startWorkbenchScanForTest()
+{
+    if (m_workbench)
+        m_workbench->startScanNow();
 }
 
 void NextWindow::rebuildCameras()
@@ -1816,6 +2059,20 @@ void NextWindow::applySettings(const AppSettings& previous)
         m_media->applySettings(m_settings);
         if (m_viewport)
             m_viewport->refresh();
+    }
+
+    // The cache directory key includes the scale, so a workbench settings
+    // change rebuilds the service (and its scan) instead of reusing the old
+    // one.
+    if (previous.workbenchCacheEnabled != m_settings.workbenchCacheEnabled
+        || previous.workbenchCacheScalePercent
+               != m_settings.workbenchCacheScalePercent
+        || previous.workbenchCacheDiskBytes
+               != m_settings.workbenchCacheDiskBytes
+        || previous.workbenchCacheMemoryBytes
+               != m_settings.workbenchCacheMemoryBytes) {
+        resetWorkbenchServices();
+        ensureWorkbenchServices();
     }
 
     // A new proxy width changes the extraction cache key; enqueue again so

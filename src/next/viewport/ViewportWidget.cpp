@@ -293,6 +293,14 @@ void ViewportWidget::setHtmlFrameProvider(render2::FrameProvider provider)
     update();
 }
 
+void ViewportWidget::setSceneCacheHooks(SceneLookup lookup, SceneStore store)
+{
+    m_sceneLookup = std::move(lookup);
+    m_sceneStore = std::move(store);
+    invalidateScene();
+    update();
+}
+
 void ViewportWidget::setShowGizmo(bool show)
 {
     if (m_showGizmo == show)
@@ -330,17 +338,59 @@ QImage ViewportWidget::grabFrame() const
     const model::Project& project = m_document->project();
     const QSize output(std::max(1, project.settings.width),
                        std::max(1, project.settings.height));
+    const int frame = m_document->playhead();
+    // A gizmo drag edits mutableProject() directly and does not emit
+    // Document::changed until release, so the cache meta for this frame is
+    // still the pre-drag one.  Draw and keep the live preview uncached.
+    const bool liveEdit = m_dragKind != DragKind::None
+                          && m_dragKind != DragKind::Pan;
 
+    if (m_sceneLookup && !liveEdit) {
+        bool hit = false;
+        const QImage cached = m_sceneLookup(frame, m_cameraUuid, &hit);
+        if (hit && !cached.isNull())
+            return cached;
+    }
+
+    bool mediaMissing = false;
+    const QImage image = renderScene(output, &mediaMissing);
+    // A frame containing a pending HTML/video placeholder must never become
+    // the cached "final" picture.
+    if (!liveEdit && !mediaMissing && m_sceneStore && !image.isNull())
+        m_sceneStore(frame, m_cameraUuid, image);
+    return image;
+}
+
+QImage ViewportWidget::renderScene(const QSize& size, bool* mediaMissing) const
+{
+    bool missing = false;
     render2::Options options;
     options.projectFrame = m_document->playhead();
     options.cameraUuid = m_cameraUuid;
-    options.outputSize = output;
-    options.videoFrame = m_videoFrameProvider;
-    options.htmlFrame = m_htmlFrameProvider;
+    options.outputSize = size;
+    options.videoFrame = [this, &missing](const Uuid& uuid, double frame) {
+        const QImage image =
+            m_videoFrameProvider ? m_videoFrameProvider(uuid, frame) : QImage();
+        if (image.isNull())
+            missing = true;
+        return image;
+    };
+    options.htmlFrame = [this, &missing](const Uuid& uuid, double frame) {
+        const QImage image =
+            m_htmlFrameProvider ? m_htmlFrameProvider(uuid, frame) : QImage();
+        if (image.isNull())
+            missing = true;
+        return image;
+    };
 
+    const model::Project& project = m_document->project();
     render2::SceneWorld world(project, m_document->assets());
     anim::Cache cache;
-    return render2::renderFrame(project, m_document->assets(), options, world, cache);
+    const QImage image = render2::renderFrame(project, m_document->assets(),
+                                              options, world, cache);
+    if (mediaMissing)
+        *mediaMissing = missing;
+    return image;
 }
 
 QPointF ViewportWidget::projectToWidget(QPointF projectPos) const
@@ -1060,22 +1110,35 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
         && m_sceneFrame == frame)
         return m_sceneImage;
 
-    const model::Project& project = m_document->project();
-    render2::Options options;
-    options.projectFrame = frame;
-    options.cameraUuid = m_cameraUuid;
-    options.outputSize = clamped;
-    options.videoFrame = m_videoFrameProvider;
-    options.htmlFrame = m_htmlFrameProvider;
+    // See grabFrame(): live gizmo edits are not representable by the stored
+    // frame meta until the drag commits.
+    const bool liveEdit = m_dragKind != DragKind::None
+                          && m_dragKind != DragKind::Pan;
 
-    render2::SceneWorld world(project, m_document->assets());
-    anim::Cache cache;
-    m_sceneImage =
-        render2::renderFrame(project, m_document->assets(), options, world, cache);
+    // The workbench cache stores whole frames, possibly at a lower resolution
+    // than the viewport; drawImage() scales it back up.
+    if (m_sceneLookup && !liveEdit) {
+        bool hit = false;
+        const QImage cached = m_sceneLookup(frame, m_cameraUuid, &hit);
+        if (hit && !cached.isNull()) {
+            m_sceneImage = cached;
+            m_sceneSize = clamped;
+            m_sceneCamera = m_cameraUuid;
+            m_sceneFrame = frame;
+            m_sceneValid = true;
+            return m_sceneImage;
+        }
+    }
+
+    bool mediaMissing = false;
+    m_sceneImage = renderScene(clamped, &mediaMissing);
     m_sceneSize = clamped;
     m_sceneCamera = m_cameraUuid;
     m_sceneFrame = frame;
     m_sceneValid = true;
+
+    if (!liveEdit && !mediaMissing && m_sceneStore && !m_sceneImage.isNull())
+        m_sceneStore(frame, m_cameraUuid, m_sceneImage);
     return m_sceneImage;
 }
 

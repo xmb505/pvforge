@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
+#include "next/app/WorkbenchServices.h"
 #include "next/settings/SettingsStore.h"
 #include "store/Store.h"
 
@@ -20,6 +21,7 @@ class QDialog;
 class QDockWidget;
 class QLabel;
 class QSpinBox;
+class QTimer;
 
 namespace pvf::mcp2 {
 class HttpServer;
@@ -38,6 +40,7 @@ class PropertiesPanel;
 class SettingsDialog;
 class TimelineWidget;
 class ViewportWidget;
+class WorkbenchPanel;
 
 // What to do with uncommitted text found when opening a project after an
 // unclean shutdown.  The default is Restore: keep the on-disk bytes.
@@ -111,6 +114,31 @@ public:
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
     MediaServices* mediaServicesForTest() const { return m_media.get(); }
+
+    // Workbench frame cache: the service is rebuilt on project/camera/settings
+    // changes, so always fetch it through this accessor.
+    WorkbenchServices* workbenchServicesForTest() const
+    {
+        return m_workbench.get();
+    }
+    workbench::CacheStats workbenchStatsForTest() const;
+    QString workbenchCacheDirForTest() const;
+    WorkbenchPrewarmProgress prewarmProgressForTest() const;
+    QImage lookupForTest(int frame, const Uuid& cameraUuid = Uuid());
+    // Starts the full scan immediately instead of waiting for the 500 ms
+    // debounce (the panel and the 缓存 menu use the same entry point).
+    void startWorkbenchScanForTest();
+    WorkbenchPanel* workbenchPanelForTest() const { return m_workbenchPanel; }
+    QAction* workbenchPanelActionForTest() const { return m_workbenchAction; }
+    QAction* cacheAllActionForTest() const { return m_cacheAllAction; }
+    QAction* cacheToPlayheadActionForTest() const
+    {
+        return m_cachePlayheadAction;
+    }
+    QAction* clearWorkbenchCacheActionForTest() const
+    {
+        return m_cacheClearAction;
+    }
 
     // Settings are loaded from QSettings at construction.  The test accessor
     // returns the currently applied snapshot, not the store's next load().
@@ -188,10 +216,16 @@ private:
     void openRecentProject(const QString& path);
     QString recentProjectName(const QString& path) const;
     void ensureMediaServices();
+    void resetMediaServices();
+    void ensureWorkbenchServices();
+    void resetWorkbenchServices();
+    void updateWorkbenchStatus();
+    void cacheAllFrames();
+    void cacheToPlayhead();
+    void clearWorkbenchCache();
     void configureVideoExtraction();
     CrashRecoveryChoice askCrashRecovery(
         const QVector<store::DirtyText>& dirty);
-    void resetMediaServices();
     void attachMediaProviders();
     void updateActions();
     void updatePlaybackAction();
@@ -226,6 +260,7 @@ private:
     std::unique_ptr<mcp2::HttpServer> m_mcpServer;
     std::unique_ptr<PlaybackController> m_playback;
     std::unique_ptr<MediaServices> m_media;
+    std::unique_ptr<WorkbenchServices> m_workbench;
     bool m_mediaProvidersAttached = false;
     // Keeps the window open and the document/media services alive while the
     // export worker holds raw providers into them.
@@ -246,6 +281,14 @@ private:
     HistoryPanel* m_historyPanel = nullptr;
     QDockWidget* m_historyDock = nullptr;
     QAction* m_historyAction = nullptr;
+
+    WorkbenchPanel* m_workbenchPanel = nullptr;
+    QDockWidget* m_workbenchDock = nullptr;
+    QAction* m_workbenchAction = nullptr;
+    QAction* m_cacheAllAction = nullptr;
+    QAction* m_cachePlayheadAction = nullptr;
+    QAction* m_cacheClearAction = nullptr;
+    QTimer* m_workbenchUiTimer = nullptr;
 
     bool m_onboardingShown = false;
     std::function<void(const QString&)> m_openFolderHandler;
@@ -292,6 +335,7 @@ private:
     QLabel* m_statusMcp = nullptr;
     QLabel* m_statusCommit = nullptr;
     QLabel* m_statusAi = nullptr;
+    QLabel* m_statusWorkbench = nullptr;
 
     QHash<Uuid, QDialog*> m_privateTimelines;
 

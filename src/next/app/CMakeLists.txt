@@ -79,6 +79,11 @@ if(NOT TARGET pvf_video2)
                      ${CMAKE_CURRENT_BINARY_DIR}/video2_dep)
 endif()
 
+if(NOT TARGET pvf_workbench)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../workbench
+                     ${CMAKE_CURRENT_BINARY_DIR}/workbench_dep)
+endif()
+
 add_library(pvf_next_app STATIC
     ProjectDocument.cpp
     ProjectDocument.h
@@ -86,6 +91,10 @@ add_library(pvf_next_app STATIC
     NextWindow.h
     MediaServices.cpp
     MediaServices.h
+    WorkbenchServices.cpp
+    WorkbenchServices.h
+    WorkbenchPanel.cpp
+    WorkbenchPanel.h
     ExportDialog.cpp
     ExportDialog.h
     PlaybackController.cpp
@@ -112,6 +121,7 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_next_history
     pvf_html2
     pvf_video2
+    pvf_workbench
     Qt6::Core
     Qt6::Widgets
     Qt6::Concurrent
@@ -138,6 +148,7 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_next_history
     pvf_html2
     pvf_video2
+    pvf_workbench
     Qt6::Widgets
     Qt6::Concurrent
 )
@@ -169,5 +180,11 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
     set_tests_properties(next.playback_controller PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+
+    add_executable(pvf_workbench_services_tests tests/WorkbenchIntegrationTests.cpp)
+    target_link_libraries(pvf_workbench_services_tests PRIVATE pvf_next_app Qt6::Test)
+    add_test(NAME next.workbench_integration COMMAND pvf_workbench_services_tests)
+    set_tests_properties(next.workbench_integration PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

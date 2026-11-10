@@ -13,6 +13,7 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
 #include <optional>
 
 class QKeyEvent;
@@ -63,6 +64,17 @@ public:
     void setVideoFrameProvider(render2::FrameProvider provider);
     void setHtmlFrameProvider(render2::FrameProvider provider);
 
+    // Whole-frame workbench cache hooks.  lookup() is asked before rendering;
+    // a hit returns the stored (possibly smaller) scene image and skips
+    // render2 entirely.  store() receives a freshly rendered scene image and
+    // may queue/encode it asynchronously.  Both hooks may be empty, and a
+    // failed lookup never affects normal rendering.
+    using SceneLookup =
+        std::function<QImage(int frame, const Uuid& cameraUuid, bool* hit)>;
+    using SceneStore = std::function<void(int frame, const Uuid& cameraUuid,
+                                          const QImage& image)>;
+    void setSceneCacheHooks(SceneLookup lookup, SceneStore store);
+
     void setShowGizmo(bool show);
     bool showGizmo() const { return m_showGizmo; }
 
@@ -81,7 +93,9 @@ public:
     void refresh();
 
     // Renders the current project canvas/camera at the project resolution.
-    // The widget background and gizmo are not included.
+    // The widget background and gizmo are not included.  With the workbench
+    // cache installed a cache hit returns the stored whole frame instead,
+    // which may be smaller than the project resolution.
     QImage grabFrame() const;
 
     QPointF projectToWidget(QPointF projectPos) const;
@@ -150,6 +164,10 @@ private:
 
     void invalidateScene();
     QImage ensureSceneImage(const QSize& size);
+    // render2 pass with the current providers.  *mediaMissing is set when an
+    // asset provider was asked for a picture and returned nothing, so the
+    // result contains render2's placeholder and must not enter the cache.
+    QImage renderScene(const QSize& size, bool* mediaMissing) const;
 
     void updateHoverCursor(const QPointF& widgetPos);
 
@@ -194,6 +212,9 @@ private:
 
     render2::FrameProvider m_videoFrameProvider;
     render2::FrameProvider m_htmlFrameProvider;
+
+    SceneLookup m_sceneLookup;
+    SceneStore m_sceneStore;
 
     QImage m_sceneImage;
     QSize m_sceneSize;

@@ -223,6 +223,11 @@ bool isRed(const QColor& color)
     return color.red() > 200 && color.green() < 60 && color.blue() < 60;
 }
 
+bool isGreen(const QColor& color)
+{
+    return color.green() > 200 && color.red() < 60 && color.blue() < 60;
+}
+
 gizmo::Transform gizmoTransformOf(const model::Entity& entity)
 {
     gizmo::Transform transform;
@@ -314,6 +319,9 @@ private slots:
     void videoProviderRendersFrame();
     void providerReceivesProjectFrame();
     void noProviderKeepsPlaceholder();
+    void sceneCacheLookupSkipsRender();
+    void sceneCacheMissStoresRenderedFrame();
+    void sceneCacheBypassedDuringGizmoDrag();
 };
 
 void ViewportWidgetTest::projectCanvasRenders()
@@ -784,6 +792,126 @@ void ViewportWidgetTest::noProviderKeepsPlaceholder()
     QVERIFY(isRed(view.grabFrame().pixelColor(160, 90)));
     view.setHtmlFrameProvider({});
     QVERIFY(!isRed(view.grabFrame().pixelColor(160, 90)));
+}
+
+void ViewportWidgetTest::sceneCacheLookupSkipsRender()
+{
+    FakeDocument document;
+    const AssetHash hash = document.registerAsset(
+        AssetType::Html, QStringLiteral("Html"), 800, 120);
+    document.addAsset(QStringLiteral("Html"), AssetType::Html, hash);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    int providerCalls = 0;
+    view.setHtmlFrameProvider([&](const Uuid&, double) {
+        ++providerCalls;
+        return redFrame();
+    });
+
+    QImage cached(320, 180, QImage::Format_ARGB32_Premultiplied);
+    cached.fill(Qt::green);
+    int lookups = 0;
+    int stores = 0;
+    int lookupFrame = -1;
+    view.setSceneCacheHooks(
+        [&](int frame, const Uuid&, bool* hit) {
+            ++lookups;
+            lookupFrame = frame;
+            *hit = true;
+            return cached;
+        },
+        [&](int, const Uuid&, const QImage&) { ++stores; });
+
+    const QImage frame = view.grabFrame();
+    QCOMPARE(lookupFrame, 0);
+    QCOMPARE(frame.size(), QSize(320, 180));
+    QCOMPARE(frame.pixelColor(160, 90), QColor(Qt::green));
+    QCOMPARE(providerCalls, 0);
+    QCOMPARE(stores, 0);
+
+    // The widget paint path uses ensureSceneImage and must hit too.
+    const QImage painted = view.grab().toImage();
+    const QColor center = painted.pixelColor(painted.width() / 2,
+                                             painted.height() / 2);
+    QVERIFY(center.green() > 200 && center.red() < 60);
+    QCOMPARE(providerCalls, 0);
+    QVERIFY(lookups >= 2);
+}
+
+void ViewportWidgetTest::sceneCacheMissStoresRenderedFrame()
+{
+    FakeDocument document;
+    document.addVector(QStringLiteral("Red"), 160.0, 90.0, 320.0, 180.0);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    int lookups = 0;
+    int stores = 0;
+    QImage stored;
+    view.setSceneCacheHooks(
+        [&](int, const Uuid&, bool* hit) {
+            ++lookups;
+            *hit = false;
+            return QImage();
+        },
+        [&](int, const Uuid&, const QImage& image) {
+            ++stores;
+            stored = image;
+        });
+
+    const QImage frame = view.grabFrame();
+    QCOMPARE(lookups, 1);
+    QCOMPARE(stores, 1);
+    QCOMPARE(frame.size(), QSize(320, 180));
+    QCOMPARE(stored.size(), QSize(320, 180));
+    QVERIFY(isRed(frame.pixelColor(160, 90)));
+    QVERIFY(isRed(stored.pixelColor(160, 90)));
+}
+
+void ViewportWidgetTest::sceneCacheBypassedDuringGizmoDrag()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         320.0, 180.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    QImage cached(320, 180, QImage::Format_ARGB32_Premultiplied);
+    cached.fill(Qt::green);
+    int lookups = 0;
+    int stores = 0;
+    view.setSceneCacheHooks(
+        [&](int, const Uuid&, bool* hit) {
+            ++lookups;
+            *hit = true;
+            return cached;
+        },
+        [&](int, const Uuid&, const QImage&) { ++stores; });
+
+    QVERIFY(isGreen(view.grabFrame().pixelColor(160, 90)));
+
+    // A drag edits mutableProject() before the commit that clears the meta
+    // cache; the scene must come from render2 until release, otherwise the
+    // gizmo would freeze on the pre-drag picture.
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      handle.toPoint());
+
+    const int lookupsBeforeDrag = lookups;
+    const QImage live = view.grabFrame();
+    QCOMPARE(lookups, lookupsBeforeDrag);
+    QVERIFY(isRed(live.pixelColor(160, 90)));
+
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        handle.toPoint());
+    QCOMPARE(stores, 0);
 }
 
 QTEST_MAIN(ViewportWidgetTest)
