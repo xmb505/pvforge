@@ -206,8 +206,11 @@ ctest --test-dir /tmp/pvf-store-build --output-on-failure
 
 ## 7. 下一步建议顺序
 
-1. 人工验收导出：2x/4x fps、2x/4x 分辨率、HTML 高清 finalFrame、音频成片。
-2. 压测 8192 宽 HTML/4x 8K 导出的内存与耗时；必要时限制并提示。
-3. 播放/watchdog 人工验收：HTML 慢页面 3s 暂停、手动恢复。
-4. 删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
-5. 补充 MCP 预览 provider 的自动化测试（当前由端到端脚本覆盖）。
+详见 [ROADMAP.md](ROADMAP.md)。
+
+1. 完成 Git 可选模式的主窗口接线（引导/设置/历史面板/MCP 只读/导出开文件夹）。
+2. 第一批低成本项：项目属性/背景色、更换素材、快捷键、吸附、HTML 变量、marker CRUD、音频峰值。
+3. 第二批：30 种缓动、文字排版、导出 CRF/编码器/ETA/预览、音频淡入淡出。
+4. 第三批：漫画框/线条/点阵/品牌墙作为一等公民。
+5. 第四批：相机监视器（无串流）+ 临摹 + 实体多选。
+6. 最后删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
