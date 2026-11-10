@@ -2,7 +2,8 @@
 
 > 日期：2026-11-10  
 > 分支：`new-entity-model`  
-> 最新已提交：`a15d237 fix: keep paint cache-only and share media with MCP preview`  
+> 最新已提交：`ba07a59 docs: plan the legacy ui backend integration`  
+> **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端模块逐步接入旧壳；`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。本文以下历史描述以本段为准。  
 > 设计主文档：`docs/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/INTEGRATION_PLAN.md`  
@@ -12,10 +13,10 @@
 
 新模型不是旧工程的迁移，而是一套平行实现：
 
-- 旧 `pvforge` 目标保留可构建，作为参考。
-- 新目标 `pvforge-next` 使用 `src/model`、`store`、`assets`、`solver`、`anim`、`render2`、`html2`、`video2`、`audio2`、`export2`、`mcp2`、`next/*`。
-- 旧工程 `.pvproj` 单文件不读取；新工程是 `.pvproj/` 目录。
-- 旧场景/文件夹/clip/模板模型全部替换；没有场景对象。
+- 旧 `pvforge` 目标就是交付壳，保留 `src/app` + `src/ui` 的布局、面板、快捷键和交互；新后端逐步接入。（2026-11-10 方向修正：原“作为参考”改为“交付壳”。）
+- `src/model`、`store`、`assets`、`solver`、`anim`、`render2`、`html2`、`video2`、`audio2`、`export2`、`mcp2` 是新后端；`pvforge-next` / `src/next/app` 只作行为参考，不交付、不改名替代。
+- 旧工程 `.pvproj` 单文件不读取；新后端目标是 `.pvproj/` 目录。迁移期旧壳仍读写旧单文件，P1 后切换。
+- 旧场景/文件夹/clip/模板模型在新后端全部替换；迁移期旧壳界面暂保留这些旧结构，不因接后端提前删除。
 
 ## 2. 已定设计（速查）
 
@@ -102,7 +103,7 @@
 - HTTP loopback + Bearer token；端口默认 47821，token 首次生成后持久化，重启不换；端口冲突报错不静默换。
 - AI 默认可写全工程；危险操作 `confirm: true`。
 - AI 写操作期间锁人类编辑；只读不锁。
-- MCP 日志底部 dock（旧面板风格）；急停取消当前调用并暂停 AI 写入，直到人类恢复；AI 收到 `stopped_by_human`“人类按下急停，此次操作未实现”。
+- MCP 日志放在相机监视器旁的浮窗（2026-11-10 方向修正：按 `USER_REQUIREMENTS.md` 和旧 `MainWindow::arrangeMcpLog()`，不是底部 dock），显示工具名、参数摘要、耗时、结果、commit；有急停按钮。急停取消当前调用并暂停 AI 写入，直到人类恢复；AI 收到 `stopped_by_human`“人类按下急停，此次操作未实现”。
 - 一次写工具调用一个 commit；纯素材导入可能没有 commit（素材不进 git）。
 - undo/redo 走内存，不产生 commit；git 历史是冷恢复。
 - 预览返回当前帧 PNG 路径 + UI 状态 + 可选摄像机。
@@ -142,7 +143,7 @@
 | MCP log | `src/next/mcp` | 日志/急停/恢复；15 测试 |
 | History | `src/next/history` | Git 历史列表/恢复到提交；10 测试 |
 
-根 CMake 已包含全部新模块；`pvforge-next` 可链接。
+根 CMake 已包含全部新模块；`pvforge-next` 可链接，但只作参考，不是交付目标（2026-11-10 方向修正）。
 
 ### 3.1 端到端验收（2026-11-10）
 
@@ -166,7 +167,7 @@
 7. **崩溃恢复扫描白名单**：只认 `project.json`、`entities/*.json`、`.gitignore`；未来新增独立文本文件需扩展。
 8. **崩溃恢复弹窗**只用注入 handler 测业务分支，真实模态框未自动化。
 9. **Timeline 实体多选/框选**：第一版单选；关键帧多选已做。
-10. **旧 app 删除**：`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。
+10. **旧 app 删除**：~~`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。~~（2026-11-10 方向修正：取消。旧 app 是交付壳，不删除；旧模型源码等新后端接入完成后只清理内部实现。）
 11. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
 12. **求解段递归守卫**：现在同一实体在求解中重新求值会退回无求解的 plain pose；跨实体循环仍由父链/目标校验拦截。
 
@@ -192,18 +193,24 @@
 4. 特殊内容创建入口（菜单/工具栏）与 MCP schema/update 支持新 kind。
 5. 工作台后台预热：`PrewarmService` QThread 尚未接生产，当前 `WorkbenchServices` 在 UI 线程扫描；文档 3 秒 vs 代码 500ms。
 6. 相机监视器 dock 几何不持久化；参考视频同步解码。
-7. 旧 app 删除/改名（先迁移 core 文字/矢量与 html CDP 共享件）。
+7. 旧 app 删除/改名（2026-11-10 方向修正：取消；旧 app 原地保留，只替换内部实现；先迁移 core 文字/矢量与 html CDP 共享件仍有效）。
 8. 品牌墙为文字标签版，旧图片/SVG 贴图未迁；Properties 无关键帧轨道。
 
 ## 5. 构建 / 测试
 
+交付目标是旧壳 `pvforge`（`src/app` + `src/ui` + 新后端）；`pvforge-next` 只作参考，不交付、不安装。2026-11-10 方向修正后，构建文档以本节为准。
+
 ```bash
-# 全量新目标
+# 交付目标（旧壳）
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --target pvforge -j
+
+# 参考目标（不交付）
 cmake --build build --target pvforge-next -j
 
 # 运行（示例）
-./build/src/next/app/pvforge-next --open /path/to/foo.pvproj
+./build/pvforge
+./build/src/next/app/pvforge-next --open /path/to/foo.pvproj  # 仅参考
 
 # 模块独立测试（推荐；根 ctest 可能未注册顶层测试）
 cmake -S src/store -B /tmp/pvf-store-build -DCMAKE_BUILD_TYPE=Debug
@@ -240,4 +247,4 @@ ctest --test-dir /tmp/pvf-store-build --output-on-failure
 3. 第二批：30 种缓动、文字排版、导出 CRF/编码器/ETA/预览、音频淡入淡出。
 4. 第三批：漫画框/线条/点阵/品牌墙作为一等公民。
 5. 第四批：相机监视器（无串流）+ 临摹 + 实体多选。
-6. 最后删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。
+6. ~~最后删除旧 app/旧模型/旧测试，`pvforge-next` 改名 `pvforge`。~~（2026-11-10 方向修正：取消。交付目标始终是旧壳 `pvforge`，`pvforge-next` 只作参考。）

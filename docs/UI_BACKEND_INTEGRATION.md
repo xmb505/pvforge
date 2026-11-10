@@ -1,9 +1,11 @@
 # 旧 UI 接入新后端方案
 
 > 只读分析，未改代码、未提交。
-> 基准：`new-entity-model` 分支 `94bc560 docs: make the legacy ui the delivery shell`。
+> 基准：`new-entity-model` 分支 `94bc560 docs: make the legacy ui the delivery shell`；P0 冻结基线 tag `legacy-ui-baseline` = `ba07a59`。
 > 目标：回答“怎么让旧 `src/app`、`src/ui` 跑在新实体模型 / Store / 渲染 / MCP / 工作台缓存上”，并保留旧 UI 的布局、面板、快捷键和交互。
 > 产品名只叫 **PVForge**；最终可执行目标、窗口标题、安装包、MCP serverInfo 都不出现 `Next` / `pvforge-next`。
+>
+> **2026-11-10 P0 已落实**：`legacy-ui-baseline` tag 已打在 `ba07a59`；旧 `pvforge` 的 `QApplication` 名称/组织名/显示名已是 `PVForge`，旧 QSettings 键（`recentProjects` 等）保留。本轮不改 CMake 目标、不改 UI 布局/面板逻辑；`pvforge-next` 暂留作参考，不作为产品、不安装。
 
 ---
 
@@ -230,11 +232,11 @@ anim / render2 / html2 / video2 / audio2 / export2 / mcp2 / workbench
 
 - 目标：把“旧 UI 是交付壳”固化，避免迁移中双目标漂移。
 - 动作：
-  - 给当前状态打 tag `legacy-ui-baseline`；
-  - 根 `CMakeLists.txt` 只保留一个交付目标 `pvforge`（旧 `src/app` + `src/ui` + 新模块）；旧参考实现不再安装、不出包，内部如需临时目标名不得出现在窗口/安装包/MCP serverInfo；
-  - `QApplication::setApplicationName("PVForge")`、`setOrganizationName("PVForge")`，沿用旧 QSettings 键（`recentProjects` 等），避免升级后最近项目和界面设置丢失；
-  - 更新 `docs/STATUS.md`、`docs/INTEGRATION_PLAN.md`、`docs/OLD_UI_FEATURES.md` 中“新壳是交付、旧 app 最终删除”的过时描述；同时修正 `ENTITY_MODEL.md`/`STATUS.md` 里“MCP 日志底部 dock”的写法，按 `USER_REQUIREMENTS.md` 和旧代码 `arrangeMcpLog()` 改为“监视器旁浮窗”。
-- 里程碑：`git tag` 存在；构建文档写清“交付目标 = 旧壳 + 新后端”。
+  - ✅ 已打 annotated tag `legacy-ui-baseline`（指向 `ba07a59`）；
+  - 交付目标保持 `pvforge`（旧 `src/app` + `src/ui` + 新模块）；`pvforge-next` 只作参考且不安装。P0 暂不做 CMake 目标清理/改名；内部临时目标名不得出现在窗口/安装包/MCP serverInfo；
+  - ✅ `QApplication::setApplicationName("PVForge")`、`setOrganizationName("PVForge")`、`setApplicationDisplayName("PVForge")`；沿用旧 QSettings 键（`recentProjects` 等），避免升级后最近项目和界面设置丢失；
+  - ✅ 更新 `docs/STATUS.md`、`docs/INTEGRATION_PLAN.md`、`docs/OLD_UI_FEATURES.md` 中“新壳是交付、旧 app 最终删除”的过时描述；同时修正 `ENTITY_MODEL.md`/`STATUS.md` 里“MCP 日志底部 dock”的写法，按 `USER_REQUIREMENTS.md` 和旧代码 `arrangeMcpLog()` 改为“监视器旁浮窗”。
+- 里程碑：✅ `legacy-ui-baseline` tag 存在（`ba07a59`）；构建文档写清“交付目标 = 旧壳 + 新后端”。
 
 ### P1 会话层与工程生命周期（M，3–4 天）
 

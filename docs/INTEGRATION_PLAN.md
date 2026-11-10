@@ -2,13 +2,25 @@
 
 > 第一波只做底层模块；本文定义第二波如何接入旧 app，以及哪些旧文件最终会被替换。
 
+> **2026-11-10 方向修正**：交付壳固定为旧 `src/app` + `src/ui`；新后端模块逐步接入旧壳，`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除，`pvforge-next` 不改名替代交付；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。下文“删除旧 app / 改名替换 / 最终替换旧入口”的历史计划以本段为准。
+
 ## 0. 开发期策略
 
-- 旧 `pvforge` 目标暂时保留可构建，作为行为参考和回退。
-- 新增 `pvforge-next` 目标，只使用 `src/model`、`src/store`、`src/solver`、`src/assets`、`src/gizmo`、`src/anim`、新渲染和新 UI。
-- 新目标达到功能 parity 后，再把 `pvforge-next` 改名/替换，删除旧 `src/core/Project.*` 和旧时间轴/场景代码。
-- 根 `CMakeLists.txt` 只由总控改一次；第二波 agent 不改根 CMake。
-- 旧测试不强行迁移；新目标建立自己的测试入口，旧测试随旧目标一起删除。
+- 旧 `pvforge` 目标就是交付壳，保留旧 UI；回退靠 tag `legacy-ui-baseline`，不靠第二套可编译产品。
+- `pvforge-next` / `src/next/app` 只作行为参考和试验；新模块继续开发，但接入旧壳。
+- 不删除旧 app；新后端按面板逐个接入旧壳，旧源码保留到内部实现替换完成。
+- 根 `CMakeLists.txt` 只由总控改；迁移期保留旧交付目标与参考目标，但只安装/发布 `pvforge`。
+- 旧测试保留在 tag 基线；交付目标继续跑旧壳测试，新增测试按新模块独立。
+
+<details>
+<summary>2026-11-10 前的原计划（已取消，保留追溯）</summary>
+
+- ~~旧 `pvforge` 目标暂时保留可构建，作为行为参考和回退。~~
+- ~~新增 `pvforge-next` 目标，只使用 `src/model`、`src/store`、`src/solver`、`src/assets`、`src/gizmo`、`src/anim`、新渲染和新 UI。~~
+- ~~新目标达到功能 parity 后，再把 `pvforge-next` 改名/替换，删除旧 `src/core/Project.*` 和旧时间轴/场景代码。~~
+- ~~旧测试不强行迁移；新目标建立自己的测试入口，旧测试随旧目标一起删除。~~
+
+</details>
 
 ## 进度
 
@@ -16,15 +28,15 @@
 
 - 已完成：Model / Assets / Solver / Gizmo / Store / Anim / Renderer2 / Export2 / Audio2 / HTML cache / HTML2 / Video2 / MCP2 / NextCore / ProjectDocument / Renderer2 / AssetPanel / Timeline / Properties / Viewport / Settings / MCP log / NextWindow。
 - 进行中：Watchdog、Store 崩溃恢复。
-- 待做：导出最终 HTML/视频 provider + 高帧率对话框、崩溃恢复弹窗、视频抽图设置、端到端验收、删除旧 app。
-- 根 CMake 已能一起编；`pvforge-next` 可链接。
+- 待做：导出最终 HTML/视频 provider + 高帧率对话框、崩溃恢复弹窗、视频抽图设置、端到端验收、旧壳逐面板接入新后端；删除旧 app 已取消（2026-11-10 方向修正）。
+- 根 CMake 已能一起编；`pvforge-next` 可链接但只作参考；交付目标仍是 `pvforge`（旧壳）。
 
 ## 当前状态
 
 - 分支：`new-entity-model`。
 - 新设计：`docs/ENTITY_MODEL.md`；状态/交接：`docs/STATUS.md`。
-- 旧模型仍在 `src/core/Project.*`、`src/ui/TimelinePanel.*`、`src/mcp/*`、`src/render/SceneRenderer.*`，仅作为回退参考。
-- 新模块：`src/model`、`store`、`assets`、`solver`、`anim`、`gizmo`、`render2`、`htmlcache`、`html2`、`video2`、`audio2`、`export2`、`mcp2`、`next/*`。
+- 旧模型仍在 `src/core/Project.*`、`src/ui/TimelinePanel.*`、`src/mcp/*`、`src/render/SceneRenderer.*`，是当前交付壳的数据层；随新后端接入逐步替换内部实现，源码不整体删除（2026-11-10 方向修正）。
+- 新模块：`src/model`、`store`、`assets`、`solver`、`anim`、`gizmo`、`render2`、`htmlcache`、`html2`、`video2`、`audio2`、`export2`、`mcp2`、`next/*`；其中 `next/*` 面板只作行为参考。
 
 ## 整合顺序
 
@@ -141,12 +153,22 @@ Store agent 必须写独立测试：临时目录建工程、保存/打开往返�
 - `AssetLibraryPanel`：sha256 素材、去重、缺失占位、.pvhtml 导入、视频拆音频。
 - `MainWindow`：新工程/打开目录、git 历史面板、导出选相机。
 
-### 阶段 6：替换旧入口
+### 阶段 6：交付壳内部替换（2026-11-10 方向修正）
 
-- `main.cpp`：新模型测试入口、旧测试清理。
-- `MainWindow`：不再使用旧 `Project` 的 scene/folder/clip 字段。
-- 删除旧 `src/core/Project.*` 中不再使用的部分，或保留为兼容层直到新路径稳定。
-- 旧工程 `.pvproj` 单文件：打开时提示“旧格式已废弃”。
+- `main.cpp`：保留旧交付入口；后续只做瘦身和服务接线，不删除旧 UI 启动路径。
+- `MainWindow`：布局/交互保留，按面板逐步替换旧 `Project` 数据访问；不整体换成 `NextWindow`。
+- 旧 `src/core/Project.*` 源码保留，只替换内部数据源；不因接入新后端删除旧 app。
+- 旧工程 `.pvproj` 单文件：迁移期旧壳继续读写；P1 后打开新目录格式时提供迁移提示。
+
+<details>
+<summary>2026-11-10 前的原计划（已取消，保留追溯）</summary>
+
+- ~~`main.cpp`：新模型测试入口、旧测试清理。~~
+- ~~`MainWindow`：不再使用旧 `Project` 的 scene/folder/clip 字段。~~
+- ~~删除旧 `src/core/Project.*` 中不再使用的部分，或保留为兼容层直到新路径稳定。~~
+- ~~旧工程 `.pvproj` 单文件：打开时提示“旧格式已废弃”。~~
+
+</details>
 
 ## 第二波 agent 分工
 
@@ -164,9 +186,9 @@ Store agent 必须写独立测试：临时目录建工程、保存/打开往返�
 
 ## 风险
 
-- **两套模型并存**：新模块不得 include 旧 `core/Project.h`；旧代码暂时保留，直到新路径可启动。
+- **两套模型并存**：旧代码是交付壳，必须保留；新模块不得 include 旧 `core/Project.h`，通过适配层接入旧面板。
 - **CMake 冲突**：根 CMake 只在第一波合并后加一次 `add_subdirectory`；第二波 agent 不改根 CMake。
-- **大文件/素材**：Git LFS 硬依赖；commit 失败要显式报错。
+- **大文件/素材**：~~Git LFS 硬依赖；commit 失败要显式报错。~~（2026-11-10 修正：新后端是文本-only git，不依赖 git-lfs；素材不进 git。）
 - **求解段数值**：预览和导出必须共用 `src/solver`，不能各写一套。
 - **Gizmo 与渲染变换**：两边必须共用同一个变换定义；先在 `src/gizmo` 和 `render2` 之间写对拍测试。
 - **旧测试**：大量旧测试是旧模型断言，新路径稳定后统一删除/重写，不要为了过旧测试保留旧字段。

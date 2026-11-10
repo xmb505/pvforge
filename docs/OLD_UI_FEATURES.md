@@ -1,11 +1,19 @@
-# 旧 UI 功能盘点（删除前评估）
+# 旧 UI 功能盘点（交付壳基线）
 
 > 日期：2026-11-10  
-> 范围：`src/app/*`（旧 MainWindow / 各对话框）、`src/ui/*`（旧面板与视图）、以及它们依赖的 `src/core`、`src/media`、`src/audio`、`src/html` 实现。只读评估，未改代码。
+> 范围：`src/app/*`（旧 MainWindow / 各对话框）、`src/ui/*`（旧面板与视图）、以及它们依赖的 `src/core`、`src/media`、`src/audio`、`src/html` 实现。只读评估，未改代码。  
+> **2026-11-10 方向修正**：旧 UI 是 PVForge 的交付壳（tag `legacy-ui-baseline`，`ba07a59`），不是待删除对象；`src/next/app` 的新壳只作行为参考。下表的清单仍然有效，但“新壳现状 / 已覆盖”只表示参考实现状态，不代表旧面板退出交付。旧 app 不删除，新后端逐步接入。
 
 ## 结论
 
+旧 UI 约 2.2 万行，是交付壳，功能面仍宽于 `src/next/app` 参考壳。后续工作不是“删旧壳”，而是把新后端（实体模型/Store/渲染/MCP/工作台缓存）逐面板接进旧壳，同时保留旧布局、快捷键和交互。下表评估哪些旧能力需要在新后端上继续保留；真正需要人类拍板的，仍是三类新模型没有直接对应的能力：特殊生成内容（漫画框/线条装饰/品牌墙/点阵）、相机监视器（临摹参考视频；HTTP/RTP 串流按需求不做），以及精细控制（完整文字排版、30 种缓动预设、CRF/编码器、导出预览）。场景模型按设计删除；曲线图编辑器和语言包在旧壳里就已经是隐藏/半成品，不进入交付范围。
+
+<details>
+<summary>2026-11-10 前的原文结论（按“旧壳删除前评估”写成，保留追溯）</summary>
+
 旧 UI 约 2.2 万行，功能面远宽于新壳。新壳已经把新模型的主链路接起来了：实体/行/裁剪/关键帧/合并菱形/私有时间线、素材哈希与缺失、求解段、HTML 缓存、MP4 导出、MCP 日志、设置和欢迎页都有对应实现；主窗口、属性面板、MCP 日志、欢迎页可以按“已覆盖”处理，素材替换和导出精细控制仍需补。真正需要人类拍板的，是旧壳里三类新模型没有直接对应的能力：特殊生成内容（漫画框/线条装饰/品牌墙/点阵）、相机监视器（临摹参考视频与 HTTP/RTP 串流），以及精细控制（完整文字排版、30 种缓动预设、CRF/编码器、导出预览）。场景模型按设计删除；曲线图编辑器和语言包在旧壳里就已经是隐藏/半成品，不建议迁移。
+
+</details>
 
 ## 逐项清单
 
@@ -20,7 +28,7 @@
 | 旧相机监视器（浮窗 / 缩放） | `src/ui/CameraMonitor.cpp/.h` | 无独立监视器。`src/next/viewport/ViewportWidget.*` 有摄像机下拉和取景框，主视口可缩放/平移。 | 需要迁移 | 主视口能替代基本预览，但无法边编辑边看成品。临摹参考视频（透明度叠加）和 HTTP/RTP 串流是旧壳独有能力；只做浮窗预览成本低，连临摹/串流一起搬成本中等。 |
 | 旧导出对话框 / 进度（编码参数 / 音频 / 范围） | `src/app/ExportDialog.cpp/.h`、`src/app/ExportProgressDialog.cpp/.h`、`src/render/VideoExporter.*` | `src/next/app/ExportDialog.*`：摄像机+范围、1x/2x/4x 分辨率、1x/2x/4x fps、音频开关、输出路径、4x 大导出确认。进度是 `QProgressDialog` 文本帧数，没有预览/ETA。`ExportOptions` 固定 CRF 18，无编码器选择。 | 需要迁移 | 核心参数已覆盖且多了 2x/4x；旧“整画布”导出按新模型取消（必须选摄像机）。旧 CRF 档位、软件/VAAPI 编码器、导出画面预览和剩余时间仍是实际交付需要的控制；`export2::ExportOptions` 已有 `crf` 字段，接 UI 即可。 |
 | 旧设置对话框（语言 / 主题 / 性能） | `src/app/SettingsDialog.cpp/.h` | `src/next/settings/SettingsDialog.*` 只有 HTML、视频、MCP 三页：缓存/清晰度/看门狗/Chrome、视频代理宽度/内存帧数、MCP 端口/token/端点/git/commit 延迟。 | 需要迁移 | HTML/视频/MCP 设置已覆盖新模型。旧的语言项见语言包一行；主题本来就没有选项（跟随系统 palette）；自动保存被自动 commit 取代，但吸附设置、工程默认值、时间轴缩放、解码信息、关于页仍值得补。 |
-| 旧 MCP 日志 / 权限面板 | `src/ui/McpLogPanel.cpp/.h`、`src/app/SettingsDialog.cpp` MCP 页 | `src/next/mcp/McpLogPanel.*`：底部 dock、服务器/AI 状态、参数与结果详情、急停/恢复/清空、500 行/1500 字上限。权限模型改为 AI 默认可写、写时锁人类，不再按场景手动武装。 | 已覆盖 | 新 dock 满足 `ENTITY_MODEL.md` 的日志+急停要求。旧的场景级权限和写前 checkpoint 已被新权限模型取代，属于设计变更而非缺失；旧日志点击跳到实体/帧的小功能没搬，影响不大。 |
+| 旧 MCP 日志 / 权限面板 | `src/ui/McpLogPanel.cpp/.h`、`src/app/SettingsDialog.cpp` MCP 页 | `src/next/mcp/McpLogPanel.*`：底部 dock、服务器/AI 状态、参数与结果详情、急停/恢复/清空、500 行/1500 字上限。（2026-11-10 修正：交付壳按监视器旁浮窗，不是底部 dock。）权限模型改为 AI 默认可写、写时锁人类，不再按场景手动武装。 | 已覆盖 | 新 dock 满足 `ENTITY_MODEL.md` 的日志+急停要求。旧的场景级权限和写前 checkpoint 已被新权限模型取代，属于设计变更而非缺失；旧日志点击跳到实体/帧的小功能没搬，影响不大。 |
 | 旧欢迎页 / 新建工程对话框 | `src/app/WelcomeWindow.cpp/.h`、`src/app/NewProjectDialog.cpp/.h` | `NextWindow::buildWelcome` 内嵌欢迎页：最近工程打开/移除/双击/右键。新建对话框含父目录、工程名、fps、宽高、背景色和预览。 | 已覆盖 | 新欢迎页比旧版多“移除”和背景色；旧作者/描述字段在新 `project.json` 中没有对应位置，可以放弃。 |
 | 旧文字排版对话框 | `src/ui/TextLayoutDialog.cpp/.h`、`src/core/TextStyle.*`、`src/core/TextBlock.*` | Properties 文字页有文本、字体、字号、颜色、对齐、行高、字距、描边宽度；缺描边色、粗体/斜体/下划线、竖排、内边距/框宽/框高的静态编辑和实时预览对话框。 | 需要迁移 | 新模型文字字段齐全，`render2` 已支持，缺的是 UI。旧 `TextLayoutDialog` 的实时预览使用同一套 `TextStyle`，可按新模型改造后直接复用。 |
 | 旧品牌墙生成器 | `src/ui/BrandWallDialog.cpp/.h`、`src/core/BrandWall.*` | 无对应 `ContentKind`。只能作为 `.pvhtml` 或矢量内容重建。 | 待定 | 保留就要新增内容类型 + JSON + `render2` 绘制 + 属性/工作台 UI；放弃则旧 PV 里的品牌墙镜头要用 HTML 重做。属于产品取舍，不是单纯搬代码。 |

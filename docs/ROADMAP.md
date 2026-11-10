@@ -1,7 +1,8 @@
 # PVForge 路线图（2026-11-10）
 
 > 依据：`docs/ENTITY_MODEL.md`、`docs/OLD_UI_FEATURES.md` 和人类逐项拍板。
-> 原则：新核心不重写；旧壳能力按优先级分批迁移，先删旧 app 前保留的一等公民。
+> **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端逐步接入；旧 app 不删除，`src/next/app` / `pvforge-next` 只作参考。产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。下文“旧壳删除前 / 第五批旧壳退休”的历史排序作废，保留原文供追溯。
+> 原则：新核心不重写；旧面板原地接入新后端；产品名只有 `PVForge`。
 
 ## 0. 已完成（基线）
 
@@ -9,7 +10,7 @@
 - 端到端 MCP 验收通过（创建/关键帧/求解/marker/标签/预览/undo/redo）。
 - Git 可选模式：默认关、首次引导、MCP 只读、历史面板、恢复到 commit。
 
-## 1. 第一批：低成本高收益（旧壳删除前）
+## 1. 第一批：低成本高收益（交付壳接入期）
 
 已完成：更换素材+预览、视口吸附、HTML 变量 UI、标记 CRUD、音频峰值、30 种缓动、工作台缓存、Git 可选模式/历史面板。
 
@@ -51,11 +52,20 @@
 | 临摹参考 | 参考视频透明度叠加 |
 | 实体多选/框选 | 批量移动/删除/复制；成组仍用空实体 |
 
-## 5. 第五批：旧壳退休
+## 5. ~~第五批：旧壳退休~~（2026-11-10 方向修正：取消）
 
-- 删除旧 `src/app`、`src/ui`、`src/core`（先移出 `TextBlock/TextStyle/VectorShape`）、`src/render`、`src/media`、`src/audio`、`src/mcp`、旧 html 壳。
-- `pvforge-next` 改名 `pvforge`；更新文档/命令。
-- 保留 `src/html` 的 CDP/browser 实现给 `html2`。
+- 交付目标始终是旧壳 `pvforge`；`pvforge-next` 不改名替代，不删除 `src/app`、`src/ui`。
+- 旧面板按目录/功能逐个把内部实现换成新后端，布局、菜单、快捷键、浮动面板保留。
+- 保留 `src/html` 的 CDP/browser 实现给 `html2`（仍有效）。
+
+<details>
+<summary>2026-11-10 前的原计划（已取消，保留追溯）</summary>
+
+- ~~删除旧 `src/app`、`src/ui`、`src/core`（先移出 `TextBlock/TextStyle/VectorShape`）、`src/render`、`src/media`、`src/audio`、`src/mcp`、旧 html 壳。~~
+- ~~`pvforge-next` 改名 `pvforge`；更新文档/命令。~~
+- ~~保留 `src/html` 的 CDP/browser 实现给 `html2`。~~
+
+</details>
 
 ## 6. 暂不做
 
