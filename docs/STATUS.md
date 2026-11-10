@@ -122,23 +122,25 @@
 | Solver | `src/solver` | 重力/公转/自转/黑洞；10 测试 |
 | Assets | `src/assets` | sha256/素材库/WAV/.pvhtml/标签；17 CTest |
 | Gizmo | `src/gizmo` | 四角旋转/Office 缩放/中心四象限；10 组 265 断言 |
-| Store | `src/store` | 文本-only git、内存 undo、debounce、崩溃恢复扫描；21 测试 |
+| Store | `src/store` | 文本-only git（可关闭）、内存 undo、debounce、崩溃恢复、恢复到 commit；32 测试 |
 | Anim | `src/anim` | 普通/求解段/父子/可见性/小数帧；12 测试 |
-| Renderer2 | `src/render2` | 图/矢量/文字/相机/占位/provider；14 测试 |
+| Renderer2 | `src/render2` | 图/矢量/文字/相机/素材丢失卡片/provider；20 测试 |
 | Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率；11 CTest |
 | Audio2 | `src/audio2` | 混音 + QAudioSink 播放；8 测试 |
 | HTML cache | `src/htmlcache` | 内存 QImage LRU + 磁盘 WebP LRU；13 测试 |
 | HTML2 | `src/html2` | `.pvhtml` 本地服务器/Chrome/三浏览器/异步/8192 上限；16 测试 |
 | Video2 | `src/video2` | 取帧/代理/全量抽图/队列/设置；25 测试 |
-| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider；40 测试 |
+| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider/无 Git 只读；40 测试 |
+| Workbench | `src/workbench` | 帧元信息/整帧 WebP/SQLite LRU/预渲染扫描；22 测试 |
 | Next core | `src/next/core` | Document 接口 |
-| Next app | `src/next/app` | ProjectDocument/NextWindow/Playback+看门狗/MediaServices/Export/崩溃恢复/MCP log；5 CTest |
-| Timeline | `src/next/timeline` | 行/裁剪/关键帧/拖放/浮层信号；30 测试 |
-| Properties | `src/next/properties` | 属性/auto-key/求解段创建/轨迹预览；29 + 11 测试 |
+| Next app | `src/next/app` | 主窗口/播放看门狗/媒体/导出/崩溃恢复/Git 引导+历史/工作台缓存/Debug；7 CTest |
+| Timeline | `src/next/timeline` | 行/裁剪/关键帧/浮层/标记 CRUD/音频峰值；36 测试 |
+| Properties | `src/next/properties` | 属性/auto-key/求解段/HTML 变量/换素材/33 缓动；35 测试 |
 | AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度/补抽；17 测试 |
-| Viewport | `src/next/viewport` | 渲染/gizmo/provider；15 测试 |
-| Settings | `src/next/settings` | 3 页 QSettings；14 测试 |
+| Viewport | `src/next/viewport` | 渲染/gizmo/provider/吸附/工作台命中；23 测试 |
+| Settings | `src/next/settings` | 5 页 QSettings/Git 引导/工作台缓存；29 测试 |
 | MCP log | `src/next/mcp` | 日志/急停/恢复；15 测试 |
+| History | `src/next/history` | Git 历史列表/恢复到提交；10 测试 |
 
 根 CMake 已包含全部新模块；`pvforge-next` 可链接。
 
