@@ -90,8 +90,8 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     form->addRow(QStringLiteral("字体"), m_font);
 
     m_size = new QSpinBox(this);
-    m_size->setRange(8, 512);
-    m_size->setValue(std::max(8, m_style.pixelSize));
+    m_size->setRange(1, 100000);
+    m_size->setValue(std::max(1, m_style.pixelSize));
     m_size->setSuffix(QStringLiteral(" px"));
     connect(m_size, &QSpinBox::valueChanged, this, [this](int value) {
         m_style.pixelSize = value;
@@ -114,7 +114,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
 
     m_strokeWidth = new QDoubleSpinBox(this);
     m_strokeWidth->setObjectName(QStringLiteral("layoutStrokeWidth"));
-    m_strokeWidth->setRange(0, 24);
+    m_strokeWidth->setRange(0, 1000);
     m_strokeWidth->setSingleStep(0.5);
     m_strokeWidth->setSuffix(QStringLiteral(" px"));
     m_strokeWidth->setValue(m_style.strokeWidth);
@@ -164,7 +164,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     form->addRow(QStringLiteral("对齐"), m_align);
 
     m_lineHeight = new QDoubleSpinBox(this);
-    m_lineHeight->setRange(0.5, 4.0);
+    m_lineHeight->setRange(0.01, 100.0);
     m_lineHeight->setSingleStep(0.1);
     m_lineHeight->setValue(m_style.lineHeight);
     m_lineHeight->setToolTip(QStringLiteral("字体行高的倍数；竖排时控制列间距"));
@@ -176,7 +176,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
 
     m_letterSpacing = new QDoubleSpinBox(this);
     m_letterSpacing->setObjectName(QStringLiteral("layoutLetterSpacing"));
-    m_letterSpacing->setRange(-50, 200);
+    m_letterSpacing->setRange(-10000, 10000);
     m_letterSpacing->setSingleStep(1);
     m_letterSpacing->setSuffix(QStringLiteral(" px"));
     m_letterSpacing->setValue(m_style.letterSpacing);
@@ -189,7 +189,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     form->addRow(QStringLiteral("字距"), m_letterSpacing);
 
     m_padding = new QDoubleSpinBox(this);
-    m_padding->setRange(0, 200);
+    m_padding->setRange(0, 100000);
     m_padding->setValue(m_style.padding);
     connect(m_padding, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         m_style.padding = value;
@@ -198,7 +198,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     form->addRow(QStringLiteral("内边距"), m_padding);
 
     m_boxWidth = new QDoubleSpinBox(this);
-    m_boxWidth->setRange(0, 4000);
+    m_boxWidth->setRange(0, 1000000);
     m_boxWidth->setSpecialValueText(QStringLiteral("自动"));
     m_boxWidth->setValue(m_style.boxWidth);
     connect(m_boxWidth, &QDoubleSpinBox::valueChanged, this, [this](double value) {
@@ -208,7 +208,7 @@ TextLayoutDialog::TextLayoutDialog(const TextStyle& style, QWidget* parent)
     form->addRow(QStringLiteral("排版宽度"), m_boxWidth);
 
     m_boxHeight = new QDoubleSpinBox(this);
-    m_boxHeight->setRange(0, 4000);
+    m_boxHeight->setRange(0, 1000000);
     m_boxHeight->setSpecialValueText(QStringLiteral("自动"));
     m_boxHeight->setToolTip(QStringLiteral("竖排时一列的最大高度，0 表示不换列"));
     m_boxHeight->setValue(m_style.boxHeight);

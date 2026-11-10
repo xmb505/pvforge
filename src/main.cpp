@@ -72,6 +72,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCheckBox>
+#include <QFocusEvent>
 #include <QDataStream>
 #include <QDoubleSpinBox>
 #include <QDropEvent>
@@ -100,6 +101,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTabWidget>
@@ -912,6 +914,948 @@ int propertiesTest(QApplication& app)
     qInfo() << "properties-test OK: basic/transform/content/keyframes/33 easing/"
                "solvers, screenshot"
             << screenshot;
+    return 0;
+}
+
+int propertiesSpecialTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p4b-special.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P4b 特殊内容");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "properties-special-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 120;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid comic =
+        makeEntity(QStringLiteral("漫画文字"), 0, pvf::ContentKind::ComicText);
+    project.entities[comic].content.comic.text = QStringLiteral("台词");
+    project.entities[comic].content.comic.pixelSize = 72;
+    project.entities[comic].content.comic.boxWidth = 480.0;
+    project.entities[comic].content.comic.boxHeight = 260.0;
+
+    const pvf::Uuid radial =
+        makeEntity(QStringLiteral("径向线"), 1, pvf::ContentKind::RadialLines);
+    project.entities[radial].content.radial.count = 56;
+    project.entities[radial].content.radial.radius = 420.0;
+
+    const pvf::Uuid flow =
+        makeEntity(QStringLiteral("流线"), 2, pvf::ContentKind::FlowLines);
+    project.entities[flow].content.flow.count = 26;
+    project.entities[flow].content.flow.length = 420.0;
+
+    const pvf::Uuid halftone =
+        makeEntity(QStringLiteral("点阵"), 3, pvf::ContentKind::HalftoneDots);
+    project.entities[halftone].content.halftone.layout = QStringLiteral("grid");
+    project.entities[halftone].content.halftone.area = 900.0;
+
+    const pvf::Uuid wall =
+        makeEntity(QStringLiteral("品牌墙"), 4, pvf::ContentKind::BrandWall);
+    project.entities[wall].content.brandWall.logos = {QStringLiteral("A"),
+                                                      QStringLiteral("B")};
+
+    const pvf::Uuid text =
+        makeEntity(QStringLiteral("文字"), 5, pvf::ContentKind::Text);
+    project.entities[text].content.text.text = QStringLiteral("PVForge");
+
+    const QVector<pvf::Uuid> all = {comic, radial, flow, halftone, wall, text};
+    if (!session->document()->commitEntities(all, QStringLiteral("p4b setup"),
+                                             &error))
+    {
+        qCritical() << "properties-special-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    if (!live || !document || !panel || !panel->sessionMode())
+    {
+        qCritical() << "properties-special-test: session window/panel missing";
+        return 1;
+    }
+
+    QString lastError;
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [&lastError](const QString& message) {
+                         lastError = message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "properties-special-test:" << message;
+        return condition;
+    };
+    auto entity = [live](const pvf::Uuid& uuid) {
+        return live->project().entities.value(uuid);
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "properties-special-test: flush failed" << flushError;
+    };
+    auto select = [&](const pvf::Uuid& uuid) {
+        document->setSelection(uuid);
+        QApplication::processEvents();
+        QApplication::processEvents();
+    };
+
+    panel->setAutoKey(false);
+
+    // Comic text page.
+    select(comic);
+    auto* comicPage = panel->findChild<QWidget*>(QStringLiteral("comicTextPage"));
+    auto* comicSize =
+        panel->findChild<QSpinBox*>(QStringLiteral("comicPixelSizeSpin"));
+    auto* comicShape =
+        panel->findChild<QComboBox*>(QStringLiteral("comicShapeCombo"));
+    if (!check(comicPage && comicPage->isVisible(),
+               QStringLiteral("comic page is not visible"))
+        || !check(comicSize && comicSize->value() == 72,
+                  QStringLiteral("comic page does not show pixelSize")))
+        return 1;
+    int before = depth();
+    comicSize->setValue(88);
+    QMetaObject::invokeMethod(comicSize, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(comic).content.comic.pixelSize == 88,
+               QStringLiteral("comic pixelSize did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("comic edit was not one commit")))
+        return 1;
+    before = depth();
+    comicShape->setCurrentIndex(comicShape->findData(QStringLiteral("burst")));
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(comic).content.comic.shape == QStringLiteral("burst"),
+               QStringLiteral("comic shape did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("comic shape edit was not one commit")))
+        return 1;
+
+    // Radial lines page.
+    select(radial);
+    auto* radialPage =
+        panel->findChild<QWidget*>(QStringLiteral("radialLinesPage"));
+    auto* radialCount =
+        panel->findChild<QSpinBox*>(QStringLiteral("radialCountSpin"));
+    if (!check(radialPage && radialPage->isVisible(),
+               QStringLiteral("radial page is not visible"))
+        || !check(radialCount && radialCount->value() == 56,
+                  QStringLiteral("radial page does not show count")))
+        return 1;
+    before = depth();
+    radialCount->setValue(12);
+    QMetaObject::invokeMethod(radialCount, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(radial).content.radial.count == 12,
+               QStringLiteral("radial count did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("radial edit was not one commit")))
+        return 1;
+
+    // Flow lines page.
+    select(flow);
+    auto* flowPage = panel->findChild<QWidget*>(QStringLiteral("flowLinesPage"));
+    auto* flowLength =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("flowLengthSpin"));
+    if (!check(flowPage && flowPage->isVisible(),
+               QStringLiteral("flow page is not visible"))
+        || !check(flowLength && std::abs(flowLength->value() - 420.0) < 1e-6,
+                  QStringLiteral("flow page does not show length")))
+        return 1;
+    before = depth();
+    flowLength->setValue(500.0);
+    QMetaObject::invokeMethod(flowLength, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(flow).content.flow.length - 500.0) < 1e-6,
+               QStringLiteral("flow length did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("flow edit was not one commit")))
+        return 1;
+
+    // Halftone page.
+    select(halftone);
+    auto* halftonePage =
+        panel->findChild<QWidget*>(QStringLiteral("halftoneDotsPage"));
+    auto* halftoneLayout =
+        panel->findChild<QComboBox*>(QStringLiteral("halftoneLayoutCombo"));
+    auto* halftoneDot =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("halftoneDotSizeSpin"));
+    if (!check(halftonePage && halftonePage->isVisible(),
+               QStringLiteral("halftone page is not visible"))
+        || !check(halftoneLayout && halftoneDot,
+                  QStringLiteral("halftone widgets missing")))
+        return 1;
+    before = depth();
+    halftoneLayout->setCurrentIndex(
+        halftoneLayout->findData(QStringLiteral("radial")));
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(halftone).content.halftone.layout
+                   == QStringLiteral("radial"),
+               QStringLiteral("halftone layout did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("halftone layout was not one commit")))
+        return 1;
+    before = depth();
+    halftoneDot->setValue(9.5);
+    QMetaObject::invokeMethod(halftoneDot, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(std::abs(entity(halftone).content.halftone.dotSize - 9.5) < 1e-6,
+               QStringLiteral("halftone dotSize did not reach the model")))
+        return 1;
+
+    // Brand wall page and empty-logo validation.
+    select(wall);
+    auto* wallPage =
+        panel->findChild<QWidget*>(QStringLiteral("brandWallPage"));
+    auto* wallLogos =
+        panel->findChild<QPlainTextEdit*>(QStringLiteral("brandLogosEdit"));
+    auto* wallColumns =
+        panel->findChild<QSpinBox*>(QStringLiteral("brandColumnsSpin"));
+    if (!check(wallPage && wallPage->isVisible(),
+               QStringLiteral("brand wall page is not visible"))
+        || !check(wallLogos && wallColumns,
+                  QStringLiteral("brand wall widgets missing")))
+        return 1;
+    before = depth();
+    wallLogos->setPlainText(QStringLiteral("ACME\nPVForge"));
+    QFocusEvent focusOut(QEvent::FocusOut);
+    QApplication::sendEvent(wallLogos, &focusOut);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(wall).content.brandWall.logos
+                   == QStringList({QStringLiteral("ACME"),
+                                   QStringLiteral("PVForge")}),
+               QStringLiteral("brand wall labels did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("brand wall label edit was not one commit")))
+        return 1;
+    before = depth();
+    wallColumns->setValue(4);
+    QMetaObject::invokeMethod(wallColumns, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(wall).content.brandWall.columns == 4,
+               QStringLiteral("brand wall columns did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("brand wall columns edit was not one commit")))
+        return 1;
+
+    lastError.clear();
+    before = depth();
+    wallLogos->setPlainText(QString());
+    QApplication::sendEvent(wallLogos, &focusOut);
+    QApplication::processEvents();
+    flush();
+    if (!check(!entity(wall).content.brandWall.logos.isEmpty(),
+               QStringLiteral("empty brand wall labels were committed"))
+        || !check(depth() == before,
+                  QStringLiteral("rejected brand wall edit added a commit"))
+        || !check(lastError.contains(QStringLiteral("标签")),
+                  QStringLiteral("brand wall rejection did not report an error")))
+        return 1;
+
+    // Range validation: a zero count must be rejected by the model.
+    select(radial);
+    lastError.clear();
+    before = depth();
+    const int radialBefore = entity(radial).content.radial.count;
+    radialCount->setValue(0);
+    QMetaObject::invokeMethod(radialCount, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(entity(radial).content.radial.count == radialBefore,
+               QStringLiteral("out-of-range radial count was committed"))
+        || !check(depth() == before,
+                  QStringLiteral("rejected radial edit added a commit"))
+        || !check(lastError.contains(QStringLiteral("count")),
+                  QStringLiteral("radial rejection did not report an error")))
+        return 1;
+
+    // The special page only appears for the five special kinds.
+    select(text);
+    auto* specialSection =
+        panel->findChild<QWidget*>(QStringLiteral("specialContentSection"));
+    if (!check(specialSection && !specialSection->isVisible(),
+               QStringLiteral("special section is visible for text")))
+        return 1;
+
+    // Restore labels for the screenshot, select the wall and show the page.
+    select(wall);
+    wallLogos->setPlainText(QStringLiteral("ACME\nPVForge"));
+    QApplication::sendEvent(wallLogos, &focusOut);
+    QApplication::processEvents();
+    flush();
+    live->setPlayhead(15);
+    QApplication::processEvents();
+    if (auto* objectTab =
+            window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
+    {
+        if (auto* section =
+                panel->findChild<QWidget*>(QStringLiteral("specialContentSection")))
+        {
+            const int y = section->mapTo(panel, QPoint(0, 0)).y();
+            objectTab->verticalScrollBar()->setValue(
+                std::clamp(y - 4, 0, objectTab->verticalScrollBar()->maximum()));
+        }
+    }
+    window->statusBar()->clearMessage();
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-p4b-special.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "properties-special-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "properties-special-test OK: comic/radial/flow/halftone/brandWall,"
+               " screenshot"
+            << screenshot;
+    return 0;
+}
+
+int htmlVarsTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    QTemporaryDir htmlSource;
+    if (!temp.isValid() || !htmlSource.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p4b-html.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P4b HTML");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "html-vars-test: create failed" << error;
+        return 1;
+    }
+
+    {
+        QFile index(QDir(htmlSource.path()).filePath(QStringLiteral("index.html")));
+        if (!index.open(QIODevice::WriteOnly))
+            return 1;
+        index.write("<!doctype html><html><body>PVForge</body></html>");
+    }
+    {
+        QJsonObject variables;
+        variables.insert(QStringLiteral("speed"),
+                         QJsonObject{{QStringLiteral("type"), QStringLiteral("number")},
+                                     {QStringLiteral("default"), 2.5},
+                                     {QStringLiteral("min"), 0.0},
+                                     {QStringLiteral("max"), 10.0}});
+        variables.insert(QStringLiteral("count"),
+                         QJsonObject{{QStringLiteral("type"), QStringLiteral("number")},
+                                     {QStringLiteral("default"), 3.0},
+                                     {QStringLiteral("min"), 0.0},
+                                     {QStringLiteral("max"), 100.0},
+                                     {QStringLiteral("integer"), true}});
+        variables.insert(QStringLiteral("label"), QStringLiteral("hello"));
+        variables.insert(QStringLiteral("flag"), true);
+        QJsonObject manifest;
+        manifest.insert(QStringLiteral("entry"), QStringLiteral("index.html"));
+        manifest.insert(QStringLiteral("logicalSize"), QJsonArray{800, 120});
+        manifest.insert(QStringLiteral("timeDependent"), true);
+        manifest.insert(QStringLiteral("variables"), variables);
+        QFile file(
+            QDir(htmlSource.path()).filePath(QStringLiteral("pvhtml.json")));
+        if (!file.open(QIODevice::WriteOnly))
+            return 1;
+        file.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+    }
+
+    const auto imported =
+        session->assets().importPvhtml(htmlSource.path(), &error);
+    if (!imported)
+    {
+        qCritical() << "html-vars-test: import failed" << error;
+        return 1;
+    }
+
+    pvf::model::Entity entity;
+    entity.uuid = pvf::model::newUuid();
+    entity.name = QStringLiteral("HTML");
+    entity.start = 0;
+    entity.end = 120;
+    entity.content.kind = pvf::ContentKind::Asset;
+    entity.content.asset.type = pvf::AssetType::Html;
+    entity.content.asset.hash = imported->hash;
+    const pvf::Uuid htmlUuid = entity.uuid;
+    session->mutableProject().entities.insert(htmlUuid, entity);
+    if (!session->document()->commitEntity(htmlUuid,
+                                           QStringLiteral("p4b html setup"),
+                                           &error))
+    {
+        qCritical() << "html-vars-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    if (!live || !document || !panel)
+    {
+        qCritical() << "html-vars-test: session window/panel missing";
+        return 1;
+    }
+
+    QString lastError;
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [&lastError](const QString& message) {
+                         lastError = message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "html-vars-test:" << message;
+        return condition;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "html-vars-test: flush failed" << flushError;
+    };
+
+    document->setSelection(htmlUuid);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* htmlSection =
+        panel->findChild<QWidget*>(QStringLiteral("sessionHtmlSection"));
+    auto* htmlInfo =
+        panel->findChild<QLabel*>(QStringLiteral("sessionHtmlInfo"));
+    auto* speedSpin = panel->findChild<QDoubleSpinBox*>(
+        QStringLiteral("sessionHtmlVarValue_var.speed"));
+    auto* countSpin = panel->findChild<QDoubleSpinBox*>(
+        QStringLiteral("sessionHtmlVarValue_var.count"));
+    auto* speedKey = panel->findChild<QToolButton*>(
+        QStringLiteral("sessionHtmlVarDiamond_var.speed"));
+    auto* labelValue = panel->findChild<QLabel*>(
+        QStringLiteral("sessionHtmlVarValue_var.label"));
+    auto* flagValue = panel->findChild<QLabel*>(
+        QStringLiteral("sessionHtmlVarValue_var.flag"));
+    if (!check(htmlSection && htmlSection->isVisible(),
+               QStringLiteral("HTML variables section is not visible"))
+        || !check(htmlInfo && htmlInfo->text().contains(QStringLiteral("是")),
+                  QStringLiteral("timeDependent state missing"))
+        || !check(speedSpin && std::abs(speedSpin->value() - 2.5) < 1e-6,
+                  QStringLiteral("numeric default is not shown"))
+        || !check(countSpin && countSpin->decimals() == 0,
+                  QStringLiteral("integer variable decimals wrong"))
+        || !check(labelValue && labelValue->text() == QStringLiteral("hello"),
+                  QStringLiteral("string variable is not read-only/default"))
+        || !check(flagValue && flagValue->text() == QStringLiteral("true"),
+                  QStringLiteral("boolean variable is not read-only/default"))
+        || !check(!panel->findChild<QDoubleSpinBox*>(
+                      QStringLiteral("sessionHtmlVarValue_var.label")),
+                  QStringLiteral("string variable got a spin box"))
+        || !check(speedKey, QStringLiteral("variable key diamond missing")))
+        return 1;
+
+    int before = depth();
+    speedKey->click();
+    QApplication::processEvents();
+    flush();
+    {
+        const auto track = live->project()
+                               .entities.value(htmlUuid)
+                               .tracks.value(QStringLiteral("var.speed"));
+        bool found = false;
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 0 && std::abs(key.value - 2.5) < 1e-6)
+                found = true;
+        if (!check(found, QStringLiteral("diamond did not key the default"))
+            || !check(depth() == before + 1,
+                      QStringLiteral("variable key was not one commit")))
+            return 1;
+    }
+
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    before = depth();
+    speedSpin->setValue(4.2);
+    QMetaObject::invokeMethod(speedSpin, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    {
+        const auto track = live->project()
+                               .entities.value(htmlUuid)
+                               .tracks.value(QStringLiteral("var.speed"));
+        bool found = false;
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 10 && std::abs(key.value - 4.2) < 1e-6)
+                found = true;
+        if (!check(found, QStringLiteral("variable edit did not key frame 10"))
+            || !check(depth() == before + 1,
+                      QStringLiteral("variable edit was not one commit")))
+            return 1;
+    }
+
+    panel->setAutoKey(false);
+    live->setPlayhead(20);
+    QApplication::processEvents();
+    lastError.clear();
+    before = depth();
+    countSpin->setValue(9.0);
+    QMetaObject::invokeMethod(countSpin, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    {
+        const auto track = live->project()
+                               .entities.value(htmlUuid)
+                               .tracks.value(QStringLiteral("var.count"));
+        bool found = false;
+        for (const pvf::model::Keyframe& key : track.keys)
+            if (key.frame == 20)
+                found = true;
+        if (!check(!found, QStringLiteral("auto-key off still wrote a key"))
+            || !check(depth() == before,
+                      QStringLiteral("rejected variable edit added a commit"))
+            || !check(lastError.contains(QStringLiteral("HTML 变量")),
+                      QStringLiteral("auto-key rejection did not report")))
+            return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "html-vars-test OK: defaults/read-only/timeDependent/var.* keys";
+    return 0;
+}
+
+int textLayoutTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p4b-text-layout.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P4b 文字排版");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "text-layout-test: create failed" << error;
+        return 1;
+    }
+
+    pvf::model::Entity entity;
+    entity.uuid = pvf::model::newUuid();
+    entity.name = QStringLiteral("标题");
+    entity.start = 0;
+    entity.end = 120;
+    entity.content.kind = pvf::ContentKind::Text;
+    entity.content.text.text = QStringLiteral("PVForge");
+    entity.content.text.pixelSize = 96;
+    const pvf::Uuid textUuid = entity.uuid;
+    session->mutableProject().entities.insert(textUuid, entity);
+    if (!session->document()->commitEntity(textUuid,
+                                           QStringLiteral("p4b text setup"),
+                                           &error))
+    {
+        qCritical() << "text-layout-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    if (!live || !document || !panel)
+    {
+        qCritical() << "text-layout-test: session window/panel missing";
+        return 1;
+    }
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "text-layout-test:" << message;
+        return condition;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "text-layout-test: flush failed" << flushError;
+    };
+
+    document->setSelection(textUuid);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* layoutButton =
+        panel->findChild<QPushButton*>(QStringLiteral("textLayoutButton"));
+    if (!check(layoutButton && layoutButton->isVisible(),
+               QStringLiteral("text layout button missing")))
+        return 1;
+
+    auto findDialog = []() -> QDialog* {
+        for (QWidget* widget : QApplication::topLevelWidgets())
+        {
+            auto* dialog = qobject_cast<QDialog*>(widget);
+            if (dialog && dialog->isVisible()
+                && dialog->windowTitle() == QStringLiteral("文字排版"))
+                return dialog;
+        }
+        return nullptr;
+    };
+
+    // Accept: the dialog edits a copy and the panel commits it once.
+    QTimer::singleShot(50, [&] {
+        QDialog* dialog = findDialog();
+        if (!dialog)
+        {
+            qCritical() << "text-layout-test: accept dialog not found";
+            return;
+        }
+        auto* size = dialog->findChild<QSpinBox*>();
+        auto* spacing = dialog->findChild<QDoubleSpinBox*>(
+            QStringLiteral("layoutLetterSpacing"));
+        auto* preview =
+            dialog->findChild<QWidget*>(QStringLiteral("layoutPreview"));
+        if (size)
+            size->setValue(123);
+        if (spacing)
+            spacing->setValue(4.0);
+        if (preview && !preview->isVisible())
+            qCritical() << "text-layout-test: preview is not visible";
+        dialog->accept();
+    });
+    QTimer::singleShot(2000, [&] {
+        if (QDialog* dialog = findDialog())
+            dialog->reject();
+    });
+    int before = depth();
+    layoutButton->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project()
+                       .entities.value(textUuid)
+                       .content.text.pixelSize
+                   == 123,
+               QStringLiteral("dialog size did not reach the model"))
+        || !check(std::abs(live->project()
+                               .entities.value(textUuid)
+                               .content.text.letterSpacing
+                           - 4.0)
+                      < 1e-6,
+                  QStringLiteral("dialog letter spacing did not reach the model"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("dialog accept was not one commit")))
+        return 1;
+
+    // Cancel: edits are discarded and no commit is added.
+    QTimer::singleShot(50, [&] {
+        QDialog* dialog = findDialog();
+        if (!dialog)
+        {
+            qCritical() << "text-layout-test: cancel dialog not found";
+            return;
+        }
+        if (auto* size = dialog->findChild<QSpinBox*>())
+            size->setValue(200);
+        dialog->reject();
+    });
+    QTimer::singleShot(2000, [&] {
+        if (QDialog* dialog = findDialog())
+            dialog->reject();
+    });
+    before = depth();
+    layoutButton->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project()
+                       .entities.value(textUuid)
+                       .content.text.pixelSize
+                   == 123,
+               QStringLiteral("cancel changed the model"))
+        || !check(depth() == before,
+                  QStringLiteral("cancel added a commit")))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "text-layout-test OK: dialog write-back and cancel";
+    return 0;
+}
+
+int brandWallCreateTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p4b-brandwall.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P4b 品牌墙");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "brandwall-create-test: create failed" << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* workbench = window->findChild<pvf::WorkbenchPanel*>();
+    auto* workbenchButton =
+        window->findChild<QToolButton*>(QStringLiteral("workbenchButton"));
+    if (!live || !document || !workbench || !workbenchButton)
+    {
+        qCritical() << "brandwall-create-test: session/workbench missing";
+        return 1;
+    }
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "brandwall-create-test:" << message;
+        return condition;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "brandwall-create-test: flush failed" << flushError;
+    };
+
+    workbenchButton->click();
+    QApplication::processEvents();
+    if (!check(workbench->isVisible(), QStringLiteral("workbench did not open")))
+        return 1;
+
+    auto* types = workbench->findChild<QListWidget*>(QStringLiteral("typeList"));
+    auto* editWall =
+        workbench->findChild<QPushButton*>(QStringLiteral("wallEditButton"));
+    auto* create =
+        workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+    if (!check(types && types->count() == 1,
+               QStringLiteral("session workbench should only list 特殊"))
+        || !check(editWall && create,
+                  QStringLiteral("session wall widgets missing")))
+        return 1;
+
+    QTimer::singleShot(50, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets())
+        {
+            auto* dialog = qobject_cast<QDialog*>(widget);
+            if (!dialog || !dialog->isVisible()
+                || dialog->windowTitle()
+                       != QStringLiteral("品牌瓷砖墙 · 文字标签"))
+                continue;
+            auto* logos = dialog->findChild<QPlainTextEdit*>(
+                QStringLiteral("brandWallContentLogos"));
+            auto* columns = dialog->findChild<QSpinBox*>(
+                QStringLiteral("brandWallContentColumns"));
+            auto* rows = dialog->findChild<QSpinBox*>(
+                QStringLiteral("brandWallContentRows"));
+            auto* spacing = dialog->findChild<QDoubleSpinBox*>(
+                QStringLiteral("brandWallContentSpacing"));
+            auto* logoSize = dialog->findChild<QDoubleSpinBox*>(
+                QStringLiteral("brandWallContentLogoSize"));
+            auto* colors = dialog->findChild<QLineEdit*>(
+                QStringLiteral("brandWallContentColors"));
+            auto* alternate = dialog->findChild<QCheckBox*>(
+                QStringLiteral("brandWallContentAlternate"));
+            auto* angle = dialog->findChild<QDoubleSpinBox*>(
+                QStringLiteral("brandWallContentAngle"));
+            auto* background = dialog->findChild<QLineEdit*>(
+                QStringLiteral("brandWallContentBackground"));
+            auto* seed = dialog->findChild<QSpinBox*>(
+                QStringLiteral("brandWallContentSeed"));
+            auto* preview = dialog->findChild<QLabel*>(
+                QStringLiteral("brandWallContentPreview"));
+            if (logos)
+                logos->setPlainText(QStringLiteral("ACME\nPVForge"));
+            if (columns)
+                columns->setValue(5);
+            if (rows)
+                rows->setValue(3);
+            if (spacing)
+                spacing->setValue(12.0);
+            if (logoSize)
+                logoSize->setValue(180.0);
+            if (colors)
+                colors->setText(QStringLiteral("#ff0000, #00ff00"));
+            if (alternate)
+                alternate->setChecked(false);
+            if (angle)
+                angle->setValue(15.0);
+            if (background)
+                background->setText(QStringLiteral("#202020"));
+            if (seed)
+                seed->setValue(7);
+            if (preview && preview->pixmap().isNull())
+                qCritical() << "brandwall-create-test: preview pixmap is empty";
+            dialog->accept();
+            return;
+        }
+        qCritical() << "brandwall-create-test: wall dialog not found";
+    });
+    QTimer::singleShot(2000, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<QDialog*>(widget);
+                dialog && dialog->isVisible())
+                dialog->reject();
+    });
+    editWall->click();
+    QApplication::processEvents();
+
+    if (!check(create->isEnabled(),
+               QStringLiteral("create button disabled after configuring")))
+        return 1;
+
+    const int before = depth();
+    create->click();
+    QApplication::processEvents();
+    flush();
+
+    const auto& entities = live->project().entities;
+    if (!check(entities.size() == 1,
+               QStringLiteral("brand wall entity was not created")))
+        return 1;
+    const pvf::model::Entity created = entities.constBegin().value();
+    if (!check(created.content.kind == pvf::ContentKind::BrandWall,
+               QStringLiteral("created entity is not a brand wall"))
+        || !check(created.content.brandWall.logos
+                      == QStringList({QStringLiteral("ACME"),
+                                      QStringLiteral("PVForge")}),
+                  QStringLiteral("brand wall labels wrong"))
+        || !check(created.content.brandWall.columns == 5
+                      && created.content.brandWall.rows == 3,
+                  QStringLiteral("brand wall grid wrong"))
+        || !check(std::abs(created.content.brandWall.spacing - 12.0) < 1e-6
+                      && std::abs(created.content.brandWall.logoSize - 180.0)
+                             < 1e-6,
+                  QStringLiteral("brand wall sizes wrong"))
+        || !check(created.content.brandWall.colors
+                      == QStringList({QStringLiteral("#ff0000"),
+                                      QStringLiteral("#00ff00")}),
+                  QStringLiteral("brand wall colors wrong"))
+        || !check(!created.content.brandWall.alternate
+                      && std::abs(created.content.brandWall.angle - 15.0) < 1e-6
+                      && created.content.brandWall.background
+                             == QStringLiteral("#202020")
+                      && created.content.brandWall.seed == 7,
+                  QStringLiteral("brand wall options wrong"))
+        || !check(std::abs(created.transform.x - 320.0) < 1e-6
+                      && std::abs(created.transform.y - 180.0) < 1e-6,
+                  QStringLiteral("brand wall was not centred"))
+        || !check(created.start == 0 && created.end == 30,
+                  QStringLiteral("brand wall range wrong"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("brand wall create was not one commit"))
+        || !check(document->selection() == created.uuid,
+                  QStringLiteral("new brand wall was not selected"))
+        || !check(!workbench->isVisible(),
+                  QStringLiteral("workbench stayed open after create")))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "brandwall-create-test OK: workbench/BrandWallDialog ->"
+               " BrandWallContent";
     return 0;
 }
 
@@ -17289,6 +18233,14 @@ int main(int argc, char* argv[])
         return sessionTest();
     if (app.arguments().contains(QStringLiteral("--properties-test")))
         return propertiesTest(app);
+    if (app.arguments().contains(QStringLiteral("--properties-special-test")))
+        return propertiesSpecialTest(app);
+    if (app.arguments().contains(QStringLiteral("--html-vars-test")))
+        return htmlVarsTest(app);
+    if (app.arguments().contains(QStringLiteral("--text-layout-test")))
+        return textLayoutTest(app);
+    if (app.arguments().contains(QStringLiteral("--brandwall-create-test")))
+        return brandWallCreateTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-test")))
         return timelineTest(app);
     const int viewportIndex = app.arguments().indexOf(

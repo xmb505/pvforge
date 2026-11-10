@@ -6,6 +6,7 @@
 
 #include <QColor>
 #include <QHash>
+#include <QJsonObject>
 #include <QVariantMap>
 #include <QVector>
 #include <QWidget>
@@ -34,6 +35,10 @@ struct EasingSpec;
 struct Entity;
 struct SolverSegment;
 } // namespace model
+
+namespace next {
+class SpecialContentEditor;
+} // namespace next
 
 class CollapsibleSection;
 class EditorSession;
@@ -94,6 +99,26 @@ private:
         QToolButton* key = nullptr;
     };
 
+    // One manifest variable row in session mode. Numeric variables get a spin
+    // box and a diamond backed by `var.<name>`; boolean/string variables are
+    // read-only and show their manifest default.
+    struct SessionHtmlRow
+    {
+        QString name;
+        QString track;
+        bool numeric = false;
+        double defaultValue = 0.0;
+        double minimum = -1000000000.0;
+        double maximum = 1000000000.0;
+        double step = 0.01;
+        int decimals = 3;
+        QString readOnlyText;
+        QLabel* nameLabel = nullptr;
+        QDoubleSpinBox* spin = nullptr;
+        QToolButton* key = nullptr;
+        QLabel* readOnlyValue = nullptr;
+    };
+
     struct TrackRow
     {
         QString track;
@@ -145,6 +170,8 @@ private:
     void buildBrandWallSection(QVBoxLayout* layout);
     void buildHalftoneSection(QVBoxLayout* layout);
     void buildHtmlSection(QVBoxLayout* layout);
+    void buildSpecialSection(QVBoxLayout* layout);
+    void buildSessionHtmlSection(QVBoxLayout* layout);
     void rebuildHtmlRows(const html::HtmlAsset& asset);
     void addHtmlVariableRow(QFormLayout* form, const html::HtmlComponent& component,
                             const html::HtmlVariable& variable);
@@ -175,6 +202,11 @@ private:
                         bool ignoreLock = false);
     bool runSessionContentEdit(const QString& message,
                                const std::function<bool(model::Content&)>& mutate);
+    void commitSpecialContentEdit();
+    void reloadSessionHtml(const model::Entity& entity);
+    void rebuildSessionHtmlRows(const QJsonObject& variables);
+    void editSessionHtmlVariable(const QString& track, double value);
+    void toggleSessionHtmlKey(const QString& track, double fallback);
     void sessionSetTrackValue(const QString& track, double value);
     void sessionSetKeyValue(const QString& track, double value);
     void sessionToggleKey(const QString& track);
@@ -244,6 +276,23 @@ private:
     QString m_htmlAssetCacheError;
     QString m_htmlAssetCacheStamp;
     bool m_htmlAssetCacheValid = false;
+
+    // Session-mode special content and HTML manifest pages.
+    CollapsibleSection* m_specialSection = nullptr;
+    next::SpecialContentEditor* m_specialEditor = nullptr;
+    Uuid m_specialUuid;
+    CollapsibleSection* m_sessionHtmlSection = nullptr;
+    QLabel* m_sessionHtmlInfo = nullptr;
+    QLabel* m_sessionHtmlWarning = nullptr;
+    QLabel* m_sessionHtmlEmpty = nullptr;
+    QWidget* m_sessionHtmlVariables = nullptr;
+    QVBoxLayout* m_sessionHtmlVariablesLayout = nullptr;
+    QVector<SessionHtmlRow> m_sessionHtmlRows;
+    Uuid m_sessionHtmlUuid;
+    AssetHash m_sessionHtmlHash;
+    bool m_sessionHtmlPresent = false;
+    bool m_sessionHtmlTimeDependent = true;
+
     QLabel* m_wallInfo = nullptr;
     QVector<DataRow> m_dataRows;
     QHash<QString, QColor> m_dataColors;

@@ -2,6 +2,7 @@
 
 #include "core/Project.h"
 #include "core/TextStyle.h"
+#include "model/Content.h"
 
 #include <QColor>
 #include <QFrame>
@@ -19,6 +20,8 @@ class QStackedWidget;
 
 namespace pvf {
 
+class EditorSession;
+
 // Floating creation panel modelled after the Mine-imator workbench.
 class WorkbenchPanel : public QFrame
 {
@@ -26,6 +29,9 @@ class WorkbenchPanel : public QFrame
 
 public:
     explicit WorkbenchPanel(Project* project, QWidget* parent = nullptr);
+    // Session mode: the special page creates model::BrandWallContent through
+    // EditorSession. Other legacy creation pages are not shown yet.
+    explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);
 
     void showAt(const QPoint& pos);
     void hidePanel();
@@ -33,11 +39,16 @@ public:
 
 signals:
     void created(EntityId id);
+    void sessionCreated(const Uuid& uuid);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void buildUi();
+    QWidget* buildSessionSpecialPage();
+    void createSessionBrandWall();
+    void updateSessionWallSummary();
     QWidget* buildMediaPage();
     QWidget* buildTextPage();
     QWidget* buildTextBoxPage();
@@ -60,6 +71,7 @@ private:
     QColor pickColor(const QColor& initial, const QString& title);
 
     Project* m_project = nullptr;
+    EditorSession* m_session = nullptr;
     QWidget* m_ignoreWidget = nullptr;
     QListWidget* m_types = nullptr;
     QStackedWidget* m_pages = nullptr;
@@ -113,6 +125,8 @@ private:
     BrandWallParams m_wallParams;
     QVector<QImage> m_wallImages;
     QLabel* m_wallSummary = nullptr;
+    model::BrandWallContent m_wallContent;
+    QLabel* m_sessionWallPreview = nullptr;
     void updateWallSummary();
     QString m_wallLogoAPath;
     QString m_wallLogoBPath;

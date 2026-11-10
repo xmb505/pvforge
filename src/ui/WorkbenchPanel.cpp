@@ -1,6 +1,7 @@
 #include "WorkbenchPanel.h"
 
 #include "app/AppIcon.h"
+#include "app/EditorSession.h"
 #include "app/MainWindow.h"
 #include "core/BrandWall.h"
 #include "ui/BrandWallDialog.h"
@@ -11,6 +12,8 @@
 #include "core/TextStyle.h"
 #include "ui/TextLayoutDialog.h"
 #include "media/MediaImporter.h"
+#include "model/Uuid.h"
+#include "next/app/ProjectDocument.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -38,12 +41,25 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 
 namespace pvf {
 
 WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     : QFrame(parent)
     , m_project(project)
+{
+    buildUi();
+}
+
+WorkbenchPanel::WorkbenchPanel(EditorSession* session, QWidget* parent)
+    : QFrame(parent)
+    , m_session(session)
+{
+    buildUi();
+}
+
+void WorkbenchPanel::buildUi()
 {
     setObjectName(QStringLiteral("workbench"));
     setFrameShape(QFrame::StyledPanel);
@@ -69,31 +85,57 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     typeFont.setPointSizeF(typeFont.pointSizeF() + 1.5);
     m_types->setFont(typeFont);
 
-    const QStringList typeNames = {
-        Lang::t(QStringLiteral("workbench.media"), QStringLiteral("媒体")),
-        Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
-        QStringLiteral("文本框"),
-        Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
-        Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
-        Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
-    };
-    for (const QString& name : typeNames)
-    {
-        auto* item = new QListWidgetItem(name, m_types);
-        item->setSizeHint(QSize(0, 42));
-    }
-    root->addWidget(m_types);
-
     auto* right = new QVBoxLayout();
     right->setSpacing(10);
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("typePages"));
-    m_pages->addWidget(buildMediaPage());
-    m_pages->addWidget(buildTextPage());
-    m_pages->addWidget(buildTextBoxPage());
-    m_pages->addWidget(buildVectorPage());
-    m_pages->addWidget(buildSpecialPage());
-    m_pages->addWidget(buildCameraPage());
+
+    if (m_session)
+    {
+        // Keep the old wall's "covers the project" intent while using the
+        // model's text-label fields. The model default is 200 px tiles.
+        m_wallContent.logos = {QStringLiteral("PVForge"),
+                               QStringLiteral("ACME")};
+        const auto& settings = m_session->settings();
+        const double fit =
+            std::min((settings.width - (m_wallContent.columns - 1)
+                                         * m_wallContent.spacing)
+                         / double(m_wallContent.columns),
+                     (settings.height - (m_wallContent.rows - 1)
+                                          * m_wallContent.spacing)
+                         / double(m_wallContent.rows));
+        m_wallContent.logoSize =
+            std::clamp(fit, 1.0, m_wallContent.logoSize);
+        auto* item = new QListWidgetItem(
+            Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
+            m_types);
+        item->setSizeHint(QSize(0, 42));
+        m_pages->addWidget(buildSpecialPage());
+    }
+    else
+    {
+        const QStringList typeNames = {
+            Lang::t(QStringLiteral("workbench.media"), QStringLiteral("媒体")),
+            Lang::t(QStringLiteral("workbench.text"), QStringLiteral("文字")),
+            QStringLiteral("文本框"),
+            Lang::t(QStringLiteral("workbench.vector"), QStringLiteral("矢量")),
+            Lang::t(QStringLiteral("workbench.special"), QStringLiteral("特殊")),
+            Lang::t(QStringLiteral("workbench.camera"), QStringLiteral("摄像机")),
+        };
+        for (const QString& name : typeNames)
+        {
+            auto* item = new QListWidgetItem(name, m_types);
+            item->setSizeHint(QSize(0, 42));
+        }
+        m_pages->addWidget(buildMediaPage());
+        m_pages->addWidget(buildTextPage());
+        m_pages->addWidget(buildTextBoxPage());
+        m_pages->addWidget(buildVectorPage());
+        m_pages->addWidget(buildSpecialPage());
+        m_pages->addWidget(buildCameraPage());
+    }
+    root->addWidget(m_types);
+
     right->addWidget(m_pages, 1);
 
     m_create = new QPushButton(
@@ -113,7 +155,8 @@ WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     connect(m_create, &QPushButton::clicked, this, &WorkbenchPanel::createCurrent);
 
     m_types->setCurrentRow(0);
-    refreshMediaLibrary();
+    if (!m_session)
+        refreshMediaLibrary();
     updateCreateState();
 }
 
@@ -434,6 +477,9 @@ QWidget* WorkbenchPanel::buildTextBoxPage()
 
 QWidget* WorkbenchPanel::buildSpecialPage()
 {
+    if (m_session)
+        return buildSessionSpecialPage();
+
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -626,6 +672,68 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     return page;
 }
 
+QWidget* WorkbenchPanel::buildSessionSpecialPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    auto* hint = new QLabel(
+        QStringLiteral("品牌瓷砖墙使用文字标签，不使用图片或 SVG 贴图。"
+                       "每个瓷砖显示 logos 列表里的一个标签。"),
+        page);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    m_wallSummary = new QLabel(page);
+    m_wallSummary->setObjectName(QStringLiteral("sessionWallSummary"));
+    m_wallSummary->setWordWrap(true);
+    layout->addWidget(m_wallSummary);
+
+    m_sessionWallPreview = new QLabel(page);
+    m_sessionWallPreview->setObjectName(QStringLiteral("sessionWallPreview"));
+    m_sessionWallPreview->setAlignment(Qt::AlignCenter);
+    m_sessionWallPreview->setMinimumHeight(180);
+    m_sessionWallPreview->setFrameShape(QFrame::StyledPanel);
+    layout->addWidget(m_sessionWallPreview, 1);
+
+    auto* editWall = new QPushButton(QStringLiteral("配置瓷砖墙…"), page);
+    editWall->setObjectName(QStringLiteral("wallEditButton"));
+    connect(editWall, &QPushButton::clicked, this, [this] {
+        BrandWallDialog dialog(m_wallContent, this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        m_wallContent = dialog.content();
+        updateSessionWallSummary();
+        updateCreateState();
+    });
+    layout->addWidget(editWall);
+
+    updateSessionWallSummary();
+    return page;
+}
+
+void WorkbenchPanel::updateSessionWallSummary()
+{
+    if (!m_wallSummary)
+        return;
+    const double width = m_wallContent.columns * m_wallContent.logoSize
+        + std::max(0, m_wallContent.columns - 1) * m_wallContent.spacing;
+    const double height = m_wallContent.rows * m_wallContent.logoSize
+        + std::max(0, m_wallContent.rows - 1) * m_wallContent.spacing;
+    m_wallSummary->setText(
+        QStringLiteral("%1 个标签 · %2×%3 瓷砖 · %4×%5 px")
+            .arg(m_wallContent.logos.size())
+            .arg(m_wallContent.columns)
+            .arg(m_wallContent.rows)
+            .arg(int(std::lround(width)))
+            .arg(int(std::lround(height))));
+    if (m_sessionWallPreview)
+        m_sessionWallPreview->setPixmap(
+            renderBrandWallPreview(m_wallContent, m_sessionWallPreview->size()));
+}
+
 void WorkbenchPanel::updateWallSummary()
 {
     if (!m_wallSummary)
@@ -757,7 +865,10 @@ void WorkbenchPanel::updateVectorFields()
 
 void WorkbenchPanel::showAt(const QPoint& pos)
 {
-    refreshMediaLibrary();
+    if (m_session)
+        updateSessionWallSummary();
+    else
+        refreshMediaLibrary();
 
     QWidget* parent = parentWidget();
     QPoint target = pos;
@@ -832,7 +943,9 @@ void WorkbenchPanel::updateCreateState()
 {
     const int page = m_pages ? m_pages->currentIndex() : 0;
     bool ready = true;
-    if (page == 0)
+    if (m_session)
+        ready = !m_wallContent.logos.isEmpty();
+    else if (page == 0)
         ready = !m_mediaPath.isEmpty();
     m_create->setEnabled(ready);
 }
@@ -1156,8 +1269,61 @@ EntityId WorkbenchPanel::createTextBox()
     return kInvalidEntity;
 }
 
+void WorkbenchPanel::createSessionBrandWall()
+{
+    if (!m_session || !m_session->document())
+        return;
+    if (m_wallContent.logos.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("创建失败"),
+                             QStringLiteral("品牌墙至少需要一个文字标签。"));
+        return;
+    }
+
+    auto* document = m_session->document();
+    const model::Project& project = m_session->project();
+    const int fps = std::max(1, m_session->settings().fps);
+    const int start = std::max(0, m_session->playhead());
+
+    model::Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("品牌瓷砖墙");
+    entity.start = start;
+    entity.end = start + fps;
+    for (const model::Entity& other : project.entities)
+    {
+        if (other.start < entity.end && entity.start < other.end)
+            entity.row = std::max(entity.row, other.row + 1);
+    }
+    entity.content.kind = ContentKind::BrandWall;
+    entity.content.brandWall = m_wallContent;
+    entity.transform.x = m_session->settings().width / 2.0;
+    entity.transform.y = m_session->settings().height / 2.0;
+
+    document->mutableProject().entities.insert(entity.uuid, entity);
+    QString error;
+    if (!document->commitEntity(entity.uuid,
+                                QStringLiteral("pvf: create brand wall"),
+                                &error))
+    {
+        document->mutableProject().entities.remove(entity.uuid);
+        QMessageBox::warning(this, QStringLiteral("创建失败"), error);
+        return;
+    }
+
+    document->setSelection(entity.uuid);
+    emit sessionCreated(entity.uuid);
+    hidePanel();
+}
+
 void WorkbenchPanel::createCurrent()
 {
+    if (m_session)
+    {
+        createSessionBrandWall();
+        return;
+    }
+
     const int page = m_pages->currentIndex();
     EntityId id = kInvalidEntity;
 

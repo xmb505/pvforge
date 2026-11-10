@@ -90,6 +90,10 @@ add_executable(pvforge
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
+    src/next/properties/SpecialContentEditor.cpp
+    src/next/properties/SpecialContentEditor.h
+    src/next/properties/TextLayoutDialog.cpp
+    src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
     src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp

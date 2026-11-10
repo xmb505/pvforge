@@ -453,6 +453,7 @@ void SpecialContentEditor::buildComicPage()
 
     m_comicText = addPlain(form, QStringLiteral("文本"),
                            QStringLiteral("comicTextEdit"));
+    m_comicText->setMaximumHeight(160);
     m_comicText->setToolTip(
         QStringLiteral("漫画文字支持多行；换行即分段。失焦后一次性写回。"));
 
@@ -677,6 +678,7 @@ void SpecialContentEditor::buildBrandWallPage()
     m_brandLogos = addPlain(form, QStringLiteral("Logo 标签"),
                             QStringLiteral("brandLogosEdit"));
     m_brandLogos->setMinimumHeight(96);
+    m_brandLogos->setMaximumHeight(140);
     m_brandLogos->setToolTip(
         QStringLiteral("每行一个，也可用逗号分隔；最多 64 个，每项 1..128 字。"));
 

@@ -774,6 +774,22 @@ void MainWindow::buildSessionShell()
     m_viewport->setObjectName(QStringLiteral("viewport"));
     m_viewport->setMinimumWidth(480);
 
+    // P4b: the legacy workbench button keeps its place; session mode only
+    // exposes the special page (brand wall creation through the new model).
+    if (m_session)
+    {
+        m_workbench = new WorkbenchPanel(m_session, m_viewport);
+        m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
+        m_workbench->hide();
+        connect(m_viewport, &Viewport::workbenchRequested, this,
+                &MainWindow::toggleWorkbench);
+        connect(m_workbench, &WorkbenchPanel::sessionCreated, this,
+                [this](const Uuid& uuid) {
+                    if (m_session && m_session->document())
+                        m_session->document()->setSelection(uuid);
+                });
+    }
+
     // P3b: the legacy floating monitor, rendering through render2 and the
     // per-project media services.  It starts docked in the viewport corner.
     if (m_session)
