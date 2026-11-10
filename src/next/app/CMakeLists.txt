@@ -84,9 +84,28 @@ if(NOT TARGET pvf_workbench)
                      ${CMAKE_CURRENT_BINARY_DIR}/workbench_dep)
 endif()
 
-add_library(pvf_next_app STATIC
+# Small document slice shared by the legacy delivery shell (P1) and the
+# reference-only NextWindow target.  Keeping it separate means the old
+# `pvforge` target can link the document/core/store without pulling in
+# NextWindow or any of the src/next UI panels.
+add_library(pvf_next_document STATIC
     ProjectDocument.cpp
     ProjectDocument.h
+)
+
+target_include_directories(pvf_next_document PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+)
+
+target_link_libraries(pvf_next_document PUBLIC
+    pvf_next_core
+    pvf_store
+    Qt6::Core
+)
+
+target_compile_features(pvf_next_document PUBLIC cxx_std_20)
+
+add_library(pvf_next_app STATIC
     NextWindow.cpp
     NextWindow.h
     MediaServices.cpp
@@ -108,6 +127,7 @@ target_include_directories(pvf_next_app PUBLIC
 )
 
 target_link_libraries(pvf_next_app PUBLIC
+    pvf_next_document
     pvf_next_core
     pvf_store
     pvf_next_assets

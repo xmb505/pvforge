@@ -2,18 +2,12 @@
 
 #include "assets/AssetStore.h"
 #include "model/Project.h"
+#include "next/core/EntityLock.h"
 
 #include <QString>
 #include <QVector>
 
 namespace pvf::next {
-
-// True when any ancestor of `uuid` is locked.  The entity itself is ignored so
-// the properties panel can still unlock a locked entity.
-bool hasLockedAncestor(const model::Project& project, const Uuid& uuid);
-
-// True when `uuid` or any ancestor is locked.
-bool isEntityLocked(const model::Project& project, const Uuid& uuid);
 
 // Metadata durationFrames of a video/audio asset.  Returns 0 for other content,
 // missing assets and assets without a known duration.

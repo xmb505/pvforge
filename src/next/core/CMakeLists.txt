@@ -22,6 +22,8 @@ endif()
 add_library(pvf_next_core STATIC
     Document.cpp
     Document.h
+    EntityLock.cpp
+    EntityLock.h
 )
 
 target_include_directories(pvf_next_core PUBLIC

@@ -1,6 +1,6 @@
 #include "next/app/ProjectDocument.h"
 
-#include "next/timeline/EntityRange.h"
+#include "next/core/EntityLock.h"
 
 #include <QDir>
 #include <QFile>

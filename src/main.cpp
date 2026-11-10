@@ -15,6 +15,7 @@
 #include "audio/AudioEngine.h"
 #include "core/Settings.h"
 #include "app/MainWindow.h"
+#include "app/EditorSession.h"
 #include "app/NewProjectDialog.h"
 #include "app/ExportDialog.h"
 #include "app/ExportProgressDialog.h"
@@ -24,6 +25,7 @@
 #include "html/HtmlCaptureTest.h"
 #include "html/HtmlLayerTest.h"
 #include "core/Project.h"
+#include "model/Project.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
@@ -151,6 +153,171 @@ int selfTest()
 
     QFile::remove(path);
     qInfo() << "self-test OK: keyframe interpolation x(15) =" << mid;
+    return 0;
+}
+
+int sessionTest()
+{
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    const QString projectDir = QDir(temp.path()).filePath(QStringLiteral("demo.pvproj"));
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P1 Demo");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+    settings.background = QStringLiteral("#1b2430");
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "session-test: create failed" << error;
+        return 1;
+    }
+    if (session->settings().width != 640 || session->settings().height != 360
+        || session->settings().fps != 30)
+    {
+        qCritical() << "session-test: created settings mismatch";
+        return 1;
+    }
+    if (!QFileInfo::exists(QDir(projectDir).filePath(QStringLiteral("project.json"))))
+    {
+        qCritical() << "session-test: project.json missing";
+        return 1;
+    }
+
+    // Rename + background go through commitProject and must survive reopen.
+    session->mutableProject().settings.name = QStringLiteral("P1 Demo 改名");
+    session->mutableProject().settings.background = QStringLiteral("#223344");
+    if (!session->commitProject(QStringLiteral("session-test rename"), &error))
+    {
+        qCritical() << "session-test: commitProject failed" << error;
+        return 1;
+    }
+
+    session->setPlayhead(42);
+    session->flush(&error);
+    if (!error.isEmpty())
+    {
+        qCritical() << "session-test: flush failed" << error;
+        return 1;
+    }
+    const QString playheadPath =
+        QDir(projectDir).filePath(QStringLiteral(".pvforge/playhead.json"));
+    if (!QFileInfo::exists(playheadPath))
+    {
+        qCritical() << "session-test: playhead.json missing";
+        return 1;
+    }
+    session.reset();
+
+    auto reopened = pvf::EditorSession::openProject(projectDir, &error);
+    if (!reopened)
+    {
+        qCritical() << "session-test: reopen failed" << error;
+        return 1;
+    }
+    if (reopened->settings().name != QStringLiteral("P1 Demo 改名")
+        || reopened->settings().background != QStringLiteral("#223344")
+        || reopened->playhead() != 42)
+    {
+        qCritical() << "session-test: reopen did not preserve settings/playhead"
+                    << reopened->settings().name << reopened->settings().background
+                    << reopened->playhead();
+        return 1;
+    }
+
+    // P1 shell: title, project-properties wiring and Ctrl+S flush.
+    auto* window = new pvf::MainWindow(reopened.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->show();
+    QApplication::processEvents();
+    if (window->windowTitle() != QStringLiteral("PVForge — P1 Demo 改名"))
+    {
+        qCritical() << "session-test: window title mismatch"
+                    << window->windowTitle();
+        return 1;
+    }
+    auto* nameEdit =
+        window->findChild<QLineEdit*>(QStringLiteral("projectName"));
+    auto* saveAction =
+        window->findChild<QAction*>(QStringLiteral("saveAction"));
+    auto* backgroundButton =
+        window->findChild<QPushButton*>(QStringLiteral("backgroundButton"));
+    if (!nameEdit || !saveAction || !backgroundButton)
+    {
+        qCritical() << "session-test: project properties/save action missing";
+        return 1;
+    }
+    if (backgroundButton->text() != QStringLiteral("#223344"))
+    {
+        qCritical() << "session-test: background panel shows"
+                    << backgroundButton->text();
+        return 1;
+    }
+
+    QMetaObject::invokeMethod(nameEdit, "textEdited", Qt::DirectConnection,
+                              Q_ARG(QString, QStringLiteral("P1 UI 改名")));
+    QApplication::processEvents();
+    if (!window->windowTitle().contains(QStringLiteral("P1 UI 改名"))
+        || !window->windowTitle().endsWith(QLatin1Char('*')))
+    {
+        qCritical() << "session-test: pending commit marker missing"
+                    << window->windowTitle();
+        return 1;
+    }
+    saveAction->trigger();
+    QApplication::processEvents();
+    if (window->windowTitle().endsWith(QLatin1Char('*')))
+    {
+        qCritical() << "session-test: Ctrl+S did not clear pending marker"
+                    << window->windowTitle();
+        return 1;
+    }
+    window->close();
+    QApplication::processEvents();
+
+    QFile savedProject(QDir(projectDir).filePath(QStringLiteral("project.json")));
+    if (!savedProject.open(QIODevice::ReadOnly))
+        return 1;
+    const QJsonObject savedObject =
+        QJsonDocument::fromJson(savedProject.readAll()).object();
+    if (savedObject.value(QStringLiteral("name")).toString()
+        != QStringLiteral("P1 UI 改名"))
+    {
+        qCritical() << "session-test: panel rename was not saved";
+        return 1;
+    }
+
+    // Legacy single-file projects are rejected with a migration hint.
+    const QString legacyPath =
+        QDir(temp.path()).filePath(QStringLiteral("legacy.pvproj"));
+    QFile legacy(legacyPath);
+    if (!legacy.open(QIODevice::WriteOnly))
+        return 1;
+    legacy.write("{}");
+    legacy.close();
+    error.clear();
+    if (pvf::EditorSession::openProject(legacyPath, &error) != nullptr
+        || !error.contains(QStringLiteral("废弃")))
+    {
+        qCritical() << "session-test: legacy file was not rejected" << error;
+        return 1;
+    }
+
+    // A session-less MainWindow must show the placeholder instead of crashing.
+    {
+        pvf::MainWindow emptyWindow(static_cast<pvf::EditorSession*>(nullptr));
+        emptyWindow.show();
+        QApplication::processEvents();
+        emptyWindow.close();
+        QApplication::processEvents();
+    }
+
+    qInfo() << "session-test OK: 640x360@30 create/open/rename/playhead";
     return 0;
 }
 
@@ -13677,6 +13844,8 @@ int main(int argc, char* argv[])
 
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();
+    if (app.arguments().contains(QStringLiteral("--session-test")))
+        return sessionTest();
     if (app.arguments().contains(QStringLiteral("--save-test")))
         return saveTest();
     if (app.arguments().contains(QStringLiteral("--scene-test")))
@@ -13817,6 +13986,37 @@ int main(int argc, char* argv[])
         return pvf::html::htmlLayerTest();
     if (app.arguments().contains(QStringLiteral("--html-export-test")))
         return pvf::html::htmlExportTest();
+
+    // P1: `--open <project-dir>` opens a `.pvproj` directory directly.  The
+    // legacy single-file format is rejected by EditorSession with a hint.
+    QString openPath;
+    const QStringList arguments = app.arguments();
+    for (int i = 1; i < arguments.size(); ++i)
+    {
+        if (arguments.at(i) == QStringLiteral("--open")
+            && i + 1 < arguments.size())
+        {
+            openPath = arguments.at(++i);
+        }
+        else if (arguments.at(i).startsWith(QStringLiteral("--open=")))
+        {
+            openPath = arguments.at(i).mid(QStringLiteral("--open=").size());
+        }
+    }
+    if (!openPath.isEmpty())
+    {
+        QString error;
+        auto session = pvf::EditorSession::openProject(openPath, &error);
+        if (!session)
+        {
+            qCritical().noquote() << "open failed:" << error;
+            return 1;
+        }
+        auto* window = new pvf::MainWindow(session.release());
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        window->show();
+        return app.exec();
+    }
 
     pvf::WelcomeWindow welcome;
     welcome.show();

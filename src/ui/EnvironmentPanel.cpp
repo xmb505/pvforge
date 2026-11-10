@@ -1,5 +1,8 @@
 #include "EnvironmentPanel.h"
 
+#include "app/EditorSession.h"
+#include "model/Project.h"
+
 #include <QColorDialog>
 #include <QFormLayout>
 #include <QLabel>
@@ -12,6 +15,20 @@ EnvironmentPanel::EnvironmentPanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
 {
+    buildUi();
+    refresh();
+}
+
+EnvironmentPanel::EnvironmentPanel(EditorSession* session, QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+{
+    buildUi();
+    refresh();
+}
+
+void EnvironmentPanel::buildUi()
+{
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
@@ -21,19 +38,26 @@ EnvironmentPanel::EnvironmentPanel(Project* project, QWidget* parent)
     layout->addLayout(form);
 
     m_background = new QPushButton(this);
+    m_background->setObjectName(QStringLiteral("backgroundButton"));
     form->addRow(QStringLiteral("背景色"), m_background);
 
     auto* hint = new QLabel(QStringLiteral("环境设置会随项目保存。"), this);
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
-    connect(m_background, &QPushButton::clicked, this, &EnvironmentPanel::pickBackground);
-    refresh();
+    connect(m_background, &QPushButton::clicked, this,
+            &EnvironmentPanel::pickBackground);
 }
 
 void EnvironmentPanel::refresh()
 {
-    m_backgroundColor = m_project->background;
+    if (!m_session && !m_project)
+        return;
+
+    const QString value = m_session ? m_session->settings().background
+                                    : m_project->background.name();
+    const QColor color(value);
+    m_backgroundColor = color.isValid() ? color : QColor(0x10, 0x10, 0x14);
     setColorButton(m_backgroundColor);
 }
 
@@ -48,14 +72,27 @@ void EnvironmentPanel::setColorButton(const QColor& color)
 
 void EnvironmentPanel::pickBackground()
 {
+    if (!m_session && !m_project)
+        return;
+
     const QColor color =
         QColorDialog::getColor(m_backgroundColor, this, QStringLiteral("背景颜色"));
     if (!color.isValid())
         return;
+
     m_backgroundColor = color;
     setColorButton(color);
-    m_project->background = color;
-    m_project->notifyChanged();
+
+    if (m_session)
+    {
+        m_session->mutableProject().settings.background = color.name();
+        m_session->commitProject(QStringLiteral("pvf: 背景色"));
+    }
+    else
+    {
+        m_project->background = color;
+        m_project->notifyChanged();
+    }
     emit changed();
 }
 

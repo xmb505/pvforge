@@ -5,12 +5,10 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSize>
 #include <QStandardPaths>
@@ -89,12 +87,16 @@ NewProjectDialog::NewProjectDialog(QWidget* parent)
     m_fps->setCurrentIndex(fpsIndex >= 0 ? fpsIndex : 1);
     form->addRow(QStringLiteral("帧率"), m_fps);
 
-    m_author = new QLineEdit(this);
-    form->addRow(QStringLiteral("作者"), m_author);
+    m_targetHint = new QLabel(this);
+    m_targetHint->setWordWrap(true);
+    m_targetHint->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(m_targetHint);
 
-    m_description = new QPlainTextEdit(this);
-    m_description->setMaximumHeight(90);
-    form->addRow(QStringLiteral("描述"), m_description);
+    auto* hint = new QLabel(
+        QStringLiteral("工程以 .pvproj 目录保存；分辨率与帧率创建后锁定。"),
+        this);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
 
     auto* buttons = new QHBoxLayout();
     buttons->addStretch(1);
@@ -122,8 +124,12 @@ void NewProjectDialog::browseLocation()
 
 void NewProjectDialog::updateState()
 {
-    m_create->setEnabled(!m_name->text().trimmed().isEmpty()
-                         && !m_location->text().trimmed().isEmpty());
+    const bool valid = !m_name->text().trimmed().isEmpty()
+                       && !m_location->text().trimmed().isEmpty();
+    m_create->setEnabled(valid);
+    m_targetHint->setText(valid
+                              ? QStringLiteral("将创建目录：%1").arg(projectPath())
+                              : QString());
 }
 
 QString NewProjectDialog::projectName() const
@@ -135,16 +141,6 @@ QString NewProjectDialog::projectPath() const
 {
     return QDir(m_location->text().trimmed())
         .filePath(projectName() + QStringLiteral(".pvproj"));
-}
-
-QString NewProjectDialog::author() const
-{
-    return m_author->text().trimmed();
-}
-
-QString NewProjectDialog::description() const
-{
-    return m_description->toPlainText().trimmed();
 }
 
 int NewProjectDialog::videoWidth() const

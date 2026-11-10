@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include "EditorSession.h"
+#include "NewProjectDialog.h"
 #include "core/Commands.h"
 #include "core/Camera.h"
 #include "core/CheckpointManager.h"
@@ -19,6 +21,9 @@
 #include "mcp/McpServer.h"
 #include "render/CameraRenderer.h"
 #include "render/VideoExporter.h"
+#include "next/app/ProjectDocument.h"
+#include "next/core/Document.h"
+#include "model/Project.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
@@ -40,11 +45,13 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
 #include <QFutureWatcher>
 #include <QInputDialog>
 #include <QJsonDocument>
@@ -739,6 +746,382 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     ensureProxies();
 }
 
+MainWindow::MainWindow(EditorSession* session, QWidget* parent)
+    : QMainWindow(parent)
+    , m_session(session)
+    , m_sessionOwner(session)
+{
+    buildSessionShell();
+}
+
+void MainWindow::buildSessionShell()
+{
+    resize(1440, 900);
+    setMinimumSize(1000, 620);
+
+    // Top split keeps the legacy shell's arrangement: large central surface on
+    // the left, project properties on the right.  Timeline/asset panels are
+    // intentionally absent until P2/P5.
+    auto* top = new QSplitter(Qt::Horizontal, this);
+    top->setObjectName(QStringLiteral("sessionTopSplit"));
+    top->setChildrenCollapsible(false);
+
+    m_sessionCanvas = new QFrame(top);
+    m_sessionCanvas->setObjectName(QStringLiteral("p1Canvas"));
+    m_sessionCanvas->setFrameShape(QFrame::NoFrame);
+    m_sessionCanvas->setMinimumWidth(480);
+    auto* canvasLayout = new QVBoxLayout(m_sessionCanvas);
+    canvasLayout->setContentsMargins(48, 48, 48, 48);
+    canvasLayout->setSpacing(14);
+    canvasLayout->addStretch(1);
+
+    m_sessionTitle = new QLabel(m_sessionCanvas);
+    QFont titleFont = m_sessionTitle->font();
+    titleFont.setPointSize(30);
+    titleFont.setBold(true);
+    m_sessionTitle->setFont(titleFont);
+    m_sessionTitle->setWordWrap(true);
+    canvasLayout->addWidget(m_sessionTitle);
+
+    m_sessionDetails = new QLabel(m_sessionCanvas);
+    QFont detailFont = m_sessionDetails->font();
+    detailFont.setPointSize(detailFont.pointSize() + 4);
+    m_sessionDetails->setFont(detailFont);
+    m_sessionDetails->setWordWrap(true);
+    canvasLayout->addWidget(m_sessionDetails);
+
+    m_sessionPath = new QLabel(m_sessionCanvas);
+    m_sessionPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_sessionPath->setWordWrap(true);
+    canvasLayout->addWidget(m_sessionPath);
+
+    m_sessionHint = new QLabel(m_sessionCanvas);
+    m_sessionHint->setWordWrap(true);
+    canvasLayout->addWidget(m_sessionHint);
+    canvasLayout->addStretch(1);
+
+    m_sessionProps = new ProjectPropertiesPanel(m_session, this);
+    m_sessionEnvironment = new EnvironmentPanel(m_session, this);
+
+    auto* projectTab = new QWidget(this);
+    auto* projectScroll = new QScrollArea(projectTab);
+    projectScroll->setObjectName(QStringLiteral("projectScroll"));
+    projectScroll->setWidgetResizable(true);
+    projectScroll->setFrameShape(QFrame::NoFrame);
+    projectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* projectContent = new QWidget(projectScroll);
+    auto* projectLayout = new QVBoxLayout(projectContent);
+    projectLayout->setContentsMargins(0, 0, 0, 0);
+    projectLayout->setSpacing(0);
+
+    auto* settingsSection = new CollapsibleSection(
+        Lang::t(QStringLiteral("section.projectSettings"), QStringLiteral("项目设置")),
+        m_sessionProps, projectContent);
+    auto* environmentSection = new CollapsibleSection(
+        Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")),
+        m_sessionEnvironment, projectContent);
+    settingsSection->setExpanded(true);
+    environmentSection->setExpanded(false);
+    projectLayout->addWidget(settingsSection);
+    projectLayout->addWidget(environmentSection);
+    projectLayout->addStretch(1);
+    projectScroll->setWidget(projectContent);
+
+    auto* projectTabLayout = new QVBoxLayout(projectTab);
+    projectTabLayout->setContentsMargins(0, 0, 0, 0);
+    projectTabLayout->addWidget(projectScroll);
+
+    m_rightTabs = new QTabWidget(this);
+    m_rightTabs->setObjectName(QStringLiteral("rightTabs"));
+    m_rightTabs->setMinimumWidth(300);
+    m_rightTabs->setMaximumWidth(440);
+    m_rightTabs->addTab(projectTab,
+                        Lang::t(QStringLiteral("panel.projectTab"),
+                                QStringLiteral("项目属性")));
+
+    top->addWidget(m_sessionCanvas);
+    top->addWidget(m_rightTabs);
+    top->setStretchFactor(0, 1);
+    top->setStretchFactor(1, 0);
+    top->setSizes({1100, 320});
+
+    auto* central = new QWidget(this);
+    auto* layout = new QVBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(top);
+    setCentralWidget(central);
+
+    m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("statusInfo"));
+    statusBar()->addPermanentWidget(m_status);
+
+    connect(m_sessionProps, &ProjectPropertiesPanel::settingsChanged, this,
+            [this] {
+                updateWindowTitle();
+                updateSessionPlaceholder();
+            });
+    connect(m_sessionEnvironment, &EnvironmentPanel::changed, this,
+            [this] { updateSessionPlaceholder(); });
+
+    if (m_session && m_session->document())
+    {
+        auto* document = m_session->document();
+        connect(document, &next::Document::changed, this,
+                &MainWindow::refreshSession);
+        connect(document, &next::Document::pendingCommitChanged, this,
+                [this](bool) { updateWindowTitle(); });
+        connect(document, &next::Document::commitFailed, this,
+                [this](const QString& message) {
+                    statusBar()->showMessage(
+                        QStringLiteral("提交失败：%1").arg(message), 5000);
+                });
+    }
+
+    createSessionMenus();
+    refreshSession();
+    updateWindowTitle();
+}
+
+void MainWindow::createSessionMenus()
+{
+    auto* fileMenu =
+        menuBar()->addMenu(Lang::t(QStringLiteral("menu.file"), QStringLiteral("文件")));
+
+    auto* newAction = new QAction(QStringLiteral("新建项目…"), this);
+    newAction->setShortcut(QKeySequence::New);
+    connect(newAction, &QAction::triggered, this, &MainWindow::createSessionProject);
+    fileMenu->addAction(newAction);
+
+    auto* openAction = new QAction(QStringLiteral("打开项目…"), this);
+    openAction->setShortcut(QKeySequence::Open);
+    connect(openAction, &QAction::triggered, this, &MainWindow::openSessionProject);
+    fileMenu->addAction(openAction);
+
+    fileMenu->addSeparator();
+
+    m_saveAction =
+        new QAction(Lang::t(QStringLiteral("action.save"), QStringLiteral("保存")), this);
+    m_saveAction->setObjectName(QStringLiteral("saveAction"));
+    m_saveAction->setShortcut(QKeySequence::Save);
+    connect(m_saveAction, &QAction::triggered, this, &MainWindow::saveProject);
+    addAction(m_saveAction);
+    fileMenu->addAction(m_saveAction);
+
+    auto* folderAction =
+        new QAction(Lang::t(QStringLiteral("action.openFolder"),
+                            QStringLiteral("打开工程文件夹")),
+                    this);
+    connect(folderAction, &QAction::triggered, this, [this] {
+        if (m_session)
+            QDesktopServices::openUrl(QUrl::fromLocalFile(m_session->root()));
+    });
+    fileMenu->addAction(folderAction);
+
+    fileMenu->addSeparator();
+    m_quitAction =
+        new QAction(Lang::t(QStringLiteral("action.quit"), QStringLiteral("退出")), this);
+    m_quitAction->setShortcut(QKeySequence::Quit);
+    connect(m_quitAction, &QAction::triggered, this, &QWidget::close);
+    addAction(m_quitAction);
+    fileMenu->addAction(m_quitAction);
+
+    auto* editMenu =
+        menuBar()->addMenu(Lang::t(QStringLiteral("menu.edit"), QStringLiteral("编辑")));
+    m_undoAction =
+        new QAction(Lang::t(QStringLiteral("action.undo"), QStringLiteral("撤销")), this);
+    m_undoAction->setShortcut(QKeySequence::Undo);
+    connect(m_undoAction, &QAction::triggered, this, [this] {
+        if (!m_session || !m_session->document())
+            return;
+        QString error;
+        if (!m_session->document()->undo(&error))
+            statusBar()->showMessage(QStringLiteral("撤销失败：%1").arg(error), 3000);
+        refreshSession();
+    });
+    addAction(m_undoAction);
+    editMenu->addAction(m_undoAction);
+
+    m_redoAction =
+        new QAction(Lang::t(QStringLiteral("action.redo"), QStringLiteral("重做")), this);
+    m_redoAction->setShortcut(QKeySequence::Redo);
+    connect(m_redoAction, &QAction::triggered, this, [this] {
+        if (!m_session || !m_session->document())
+            return;
+        QString error;
+        if (!m_session->document()->redo(&error))
+            statusBar()->showMessage(QStringLiteral("重做失败：%1").arg(error), 3000);
+        refreshSession();
+    });
+    addAction(m_redoAction);
+    editMenu->addAction(m_redoAction);
+
+    auto* helpMenu =
+        menuBar()->addMenu(Lang::t(QStringLiteral("menu.help"), QStringLiteral("帮助")));
+    helpMenu->addAction(
+        Lang::t(QStringLiteral("action.about"), QStringLiteral("关于 PVForge")), this,
+        [this] {
+            QMessageBox::about(
+                this, QStringLiteral("关于 PVForge"),
+                QStringLiteral("PVForge %1\n\n旧 UI 接入 P1：目录工程、工程属性与播放头已接通。")
+                    .arg(QStringLiteral(PVFORGE_VERSION)));
+        });
+
+    menuBar()->setFixedHeight(menuBar()->sizeHint().height());
+}
+
+void MainWindow::refreshSession()
+{
+    if (!m_session)
+        return;
+
+    if (m_sessionProps)
+        m_sessionProps->refresh();
+    if (m_sessionEnvironment)
+        m_sessionEnvironment->refresh();
+
+    updateSessionPlaceholder();
+    updateWindowTitle();
+
+    if (auto* document = m_session->document())
+    {
+        if (m_undoAction)
+            m_undoAction->setEnabled(document->store()->undoDepth() > 0);
+        if (m_redoAction)
+            m_redoAction->setEnabled(document->store()->redoDepth() > 0);
+    }
+}
+
+void MainWindow::updateSessionPlaceholder()
+{
+    if (!m_sessionCanvas)
+        return;
+
+    if (!m_session)
+    {
+        m_sessionTitle->setText(QStringLiteral("没有打开的工程"));
+        m_sessionDetails->setText(QStringLiteral("PVForge"));
+        m_sessionPath->clear();
+        m_sessionHint->setText(
+            QStringLiteral("从「文件 → 新建项目」或启动欢迎页打开一个 .pvproj 目录工程。"));
+        return;
+    }
+
+    const model::ProjectSettings& settings = m_session->settings();
+    QColor background(settings.background);
+    if (!background.isValid())
+        background = QColor(0x10, 0x10, 0x14);
+    const QString foreground =
+        background.lightness() > 140 ? QStringLiteral("#151515")
+                                     : QStringLiteral("#f2f2f2");
+
+    m_sessionCanvas->setStyleSheet(
+        QStringLiteral("QFrame#p1Canvas { background-color: %1; }")
+            .arg(background.name()));
+    for (QLabel* label : {m_sessionTitle, m_sessionDetails, m_sessionPath,
+                          m_sessionHint})
+        label->setStyleSheet(QStringLiteral("color: %1;").arg(foreground));
+
+    m_sessionTitle->setText(m_session->name());
+    m_sessionDetails->setText(
+        QStringLiteral("%1 × %2 · %3 fps · 背景色 %4 · 播放头 %5")
+            .arg(settings.width)
+            .arg(settings.height)
+            .arg(settings.fps)
+            .arg(background.name().toUpper())
+            .arg(m_session->playhead()));
+    m_sessionPath->setText(m_session->root());
+    m_sessionHint->setText(QStringLiteral(
+        "P1 里程碑：工程生命周期已接通。时间轴、视口、属性面板、素材箱和"
+        "摄像机监视器将在 P2–P5 逐个接回。"));
+    if (m_status)
+        m_status->setText(
+            QStringLiteral("%1 × %2 @ %3 fps")
+                .arg(settings.width)
+                .arg(settings.height)
+                .arg(settings.fps));
+}
+
+bool MainWindow::saveSessionProject()
+{
+    if (!m_session)
+        return false;
+
+    QString error;
+    m_session->flush(&error);
+    if (!error.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("保存失败"), error);
+        return false;
+    }
+    updateWindowTitle();
+    statusBar()->showMessage(QStringLiteral("已保存"), 2000);
+    return true;
+}
+
+void MainWindow::openSessionProject()
+{
+    const QString path = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("打开项目（选择 .pvproj 工程目录）"), QString(),
+        QFileDialog::ShowDirsOnly);
+    if (path.isEmpty())
+        return;
+
+    QString error;
+    auto session = EditorSession::openProject(path, &error);
+    if (!session)
+    {
+        QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
+        return;
+    }
+
+    rememberRecentProject(session->root());
+    showSessionWindow(std::move(session));
+    close();
+}
+
+void MainWindow::createSessionProject()
+{
+    NewProjectDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString path = dialog.projectPath();
+    if (QFileInfo::exists(path))
+    {
+        QMessageBox::warning(this, QStringLiteral("无法创建项目"),
+                             QStringLiteral("路径已存在：%1\n\n请换一个项目名称或位置。")
+                                 .arg(path));
+        return;
+    }
+    QDir().mkpath(QFileInfo(path).absolutePath());
+
+    model::ProjectSettings settings;
+    settings.name = dialog.projectName();
+    settings.width = dialog.videoWidth();
+    settings.height = dialog.videoHeight();
+    settings.fps = dialog.frameRate();
+
+    QString error;
+    auto session = EditorSession::createProject(path, settings, &error);
+    if (!session)
+    {
+        QMessageBox::warning(this, QStringLiteral("无法创建项目"), error);
+        return;
+    }
+
+    rememberRecentProject(session->root());
+    showSessionWindow(std::move(session));
+    close();
+}
+
+void MainWindow::showSessionWindow(std::unique_ptr<EditorSession> session)
+{
+    auto* window = new MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->show();
+}
+
 MainWindow::~MainWindow()
 {
     // Stop MCP before the HTTP server and log panel children are destroyed;
@@ -1076,6 +1459,21 @@ void MainWindow::toggleWorkbench()
 
 void MainWindow::updateWindowTitle()
 {
+    if (m_session)
+    {
+        const bool pending = m_session->document()
+                             && m_session->document()->hasPendingCommit();
+        setWindowTitle(QStringLiteral("PVForge — %1%2")
+                           .arg(m_session->name(),
+                                pending ? QStringLiteral(" *") : QString()));
+        return;
+    }
+    if (!m_project)
+    {
+        setWindowTitle(QStringLiteral("PVForge"));
+        return;
+    }
+
     const QString status = m_project->modified
                                ? Lang::t(QStringLiteral("title.unsaved"), QStringLiteral("未保存"))
                                : Lang::t(QStringLiteral("title.saved"), QStringLiteral("已保存"));
@@ -1115,6 +1513,11 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
 
 bool MainWindow::saveProject()
 {
+    if (m_session)
+        return saveSessionProject();
+    if (!m_project)
+        return false;
+
     if (m_project->filePath.isEmpty())
         return saveProjectAs();
 
@@ -2287,6 +2690,25 @@ EntityId MainWindow::createFolderForTest(EntityId parent)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    if (m_session)
+    {
+        // Edits are already on disk; flush only the debounced git commit and
+        // persist the playhead next to the project.
+        QString error;
+        m_session->flush(&error);
+        if (!error.isEmpty())
+            statusBar()->showMessage(
+                QStringLiteral("关闭时提交失败：%1").arg(error), 5000);
+        event->accept();
+        return;
+    }
+
+    if (!m_project)
+    {
+        event->accept();
+        return;
+    }
+
     if (m_project->modified)
     {
         const auto answer = QMessageBox::question(
@@ -3092,6 +3514,14 @@ void MainWindow::onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec
 
 void MainWindow::refreshAll()
 {
+    if (m_session)
+    {
+        refreshSession();
+        return;
+    }
+    if (!m_project)
+        return;
+
     cleanupHtmlRenderers();
     if (m_selected != kInvalidEntity)
     {

@@ -86,6 +86,8 @@ add_executable(pvforge
     src/app/ExportDialog.cpp
     src/app/ExportProgressDialog.cpp
     src/app/MainWindow.cpp
+    src/app/EditorSession.cpp
+    src/app/EditorSession.h
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
@@ -131,8 +133,9 @@ target_link_libraries(pvforge PRIVATE
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
 
-# New entity model modules. The old pvforge target stays buildable while
-# pvforge-next is assembled; these libraries are not linked into it yet.
+# New entity model modules. The legacy pvforge target links only the small
+# document/core/store slice (pvf_next_document); pvforge-next assembles the
+# full reference shell from the remaining libraries.
 add_subdirectory(src/model)
 add_subdirectory(src/assets)
 add_subdirectory(src/solver)
@@ -156,3 +159,7 @@ add_subdirectory(src/next/timeline)
 add_subdirectory(src/next/properties)
 add_subdirectory(src/next/viewport)
 add_subdirectory(src/next/app)
+
+# P1 delivery shell: link only the document slice of the new backend.
+# `pvforge-next` (and its main.cpp) stays a separate, reference-only target.
+target_link_libraries(pvforge PRIVATE pvf_next_document)

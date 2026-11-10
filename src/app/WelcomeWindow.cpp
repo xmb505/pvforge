@@ -1,8 +1,9 @@
 #include "WelcomeWindow.h"
 
+#include "EditorSession.h"
 #include "MainWindow.h"
 #include "NewProjectDialog.h"
-#include "core/Project.h"
+#include "model/Project.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -12,14 +13,9 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QSettings>
 #include <QVBoxLayout>
 
 namespace pvf {
-
-namespace {
-constexpr auto kRecentKey = "recentProjects";
-}
 
 WelcomeWindow::WelcomeWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -93,11 +89,11 @@ void WelcomeWindow::refreshRecent()
 {
     m_recent->clear();
 
-    const QStringList files = QSettings().value(kRecentKey).toStringList();
-    for (const QString& path : files)
+    // recentProjects() already validates that each entry is still a .pvproj
+    // directory with a project.json and drops stale legacy file paths.
+    const QStringList directories = recentProjects();
+    for (const QString& path : directories)
     {
-        if (!QFileInfo::exists(path))
-            continue;
         auto* item = new QListWidgetItem(QFileInfo(path).completeBaseName(), m_recent);
         item->setData(Qt::UserRole, path);
         item->setToolTip(path);
@@ -112,34 +108,20 @@ void WelcomeWindow::refreshRecent()
     }
 }
 
-void WelcomeWindow::rememberRecent(const QString& path)
-{
-    QSettings settings;
-    QStringList files = settings.value(kRecentKey).toStringList();
-    files.removeAll(path);
-    files.prepend(path);
-    while (files.size() > 10)
-        files.removeLast();
-    settings.setValue(kRecentKey, files);
-    refreshRecent();
-}
-
 void WelcomeWindow::openProject(const QString& path)
 {
-    auto* project = new Project;
     QString error;
-    if (!project->load(path, &error))
+    auto session = EditorSession::openProject(path, &error);
+    if (!session)
     {
-        QMessageBox::warning(this, QStringLiteral("无法打开项目"),
-                             QStringLiteral("%1\n\n%2").arg(path, error));
-        delete project;
+        QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
         refreshRecent();
         return;
     }
 
-    rememberRecent(path);
+    rememberRecentProject(session->root());
 
-    auto* window = new MainWindow(project);
+    auto* window = new MainWindow(session.release());
     window->setAttribute(Qt::WA_DeleteOnClose);
     window->show();
     hide();
@@ -152,40 +134,44 @@ void WelcomeWindow::createProject()
         return;
 
     const QString path = dialog.projectPath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-
-    if (QFileInfo::exists(path))
+    const QFileInfo info(path);
+    if (info.exists())
     {
-        const auto answer = QMessageBox::question(
-            this, QStringLiteral("项目已存在"),
-            QStringLiteral("%1 已存在，要覆盖吗？").arg(path));
-        if (answer != QMessageBox::Yes)
-            return;
+        QMessageBox::warning(
+            this, QStringLiteral("无法创建项目"),
+            info.isDir()
+                ? QStringLiteral("目录已存在：%1\n\n请换一个项目名称或位置。").arg(path)
+                : QStringLiteral("同名文件已存在：%1").arg(path));
+        return;
     }
+    QDir().mkpath(info.absolutePath());
 
-    Project project;
-    project.name = dialog.projectName();
-    project.author = dialog.author();
-    project.description = dialog.description();
-    project.width = dialog.videoWidth();
-    project.height = dialog.videoHeight();
-    project.fps = dialog.frameRate();
+    model::ProjectSettings settings;
+    settings.name = dialog.projectName();
+    settings.width = dialog.videoWidth();
+    settings.height = dialog.videoHeight();
+    settings.fps = dialog.frameRate();
 
     QString error;
-    if (!project.save(path, &error))
+    auto session = EditorSession::createProject(path, settings, &error);
+    if (!session)
     {
         QMessageBox::warning(this, QStringLiteral("无法创建项目"), error);
         return;
     }
 
-    openProject(path);
+    rememberRecentProject(session->root());
+    auto* window = new MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->show();
+    hide();
 }
 
 void WelcomeWindow::browseProject()
 {
-    const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("打开项目"), QString(),
-        QStringLiteral("PVForge 工程 (*.pvproj);;所有文件 (*)"));
+    const QString path = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("打开项目（选择 .pvproj 工程目录）"), QString(),
+        QFileDialog::ShowDirsOnly);
     if (!path.isEmpty())
         openProject(path);
 }

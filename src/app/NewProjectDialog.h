@@ -4,8 +4,8 @@
 
 class QComboBox;
 class QLineEdit;
-class QPlainTextEdit;
 class QPushButton;
+class QLabel;
 
 namespace pvf {
 
@@ -17,9 +17,8 @@ public:
     explicit NewProjectDialog(QWidget* parent = nullptr);
 
     QString projectName() const;
+    // Directory project: `<location>/<name>.pvproj/`.
     QString projectPath() const;
-    QString author() const;
-    QString description() const;
     int videoWidth() const;
     int videoHeight() const;
     int frameRate() const;
@@ -32,8 +31,7 @@ private:
     QLineEdit* m_location = nullptr;
     QComboBox* m_resolution = nullptr;
     QComboBox* m_fps = nullptr;
-    QLineEdit* m_author = nullptr;
-    QPlainTextEdit* m_description = nullptr;
+    QLabel* m_targetHint = nullptr;
     QPushButton* m_create = nullptr;
 };
 

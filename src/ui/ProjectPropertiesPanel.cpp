@@ -1,5 +1,8 @@
 #include "ProjectPropertiesPanel.h"
 
+#include "app/EditorSession.h"
+#include "model/Project.h"
+
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -14,6 +17,35 @@ ProjectPropertiesPanel::ProjectPropertiesPanel(Project* project, QWidget* parent
     : QWidget(parent)
     , m_project(project)
 {
+    buildUi();
+    refresh();
+}
+
+ProjectPropertiesPanel::ProjectPropertiesPanel(EditorSession* session, QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+{
+    buildUi();
+
+    // Width/height/fps are fixed when the project is created in P1.  Keep the
+    // same rows and look, but show them as read-only values.
+    for (QSpinBox* spin : {m_width, m_height, m_fps})
+    {
+        spin->setReadOnly(true);
+        spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        spin->setFocusPolicy(Qt::NoFocus);
+        spin->setToolTip(QStringLiteral("创建工程后锁定"));
+    }
+    m_authorLabel->hide();
+    m_author->hide();
+    m_descriptionLabel->hide();
+    m_description->hide();
+
+    refresh();
+}
+
+void ProjectPropertiesPanel::buildUi()
+{
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
@@ -27,11 +59,13 @@ ProjectPropertiesPanel::ProjectPropertiesPanel(Project* project, QWidget* parent
     form->addRow(QStringLiteral("名称"), m_name);
 
     m_author = new QLineEdit(this);
-    form->addRow(QStringLiteral("作者"), m_author);
+    m_authorLabel = new QLabel(QStringLiteral("作者"), this);
+    form->addRow(m_authorLabel, m_author);
 
     m_description = new QPlainTextEdit(this);
     m_description->setMaximumHeight(90);
-    form->addRow(QStringLiteral("描述"), m_description);
+    m_descriptionLabel = new QLabel(QStringLiteral("描述"), this);
+    form->addRow(m_descriptionLabel, m_description);
 
     m_width = new QSpinBox(this);
     m_width->setRange(16, 8192);
@@ -53,66 +87,95 @@ ProjectPropertiesPanel::ProjectPropertiesPanel(Project* project, QWidget* parent
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
-    connect(m_name, &QLineEdit::textEdited, this, [this](const QString& text) {
-        m_project->name = text;
-        m_project->notifyChanged();
-        emit settingsChanged();
-    });
+    connect(m_name, &QLineEdit::textEdited, this,
+            [this](const QString& text) { applyName(text); });
     connect(m_author, &QLineEdit::textEdited, this, [this](const QString& text) {
+        if (!m_project)
+            return;
         m_project->author = text;
         m_project->notifyChanged();
     });
     connect(m_description, &QPlainTextEdit::textChanged, this, [this] {
+        if (!m_project)
+            return;
         m_project->description = m_description->toPlainText();
         m_project->notifyChanged();
     });
     connect(m_width, &QSpinBox::valueChanged, this, [this](int value) {
+        if (!m_project)
+            return;
         m_project->width = value;
         m_project->notifyChanged();
         emit settingsChanged();
     });
     connect(m_height, &QSpinBox::valueChanged, this, [this](int value) {
+        if (!m_project)
+            return;
         m_project->height = value;
         m_project->notifyChanged();
         emit settingsChanged();
     });
     connect(m_fps, &QSpinBox::valueChanged, this, [this](int value) {
+        if (!m_project)
+            return;
         m_project->fps = value;
         m_project->notifyChanged();
         emit settingsChanged();
     });
+}
 
-    refresh();
+void ProjectPropertiesPanel::applyName(const QString& text)
+{
+    if (m_session)
+    {
+        m_session->mutableProject().settings.name = text;
+        // One commit per edit gesture; the store debounces the git commit.
+        m_session->commitProject(QStringLiteral("pvf: 重命名工程"));
+    }
+    else if (m_project)
+    {
+        m_project->name = text;
+        m_project->notifyChanged();
+    }
+    emit settingsChanged();
 }
 
 void ProjectPropertiesPanel::refresh()
 {
+    if (!m_session && !m_project)
+        return;
+
+    const QString name = m_session ? m_session->settings().name : m_project->name;
+    const int width = m_session ? m_session->settings().width : m_project->width;
+    const int height = m_session ? m_session->settings().height : m_project->height;
+    const int fps = m_session ? m_session->settings().fps : m_project->fps;
+
     if (!m_name->hasFocus())
     {
         const QSignalBlocker blocker(m_name);
-        m_name->setText(m_project->name);
+        m_name->setText(name);
     }
-    if (!m_author->hasFocus())
+    if (m_project && !m_author->hasFocus())
     {
         const QSignalBlocker blocker(m_author);
         m_author->setText(m_project->author);
     }
-    if (!m_description->hasFocus())
+    if (m_project && !m_description->hasFocus())
     {
         const QSignalBlocker blocker(m_description);
         m_description->setPlainText(m_project->description);
     }
     {
         const QSignalBlocker blocker(m_width);
-        m_width->setValue(m_project->width);
+        m_width->setValue(width);
     }
     {
         const QSignalBlocker blocker(m_height);
-        m_height->setValue(m_project->height);
+        m_height->setValue(height);
     }
     {
         const QSignalBlocker blocker(m_fps);
-        m_fps->setValue(m_project->fps);
+        m_fps->setValue(fps);
     }
 }
 

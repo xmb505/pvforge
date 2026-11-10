@@ -15,6 +15,7 @@
 
 class QAction;
 class QCloseEvent;
+class QFrame;
 class QKeyEvent;
 class QProgressBar;
 class QLabel;
@@ -35,6 +36,7 @@ class AudioEngine;
 class CameraMonitor;
 class CheckpointManager;
 class CurveEditor;
+class EditorSession;
 class EnvironmentPanel;
 class McpCommandService;
 class McpLogPanel;
@@ -56,7 +58,12 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
+    // Legacy shell used by the pre-P2 panels and the existing self-tests.
     explicit MainWindow(Project* project, QWidget* parent = nullptr);
+    // P1 shell: takes ownership of the session and builds the minimal window
+    // (project properties + read-only placeholder). Panels from the legacy
+    // shell are intentionally not instantiated in this mode.
+    explicit MainWindow(EditorSession* session, QWidget* parent = nullptr);
     ~MainWindow() override;
 
     Project* project() const { return m_project; }
@@ -179,6 +186,16 @@ private:
     void hideImportBusy();
     bool saveProject();
     bool saveProjectAs();
+
+    // ---- P1 session shell -----------------------------------------------
+    void buildSessionShell();
+    void createSessionMenus();
+    void refreshSession();
+    void updateSessionPlaceholder();
+    bool saveSessionProject();
+    void openSessionProject();
+    void createSessionProject();
+    void showSessionWindow(std::unique_ptr<EditorSession> session);
     void exportVideo();
     void autoSave();
     void updateAutosaveTimer();
@@ -229,6 +246,9 @@ private:
                         const QImage& image, const QString& error);
 
     Project* m_project = nullptr;
+    EditorSession* m_session = nullptr;
+    // Declared before the session-mode panels so the session outlives them.
+    std::unique_ptr<EditorSession> m_sessionOwner;
     History* m_history = nullptr;
     Viewport* m_viewport = nullptr;
     PropertiesPanel* m_props = nullptr;
@@ -301,6 +321,15 @@ private:
     bool m_playing = false;
     EntityId m_selected = kInvalidEntity;
     std::unique_ptr<EntityClipboard> m_entityClip;
+
+    // P1 session shell widgets/actions (unused by the legacy constructor).
+    ProjectPropertiesPanel* m_sessionProps = nullptr;
+    EnvironmentPanel* m_sessionEnvironment = nullptr;
+    QFrame* m_sessionCanvas = nullptr;
+    QLabel* m_sessionTitle = nullptr;
+    QLabel* m_sessionDetails = nullptr;
+    QLabel* m_sessionPath = nullptr;
+    QLabel* m_sessionHint = nullptr;
 };
 
 } // namespace pvf
