@@ -1224,6 +1224,7 @@ void NextWindow::buildEditor()
     m_viewport = new ViewportWidget(m_document, top);
     m_viewport->setSceneExpandPercent(
         m_settings.workbenchCacheExpandPercent);
+    applyViewportSnapSettings();
     m_propertiesPanel = new PropertiesPanel(m_document, top);
 
     m_propertiesPanel->setAutoKey(!m_autoKeyCheck
@@ -2422,10 +2423,26 @@ void NextWindow::startMcpServer()
                 if (m_mcpLogPanel)
                     m_mcpLogPanel->addToolInvocation(name, argsJson, resultJson,
                                                      ms, ok);
-                // Write tools commit straight through the store, so the
-                // history dock would otherwise stay on the previous rows.
-                if (ok && mcp2::Service::isWriteTool(name))
+
+                // Write tools commit straight through the store.  Reload the
+                // document from disk first so every panel sees the new bytes,
+                // even when the tool failed after partially writing assets.
+                if (mcp2::Service::isWriteTool(name))
+                {
+                    QString reloadError;
+                    if (m_document
+                        && !m_document->notifyExternalChange(&reloadError)
+                        && !reloadError.isEmpty())
+                    {
+                        if (m_mcpLogPanel)
+                            m_mcpLogPanel->addSystemEvent(tr("刷新工程失败"),
+                                                          reloadError);
+                        statusBar()->showMessage(
+                            tr("刷新工程失败：%1").arg(reloadError), 8000);
+                    }
+                    refreshAll();
                     refreshHistory();
+                }
                 refreshAiLock();
                 statusBar()->showMessage(
                     ok ? tr("AI %1 完成（%2 ms）").arg(name).arg(ms)
@@ -2493,18 +2510,35 @@ void NextWindow::stopMcpServer()
         m_mcpLogPanel->setServerState(false, 0, {});
 }
 
-void NextWindow::refreshAiLock()
+void NextWindow::setHumanEditingEnabled(bool enabled)
 {
-    const bool writing = m_aiBusyWrites > 0;
-    const bool locked = m_aiStopped || writing;
+    m_humanEditingEnabled = enabled;
 
+    // Playback, playhead scrubbers, camera/view controls and the MCP log stay
+    // live so the human can stop the AI or inspect the timeline while locked.
     for (QWidget* panel : {static_cast<QWidget*>(m_assetPanel),
                            static_cast<QWidget*>(m_viewport),
                            static_cast<QWidget*>(m_propertiesPanel),
                            static_cast<QWidget*>(m_timeline)}) {
         if (panel)
-            panel->setEnabled(!locked);
+            panel->setEnabled(enabled);
     }
+
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->setEnabled(true);
+
+    // updateActions() also gates every write QAction on this flag, so a
+    // document change refresh cannot re-enable a shortcut while locked.
+    updateActions();
+}
+
+void NextWindow::refreshAiLock()
+{
+    // An emergency stop deliberately releases human editing even though the
+    // in-flight tool is still unwinding; the Service keeps rejecting AI
+    // writes until resumeAi().  Without a stop, only a running write locks.
+    const bool writing = m_aiBusyWrites > 0 && !m_aiStopped;
+    setHumanEditingEnabled(!writing);
 
     if (m_statusAi) {
         if (m_aiStopped) {
@@ -2543,9 +2577,21 @@ void NextWindow::applyHumanCommitDelay()
         m_document->setHumanCommitDelayMs(m_settings.humanCommitDelayMs);
 }
 
+void NextWindow::applyViewportSnapSettings()
+{
+    if (!m_viewport)
+        return;
+    m_viewport->setSnapThresholdPixels(m_settings.snapPixels);
+    m_viewport->setSnapCanvasCenter(m_settings.snapCanvasCenter);
+    m_viewport->setSnapEntityEdges(m_settings.snapEntityEdges);
+    m_viewport->setSnapEdgeMidpoints(m_settings.snapEdgeMidpoints);
+    m_viewport->setSnapAngles(m_settings.snapAngles);
+}
+
 void NextWindow::applySettings(const AppSettings& previous)
 {
     applyHumanCommitDelay();
+    applyViewportSnapSettings();
     if (m_playback)
         m_playback->setWatchdogMs(m_settings.watchdogMs);
 
@@ -2870,15 +2916,24 @@ void NextWindow::exportVideo()
 
     startExport(dialog.cameraUuid(), dialog.startFrame(), dialog.endFrame(),
                 dialog.outputPath(), dialog.includeAudio(), dialog.outputFps(),
-                dialog.resolutionScale());
+                dialog.resolutionScale(), dialog.overwriteExisting());
 }
 
 void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
                              const QString& outputPath, bool includeAudio,
-                             int outputFps, int resolutionScale)
+                             int outputFps, int resolutionScale,
+                             bool overwriteExisting)
 {
     if (!m_document || outputPath.isEmpty() || m_exportRunning)
         return;
+
+    export2::Options options;
+    options.overwrite = overwriteExisting;
+    if (m_exportOverwriteProbe)
+    {
+        m_exportOverwriteProbe(options.overwrite);
+        return;
+    }
 
     // The export worker captures the media services; make sure they exist and
     // that the HTML browsers were started by this (the owning) thread.
@@ -2905,7 +2960,6 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
         std::max(2, (project->settings.width * scale) & ~1),
         std::max(2, (project->settings.height * scale) & ~1));
 
-    export2::Options options;
     options.outputPath = outputPath;
     options.cameraUuid = cameraUuid;
     options.startFrame = startFrame;
@@ -3163,11 +3217,13 @@ void NextWindow::updatePlaybackAction()
 void NextWindow::updateActions()
 {
     const bool open = m_document != nullptr;
+    const bool editing = open && m_humanEditingEnabled;
+    const bool actionsEnabled = m_humanEditingEnabled;
     updatePlaybackAction();
     if (m_undoAction)
-        m_undoAction->setEnabled(open);
+        m_undoAction->setEnabled(editing);
     if (m_redoAction)
-        m_redoAction->setEnabled(open);
+        m_redoAction->setEnabled(editing);
 
     bool hasCamera = false;
     if (m_document) {
@@ -3180,12 +3236,19 @@ void NextWindow::updateActions()
         }
     }
     if (m_exportAction)
-        m_exportAction->setEnabled(open && hasCamera);
+        m_exportAction->setEnabled(editing && hasCamera);
 
     if (m_projectPropertiesAction)
-        m_projectPropertiesAction->setEnabled(open);
+        m_projectPropertiesAction->setEnabled(editing);
     if (m_fitViewAction)
         m_fitViewAction->setEnabled(open);
+    // Project switching destroys the MCP service, so it is a write entry too.
+    if (m_newAction)
+        m_newAction->setEnabled(actionsEnabled);
+    if (m_openAction)
+        m_openAction->setEnabled(actionsEnabled);
+    if (m_settingsAction)
+        m_settingsAction->setEnabled(actionsEnabled);
 
     bool canEditSelection = false;
     if (m_document) {
@@ -3195,20 +3258,20 @@ void NextWindow::updateActions()
                            && !it.value().locked;
     }
     if (m_deleteAction)
-        m_deleteAction->setEnabled(canEditSelection);
+        m_deleteAction->setEnabled(canEditSelection && m_humanEditingEnabled);
     // Copy/duplicate act on the selected editable entity.  Paste only needs a
     // snapshot; the parent check happens when it is actually pasted.
     if (m_copyEntityAction)
-        m_copyEntityAction->setEnabled(canEditSelection);
+        m_copyEntityAction->setEnabled(canEditSelection && m_humanEditingEnabled);
     if (m_duplicateAction)
-        m_duplicateAction->setEnabled(canEditSelection);
+        m_duplicateAction->setEnabled(canEditSelection && m_humanEditingEnabled);
     if (m_pasteEntityAction)
-        m_pasteEntityAction->setEnabled(open && m_hasEntityClipboard);
+        m_pasteEntityAction->setEnabled(editing && m_hasEntityClipboard);
 
     for (QAction* action : {m_createEmptyAction, m_createTextAction,
                             m_createVectorAction, m_createCameraAction}) {
         if (action)
-            action->setEnabled(open);
+            action->setEnabled(editing);
     }
     if (m_autoKeyCheck)
         m_autoKeyCheck->setEnabled(open);

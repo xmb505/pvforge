@@ -167,6 +167,16 @@ public:
     {
         m_exportHandler = std::move(handler);
     }
+    // Test hook: observe the overwrite flag actually copied into
+    // export2::Options without starting the worker.
+    void setExportOverwriteProbeForTest(std::function<void(bool)> probe)
+    {
+        m_exportOverwriteProbe = std::move(probe);
+    }
+    void startExportForTest(const QString& outputPath, bool overwrite)
+    {
+        startExport(Uuid(), 0, 1, outputPath, false, 0, 1, overwrite);
+    }
 
     McpLogPanel* mcpLogPanelForTest() const { return m_mcpLogPanel; }
     QDockWidget* mcpLogDockForTest() const { return m_mcpLogDock; }
@@ -199,6 +209,7 @@ public:
     QAction* redoActionForTest() const { return m_redoAction; }
     QAction* exportActionForTest() const { return m_exportAction; }
     QAction* createEntityActionForTest(ContentKind kind) const;
+    bool humanEditingEnabledForTest() const { return m_humanEditingEnabled; }
 
     // Opens the private timeline overlay for a parent entity.  Exposed as a
     // test-friendly wrapper around the same slot the timeline signal uses.
@@ -260,19 +271,22 @@ private:
     void startMcpServer();
     void stopMcpServer();
     void applyHumanCommitDelay();
+    void applyViewportSnapSettings();
     void applySettings(const AppSettings& previous);
     void showOnboardingIfNeeded();
     void refreshHistory();
     void restoreHistoryCommit(const QString& hash);
     bool restoreCommitInternal(const QString& hash, QString* error);
     void openOutputFolder(const QString& path);
+    void setHumanEditingEnabled(bool enabled);
     void refreshAiLock();
     void resetAiLock();
     bool mcpToolRunning() const { return m_activeToolCalls > 0; }
     void updateSettingsDialogContext();
     void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
                      const QString& outputPath, bool includeAudio,
-                     int outputFps = 0, int resolutionScale = 1);
+                     int outputFps = 0, int resolutionScale = 1,
+                     bool overwriteExisting = false);
     void applyProjectSettings(const QString& name, const QString& background);
     // Clones `source` with a fresh UUID and commits it once.  Children are not
     // copied.  Returns the new UUID, or an empty one on failure.
@@ -330,10 +344,15 @@ private:
     bool m_onboardingShown = false;
     std::function<void(const QString&)> m_openFolderHandler;
     std::function<void()> m_exportHandler;
+    std::function<void(bool)> m_exportOverwriteProbe;
     // Application-internal clipboard; only one entity is supported.
     model::Entity m_entityClipboard;
     bool m_hasEntityClipboard = false;
     bool m_aiStopped = false;
+    // False while an AI write tool is running.  updateActions() and the four
+    // editing panels both honour this, so a late document refresh cannot
+    // re-enable a shortcut mid-write.
+    bool m_humanEditingEnabled = true;
     int m_activeToolCalls = 0;
     int m_aiBusyWrites = 0;
     QHash<QString, QString> m_runningToolArgs;

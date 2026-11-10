@@ -114,6 +114,11 @@ private:
     QSet<QTcpSocket*> m_connections;
     QTcpServer* m_server = nullptr;
     quint16 m_port = 0;
+    // Only one tools/call may touch the project at a time.  A batch tool can
+    // pump the event loop at its checkpoint, which may deliver a second
+    // request; that request is answered with a JSON-RPC busy error instead of
+    // re-entering the service.
+    bool m_toolCallBusy = false;
 };
 
 } // namespace pvf::mcp2

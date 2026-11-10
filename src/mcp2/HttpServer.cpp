@@ -223,6 +223,21 @@ void sendHttpError(QTcpSocket* socket, int status, const QString& code,
     sendHttp(socket, status, body, QByteArrayLiteral("application/json"), extra);
 }
 
+// Sets a bool for the lifetime of the guard.  Used to make tools/call
+// non-reentrant across the batch checkpoint's processEvents().
+class BusyFlag
+{
+public:
+    explicit BusyFlag(bool& flag) : m_flag(flag) { m_flag = true; }
+    ~BusyFlag() { m_flag = false; }
+
+    BusyFlag(const BusyFlag&) = delete;
+    BusyFlag& operator=(const BusyFlag&) = delete;
+
+private:
+    bool& m_flag;
+};
+
 bool constantTimeEquals(const QByteArray& a, const QByteArray& b)
 {
     // Hash both sides so the comparison always runs over a fixed length and
@@ -1130,6 +1145,13 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
 
         if (method == QLatin1String("tools/call"))
         {
+            if (m_toolCallBusy)
+            {
+                sendRpcError(socket, id, -32000,
+                             QStringLiteral("Server busy: a tool call is already running"));
+                return;
+            }
+
             const QJsonValue paramsValue = request.value(QStringLiteral("params"));
             if (!paramsValue.isObject())
             {
@@ -1154,6 +1176,11 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
                 return;
             }
             const QJsonObject args = argsValue.toObject();
+
+            // Hold the serial-write guard until the response has been
+            // produced.  The guard is a stack object so a thrown tool also
+            // releases it.
+            BusyFlag busy(m_toolCallBusy);
 
             QElapsedTimer timer;
             timer.start();

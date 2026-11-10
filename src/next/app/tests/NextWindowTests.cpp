@@ -22,6 +22,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -36,6 +38,7 @@
 #include <QSpinBox>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QWheelEvent>
 #include <QtTest>
@@ -135,6 +138,94 @@ bool rewriteEntityName(const QString& projectDir, const Uuid& uuid,
     return file.write(bytes) == bytes.size() && file.flush();
 }
 
+// Minimal raw HTTP client for the MCP concurrency test.  The server and the
+// test share one thread, so every wait has to keep pumping events.
+template <typename Predicate>
+bool pumpUntil(Predicate predicate, int timeoutMs = 10000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < timeoutMs)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    return predicate();
+}
+
+bool connectLocal(QTcpSocket& socket, quint16 port)
+{
+    socket.connectToHost(QStringLiteral("127.0.0.1"), port);
+    return pumpUntil([&] {
+               return socket.state() == QAbstractSocket::ConnectedState
+                      || socket.state() == QAbstractSocket::UnconnectedState;
+           })
+           && socket.state() == QAbstractSocket::ConnectedState;
+}
+
+void writeRpc(QTcpSocket& socket, quint16 port, const QByteArray& token,
+              const QJsonObject& request)
+{
+    const QByteArray body =
+        QJsonDocument(request).toJson(QJsonDocument::Compact);
+    QByteArray head =
+        QByteArrayLiteral("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:")
+        + QByteArray::number(port) + QByteArrayLiteral("\r\n")
+        + QByteArrayLiteral("Content-Type: application/json\r\n")
+        + QByteArrayLiteral("Authorization: Bearer ") + token
+        + QByteArrayLiteral("\r\nContent-Length: ")
+        + QByteArray::number(body.size())
+        + QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
+    socket.write(head);
+    socket.write(body);
+    socket.flush();
+}
+
+int httpContentLength(const QByteArray& header)
+{
+    const QByteArray lower = header.toLower();
+    int pos = lower.indexOf("content-length:");
+    if (pos < 0)
+        return -1;
+    pos += int(qstrlen("content-length:"));
+    while (pos < lower.size()
+           && (lower.at(pos) == ' ' || lower.at(pos) == '\t'))
+        ++pos;
+    int end = pos;
+    while (end < lower.size() && lower.at(end) >= '0' && lower.at(end) <= '9')
+        ++end;
+    bool ok = false;
+    const int length = lower.mid(pos, end - pos).toInt(&ok);
+    return ok ? length : -1;
+}
+
+QJsonObject readRpc(QTcpSocket& socket, bool* ok)
+{
+    *ok = false;
+    QByteArray data;
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 15000)
+    {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        data += socket.readAll();
+
+        const int headerEnd = data.indexOf("\r\n\r\n");
+        if (headerEnd >= 0)
+        {
+            const int length = httpContentLength(data.left(headerEnd));
+            if (length >= 0 && data.size() >= headerEnd + 4 + length)
+            {
+                *ok = true;
+                return QJsonDocument::fromJson(
+                           data.mid(headerEnd + 4, length))
+                    .object();
+            }
+        }
+        if (socket.state() == QAbstractSocket::UnconnectedState
+            && !socket.bytesAvailable())
+            break;
+    }
+    return {};
+}
+
 // Recent projects live in the same PVForge/PVForge QSettings file as the app
 // preferences; XDG_CONFIG_HOME isolates it per test binary.
 void clearRecentProjectsSetting()
@@ -217,6 +308,12 @@ private slots:
         QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
         settings.setValue(QStringLiteral("app/onboardingDone"), true);
         settings.setValue(QStringLiteral("git/enabled"), true);
+        settings.setValue(QStringLiteral("snap/pixels"), 6);
+        settings.setValue(QStringLiteral("snap/canvasCenter"), true);
+        settings.setValue(QStringLiteral("snap/entityEdges"), true);
+        settings.setValue(QStringLiteral("snap/edgeMidpoints"), false);
+        settings.setValue(QStringLiteral("snap/angles"),
+                          QStringLiteral("0,90,180,270"));
         settings.sync();
     }
 
@@ -635,6 +732,64 @@ private slots:
         QCOMPARE(wideDialog.result(), int(QDialog::Accepted));
     }
 
+    void exportOverwriteFlagReachesOptions()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+        window->createEntity(ContentKind::Camera);
+        const Uuid cameraUuid = window->document()->selection();
+        QVERIFY(!cameraUuid.isEmpty());
+
+        const QString output = temp.path() + QStringLiteral("/existing.mp4");
+        QFile existing(output);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        existing.write("old");
+        existing.close();
+
+        ExportDialog confirm(window->document()->project(), cameraUuid);
+        auto* pathEdit =
+            confirm.findChild<QLineEdit*>(QStringLiteral("exportOutputPath"));
+        QVERIFY(pathEdit != nullptr);
+        pathEdit->setText(output);
+        confirm.setOverwriteDecisionForTest(true);
+        auto* confirmButtons = confirm.findChild<QDialogButtonBox*>();
+        QVERIFY(confirmButtons != nullptr);
+        QTest::mouseClick(confirmButtons->button(QDialogButtonBox::Ok),
+                          Qt::LeftButton);
+        QCOMPARE(confirm.result(), int(QDialog::Accepted));
+        QVERIFY(confirm.overwriteExisting());
+
+        bool probed = false;
+        bool overwrite = false;
+        window->setExportOverwriteProbeForTest([&](bool value) {
+            probed = true;
+            overwrite = value;
+        });
+        window->startExportForTest(output, confirm.overwriteExisting());
+        QVERIFY(probed);
+        QVERIFY(overwrite);
+
+        ExportDialog reject(window->document()->project(), cameraUuid);
+        auto* rejectPath =
+            reject.findChild<QLineEdit*>(QStringLiteral("exportOutputPath"));
+        QVERIFY(rejectPath != nullptr);
+        rejectPath->setText(output);
+        reject.setOverwriteDecisionForTest(false);
+        auto* rejectButtons = reject.findChild<QDialogButtonBox*>();
+        QVERIFY(rejectButtons != nullptr);
+        QTest::mouseClick(rejectButtons->button(QDialogButtonBox::Ok),
+                          Qt::LeftButton);
+        QVERIFY(reject.result() != int(QDialog::Accepted));
+        QVERIFY(!reject.overwriteExisting());
+
+        window->startExportForTest(output, reject.overwriteExisting());
+        QVERIFY(probed);
+        QVERIFY(!overwrite);
+    }
+
     void mcpServerStartsAndReportsViewState()
     {
         QTemporaryDir temp;
@@ -701,6 +856,122 @@ private slots:
         window.setDocument(nullptr);
         QVERIFY(window.mcpServerForTest() == nullptr);
         QVERIFY(window.mcpServiceForTest() == nullptr);
+    }
+
+    void mcpSecondToolCallIsRejectedWhileFirstRuns()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString projectDir =
+            temp.path() + QStringLiteral("/busy.pvproj");
+        QString error;
+        {
+            ProjectSettings settings;
+            settings.name = QStringLiteral("Busy");
+            settings.width = 640;
+            settings.height = 360;
+            settings.fps = 24;
+            auto document =
+                ProjectDocument::create(projectDir, settings, &error);
+            QVERIFY2(document != nullptr, qPrintable(error));
+        }
+
+        const QString configPath = writeMcpConfig(temp);
+        QVERIFY(!configPath.isEmpty());
+        NextWindow window(nullptr);
+        window.setMcpConfigPathForTest(configPath);
+        QVERIFY2(window.openProject(projectDir, &error), qPrintable(error));
+        mcp2::HttpServer* server = window.mcpServerForTest();
+        QVERIFY(server != nullptr);
+        QVERIFY(server->isRunning());
+        const quint16 port = server->port();
+        const QByteArray token = server->token();
+
+        const auto toolCall = [](int id, const QString& name,
+                                 const QJsonObject& args) {
+            return QJsonObject{
+                {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                {QStringLiteral("id"), id},
+                {QStringLiteral("method"), QStringLiteral("tools/call")},
+                {QStringLiteral("params"),
+                 QJsonObject{{QStringLiteral("name"), name},
+                             {QStringLiteral("arguments"), args}}}};
+        };
+
+        // A long batch tool pumps events at every checkpoint, which is exactly
+        // where a second request used to re-enter the service.
+        QJsonArray entities;
+        for (int i = 0; i < 40; ++i)
+            entities.append(QJsonObject{
+                {QStringLiteral("name"), QStringLiteral("批量%1").arg(i)},
+                {QStringLiteral("start"), 0},
+                {QStringLiteral("end"), 30}});
+        const QJsonObject many =
+            toolCall(1, QStringLiteral("entity.createMany"),
+                     QJsonObject{{QStringLiteral("entities"), entities}});
+        const QJsonObject second =
+            toolCall(2, QStringLiteral("entity.create"),
+                     QJsonObject{{QStringLiteral("name"),
+                                  QStringLiteral("第二个")},
+                                 {QStringLiteral("start"), 0},
+                                 {QStringLiteral("end"), 30}});
+        const QJsonObject list = QJsonObject{
+            {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+            {QStringLiteral("id"), 3},
+            {QStringLiteral("method"), QStringLiteral("tools/list")}};
+
+        QTcpSocket firstSocket;
+        QTcpSocket secondSocket;
+        QTcpSocket listSocket;
+        QVERIFY(connectLocal(firstSocket, port));
+        QVERIFY(connectLocal(secondSocket, port));
+        QVERIFY(connectLocal(listSocket, port));
+        writeRpc(firstSocket, port, token, many);
+        writeRpc(secondSocket, port, token, second);
+        writeRpc(listSocket, port, token, list);
+
+        bool ok = false;
+        const QJsonObject firstReply = readRpc(firstSocket, &ok);
+        QVERIFY(ok);
+        const QJsonObject firstResult =
+            firstReply.value(QStringLiteral("result")).toObject();
+        QCOMPARE(firstResult.value(QStringLiteral("isError")).toBool(), false);
+
+        const QJsonObject busyReply = readRpc(secondSocket, &ok);
+        QVERIFY(ok);
+        QVERIFY(!busyReply.contains(QStringLiteral("result")));
+        const QJsonObject busyError =
+            busyReply.value(QStringLiteral("error")).toObject();
+        QCOMPARE(busyError.value(QStringLiteral("code")).toInt(), -32000);
+        QVERIFY(busyError.value(QStringLiteral("message"))
+                    .toString()
+                    .contains(QStringLiteral("busy"), Qt::CaseInsensitive));
+
+        // tools/list stays usable while a tool call is running.
+        const QJsonObject listReply = readRpc(listSocket, &ok);
+        QVERIFY(ok);
+        QVERIFY(!listReply.value(QStringLiteral("result"))
+                     .toObject()
+                     .value(QStringLiteral("tools"))
+                     .toArray()
+                     .isEmpty());
+
+        // The guard is released when the first call finishes.
+        QTcpSocket afterSocket;
+        QVERIFY(connectLocal(afterSocket, port));
+        writeRpc(afterSocket, port, token,
+                 toolCall(4, QStringLiteral("entity.create"),
+                          QJsonObject{{QStringLiteral("name"),
+                                       QStringLiteral("第三个")},
+                                      {QStringLiteral("start"), 0},
+                                      {QStringLiteral("end"), 30}}));
+        const QJsonObject afterReply = readRpc(afterSocket, &ok);
+        QVERIFY(ok);
+        QCOMPARE(afterReply.value(QStringLiteral("result"))
+                     .toObject()
+                     .value(QStringLiteral("isError"))
+                     .toBool(),
+                 false);
     }
 
     void gitDisabledProjectOpensReadOnly()
@@ -1386,6 +1657,39 @@ private slots:
         QCOMPARE(window.assetPanelForTest()->videoExtractionWidth(), 1280);
     }
 
+    void viewportSnapSettingsApplyImmediately()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ViewportWidget* viewport = window->viewportForTest();
+        QVERIFY(viewport != nullptr);
+        QCOMPARE(viewport->snapThresholdPixels(), 6);
+        QVERIFY(viewport->snapCanvasCenter());
+        QVERIFY(viewport->snapEntityEdges());
+        QVERIFY(!viewport->snapEdgeMidpoints());
+        QVERIFY(viewport->snapAngles()
+                == QVector<double>({0.0, 90.0, 180.0, 270.0}));
+
+        AppSettings settings = window->settingsForTest();
+        settings.snapPixels = 24;
+        settings.snapCanvasCenter = false;
+        settings.snapEntityEdges = false;
+        settings.snapEdgeMidpoints = true;
+        settings.snapAngles = {0.0, 30.0, 90.0};
+        window->setSettingsForTest(settings);
+
+        QCOMPARE(viewport->snapThresholdPixels(), 24);
+        QVERIFY(!viewport->snapCanvasCenter());
+        QVERIFY(!viewport->snapEntityEdges());
+        QVERIFY(viewport->snapEdgeMidpoints());
+        QVERIFY(viewport->snapAngles()
+                == QVector<double>({0.0, 30.0, 90.0}));
+    }
+
     void settingsDialogAppliesAndPersists()
     {
         QTemporaryDir temp;
@@ -1449,7 +1753,49 @@ private slots:
 
         const int before = panel->entryCountForTest();
 
-        // A write tool locks every editing panel except the log itself.
+        // Give the window an editable selection and a camera so delete,
+        // duplicate, copy/paste and export are all enabled before locking.
+        window->createEntity(ContentKind::Camera);
+        window->copyEntityActionForTest()->trigger();
+        QAction* undo = window->undoActionForTest();
+        QAction* redo = window->redoActionForTest();
+        QAction* deleteAction = window->deleteActionForTest();
+        QAction* duplicate = window->duplicateActionForTest();
+        QAction* copy = window->copyEntityActionForTest();
+        QAction* paste = window->pasteEntityActionForTest();
+        QAction* exportAction = window->exportActionForTest();
+        QAction* settingsAction = window->settingsActionForTest();
+        QAction* propertiesAction = window->projectPropertiesActionForTest();
+        QAction* createEmpty =
+            window->createEntityActionForTest(ContentKind::Empty);
+        QAction* createText =
+            window->createEntityActionForTest(ContentKind::Text);
+        QAction* createVector =
+            window->createEntityActionForTest(ContentKind::Vector);
+        QAction* createCamera =
+            window->createEntityActionForTest(ContentKind::Camera);
+        QAction* newAction =
+            window->findChild<QAction*>(QStringLiteral("newProjectAction"));
+        QAction* openAction =
+            window->findChild<QAction*>(QStringLiteral("openProjectAction"));
+        QVERIFY(undo && redo && deleteAction && duplicate && copy && paste
+                && exportAction && settingsAction && propertiesAction);
+        QVERIFY(createEmpty && createText && createVector && createCamera);
+        QVERIFY(newAction && openAction);
+        QVERIFY(paste->isEnabled());
+        QVERIFY(exportAction->isEnabled());
+
+        const auto verifyWriteActions = [&](bool enabled) {
+            for (QAction* action :
+                 {undo, redo, deleteAction, duplicate, copy, paste,
+                  exportAction, settingsAction, propertiesAction, createEmpty,
+                  createText, createVector, createCamera, newAction, openAction})
+                QCOMPARE(action->isEnabled(), enabled);
+        };
+        verifyWriteActions(true);
+
+        // A write tool locks every editing panel and write QAction except the
+        // log itself.
         server->toolCallStarted(QStringLiteral("entity.create"),
                                 QStringLiteral("{\"name\":\"标题\"}"), true);
         QVERIFY(!window->assetPanelForTest()->isEnabled());
@@ -1459,10 +1805,16 @@ private slots:
         QVERIFY(panel->isEnabled());
         QVERIFY(!dock->isHidden());
         QVERIFY(logAction->isChecked());
+        QVERIFY(!window->humanEditingEnabledForTest());
+        verifyWriteActions(false);
         auto* statusAi = window->findChild<QLabel*>(QStringLiteral("statusAi"));
         QVERIFY(statusAi != nullptr);
         QVERIFY(statusAi->isVisible());
         QCOMPARE(statusAi->text(), QStringLiteral("AI 修改中…"));
+
+        // A document refresh during the write must not re-enable a shortcut.
+        window->refreshAll();
+        verifyWriteActions(false);
 
         server->toolCallFinished(QStringLiteral("entity.create"),
                                  QStringLiteral("{\"ok\":true}"), 12, true);
@@ -1470,6 +1822,8 @@ private slots:
         QVERIFY(window->timelineForTest()->isEnabled());
         QVERIFY(window->propertiesPanelForTest()->isEnabled());
         QVERIFY(window->viewportForTest()->isEnabled());
+        QVERIFY(window->humanEditingEnabledForTest());
+        verifyWriteActions(true);
         QVERIFY(statusAi->isHidden());
         QVERIFY(panel->entryCountForTest() > before);
 
@@ -1477,6 +1831,7 @@ private slots:
         server->toolCallStarted(QStringLiteral("view.state"),
                                 QStringLiteral("{}"), false);
         QVERIFY(window->viewportForTest()->isEnabled());
+        verifyWriteActions(true);
         server->toolCallFinished(QStringLiteral("view.state"),
                                  QStringLiteral("{\"ok\":true}"), 1, true);
 
@@ -1488,24 +1843,103 @@ private slots:
 
         stopButton->click();
         QVERIFY(server->aiStopped());
-        QVERIFY(!window->viewportForTest()->isEnabled());
-        QVERIFY(statusAi->isVisible());
-        QCOMPARE(statusAi->text(), QStringLiteral("AI 已急停"));
-
-        // stop wins over a finished call: the editor stays locked.
-        server->toolCallStarted(QStringLiteral("entity.update"),
-                                QStringLiteral("{}"), true);
-        server->toolCallFinished(QStringLiteral("entity.update"),
-                                 QStringLiteral("{\"ok\":false}"), 2, false);
-        QVERIFY(!window->viewportForTest()->isEnabled());
-
-        resumeButton->click();
-        QVERIFY(!server->aiStopped());
+        // Emergency stop stops AI writes but returns the editor to the human.
+        QVERIFY(window->humanEditingEnabledForTest());
         QVERIFY(window->assetPanelForTest()->isEnabled());
         QVERIFY(window->timelineForTest()->isEnabled());
         QVERIFY(window->propertiesPanelForTest()->isEnabled());
         QVERIFY(window->viewportForTest()->isEnabled());
+        verifyWriteActions(true);
+        QVERIFY(statusAi->isVisible());
+        QCOMPARE(statusAi->text(), QStringLiteral("AI 已急停"));
+
+        // A rejected write while stopped does not re-lock the human editor.
+        server->toolCallStarted(QStringLiteral("entity.update"),
+                                QStringLiteral("{}"), true);
+        QVERIFY(window->humanEditingEnabledForTest());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        server->toolCallFinished(QStringLiteral("entity.update"),
+                                 QStringLiteral("{\"ok\":false}"), 2, false);
+        QVERIFY(window->humanEditingEnabledForTest());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        verifyWriteActions(true);
+
+        resumeButton->click();
+        QVERIFY(!server->aiStopped());
+        QVERIFY(window->humanEditingEnabledForTest());
+        QVERIFY(window->assetPanelForTest()->isEnabled());
+        QVERIFY(window->timelineForTest()->isEnabled());
+        QVERIFY(window->propertiesPanelForTest()->isEnabled());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        verifyWriteActions(true);
         QVERIFY(statusAi->isHidden());
+    }
+
+    void mcpWriteReloadsEditorAndKeepsViewState()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        // A camera gives the editor a valid selection and makes undo/export
+        // meaningful.  The playhead is chosen away from the defaults.
+        window->document()->setPlayhead(7);
+        window->createEntity(ContentKind::Camera);
+        const Uuid selection = window->document()->selection();
+        QVERIFY(!selection.isEmpty());
+
+        const QJsonObject create = window->mcpServiceForTest()->execute(
+            QStringLiteral("entity.create"),
+            QJsonObject{{QStringLiteral("name"), QStringLiteral("MCP 实体")},
+                        {QStringLiteral("start"), 0},
+                        {QStringLiteral("end"), 30}});
+        QVERIFY2(create.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(QString::fromUtf8(
+                     QJsonDocument(create).toJson(QJsonDocument::Compact))));
+        const Uuid created = create.value(QStringLiteral("data"))
+                                 .toObject()
+                                 .value(QStringLiteral("uuid"))
+                                 .toString();
+        QVERIFY(!created.isEmpty());
+
+        mcp2::HttpServer* server = window->mcpServerForTest();
+        QVERIFY(server != nullptr);
+
+        // Change the file behind the in-memory store.  Only a real disk
+        // reload can see this, so the test fails if toolCallFinished merely
+        // refreshes the panels.
+        QVERIFY(rewriteEntityName(window->document()->root(), created,
+                                  QStringLiteral("磁盘改名")));
+        server->toolCallStarted(QStringLiteral("entity.update"),
+                                QStringLiteral("{}"), true);
+        server->toolCallFinished(QStringLiteral("entity.update"),
+                                 QStringLiteral("{\"ok\":true}"), 3, true);
+
+        QCOMPARE(window->document()->project().entities.value(created).name,
+                 QStringLiteral("磁盘改名"));
+        QCOMPARE(window->document()->playhead(), 7);
+        QCOMPARE(window->document()->selection(), selection);
+        QVERIFY(window->humanEditingEnabledForTest());
+        QVERIFY(window->viewportForTest()->isEnabled());
+        QVERIFY(window->timelineForTest()->isEnabled());
+        QVERIFY(window->assetPanelForTest()->isEnabled());
+        QVERIFY(window->propertiesPanelForTest()->isEnabled());
+
+        // A failed write may still have left assets or partial text behind;
+        // it refreshes exactly like a successful one.
+        QVERIFY(rewriteEntityName(window->document()->root(), created,
+                                  QStringLiteral("失败也刷新")));
+        server->toolCallStarted(QStringLiteral("entity.create"),
+                                QStringLiteral("{}"), true);
+        server->toolCallFinished(QStringLiteral("entity.create"),
+                                 QStringLiteral("{\"ok\":false}"), 2, false);
+        QCOMPARE(window->document()->project().entities.value(created).name,
+                 QStringLiteral("失败也刷新"));
+        QCOMPARE(window->document()->playhead(), 7);
+        QCOMPARE(window->document()->selection(), selection);
+        QVERIFY(window->humanEditingEnabledForTest());
     }
 
     void recentProjectsStartEmpty()

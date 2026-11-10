@@ -348,4 +348,23 @@ void ProjectDocument::reloadAfterHistory(QString* error)
     Q_UNUSED(error);
 }
 
+bool ProjectDocument::notifyExternalChange(QString* error)
+{
+    // Playhead and selection live on the Document, not in the store, so a
+    // store reload cannot lose them.  A selection whose entity disappeared
+    // (deleted by the MCP tool) is cleared instead of dangling.
+    const Uuid selection = m_selection;
+    const bool reloaded = m_store->reloadAfterDiscard(error);
+    if (selection.isEmpty()
+        || m_store->project().entities.contains(selection))
+        m_selection = selection;
+    else
+        m_selection.clear();
+
+    // Refresh even when the reload failed: the service may have partially
+    // written assets or text and the panels must not keep the old picture.
+    emit changed();
+    return reloaded;
+}
+
 } // namespace pvf::next

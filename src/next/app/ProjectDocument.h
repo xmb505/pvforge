@@ -72,6 +72,12 @@ public:
     QString root() const;
     void reloadAfterHistory(QString* error = nullptr);
 
+    // Reloads the in-memory project and assets index after a writer outside
+    // the Document (the MCP service) changed the project on disk.  The
+    // playhead and a still-existing selection are kept, then changed() is
+    // emitted so every panel refreshes from the new bytes.
+    bool notifyExternalChange(QString* error = nullptr);
+
 private:
     explicit ProjectDocument(std::unique_ptr<store::ProjectStore> store,
                              QObject* parent = nullptr);
