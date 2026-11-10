@@ -54,6 +54,12 @@ public:
     bool undo(QString* error = nullptr) override;
     bool redo(QString* error = nullptr) override;
 
+    // AI write lock for the human path.  MCP writes bypass the Document and go
+    // straight to the store, so this only gates panel/menu edits.  Defaults to
+    // enabled; read-only views are unaffected.
+    void setHumanWritesEnabled(bool enabled) { m_humanWritesEnabled = enabled; }
+    bool humanWritesEnabled() const { return m_humanWritesEnabled; }
+
     void flush(QString* error = nullptr) override;
     bool hasPendingCommit() const override;
 
@@ -95,6 +101,7 @@ private:
     std::unique_ptr<store::ProjectStore> m_store;
     QTimer m_commitTimer;
     bool m_pendingCommit = false;
+    bool m_humanWritesEnabled = true;
     int m_playhead = 0;
     Uuid m_selection;
 };

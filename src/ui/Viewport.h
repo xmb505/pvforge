@@ -73,6 +73,11 @@ public:
     void setAutoKeyEnabled(bool on) { m_autoKeyEnabled = on; }
     bool autoKeyEnabled() const { return m_autoKeyEnabled; }
 
+    // AI write lock: selection, panning, zooming and the camera monitor keep
+    // working; gizmo/camera drags that would write are ignored.
+    void setEditingEnabled(bool on) { m_editingEnabled = on; }
+    bool editingEnabled() const { return m_editingEnabled; }
+
     // Session gizmo test hooks.
     gizmo::Transform gizmoTransformForTest(const Uuid& uuid) const;
     gizmo::Bounds gizmoBoundsForTest(const Uuid& uuid) const;
@@ -298,6 +303,7 @@ private:
 
     // ---- session gizmo state --------------------------------------------
     bool m_autoKeyEnabled = true;
+    bool m_editingEnabled = true;
     SessionDragKind m_sessionDragKind = SessionDragKind::None;
     Uuid m_sessionDragUuid;
     model::Entity m_sessionDragStart;

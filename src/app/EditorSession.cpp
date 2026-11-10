@@ -1,17 +1,20 @@
 #include "EditorSession.h"
 
 #include "EditActions.h"
+#include "mcp2/HttpServer.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
 #include <QSettings>
 
 #include <algorithm>
+#include <optional>
 
 namespace pvf {
 
@@ -19,6 +22,9 @@ namespace {
 
 constexpr auto kRecentKey = "recentProjects";
 constexpr int kRecentLimit = 10;
+
+QString g_mcpConfigPathForTest;
+std::optional<quint16> g_mcpPortOverrideForTest;
 
 QString normalizedProjectDir(const QString& path)
 {
@@ -57,17 +63,173 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     // Start the per-camera workbench cache so its directory exists even before
     // the first paint; the prewarm scan is debounced internally.
     workbench();
+
+    // The MCP endpoint belongs to the open project: a switch destroys the
+    // session (and its listener) before the next project starts one.
+    startMcpServer();
 }
 
 EditorSession::~EditorSession()
 {
     // Explicit teardown keeps the documented order even if a future member is
-    // added: stop the frame clock, release the cache, then the media services.
+    // added: stop the MCP listener, stop the frame clock, release the cache,
+    // then the media services.
+    stopMcpServer();
     if (m_playback)
         m_playback->setDocument(nullptr);
     m_workbench.reset();
     if (m_media)
         m_media->stop();
+}
+
+void EditorSession::setMcpConfigPathForTest(const QString& path)
+{
+    g_mcpConfigPathForTest = path;
+}
+
+void EditorSession::setMcpPortOverrideForTest(quint16 port)
+{
+    g_mcpPortOverrideForTest = port;
+}
+
+void EditorSession::startMcpServer()
+{
+    stopMcpServer();
+    if (!m_document || !m_document->store())
+        return;
+
+    m_mcpService = std::make_unique<mcp2::Service>(m_document->store(),
+                                                   &m_document->assets());
+    // Git is the write audit trail.  Without it the MCP surface stays readable
+    // but every write tool is denied with permission_denied/git_disabled.
+    m_mcpService->setWritesEnabled(m_document->store()->gitEnabled());
+    m_mcpService->setViewStateProvider([this] {
+        mcp2::ViewState state;
+        if (m_document)
+        {
+            state.playhead = m_document->playhead();
+            state.selection = m_document->selection();
+            state.cameraUuid = activeCameraUuid();
+        }
+        if (m_viewStateExtras)
+            m_viewStateExtras(state);
+        return state;
+    });
+    m_mcpService->setVideoFrameProvider([this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->videoFrame(uuid, frame) : QImage();
+    });
+    m_mcpService->setHtmlFrameProvider([this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->htmlFrameBlocking(uuid, frame) : QImage();
+    });
+    // Long batch tools run on the UI thread.  Pumping events at each batch
+    // checkpoint keeps the emergency-stop button and the AI lock indicator
+    // responsive while a transaction is in flight.
+    m_mcpService->setBatchCheckpoint([] {
+        QCoreApplication::processEvents();
+    });
+
+    auto server = std::make_unique<mcp2::HttpServer>(m_mcpService.get());
+    if (!g_mcpConfigPathForTest.isEmpty())
+    {
+        server->setConfigFilePath(g_mcpConfigPathForTest);
+        server->setEndpointFilePath(g_mcpConfigPathForTest
+                                    + QStringLiteral(".endpoint.json"));
+    }
+
+    const quint16 requestedPort = g_mcpPortOverrideForTest
+                                      ? *g_mcpPortOverrideForTest
+                                      : m_appSettings.mcpPort;
+    QString error;
+    const quint16 port = server->start(requestedPort, &error);
+    m_mcpError = port == 0
+                     ? (error.isEmpty() ? QStringLiteral("未知错误") : error)
+                     : QString();
+    m_mcpServer = std::move(server);
+}
+
+void EditorSession::stopMcpServer()
+{
+    if (m_mcpServer)
+    {
+        m_mcpServer->stop();
+        m_mcpServer.reset();
+    }
+    m_mcpService.reset();
+}
+
+void EditorSession::restartMcpServer()
+{
+    startMcpServer();
+}
+
+void EditorSession::setHumanEditingEnabled(bool enabled)
+{
+    m_humanEditingEnabled = enabled;
+    if (m_document)
+        m_document->setHumanWritesEnabled(enabled);
+}
+
+void EditorSession::invalidateWorkbench()
+{
+    m_workbench.reset();
+}
+
+bool EditorSession::applyAppSettings(const next::AppSettings& settings,
+                                     QString* error)
+{
+    if (error)
+        error->clear();
+
+    const next::AppSettings previous = m_appSettings;
+    m_appSettings = next::SettingsStore::sanitized(settings);
+    if (m_settingsStore)
+        m_settingsStore->save(m_appSettings);
+
+    if (m_media)
+        m_media->applySettings(m_appSettings);
+    if (m_playback)
+        m_playback->setWatchdogMs(m_appSettings.watchdogMs);
+    if (m_document)
+        m_document->setHumanCommitDelayMs(m_appSettings.humanCommitDelayMs);
+
+    // Scale/expansion/disk budget are baked into the cache directory key, so
+    // the service is rebuilt (and rescanned) on the next workbench() call.
+    invalidateWorkbench();
+
+    bool ok = true;
+    const bool actualGit =
+        m_document && m_document->store() && m_document->store()->gitEnabled();
+    if (m_document && m_appSettings.gitEnabled != actualGit)
+    {
+        QString gitError;
+        if (!m_document->setGitEnabled(m_appSettings.gitEnabled, &gitError))
+        {
+            // Settings only express a wish; persist the state the store
+            // actually reached so the next launch does not claim a repository
+            // that is not there (for example when git is missing).
+            m_appSettings.gitEnabled =
+                m_document->store() && m_document->store()->gitEnabled();
+            if (m_settingsStore)
+                m_settingsStore->save(m_appSettings);
+            if (error)
+                *error = gitError.isEmpty() ? QStringLiteral("Git 切换失败")
+                                            : gitError;
+            ok = false;
+        }
+    }
+
+    if (m_mcpService && m_document)
+        m_mcpService->setWritesEnabled(m_document->store()->gitEnabled());
+
+    if (previous.mcpPort != m_appSettings.mcpPort)
+    {
+        const bool wasStopped = m_mcpServer && m_mcpServer->aiStopped();
+        restartMcpServer();
+        if (wasStopped && m_mcpServer)
+            m_mcpServer->stopAi();
+    }
+
+    return ok;
 }
 
 std::unique_ptr<EditorSession> EditorSession::createProject(

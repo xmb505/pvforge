@@ -1,5 +1,7 @@
 #pragma once
 
+#include "next/settings/SettingsStore.h"
+
 #include <QDialog>
 #include <QString>
 #include <QStringList>
@@ -26,9 +28,28 @@ class SettingsDialog : public QDialog
 public:
     explicit SettingsDialog(QWidget* parent = nullptr,
                             McpServer* mcpServer = nullptr);
+    // AppSettings-backed mode used by the delivery shell.  It keeps the old
+    // category list / page stack layout but exposes the new backend settings
+    // (HTML, video proxy, workbench cache, snapping, MCP, Git, autosave).
+    explicit SettingsDialog(next::SettingsStore* store, QWidget* parent = nullptr);
+
+    bool appSettingsMode() const { return m_appStore != nullptr; }
+    next::AppSettings appSettings() const;
+    void setAppSettings(const next::AppSettings& settings);
 
     // Used by Help -> About so both entry points show the same page.
     void showAboutPage();
+
+    // Live endpoint facts supplied by the shell; the dialog never starts or
+    // stops the server itself.
+    void setMcpStatus(bool running, quint16 port, const QString& token,
+                      const QString& error, bool writesEnabled);
+    void setGitInfo(const QString& repositoryPath, const QString& recentCommit);
+    QString gitRepositoryPath() const { return m_appGitRepositoryValue; }
+    QString gitRecentCommit() const { return m_appGitRecentValue; }
+    void setEndpointPath(const QString& path);
+    QString endpointPath() const;
+    static QString defaultEndpointPath();
 
     // Reflects MainWindow's authoritative permission state. The dialog never
     // arms writes itself: it asks MainWindow, which prepares the checkpoint,
@@ -43,6 +64,12 @@ signals:
     void mcpPermissionArmRequested();
     void mcpPermissionDisarmRequested();
 
+    // AppSettings mode.
+    void settingsApplied();
+    void resetMcpTokenRequested();
+    void clearHtmlCacheRequested();
+    void chromeDetectRequested();
+
 protected:
     void accept() override;
 
@@ -55,6 +82,18 @@ private:
     QWidget* createDecodePage();
     QWidget* createMcpPage();
     QWidget* createAboutPage();
+
+    QWidget* createAppGeneralPage();
+    QWidget* createAppEditorPage();
+    QWidget* createAppHtmlPage();
+    QWidget* createAppVideoPage();
+    QWidget* createAppWorkbenchPage();
+    QWidget* createAppMcpPage();
+    QWidget* createAppGitPage();
+    void buildAppShell();
+    void saveAppSettings();
+    void refreshAppGitStatus();
+
     int addPage(const QString& title, QWidget* page, const QStringList& iconNames);
 
     void applyMcpEnabled(bool enabled);
@@ -70,6 +109,50 @@ private:
     QStackedWidget* m_pages = nullptr;
     int m_aboutIndex = 0;
     McpServer* m_mcpServer = nullptr;
+
+    // AppSettings mode.
+    next::SettingsStore* m_appStore = nullptr;
+    QSpinBox* m_appAutoSaveMinutes = nullptr;
+    QSpinBox* m_appCommitDelayMs = nullptr;
+    QSpinBox* m_appSnapPixels = nullptr;
+    QCheckBox* m_appSnapCanvasCenter = nullptr;
+    QCheckBox* m_appSnapEntityEdges = nullptr;
+    QCheckBox* m_appSnapEdgeMidpoints = nullptr;
+    QCheckBox* m_appSnapAngle0 = nullptr;
+    QCheckBox* m_appSnapAngle30 = nullptr;
+    QCheckBox* m_appSnapAngle45 = nullptr;
+    QCheckBox* m_appSnapAngle90 = nullptr;
+    QCheckBox* m_appHtmlCacheEnabled = nullptr;
+    QSpinBox* m_appHtmlMemoryMb = nullptr;
+    QSpinBox* m_appHtmlDiskGb = nullptr;
+    QComboBox* m_appHtmlScale = nullptr;
+    QSpinBox* m_appHtmlMaxWidth = nullptr;
+    QSpinBox* m_appWatchdogMs = nullptr;
+    QLineEdit* m_appChromeExecutable = nullptr;
+    QPushButton* m_appChromeBrowse = nullptr;
+    QPushButton* m_appChromeDetect = nullptr;
+    QPushButton* m_appClearHtmlCache = nullptr;
+    QCheckBox* m_appVideoProxyEnabled = nullptr;
+    QComboBox* m_appVideoProxyWidth = nullptr;
+    QComboBox* m_appVideoMemoryFrames = nullptr;
+    QCheckBox* m_appWorkbenchEnabled = nullptr;
+    QComboBox* m_appWorkbenchScale = nullptr;
+    QSpinBox* m_appWorkbenchExpand = nullptr;
+    QSpinBox* m_appWorkbenchDiskGb = nullptr;
+    qint64 m_appWorkbenchMemoryBytes = 256LL * 1024 * 1024;
+    QSpinBox* m_appMcpPort = nullptr;
+    QLineEdit* m_appMcpToken = nullptr;
+    QLineEdit* m_appMcpEndpoint = nullptr;
+    QPushButton* m_appResetMcpToken = nullptr;
+    QLabel* m_appMcpStatus = nullptr;
+    QCheckBox* m_appGitEnabled = nullptr;
+    QLabel* m_appGitStatus = nullptr;
+    QPushButton* m_appGitDetect = nullptr;
+    QLabel* m_appGitRepository = nullptr;
+    QLabel* m_appGitRecent = nullptr;
+    QString m_appGitRepositoryValue;
+    QString m_appGitRecentValue;
+    bool m_appOnboardingDone = false;
 
     QComboBox* m_language = nullptr;
     QSpinBox* m_snapPixels = nullptr;

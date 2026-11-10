@@ -543,7 +543,19 @@ QStringList textPathsForState(const QString& root)
         }
     };
     add(QStringLiteral("project.json"));
-    add(QStringLiteral("entities"));
+    // An empty entities/ directory is invisible to git.  Passing it as a
+    // pathspec makes `git commit -- entities` fail with "pathspec did not
+    // match any file", so only include it when it actually holds files (or is
+    // already tracked).
+    const QDir entitiesDir(absolutePath(root, QStringLiteral("entities")));
+    const bool entitiesHaveFiles =
+        entitiesDir.exists()
+        && !entitiesDir
+                .entryList(QDir::Files | QDir::Hidden | QDir::System
+                               | QDir::NoDotAndDotDot)
+                .isEmpty();
+    if (entitiesHaveFiles || isTracked(root, QStringLiteral("entities")))
+        paths << QStringLiteral("entities");
     add(QStringLiteral(".gitignore"));
     return paths;
 }

@@ -170,4 +170,4 @@ add_subdirectory(src/next/app)
 # range helpers. `pvforge-next` (and its main.cpp) stays a separate,
 # reference-only target.
 target_link_libraries(pvforge PRIVATE pvf_next_document pvf_next_services
-    pvf_mcp2 pvf_entity_range)
+    pvf_mcp2 pvf_entity_range pvf_next_mcp_log pvf_next_history)

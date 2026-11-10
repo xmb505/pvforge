@@ -1942,6 +1942,11 @@ bool EditActions::apply(const EditPlan& plan, QString* error)
         setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
         return false;
     }
+    if (!m_session->humanEditingEnabled())
+    {
+        setError(error, QStringLiteral("AI 正在修改工程，请稍后再编辑，或先按“急停”"));
+        return false;
+    }
     if (plan.isEmpty())
         return true;
 

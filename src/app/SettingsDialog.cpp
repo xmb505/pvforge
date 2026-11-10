@@ -6,6 +6,7 @@
 #include "media/DecoderInfo.h"
 #include "mcp/McpServer.h"
 #include "mcp/StdioBridge.h"
+#include "next/settings/GitDetect.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -13,7 +14,9 @@
 #include <QComboBox>
 #include <QAbstractItemView>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFont>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -36,6 +39,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 namespace pvf {
@@ -143,6 +147,599 @@ SettingsDialog::SettingsDialog(QWidget* parent, McpServer* mcpServer)
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &SettingsDialog::reject);
     root->addWidget(buttons);
+}
+
+SettingsDialog::SettingsDialog(next::SettingsStore* store, QWidget* parent)
+    : QDialog(parent)
+    , m_appStore(store)
+{
+    buildAppShell();
+}
+
+void SettingsDialog::buildAppShell()
+{
+    setWindowTitle(QStringLiteral("设置"));
+    setMinimumSize(720, 520);
+    resize(820, 600);
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(12, 12, 12, 12);
+    root->setSpacing(10);
+
+    auto* body = new QHBoxLayout;
+    body->setSpacing(12);
+
+    m_categories = new QListWidget(this);
+    m_categories->setObjectName(QStringLiteral("settingsCategories"));
+    m_categories->setFixedWidth(158);
+    m_categories->setFrameShape(QFrame::StyledPanel);
+    m_categories->setIconSize(QSize(16, 16));
+    m_categories->setUniformItemSizes(true);
+    m_categories->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_categories->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    body->addWidget(m_categories);
+
+    m_pages = new QStackedWidget(this);
+    m_pages->setObjectName(QStringLiteral("settingsPages"));
+    m_pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    body->addWidget(m_pages, 1);
+
+    addPage(QStringLiteral("常规"), createAppGeneralPage(),
+            {QStringLiteral("preferences-system"), QStringLiteral("settings")});
+    addPage(QStringLiteral("编辑器"), createAppEditorPage(),
+            {QStringLiteral("document-edit"), QStringLiteral("accessories-text-editor")});
+    addPage(QStringLiteral("HTML"), createAppHtmlPage(),
+            {QStringLiteral("text-html"), QStringLiteral("applications-internet")});
+    addPage(QStringLiteral("视频"), createAppVideoPage(),
+            {QStringLiteral("video-x-generic"), QStringLiteral("media-playback-start")});
+    addPage(QStringLiteral("工作台"), createAppWorkbenchPage(),
+            {QStringLiteral("view-grid"), QStringLiteral("applications-graphics")});
+    addPage(QStringLiteral("MCP"), createAppMcpPage(),
+            {QStringLiteral("network-server"), QStringLiteral("network-wired")});
+    addPage(QStringLiteral("Git"), createAppGitPage(),
+            {QStringLiteral("git"), QStringLiteral("vcs-branch")});
+    m_aboutIndex = addPage(QStringLiteral("关于"), createAboutPage(),
+                           {QStringLiteral("help-about")});
+
+    connect(m_categories, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0)
+            m_pages->setCurrentIndex(row);
+    });
+    m_categories->setCurrentRow(0);
+    root->addLayout(body, 1);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    if (auto* ok = buttons->button(QDialogButtonBox::Ok))
+        ok->setText(QStringLiteral("确定"));
+    if (auto* cancel = buttons->button(QDialogButtonBox::Cancel))
+        cancel->setText(QStringLiteral("取消"));
+    auto* apply = buttons->addButton(QStringLiteral("应用"),
+                                     QDialogButtonBox::ApplyRole);
+    apply->setObjectName(QStringLiteral("applyButton"));
+    connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(apply, &QPushButton::clicked, this, [this] {
+        saveAppSettings();
+        emit settingsApplied();
+    });
+    root->addWidget(buttons);
+
+    setAppSettings(m_appStore ? m_appStore->load() : next::AppSettings{});
+}
+
+QWidget* SettingsDialog::createAppGeneralPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* saving = new QGroupBox(QStringLiteral("保存"), page);
+    auto* form = new QFormLayout(saving);
+    m_appAutoSaveMinutes = new QSpinBox(saving);
+    m_appAutoSaveMinutes->setObjectName(QStringLiteral("autoSaveMinutes"));
+    m_appAutoSaveMinutes->setRange(1, 60);
+    m_appAutoSaveMinutes->setSuffix(QStringLiteral(" 分钟"));
+    m_appAutoSaveMinutes->setToolTip(
+        QStringLiteral("有未提交编辑时，每隔这么久自动保存一次。"));
+    form->addRow(QStringLiteral("自动保存间隔"), m_appAutoSaveMinutes);
+
+    m_appCommitDelayMs = new QSpinBox(saving);
+    m_appCommitDelayMs->setObjectName(QStringLiteral("humanCommitDelayMs"));
+    m_appCommitDelayMs->setRange(200, 5000);
+    m_appCommitDelayMs->setSingleStep(100);
+    m_appCommitDelayMs->setSuffix(QStringLiteral(" ms"));
+    form->addRow(QStringLiteral("人类 commit debounce"), m_appCommitDelayMs);
+    form->addRow(infoLabel(
+        QStringLiteral("人类编辑停手后合并为一个 commit 的等待时间。"), saving));
+    layout->addWidget(saving);
+
+    layout->addWidget(infoLabel(
+        QStringLiteral("自动保存只提交有未提交编辑的工程；播放头位置单独记在 "
+                       "工程目录的 .pvforge/playhead.json，不进入 Git 提交。"),
+        page));
+    layout->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppEditorPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* snapping = new QGroupBox(QStringLiteral("吸附"), page);
+    auto* form = new QFormLayout(snapping);
+    m_appSnapPixels = new QSpinBox(snapping);
+    m_appSnapPixels->setObjectName(QStringLiteral("snapPixels"));
+    m_appSnapPixels->setRange(1, 32);
+    m_appSnapPixels->setSuffix(QStringLiteral(" px"));
+    m_appSnapPixels->setToolTip(
+        QStringLiteral("画布中心线与实体边缘的吸附半径（屏幕像素）。"));
+    form->addRow(QStringLiteral("吸附阈值"), m_appSnapPixels);
+
+    m_appSnapCanvasCenter = new QCheckBox(
+        QStringLiteral("允许实体边缘吸附画布中心线"), snapping);
+    m_appSnapCanvasCenter->setObjectName(QStringLiteral("snapCanvasCenter"));
+    form->addRow(m_appSnapCanvasCenter);
+    m_appSnapEntityEdges =
+        new QCheckBox(QStringLiteral("吸附其他实体边缘"), snapping);
+    m_appSnapEntityEdges->setObjectName(QStringLiteral("snapEntityEdges"));
+    form->addRow(m_appSnapEntityEdges);
+    m_appSnapEdgeMidpoints =
+        new QCheckBox(QStringLiteral("吸附其他实体边缘中点"), snapping);
+    m_appSnapEdgeMidpoints->setObjectName(QStringLiteral("snapEdgeMidpoints"));
+    form->addRow(m_appSnapEdgeMidpoints);
+
+    auto* angles = new QGroupBox(QStringLiteral("旋转角度吸附"), snapping);
+    auto* angleLayout = new QHBoxLayout(angles);
+    angleLayout->setContentsMargins(8, 6, 8, 6);
+    m_appSnapAngle0 = new QCheckBox(QStringLiteral("0°"), angles);
+    m_appSnapAngle0->setObjectName(QStringLiteral("snapAngle0"));
+    m_appSnapAngle30 = new QCheckBox(QStringLiteral("30°"), angles);
+    m_appSnapAngle30->setObjectName(QStringLiteral("snapAngle30"));
+    m_appSnapAngle45 = new QCheckBox(QStringLiteral("45°"), angles);
+    m_appSnapAngle45->setObjectName(QStringLiteral("snapAngle45"));
+    m_appSnapAngle90 = new QCheckBox(QStringLiteral("90°"), angles);
+    m_appSnapAngle90->setObjectName(QStringLiteral("snapAngle90"));
+    angleLayout->addWidget(m_appSnapAngle0);
+    angleLayout->addWidget(m_appSnapAngle30);
+    angleLayout->addWidget(m_appSnapAngle45);
+    angleLayout->addWidget(m_appSnapAngle90);
+    angleLayout->addStretch(1);
+    form->addRow(angles);
+
+    form->addRow(infoLabel(
+        QStringLiteral("按住 Ctrl 拖动可临时关闭吸附。勾选 0°/90° 会同时覆盖 "
+                       "180°/270°。"), snapping));
+    layout->addWidget(snapping);
+    layout->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppHtmlPage()
+{
+    auto* page = new QWidget(this);
+    auto* outer = new QVBoxLayout(page);
+    outer->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea(page);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget(scroll);
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* cache = new QGroupBox(QStringLiteral("HTML 帧缓存"), content);
+    auto* form = new QFormLayout(cache);
+    m_appHtmlCacheEnabled = new QCheckBox(
+        QStringLiteral("启用 HTML 帧缓存（内存 + 磁盘 LRU）"), cache);
+    m_appHtmlCacheEnabled->setObjectName(QStringLiteral("htmlCacheEnabled"));
+    form->addRow(m_appHtmlCacheEnabled);
+    m_appHtmlMemoryMb = new QSpinBox(cache);
+    m_appHtmlMemoryMb->setObjectName(QStringLiteral("htmlMemoryMb"));
+    m_appHtmlMemoryMb->setRange(32, 4096);
+    m_appHtmlMemoryMb->setSuffix(QStringLiteral(" MB"));
+    form->addRow(QStringLiteral("内存上限"), m_appHtmlMemoryMb);
+    m_appHtmlDiskGb = new QSpinBox(cache);
+    m_appHtmlDiskGb->setObjectName(QStringLiteral("htmlDiskGb"));
+    m_appHtmlDiskGb->setRange(1, 64);
+    m_appHtmlDiskGb->setSuffix(QStringLiteral(" GB"));
+    form->addRow(QStringLiteral("磁盘上限"), m_appHtmlDiskGb);
+    m_appHtmlScale = new QComboBox(cache);
+    m_appHtmlScale->setObjectName(QStringLiteral("htmlScale"));
+    m_appHtmlScale->addItem(QStringLiteral("25%"), 0.25);
+    m_appHtmlScale->addItem(QStringLiteral("50%"), 0.5);
+    m_appHtmlScale->addItem(QStringLiteral("75%"), 0.75);
+    m_appHtmlScale->addItem(QStringLiteral("100%"), 1.0);
+    form->addRow(QStringLiteral("清晰度（工程分辨率比例）"), m_appHtmlScale);
+    m_appHtmlMaxWidth = new QSpinBox(cache);
+    m_appHtmlMaxWidth->setObjectName(QStringLiteral("htmlMaxWidth"));
+    m_appHtmlMaxWidth->setRange(320, 4096);
+    m_appHtmlMaxWidth->setSuffix(QStringLiteral(" px"));
+    form->addRow(QStringLiteral("最大宽度"), m_appHtmlMaxWidth);
+    m_appWatchdogMs = new QSpinBox(cache);
+    m_appWatchdogMs->setObjectName(QStringLiteral("watchdogMs"));
+    m_appWatchdogMs->setRange(500, 30000);
+    m_appWatchdogMs->setSingleStep(250);
+    m_appWatchdogMs->setSuffix(QStringLiteral(" ms"));
+    form->addRow(QStringLiteral("帧看门狗超时"), m_appWatchdogMs);
+    layout->addWidget(cache);
+
+    auto* chrome = new QGroupBox(QStringLiteral("Chrome / Chromium"), content);
+    auto* chromeForm = new QFormLayout(chrome);
+    auto* chromeRow = new QWidget(chrome);
+    auto* chromeLayout = new QHBoxLayout(chromeRow);
+    chromeLayout->setContentsMargins(0, 0, 0, 0);
+    m_appChromeExecutable = new QLineEdit(chromeRow);
+    m_appChromeExecutable->setObjectName(QStringLiteral("chromeExecutable"));
+    m_appChromeExecutable->setPlaceholderText(QStringLiteral("留空自动检测"));
+    m_appChromeBrowse = new QPushButton(QStringLiteral("浏览…"), chromeRow);
+    m_appChromeBrowse->setObjectName(QStringLiteral("chromeBrowse"));
+    m_appChromeDetect = new QPushButton(QStringLiteral("自动检测"), chromeRow);
+    m_appChromeDetect->setObjectName(QStringLiteral("chromeDetect"));
+    chromeLayout->addWidget(m_appChromeExecutable, 1);
+    chromeLayout->addWidget(m_appChromeBrowse);
+    chromeLayout->addWidget(m_appChromeDetect);
+    chromeForm->addRow(QStringLiteral("可执行文件"), chromeRow);
+    m_appClearHtmlCache = new QPushButton(QStringLiteral("清空 HTML 缓存"), chrome);
+    m_appClearHtmlCache->setObjectName(QStringLiteral("clearHtmlCache"));
+    chromeForm->addRow(QStringLiteral("缓存维护"), m_appClearHtmlCache);
+    layout->addWidget(chrome);
+
+    connect(m_appChromeBrowse, &QPushButton::clicked, this, [this] {
+        QString start = m_appChromeExecutable->text().trimmed();
+        if (start.isEmpty())
+            start = QDir::homePath();
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("选择 Chrome/Chromium 可执行文件"), start);
+        if (!path.isEmpty())
+            m_appChromeExecutable->setText(path);
+    });
+    connect(m_appChromeDetect, &QPushButton::clicked, this,
+            &SettingsDialog::chromeDetectRequested);
+    connect(m_appClearHtmlCache, &QPushButton::clicked, this,
+            &SettingsDialog::clearHtmlCacheRequested);
+
+    layout->addWidget(infoLabel(
+        QStringLiteral("关闭缓存后只使用前端浏览器实时渲染；导出仍会启动成品浏览器。"),
+        content));
+    layout->addStretch(1);
+    scroll->setWidget(content);
+    outer->addWidget(scroll);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppVideoPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* video = new QGroupBox(QStringLiteral("视频预览"), page);
+    auto* form = new QFormLayout(video);
+    m_appVideoProxyEnabled =
+        new QCheckBox(QStringLiteral("启用视频播放代理"), video);
+    m_appVideoProxyEnabled->setObjectName(QStringLiteral("videoProxyEnabled"));
+    form->addRow(m_appVideoProxyEnabled);
+    m_appVideoProxyWidth = new QComboBox(video);
+    m_appVideoProxyWidth->setObjectName(QStringLiteral("videoProxyWidth"));
+    m_appVideoProxyWidth->addItem(QStringLiteral("960 px"), 960);
+    m_appVideoProxyWidth->addItem(QStringLiteral("1280 px"), 1280);
+    form->addRow(QStringLiteral("代理最大宽度"), m_appVideoProxyWidth);
+    m_appVideoMemoryFrames = new QComboBox(video);
+    m_appVideoMemoryFrames->setObjectName(QStringLiteral("videoMemoryFrames"));
+    m_appVideoMemoryFrames->addItem(QStringLiteral("32 帧"), 32);
+    m_appVideoMemoryFrames->addItem(QStringLiteral("64 帧"), 64);
+    m_appVideoMemoryFrames->addItem(QStringLiteral("128 帧"), 128);
+    form->addRow(QStringLiteral("内存帧数"), m_appVideoMemoryFrames);
+    form->addRow(infoLabel(
+        QStringLiteral("代理用于时间轴播放；导出始终解码原片。"), video));
+    layout->addWidget(video);
+    layout->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppWorkbenchPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* cache = new QGroupBox(QStringLiteral("工作台缓存"), page);
+    auto* form = new QFormLayout(cache);
+    m_appWorkbenchEnabled = new QCheckBox(
+        QStringLiteral("启用工作台缓存（整帧预渲染）"), cache);
+    m_appWorkbenchEnabled->setObjectName(QStringLiteral("workbenchCacheEnabled"));
+    form->addRow(m_appWorkbenchEnabled);
+    m_appWorkbenchScale = new QComboBox(cache);
+    m_appWorkbenchScale->setObjectName(QStringLiteral("workbenchScale"));
+    m_appWorkbenchScale->addItem(QStringLiteral("25%"), 25);
+    m_appWorkbenchScale->addItem(QStringLiteral("50%"), 50);
+    m_appWorkbenchScale->addItem(QStringLiteral("75%"), 75);
+    m_appWorkbenchScale->addItem(QStringLiteral("100%"), 100);
+    form->addRow(QStringLiteral("清晰度（工程分辨率比例）"), m_appWorkbenchScale);
+    m_appWorkbenchExpand = new QSpinBox(cache);
+    m_appWorkbenchExpand->setObjectName(QStringLiteral("workbenchExpandPercent"));
+    m_appWorkbenchExpand->setRange(0, 200);
+    m_appWorkbenchExpand->setSingleStep(5);
+    m_appWorkbenchExpand->setSuffix(QStringLiteral(" %"));
+    form->addRow(QStringLiteral("工作台缓存向外扩展"), m_appWorkbenchExpand);
+    m_appWorkbenchDiskGb = new QSpinBox(cache);
+    m_appWorkbenchDiskGb->setObjectName(QStringLiteral("workbenchDiskGb"));
+    m_appWorkbenchDiskGb->setRange(1, 64);
+    m_appWorkbenchDiskGb->setSuffix(QStringLiteral(" GB"));
+    form->addRow(QStringLiteral("磁盘上限"), m_appWorkbenchDiskGb);
+    form->addRow(infoLabel(
+        QStringLiteral("缓存世界矩形在画布四周各扩展宽高的该比例；只影响编辑器"
+                       "画布视图，相机视图和导出不扩展。"), cache));
+    layout->addWidget(cache);
+    layout->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppMcpPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* service = new QGroupBox(QStringLiteral("MCP 服务"), page);
+    auto* form = new QFormLayout(service);
+    m_appMcpPort = new QSpinBox(service);
+    m_appMcpPort->setObjectName(QStringLiteral("mcpPort"));
+    m_appMcpPort->setRange(1024, 65535);
+    m_appMcpPort->setGroupSeparatorShown(false);
+    form->addRow(QStringLiteral("监听端口"), m_appMcpPort);
+    m_appMcpStatus = infoLabel(QStringLiteral("未启动"), service);
+    m_appMcpStatus->setObjectName(QStringLiteral("mcpStatus"));
+    form->addRow(QStringLiteral("状态"), m_appMcpStatus);
+    m_appMcpToken = new QLineEdit(service);
+    m_appMcpToken->setObjectName(QStringLiteral("mcpToken"));
+    m_appMcpToken->setReadOnly(true);
+    m_appMcpToken->setPlaceholderText(QStringLiteral("服务器未启动"));
+    form->addRow(QStringLiteral("Bearer token"), m_appMcpToken);
+    m_appResetMcpToken = new QPushButton(QStringLiteral("重置 token"), service);
+    m_appResetMcpToken->setObjectName(QStringLiteral("resetMcpToken"));
+    connect(m_appResetMcpToken, &QPushButton::clicked, this,
+            &SettingsDialog::resetMcpTokenRequested);
+    form->addRow(QStringLiteral("访问凭据"), m_appResetMcpToken);
+    m_appMcpEndpoint = new QLineEdit(service);
+    m_appMcpEndpoint->setObjectName(QStringLiteral("mcpEndpointPath"));
+    m_appMcpEndpoint->setReadOnly(true);
+    m_appMcpEndpoint->setText(defaultEndpointPath());
+    form->addRow(QStringLiteral("Endpoint 文件"), m_appMcpEndpoint);
+    form->addRow(infoLabel(
+        QStringLiteral("只监听 127.0.0.1；token 保存在 endpoint 文件中。"
+                       "Git 未启用时写工具返回 permission_denied。"), service));
+    layout->addWidget(service);
+    layout->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::createAppGitPage()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(12);
+
+    auto* git = new QGroupBox(QStringLiteral("Git"), page);
+    auto* form = new QFormLayout(git);
+    m_appGitEnabled = new QCheckBox(
+        QStringLiteral("启用 Git（历史、崩溃恢复、AI 写入）"), git);
+    m_appGitEnabled->setObjectName(QStringLiteral("gitEnabled"));
+    form->addRow(m_appGitEnabled);
+    m_appGitStatus = infoLabel(QString(), git);
+    m_appGitStatus->setObjectName(QStringLiteral("gitStatus"));
+    form->addRow(QStringLiteral("检测状态"), m_appGitStatus);
+    m_appGitDetect = new QPushButton(QStringLiteral("重新检测"), git);
+    m_appGitDetect->setObjectName(QStringLiteral("gitDetect"));
+    connect(m_appGitDetect, &QPushButton::clicked, this,
+            &SettingsDialog::refreshAppGitStatus);
+    form->addRow(QStringLiteral("检测"), m_appGitDetect);
+    form->addRow(infoLabel(
+        QStringLiteral("关闭时只保留本次运行的内存撤销；重启后无法撤销。"
+                       "没有 Git 时 MCP 只读。"), git));
+    layout->addWidget(git);
+
+    auto* repo = new QGroupBox(QStringLiteral("当前工程"), page);
+    auto* repoForm = new QFormLayout(repo);
+    m_appGitRepository = infoLabel(QStringLiteral("（未打开工程）"), repo);
+    m_appGitRepository->setObjectName(QStringLiteral("gitRepositoryPath"));
+    repoForm->addRow(QStringLiteral("仓库路径"), m_appGitRepository);
+    m_appGitRecent = infoLabel(QStringLiteral("—"), repo);
+    m_appGitRecent->setObjectName(QStringLiteral("gitRecentCommit"));
+    repoForm->addRow(QStringLiteral("最近提交"), m_appGitRecent);
+    repoForm->addRow(infoLabel(
+        QStringLiteral("Git 只管理文本工程文件（project.json、entities/*.json、"
+                       "markers）；assets/ 与 .cache/ 不进提交。"), repo));
+    layout->addWidget(repo);
+
+    refreshAppGitStatus();
+    layout->addStretch(1);
+    return page;
+}
+
+void SettingsDialog::refreshAppGitStatus()
+{
+    if (!m_appGitStatus)
+        return;
+    const next::GitInfo info = next::detectGit();
+    m_appGitStatus->setText(
+        info.found
+            ? QStringLiteral("已找到：%1（%2）").arg(info.executable, info.version)
+            : QStringLiteral("未找到 Git：%1").arg(info.error));
+}
+
+next::AppSettings SettingsDialog::appSettings() const
+{
+    if (!m_appStore)
+        return next::AppSettings{};
+    next::AppSettings settings;
+    settings.autoSaveMinutes = m_appAutoSaveMinutes->value();
+    settings.humanCommitDelayMs = m_appCommitDelayMs->value();
+    settings.snapPixels = m_appSnapPixels->value();
+    settings.snapCanvasCenter = m_appSnapCanvasCenter->isChecked();
+    settings.snapEntityEdges = m_appSnapEntityEdges->isChecked();
+    settings.snapEdgeMidpoints = m_appSnapEdgeMidpoints->isChecked();
+    settings.snapAngles.clear();
+    if (m_appSnapAngle0->isChecked())
+        settings.snapAngles << 0.0 << 180.0;
+    if (m_appSnapAngle30->isChecked())
+        settings.snapAngles << 30.0;
+    if (m_appSnapAngle45->isChecked())
+        settings.snapAngles << 45.0;
+    if (m_appSnapAngle90->isChecked())
+        settings.snapAngles << 90.0 << 270.0;
+
+    settings.htmlCacheEnabled = m_appHtmlCacheEnabled->isChecked();
+    settings.htmlMemoryBytes = qint64(m_appHtmlMemoryMb->value()) * 1024 * 1024;
+    settings.htmlDiskBytes = qint64(m_appHtmlDiskGb->value()) * 1024 * 1024 * 1024;
+    settings.htmlScale = m_appHtmlScale->currentData().toDouble();
+    settings.htmlMaxWidth = m_appHtmlMaxWidth->value();
+    settings.watchdogMs = m_appWatchdogMs->value();
+    settings.chromeExecutable = m_appChromeExecutable->text().trimmed();
+
+    settings.videoProxyEnabled = m_appVideoProxyEnabled->isChecked();
+    settings.videoProxyWidth = m_appVideoProxyWidth->currentData().toInt();
+    settings.videoMemoryFrames = m_appVideoMemoryFrames->currentData().toInt();
+
+    settings.workbenchCacheEnabled = m_appWorkbenchEnabled->isChecked();
+    settings.workbenchCacheScalePercent = m_appWorkbenchScale->currentData().toInt();
+    settings.workbenchCacheExpandPercent = m_appWorkbenchExpand->value();
+    settings.workbenchCacheDiskBytes =
+        qint64(m_appWorkbenchDiskGb->value()) * 1024 * 1024 * 1024;
+    settings.workbenchCacheMemoryBytes = m_appWorkbenchMemoryBytes;
+
+    settings.mcpPort = static_cast<quint16>(m_appMcpPort->value());
+    settings.gitEnabled = m_appGitEnabled->isChecked();
+    settings.onboardingDone = m_appOnboardingDone;
+    return next::SettingsStore::sanitized(settings);
+}
+
+void SettingsDialog::setAppSettings(const next::AppSettings& settings)
+{
+    if (!m_appStore)
+        return;
+    const next::AppSettings value = next::SettingsStore::sanitized(settings);
+    m_appAutoSaveMinutes->setValue(value.autoSaveMinutes);
+    m_appCommitDelayMs->setValue(value.humanCommitDelayMs);
+    m_appSnapPixels->setValue(value.snapPixels);
+    m_appSnapCanvasCenter->setChecked(value.snapCanvasCenter);
+    m_appSnapEntityEdges->setChecked(value.snapEntityEdges);
+    m_appSnapEdgeMidpoints->setChecked(value.snapEdgeMidpoints);
+    const auto hasAngle = [&value](double angle) {
+        return value.snapAngles.contains(angle);
+    };
+    m_appSnapAngle0->setChecked(hasAngle(0.0) || hasAngle(180.0));
+    m_appSnapAngle30->setChecked(hasAngle(30.0));
+    m_appSnapAngle45->setChecked(hasAngle(45.0));
+    m_appSnapAngle90->setChecked(hasAngle(90.0) || hasAngle(270.0));
+
+    m_appHtmlCacheEnabled->setChecked(value.htmlCacheEnabled);
+    m_appHtmlMemoryMb->setValue(int(value.htmlMemoryBytes / (1024 * 1024)));
+    m_appHtmlDiskGb->setValue(int(value.htmlDiskBytes / (1024 * 1024 * 1024)));
+    const int htmlScale = m_appHtmlScale->findData(value.htmlScale);
+    if (htmlScale >= 0)
+        m_appHtmlScale->setCurrentIndex(htmlScale);
+    m_appHtmlMaxWidth->setValue(value.htmlMaxWidth);
+    m_appWatchdogMs->setValue(value.watchdogMs);
+    m_appChromeExecutable->setText(value.chromeExecutable);
+
+    m_appVideoProxyEnabled->setChecked(value.videoProxyEnabled);
+    const int proxyWidth = m_appVideoProxyWidth->findData(value.videoProxyWidth);
+    if (proxyWidth >= 0)
+        m_appVideoProxyWidth->setCurrentIndex(proxyWidth);
+    const int memoryFrames = m_appVideoMemoryFrames->findData(value.videoMemoryFrames);
+    if (memoryFrames >= 0)
+        m_appVideoMemoryFrames->setCurrentIndex(memoryFrames);
+
+    m_appWorkbenchEnabled->setChecked(value.workbenchCacheEnabled);
+    const int scale = m_appWorkbenchScale->findData(value.workbenchCacheScalePercent);
+    if (scale >= 0)
+        m_appWorkbenchScale->setCurrentIndex(scale);
+    m_appWorkbenchExpand->setValue(value.workbenchCacheExpandPercent);
+    m_appWorkbenchDiskGb->setValue(
+        int(value.workbenchCacheDiskBytes / (1024 * 1024 * 1024)));
+    m_appWorkbenchMemoryBytes = value.workbenchCacheMemoryBytes;
+
+    m_appMcpPort->setValue(value.mcpPort);
+    m_appGitEnabled->setChecked(value.gitEnabled);
+    m_appOnboardingDone = value.onboardingDone;
+}
+
+void SettingsDialog::saveAppSettings()
+{
+    if (!m_appStore)
+        return;
+    m_appStore->save(appSettings());
+}
+
+void SettingsDialog::setMcpStatus(bool running, quint16 port,
+                                  const QString& token, const QString& error,
+                                  bool writesEnabled)
+{
+    if (!m_appMcpStatus)
+        return;
+    if (running)
+    {
+        m_appMcpStatus->setText(
+            QStringLiteral("监听中 · 127.0.0.1:%1 · %2")
+                .arg(port)
+                .arg(writesEnabled ? QStringLiteral("可写")
+                                   : QStringLiteral("只读（Git 未启用）")));
+        m_appMcpToken->setText(token);
+    }
+    else
+    {
+        m_appMcpStatus->setText(
+            error.isEmpty() ? QStringLiteral("未启动")
+                            : QStringLiteral("启动失败：%1").arg(error));
+        m_appMcpToken->clear();
+    }
+}
+
+void SettingsDialog::setGitInfo(const QString& repositoryPath,
+                                const QString& recentCommit)
+{
+    m_appGitRepositoryValue = repositoryPath;
+    m_appGitRecentValue = recentCommit;
+    if (!m_appGitRepository || !m_appGitRecent)
+        return;
+    m_appGitRepository->setText(repositoryPath.isEmpty()
+                                    ? QStringLiteral("（未打开工程）")
+                                    : repositoryPath);
+    m_appGitRecent->setText(recentCommit.isEmpty() ? QStringLiteral("—")
+                                                   : recentCommit);
+}
+
+void SettingsDialog::setEndpointPath(const QString& path)
+{
+    if (m_appMcpEndpoint)
+        m_appMcpEndpoint->setText(path);
+}
+
+QString SettingsDialog::endpointPath() const
+{
+    return m_appMcpEndpoint ? m_appMcpEndpoint->text()
+                            : defaultEndpointPath();
+}
+
+QString SettingsDialog::defaultEndpointPath()
+{
+    QString base = qEnvironmentVariable("XDG_CONFIG_HOME").trimmed();
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    if (base.isEmpty())
+        base = QDir::homePath() + QStringLiteral("/.config");
+    return base + QStringLiteral("/PVForge/mcp-endpoint.json");
 }
 
 int SettingsDialog::addPage(const QString& title, QWidget* page,
@@ -831,6 +1428,14 @@ QWidget* SettingsDialog::createAboutPage()
 
 void SettingsDialog::accept()
 {
+    if (m_appStore)
+    {
+        saveAppSettings();
+        emit settingsApplied();
+        QDialog::accept();
+        return;
+    }
+
     Settings::setLanguage(m_language->currentData().toString());
     Settings::setSnapPixels(m_snapPixels->value());
     Settings::setEdgeCenterSnap(m_edgeCenterSnap->isChecked());

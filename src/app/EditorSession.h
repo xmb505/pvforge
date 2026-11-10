@@ -1,11 +1,13 @@
 #pragma once
 
 #include "common/Types.h"
+#include "mcp2/Service.h"
 #include "next/settings/SettingsStore.h"
 
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <memory>
 
 namespace pvf {
@@ -25,6 +27,10 @@ class PlaybackController;
 class ProjectDocument;
 class WorkbenchServices;
 } // namespace next
+
+namespace mcp2 {
+class HttpServer;
+} // namespace mcp2
 
 class EditActions;
 
@@ -73,6 +79,47 @@ public:
     // the cache is disabled.
     next::WorkbenchServices* workbench();
     const next::AppSettings& appSettings() const { return m_appSettings; }
+    next::SettingsStore* settingsStore() const { return m_settingsStore.get(); }
+
+    // Applies an AppSettings snapshot to every backend service without
+    // recreating the window: media providers, playback watchdog, workbench
+    // cache, human commit debounce, Git state and the MCP endpoint.  The
+    // snapshot is persisted.  A failed Git switch is reported through `error`
+    // and `gitEnabled` is corrected to the state the store actually reached.
+    bool applyAppSettings(const next::AppSettings& settings,
+                          QString* error = nullptr);
+
+    // Drops the workbench cache; the next workbench() call rebuilds and
+    // rescans it.  MCP write tools call this after changing project bytes.
+    void invalidateWorkbench();
+
+    // MCP endpoint.  The service and HTTP listener belong to the session and
+    // are started when the project opens, stopped on close/switch.  The port
+    // comes from AppSettings; the Bearer token is persisted by HttpServer.
+    mcp2::Service* mcpService() const { return m_mcpService.get(); }
+    mcp2::HttpServer* mcpServer() const { return m_mcpServer.get(); }
+    QString mcpError() const { return m_mcpError; }
+    void restartMcpServer();
+    // Stops the listener without destroying the session; used when switching
+    // projects so the next session can bind the same configured port.
+    void stopMcpServer();
+
+    // Test hooks: a temporary config file (usually with port 0) and a port
+    // override keep the test process off the user's real endpoint file.
+    static void setMcpConfigPathForTest(const QString& path);
+    static void setMcpPortOverrideForTest(quint16 port);
+
+    // AI write lock.  While false every human write path (EditActions and
+    // ProjectDocument) refuses with an error, and the shell disables its
+    // editing widgets.  Read-only views keep working.
+    void setHumanEditingEnabled(bool enabled);
+    bool humanEditingEnabled() const { return m_humanEditingEnabled; }
+
+    // The shell enriches view.state with timeline-only fields (parent/zoom).
+    void setViewStateExtras(std::function<void(mcp2::ViewState&)> extras)
+    {
+        m_viewStateExtras = std::move(extras);
+    }
 
     // Camera used for the viewport viewfinder overlay and the camera monitor.
     // The explicitly chosen monitor camera wins; otherwise the selected
@@ -98,6 +145,8 @@ public:
 private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
+    void startMcpServer();
+
     // Declared before the services so the services die first.
     std::unique_ptr<next::ProjectDocument> m_document;
     std::unique_ptr<next::SettingsStore> m_settingsStore;
@@ -106,6 +155,11 @@ private:
     std::unique_ptr<next::WorkbenchServices> m_workbench;
     std::unique_ptr<next::PlaybackController> m_playback;
     std::unique_ptr<EditActions> m_editActions;
+    std::unique_ptr<mcp2::Service> m_mcpService;
+    std::unique_ptr<mcp2::HttpServer> m_mcpServer;
+    QString m_mcpError;
+    std::function<void(mcp2::ViewState&)> m_viewStateExtras;
+    bool m_humanEditingEnabled = true;
     Uuid m_monitorCamera;
     bool m_monitorCameraExplicit = false;
     bool m_monitorCameraFromSelection = false;

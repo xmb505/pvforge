@@ -33,6 +33,7 @@ namespace {
 
 enum ItemRole {
     EntityRole = Qt::UserRole + 1,
+    EntityUuidRole,
     FrameRole,
 };
 
@@ -144,7 +145,7 @@ McpLogPanel::McpLogPanel(QWidget* viewport, QWidget* parent)
 
     m_stopButton = new QToolButton(this);
     m_stopButton->setObjectName(QStringLiteral("mcpLogStopButton"));
-    m_stopButton->setText(QStringLiteral("停止 AI"));
+    m_stopButton->setText(QStringLiteral("急停"));
     m_stopButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_stopButton->setFocusPolicy(Qt::NoFocus);
     m_stopButton->setToolTip(
@@ -156,6 +157,16 @@ McpLogPanel::McpLogPanel(QWidget* viewport, QWidget* parent)
                        "color: #bbbbbb; }"));
     connect(m_stopButton, &QToolButton::clicked, this,
             &McpLogPanel::stopAiRequested);
+
+    m_resumeButton = new QToolButton(this);
+    m_resumeButton->setObjectName(QStringLiteral("mcpLogResumeButton"));
+    m_resumeButton->setText(QStringLiteral("恢复"));
+    m_resumeButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_resumeButton->setFocusPolicy(Qt::NoFocus);
+    m_resumeButton->setToolTip(QStringLiteral("恢复 AI 写操作"));
+    connect(m_resumeButton, &QToolButton::clicked, this,
+            &McpLogPanel::resumeAiRequested);
+    m_resumeButton->hide();
 
     m_clearButton = new QToolButton(this);
     m_clearButton->setObjectName(QStringLiteral("mcpLogClearButton"));
@@ -191,9 +202,31 @@ void McpLogPanel::setServerState(bool running, quint16 port, const QString& erro
     updateHeader();
 }
 
+void McpLogPanel::setAiState(bool stopped, bool busy, bool writesEnabled)
+{
+    m_aiMode = true;
+    m_resumeButton->setVisible(true);
+    m_stopButton->setText(QStringLiteral("急停"));
+    m_stopped = stopped;
+    m_aiBusy = busy;
+    m_writesEnabled = writesEnabled;
+    if (!stopped)
+        m_armed = false;
+    updateHeader();
+}
+
+void McpLogPanel::setWritesEnabled(bool enabled)
+{
+    m_writesEnabled = enabled;
+    updateHeader();
+}
+
 void McpLogPanel::setPermissionState(bool armed, const QString& sceneName,
                                      bool stopped)
 {
+    m_aiMode = false;
+    m_resumeButton->setVisible(false);
+    m_stopButton->setText(QStringLiteral("停止 AI"));
     m_armed = armed;
     m_stopped = stopped;
     m_sceneName = sceneName;
@@ -256,11 +289,18 @@ void McpLogPanel::addToolInvocation(const QString& name, const QString& argsJson
     const QString scene =
         readStringArgument(args, {QStringLiteral("scene"),
                                   QStringLiteral("sceneId")});
+    QString entityUuid = readStringArgument(args, entityKeys);
+    if (entityUuid.contains(QLatin1Char('-')) && entityUuid.size() >= 32)
+        entityId = -1;
+    else
+        entityUuid.clear();
 
     QString target;
     QStringList targetParts;
     if (entityId >= 0)
         targetParts.append(QStringLiteral("实体 #%1").arg(entityId));
+    else if (!entityUuid.isEmpty())
+        targetParts.append(QStringLiteral("实体 %1").arg(entityUuid.left(8)));
     if (!scene.isEmpty())
         targetParts.append(QStringLiteral("场景 %1").arg(scene));
     if (frame >= 0)
@@ -282,12 +322,23 @@ void McpLogPanel::addToolInvocation(const QString& name, const QString& argsJson
     item->setText(3, ok ? QStringLiteral("ok") : QStringLiteral("error"));
     item->setText(4, target);
     item->setData(0, EntityRole, entityId);
+    item->setData(0, EntityUuidRole, entityUuid);
     item->setData(0, FrameRole, frame);
     if (!ok)
         item->setForeground(3, QBrush(QColor(220, 80, 70)));
 
     const QJsonObject resultObject =
         QJsonDocument::fromJson(resultJson.toUtf8()).object();
+    const QString commitHash =
+        resultObject.value(QStringLiteral("commit"))
+            .toObject()
+            .value(QStringLiteral("shortHash"))
+            .toString();
+    if (!commitHash.isEmpty())
+    {
+        item->setText(3, item->text(3) + QStringLiteral(" · ") + commitHash);
+        item->setToolTip(3, QStringLiteral("提交 %1").arg(commitHash));
+    }
     QString errorCode =
         resultObject.value(QStringLiteral("error"))
             .toObject()
@@ -299,6 +350,8 @@ void McpLogPanel::addToolInvocation(const QString& name, const QString& argsJson
     QString detail;
     if (!errorCode.isEmpty())
         detail += QStringLiteral("错误码：%1\n").arg(errorCode);
+    if (!commitHash.isEmpty())
+        detail += QStringLiteral("提交：%1\n").arg(commitHash);
     detail += QStringLiteral("参数：%1\n结果：%2")
                   .arg(truncateForDisplay(argsJson, kMaxDetailChars),
                        truncateForDisplay(resultJson, kMaxDetailChars));
@@ -339,19 +392,27 @@ void McpLogPanel::updateHeader()
     if (m_serverRunning)
     {
         QString text = QStringLiteral("监听中 · 127.0.0.1:%1").arg(m_serverPort);
-        if (m_armed)
+        if (m_stopped)
+        {
+            text += QStringLiteral(" · 已急停");
+        }
+        else if (m_aiBusy)
+        {
+            text += QStringLiteral(" · AI 修改中");
+        }
+        else if (m_armed)
         {
             text += QStringLiteral(" · 已武装：%1")
                         .arg(m_sceneName.isEmpty() ? QStringLiteral("未分场景")
                                                    : m_sceneName);
         }
-        else if (m_stopped)
+        else if (!m_writesEnabled)
         {
-            text += QStringLiteral(" · 已急停");
+            text += QStringLiteral(" · 只读");
         }
         else
         {
-            text += QStringLiteral(" · 只读");
+            text += QStringLiteral(" · 可写");
         }
         m_statusLabel->setText(text);
     }
@@ -364,12 +425,17 @@ void McpLogPanel::updateHeader()
     if (m_serverRunning)
     {
         tooltip = QStringLiteral("MCP 正在监听 127.0.0.1:%1").arg(m_serverPort);
-        if (m_armed)
-            tooltip += QStringLiteral("\n写权限已解锁：%1").arg(m_sceneName);
-        else if (m_stopped)
+        if (m_stopped)
             tooltip += QStringLiteral("\n人类已急停，写操作返回 stopped_by_human");
+        else if (m_aiBusy)
+            tooltip += QStringLiteral("\nAI 正在修改工程，人类编辑已临时锁定");
+        else if (m_armed)
+            tooltip += QStringLiteral("\n写权限已解锁：%1").arg(m_sceneName);
+        else if (!m_writesEnabled)
+            tooltip += QStringLiteral("\n只读：Git 未启用，写工具返回 "
+                                      "permission_denied（git_disabled）");
         else
-            tooltip += QStringLiteral("\n只读模式");
+            tooltip += QStringLiteral("\n可写：Git 已启用");
     }
     else
     {
@@ -383,10 +449,13 @@ void McpLogPanel::updateHeader()
         statusPalette.setColor(QPalette::WindowText, QColor(220, 140, 60));
     else if (!m_serverError.isEmpty() && !m_serverRunning)
         statusPalette.setColor(QPalette::WindowText, QColor(220, 80, 70));
+    else if (m_aiBusy)
+        statusPalette.setColor(QPalette::WindowText, QColor(90, 169, 230));
     m_statusLabel->setPalette(statusPalette);
 
     m_countLabel->setText(QStringLiteral("调用 %1 次").arg(m_totalCalls));
-    m_stopButton->setEnabled(m_serverRunning);
+    m_stopButton->setEnabled(m_serverRunning && !m_stopped);
+    m_resumeButton->setEnabled(m_serverRunning && m_stopped);
     m_clearButton->setEnabled(m_tree->topLevelItemCount() > 0);
 }
 
@@ -424,8 +493,13 @@ void McpLogPanel::layoutChildren()
 
     const int headerY = kTitleHeight;
     right = width() - 6;
-    m_stopButton->setGeometry(right - 70, headerY + 3, 70, 22);
-    right -= 74;
+    if (m_aiMode)
+    {
+        m_resumeButton->setGeometry(right - 48, headerY + 3, 48, 22);
+        right -= 52;
+    }
+    m_stopButton->setGeometry(right - 48, headerY + 3, 48, 22);
+    right -= 52;
     m_clearButton->setGeometry(right - 48, headerY + 3, 48, 22);
     right -= 52;
     m_countLabel->setGeometry(right - 84, headerY + 4, 84, 20);
@@ -667,8 +741,11 @@ void McpLogPanel::activateItem(QTreeWidgetItem* item)
     if (!item || item->parent())
         return;
     const int entityId = item->data(0, EntityRole).toInt();
+    const QString entityUuid = item->data(0, EntityUuidRole).toString();
     const int frame = item->data(0, FrameRole).toInt();
-    if (entityId >= 0)
+    if (!entityUuid.isEmpty())
+        emit entityUuidActivated(entityUuid);
+    else if (entityId >= 0)
         emit entityActivated(EntityId(entityId));
     if (frame >= 0)
         emit frameRequested(frame);

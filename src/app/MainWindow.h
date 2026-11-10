@@ -4,6 +4,8 @@
 #include "core/Project.h"
 #include "html/HtmlAsset.h"
 #include "media/VideoPlayer.h"
+#include "next/settings/SettingsStore.h"
+#include "store/Store.h"
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -15,6 +17,7 @@
 
 class QAction;
 class QCloseEvent;
+class QDockWidget;
 class QFrame;
 class QKeyEvent;
 class QProgressBar;
@@ -30,6 +33,14 @@ namespace html {
 class HtmlBrowser;
 class HtmlRenderer;
 } // namespace html
+
+namespace mcp2 {
+class HttpServer;
+}
+
+namespace next {
+class HistoryPanel;
+}
 
 class AssetLibraryPanel;
 class AudioEngine;
@@ -52,6 +63,25 @@ class WaveformView;
 class WorkbenchPanel;
 
 struct MediaImportResult;
+
+// Crash recovery choices for the session shell.  The store scans uncommitted
+// text when the project opens; the shell asks before touching anything.
+enum class SessionCrashRecoveryChoice
+{
+    Restore,
+    Discard,
+    Commit,
+    Cancel
+};
+using SessionCrashRecoveryHandler =
+    std::function<SessionCrashRecoveryChoice(const QVector<store::DirtyText>&)>;
+
+// Opens a `.pvproj` directory and resolves uncommitted text through `handler`
+// (or a modal dialog when empty).  Exposed so the crash-recovery branches can
+// be tested without driving a dialog.
+std::unique_ptr<EditorSession> openSessionProjectWithRecovery(
+    const QString& path, bool useGit, const SessionCrashRecoveryHandler& handler,
+    QWidget* parent, QString* error);
 
 class MainWindow : public QMainWindow
 {
@@ -105,6 +135,23 @@ public:
     // Test entry point that uses the same dialog wiring as Edit -> Settings,
     // but shows the dialog non-modally so a test can drive its controls.
     SettingsDialog* openSettingsDialogForTest();
+
+    // ---- P6 session-shell test accessors --------------------------------
+    bool humanEditingEnabledForTest() const;
+    TimelinePanel* timelineForTest() const { return m_timeline; }
+    PropertiesPanel* propertiesForTest() const { return m_props; }
+    WorkbenchPanel* workbenchForTest() const { return m_workbench; }
+    next::HistoryPanel* historyPanelForTest() const { return m_sessionHistory; }
+    SettingsDialog* openSessionSettingsDialogForTest();
+    bool openSessionProjectForTest(const QString& path, QString* error = nullptr);
+    void setCrashRecoveryHandlerForTest(SessionCrashRecoveryHandler handler)
+    {
+        m_crashRecoveryHandler = std::move(handler);
+    }
+    void showMcpLogForTest();
+    QString mcpStatusTextForTest() const;
+    void triggerSessionAutoSaveForTest();
+    bool restoreSessionCommitForTest(const QString& hash, QString* error = nullptr);
 
     // Scene and annotation UI tests drive the same code paths as the menus
     // without opening modal dialogs.
@@ -210,6 +257,30 @@ private:
     void exportVideo();
     void autoSave();
     void updateAutosaveTimer();
+
+    // ---- P6 MCP / Git / settings ----------------------------------------
+    void wireSessionMcpServer();
+    void onSessionMcpToolStarted(const QString& name, const QString& argsJson,
+                                 bool write);
+    void onSessionMcpToolFinished(const QString& name, const QString& resultJson,
+                                  qint64 ms, bool ok);
+    void onSessionMcpStoppedChanged(bool stopped);
+    void refreshSessionAiLock();
+    void resetSessionAiLock();
+    void setHumanEditingEnabled(bool enabled);
+    void updateSessionActionStates();
+    void refreshSessionAfterExternalChange();
+    void updateSessionMcpStatus();
+    void showSessionMcpLog();
+    void openSessionSettings();
+    void applySessionSettings(const next::AppSettings& settings);
+    void wireSessionSettingsDialog(SettingsDialog* dialog);
+    void updateSessionSettingsDialogContext();
+    void refreshSessionHistory();
+    void restoreSessionCommit(const QString& hash);
+    bool restoreSessionCommitInternal(const QString& hash, QString* error);
+    void showSessionOnboardingIfNeeded();
+    void sessionAutoSave();
     void onEntityRenamed(EntityId id, const QString& name);
     void onAudioMoved(EntityId id, double startFrame);
     void onParentEdited(EntityId id, EntityId parent);
@@ -276,6 +347,22 @@ private:
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
+    // Session-shell MCP endpoint wiring.  The listener belongs to EditorSession;
+    // this only tracks the server the signals are connected to so a restart
+    // does not double-connect.
+    mcp2::HttpServer* m_wiredSessionMcpServer = nullptr;
+    QAction* m_mcpLogAction = nullptr;
+    QAction* m_settingsAction = nullptr;
+    QAction* m_historyAction = nullptr;
+    QDockWidget* m_sessionHistoryDock = nullptr;
+    next::HistoryPanel* m_sessionHistory = nullptr;
+    SettingsDialog* m_sessionSettingsDialog = nullptr;
+    bool m_sessionAiStopped = false;
+    int m_sessionActiveToolCalls = 0;
+    int m_sessionAiBusyWrites = 0;
+    QHash<QString, int> m_sessionRunningWrites;
+    QHash<QString, QString> m_sessionRunningToolArgs;
+    SessionCrashRecoveryHandler m_crashRecoveryHandler;
     // Created only while a human has armed writes for one scene. Global
     // objects (active camera, audio, root-level logos) stay locked because
     // McpCommandService::allowGlobal() is false by default; a future UI can

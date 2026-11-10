@@ -24,6 +24,11 @@
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
+#include "next/history/HistoryPanel.h"
+#include "next/settings/OnboardingDialog.h"
+#include "next/settings/SettingsStore.h"
+#include "mcp2/HttpServer.h"
+#include "mcp2/Service.h"
 #include "model/Project.h"
 #include "model/Query.h"
 #include "ui/AssetLibraryPanel.h"
@@ -48,6 +53,8 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDirIterator>
+#include <QDockWidget>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileDialog>
@@ -801,6 +808,42 @@ void MainWindow::buildSessionShell()
         m_monitor->setVisible(Settings::monitorVisible());
     }
 
+    // P6: the old floating MCP log keeps its place beside the camera monitor.
+    // It is a child of the viewport (drag/detach like the monitor), never a
+    // dock, so the legacy arrangeMcpLog() geometry still applies.
+    if (m_session)
+    {
+        m_mcpLog = new McpLogPanel(m_viewport);
+        m_mcpLog->setLoggingEnabled(Settings::mcpLogVisible());
+        m_mcpLog->setServerState(false, 0);
+        m_mcpLog->hide();
+        connect(m_mcpLog, &McpLogPanel::visibilityChanged, this,
+                [this](bool visible) {
+                    if (m_mcpLogAction)
+                    {
+                        const QSignalBlocker blocker(m_mcpLogAction);
+                        m_mcpLogAction->setChecked(visible);
+                    }
+                    if (visible)
+                        arrangeMcpLog();
+                });
+        connect(m_mcpLog, &McpLogPanel::entityUuidActivated, this,
+                [this](const QString& uuid) {
+                    if (m_session && m_session->document())
+                        m_session->document()->setSelection(uuid);
+                });
+        connect(m_mcpLog, &McpLogPanel::frameRequested, this,
+                [this](int frame) { sessionGoToFrame(frame); });
+        connect(m_mcpLog, &McpLogPanel::stopAiRequested, this, [this] {
+            if (m_session && m_session->mcpServer())
+                m_session->mcpServer()->stopAi();
+        });
+        connect(m_mcpLog, &McpLogPanel::resumeAiRequested, this, [this] {
+            if (m_session && m_session->mcpServer())
+                m_session->mcpServer()->resumeAi();
+        });
+    }
+
     m_sessionProps = new ProjectPropertiesPanel(m_session, this);
     m_sessionEnvironment = new EnvironmentPanel(m_session, this);
 
@@ -902,6 +945,68 @@ void MainWindow::buildSessionShell()
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("statusInfo"));
     statusBar()->addPermanentWidget(m_status);
+
+    // P6: Git history dock.  The panel is the existing next/history widget,
+    // styled with the old dark palette and hidden until View -> Git 历史.
+    if (m_session)
+    {
+        m_sessionHistory = new next::HistoryPanel(this);
+        m_sessionHistory->setObjectName(QStringLiteral("sessionHistoryPanel"));
+        QPalette dark = m_sessionHistory->palette();
+        dark.setColor(QPalette::Window, QColor(35, 38, 41));
+        dark.setColor(QPalette::WindowText, QColor(239, 240, 241));
+        dark.setColor(QPalette::Base, QColor(27, 30, 32));
+        dark.setColor(QPalette::AlternateBase, QColor(42, 46, 50));
+        dark.setColor(QPalette::Text, QColor(239, 240, 241));
+        dark.setColor(QPalette::Button, QColor(42, 46, 50));
+        dark.setColor(QPalette::ButtonText, QColor(239, 240, 241));
+        dark.setColor(QPalette::Mid, QColor(90, 95, 100));
+        dark.setColor(QPalette::Highlight, QColor(61, 174, 233));
+        dark.setColor(QPalette::HighlightedText, Qt::white);
+        m_sessionHistory->setPalette(dark);
+        m_sessionHistory->setAutoFillBackground(true);
+
+        m_sessionHistoryDock = new QDockWidget(QStringLiteral("Git 历史"), this);
+        m_sessionHistoryDock->setObjectName(QStringLiteral("sessionHistoryDock"));
+        m_sessionHistoryDock->setAllowedAreas(Qt::RightDockWidgetArea
+                                              | Qt::BottomDockWidgetArea);
+        m_sessionHistoryDock->setFeatures(QDockWidget::DockWidgetClosable
+                                          | QDockWidget::DockWidgetMovable
+                                          | QDockWidget::DockWidgetFloatable);
+        m_sessionHistoryDock->setWidget(m_sessionHistory);
+        addDockWidget(Qt::RightDockWidgetArea, m_sessionHistoryDock);
+        m_sessionHistoryDock->hide();
+        connect(m_sessionHistory, &next::HistoryPanel::refreshRequested, this,
+                &MainWindow::refreshSessionHistory);
+        connect(m_sessionHistory, &next::HistoryPanel::restoreRequested, this,
+                [this](const QString& hash, const QString&) {
+                    restoreSessionCommit(hash);
+                });
+        connect(m_sessionHistoryDock, &QDockWidget::visibilityChanged, this,
+                [this](bool visible) {
+                    if (m_historyAction)
+                    {
+                        const QSignalBlocker blocker(m_historyAction);
+                        m_historyAction->setChecked(visible);
+                    }
+                    if (visible)
+                        refreshSessionHistory();
+                });
+    }
+
+    m_mcpStatusButton = new QToolButton(this);
+    m_mcpStatusButton->setObjectName(QStringLiteral("mcpStatusButton"));
+    m_mcpStatusButton->setAutoRaise(true);
+    m_mcpStatusButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_mcpStatusButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_mcpStatusButton, &QToolButton::clicked, this,
+            &MainWindow::showSessionMcpLog);
+    if (m_session)
+        statusBar()->addPermanentWidget(m_mcpStatusButton);
+
+    m_autosaveTimer = new QTimer(this);
+    connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::sessionAutoSave);
+    updateAutosaveTimer();
 
     connect(m_sessionProps, &ProjectPropertiesPanel::settingsChanged, this,
             [this] {
@@ -1110,6 +1215,23 @@ void MainWindow::buildSessionShell()
             m_props->setSelectedUuid(document->selection());
     }
 
+    // P6: MCP endpoint, AI lock and history wiring.  The server itself was
+    // started by EditorSession when the project opened; this connects its
+    // signals to the legacy panels.
+    if (m_session)
+    {
+        if (m_timeline)
+        {
+            m_session->setViewStateExtras([this](mcp2::ViewState& state) {
+                if (m_timeline)
+                    state.viewScale = m_timeline->pixelsPerFrame();
+            });
+        }
+        wireSessionMcpServer();
+        updateSessionMcpStatus();
+        refreshSessionHistory();
+    }
+
     createSessionMenus();
     createSessionToolBar();
     if (m_viewport)
@@ -1132,6 +1254,7 @@ void MainWindow::buildSessionShell()
     refreshSession();
     updateSessionPlaybackUi();
     updateWindowTitle();
+    showSessionOnboardingIfNeeded();
 }
 
 void MainWindow::createSessionMenus()
@@ -1140,11 +1263,13 @@ void MainWindow::createSessionMenus()
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.file"), QStringLiteral("文件")));
 
     auto* newAction = new QAction(QStringLiteral("新建项目…"), this);
+    newAction->setObjectName(QStringLiteral("newProjectAction"));
     newAction->setShortcut(QKeySequence::New);
     connect(newAction, &QAction::triggered, this, &MainWindow::createSessionProject);
     fileMenu->addAction(newAction);
 
     auto* openAction = new QAction(QStringLiteral("打开项目…"), this);
+    openAction->setObjectName(QStringLiteral("openProjectAction"));
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openSessionProject);
     fileMenu->addAction(openAction);
@@ -1222,6 +1347,14 @@ void MainWindow::createSessionMenus()
             m_props->setAutoKey(on);
     });
     editMenu->addAction(m_autoKeyAction);
+    editMenu->addSeparator();
+
+    m_settingsAction = new QAction(QStringLiteral("设置…"), this);
+    m_settingsAction->setObjectName(QStringLiteral("settingsAction"));
+    m_settingsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+,")));
+    connect(m_settingsAction, &QAction::triggered, this,
+            &MainWindow::openSessionSettings);
+    editMenu->addAction(m_settingsAction);
 
     auto* playMenu =
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.play"), QStringLiteral("播放")));
@@ -1314,6 +1447,35 @@ void MainWindow::createSessionMenus()
             m_monitor->setVisibleFromMenu(on);
     });
     viewMenu->addAction(monitorAction);
+
+    m_mcpLogAction = new QAction(QStringLiteral("MCP 日志"), this);
+    m_mcpLogAction->setObjectName(QStringLiteral("mcpLogAction"));
+    m_mcpLogAction->setCheckable(true);
+    connect(m_mcpLogAction, &QAction::toggled, this, [this](bool on) {
+        if (!m_mcpLog)
+            return;
+        if (on)
+            showSessionMcpLog();
+        else if (!m_mcpLog->isDetached())
+            m_mcpLog->hide();
+    });
+    viewMenu->addAction(m_mcpLogAction);
+
+    m_historyAction = new QAction(QStringLiteral("Git 历史"), this);
+    m_historyAction->setObjectName(QStringLiteral("historyAction"));
+    m_historyAction->setCheckable(true);
+    connect(m_historyAction, &QAction::toggled, this, [this](bool on) {
+        if (!m_sessionHistoryDock)
+            return;
+        m_sessionHistoryDock->setVisible(on);
+        if (on)
+        {
+            m_sessionHistoryDock->raise();
+            refreshSessionHistory();
+        }
+    });
+    viewMenu->addAction(m_historyAction);
+
     viewMenu->addAction(m_fitAction);
 
     auto* helpMenu =
@@ -1371,6 +1533,7 @@ void MainWindow::refreshSession()
         if (m_redoAction)
             m_redoAction->setEnabled(document->store()->redoDepth() > 0);
     }
+    updateSessionActionStates();
 }
 
 void MainWindow::sessionGoToFrame(int frame)
@@ -1430,15 +1593,721 @@ void MainWindow::updateSessionStatus()
     }
 
     const bool playing = m_session->playback() && m_session->playback()->isPlaying();
+    QString aiState;
+    if (m_sessionAiStopped)
+        aiState = QStringLiteral(" · AI 已急停");
+    else if (m_sessionAiBusyWrites > 0)
+        aiState = QStringLiteral(" · AI 修改中");
     m_status->setText(
-        QStringLiteral("%1 × %2 @ %3 fps · 帧 %4 / 总长 %5 · %6 · 选中 %7")
+        QStringLiteral("%1 × %2 @ %3 fps · 帧 %4 / 总长 %5 · %6 · 选中 %7%8")
             .arg(settings.width)
             .arg(settings.height)
             .arg(settings.fps)
             .arg(m_session->playhead())
             .arg(totalEnd)
             .arg(playing ? QStringLiteral("播放中") : QStringLiteral("暂停"))
-            .arg(selection));
+            .arg(selection)
+            .arg(aiState));
+}
+
+void MainWindow::wireSessionMcpServer()
+{
+    if (!m_session || !m_session->mcpServer())
+    {
+        updateSessionMcpStatus();
+        return;
+    }
+
+    mcp2::HttpServer* server = m_session->mcpServer();
+    if (m_wiredSessionMcpServer == server)
+        return;
+    m_wiredSessionMcpServer = server;
+
+    connect(server, &mcp2::HttpServer::toolCallStarted, this,
+            &MainWindow::onSessionMcpToolStarted);
+    connect(server, &mcp2::HttpServer::toolCallFinished, this,
+            &MainWindow::onSessionMcpToolFinished);
+    connect(server, &mcp2::HttpServer::stoppedChanged, this,
+            &MainWindow::onSessionMcpStoppedChanged);
+
+    m_sessionAiStopped = server->aiStopped();
+    if (m_mcpLog)
+    {
+        m_mcpLog->setServerState(server->isRunning(), server->port(),
+                                 m_session->mcpError());
+        m_mcpLog->setWritesEnabled(m_session->document()
+                                   && m_session->document()->store()->gitEnabled());
+        m_mcpLog->setAiState(m_sessionAiStopped, false,
+                             m_session->document()
+                                 && m_session->document()->store()->gitEnabled());
+        m_mcpLog->addSystemEvent(
+            server->isRunning() ? QStringLiteral("MCP 已启动")
+                                : QStringLiteral("MCP 启动失败"),
+            server->isRunning()
+                ? QStringLiteral("127.0.0.1:%1").arg(server->port())
+                : m_session->mcpError());
+    }
+    refreshSessionAiLock();
+}
+
+void MainWindow::onSessionMcpToolStarted(const QString& name,
+                                         const QString& argsJson, bool write)
+{
+    ++m_sessionActiveToolCalls;
+    m_sessionRunningToolArgs.insert(name, argsJson);
+    if (write)
+    {
+        ++m_sessionRunningWrites[name];
+        ++m_sessionAiBusyWrites;
+    }
+
+    if (m_mcpLog)
+    {
+        if (m_mcpLog->loggingEnabled() && !m_mcpLog->isVisible())
+            showSessionMcpLog();
+        m_mcpLog->addSystemEvent(QStringLiteral("开始：%1").arg(name), argsJson);
+    }
+    refreshSessionAiLock();
+}
+
+void MainWindow::onSessionMcpToolFinished(const QString& name,
+                                          const QString& resultJson, qint64 ms,
+                                          bool ok)
+{
+    if (m_sessionActiveToolCalls > 0)
+        --m_sessionActiveToolCalls;
+    const QString argsJson = m_sessionRunningToolArgs.take(name);
+    const bool write = mcp2::Service::isWriteTool(name);
+    if (write)
+    {
+        auto it = m_sessionRunningWrites.find(name);
+        if (it != m_sessionRunningWrites.end())
+        {
+            if (--it.value() <= 0)
+                m_sessionRunningWrites.erase(it);
+        }
+        if (m_sessionAiBusyWrites > 0)
+            --m_sessionAiBusyWrites;
+    }
+
+    if (m_mcpLog)
+        m_mcpLog->addToolInvocation(name, argsJson, resultJson, ms, ok);
+
+    // Write tools commit straight through the store.  Reload the document from
+    // disk first so the old timeline/viewport/properties/asset bin/workbench
+    // all see the new bytes.
+    if (write)
+    {
+        refreshSessionAfterExternalChange();
+        refreshSessionHistory();
+        updateSessionSettingsDialogContext();
+    }
+
+    refreshSessionAiLock();
+    statusBar()->showMessage(
+        ok ? QStringLiteral("AI %1 完成（%2 ms）").arg(name).arg(ms)
+           : QStringLiteral("AI %1 失败（%2 ms）").arg(name).arg(ms),
+        5000);
+}
+
+void MainWindow::onSessionMcpStoppedChanged(bool stopped)
+{
+    m_sessionAiStopped = stopped;
+    if (m_mcpLog)
+    {
+        m_mcpLog->addSystemEvent(
+            stopped ? QStringLiteral("AI 已急停")
+                    : QStringLiteral("AI 写入已恢复"));
+    }
+    refreshSessionAiLock();
+    statusBar()->showMessage(
+        stopped ? QStringLiteral("AI 已急停：写入暂停，直到点“恢复”")
+                : QStringLiteral("AI 写入已恢复"),
+        5000);
+}
+
+void MainWindow::refreshSessionAiLock()
+{
+    // An emergency stop deliberately releases human editing even though the
+    // in-flight tool is still unwinding; the Service keeps rejecting AI writes
+    // until resumeAi().  Without a stop, only a running write locks.
+    const bool writing = m_sessionAiBusyWrites > 0 && !m_sessionAiStopped;
+    setHumanEditingEnabled(!writing);
+
+    const bool writesEnabled =
+        m_session && m_session->document()
+        && m_session->document()->store()->gitEnabled();
+    if (m_mcpLog)
+    {
+        m_mcpLog->setWritesEnabled(writesEnabled);
+        m_mcpLog->setAiState(m_sessionAiStopped, writing, writesEnabled);
+    }
+    updateSessionMcpStatus();
+    updateSessionStatus();
+}
+
+void MainWindow::resetSessionAiLock()
+{
+    m_sessionAiStopped = false;
+    m_sessionActiveToolCalls = 0;
+    m_sessionAiBusyWrites = 0;
+    m_sessionRunningWrites.clear();
+    m_sessionRunningToolArgs.clear();
+    refreshSessionAiLock();
+}
+
+void MainWindow::setHumanEditingEnabled(bool enabled)
+{
+    if (m_session)
+        m_session->setHumanEditingEnabled(enabled);
+
+    // Playback, view navigation, the camera monitor and the MCP log stay live
+    // so the human can stop the AI or inspect the timeline while locked.
+    for (QWidget* panel : {static_cast<QWidget*>(m_timeline),
+                           static_cast<QWidget*>(m_props),
+                           static_cast<QWidget*>(m_library),
+                           static_cast<QWidget*>(m_workbench),
+                           static_cast<QWidget*>(m_sessionProps),
+                           static_cast<QWidget*>(m_sessionEnvironment),
+                           static_cast<QWidget*>(m_sessionHistory),
+                           static_cast<QWidget*>(m_sessionSettingsDialog)})
+    {
+        if (panel)
+            panel->setEnabled(enabled);
+    }
+    if (m_viewport)
+        m_viewport->setEditingEnabled(enabled);
+
+    updateSessionActionStates();
+}
+
+void MainWindow::updateSessionActionStates()
+{
+    if (!m_session)
+        return;
+
+    const bool human = m_session->humanEditingEnabled();
+    bool canUndo = false;
+    bool canRedo = false;
+    if (auto* document = m_session->document())
+    {
+        canUndo = document->store()->undoDepth() > 0;
+        canRedo = document->store()->redoDepth() > 0;
+    }
+    if (m_undoAction)
+        m_undoAction->setEnabled(human && canUndo);
+    if (m_redoAction)
+        m_redoAction->setEnabled(human && canRedo);
+    for (const QString& name : {QStringLiteral("saveAction"),
+                                QStringLiteral("newProjectAction"),
+                                QStringLiteral("openProjectAction")})
+    {
+        if (auto* action = findChild<QAction*>(name))
+            action->setEnabled(human);
+    }
+    if (m_settingsAction)
+        m_settingsAction->setEnabled(human);
+}
+
+void MainWindow::refreshSessionAfterExternalChange()
+{
+    if (!m_session || !m_session->document())
+        return;
+
+    QString error;
+    if (!m_session->document()->notifyExternalChange(&error)
+        && !error.isEmpty())
+    {
+        if (m_mcpLog)
+            m_mcpLog->addSystemEvent(QStringLiteral("刷新工程失败"), error);
+        statusBar()->showMessage(
+            QStringLiteral("刷新工程失败：%1").arg(error), 8000);
+    }
+
+    // The whole-frame cache key includes the content hash; dropping it forces a
+    // rescan on the next paint instead of showing stale pre-rendered frames.
+    m_session->invalidateWorkbench();
+    if (m_timeline)
+        m_timeline->refreshFromSession();
+    if (m_library)
+        m_library->refresh();
+    if (m_props)
+        m_props->refresh();
+    if (m_sessionProps)
+        m_sessionProps->refresh();
+    if (m_sessionEnvironment)
+        m_sessionEnvironment->refresh();
+    if (m_workbench)
+        m_workbench->refreshSession();
+    if (m_viewport)
+        m_viewport->refreshSession();
+    if (m_monitor)
+        m_monitor->setProjectChanged();
+    refreshSession();
+}
+
+void MainWindow::updateSessionMcpStatus()
+{
+    if (!m_mcpStatusButton || !m_session)
+        return;
+
+    mcp2::HttpServer* server = m_session->mcpServer();
+    const bool running = server && server->isRunning();
+    const bool writesEnabled =
+        m_session->document() && m_session->document()->store()->gitEnabled();
+    if (running)
+    {
+        if (m_sessionAiStopped)
+            m_mcpStatusButton->setText(QStringLiteral("MCP 已急停 · 日志"));
+        else if (m_sessionAiBusyWrites > 0)
+            m_mcpStatusButton->setText(QStringLiteral("MCP AI 修改中 · 日志"));
+        else if (!writesEnabled)
+            m_mcpStatusButton->setText(QStringLiteral("MCP 只读 · 日志"));
+        else
+            m_mcpStatusButton->setText(QStringLiteral("MCP 已启用 · 日志"));
+        QString tip = QStringLiteral("监听中：%1").arg(server->endpointUrl());
+        tip += writesEnabled ? QStringLiteral("\n可写（Git 已启用）")
+                             : QStringLiteral("\n只读：Git 未启用");
+        if (m_sessionAiStopped)
+            tip += QStringLiteral("\n人类已急停，写操作返回 stopped_by_human");
+        tip += QStringLiteral("\n点击打开 MCP 日志");
+        m_mcpStatusButton->setToolTip(tip);
+    }
+    else
+    {
+        const QString error = m_session->mcpError();
+        m_mcpStatusButton->setText(error.isEmpty()
+                                       ? QStringLiteral("MCP 关闭 · 日志")
+                                       : QStringLiteral("MCP 错误 · 日志"));
+        m_mcpStatusButton->setToolTip(
+            (error.isEmpty() ? QStringLiteral("MCP 未启动")
+                             : QStringLiteral("MCP 启动失败：%1").arg(error))
+            + QStringLiteral("\n点击打开 MCP 日志"));
+    }
+}
+
+void MainWindow::showSessionMcpLog()
+{
+    if (!m_mcpLog)
+        return;
+    m_mcpLog->showFromMenu();
+    arrangeMcpLog();
+}
+
+void MainWindow::wireSessionSettingsDialog(SettingsDialog* dialog)
+{
+    if (!dialog)
+        return;
+
+    connect(dialog, &SettingsDialog::settingsApplied, this, [this, dialog] {
+        if (!m_session)
+            return;
+        applySessionSettings(dialog->appSettings());
+    });
+    connect(dialog, &SettingsDialog::resetMcpTokenRequested, this, [this] {
+        if (!m_session)
+            return;
+        if (m_session->mcpServer())
+            m_session->mcpServer()->resetCredentials();
+        updateSessionSettingsDialogContext();
+        statusBar()->showMessage(
+            QStringLiteral("MCP token 已重置；客户端需重新读取 endpoint 文件"),
+            8000);
+    });
+    connect(dialog, &SettingsDialog::clearHtmlCacheRequested, this, [this] {
+        if (!m_session)
+            return;
+        const QString path =
+            QDir(m_session->root()).filePath(QStringLiteral(".cache/html"));
+        int files = 0;
+        qint64 bytes = 0;
+        if (QFileInfo::exists(path))
+        {
+            QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
+                            QDirIterator::Subdirectories);
+            while (it.hasNext())
+            {
+                it.next();
+                ++files;
+                bytes += it.fileInfo().size();
+            }
+            QDir(path).removeRecursively();
+        }
+        statusBar()->showMessage(
+            QStringLiteral("已清理 HTML 缓存：%1 个文件，%2 MB")
+                .arg(files)
+                .arg(bytes / (1024.0 * 1024.0), 0, 'f', 1),
+            8000);
+    });
+    connect(dialog, &SettingsDialog::chromeDetectRequested, this,
+            [this, dialog] {
+                const QString requested = dialog->appSettings().chromeExecutable;
+                QString found = html::HtmlBrowser::detectExecutable(requested);
+                if (found.isEmpty())
+                    found = html::HtmlBrowser::detectExecutable();
+                if (found.isEmpty())
+                {
+                    statusBar()->showMessage(
+                        QStringLiteral("未找到 Chrome/Chromium，请手动指定路径"),
+                        8000);
+                    return;
+                }
+                next::AppSettings settings = dialog->appSettings();
+                settings.chromeExecutable = found;
+                dialog->setAppSettings(settings);
+                statusBar()->showMessage(
+                    QStringLiteral("已检测到 Chrome：%1").arg(found), 8000);
+            });
+}
+
+void MainWindow::openSessionSettings()
+{
+    if (!m_session || !m_session->settingsStore())
+        return;
+    if (m_sessionSettingsDialog)
+    {
+        m_sessionSettingsDialog->raise();
+        m_sessionSettingsDialog->activateWindow();
+        return;
+    }
+
+    auto* dialog = new SettingsDialog(m_session->settingsStore(), this);
+    dialog->setObjectName(QStringLiteral("settingsDialog"));
+    m_sessionSettingsDialog = dialog;
+    wireSessionSettingsDialog(dialog);
+    updateSessionSettingsDialogContext();
+    connect(dialog, &QObject::destroyed, this, [this] {
+        m_sessionSettingsDialog = nullptr;
+    });
+
+    // Legacy interaction: Edit -> Settings is modal.  Apply still takes effect
+    // immediately, without restarting the window.
+    dialog->exec();
+    applySessionSettings(m_session->settingsStore()->load());
+    dialog->deleteLater();
+    m_sessionSettingsDialog = nullptr;
+}
+
+SettingsDialog* MainWindow::openSessionSettingsDialogForTest()
+{
+    if (!m_session || !m_session->settingsStore())
+        return nullptr;
+    if (m_sessionSettingsDialog)
+        return m_sessionSettingsDialog;
+
+    auto* dialog = new SettingsDialog(m_session->settingsStore(), this);
+    dialog->setObjectName(QStringLiteral("settingsDialogTest"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setModal(false);
+    m_sessionSettingsDialog = dialog;
+    wireSessionSettingsDialog(dialog);
+    updateSessionSettingsDialogContext();
+    connect(dialog, &QObject::destroyed, this, [this] {
+        m_sessionSettingsDialog = nullptr;
+    });
+    dialog->show();
+    return dialog;
+}
+
+void MainWindow::updateSessionSettingsDialogContext()
+{
+    if (!m_session || !m_sessionSettingsDialog)
+        return;
+
+    QString repositoryPath = m_session->root();
+    QString recentCommit;
+    if (m_session->document() && m_session->document()->store()
+        && m_session->document()->store()->gitEnabled())
+    {
+        QString error;
+        const QVector<store::GitCommit> history =
+            m_session->document()->store()->history(1, &error);
+        if (!history.isEmpty())
+            recentCommit = QStringLiteral("%1 %2")
+                               .arg(history.first().hash.left(7),
+                                    history.first().message);
+    }
+    m_sessionSettingsDialog->setGitInfo(repositoryPath, recentCommit);
+
+    mcp2::HttpServer* server = m_session->mcpServer();
+    const bool running = server && server->isRunning();
+    m_sessionSettingsDialog->setEndpointPath(
+        server ? server->endpointFilePath()
+               : SettingsDialog::defaultEndpointPath());
+    m_sessionSettingsDialog->setMcpStatus(
+        running, server ? server->port() : 0,
+        server ? QString::fromLatin1(server->token()) : QString(),
+        m_session->mcpError(),
+        m_session->document() && m_session->document()->store()->gitEnabled());
+}
+
+void MainWindow::applySessionSettings(const next::AppSettings& settings)
+{
+    if (!m_session)
+        return;
+
+    QString error;
+    const bool ok = m_session->applyAppSettings(settings, &error);
+    const next::AppSettings actual = m_session->appSettings();
+
+    if (m_viewport)
+    {
+        m_viewport->setSnapPixels(actual.snapPixels);
+        m_viewport->setEdgeCenterSnap(actual.snapCanvasCenter);
+    }
+    updateAutosaveTimer();
+    if (m_mcpLog)
+    {
+        m_mcpLog->setLoggingEnabled(Settings::mcpLogVisible());
+        m_mcpLog->setWritesEnabled(m_session->document()
+                                   && m_session->document()->store()->gitEnabled());
+    }
+    // A port change rebuilds the listener; reconnect the new instance.
+    wireSessionMcpServer();
+    updateSessionMcpStatus();
+    refreshSessionHistory();
+    updateSessionSettingsDialogContext();
+    if (m_viewport)
+        m_viewport->refreshSession();
+
+    if (!error.isEmpty())
+    {
+        if (m_mcpLog)
+            m_mcpLog->addSystemEvent(QStringLiteral("设置应用失败"), error);
+        statusBar()->showMessage(QStringLiteral("设置应用失败：%1").arg(error),
+                                 8000);
+    }
+    else if (!m_session->mcpError().isEmpty())
+    {
+        if (m_mcpLog)
+            m_mcpLog->addSystemEvent(QStringLiteral("MCP 启动失败"),
+                                     m_session->mcpError());
+        statusBar()->showMessage(
+            QStringLiteral("设置已保存，但 MCP 启动失败：%1")
+                .arg(m_session->mcpError()),
+            8000);
+    }
+    else
+    {
+        statusBar()->showMessage(ok ? QStringLiteral("设置已应用")
+                                    : QStringLiteral("设置已保存"),
+                                 3000);
+    }
+    updateSessionStatus();
+}
+
+void MainWindow::refreshSessionHistory()
+{
+    if (!m_sessionHistory)
+        return;
+
+    if (!m_session || !m_session->document())
+    {
+        m_sessionHistory->setCommits({});
+        m_sessionHistory->setStatus(QStringLiteral("未打开工程"));
+        return;
+    }
+    store::ProjectStore* projectStore = m_session->document()->store();
+    if (!projectStore || !projectStore->gitEnabled())
+    {
+        m_sessionHistory->setCommits({});
+        m_sessionHistory->setStatus(QStringLiteral("Git 未启用"));
+        return;
+    }
+
+    QString error;
+    const QVector<store::GitCommit> commits = projectStore->history(200, &error);
+    if (!error.isEmpty())
+    {
+        m_sessionHistory->setCommits({});
+        m_sessionHistory->setStatus(
+            QStringLiteral("读取历史失败：%1").arg(error));
+        return;
+    }
+    m_sessionHistory->setCommits(commits);
+    m_sessionHistory->setStatus(
+        commits.isEmpty() ? QStringLiteral("还没有提交")
+                          : QStringLiteral("%1 个提交").arg(commits.size()));
+}
+
+bool MainWindow::restoreSessionCommitInternal(const QString& hash,
+                                              QString* error)
+{
+    if (error)
+        error->clear();
+    if (!m_session || !m_session->document())
+    {
+        if (error)
+            *error = QStringLiteral("没有打开的工程");
+        return false;
+    }
+    store::ProjectStore* projectStore = m_session->document()->store();
+    if (!projectStore || !projectStore->gitEnabled())
+    {
+        if (error)
+            *error = QStringLiteral("Git 未启用");
+        return false;
+    }
+
+    QString flushError;
+    if (m_session->document()->hasPendingCommit())
+        m_session->document()->flush(&flushError);
+    if (!flushError.isEmpty())
+    {
+        if (error)
+            *error = flushError;
+        return false;
+    }
+    if (!projectStore->restoreCommit(hash, error))
+        return false;
+
+    m_session->document()->reloadAfterHistory(error);
+    refreshSessionAfterExternalChange();
+    refreshSessionHistory();
+    return true;
+}
+
+void MainWindow::restoreSessionCommit(const QString& hash)
+{
+    if (!m_session || !m_session->humanEditingEnabled())
+        return;
+    if (m_sessionHistory)
+        m_sessionHistory->setBusy(true);
+
+    QMessageBox box(QMessageBox::Question, QStringLiteral("恢复 Git 历史"),
+                    QStringLiteral("恢复到 %1？会丢弃当前未提交文本。")
+                        .arg(hash.left(7)),
+                    QMessageBox::NoButton, this);
+    QPushButton* restore =
+        box.addButton(QStringLiteral("恢复"), QMessageBox::AcceptRole);
+    QPushButton* cancel =
+        box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(cancel);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    QString error;
+    const bool ok = box.clickedButton() == restore
+                    && restoreSessionCommitInternal(hash, &error);
+    if (m_sessionHistory)
+        m_sessionHistory->setBusy(false);
+    if (!ok)
+    {
+        if (!error.isEmpty())
+            statusBar()->showMessage(
+                QStringLiteral("恢复失败：%1").arg(error), 8000);
+        return;
+    }
+    statusBar()->showMessage(
+        QStringLiteral("已恢复到 %1").arg(hash.left(7)), 5000);
+    if (m_mcpLog)
+        m_mcpLog->addSystemEvent(
+            QStringLiteral("恢复历史"),
+            QStringLiteral("已恢复到 %1").arg(hash.left(7)));
+}
+
+bool MainWindow::restoreSessionCommitForTest(const QString& hash,
+                                             QString* error)
+{
+    return restoreSessionCommitInternal(hash, error);
+}
+
+void MainWindow::showSessionOnboardingIfNeeded()
+{
+    if (!m_session || m_session->appSettings().onboardingDone)
+        return;
+
+    // Tests must never block on the first-run dialog; the setting stays
+    // untouched so the test can drive it explicitly.
+    for (const QString& argument : QCoreApplication::arguments())
+    {
+        if (argument.endsWith(QStringLiteral("-test")))
+            return;
+    }
+
+    auto* dialog = new next::OnboardingDialog(m_session->appSettings(), this);
+    dialog->setObjectName(QStringLiteral("onboardingDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setModal(false);
+    connect(dialog, &QDialog::accepted, this, [this, dialog] {
+        next::AppSettings settings = m_session->appSettings();
+        settings.gitEnabled = dialog->gitEnabled();
+        settings.onboardingDone = true;
+        applySessionSettings(settings);
+    });
+    connect(dialog, &QDialog::rejected, this, [this] {
+        next::AppSettings settings = m_session->appSettings();
+        settings.onboardingDone = true;
+        applySessionSettings(settings);
+    });
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void MainWindow::sessionAutoSave()
+{
+    if (!m_session || !m_session->document())
+        return;
+    if (!m_session->document()->hasPendingCommit())
+        return;
+
+    QString error;
+    m_session->flush(&error);
+    if (!error.isEmpty())
+    {
+        statusBar()->showMessage(
+            QStringLiteral("自动保存失败：%1").arg(error), 8000);
+        return;
+    }
+    m_session->savePlayhead();
+    statusBar()->showMessage(QStringLiteral("已自动保存"), 3000);
+}
+
+void MainWindow::triggerSessionAutoSaveForTest()
+{
+    sessionAutoSave();
+}
+
+void MainWindow::showMcpLogForTest()
+{
+    showSessionMcpLog();
+}
+
+QString MainWindow::mcpStatusTextForTest() const
+{
+    return m_mcpStatusButton ? m_mcpStatusButton->text() : QString();
+}
+
+bool MainWindow::humanEditingEnabledForTest() const
+{
+    return m_session ? m_session->humanEditingEnabled() : true;
+}
+
+bool MainWindow::openSessionProjectForTest(const QString& path, QString* error)
+{
+    const bool useGit = m_session ? m_session->appSettings().gitEnabled
+                                  : next::SettingsStore().load().gitEnabled;
+    if (m_session)
+    {
+        m_session->stopMcpServer();
+        m_wiredSessionMcpServer = nullptr;
+    }
+    auto session = openSessionProjectWithRecovery(
+        path, useGit, m_crashRecoveryHandler, this, error);
+    if (!session)
+    {
+        if (m_session)
+        {
+            m_session->restartMcpServer();
+            wireSessionMcpServer();
+        }
+        return false;
+    }
+    rememberRecentProject(session->root());
+    showSessionWindow(std::move(session));
+    close();
+    return true;
 }
 
 bool MainWindow::saveSessionProject()
@@ -1458,6 +2327,103 @@ bool MainWindow::saveSessionProject()
     return true;
 }
 
+namespace {
+
+SessionCrashRecoveryChoice askSessionCrashRecovery(
+    const QVector<store::DirtyText>& dirty, QWidget* parent)
+{
+    QStringList lines;
+    const int shown = std::min<int>(dirty.size(), 20);
+    for (int i = 0; i < shown; ++i)
+        lines << QStringLiteral("%1（%2）").arg(dirty.at(i).path, dirty.at(i).status);
+    if (dirty.size() > shown)
+        lines << QStringLiteral("...等 %1 个文件").arg(dirty.size());
+
+    QMessageBox box(
+        QMessageBox::Question, QStringLiteral("发现未提交的文本改动"),
+        QStringLiteral("工程中有 %1 个未提交的文本文件，可能来自上次异常退出：\n\n"
+                       "%2\n\n请选择如何处理这些改动。")
+            .arg(dirty.size())
+            .arg(lines.join(QLatin1Char('\n'))),
+        QMessageBox::NoButton, parent);
+    QPushButton* restore =
+        box.addButton(QStringLiteral("恢复并打开"), QMessageBox::AcceptRole);
+    QPushButton* discard =
+        box.addButton(QStringLiteral("丢弃未提交文本"), QMessageBox::DestructiveRole);
+    QPushButton* commit =
+        box.addButton(QStringLiteral("提交为恢复点"), QMessageBox::ActionRole);
+    QPushButton* cancel =
+        box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(restore);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    if (box.clickedButton() == restore)
+        return SessionCrashRecoveryChoice::Restore;
+    if (box.clickedButton() == discard)
+        return SessionCrashRecoveryChoice::Discard;
+    if (box.clickedButton() == commit)
+        return SessionCrashRecoveryChoice::Commit;
+    return SessionCrashRecoveryChoice::Cancel;
+}
+
+} // namespace
+
+std::unique_ptr<EditorSession> openSessionProjectWithRecovery(
+    const QString& path, bool useGit, const SessionCrashRecoveryHandler& handler,
+    QWidget* parent, QString* error)
+{
+    auto session = EditorSession::openProject(path, error, useGit);
+    if (!session)
+        return nullptr;
+
+    const QVector<store::DirtyText> dirty =
+        session->document()->store()->dirtyText();
+    if (dirty.isEmpty())
+        return session;
+
+    const SessionCrashRecoveryChoice choice =
+        handler ? handler(dirty) : askSessionCrashRecovery(dirty, parent);
+    QString recoveryError;
+    switch (choice)
+    {
+    case SessionCrashRecoveryChoice::Restore:
+        // The store already loaded the working tree, so keeping it is the
+        // restore action.
+        break;
+    case SessionCrashRecoveryChoice::Discard:
+        if (!session->document()->store()->discardDirtyText(&recoveryError)
+            || !session->document()->store()->reloadAfterDiscard(&recoveryError))
+        {
+            if (error)
+                *error = QStringLiteral("丢弃未提交文本失败：%1")
+                             .arg(recoveryError.isEmpty()
+                                      ? QStringLiteral("未知错误")
+                                      : recoveryError);
+            return nullptr;
+        }
+        session->document()->reloadAfterHistory(&recoveryError);
+        break;
+    case SessionCrashRecoveryChoice::Commit:
+        if (!session->document()->store()->commitRecoveredText(&recoveryError))
+        {
+            if (error)
+                *error = QStringLiteral("提交未提交文本失败：%1")
+                             .arg(recoveryError.isEmpty()
+                                      ? QStringLiteral("未知错误")
+                                      : recoveryError);
+            return nullptr;
+        }
+        break;
+    case SessionCrashRecoveryChoice::Cancel:
+        // Not an error: the caller suppresses an empty error message.
+        if (error)
+            error->clear();
+        return nullptr;
+    }
+    return session;
+}
+
 void MainWindow::openSessionProject()
 {
     const QString path = QFileDialog::getExistingDirectory(
@@ -1466,11 +2432,25 @@ void MainWindow::openSessionProject()
     if (path.isEmpty())
         return;
 
+    const bool useGit = m_session ? m_session->appSettings().gitEnabled
+                                  : next::SettingsStore().load().gitEnabled;
+    if (m_session)
+    {
+        m_session->stopMcpServer();
+        m_wiredSessionMcpServer = nullptr;
+    }
     QString error;
-    auto session = EditorSession::openProject(path, &error);
+    auto session = openSessionProjectWithRecovery(
+        path, useGit, m_crashRecoveryHandler, this, &error);
     if (!session)
     {
-        QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
+        if (m_session)
+        {
+            m_session->restartMcpServer();
+            wireSessionMcpServer();
+        }
+        if (!error.isEmpty())
+            QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
         return;
     }
 
@@ -1502,9 +2482,21 @@ void MainWindow::createSessionProject()
     settings.fps = dialog.frameRate();
 
     QString error;
-    auto session = EditorSession::createProject(path, settings, &error);
+    const bool useGit = m_session ? m_session->appSettings().gitEnabled
+                                  : next::SettingsStore().load().gitEnabled;
+    if (m_session)
+    {
+        m_session->stopMcpServer();
+        m_wiredSessionMcpServer = nullptr;
+    }
+    auto session = EditorSession::createProject(path, settings, &error, useGit);
     if (!session)
     {
+        if (m_session)
+        {
+            m_session->restartMcpServer();
+            wireSessionMcpServer();
+        }
         QMessageBox::warning(this, QStringLiteral("无法创建项目"), error);
         return;
     }
@@ -1940,6 +2932,11 @@ bool MainWindow::saveProject()
 
 void MainWindow::autoSave()
 {
+    if (m_session)
+    {
+        sessionAutoSave();
+        return;
+    }
     if (!Settings::autosaveEnabled() || m_project->filePath.isEmpty()
         || !m_project->modified)
         return;
@@ -1960,6 +2957,13 @@ void MainWindow::updateAutosaveTimer()
 {
     if (!m_autosaveTimer)
         return;
+    if (m_session)
+    {
+        const int minutes =
+            std::clamp(m_session->appSettings().autoSaveMinutes, 1, 60);
+        m_autosaveTimer->start(minutes * 60 * 1000);
+        return;
+    }
     if (!Settings::autosaveEnabled())
     {
         m_autosaveTimer->stop();
@@ -3106,6 +4110,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
         if (!error.isEmpty())
             statusBar()->showMessage(
                 QStringLiteral("关闭时提交失败：%1").arg(error), 5000);
+        // Free the fixed MCP port before a project switch constructs the next
+        // session (the new listener binds the same configured port).
+        m_session->stopMcpServer();
+        m_wiredSessionMcpServer = nullptr;
         event->accept();
         return;
     }

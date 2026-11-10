@@ -753,6 +753,14 @@ QWidget* WorkbenchPanel::buildSessionSpecialPage()
     return page;
 }
 
+void WorkbenchPanel::refreshSession()
+{
+    if (!m_session)
+        return;
+    refreshMediaLibrary();
+    updateSessionWallSummary();
+}
+
 void WorkbenchPanel::updateSessionWallSummary()
 {
     if (!m_wallSummary)

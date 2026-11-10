@@ -3095,29 +3095,32 @@ void Viewport::mousePressEvent(QMouseEvent* event)
 
         // The camera frame is selected through its border/title; clicks inside
         // pass through to the scene so entities remain editable.
-        if (handleSessionCameraPress(event))
+        if (m_editingEnabled && handleSessionCameraPress(event))
         {
             update();
             return;
         }
 
-        if (const auto handle = hitSessionGizmo(event->position()))
+        if (m_editingEnabled)
         {
-            const SessionDragKind kind =
-                *handle == gizmo::Handle::MoveX ? SessionDragKind::MoveX
-                : *handle == gizmo::Handle::MoveY ? SessionDragKind::MoveY
-                : *handle == gizmo::Handle::CenterScale
-                    ? SessionDragKind::CenterScale
-                : *handle == gizmo::Handle::ScaleTopLeft
-                          || *handle == gizmo::Handle::ScaleTopRight
-                          || *handle == gizmo::Handle::ScaleBottomRight
-                          || *handle == gizmo::Handle::ScaleBottomLeft
-                    ? SessionDragKind::Scale
-                    : SessionDragKind::Rotate;
-            startSessionGizmoDrag(m_session->document()->selection(), kind,
-                                  *handle, event->position());
-            update();
-            return;
+            if (const auto handle = hitSessionGizmo(event->position()))
+            {
+                const SessionDragKind kind =
+                    *handle == gizmo::Handle::MoveX ? SessionDragKind::MoveX
+                    : *handle == gizmo::Handle::MoveY ? SessionDragKind::MoveY
+                    : *handle == gizmo::Handle::CenterScale
+                        ? SessionDragKind::CenterScale
+                    : *handle == gizmo::Handle::ScaleTopLeft
+                              || *handle == gizmo::Handle::ScaleTopRight
+                              || *handle == gizmo::Handle::ScaleBottomRight
+                              || *handle == gizmo::Handle::ScaleBottomLeft
+                        ? SessionDragKind::Scale
+                        : SessionDragKind::Rotate;
+                startSessionGizmoDrag(m_session->document()->selection(), kind,
+                                      *handle, event->position());
+                update();
+                return;
+            }
         }
 
         const model::Entity* hit = hitTestSession(event->position());
@@ -3126,7 +3129,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
             if (m_session->document())
                 m_session->document()->setSelection(hit->uuid);
             emit uuidSelected(hit->uuid);
-            if (!hit->locked)
+            if (m_editingEnabled && !hit->locked)
                 startSessionGizmoDrag(hit->uuid, SessionDragKind::Move,
                                       gizmo::Handle::MoveX, event->position());
         }

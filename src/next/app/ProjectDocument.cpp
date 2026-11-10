@@ -29,6 +29,16 @@ void setError(QString* error, const QString& message)
         *error = message;
 }
 
+// Human edit lock shared by every Document write entry point.  The message is
+// deliberately actionable: the user can wait for the AI tool or press 急停.
+bool ensureHumanWrites(bool enabled, QString* error)
+{
+    if (enabled)
+        return true;
+    setError(error, QStringLiteral("AI 正在修改工程，请稍后再编辑，或先按“急停”"));
+    return false;
+}
+
 // Validates the project as it will exist after the write.  Upserts are already
 // present in the in-memory project; deletes are removed from a copy first.
 bool validateForWrite(const model::Project& project,
@@ -170,6 +180,8 @@ bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
                                    QString* error)
 {
     Q_UNUSED(message);
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     if (!validateForWrite(m_store->project(), {uuid}, {}, error))
         return false;
     if (!m_store->saveEntity(uuid, error))
@@ -183,6 +195,8 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     if (!validateForWrite(m_store->project(), uuids, {}, error))
         return false;
     for (const Uuid& uuid : uuids)
@@ -199,6 +213,8 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     if (!validateForWrite(m_store->project(), {}, uuids, error))
         return false;
     for (const Uuid& uuid : uuids)
@@ -219,6 +235,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
                                     QString* error)
 {
     Q_UNUSED(message);
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     if (!validateForWrite(m_store->project(), upserts, deletes, error))
         return false;
     for (const Uuid& uuid : upserts)
@@ -241,6 +259,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
     Q_UNUSED(message);
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     if (!validateForWrite(m_store->project(), {}, {}, error))
         return false;
     if (!m_store->saveProject(error))
@@ -295,6 +315,8 @@ int ProjectDocument::humanCommitDelayMs() const
 
 bool ProjectDocument::undo(QString* error)
 {
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     // Do not flush the pending edit first: Ctrl+Z applies the last memory
     // snapshot and drops the debounce. If undo itself fails, keep the pending
     // edit alive so it can still reach git later.
@@ -321,6 +343,8 @@ bool ProjectDocument::undo(QString* error)
 
 bool ProjectDocument::redo(QString* error)
 {
+    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
     const bool wasPending = m_pendingCommit;
     m_commitTimer.stop();
     m_pendingCommit = false;

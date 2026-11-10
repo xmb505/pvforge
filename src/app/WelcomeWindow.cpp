@@ -4,7 +4,10 @@
 #include "MainWindow.h"
 #include "NewProjectDialog.h"
 #include "model/Project.h"
+#include "next/settings/OnboardingDialog.h"
+#include "next/settings/SettingsStore.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -16,6 +19,25 @@
 #include <QVBoxLayout>
 
 namespace pvf {
+
+namespace {
+
+bool settingsGitEnabled()
+{
+    return next::SettingsStore().load().gitEnabled;
+}
+
+bool runningUnderTest()
+{
+    for (const QString& argument : QCoreApplication::arguments())
+    {
+        if (argument.endsWith(QStringLiteral("-test")))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
 
 WelcomeWindow::WelcomeWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -83,6 +105,34 @@ WelcomeWindow::WelcomeWindow(QWidget* parent)
 
     setCentralWidget(central);
     refreshRecent();
+
+    // First-run Git onboarding.  It only records the human's choice; the
+    // project shell applies it when the first project opens.
+    next::SettingsStore store;
+    const next::AppSettings settings = store.load();
+    if (!settings.onboardingDone && !runningUnderTest())
+    {
+        auto* dialog = new next::OnboardingDialog(settings, this);
+        dialog->setObjectName(QStringLiteral("onboardingDialog"));
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setModal(false);
+        connect(dialog, &QDialog::accepted, this, [dialog] {
+            next::SettingsStore store;
+            next::AppSettings settings = store.load();
+            settings.gitEnabled = dialog->gitEnabled();
+            settings.onboardingDone = true;
+            store.save(settings);
+        });
+        connect(dialog, &QDialog::rejected, this, [] {
+            next::SettingsStore store;
+            next::AppSettings settings = store.load();
+            settings.onboardingDone = true;
+            store.save(settings);
+        });
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    }
 }
 
 void WelcomeWindow::refreshRecent()
@@ -111,10 +161,12 @@ void WelcomeWindow::refreshRecent()
 void WelcomeWindow::openProject(const QString& path)
 {
     QString error;
-    auto session = EditorSession::openProject(path, &error);
+    auto session = openSessionProjectWithRecovery(
+        path, settingsGitEnabled(), SessionCrashRecoveryHandler{}, this, &error);
     if (!session)
     {
-        QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
+        if (!error.isEmpty())
+            QMessageBox::warning(this, QStringLiteral("无法打开项目"), error);
         refreshRecent();
         return;
     }
@@ -153,7 +205,8 @@ void WelcomeWindow::createProject()
     settings.fps = dialog.frameRate();
 
     QString error;
-    auto session = EditorSession::createProject(path, settings, &error);
+    auto session = EditorSession::createProject(path, settings, &error,
+                                                settingsGitEnabled());
     if (!session)
     {
         QMessageBox::warning(this, QStringLiteral("无法创建项目"), error);

@@ -28,6 +28,10 @@ public:
     explicit McpLogPanel(QWidget* viewport, QWidget* parent = nullptr);
 
     void setServerState(bool running, quint16 port, const QString& error = QString());
+    // AI write guard: stopped wins over busy.  writesEnabled mirrors the Git
+    // prerequisite and turns the header into "只读".
+    void setAiState(bool stopped, bool busy, bool writesEnabled = true);
+    void setWritesEnabled(bool enabled);
     void setLoggingEnabled(bool on);
     bool loggingEnabled() const { return m_loggingEnabled; }
 
@@ -51,8 +55,12 @@ public:
 
 signals:
     void entityActivated(EntityId id);
+    // New-model tool calls carry UUIDs; the old int signal stays for the
+    // legacy core::Project shell.
+    void entityUuidActivated(const QString& uuid);
     void frameRequested(int frame);
     void stopAiRequested();
+    void resumeAiRequested();
     void visibilityChanged(bool visible);
 
 protected:
@@ -85,6 +93,7 @@ private:
     QToolButton* m_detachButton = nullptr;
     QToolButton* m_closeButton = nullptr;
     QToolButton* m_stopButton = nullptr;
+    QToolButton* m_resumeButton = nullptr;
     QToolButton* m_clearButton = nullptr;
 
     bool m_detached = false;
@@ -96,6 +105,9 @@ private:
     bool m_serverRunning = false;
     bool m_armed = false;
     bool m_stopped = false;
+    bool m_aiBusy = false;
+    bool m_writesEnabled = false;
+    bool m_aiMode = false;
     quint16 m_serverPort = 0;
     QString m_serverError;
     QString m_sceneName;
