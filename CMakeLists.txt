@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.21)
 
 project(PVForge VERSION 0.2.0 DESCRIPTION "2D music PV editor with a Mine-imator style animation workflow" LANGUAGES CXX)
 
+# Enable testing at the top level so `ctest` in the build root discovers the
+# add_test() calls registered by the module subdirectories. Enabling it only in
+# subdirectories writes their CTestTestfile.cmake but leaves the build root
+# without one, so a root-level ctest reports zero tests.
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
