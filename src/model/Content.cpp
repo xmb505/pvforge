@@ -2,6 +2,8 @@
 
 #include "JsonUtil.h"
 
+#include <QRegularExpression>
+
 #include <cmath>
 
 namespace pvf::model {
@@ -28,6 +30,8 @@ std::optional<ContentKind> contentKindFromName(const QString& name)
         return ContentKind::FlowLines;
     if (name == QLatin1String("halftoneDots"))
         return ContentKind::HalftoneDots;
+    if (name == QLatin1String("brandWall"))
+        return ContentKind::BrandWall;
     return std::nullopt;
 }
 
@@ -40,6 +44,15 @@ bool isComicShape(const QString& name)
 bool isHalftoneLayout(const QString& name)
 {
     return name == QLatin1String("grid") || name == QLatin1String("radial");
+}
+
+// Colours stay plain strings in the model, which links only QtCore.  #rgb,
+// #rrggbb and #aarrggbb match what QColor accepts for wall colours.
+bool isColorValue(const QString& value)
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"));
+    return pattern.match(value).hasMatch();
 }
 
 bool finiteNumber(double value, const QString& label, QString* error)
@@ -370,6 +383,44 @@ HalftoneDotsContent halftoneFromJson(const QJsonObject& object)
     return halftone;
 }
 
+QJsonObject brandWallToJson(const BrandWallContent& wall)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("logos"), QJsonArray::fromStringList(wall.logos));
+    object.insert(QStringLiteral("columns"), wall.columns);
+    object.insert(QStringLiteral("rows"), wall.rows);
+    object.insert(QStringLiteral("spacing"), wall.spacing);
+    object.insert(QStringLiteral("logoSize"), wall.logoSize);
+    object.insert(QStringLiteral("colors"), QJsonArray::fromStringList(wall.colors));
+    object.insert(QStringLiteral("alternate"), wall.alternate);
+    object.insert(QStringLiteral("angle"), wall.angle);
+    object.insert(QStringLiteral("background"), wall.background);
+    object.insert(QStringLiteral("seed"), wall.seed);
+    return object;
+}
+
+BrandWallContent brandWallFromJson(const QJsonObject& object)
+{
+    BrandWallContent wall;
+    wall.logos = detail::jsonStringList(object, QStringLiteral("logos"));
+    wall.columns = detail::jsonInt(
+        object, QStringLiteral("columns"), wall.columns);
+    wall.rows = detail::jsonInt(object, QStringLiteral("rows"), wall.rows);
+    wall.spacing = detail::jsonDouble(
+        object, QStringLiteral("spacing"), wall.spacing);
+    wall.logoSize = detail::jsonDouble(
+        object, QStringLiteral("logoSize"), wall.logoSize);
+    wall.colors = detail::jsonStringList(object, QStringLiteral("colors"));
+    wall.alternate = detail::jsonBool(
+        object, QStringLiteral("alternate"), wall.alternate);
+    wall.angle = detail::jsonDouble(
+        object, QStringLiteral("angle"), wall.angle);
+    wall.background = detail::jsonString(
+        object, QStringLiteral("background"), wall.background);
+    wall.seed = detail::jsonInt(object, QStringLiteral("seed"), wall.seed);
+    return wall;
+}
+
 } // namespace
 
 QJsonObject toJson(const Transform& transform)
@@ -447,6 +498,10 @@ QJsonObject toJson(const Content& content)
     case ContentKind::HalftoneDots:
         object.insert(QStringLiteral("halftoneDots"),
                       halftoneToJson(content.halftone));
+        break;
+    case ContentKind::BrandWall:
+        object.insert(QStringLiteral("brandWall"),
+                      brandWallToJson(content.brandWall));
         break;
     }
     return object;
@@ -566,6 +621,17 @@ std::optional<Content> contentFromJson(const QJsonObject& object,
             return std::nullopt;
         }
         content.halftone = halftoneFromJson(value.toObject());
+        break;
+    }
+    case ContentKind::BrandWall:
+    {
+        const QJsonValue value = object.value(QStringLiteral("brandWall"));
+        if (!value.isUndefined() && !value.isNull() && !value.isObject())
+        {
+            detail::setError(error, QStringLiteral("brandWall 必须是对象"));
+            return std::nullopt;
+        }
+        content.brandWall = brandWallFromJson(value.toObject());
         break;
     }
     }
@@ -763,6 +829,81 @@ bool validateContent(const Content& content, QString* error)
                              QStringLiteral("点阵过密：area/spacing 不能超过 "
                                             "512（当前 %1）")
                                  .arg(halftone.area / halftone.spacing));
+            return false;
+        }
+        return true;
+    }
+
+    case ContentKind::BrandWall:
+    {
+        const BrandWallContent& wall = content.brandWall;
+        if (wall.columns < 1 || wall.columns > 64)
+        {
+            detail::setError(error,
+                             QStringLiteral("品牌墙 columns 必须在 1..64 之间"
+                                            "（当前 %1）")
+                                 .arg(wall.columns));
+            return false;
+        }
+        if (wall.rows < 1 || wall.rows > 64)
+        {
+            detail::setError(error,
+                             QStringLiteral("品牌墙 rows 必须在 1..64 之间"
+                                            "（当前 %1）")
+                                 .arg(wall.rows));
+            return false;
+        }
+        if (!numberInRange(wall.spacing, 0.0, 512.0,
+                           QStringLiteral("品牌墙 spacing"), error))
+            return false;
+        if (!numberInRange(wall.logoSize, 1.0, 1024.0,
+                           QStringLiteral("品牌墙 logoSize"), error))
+            return false;
+        if (!numberInRange(wall.angle, -360.0, 360.0,
+                           QStringLiteral("品牌墙 angle"), error))
+            return false;
+        if (wall.logos.size() > 64)
+        {
+            detail::setError(error,
+                             QStringLiteral("品牌墙 logos 最多 64 个（当前 %1）")
+                                 .arg(wall.logos.size()));
+            return false;
+        }
+        for (const QString& logo : wall.logos)
+        {
+            if (logo.isEmpty() || logo.size() > 128)
+            {
+                detail::setError(error,
+                                 QStringLiteral("品牌墙 logos 每项必须在 "
+                                                "1..128 字之间"));
+                return false;
+            }
+        }
+        if (wall.colors.isEmpty())
+        {
+            detail::setError(error,
+                             QStringLiteral("品牌墙 colors 至少需要一个颜色"));
+            return false;
+        }
+        for (const QString& color : wall.colors)
+        {
+            if (!isColorValue(color))
+            {
+                detail::setError(error,
+                                 QStringLiteral("品牌墙 colors 颜色非法：%1"
+                                                "（需 #rgb、#rrggbb 或 "
+                                                "#aarrggbb）")
+                                     .arg(color));
+                return false;
+            }
+        }
+        if (!wall.background.isEmpty() && !isColorValue(wall.background))
+        {
+            detail::setError(error,
+                             QStringLiteral("品牌墙 background 颜色非法：%1"
+                                            "（需 #rgb、#rrggbb 或 "
+                                            "#aarrggbb）")
+                                 .arg(wall.background));
             return false;
         }
         return true;

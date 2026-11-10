@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QPointF>
 #include <QString>
+#include <QStringList>
 
 #include <optional>
 
@@ -146,6 +147,29 @@ struct HalftoneDotsContent
     int seed = 1;
 };
 
+// Press-conference backdrop: a grid of coloured tiles, each showing one of
+// several logo labels.  Tiles are `logoSize` square with `spacing` between
+// them; `alternate` offsets the colour/logo slot on every other row
+// (checkerboard), otherwise slots run left-to-right then top-to-bottom.
+// `background` is an optional colour (empty = transparent).
+struct BrandWallContent
+{
+    QStringList logos;
+    int columns = 6;
+    int rows = 4;
+    double spacing = 8.0;
+    double logoSize = 200.0;
+    QStringList colors = {
+        QStringLiteral("#d246a0"), QStringLiteral("#e8e8ee"),
+        QStringLiteral("#4082b4"), QStringLiteral("#e6c878"),
+        QStringLiteral("#5aa078"), QStringLiteral("#966eb4"),
+    };
+    bool alternate = true;
+    double angle = 0.0;
+    QString background;
+    int seed = 1;
+};
+
 struct Content
 {
     ContentKind kind = ContentKind::Empty;
@@ -157,6 +181,7 @@ struct Content
     RadialLinesContent radial;
     FlowLinesContent flow;
     HalftoneDotsContent halftone;
+    BrandWallContent brandWall;
 };
 
 QJsonObject toJson(const Transform& transform);

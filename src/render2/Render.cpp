@@ -848,6 +848,97 @@ void paintHalftoneDots(QPainter& painter,
     painter.restore();
 }
 
+void paintBrandWall(QPainter& painter, const model::BrandWallContent& wall)
+{
+    if (wall.columns <= 0 || wall.rows <= 0 || wall.logoSize <= 0.0)
+        return;
+
+    const double spacing = std::max(0.0, wall.spacing);
+    const double cell = wall.logoSize;
+    const double width =
+        wall.columns * cell + std::max(0, wall.columns - 1) * spacing;
+    const double height =
+        wall.rows * cell + std::max(0, wall.rows - 1) * spacing;
+    const QRectF bounds(-width / 2.0, -height / 2.0, width, height);
+
+    QVector<QColor> colors;
+    colors.reserve(wall.colors.size());
+    for (const QString& value : wall.colors)
+    {
+        const QColor color(value);
+        if (color.isValid())
+            colors.append(color);
+    }
+    if (colors.isEmpty())
+        colors.append(QColor(210, 70, 160));
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.rotate(wall.angle);
+
+    const QColor background(wall.background);
+    if (!wall.background.isEmpty() && background.isValid()
+        && background.alpha() > 0)
+        painter.fillRect(bounds, background);
+
+    painter.setClipRect(bounds, Qt::IntersectClip);
+
+    QFont font;
+    font.setBold(true);
+    const int basePixel =
+        std::clamp(int(std::lround(cell * 0.32)), 4, 512);
+    font.setPixelSize(basePixel);
+
+    const double step = cell + spacing;
+    for (int row = 0; row < wall.rows; ++row)
+    {
+        for (int column = 0; column < wall.columns; ++column)
+        {
+            const QRectF tile(bounds.left() + column * step,
+                              bounds.top() + row * step, cell, cell);
+            const int slot = wall.alternate ? row + column
+                                            : row * wall.columns + column;
+            const QColor color = colors.at(slot % colors.size());
+            painter.fillRect(tile, color);
+
+            if (wall.logos.isEmpty())
+                continue;
+
+            const int logoCount = wall.logos.size();
+            int logoIndex =
+                int((qint64(slot) + qint64(wall.seed)) % logoCount);
+            if (logoIndex < 0)
+                logoIndex += logoCount;
+            const QString& label = wall.logos.at(logoIndex);
+            if (label.isEmpty())
+                continue;
+
+            QFont tileFont = font;
+            QFontMetricsF metrics(tileFont);
+            const double availableWidth = std::max(1.0, cell * 0.84);
+            const double availableHeight = std::max(1.0, cell * 0.84);
+            const double textWidth =
+                std::max(1.0, metrics.horizontalAdvance(label));
+            const double textHeight = std::max(1.0, metrics.height());
+            if (textWidth > availableWidth || textHeight > availableHeight)
+            {
+                const double scale = std::min(
+                    availableWidth / textWidth, availableHeight / textHeight);
+                tileFont.setPixelSize(std::max(
+                    3, int(std::floor(basePixel * scale))));
+            }
+
+            painter.save();
+            painter.setClipRect(tile, Qt::IntersectClip);
+            painter.setFont(tileFont);
+            painter.setPen(qGray(color.rgb()) > 150 ? Qt::black : Qt::white);
+            painter.drawText(tile, Qt::AlignCenter | Qt::TextWordWrap, label);
+            painter.restore();
+        }
+    }
+    painter.restore();
+}
+
 void paintContent(QPainter& painter, const model::Entity& entity,
                   const assets::AssetStore& store, const Options& options,
                   double projectFrame)
@@ -881,6 +972,10 @@ void paintContent(QPainter& painter, const model::Entity& entity,
 
     case ContentKind::HalftoneDots:
         paintHalftoneDots(painter, entity.content.halftone);
+        return;
+
+    case ContentKind::BrandWall:
+        paintBrandWall(painter, entity.content.brandWall);
         return;
 
     case ContentKind::Asset:
@@ -1069,6 +1164,26 @@ QSizeF contentSize(const model::Entity& entity, const assets::AssetStore& store,
                 * (std::abs(std::cos(angle)) + std::abs(std::sin(angle)))
             + std::max(0.0, halftone.dotSize) * 2.0;
         return QSizeF(std::max(1.0, extent), std::max(1.0, extent));
+    }
+
+    case ContentKind::BrandWall:
+    {
+        const model::BrandWallContent& wall = entity.content.brandWall;
+        const int columns = std::max(1, wall.columns);
+        const int rows = std::max(1, wall.rows);
+        const double spacing = std::max(0.0, wall.spacing);
+        const double size = std::max(0.0, wall.logoSize);
+        QRectF bounds(0.0, 0.0,
+                      columns * size + (columns - 1) * spacing,
+                      rows * size + (rows - 1) * spacing);
+        if (std::abs(wall.angle) > 1e-6)
+        {
+            QTransform rotation;
+            rotation.rotate(wall.angle);
+            bounds = rotation.mapRect(bounds);
+        }
+        return QSizeF(std::max(1.0, bounds.width()),
+                      std::max(1.0, bounds.height()));
     }
 
     case ContentKind::Empty:

@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QSet>
@@ -156,6 +157,7 @@ void testContentJsonRoundTrip()
         case ContentKind::RadialLines:
         case ContentKind::FlowLines:
         case ContentKind::HalftoneDots:
+        case ContentKind::BrandWall:
             // Detailed round-trips for the special content live in
             // testSpecialContentJsonRoundTrip.
             break;
@@ -338,6 +340,40 @@ void testSpecialContentJsonRoundTrip()
         CHECK(parsedHalftone->content.halftone.seed == 11);
     }
 
+    Entity wallEntity = makeEntity(0, 10);
+    wallEntity.content.kind = ContentKind::BrandWall;
+    BrandWallContent& wall = wallEntity.content.brandWall;
+    wall.logos = {QStringLiteral("PV"), QStringLiteral("Lumen")};
+    wall.columns = 5;
+    wall.rows = 3;
+    wall.spacing = 14.5;
+    wall.logoSize = 160.0;
+    wall.colors = {QStringLiteral("#112233"), QStringLiteral("#ff8800")};
+    wall.alternate = false;
+    wall.angle = -21.0;
+    wall.background = QStringLiteral("#000000");
+    wall.seed = 9;
+
+    const QJsonObject wallJson = toJson(wallEntity);
+    const auto parsedWall = entityFromJson(wallJson, &error);
+    CHECK_DETAIL(parsedWall.has_value(), error);
+    if (parsedWall)
+    {
+        CHECK(toJson(*parsedWall) == wallJson);
+        CHECK(parsedWall->content.brandWall.logos
+              == QStringList({QStringLiteral("PV"), QStringLiteral("Lumen")}));
+        CHECK(parsedWall->content.brandWall.columns == 5);
+        CHECK(parsedWall->content.brandWall.rows == 3);
+        CHECK(nearly(parsedWall->content.brandWall.spacing, 14.5));
+        CHECK(nearly(parsedWall->content.brandWall.logoSize, 160.0));
+        CHECK(parsedWall->content.brandWall.colors.size() == 2);
+        CHECK(!parsedWall->content.brandWall.alternate);
+        CHECK(nearly(parsedWall->content.brandWall.angle, -21.0));
+        CHECK(parsedWall->content.brandWall.background
+              == QStringLiteral("#000000"));
+        CHECK(parsedWall->content.brandWall.seed == 9);
+    }
+
     // Unknown fields in a content object are ignored, not rejected.
     QJsonObject unknown = comicJson;
     QJsonObject unknownContent =
@@ -352,6 +388,20 @@ void testSpecialContentJsonRoundTrip()
     CHECK_DETAIL(parsedUnknown.has_value(), error);
     if (parsedUnknown)
         CHECK(toJson(*parsedUnknown) == comicJson);
+
+    // The same tolerance applies inside brandWall.
+    QJsonObject unknownWall = toJson(wallEntity);
+    QJsonObject unknownWallContent =
+        unknownWall.value(QStringLiteral("content")).toObject();
+    QJsonObject wallFields =
+        unknownWallContent.value(QStringLiteral("brandWall")).toObject();
+    wallFields.insert(QStringLiteral("glow"), 1.0);
+    unknownWallContent.insert(QStringLiteral("brandWall"), wallFields);
+    unknownWall.insert(QStringLiteral("content"), unknownWallContent);
+    const auto parsedUnknownWall = entityFromJson(unknownWall, &error);
+    CHECK_DETAIL(parsedUnknownWall.has_value(), error);
+    if (parsedUnknownWall)
+        CHECK(toJson(*parsedUnknownWall) == wallJson);
 }
 
 void testSpecialContentValidation()
@@ -494,6 +544,54 @@ void testSpecialContentValidation()
     bad.content.halftone.spacing = 1.0;
     reject(bad, QStringLiteral("过密"));
 
+    Entity wall = makeEntity();
+    wall.content.kind = ContentKind::BrandWall;
+    CHECK(validateEntity(wall));
+
+    bad = wall;
+    bad.content.brandWall.columns = 0;
+    reject(bad, QStringLiteral("columns"));
+
+    bad = wall;
+    bad.content.brandWall.rows = 65;
+    reject(bad, QStringLiteral("rows"));
+
+    bad = wall;
+    bad.content.brandWall.spacing = -1.0;
+    reject(bad, QStringLiteral("spacing"));
+
+    bad = wall;
+    bad.content.brandWall.logoSize = 0.0;
+    reject(bad, QStringLiteral("logoSize"));
+
+    bad = wall;
+    bad.content.brandWall.angle = 361.0;
+    reject(bad, QStringLiteral("angle"));
+
+    bad = wall;
+    bad.content.brandWall.logos = QStringList(65, QStringLiteral("x"));
+    reject(bad, QStringLiteral("logos"));
+
+    bad = wall;
+    bad.content.brandWall.logos = {QStringLiteral("ok"), QString()};
+    reject(bad, QStringLiteral("logos"));
+
+    bad = wall;
+    bad.content.brandWall.logos = {QString(129, QLatin1Char('x'))};
+    reject(bad, QStringLiteral("logos"));
+
+    bad = wall;
+    bad.content.brandWall.colors.clear();
+    reject(bad, QStringLiteral("colors"));
+
+    bad = wall;
+    bad.content.brandWall.colors = {QStringLiteral("not-a-color")};
+    reject(bad, QStringLiteral("colors"));
+
+    bad = wall;
+    bad.content.brandWall.background = QStringLiteral("not-a-color");
+    reject(bad, QStringLiteral("background"));
+
     // Invalid enum names are rejected while parsing, with a specific error.
     QString error;
     QJsonObject badComic;
@@ -513,6 +611,17 @@ void testSpecialContentValidation()
     const auto parsedHalftone = contentFromJson(badHalftone, &error);
     CHECK(!parsedHalftone.has_value());
     CHECK(error.contains(QStringLiteral("layout")));
+
+    QJsonObject badWall;
+    badWall.insert(QStringLiteral("kind"), QStringLiteral("brandWall"));
+    QJsonObject badWallFields;
+    badWallFields.insert(QStringLiteral("colors"),
+                         QJsonArray::fromStringList(
+                             {QStringLiteral("not-a-color")}));
+    badWall.insert(QStringLiteral("brandWall"), badWallFields);
+    const auto parsedWall = contentFromJson(badWall, &error);
+    CHECK(!parsedWall.has_value());
+    CHECK(error.contains(QStringLiteral("colors")));
 }
 
 void testEntityJsonRoundTrip()

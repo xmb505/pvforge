@@ -208,6 +208,13 @@ void writeContent(QDataStream& out, const model::Entity& entity,
             << halftone.color.toUtf8() << qint32(halftone.seed);
         break;
     }
+    case ContentKind::BrandWall: {
+        const model::BrandWallContent& wall = content.brandWall;
+        out << wall.logos << qint32(wall.columns) << qint32(wall.rows)
+            << wall.spacing << wall.logoSize << wall.colors << wall.alternate
+            << wall.angle << wall.background.toUtf8() << qint32(wall.seed);
+        break;
+    }
     }
 }
 

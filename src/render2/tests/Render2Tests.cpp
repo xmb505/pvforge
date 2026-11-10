@@ -255,6 +255,18 @@ Entity makeSpecialEntity(ContentKind kind, const Uuid& uuid)
         entity.content.halftone.minRatio = 0.6;
         entity.content.halftone.color = QStringLiteral("#ff0000");
         break;
+    case ContentKind::BrandWall:
+        entity.content.kind = kind;
+        entity.content.brandWall.logos = {QStringLiteral("PV"),
+                                          QStringLiteral("ACME")};
+        entity.content.brandWall.columns = 4;
+        entity.content.brandWall.rows = 3;
+        entity.content.brandWall.spacing = 10.0;
+        entity.content.brandWall.logoSize = 70.0;
+        entity.content.brandWall.colors = {QStringLiteral("#ff0000"),
+                                           QStringLiteral("#00ff00")};
+        entity.content.brandWall.alternate = true;
+        break;
     default:
         break;
     }
@@ -1033,6 +1045,7 @@ void testSpecialContentRender()
         {ContentKind::RadialLines, QStringLiteral("radialLines")},
         {ContentKind::FlowLines, QStringLiteral("flowLines")},
         {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
+        {ContentKind::BrandWall, QStringLiteral("brandWall")},
     };
 
     for (const auto& entry : kinds)
@@ -1076,6 +1089,7 @@ void testSpecialContentOpacity()
         {ContentKind::RadialLines, QStringLiteral("radialLines")},
         {ContentKind::FlowLines, QStringLiteral("flowLines")},
         {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
+        {ContentKind::BrandWall, QStringLiteral("brandWall")},
     };
 
     for (const auto& entry : kinds)
@@ -1128,6 +1142,86 @@ void testSpecialContentFollowsParent()
     CHECK(!bounds.isEmpty());
     CHECK(std::abs(bounds.center().x() - 200) <= 8);
     CHECK(std::abs(bounds.center().y() - 150) <= 8);
+}
+
+void testBrandWallLayout()
+{
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    const auto describe = [](const QRectF& rect) {
+        return QStringLiteral("%1x%2 at %3,%4")
+            .arg(rect.width())
+            .arg(rect.height())
+            .arg(rect.x())
+            .arg(rect.y());
+    };
+
+    const auto makeWall = [](int columns, int rows, bool alternate,
+                             double angle, const QString& background,
+                             const QStringList& logos) {
+        Project project = makeProject(400, 300);
+        Entity entity = makeEntity(QStringLiteral("wall"));
+        entity.transform.x = 200.0;
+        entity.transform.y = 150.0;
+        entity.content.kind = ContentKind::BrandWall;
+        BrandWallContent& wall = entity.content.brandWall;
+        wall.logos = logos;
+        wall.columns = columns;
+        wall.rows = rows;
+        wall.spacing = 10.0;
+        wall.logoSize = 50.0;
+        wall.colors = {QStringLiteral("#ff0000"), QStringLiteral("#00ff00"),
+                       QStringLiteral("#0000ff")};
+        wall.alternate = alternate;
+        wall.angle = angle;
+        wall.background = background;
+        add(project, entity);
+        return project;
+    };
+
+    // 3x3 wall of 50px tiles with 10px grout: 170x170 centred at (200,150).
+    const QImage rows = render(
+        makeWall(3, 3, false, 0.0, QString(), {}), store, 0, Uuid(), QSize(),
+        QColor(Qt::white));
+    const QRect bounds = inkBounds(rows, Qt::white);
+    CHECK_DETAIL(std::abs(bounds.width() - 170) <= 2, describe(bounds));
+    CHECK_DETAIL(std::abs(bounds.height() - 170) <= 2, describe(bounds));
+    CHECK_DETAIL(std::abs(bounds.center().x() - 200) <= 2, describe(bounds));
+    CHECK_DETAIL(std::abs(bounds.center().y() - 150) <= 2, describe(bounds));
+    CHECK(countInkPixels(rows, Qt::white) > 20000);
+
+    // Transparent background leaves the grout white.
+    CHECK(nearColor(rows.pixelColor(170, 90), Qt::white));
+    // Slot at row 1, column 0: row-major is red, checkerboard is green.
+    CHECK(nearColor(rows.pixelColor(120, 140), QColor(Qt::red)));
+
+    const QImage alternating = render(
+        makeWall(3, 3, true, 0.0, QString(), {}), store, 0, Uuid(), QSize(),
+        QColor(Qt::white));
+    CHECK(nearColor(alternating.pixelColor(120, 140), QColor(Qt::green)));
+
+    // An explicit background fills the grout.
+    const QImage filled = render(
+        makeWall(3, 3, false, 0.0, QStringLiteral("#000000"), {}), store, 0,
+        Uuid(), QSize(), QColor(Qt::white));
+    CHECK(nearColor(filled.pixelColor(170, 90), QColor(Qt::black)));
+
+    // A rotated 4x2 wall: 230x110 becomes 110x230.
+    const Project rotated =
+        makeWall(4, 2, false, 90.0, QString(), {QStringLiteral("PV")});
+    const QImage rotatedImage =
+        render(rotated, store, 0, Uuid(), QSize(), QColor(Qt::white));
+    const QRect rotatedBounds = inkBounds(rotatedImage, Qt::white);
+    CHECK_DETAIL(std::abs(rotatedBounds.width() - 110) <= 3,
+                 describe(rotatedBounds));
+    CHECK_DETAIL(std::abs(rotatedBounds.height() - 230) <= 3,
+                 describe(rotatedBounds));
+
+    render2::SceneWorld world(rotated, store);
+    const QRectF shape = world.shapeOf(QStringLiteral("wall"), 0).boundingRect();
+    CHECK_DETAIL(std::abs(shape.width() - 110.0) <= 0.5, describe(shape));
+    CHECK_DETAIL(std::abs(shape.height() - 230.0) <= 0.5, describe(shape));
 }
 
 void testAnimatedContentFieldMapping()
@@ -1387,6 +1481,7 @@ int main(int argc, char** argv)
         {QStringLiteral("specialContentOpacity"), testSpecialContentOpacity},
         {QStringLiteral("specialContentFollowsParent"),
          testSpecialContentFollowsParent},
+        {QStringLiteral("brandWallLayout"), testBrandWallLayout},
         {QStringLiteral("animatedContentFieldMapping"),
          testAnimatedContentFieldMapping},
         {QStringLiteral("contentTrackFallback"), testContentTrackFallback},

@@ -26,7 +26,8 @@ enum class ContentKind
     ComicText,
     RadialLines,
     FlowLines,
-    HalftoneDots
+    HalftoneDots,
+    BrandWall
 };
 
 enum class SolverEffect
@@ -75,6 +76,8 @@ inline QString contentKindName(ContentKind kind)
         return QStringLiteral("flowLines");
     case ContentKind::HalftoneDots:
         return QStringLiteral("halftoneDots");
+    case ContentKind::BrandWall:
+        return QStringLiteral("brandWall");
     }
     return QStringLiteral("empty");
 }

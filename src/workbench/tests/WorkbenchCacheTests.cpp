@@ -619,6 +619,20 @@ void WorkbenchCacheTests::metaTracksGenerativeContent()
                    [](model::Content& c) { c.halftone.color = QStringLiteral("#ff0000"); },
                    [](model::Content& c) { c.halftone.seed += 1; },
                });
+
+    verifyKind(ContentKind::BrandWall,
+               {
+                   [](model::Content& c) { c.brandWall.logos = {QStringLiteral("PV")}; },
+                   [](model::Content& c) { c.brandWall.columns += 1; },
+                   [](model::Content& c) { c.brandWall.rows += 1; },
+                   [](model::Content& c) { c.brandWall.spacing += 1.0; },
+                   [](model::Content& c) { c.brandWall.logoSize += 1.0; },
+                   [](model::Content& c) { c.brandWall.colors = {QStringLiteral("#ff0000")}; },
+                   [](model::Content& c) { c.brandWall.alternate = !c.brandWall.alternate; },
+                   [](model::Content& c) { c.brandWall.angle += 1.0; },
+                   [](model::Content& c) { c.brandWall.background = QStringLiteral("#000000"); },
+                   [](model::Content& c) { c.brandWall.seed += 1; },
+               });
 }
 
 void WorkbenchCacheTests::metaTracksContentTracks()

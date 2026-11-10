@@ -35,6 +35,7 @@ set(PVF_RENDER2_TEST_CASES
     specialContentRender
     specialContentOpacity
     specialContentFollowsParent
+    brandWallLayout
     animatedContentFieldMapping
     contentTrackFallback
     textFontSizeTrackRenders
