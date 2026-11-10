@@ -99,6 +99,18 @@ if(BUILD_TESTING)
         markerShortcutAdds
         waveformPaintsForAudioEntity
         waveformMissingAssetPaintsFlat
+        playheadAutoScrollFollowsBothWays
+        rowSlotsStayFixedAfterDelete
+        dropDeepRowKeepsRequestedSlot
+        deepRowsScrollIntoView
+        oneGestureCommitsOnceAndEscRestores
+        rulerLabelsCenterOnTicks
+        moveSnapsToNeighborEdges
+        trimSnapsToNeighborEdge
+        splitEntityCreatesRightHalf
+        splitParentSplitsChildren
+        splitVideoShiftsSourceIn
+        splitRejectsBoundary
     )
 
     foreach(test_case IN LISTS PVF_TIMELINE_TEST_CASES)

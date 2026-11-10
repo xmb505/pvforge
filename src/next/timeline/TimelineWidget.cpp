@@ -282,6 +282,17 @@ TimelineWidget::TimelineWidget(Document* document, QWidget* parent)
     connect(m_hScroll, &QScrollBar::valueChanged, this,
             &TimelineWidget::onScrollBarValueChanged);
 
+    m_vScroll = new QScrollBar(Qt::Vertical, this);
+    m_vScroll->setObjectName(QStringLiteral("timelineRowScrollBar"));
+    m_vScroll->setRange(0, 0);
+    m_vScroll->hide();
+    connect(m_vScroll, &QScrollBar::valueChanged, this, [this](int value) {
+        if (m_rowScroll == value)
+            return;
+        m_rowScroll = value;
+        update();
+    });
+
     if (m_document)
     {
         m_playhead = std::max(0, m_document->playhead());
@@ -336,6 +347,7 @@ void TimelineWidget::setParentUuid(const Uuid& parentUuid)
             startFrame = std::max(0, owner.value().start);
     }
     m_scrollX = std::max(0, int(std::lround(startFrame * m_pixelsPerFrame)) - 8);
+    m_rowScroll = 0;
 
     updateScrollBar();
     update();
@@ -402,6 +414,30 @@ QRect TimelineWidget::rulerRect() const
     return QRect(0, top, width(), kRulerHeight);
 }
 
+QRect TimelineWidget::rulerLabelRect(int frame) const
+{
+    QFont small = font();
+    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
+    const QFontMetrics metrics(small);
+    const QString text = QString::number(frame);
+    const int textWidth = metrics.horizontalAdvance(text) + 4;
+    const QRect ruler = rulerRect();
+    const int x = xFromFrame(frame) - textWidth / 2;
+    return QRect(x, ruler.top() + 14, textWidth, ruler.height() - 14);
+}
+
+void TimelineWidget::setRowScroll(int value)
+{
+    updateScrollBar();
+    if (!m_vScroll)
+    {
+        m_rowScroll = std::max(0, value);
+        update();
+        return;
+    }
+    m_vScroll->setValue(std::max(0, value));
+}
+
 QRect TimelineWidget::markerLaneRect() const
 {
     const QRect ruler = rulerRect();
@@ -452,7 +488,7 @@ QVector<Uuid> TimelineWidget::visibleEntities() const
 int TimelineWidget::rowTop(int row) const
 {
     const QRect body = bodyRect();
-    return body.bottom() - (row + 1) * kRowHeight + 1;
+    return body.bottom() - (row + 1) * kRowHeight + 1 + m_rowScroll;
 }
 
 QRect TimelineWidget::bodyRect() const
@@ -510,6 +546,32 @@ void TimelineWidget::updateScrollBar()
         std::max(1, int(std::lround(m_pixelsPerFrame * 5.0))));
     m_scrollX = std::clamp(m_scrollX, 0, maximum);
     m_hScroll->setValue(m_scrollX);
+
+    int highestRow = -1;
+    if (m_document)
+    {
+        for (const Uuid& uuid : visibleEntities())
+        {
+            const auto it = m_document->project().entities.constFind(uuid);
+            if (it != m_document->project().entities.constEnd())
+                highestRow = std::max(highestRow, std::max(0, it.value().row));
+        }
+    }
+    const QRect body = bodyRect();
+    const int maximumY =
+        std::max(0, (highestRow + 1) * kRowHeight - body.height());
+    m_rowScroll = std::clamp(m_rowScroll, 0, maximumY);
+    if (m_vScroll)
+    {
+        QSignalBlocker rowBlocker(m_vScroll);
+        m_vScroll->setRange(0, maximumY);
+        m_vScroll->setPageStep(std::max(1, body.height()));
+        m_vScroll->setSingleStep(kRowHeight);
+        m_vScroll->setValue(m_rowScroll);
+        m_vScroll->setVisible(maximumY > 0);
+        m_vScroll->setGeometry(width() - kScrollBarWidth, body.top(),
+                               kScrollBarWidth, body.height());
+    }
 }
 
 void TimelineWidget::setScrollX(int value)
@@ -525,11 +587,19 @@ void TimelineWidget::setScrollX(int value)
 
 void TimelineWidget::ensureFrameVisible(int frame)
 {
+    int right = width();
+    if (m_vScroll && !m_vScroll->isHidden())
+        right -= kScrollBarWidth;
+    right = std::max(1, right);
+
     const int x = xFromFrame(frame);
-    if (x >= 0 && x < width())
+    if (x >= 0 && x < right)
         return;
 
-    const int target = int(std::lround(frame * m_pixelsPerFrame)) - width() / 2;
+    const int target = x < 0
+                           ? int(std::lround(frame * m_pixelsPerFrame)) - 2
+                           : int(std::lround(frame * m_pixelsPerFrame))
+                                 - right + 2;
     setScrollX(target);
 }
 
@@ -671,8 +741,8 @@ void TimelineWidget::paintRuler(QPainter& painter)
         painter.setPen(QPen(pal.color(QPalette::Mid), 1));
         painter.drawLine(x, ruler.bottom() - 8, x, ruler.bottom());
         painter.setPen(pal.color(QPalette::Text));
-        painter.drawText(QRect(x + 3, ruler.top() + 14, 90, ruler.height() - 14),
-                         Qt::AlignLeft | Qt::AlignVCenter,
+        painter.drawText(rulerLabelRect(frame),
+                         Qt::AlignHCenter | Qt::AlignVCenter,
                          QString::number(frame));
     }
 }
@@ -687,7 +757,7 @@ void TimelineWidget::paintRows(QPainter& painter)
     painter.save();
     painter.setClipRect(body);
 
-    const int maxRow = body.height() / kRowHeight + 2;
+    const int maxRow = (body.height() + m_rowScroll) / kRowHeight + 2;
     for (int row = 0; row <= maxRow; ++row)
     {
         const int top = rowTop(row);
@@ -1041,6 +1111,97 @@ void TimelineWidget::openMarkerEditor(const QString& markerId)
     QString error;
     if (!updateMarker(markerId, dialog.marker(), &error) && !error.isEmpty())
         QMessageBox::warning(this, tr("标记"), error);
+}
+
+bool TimelineWidget::splitSelectedAtPlayhead(QString* error)
+{
+    if (error)
+        error->clear();
+    if (!m_document)
+    {
+        if (error)
+            *error = tr("未打开工程");
+        return false;
+    }
+
+    const Uuid uuid = m_document->selection();
+    if (uuid.isEmpty())
+    {
+        if (error)
+            *error = tr("没有选中的实体");
+        emit statusMessage(tr("没有选中的实体，无法切分"));
+        return false;
+    }
+
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd())
+    {
+        if (error)
+            *error = tr("实体不存在");
+        return false;
+    }
+    const model::Entity& entity = it.value();
+    const QString name = entityDisplayName(entity);
+    if (entityIsLocked(m_document, uuid))
+    {
+        if (error)
+            *error = tr("实体已锁定：%1").arg(name);
+        emit statusMessage(tr("实体已锁定：%1").arg(name));
+        return false;
+    }
+
+    const int cut = playhead();
+    if (cut <= entity.start || cut >= entity.end)
+    {
+        const QString message =
+            tr("播放头必须位于实体内部才能切分：%1 范围 [%2, %3)，播放头 %4")
+                .arg(name)
+                .arg(entity.start)
+                .arg(entity.end)
+                .arg(cut);
+        if (error)
+            *error = message;
+        emit statusMessage(message);
+        return false;
+    }
+
+    const model::Project before = m_document->project();
+    model::Project split;
+    QVector<Uuid> upserts;
+    QVector<Uuid> deletes;
+    Uuid rightUuid;
+    QString splitError;
+    if (!splitEntityAt(before, m_document->assets(), uuid, cut, &split,
+                       &upserts, &deletes, &rightUuid, &splitError))
+    {
+        if (error)
+            *error = splitError;
+        emit statusMessage(splitError.isEmpty() ? tr("切分失败")
+                                                : tr("切分失败：%1")
+                                                      .arg(splitError));
+        return false;
+    }
+
+    m_document->mutableProject() = split;
+    QString commitError;
+    if (!m_document->commitChanges(
+            upserts, deletes,
+            tr("pvf: split entity \"%1\"").arg(name), &commitError))
+    {
+        m_document->mutableProject() = before;
+        if (error)
+            *error = commitError;
+        emit statusMessage(
+            commitError.isEmpty() ? tr("切分提交失败")
+                                  : tr("切分提交失败：%1").arg(commitError));
+        updateScrollBar();
+        update();
+        return false;
+    }
+
+    updateScrollBar();
+    update();
+    return true;
 }
 
 void TimelineWidget::paintEntities(QPainter& painter)
@@ -1746,7 +1907,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         setCursor(Qt::ClosedHandCursor);
     }
 
-    if (m_dragMode == DragMode::TrimStart
+    if (m_dragMode == DragMode::Move
+        || m_dragMode == DragMode::TrimStart
         || m_dragMode == DragMode::TrimEnd)
     {
         m_dragProjectSnapshot = m_document->project();
@@ -1794,7 +1956,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* event)
     if (m_dragMode == DragMode::Move || m_dragMode == DragMode::TrimStart
         || m_dragMode == DragMode::TrimEnd)
     {
-        applyDrag(pos);
+        applyDrag(pos, event->modifiers());
         return;
     }
 
@@ -1975,21 +2137,40 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* event)
     const bool onRuler =
         rulerRect().contains(pos) || markerLaneRect().contains(pos);
     const QString markerId = markerIdAt(pos);
-    if (!onRuler && markerId.isEmpty())
+    const Hit entityHit = hitTest(pos);
+    if (!onRuler && markerId.isEmpty() && entityHit.uuid.isEmpty())
     {
         QWidget::contextMenuEvent(event);
         return;
     }
 
     QMenu menu(this);
-    QAction* addAction = menu.addAction(tr("在播放头添加标记…"));
+    QAction* addAction = nullptr;
     QAction* editAction = nullptr;
     QAction* deleteAction = nullptr;
-    if (!markerId.isEmpty())
+    QAction* splitAction = nullptr;
+    if (onRuler || !markerId.isEmpty())
     {
-        menu.addSeparator();
-        editAction = menu.addAction(tr("编辑标记…"));
-        deleteAction = menu.addAction(tr("删除标记"));
+        addAction = menu.addAction(tr("在播放头添加标记…"));
+        if (!markerId.isEmpty())
+        {
+            menu.addSeparator();
+            editAction = menu.addAction(tr("编辑标记…"));
+            deleteAction = menu.addAction(tr("删除标记"));
+        }
+    }
+    if (!entityHit.uuid.isEmpty())
+    {
+        if (!menu.isEmpty())
+            menu.addSeparator();
+        const auto entity =
+            m_document->project().entities.constFind(entityHit.uuid);
+        const bool canSplit =
+            entity != m_document->project().entities.constEnd()
+            && playhead() > entity.value().start
+            && playhead() < entity.value().end;
+        splitAction = menu.addAction(tr("在播放头切分"));
+        splitAction->setEnabled(canSplit);
     }
 
     QAction* chosen = menu.exec(event->globalPos());
@@ -1999,6 +2180,12 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* event)
         openMarkerEditor(markerId);
     else if (chosen == deleteAction)
         deleteMarkerWithConfirm(markerId);
+    else if (chosen == splitAction)
+    {
+        m_document->setSelection(entityHit.uuid);
+        QString error;
+        splitSelectedAtPlayhead(&error);
+    }
     event->accept();
 }
 
@@ -2011,10 +2198,26 @@ void TimelineWidget::keyPressEvent(QKeyEvent* event)
     }
 
     const bool ctrl = event->modifiers() & Qt::ControlModifier;
+    if (event->key() == Qt::Key_Escape && m_dragMode != DragMode::None)
+    {
+        cancelDrag();
+        event->accept();
+        return;
+    }
+
     if ((event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier
         && event->key() == Qt::Key_M)
     {
         addMarkerAtPlayhead();
+        event->accept();
+        return;
+    }
+
+    if ((event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier
+        && event->key() == Qt::Key_S)
+    {
+        QString error;
+        splitSelectedAtPlayhead(&error);
         event->accept();
         return;
     }
@@ -2276,16 +2479,29 @@ void TimelineWidget::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    int delta = event->angleDelta().x();
-    if (delta == 0)
-        delta = event->angleDelta().y();
-    if (delta == 0)
+    int deltaX = event->angleDelta().x();
+    int deltaY = event->angleDelta().y();
+    if (deltaX == 0 && deltaY == 0)
     {
         event->ignore();
         return;
     }
 
-    setScrollX(m_scrollX - delta);
+    if (deltaX != 0)
+    {
+        setScrollX(m_scrollX - deltaX);
+    }
+    else if (event->modifiers() & Qt::ShiftModifier)
+    {
+        setScrollX(m_scrollX - deltaY);
+    }
+    else
+    {
+        // Plain vertical wheel scrolls rows; the timeline is bottom-anchored,
+        // so wheel-up reveals deeper rows.
+        setRowScroll(m_rowScroll
+                     + int(std::lround(deltaY / 120.0 * kRowHeight)));
+    }
     event->accept();
 }
 
@@ -2296,6 +2512,12 @@ void TimelineWidget::resizeEvent(QResizeEvent* event)
     {
         m_hScroll->setGeometry(0, height() - kScrollBarHeight, width(),
                                kScrollBarHeight);
+    }
+    if (m_vScroll)
+    {
+        const QRect body = bodyRect();
+        m_vScroll->setGeometry(width() - kScrollBarWidth, body.top(),
+                               kScrollBarWidth, body.height());
     }
     updateScrollBar();
 }
@@ -2314,9 +2536,9 @@ int TimelineWidget::dropRowFor(int y, int startFrame, int endFrame) const
     const QRect body = bodyRect();
     int candidate = -1;
     if (!body.isEmpty() && y >= body.top() && y <= body.bottom())
-        candidate = std::max(0, (body.bottom() - y) / kRowHeight);
+        candidate =
+            std::max(0, (body.bottom() - y + m_rowScroll) / kRowHeight);
 
-    int highestUsed = -1;
     int highestInRange = -1;
     const QVector<Uuid> siblings = visibleEntities();
     for (const Uuid& uuid : siblings)
@@ -2325,19 +2547,18 @@ int TimelineWidget::dropRowFor(int y, int startFrame, int endFrame) const
         if (it == m_document->project().entities.constEnd())
             continue;
         const model::Entity& entity = it.value();
-        highestUsed = std::max(highestUsed, std::max(0, entity.row));
         if (rangesOverlap(entity.start, entity.end, startFrame, endFrame))
             highestInRange = std::max(highestInRange, std::max(0, entity.row));
     }
 
-    // Blank rows above the existing row space (and drops outside the body)
-    // use the model default: highest occupied row in [start, end) + 1.
+    // Drops outside the body use the model default: highest occupied row in
+    // [start, end) + 1.
     const int autoRow = std::max(0, highestInRange + 1);
-    if (candidate < 0 || candidate > highestUsed)
+    if (candidate < 0)
         return autoRow;
 
-    // Keep the row under the cursor, unless a sibling already overlaps this
-    // time range there; then fall back to the next free row.
+    // Fixed slots: the row under the cursor wins even when it is far above the
+    // rows currently in use. Only an actual overlap on that row falls back.
     for (const Uuid& uuid : siblings)
     {
         const auto it = m_document->project().entities.constFind(uuid);
@@ -2629,7 +2850,39 @@ void TimelineWidget::applyKeyframeDrag(const QPoint& pos)
     update();
 }
 
-void TimelineWidget::applyDrag(const QPoint& pos)
+int TimelineWidget::snapFrame(int frame, bool enabled,
+                              const QSet<Uuid>& excluded) const
+{
+    if (!enabled || !m_document)
+        return frame;
+
+    const int x = xFromFrame(frame);
+    int best = frame;
+    int bestDistance = kSnapPixels + 1;
+    for (const Uuid& uuid : visibleEntities())
+    {
+        if (excluded.contains(uuid))
+            continue;
+        const auto it = m_document->project().entities.constFind(uuid);
+        if (it == m_document->project().entities.constEnd())
+            continue;
+
+        const int edges[] = {it.value().start, it.value().end};
+        for (int edge : edges)
+        {
+            const int distance = std::abs(xFromFrame(edge) - x);
+            if (distance <= kSnapPixels && distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = edge;
+            }
+        }
+    }
+    return best;
+}
+
+void TimelineWidget::applyDrag(const QPoint& pos,
+                               Qt::KeyboardModifiers modifiers)
 {
     if (!m_document || m_dragEntity.isEmpty())
         return;
@@ -2641,6 +2894,7 @@ void TimelineWidget::applyDrag(const QPoint& pos)
     model::Entity& entity = it.value();
     const int delta = frameFromX(pos.x()) - frameFromX(m_dragPressPos.x());
     const int duration = std::max(1, m_dragOriginalEnd - m_dragOriginalStart);
+    const bool snapEnabled = !(modifiers & Qt::ControlModifier);
 
     int minStart = 0;
     int maxEnd = INT_MAX;
@@ -2660,9 +2914,34 @@ void TimelineWidget::applyDrag(const QPoint& pos)
     case DragMode::Move:
     {
         const int lastStart = maxEnd == INT_MAX ? INT_MAX : maxEnd - duration;
-        const int newStart =
-            std::clamp(m_dragOriginalStart + delta, minStart,
-                       std::max(minStart, lastStart));
+        const int maxStart = std::max(minStart, lastStart);
+        int newStart =
+            std::clamp(m_dragOriginalStart + delta, minStart, maxStart);
+        if (snapEnabled)
+        {
+            QSet<Uuid> excluded;
+            for (const Uuid& moved : m_dragMoveUuids)
+                excluded.insert(moved);
+
+            int bestDelta = 0;
+            int bestDistance = kSnapPixels + 1;
+            const int rawStart = newStart;
+            const int rawEnd = newStart + duration;
+            for (int edge : {rawStart, rawEnd})
+            {
+                const int snapped = snapFrame(edge, true, excluded);
+                if (snapped == edge)
+                    continue;
+                const int distance =
+                    std::abs(xFromFrame(edge) - xFromFrame(snapped));
+                if (distance <= kSnapPixels && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestDelta = snapped - edge;
+                }
+            }
+            newStart = std::clamp(newStart + bestDelta, minStart, maxStart);
+        }
         int appliedDelta = newStart - m_dragOriginalStart;
 
         // Never push any entity of the moved subtree before frame 0.
@@ -2705,8 +2984,15 @@ void TimelineWidget::applyDrag(const QPoint& pos)
     {
         const int lastStart = std::min(m_dragOriginalEnd - 1,
                                        maxEnd == INT_MAX ? INT_MAX : maxEnd - 1);
-        const int newStart = std::clamp(m_dragOriginalStart + delta, minStart,
-                                        std::max(minStart, lastStart));
+        int newStart = std::clamp(m_dragOriginalStart + delta, minStart,
+                                  std::max(minStart, lastStart));
+        if (snapEnabled)
+        {
+            QSet<Uuid> excluded;
+            excluded.insert(entity.uuid);
+            newStart = std::clamp(snapFrame(newStart, true, excluded),
+                                  minStart, std::max(minStart, lastStart));
+        }
         if (newStart != entity.start)
         {
             entity.start = newStart;
@@ -2719,9 +3005,18 @@ void TimelineWidget::applyDrag(const QPoint& pos)
     case DragMode::TrimEnd:
     {
         const int firstEnd = m_dragOriginalStart + 1;
-        const int newEnd = std::max(
+        int newEnd = std::max(
             firstEnd, std::min(m_dragOriginalEnd + delta,
                                maxEnd == INT_MAX ? INT_MAX : maxEnd));
+        if (snapEnabled)
+        {
+            QSet<Uuid> excluded;
+            excluded.insert(entity.uuid);
+            newEnd = std::max(
+                firstEnd,
+                std::min(snapFrame(newEnd, true, excluded),
+                         maxEnd == INT_MAX ? INT_MAX : maxEnd));
+        }
         if (newEnd != entity.end)
         {
             entity.end = newEnd;
@@ -2942,6 +3237,52 @@ void TimelineWidget::finishDrag()
                             : tr("裁剪提交失败：%1").arg(error));
     }
 
+    updateScrollBar();
+    update();
+}
+
+void TimelineWidget::cancelDrag()
+{
+    if (!m_document || m_dragMode == DragMode::None)
+        return;
+
+    if (m_dragHasSnapshot)
+        m_document->mutableProject() = m_dragProjectSnapshot;
+    else if (m_dragMode == DragMode::Keyframes && !m_dragEntity.isEmpty())
+    {
+        auto it = m_document->mutableProject().entities.find(m_dragEntity);
+        if (it != m_document->mutableProject().entities.end())
+        {
+            it.value().tracks.clear();
+            for (auto trackIt = m_dragKeyTracks.constBegin();
+                 trackIt != m_dragKeyTracks.constEnd(); ++trackIt)
+            {
+                model::Track track;
+                track.keys = trackIt.value();
+                it.value().tracks.insert(trackIt.key(), track);
+            }
+        }
+    }
+    else if (m_dragMode == DragMode::Marker && !m_dragMarkerId.isEmpty())
+    {
+        m_document->mutableProject().markers = m_dragMarkerSnapshot;
+    }
+
+    m_dragMode = DragMode::None;
+    m_dragEntity.clear();
+    m_dragMoveUuids.clear();
+    m_dragOriginalRanges.clear();
+    m_dragProjectSnapshot = model::Project();
+    m_dragHasSnapshot = false;
+    m_dragChanged = false;
+    m_dragKeyTracks.clear();
+    m_dragKeyFrames.clear();
+    m_dragKeyDelta = 0;
+    m_dragKeyConflict = false;
+    m_dragMarkerId.clear();
+    m_dragMarkerSnapshot.clear();
+
+    unsetCursor();
     updateScrollBar();
     update();
 }

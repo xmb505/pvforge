@@ -74,7 +74,15 @@ public:
     // Geometry helpers, also used by the tests.
     int xFromFrame(int frame) const;
     int frameFromX(int x) const;
+    int scrollX() const { return m_scrollX; }
+    int rowScroll() const { return m_rowScroll; }
+    void setRowScroll(int value);
     QRect rulerRect() const;
+    // Rectangle used to draw a major ruler label; its horizontal centre is the
+    // tick position of `frame`.
+    QRect rulerLabelRect(int frame) const;
+    // Area below the marker lane that holds the rows.
+    QRect bodyRect() const;
     QRect breadcrumbRect() const;
     // Marker strip directly below the ruler. Markers are global project
     // annotations: they never occupy rows and never limit the timeline length.
@@ -100,6 +108,10 @@ public:
     // Dialog helpers used by the context menu and marker double-click.
     void openNewMarkerDialog();
     void openMarkerEditor(const QString& markerId);
+
+    // Splits the selected entity at the playhead. The left half keeps the
+    // original UUID, the right half gets a fresh one. One commit on success.
+    bool splitSelectedAtPlayhead(QString* error = nullptr);
 
     // Waveform peak cache diagnostics; the cache is memory-only and cleared
     // when the project root changes.
@@ -154,7 +166,6 @@ private:
     };
 
     int rowTop(int row) const;
-    QRect bodyRect() const;
     QRect toolbarRect() const;
     int labelFrameStep() const;
 
@@ -166,8 +177,11 @@ private:
 
     Hit hitTest(const QPoint& pos) const;
     void updateHoverCursor(const QPoint& pos);
-    void applyDrag(const QPoint& pos);
+    void applyDrag(const QPoint& pos, Qt::KeyboardModifiers modifiers);
     void finishDrag();
+    void cancelDrag();
+    int snapFrame(int frame, bool enabled,
+                  const QSet<Uuid>& excluded) const;
 
     // Merged keyframe diamonds: one frame can hold keys on several tracks.
     QSet<int> mergedKeyFrames(const model::Entity& entity) const;
@@ -218,8 +232,10 @@ private:
     Uuid m_parentUuid;
     double m_pixelsPerFrame = 4.0;
     int m_scrollX = 0;
+    int m_rowScroll = 0;
     int m_playhead = 0;
     QScrollBar* m_hScroll = nullptr;
+    QScrollBar* m_vScroll = nullptr;
 
     DragMode m_dragMode = DragMode::None;
     Uuid m_dragEntity;
@@ -276,7 +292,10 @@ private:
     static constexpr int kMarkerLaneHeight = 16;
     static constexpr int kRowHeight = 30;
     static constexpr int kScrollBarHeight = 14;
+    static constexpr int kScrollBarWidth = 12;
     static constexpr int kEdgeGrabPixels = 5;
+    // Snapping radius while moving/trimming, in screen pixels.
+    static constexpr int kSnapPixels = 6;
     // Peak resolution cached per asset. Entity bars sample this envelope and
     // fold it down to one value per painted pixel.
     static constexpr int kPeakBuckets = 2048;

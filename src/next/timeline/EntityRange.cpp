@@ -137,6 +137,17 @@ bool collectSubtreeDeletes(const model::Project& project, const Uuid& uuid,
     return collectSubtreeDeletes(project, uuid, deletes, visited, error);
 }
 
+void collectSubtreeOrder(const model::Project& project, const Uuid& uuid,
+                         QVector<Uuid>& out, QSet<Uuid>& visited)
+{
+    if (visited.contains(uuid))
+        return;
+    visited.insert(uuid);
+    out.append(uuid);
+    for (const Uuid& child : model::childrenOf(project, uuid))
+        collectSubtreeOrder(project, child, out, visited);
+}
+
 bool trimNode(model::Project& project, const assets::AssetStore& assets,
               const Uuid& uuid, int newStart, int newEnd,
               QVector<Uuid>& upserts, QVector<Uuid>& deletes, QString* error)
@@ -449,6 +460,124 @@ bool applyEntityRange(const model::Project& project,
     *result = std::move(working);
     *upserts = localUpserts;
     *deletes = localDeletes;
+    return true;
+}
+
+bool splitEntityAt(const model::Project& project,
+                   const assets::AssetStore& assets, const Uuid& uuid,
+                   int frame, model::Project* result, QVector<Uuid>* upserts,
+                   QVector<Uuid>* deletes, Uuid* rightUuid, QString* error)
+{
+    if (error)
+        error->clear();
+    if (!result || !upserts || !deletes || !rightUuid)
+    {
+        setError(error, QStringLiteral("内部错误：切分输出为空"));
+        return false;
+    }
+
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+    const model::Entity& entity = it.value();
+    if (isEntityLocked(project, uuid))
+    {
+        setError(error, QStringLiteral("实体 %1 或其祖先已锁定，不能切分")
+                            .arg(displayName(entity)));
+        return false;
+    }
+    if (frame <= entity.start || frame >= entity.end)
+    {
+        setError(error,
+                 QStringLiteral("切分帧 %1 必须位于实体 %2 的范围 [%3, %4) 内部")
+                     .arg(frame)
+                     .arg(displayName(entity))
+                     .arg(entity.start)
+                     .arg(entity.end));
+        return false;
+    }
+
+    // Left half: the original entity keeps its UUID.
+    model::Project left;
+    QVector<Uuid> leftUpserts;
+    QVector<Uuid> leftDeletes;
+    if (!applyEntityRange(project, assets, uuid, entity.start, frame, &left,
+                          &leftUpserts, &leftDeletes, error))
+        return false;
+
+    // Right half: clone the whole subtree with fresh UUIDs, then trim the
+    // clone to [frame, end).  The destructive trim shifts sourceIn,
+    // keyframes, solvers and children exactly like a normal trim.
+    QVector<Uuid> order;
+    QSet<Uuid> visited;
+    collectSubtreeOrder(project, uuid, order, visited);
+
+    QHash<Uuid, Uuid> remap;
+    for (const Uuid& original : order)
+        remap.insert(original, model::newUuid());
+
+    model::Project right = project;
+    for (const Uuid& original : order)
+        right.entities.remove(original);
+
+    for (const Uuid& original : order)
+    {
+        const model::Entity& source = project.entities.value(original);
+        model::Entity clone = source;
+        clone.uuid = remap.value(original);
+        clone.parentUuid = original == uuid
+                               ? source.parentUuid
+                               : remap.value(source.parentUuid);
+        for (model::SolverSegment& solver : clone.solvers)
+        {
+            const QString target = solver.params
+                                       .value(QStringLiteral("targetUuid"))
+                                       .toString();
+            const auto mapped = remap.constFind(target);
+            if (mapped != remap.constEnd())
+                solver.params.insert(QStringLiteral("targetUuid"),
+                                     mapped.value());
+        }
+        right.entities.insert(clone.uuid, clone);
+    }
+
+    const Uuid newRoot = remap.value(uuid);
+    model::Project rightTrimmed;
+    QVector<Uuid> rightUpserts;
+    QVector<Uuid> rightDeletes;
+    if (!applyEntityRange(right, assets, newRoot, frame, entity.end,
+                          &rightTrimmed, &rightUpserts, &rightDeletes, error))
+        return false;
+
+    for (const Uuid& upsert : rightUpserts)
+    {
+        const auto clone = rightTrimmed.entities.constFind(upsert);
+        if (clone != rightTrimmed.entities.constEnd())
+            left.entities.insert(upsert, clone.value());
+    }
+
+    QString validationError;
+    if (!model::validateProject(left, &validationError))
+    {
+        setError(error, QStringLiteral("切分后工程校验失败：%1")
+                            .arg(validationError));
+        return false;
+    }
+
+    QVector<Uuid> allUpserts = leftUpserts;
+    for (const Uuid& upsert : rightUpserts)
+    {
+        if (!allUpserts.contains(upsert))
+            allUpserts.append(upsert);
+    }
+
+    *result = std::move(left);
+    *upserts = allUpserts;
+    *deletes = leftDeletes;
+    *rightUuid = newRoot;
     return true;
 }
 

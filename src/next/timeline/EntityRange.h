@@ -39,4 +39,19 @@ bool applyEntityRange(const model::Project& project,
                       QVector<Uuid>* upserts, QVector<Uuid>* deletes,
                       QString* error = nullptr);
 
+// Splits `uuid` at the absolute frame `frame` into two sibling entities:
+//   - the original entity keeps the left range [start, frame);
+//   - a new entity with a fresh UUID takes the right range [frame, end).
+// Video/audio sourceIn is shifted on the right half, keyframes are cropped and
+// shifted, solver segments are cut, and children are split recursively.  The
+// cut must be strictly inside the entity.  `result` is only written on success;
+// `upserts` contains both halves and every surviving descendant, `deletes` the
+// original descendants that fall entirely inside the left half's discarded
+// right-hand region.
+bool splitEntityAt(const model::Project& project,
+                   const assets::AssetStore& assets, const Uuid& uuid,
+                   int frame, model::Project* result, QVector<Uuid>* upserts,
+                   QVector<Uuid>* deletes, Uuid* rightUuid,
+                   QString* error = nullptr);
+
 } // namespace pvf::next
