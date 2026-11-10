@@ -1,9 +1,12 @@
+#include "next/settings/GitDetect.h"
+#include "next/settings/OnboardingDialog.h"
 #include "next/settings/SettingsDialog.h"
 #include "next/settings/SettingsStore.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -44,6 +47,8 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.videoMemoryFrames, expected.videoMemoryFrames);
     QCOMPARE(int(actual.mcpPort), int(expected.mcpPort));
     QCOMPARE(actual.humanCommitDelayMs, expected.humanCommitDelayMs);
+    QCOMPARE(actual.gitEnabled, expected.gitEnabled);
+    QCOMPARE(actual.onboardingDone, expected.onboardingDone);
 }
 
 } // namespace
@@ -54,18 +59,28 @@ class SettingsTests : public QObject
 
 private slots:
     void storeDefaults();
+    void storeGitDefaults();
     void storeRoundTrip();
     void storeClampsLoadedValues();
     void storeSanitizesSavedValues();
 
+    void detectGitFindsExecutable();
+
     void dialogDefaults();
     void dialogRoundTrip();
     void dialogClampsValues();
+    void dialogGitCheckboxRoundTrip();
+    void dialogGitCancelDoesNotSave();
+    void dialogGitApplySaves();
     void cancelDoesNotSave();
     void applySavesWithoutClosing();
     void okSavesAndAccepts();
     void operationSignalsAreEmitted();
     void gitInfoAndEndpointPath();
+
+    void onboardingDefaultsToUnchecked();
+    void onboardingEnablesGit();
+    void onboardingUsesConfiguredValue();
 };
 
 void SettingsTests::storeDefaults()
@@ -75,6 +90,13 @@ void SettingsTests::storeDefaults()
     SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
 
     verifySettingsEqual(store.load(), AppSettings{});
+}
+
+void SettingsTests::storeGitDefaults()
+{
+    const AppSettings defaults;
+    QCOMPARE(defaults.gitEnabled, false);
+    QCOMPARE(defaults.onboardingDone, false);
 }
 
 void SettingsTests::storeRoundTrip()
@@ -97,6 +119,8 @@ void SettingsTests::storeRoundTrip()
     expected.videoMemoryFrames = 128;
     expected.mcpPort = 51234;
     expected.humanCommitDelayMs = 2500;
+    expected.gitEnabled = true;
+    expected.onboardingDone = true;
 
     store.save(expected);
 
@@ -116,8 +140,25 @@ void SettingsTests::storeRoundTrip()
     QVERIFY(raw.contains(QStringLiteral("video/memoryFrames")));
     QVERIFY(raw.contains(QStringLiteral("mcp/port")));
     QVERIFY(raw.contains(QStringLiteral("git/humanCommitDelayMs")));
+    QVERIFY(raw.contains(QStringLiteral("git/enabled")));
+    QVERIFY(raw.contains(QStringLiteral("app/onboardingDone")));
     QCOMPARE(raw.value(QStringLiteral("html/memoryBytes")).toLongLong(), 512 * kMiB);
     QCOMPARE(raw.value(QStringLiteral("mcp/port")).toInt(), 51234);
+    QCOMPARE(raw.value(QStringLiteral("git/enabled")).toBool(), true);
+    QCOMPARE(raw.value(QStringLiteral("app/onboardingDone")).toBool(), true);
+}
+
+void SettingsTests::detectGitFindsExecutable()
+{
+    const GitInfo info = detectGit();
+    if (!info.found)
+        QSKIP(qPrintable(QStringLiteral("本机没有 git：%1").arg(info.error)));
+
+    QVERIFY(!info.executable.isEmpty());
+    QVERIFY2(QFileInfo(info.executable).isAbsolute(), qPrintable(info.executable));
+    QVERIFY2(info.version.contains(QStringLiteral("git version")),
+             qPrintable(info.version));
+    QVERIFY(info.error.isEmpty());
 }
 
 void SettingsTests::storeClampsLoadedValues()
@@ -195,7 +236,9 @@ void SettingsTests::dialogDefaults()
     SettingsDialog dialog(&store);
 
     verifySettingsEqual(dialog.settings(), AppSettings{});
-    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 3);
+    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 4);
+    QVERIFY(!findWidget<QCheckBox>(dialog, "gitEnabled")->isChecked());
+    QVERIFY(!findWidget<QLabel>(dialog, "gitStatus")->text().isEmpty());
     QVERIFY(dialog.endpointPath().endsWith(
         QStringLiteral("/PVForge/mcp-endpoint.json")));
     QCOMPARE(dialog.endpointPath(), SettingsDialog::defaultEndpointPath());
@@ -257,6 +300,70 @@ void SettingsTests::dialogClampsValues()
     QCOMPARE(settings.videoMemoryFrames, 32);
     QCOMPARE(int(settings.mcpPort), 1024);
     QCOMPARE(settings.humanCommitDelayMs, 200);
+}
+
+void SettingsTests::dialogGitCheckboxRoundTrip()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    auto* enabled = findWidget<QCheckBox>(dialog, "gitEnabled");
+    QVERIFY(!enabled->isChecked());
+    QVERIFY(!dialog.settings().gitEnabled);
+
+    enabled->setChecked(true);
+    QVERIFY(dialog.settings().gitEnabled);
+
+    dialog.setSettings(AppSettings{});
+    QVERIFY(!enabled->isChecked());
+
+    AppSettings configured;
+    configured.gitEnabled = true;
+    configured.onboardingDone = true;
+    dialog.setSettings(configured);
+    QVERIFY(enabled->isChecked());
+    QCOMPARE(dialog.settings().onboardingDone, true);
+
+    findWidget<QPushButton>(dialog, "gitDetect")->click();
+    QVERIFY(!findWidget<QLabel>(dialog, "gitStatus")->text().isEmpty());
+}
+
+void SettingsTests::dialogGitCancelDoesNotSave()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    findWidget<QCheckBox>(dialog, "gitEnabled")->setChecked(true);
+    findWidget<QDialogButtonBox>(dialog, "settingsButtons")
+        ->button(QDialogButtonBox::Cancel)
+        ->click();
+
+    QCOMPARE(dialog.result(), int(QDialog::Rejected));
+    QCOMPARE(store.load().gitEnabled, false);
+}
+
+void SettingsTests::dialogGitApplySaves()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = temp.filePath(QStringLiteral("settings.ini"));
+    SettingsStore store(path);
+
+    AppSettings existing;
+    existing.onboardingDone = true;
+    store.save(existing);
+
+    SettingsDialog dialog(&store);
+    findWidget<QCheckBox>(dialog, "gitEnabled")->setChecked(true);
+    findWidget<QPushButton>(dialog, "applyButton")->click();
+
+    const AppSettings saved = store.load();
+    QCOMPARE(saved.gitEnabled, true);
+    QCOMPARE(saved.onboardingDone, true);
 }
 
 void SettingsTests::cancelDoesNotSave()
@@ -355,6 +462,42 @@ void SettingsTests::gitInfoAndEndpointPath()
     dialog.setEndpointPath(QStringLiteral("/tmp/demo/mcp-endpoint.json"));
     QCOMPARE(dialog.endpointPath(), QStringLiteral("/tmp/demo/mcp-endpoint.json"));
     QVERIFY(findWidget<QLineEdit>(dialog, "mcpEndpointPath")->isReadOnly());
+}
+
+void SettingsTests::onboardingDefaultsToUnchecked()
+{
+    OnboardingDialog dialog(AppSettings{});
+
+    auto* enabled = findWidget<QCheckBox>(dialog, "onboardingGitEnabled");
+    QVERIFY(!enabled->isChecked());
+    QVERIFY(!findWidget<QLabel>(dialog, "onboardingGitStatus")->text().isEmpty());
+
+    findWidget<QPushButton>(dialog, "onboardingGitDetect")->click();
+    QVERIFY(!findWidget<QLabel>(dialog, "onboardingGitStatus")->text().isEmpty());
+
+    findWidget<QPushButton>(dialog, "onboardingStart")->click();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.gitEnabled(), false);
+}
+
+void SettingsTests::onboardingEnablesGit()
+{
+    OnboardingDialog dialog(AppSettings{});
+    findWidget<QCheckBox>(dialog, "onboardingGitEnabled")->setChecked(true);
+    findWidget<QPushButton>(dialog, "onboardingStart")->click();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.gitEnabled(), true);
+}
+
+void SettingsTests::onboardingUsesConfiguredValue()
+{
+    AppSettings settings;
+    settings.gitEnabled = true;
+    OnboardingDialog dialog(settings);
+
+    QVERIFY(findWidget<QCheckBox>(dialog, "onboardingGitEnabled")->isChecked());
+    QCOMPARE(dialog.gitEnabled(), true);
 }
 
 QTEST_MAIN(SettingsTests)

@@ -121,6 +121,11 @@ AppSettings SettingsStore::load() const
         m_settings
             .value(QStringLiteral("git/humanCommitDelayMs"), settings.humanCommitDelayMs)
             .toInt();
+    settings.gitEnabled =
+        m_settings.value(QStringLiteral("git/enabled"), settings.gitEnabled).toBool();
+    settings.onboardingDone =
+        m_settings.value(QStringLiteral("app/onboardingDone"), settings.onboardingDone)
+            .toBool();
 
     return sanitized(settings);
 }
@@ -143,6 +148,8 @@ void SettingsStore::save(const AppSettings& settings)
 
     m_settings.setValue(QStringLiteral("mcp/port"), value.mcpPort);
     m_settings.setValue(QStringLiteral("git/humanCommitDelayMs"), value.humanCommitDelayMs);
+    m_settings.setValue(QStringLiteral("git/enabled"), value.gitEnabled);
+    m_settings.setValue(QStringLiteral("app/onboardingDone"), value.onboardingDone);
 
     m_settings.sync();
 }

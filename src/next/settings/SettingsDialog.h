@@ -22,7 +22,8 @@ namespace pvf::next {
 // Operations that need the rest of the application (clearing the HTML cache,
 // rotating the MCP token, probing for Chrome, reading git history) are emitted
 // as signals instead of being performed here, so this module stays independent
-// of the renderer, MCP server and git.
+// of the renderer, MCP server and git.  The Git page only probes for a git
+// binary (`git --version`); repository work stays in the shell.
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
@@ -53,6 +54,8 @@ private:
     void buildHtmlPage();
     void buildVideoPage();
     void buildMcpPage();
+    void buildGitPage();
+    void refreshGitStatus();
     void saveToStore();
 
     SettingsStore* m_store = nullptr;
@@ -77,11 +80,16 @@ private:
     QSpinBox* m_mcpPort = nullptr;
     QPushButton* m_resetMcpToken = nullptr;
     QLineEdit* m_mcpEndpointPath = nullptr;
+
+    QCheckBox* m_gitEnabled = nullptr;
+    QLabel* m_gitStatus = nullptr;
+    QPushButton* m_gitDetect = nullptr;
     QLabel* m_gitRepositoryPath = nullptr;
     QLabel* m_gitRecentCommit = nullptr;
     QSpinBox* m_humanCommitDelayMs = nullptr;
     QString m_gitRepositoryValue;
     QString m_gitRecentCommitValue;
+    bool m_onboardingDone = false;
 };
 
 } // namespace pvf::next

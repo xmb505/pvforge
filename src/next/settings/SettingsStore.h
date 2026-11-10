@@ -28,6 +28,10 @@ struct AppSettings
     // MCP/Git
     quint16 mcpPort = 47821;
     int humanCommitDelayMs = 1000;
+    // Git is an optional prerequisite and stays off until the user enables it,
+    // either in the first-run onboarding or in the settings dialog.
+    bool gitEnabled = false;
+    bool onboardingDone = false;
 
     bool operator==(const AppSettings&) const = default;
 };

@@ -12,8 +12,12 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Test)
 add_library(pvf_next_settings STATIC
     SettingsStore.cpp
     SettingsStore.h
+    GitDetect.cpp
+    GitDetect.h
     SettingsDialog.cpp
     SettingsDialog.h
+    OnboardingDialog.cpp
+    OnboardingDialog.h
 )
 
 target_include_directories(pvf_next_settings PUBLIC

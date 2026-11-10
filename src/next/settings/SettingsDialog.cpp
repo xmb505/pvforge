@@ -1,5 +1,7 @@
 #include "next/settings/SettingsDialog.h"
 
+#include "next/settings/GitDetect.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -57,6 +59,7 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     buildHtmlPage();
     buildVideoPage();
     buildMcpPage();
+    buildGitPage();
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
                                          this);
@@ -220,7 +223,34 @@ void SettingsDialog::buildMcpPage()
             &SettingsDialog::resetMcpTokenRequested);
     form->addRow(QStringLiteral("访问凭据"), m_resetMcpToken);
 
-    auto* gitGroup = new QGroupBox(QStringLiteral("Git"), page);
+    m_tabs->addTab(page, QStringLiteral("MCP"));
+}
+
+void SettingsDialog::buildGitPage()
+{
+    auto* page = new QWidget(m_tabs);
+    auto* form = new QFormLayout(page);
+
+    m_gitEnabled =
+        new QCheckBox(QStringLiteral("启用 Git（历史、崩溃恢复、AI 写入）"), page);
+    m_gitEnabled->setObjectName(QStringLiteral("gitEnabled"));
+    form->addRow(m_gitEnabled);
+
+    m_gitStatus = selectableLabel(QString(), page);
+    m_gitStatus->setObjectName(QStringLiteral("gitStatus"));
+    form->addRow(QStringLiteral("检测状态"), m_gitStatus);
+
+    m_gitDetect = new QPushButton(QStringLiteral("重新检测"), page);
+    m_gitDetect->setObjectName(QStringLiteral("gitDetect"));
+    connect(m_gitDetect, &QPushButton::clicked, this, &SettingsDialog::refreshGitStatus);
+    form->addRow(QStringLiteral("检测"), m_gitDetect);
+
+    form->addRow(selectableLabel(
+        QStringLiteral("关闭时只保留本次运行的内存撤销；重启后无法撤销。"
+                       "没有 Git 时 MCP 只读。"),
+        page));
+
+    auto* gitGroup = new QGroupBox(QStringLiteral("当前工程"), page);
     auto* gitForm = new QFormLayout(gitGroup);
     m_gitRepositoryPath = selectableLabel(QStringLiteral("（未打开工程）"), gitGroup);
     m_gitRepositoryPath->setObjectName(QStringLiteral("gitRepositoryPath"));
@@ -243,7 +273,17 @@ void SettingsDialog::buildMcpPage()
     form->addRow(selectableLabel(
         QStringLiteral("人类编辑停手后合并为一个 commit 的等待时间。"), page));
 
-    m_tabs->addTab(page, QStringLiteral("MCP / Git"));
+    refreshGitStatus();
+    m_tabs->addTab(page, QStringLiteral("Git"));
+}
+
+void SettingsDialog::refreshGitStatus()
+{
+    const GitInfo info = detectGit();
+    m_gitStatus->setText(
+        info.found
+            ? QStringLiteral("已找到：%1（%2）").arg(info.executable, info.version)
+            : QStringLiteral("未找到 Git：%1").arg(info.error));
 }
 
 AppSettings SettingsDialog::settings() const
@@ -263,6 +303,8 @@ AppSettings SettingsDialog::settings() const
 
     settings.mcpPort = static_cast<quint16>(m_mcpPort->value());
     settings.humanCommitDelayMs = m_humanCommitDelayMs->value();
+    settings.gitEnabled = m_gitEnabled->isChecked();
+    settings.onboardingDone = m_onboardingDone;
 
     return SettingsStore::sanitized(settings);
 }
@@ -291,6 +333,8 @@ void SettingsDialog::setSettings(const AppSettings& settings)
 
     m_mcpPort->setValue(value.mcpPort);
     m_humanCommitDelayMs->setValue(value.humanCommitDelayMs);
+    m_gitEnabled->setChecked(value.gitEnabled);
+    m_onboardingDone = value.onboardingDone;
 }
 
 void SettingsDialog::setGitInfo(const QString& repositoryPath, const QString& recentCommit)
