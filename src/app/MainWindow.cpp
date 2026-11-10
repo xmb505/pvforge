@@ -21,6 +21,7 @@
 #include "mcp/McpServer.h"
 #include "render/CameraRenderer.h"
 #include "render/VideoExporter.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "model/Project.h"
@@ -767,39 +768,11 @@ void MainWindow::buildSessionShell()
     top->setObjectName(QStringLiteral("sessionTopSplit"));
     top->setChildrenCollapsible(false);
 
-    m_sessionCanvas = new QFrame(top);
-    m_sessionCanvas->setObjectName(QStringLiteral("p1Canvas"));
-    m_sessionCanvas->setFrameShape(QFrame::NoFrame);
-    m_sessionCanvas->setMinimumWidth(480);
-    auto* canvasLayout = new QVBoxLayout(m_sessionCanvas);
-    canvasLayout->setContentsMargins(48, 48, 48, 48);
-    canvasLayout->setSpacing(14);
-    canvasLayout->addStretch(1);
-
-    m_sessionTitle = new QLabel(m_sessionCanvas);
-    QFont titleFont = m_sessionTitle->font();
-    titleFont.setPointSize(30);
-    titleFont.setBold(true);
-    m_sessionTitle->setFont(titleFont);
-    m_sessionTitle->setWordWrap(true);
-    canvasLayout->addWidget(m_sessionTitle);
-
-    m_sessionDetails = new QLabel(m_sessionCanvas);
-    QFont detailFont = m_sessionDetails->font();
-    detailFont.setPointSize(detailFont.pointSize() + 4);
-    m_sessionDetails->setFont(detailFont);
-    m_sessionDetails->setWordWrap(true);
-    canvasLayout->addWidget(m_sessionDetails);
-
-    m_sessionPath = new QLabel(m_sessionCanvas);
-    m_sessionPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_sessionPath->setWordWrap(true);
-    canvasLayout->addWidget(m_sessionPath);
-
-    m_sessionHint = new QLabel(m_sessionCanvas);
-    m_sessionHint->setWordWrap(true);
-    canvasLayout->addWidget(m_sessionHint);
-    canvasLayout->addStretch(1);
+    // P3a: the old viewport widget is back, drawing the new entity model
+    // through render2.  The P1 read-only placeholder page is gone.
+    m_viewport = new Viewport(m_session, top);
+    m_viewport->setObjectName(QStringLiteral("viewport"));
+    m_viewport->setMinimumWidth(480);
 
     m_sessionProps = new ProjectPropertiesPanel(m_session, this);
     m_sessionEnvironment = new EnvironmentPanel(m_session, this);
@@ -840,7 +813,7 @@ void MainWindow::buildSessionShell()
                         Lang::t(QStringLiteral("panel.projectTab"),
                                 QStringLiteral("项目属性")));
 
-    top->addWidget(m_sessionCanvas);
+    top->addWidget(m_viewport);
     top->addWidget(m_rightTabs);
     top->setStretchFactor(0, 1);
     top->setStretchFactor(1, 0);
@@ -875,10 +848,16 @@ void MainWindow::buildSessionShell()
     connect(m_sessionProps, &ProjectPropertiesPanel::settingsChanged, this,
             [this] {
                 updateWindowTitle();
-                updateSessionPlaceholder();
+                if (m_viewport)
+                    m_viewport->refreshSession();
+                updateSessionStatus();
             });
     connect(m_sessionEnvironment, &EnvironmentPanel::changed, this,
-            [this] { updateSessionPlaceholder(); });
+            [this] {
+                if (m_viewport)
+                    m_viewport->refreshSession();
+                updateSessionStatus();
+            });
 
     if (m_session && m_session->document())
     {
@@ -896,34 +875,56 @@ void MainWindow::buildSessionShell()
                         QStringLiteral("提交失败：%1").arg(message), 5000);
                 });
         connect(document, &next::Document::playheadChanged, this, [this] {
-            if (m_session)
-            {
-                m_frame = m_session->playhead();
-                if (m_timeline)
-                    m_timeline->setCurrentFrame(m_frame);
-            }
-            updateSessionPlaceholder();
+            if (!m_session)
+                return;
+            m_frame = m_session->playhead();
+            if (m_timeline)
+                m_timeline->setCurrentFrame(m_frame);
+            if (m_viewport)
+                m_viewport->setCurrentFrame(m_frame);
+            updateSessionStatus();
         });
         connect(document, &next::Document::selectionChanged, this, [this] {
-            if (m_session && m_timeline)
-            {
-                m_selected = m_timeline->entityIdForUuid(
-                    m_session->document()->selection());
+            if (!m_session)
+                return;
+            m_selected = m_timeline
+                             ? m_timeline->entityIdForUuid(
+                                   m_session->document()->selection())
+                             : kInvalidEntity;
+            if (m_timeline)
                 m_timeline->setSelectedEntity(m_selected);
-            }
-            updateSessionPlaceholder();
+            // A selected camera changes the render camera, so the workbench
+            // cache must be rebuilt for that camera before the next paint.
+            m_session->workbench();
+            if (m_viewport)
+                m_viewport->refreshSession();
+            updateSessionStatus();
         });
+
+        if (m_viewport)
+        {
+            connect(m_viewport, &Viewport::uuidSelected, this,
+                    [this](const Uuid& uuid) {
+                        if (m_session && m_session->document())
+                            m_session->document()->setSelection(uuid);
+                    });
+            if (auto* playback = m_session->playback())
+            {
+                connect(m_viewport, &Viewport::framePresented, playback,
+                        [playback](int) { playback->noteFramePresented(); });
+                connect(playback, &next::PlaybackController::playbackStateChanged,
+                        this, [this](bool) { updateSessionPlaybackUi(); });
+                connect(playback, &next::PlaybackController::stalled, this,
+                        [this](const QString& message) {
+                            statusBar()->showMessage(message, 5000);
+                        });
+            }
+        }
 
         if (m_timeline)
         {
             connect(m_timeline, &TimelinePanel::frameRequested, this,
-                    [this](int frame) {
-                        if (!m_session)
-                            return;
-                        m_frame = frame;
-                        m_session->setPlayhead(frame);
-                        updateSessionPlaceholder();
-                    });
+                    [this](int frame) { sessionGoToFrame(frame); });
             connect(m_timeline, &TimelinePanel::entitySelected, this,
                     [this](EntityId id) {
                         if (!m_session || !m_timeline)
@@ -931,8 +932,13 @@ void MainWindow::buildSessionShell()
                         m_selected = id;
                         m_session->document()->setSelection(
                             m_timeline->uuidForEntityId(id));
-                        updateSessionPlaceholder();
+                        updateSessionStatus();
                     });
+            connect(m_timeline, &TimelinePanel::scrubStarted, this, [this] {
+                if (m_session && m_session->playback()
+                    && m_session->playback()->isPlaying())
+                    m_session->playback()->pause();
+            });
             connect(m_timeline, &TimelinePanel::editCommitted, this,
                     [this](const QString& text) {
                         statusBar()->showMessage(text, 2000);
@@ -944,6 +950,9 @@ void MainWindow::buildSessionShell()
                     });
         }
 
+        // Opening a project always starts the viewport at frame 0, even when
+        // the project carries a persisted playhead.
+        m_session->setPlayhead(0);
         m_frame = m_session->playhead();
         m_selected = m_timeline
                          ? m_timeline->entityIdForUuid(document->selection())
@@ -951,7 +960,9 @@ void MainWindow::buildSessionShell()
     }
 
     createSessionMenus();
+    createSessionToolBar();
     refreshSession();
+    updateSessionPlaybackUi();
     updateWindowTitle();
 }
 
@@ -1028,6 +1039,70 @@ void MainWindow::createSessionMenus()
     addAction(m_redoAction);
     editMenu->addAction(m_redoAction);
 
+    auto* playMenu =
+        menuBar()->addMenu(Lang::t(QStringLiteral("menu.play"), QStringLiteral("播放")));
+    m_playAction =
+        new QAction(Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")), this);
+    m_playAction->setObjectName(QStringLiteral("playAction"));
+    m_playAction->setShortcut(QKeySequence(Qt::Key_Space));
+    m_playAction->setShortcutContext(Qt::ApplicationShortcut);
+    connect(m_playAction, &QAction::triggered, this, &MainWindow::togglePlayback);
+    addAction(m_playAction);
+    playMenu->addAction(m_playAction);
+
+    m_homeAction =
+        new QAction(Lang::t(QStringLiteral("action.home"), QStringLiteral("回到开头")),
+                    this);
+    m_homeAction->setObjectName(QStringLiteral("homeAction"));
+    m_homeAction->setShortcut(QKeySequence(Qt::Key_Home));
+    connect(m_homeAction, &QAction::triggered, this, [this] {
+        sessionGoToFrame(0);
+    });
+    addAction(m_homeAction);
+    playMenu->addAction(m_homeAction);
+
+    m_endAction =
+        new QAction(Lang::t(QStringLiteral("action.end"), QStringLiteral("跳到结尾")),
+                    this);
+    m_endAction->setObjectName(QStringLiteral("endAction"));
+    m_endAction->setShortcut(QKeySequence(Qt::Key_End));
+    connect(m_endAction, &QAction::triggered, this, [this] {
+        if (m_session && m_session->playback())
+            sessionGoToFrame(m_session->playback()->contentEnd());
+    });
+    addAction(m_endAction);
+    playMenu->addAction(m_endAction);
+
+    auto* stepBackAction = new QAction(QStringLiteral("上一帧"), this);
+    stepBackAction->setShortcut(QKeySequence(Qt::Key_Left));
+    connect(stepBackAction, &QAction::triggered, this, [this] {
+        if (m_session)
+            sessionGoToFrame(std::max(0, m_session->playhead() - 1));
+    });
+    addAction(stepBackAction);
+    playMenu->addAction(stepBackAction);
+
+    auto* stepForwardAction = new QAction(QStringLiteral("下一帧"), this);
+    stepForwardAction->setShortcut(QKeySequence(Qt::Key_Right));
+    connect(stepForwardAction, &QAction::triggered, this, [this] {
+        if (m_session)
+            sessionGoToFrame(m_session->playhead() + 1);
+    });
+    addAction(stepForwardAction);
+    playMenu->addAction(stepForwardAction);
+
+    m_fitAction =
+        new QAction(Lang::t(QStringLiteral("action.fitWindow"),
+                            QStringLiteral("适配窗口")),
+                    this);
+    m_fitAction->setShortcut(QKeySequence(Qt::Key_F));
+    connect(m_fitAction, &QAction::triggered, this, [this] {
+        if (m_viewport)
+            m_viewport->resetView();
+    });
+    addAction(m_fitAction);
+    playMenu->addAction(m_fitAction);
+
     auto* helpMenu =
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.help"), QStringLiteral("帮助")));
     helpMenu->addAction(
@@ -1035,11 +1110,26 @@ void MainWindow::createSessionMenus()
         [this] {
             QMessageBox::about(
                 this, QStringLiteral("关于 PVForge"),
-                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2b2：目录工程、工程属性、播放头、可编辑时间轴、关键帧、标记与切分已接通。")
+                QStringLiteral("PVForge %1\n\n旧 UI 接入 P3a：目录工程、工程属性、可编辑时间轴、render2 视口、播放与工作台缓存已接通。")
                     .arg(QStringLiteral(PVFORGE_VERSION)));
         });
 
     menuBar()->setFixedHeight(menuBar()->sizeHint().height());
+}
+
+void MainWindow::createSessionToolBar()
+{
+    auto* bar = addToolBar(QStringLiteral("播放"));
+    bar->setObjectName(QStringLiteral("sessionPlayToolBar"));
+    bar->setMovable(false);
+    if (m_playAction)
+        bar->addAction(m_playAction);
+    if (m_homeAction)
+        bar->addAction(m_homeAction);
+    if (m_endAction)
+        bar->addAction(m_endAction);
+    if (m_fitAction)
+        bar->addAction(m_fitAction);
 }
 
 void MainWindow::refreshSession()
@@ -1051,8 +1141,10 @@ void MainWindow::refreshSession()
         m_sessionProps->refresh();
     if (m_sessionEnvironment)
         m_sessionEnvironment->refresh();
+    if (m_viewport)
+        m_viewport->refreshSession();
 
-    updateSessionPlaceholder();
+    updateSessionStatus();
     updateWindowTitle();
 
     if (auto* document = m_session->document())
@@ -1064,47 +1156,52 @@ void MainWindow::refreshSession()
     }
 }
 
-void MainWindow::updateSessionPlaceholder()
+void MainWindow::sessionGoToFrame(int frame)
 {
-    if (!m_sessionCanvas)
+    if (!m_session)
+        return;
+    const int clamped = std::max(0, frame);
+    m_session->setPlayhead(clamped);
+    m_frame = clamped;
+    if (m_timeline)
+        m_timeline->setCurrentFrame(clamped);
+    if (m_viewport)
+        m_viewport->setCurrentFrame(clamped);
+    updateSessionStatus();
+}
+
+void MainWindow::updateSessionPlaybackUi()
+{
+    const bool playing = m_session && m_session->playback()
+                         && m_session->playback()->isPlaying();
+    if (m_playAction)
+        m_playAction->setText(
+            playing ? Lang::t(QStringLiteral("action.pause"), QStringLiteral("暂停"))
+                    : Lang::t(QStringLiteral("action.play"), QStringLiteral("播放")));
+    updateSessionStatus();
+}
+
+void MainWindow::updateSessionStatus()
+{
+    if (!m_status)
         return;
 
     if (!m_session)
     {
-        m_sessionTitle->setText(QStringLiteral("没有打开的工程"));
-        m_sessionDetails->setText(QStringLiteral("PVForge"));
-        m_sessionPath->clear();
-        m_sessionHint->setText(
-            QStringLiteral("从「文件 → 新建项目」或启动欢迎页打开一个 .pvproj 目录工程。"));
+        m_status->setText(QStringLiteral("没有打开的工程"));
         return;
     }
 
     const model::ProjectSettings& settings = m_session->settings();
-    QColor background(settings.background);
-    if (!background.isValid())
-        background = QColor(0x10, 0x10, 0x14);
-    const QString foreground =
-        background.lightness() > 140 ? QStringLiteral("#151515")
-                                     : QStringLiteral("#f2f2f2");
-
-    m_sessionCanvas->setStyleSheet(
-        QStringLiteral("QFrame#p1Canvas { background-color: %1; }")
-            .arg(background.name()));
-    for (QLabel* label : {m_sessionTitle, m_sessionDetails, m_sessionPath,
-                          m_sessionHint})
-        label->setStyleSheet(QStringLiteral("color: %1;").arg(foreground));
-
-    m_sessionTitle->setText(m_session->name());
-
     const model::Project& project = m_session->project();
-    const QVector<Uuid> roots = model::rootEntities(project);
     int totalEnd = 0;
-    for (const Uuid& uuid : roots)
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
     {
-        const auto found = project.entities.constFind(uuid);
-        if (found != project.entities.constEnd())
-            totalEnd = std::max(totalEnd, found->end);
+        if (it->parentUuid.isEmpty())
+            totalEnd = std::max(totalEnd, it->end);
     }
+
     QString selection = QStringLiteral("无");
     if (auto* document = m_session->document())
     {
@@ -1113,30 +1210,16 @@ void MainWindow::updateSessionPlaceholder()
             selection = found->name.isEmpty() ? found->uuid : found->name;
     }
 
-    m_sessionDetails->setText(
-        QStringLiteral("%1 × %2 · %3 fps · 背景色 %4 · 播放头 %5")
+    const bool playing = m_session->playback() && m_session->playback()->isPlaying();
+    m_status->setText(
+        QStringLiteral("%1 × %2 @ %3 fps · 帧 %4 / 总长 %5 · %6 · 选中 %7")
             .arg(settings.width)
             .arg(settings.height)
             .arg(settings.fps)
-            .arg(background.name().toUpper())
-            .arg(m_session->playhead()));
-    m_sessionPath->setText(m_session->root());
-    m_sessionHint->setText(
-        QStringLiteral("P2b2：时间轴可编辑（%1 个根实体，总长 %2 帧）。"
-                       "拖动、裁剪、换行、换父级、级联删除、关键帧、标记和"
-                       "播放头切分已接通；视口、属性面板、"
-                       "素材箱和摄像机监视器随后接回。")
-            .arg(roots.size())
-            .arg(totalEnd));
-    if (m_status)
-        m_status->setText(
-            QStringLiteral("%1 × %2 @ %3 fps · 总长 %4 帧 · 播放头 %5 · 选中 %6")
-                .arg(settings.width)
-                .arg(settings.height)
-                .arg(settings.fps)
-                .arg(totalEnd)
-                .arg(m_session->playhead())
-                .arg(selection));
+            .arg(m_session->playhead())
+            .arg(totalEnd)
+            .arg(playing ? QStringLiteral("播放中") : QStringLiteral("暂停"))
+            .arg(selection));
 }
 
 bool MainWindow::saveSessionProject()
@@ -2797,6 +2880,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         // Edits are already on disk; flush only the debounced git commit and
         // persist the playhead next to the project.
+        if (m_session->playback())
+            m_session->playback()->pause();
         QString error;
         m_session->flush(&error);
         if (!error.isEmpty())
@@ -2851,6 +2936,12 @@ EntityId MainWindow::importImageFile(const QString& path)
 
 void MainWindow::setFrame(int frame)
 {
+    if (m_session)
+    {
+        sessionGoToFrame(frame);
+        return;
+    }
+
     m_frame = std::max(0, frame);
     m_videoPlayer.update(*m_project, m_frame);
     m_viewport->setCurrentFrame(m_frame);
@@ -3664,6 +3755,25 @@ void MainWindow::ensureProxies()
 
 void MainWindow::togglePlayback()
 {
+    if (m_session)
+    {
+        auto* playback = m_session->playback();
+        if (!playback)
+            return;
+        if (playback->isPlaying())
+        {
+            playback->pause();
+        }
+        else
+        {
+            if (m_session->playhead() >= playback->contentEnd())
+                sessionGoToFrame(0);
+            playback->play();
+        }
+        updateSessionPlaybackUi();
+        return;
+    }
+
     if (m_playing)
     {
         m_playTimer->stop();

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "common/Types.h"
+#include "next/settings/SettingsStore.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -17,14 +20,18 @@ class AssetStore;
 }
 
 namespace next {
+class MediaServices;
+class PlaybackController;
 class ProjectDocument;
-}
+class WorkbenchServices;
+} // namespace next
 
 class EditActions;
 
 // Thin adapter between the legacy application shell and the new
-// next::ProjectDocument.  It owns the document and exposes only the pieces the
-// P1 shell needs; it deliberately keeps no shadow copy of the project model.
+// next::ProjectDocument.  It owns the document and the per-project backend
+// services the old shell needs (media decoders, the workbench cache and the
+// playback clock).  It deliberately keeps no shadow copy of the project model.
 class EditorSession
 {
 public:
@@ -57,6 +64,21 @@ public:
     QString root() const;
     QString name() const;
 
+    // Backend services.  MediaServices and WorkbenchServices must be destroyed
+    // before the document; member order in the implementation guarantees it.
+    next::MediaServices* media() const { return m_media.get(); }
+    next::PlaybackController* playback() const { return m_playback.get(); }
+    // Returns the workbench cache for the current camera, rebuilding it when
+    // the active camera or the expand setting changed.  May return nullptr when
+    // the cache is disabled.
+    next::WorkbenchServices* workbench();
+    const next::AppSettings& appSettings() const { return m_appSettings; }
+
+    // Camera used for render2::Options::cameraUuid.  The selected camera wins;
+    // otherwise the old viewport's whole-canvas view is used (empty uuid).
+    // P3b adds the camera frame overlay and monitor.
+    Uuid activeCameraUuid() const;
+
     int playhead() const;
     void setPlayhead(int frame);
     void savePlayhead();
@@ -72,7 +94,13 @@ public:
 private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
+    // Declared before the services so the services die first.
     std::unique_ptr<next::ProjectDocument> m_document;
+    std::unique_ptr<next::SettingsStore> m_settingsStore;
+    next::AppSettings m_appSettings;
+    std::unique_ptr<next::MediaServices> m_media;
+    std::unique_ptr<next::WorkbenchServices> m_workbench;
+    std::unique_ptr<next::PlaybackController> m_playback;
     std::unique_ptr<EditActions> m_editActions;
 };
 

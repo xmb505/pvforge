@@ -26,9 +26,13 @@
 #include "html/HtmlCaptureTest.h"
 #include "html/HtmlLayerTest.h"
 #include "core/Project.h"
+#include "mcp2/Service.h"
 #include "model/Project.h"
 #include "model/Uuid.h"
+#include "next/app/MediaServices.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
+#include "next/app/WorkbenchServices.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
@@ -101,6 +105,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -601,6 +606,287 @@ int timelineTest(QApplication& app)
     QApplication::processEvents();
     qInfo() << "timeline-test OK: 7 rows, ranges, depth, markers, playhead,"
                " private timeline";
+    return 0;
+}
+
+int viewportTest(QApplication& app, const QString& projectDir)
+{
+    Q_UNUSED(app);
+    QString error;
+    auto session = pvf::EditorSession::openProject(projectDir, &error);
+    if (!session)
+    {
+        qCritical() << "viewport-test: open failed" << projectDir << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* sessionPtr = window->editorSessionForTest();
+    auto* viewport = window->viewportForTest();
+    if (!sessionPtr || !sessionPtr->document() || !viewport)
+    {
+        qCritical() << "viewport-test: window has no session viewport";
+        return 1;
+    }
+    if (sessionPtr->playhead() != 0)
+    {
+        qCritical() << "viewport-test: open did not start at frame 0"
+                    << sessionPtr->playhead();
+        return 1;
+    }
+    if (viewport->grabProjectFrame().isNull())
+    {
+        qCritical() << "viewport-test: frame 0 render is empty";
+        return 1;
+    }
+
+    auto waitFor = [](const std::function<bool()>& predicate, int timeoutMs) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < timeoutMs)
+        {
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(10);
+        }
+        return predicate();
+    };
+
+    sessionPtr->setPlayhead(30);
+    QApplication::processEvents();
+
+    auto* media = sessionPtr->media();
+    if (media)
+    {
+        media->prepareHtmlPreview(3000);
+        waitFor([media] { return !media->htmlPending(); }, 5000);
+    }
+    viewport->refreshSession();
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+
+    const QImage grab = viewport->grab().toImage();
+    if (grab.isNull() || grab.width() < 100 || grab.height() < 100)
+    {
+        qCritical() << "viewport-test: viewport grab is empty" << grab.size();
+        return 1;
+    }
+
+    // The HTML layer is a solid #ff3b30 rectangle at project (0,0)-(320,150)
+    // (the clip starts above the canvas).  A camera view maps it into the
+    // upper-left quadrant of the viewport.
+    int redPixels = 0;
+    for (int y = 0; y < grab.height(); y += 2)
+    {
+        for (int x = 0; x < grab.width(); x += 2)
+        {
+            const QColor color = grab.pixelColor(x, y);
+            if (color.red() > 180 && color.green() < 100 && color.blue() < 100)
+                ++redPixels;
+        }
+    }
+    if (redPixels < 200)
+    {
+        qCritical() << "viewport-test: HTML red area missing; red pixels"
+                    << redPixels
+                    << "htmlStartFailed" << (media && media->htmlStartFailed())
+                    << (media ? media->htmlError() : QString());
+        return 1;
+    }
+
+    // Sample a point that only the HTML layer covers: project (40,40) is inside
+    // the 320x180 HTML frame, left of the video and image entities.
+    const QPoint htmlPoint =
+        viewport->projectToWidgetForTest(QPointF(40.0, 40.0)).toPoint();
+    if (!grab.rect().contains(htmlPoint))
+    {
+        qCritical() << "viewport-test: HTML sample point outside viewport"
+                    << htmlPoint;
+        return 1;
+    }
+    const QColor htmlColor = grab.pixelColor(htmlPoint);
+    if (htmlColor.red() < 180 || htmlColor.green() > 100
+        || htmlColor.blue() > 100)
+    {
+        qCritical() << "viewport-test: HTML pixel is not red" << htmlPoint
+                    << htmlColor;
+        return 1;
+    }
+
+    // The title text sits on the canvas centre at frame 30.
+    bool centreLit = false;
+    const QPoint centre(grab.width() / 2, grab.height() / 2);
+    for (int dy = -8; dy <= 8 && !centreLit; ++dy)
+    {
+        for (int dx = -8; dx <= 8; ++dx)
+        {
+            const QColor color = grab.pixelColor(centre.x() + dx, centre.y() + dy);
+            if (color.lightness() > 150)
+            {
+                centreLit = true;
+                break;
+            }
+        }
+    }
+    if (!centreLit)
+    {
+        qCritical() << "viewport-test: canvas centre has no rendered pixels";
+        return 1;
+    }
+
+    auto* workbench = sessionPtr->workbench();
+    const QString cacheDir = workbench ? workbench->cacheDirectory() : QString();
+    if (cacheDir.isEmpty() || !QFileInfo(cacheDir).isDir())
+    {
+        qCritical() << "viewport-test: workbench cache directory missing" << cacheDir;
+        return 1;
+    }
+    const pvf::workbench::CacheStats cacheStats =
+        workbench ? workbench->stats() : pvf::workbench::CacheStats();
+    if (cacheStats.entries <= 0)
+    {
+        qCritical() << "viewport-test: workbench cache has no entries" << cacheDir;
+        return 1;
+    }
+
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-p3a-viewport.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "viewport-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    // Compare the same frame with preview.render_frame (same render2 call and
+    // the same MediaServices providers).
+    pvf::mcp2::Service service(sessionPtr->document()->store(),
+                               &sessionPtr->assets());
+    if (media)
+    {
+        service.setVideoFrameProvider([media](const pvf::Uuid& uuid, double frame) {
+            return media->videoFrame(uuid, frame);
+        });
+        service.setHtmlFrameProvider([media](const pvf::Uuid& uuid, double frame) {
+            return media->htmlFrame(uuid, frame);
+        });
+    }
+    QJsonObject args;
+    args.insert(QStringLiteral("frame"), 30);
+    const QJsonObject previewResult =
+        service.execute(QStringLiteral("preview.render_frame"), args);
+    if (!previewResult.value(QStringLiteral("ok")).toBool())
+    {
+        qCritical() << "viewport-test: preview.render_frame failed"
+                    << previewResult;
+        return 1;
+    }
+    const QString previewPath =
+        previewResult.value(QStringLiteral("data"))
+            .toObject()
+            .value(QStringLiteral("path"))
+            .toString();
+    const QImage preview(previewPath);
+    const QImage viewportFrame = viewport->grabProjectFrame();
+    if (preview.isNull() || viewportFrame.isNull()
+        || preview.size() != viewportFrame.size())
+    {
+        qCritical() << "viewport-test: preview/viewport size mismatch"
+                    << preview.size() << viewportFrame.size() << previewPath;
+        return 1;
+    }
+    QFile::remove(QStringLiteral("/tmp/opencode/pvforge-p3a-preview.png"));
+    QFile::copy(previewPath,
+                QStringLiteral("/tmp/opencode/pvforge-p3a-preview.png"));
+
+    double colourDiff = 0.0;
+    int samples = 0;
+    for (int y = 0; y < preview.height(); y += 4)
+    {
+        for (int x = 0; x < preview.width(); x += 4)
+        {
+            const QColor a = preview.pixelColor(x, y);
+            const QColor b = viewportFrame.pixelColor(x, y);
+            colourDiff += std::abs(a.red() - b.red())
+                          + std::abs(a.green() - b.green())
+                          + std::abs(a.blue() - b.blue());
+            ++samples;
+        }
+    }
+    colourDiff /= std::max(1, samples);
+    if (colourDiff > 12.0)
+    {
+        qCritical() << "viewport-test: preview colour mismatch" << colourDiff
+                    << previewPath;
+        return 1;
+    }
+
+    // Playback: the frame clock must advance the playhead by ~30 frames.
+    auto* playback = sessionPtr->playback();
+    if (!playback)
+    {
+        qCritical() << "viewport-test: no playback controller";
+        return 1;
+    }
+    sessionPtr->setPlayhead(30);
+    const int playStart = sessionPtr->playhead();
+    playback->play();
+    const bool advanced =
+        waitFor([sessionPtr, playStart] {
+            return sessionPtr->playhead() >= playStart + 30;
+        }, 6000);
+    playback->pause();
+    const int playEnd = sessionPtr->playhead();
+    if (!advanced || playEnd <= playStart)
+    {
+        qCritical() << "viewport-test: playback did not advance" << playStart
+                    << playEnd;
+        return 1;
+    }
+
+    // The old camera selection rule: selecting a camera entity switches
+    // render2's cameraUuid to it; clearing the selection returns to canvas.
+    pvf::Uuid cameraUuid;
+    for (auto it = sessionPtr->project().entities.constBegin();
+         it != sessionPtr->project().entities.constEnd(); ++it)
+    {
+        if (it->content.kind == pvf::ContentKind::Camera)
+        {
+            cameraUuid = it->uuid;
+            break;
+        }
+    }
+    if (!cameraUuid.isEmpty())
+    {
+        sessionPtr->document()->setSelection(cameraUuid);
+        QApplication::processEvents();
+        if (sessionPtr->activeCameraUuid() != cameraUuid
+            || viewport->grabProjectFrame(cameraUuid).isNull())
+        {
+            qCritical() << "viewport-test: camera selection did not reach render2";
+            return 1;
+        }
+        sessionPtr->document()->setSelection(pvf::Uuid());
+        QApplication::processEvents();
+        if (!sessionPtr->activeCameraUuid().isEmpty())
+        {
+            qCritical() << "viewport-test: canvas selection did not clear camera";
+            return 1;
+        }
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "viewport-test OK: frame 30 red pixels" << redPixels
+            << "cache entries" << cacheStats.entries << "preview diff"
+            << colourDiff << "playback" << playStart << "->" << playEnd
+            << "screenshot" << screenshot;
     return 0;
 }
 
@@ -15645,6 +15931,16 @@ int main(int argc, char* argv[])
         return sessionTest();
     if (app.arguments().contains(QStringLiteral("--timeline-test")))
         return timelineTest(app);
+    const int viewportIndex = app.arguments().indexOf(
+        QStringLiteral("--viewport-test"));
+    if (viewportIndex >= 0)
+    {
+        QString projectDir = QStringLiteral("/tmp/pvfe2e/proj");
+        if (viewportIndex + 1 < app.arguments().size()
+            && !app.arguments().at(viewportIndex + 1).startsWith(QLatin1Char('-')))
+            projectDir = app.arguments().at(viewportIndex + 1);
+        return viewportTest(app, projectDir);
+    }
     if (app.arguments().contains(QStringLiteral("--timeline-edit-test")))
         return timelineEditTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-keys-test")))

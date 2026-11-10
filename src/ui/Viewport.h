@@ -1,8 +1,10 @@
 #pragma once
 
+#include "common/Types.h"
 #include "core/Camera.h"
 #include "core/Project.h"
 
+#include <QImage>
 #include <QPointF>
 #include <QPolygonF>
 #include <QTransform>
@@ -13,16 +15,34 @@ class QToolButton;
 
 namespace pvf {
 
+class EditorSession;
+
+namespace model {
+struct Entity;
+}
+
 class Viewport : public QWidget
 {
     Q_OBJECT
 
 public:
+    // Legacy shell constructor (old core::Project data source).
     explicit Viewport(Project* project, QWidget* parent = nullptr);
+    // Delivery shell constructor: draws the new entity model through render2
+    // and the per-project MediaServices/WorkbenchServices.
+    explicit Viewport(EditorSession* session, QWidget* parent = nullptr);
 
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
     void resetView();
+
+    // Drops the cached render2 frame and repaints (document/media changes).
+    void refreshSession();
+
+    // Renders the current frame at project resolution for tests/previews.
+    QImage grabProjectFrame(const Uuid& cameraUuid = Uuid()) const;
+    QPointF projectToWidgetForTest(const QPointF& pos) const;
+    QImage sessionImageForTest() const { return m_sessionImage; }
 
     QToolButton* workbenchButton() const { return m_workbenchButton; }
 
@@ -48,6 +68,10 @@ public:
 
 signals:
     void entitySelected(EntityId id);
+    // Session shell selection: UUIDs are the new model's entity identity.
+    void uuidSelected(const Uuid& uuid);
+    // A complete render2 frame reached the screen (playback watchdog input).
+    void framePresented(int frame);
     void valueEdited(EntityId id, const QString& prop, double value);
     void positionEdited(EntityId id, double x, double y);
     void scaleEdited(EntityId id, double sx, double sy, double x, double y);
@@ -96,10 +120,27 @@ private:
 
     enum class CameraPart { None, Move, Corner0, Corner1, Corner2, Corner3, Rotate };
 
+    bool sessionMode() const { return m_session != nullptr; }
+    QSize canvasSize() const;
     QRectF canvasRect() const;
     double viewScale() const;
     QTransform worldToScreenTransform() const;
     QPointF screenToCanvas(const QPointF& pos) const;
+
+    // ---- session (new model) rendering ---------------------------------
+    Uuid sessionCameraUuid() const;
+    int sessionExpandPercent() const;
+    QRectF sessionSceneRect() const;
+    QTransform sessionWorldToScreen() const;
+    QPointF sessionScreenToProject(const QPointF& pos) const;
+    QImage renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
+                              int expandPercent, bool* mediaMissing) const;
+    QImage ensureSessionImage();
+    void invalidateSessionImage();
+    void paintSession(QPainter& painter);
+    void drawSessionSelection(QPainter& painter);
+    const model::Entity* hitTestSession(const QPointF& pos) const;
+
     EntityId activeCameraEntity() const;
     Camera::State cameraState(const Entity& e) const;
     QPolygonF cameraScreenPolygon() const;
@@ -138,6 +179,7 @@ private:
     void applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap);
 
     Project* m_project = nullptr;
+    EditorSession* m_session = nullptr;
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
     double m_zoom = 1.0;
@@ -177,6 +219,16 @@ private:
     double m_cameraStartAngle = 0.0;
 
     QToolButton* m_workbenchButton = nullptr;
+
+    // Cached render2 image for the session shell.  Workbench lookups may
+    // return a lower-resolution image; drawImage() scales it to the scene rect.
+    mutable QImage m_sessionImage;
+    bool m_sessionImageValid = false;
+    bool m_sessionMediaMissing = false;
+    QSize m_sessionImageSize;
+    int m_sessionImageFrame = -1;
+    Uuid m_sessionImageCamera;
+    int m_sessionImageExpand = -1;
 };
 
 } // namespace pvf

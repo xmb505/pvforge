@@ -72,11 +72,6 @@ add_executable(pvforge
     src/render/CameraRenderer.cpp
     src/render/VideoExporter.cpp
     src/html/HtmlAsset.cpp
-    src/html/WsClient.cpp
-    src/html/CdpTransport.cpp
-    src/html/PipeCdpTransport.cpp
-    src/html/CdpClient.cpp
-    src/html/HtmlBrowser.cpp
     src/html/HtmlRenderer.cpp
     src/html/HtmlCaptureTest.cpp
     src/html/HtmlLayerTest.cpp
@@ -169,4 +164,5 @@ add_subdirectory(src/next/app)
 # P1/P2 delivery shell: link only the document slice and the shared entity
 # range helpers. `pvforge-next` (and its main.cpp) stays a separate,
 # reference-only target.
-target_link_libraries(pvforge PRIVATE pvf_next_document pvf_entity_range)
+target_link_libraries(pvforge PRIVATE pvf_next_document pvf_next_services
+    pvf_mcp2 pvf_entity_range)

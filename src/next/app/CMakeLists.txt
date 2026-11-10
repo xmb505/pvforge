@@ -105,21 +105,46 @@ target_link_libraries(pvf_next_document PUBLIC
 
 target_compile_features(pvf_next_document PUBLIC cxx_std_20)
 
+add_library(pvf_next_services STATIC
+    MediaServices.cpp
+    MediaServices.h
+    WorkbenchServices.cpp
+    WorkbenchServices.h
+    PlaybackController.cpp
+    PlaybackController.h
+)
+
+target_include_directories(pvf_next_services PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../..
+)
+
+target_link_libraries(pvf_next_services PUBLIC
+    pvf_next_document
+    pvf_next_core
+    pvf_store
+    pvf_next_assets
+    pvf_render2
+    pvf_next_settings
+    pvf_html2
+    pvf_video2
+    pvf_audio2
+    pvf_workbench
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+
+target_compile_features(pvf_next_services PUBLIC cxx_std_20)
+
 add_library(pvf_next_app STATIC
     NextWindow.cpp
     NextWindow.h
-    MediaServices.cpp
-    MediaServices.h
     CameraMonitorWidget.cpp
     CameraMonitorWidget.h
-    WorkbenchServices.cpp
-    WorkbenchServices.h
     WorkbenchPanel.cpp
     WorkbenchPanel.h
     ExportDialog.cpp
     ExportDialog.h
-    PlaybackController.cpp
-    PlaybackController.h
 )
 
 target_include_directories(pvf_next_app PUBLIC
@@ -127,6 +152,7 @@ target_include_directories(pvf_next_app PUBLIC
 )
 
 target_link_libraries(pvf_next_app PUBLIC
+    pvf_next_services
     pvf_next_document
     pvf_next_core
     pvf_store

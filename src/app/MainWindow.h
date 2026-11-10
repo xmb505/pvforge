@@ -70,6 +70,7 @@ public:
     // P2a session shell: the window owns the session; tests read the Document
     // through this accessor instead of reaching into private members.
     EditorSession* editorSessionForTest() const { return m_session; }
+    Viewport* viewportForTest() const { return m_viewport; }
     EntityId importImageFile(const QString& path);
     void goToFrame(int frame) { setFrame(frame); }
     int currentFrame() const { return m_frame; }
@@ -193,8 +194,11 @@ private:
     // ---- P1 session shell -----------------------------------------------
     void buildSessionShell();
     void createSessionMenus();
+    void createSessionToolBar();
     void refreshSession();
-    void updateSessionPlaceholder();
+    void updateSessionStatus();
+    void updateSessionPlaybackUi();
+    void sessionGoToFrame(int frame);
     bool saveSessionProject();
     void openSessionProject();
     void createSessionProject();
@@ -328,11 +332,6 @@ private:
     // P1 session shell widgets/actions (unused by the legacy constructor).
     ProjectPropertiesPanel* m_sessionProps = nullptr;
     EnvironmentPanel* m_sessionEnvironment = nullptr;
-    QFrame* m_sessionCanvas = nullptr;
-    QLabel* m_sessionTitle = nullptr;
-    QLabel* m_sessionDetails = nullptr;
-    QLabel* m_sessionPath = nullptr;
-    QLabel* m_sessionHint = nullptr;
 };
 
 } // namespace pvf

@@ -3,9 +3,16 @@
 #include "Viewport.h"
 
 #include "app/AppIcon.h"
+#include "app/EditorSession.h"
 #include "core/PerfMonitor.h"
 #include "core/Settings.h"
+#include "model/Model.h"
+#include "next/app/MediaServices.h"
+#include "next/app/ProjectDocument.h"
+#include "next/app/WorkbenchServices.h"
+#include "next/core/Document.h"
 #include "render/SceneRenderer.h"
+#include "render2/Render.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -83,11 +90,67 @@ Viewport::Viewport(Project* project, QWidget* parent)
     connect(m_workbenchButton, &QToolButton::clicked, this, &Viewport::workbenchRequested);
 }
 
+Viewport::Viewport(EditorSession* session, QWidget* parent)
+    : Viewport(static_cast<Project*>(nullptr), parent)
+{
+    m_session = session;
+    if (!m_session)
+        return;
+
+    if (auto* document = m_session->document())
+    {
+        connect(document, &next::Document::changed, this, [this] {
+            invalidateSessionImage();
+            update();
+        });
+        connect(document, &next::Document::playheadChanged, this, [this] {
+            invalidateSessionImage();
+            update();
+        });
+        connect(document, &next::Document::selectionChanged, this, [this] {
+            invalidateSessionImage();
+            update();
+        });
+    }
+
+    if (auto* media = m_session->media())
+    {
+        connect(media, &next::MediaServices::htmlFrameReady, this, [this] {
+            invalidateSessionImage();
+            update();
+        }, Qt::QueuedConnection);
+        connect(media, &next::MediaServices::htmlServiceFailed, this,
+                [this](const QString& message) {
+                    setToolTip(QStringLiteral("HTML 服务未启动：%1").arg(message));
+                });
+    }
+}
+
+void Viewport::refreshSession()
+{
+    invalidateSessionImage();
+    update();
+}
+
+QSize Viewport::canvasSize() const
+{
+    if (m_session)
+    {
+        const model::ProjectSettings& settings = m_session->settings();
+        return QSize(std::max(1, settings.width), std::max(1, settings.height));
+    }
+    if (m_project)
+        return QSize(std::max(1, m_project->width), std::max(1, m_project->height));
+    return QSize(16, 9);
+}
+
 void Viewport::setCurrentFrame(int frame)
 {
     if (m_frame == frame)
         return;
     m_frame = frame;
+    if (sessionMode())
+        invalidateSessionImage();
     update();
 }
 
@@ -117,16 +180,17 @@ void Viewport::resetView()
 
 double Viewport::viewScale() const
 {
-    return canvasRect().width() / std::max(1, m_project->width);
+    return canvasRect().width() / std::max(1, canvasSize().width());
 }
 
 QRectF Viewport::canvasRect() const
 {
+    const QSize canvas = canvasSize();
     const double margin = 40.0;
-    const double fitW = (width() - margin) / std::max(1, m_project->width);
-    const double fitH = (height() - margin) / std::max(1, m_project->height);
+    const double fitW = (width() - margin) / std::max(1, canvas.width());
+    const double fitH = (height() - margin) / std::max(1, canvas.height());
     const double scale = std::max(0.0001, std::min(fitW, fitH) * m_zoom);
-    const QSizeF size(m_project->width * scale, m_project->height * scale);
+    const QSizeF size(canvas.width() * scale, canvas.height() * scale);
     const QPointF center = QRectF(rect()).center() + m_pan;
     return QRectF(center.x() - size.width() / 2.0, center.y() - size.height() / 2.0,
                   size.width(), size.height());
@@ -138,6 +202,299 @@ QPointF Viewport::screenToCanvas(const QPointF& pos) const
     const double s = viewScale();
     const QPointF center = canvas.center();
     return QPointF((pos.x() - center.x()) / s, (pos.y() - center.y()) / s);
+}
+
+// ---- session shell: render2 + MediaServices + WorkbenchServices ----------
+
+Uuid Viewport::sessionCameraUuid() const
+{
+    return m_session ? m_session->activeCameraUuid() : Uuid();
+}
+
+int Viewport::sessionExpandPercent() const
+{
+    if (!m_session)
+        return 0;
+    return std::clamp(m_session->appSettings().workbenchCacheExpandPercent, 0, 200);
+}
+
+QTransform Viewport::sessionWorldToScreen() const
+{
+    const QRectF canvas = canvasRect();
+    const double s = viewScale();
+    QTransform transform;
+    transform.translate(canvas.left(), canvas.top());
+    transform.scale(s, s);
+    return transform;
+}
+
+QPointF Viewport::sessionScreenToProject(const QPointF& pos) const
+{
+    bool ok = false;
+    const QTransform inverse = sessionWorldToScreen().inverted(&ok);
+    return ok ? inverse.map(pos) : pos;
+}
+
+QRectF Viewport::sessionSceneRect() const
+{
+    const QSize canvas = canvasSize();
+    const int expand = sessionExpandPercent();
+    const double factor = double(expand) / 100.0;
+    const QRectF world(-canvas.width() * factor, -canvas.height() * factor,
+                       canvas.width() * (1.0 + 2.0 * factor),
+                       canvas.height() * (1.0 + 2.0 * factor));
+    return sessionWorldToScreen().mapRect(world);
+}
+
+QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
+                                    int expandPercent,
+                                    bool* mediaMissing) const
+{
+    if (!m_session)
+        return {};
+
+    bool missing = false;
+    render2::Options options;
+    options.projectFrame = m_session->playhead();
+    options.cameraUuid = cameraUuid;
+    options.outputSize = size;
+    if (cameraUuid.isEmpty() && expandPercent > 0)
+    {
+        const QSize canvas = canvasSize();
+        const double factor = double(expandPercent) / 100.0;
+        options.worldRect =
+            QRectF(-canvas.width() * factor, -canvas.height() * factor,
+                   canvas.width() * (1.0 + 2.0 * factor),
+                   canvas.height() * (1.0 + 2.0 * factor));
+        options.transparentOutsideCanvas = true;
+    }
+    options.videoFrame = [this, &missing](const Uuid& uuid, double frame) {
+        const QImage image =
+            m_session->media() ? m_session->media()->videoFrame(uuid, frame)
+                               : QImage();
+        if (image.isNull())
+            missing = true;
+        return image;
+    };
+    options.htmlFrame = [this, &missing](const Uuid& uuid, double frame) {
+        const QImage image =
+            m_session->media() ? m_session->media()->htmlFrame(uuid, frame)
+                               : QImage();
+        if (image.isNull())
+            missing = true;
+        return image;
+    };
+
+    render2::SceneWorld world(m_session->project(), m_session->assets());
+    anim::Cache cache;
+    const QImage image = render2::renderFrame(
+        m_session->project(), m_session->assets(), options, world, cache);
+    if (mediaMissing)
+        *mediaMissing = missing;
+    return image;
+}
+
+QImage Viewport::ensureSessionImage()
+{
+    if (!m_session)
+        return {};
+
+    const QSize targetSize = size();
+    const int frame = m_session->playhead();
+    const Uuid camera = sessionCameraUuid();
+    const int expand = camera.isEmpty() ? sessionExpandPercent() : 0;
+
+    if (m_sessionImageValid && m_sessionImageSize == targetSize
+        && m_sessionImageFrame == frame && m_sessionImageCamera == camera
+        && m_sessionImageExpand == expand)
+        return m_sessionImage;
+
+    m_sessionMediaMissing = false;
+
+    // Whole-frame workbench cache: a hit is a finished picture and skips
+    // render2 entirely.  Misses render live and store the result unless a
+    // media provider returned a placeholder.
+    next::WorkbenchServices* workbench = m_session->workbench();
+    if (workbench)
+    {
+        bool hit = false;
+        const QImage cached = workbench->lookup(frame, camera, &hit);
+        if (hit && !cached.isNull())
+        {
+            m_sessionImage = cached;
+            m_sessionImageSize = targetSize;
+            m_sessionImageFrame = frame;
+            m_sessionImageCamera = camera;
+            m_sessionImageExpand = expand;
+            m_sessionImageValid = true;
+            m_sessionMediaMissing = false;
+            return m_sessionImage;
+        }
+    }
+
+    bool missing = false;
+    QImage image = renderSessionFrame(targetSize, camera, expand, &missing);
+    m_sessionImage = image;
+    m_sessionImageSize = targetSize;
+    m_sessionImageFrame = frame;
+    m_sessionImageCamera = camera;
+    m_sessionImageExpand = expand;
+    m_sessionImageValid = true;
+    m_sessionMediaMissing = missing;
+
+    if (!missing && !image.isNull() && workbench)
+        workbench->store(frame, camera, image);
+    return m_sessionImage;
+}
+
+void Viewport::invalidateSessionImage()
+{
+    m_sessionImageValid = false;
+}
+
+QImage Viewport::grabProjectFrame(const Uuid& cameraUuid) const
+{
+    if (!m_session)
+        return {};
+    const model::ProjectSettings& settings = m_session->settings();
+    return renderSessionFrame(
+        QSize(std::max(1, settings.width), std::max(1, settings.height)),
+        cameraUuid, 0, nullptr);
+}
+
+QPointF Viewport::projectToWidgetForTest(const QPointF& pos) const
+{
+    return sessionWorldToScreen().map(pos);
+}
+
+const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
+{
+    if (!m_session)
+        return nullptr;
+
+    const model::Project& project = m_session->project();
+    const int frame = m_session->playhead();
+    const QPointF projectPos = sessionScreenToProject(pos);
+
+    QVector<const model::Entity*> candidates;
+    candidates.reserve(project.entities.size());
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (entity.hidden || entity.locked || !entity.visible)
+            continue;
+        if (entity.content.kind == ContentKind::Camera
+            || entity.content.kind == ContentKind::Empty)
+            continue;
+        if (entity.content.kind == ContentKind::Asset
+            && entity.content.asset.type == AssetType::Audio)
+            continue;
+        if (frame < entity.start || frame >= entity.end)
+            continue;
+        candidates.append(&entity);
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const model::Entity* a, const model::Entity* b) {
+                  return a->row > b->row;
+              });
+
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    for (const model::Entity* entity : candidates)
+    {
+        const QPainterPath shape = world.shapeOf(entity->uuid, frame);
+        if (!shape.isEmpty() && shape.contains(projectPos))
+            return entity;
+    }
+    return nullptr;
+}
+
+void Viewport::drawSessionSelection(QPainter& painter)
+{
+    if (!m_session || !m_session->document())
+        return;
+
+    const Uuid selected = m_session->document()->selection();
+    if (selected.isEmpty())
+        return;
+
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(selected);
+    if (it == project.entities.constEnd())
+        return;
+    if (it->hidden || it->locked || it->content.kind == ContentKind::Camera
+        || it->content.kind == ContentKind::Empty)
+        return;
+
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    const QPainterPath shape = world.shapeOf(selected, m_session->playhead());
+    if (shape.isEmpty())
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setTransform(sessionWorldToScreen(), true);
+    QPen pen(QColor(77, 163, 255));
+    pen.setCosmetic(true);
+    pen.setWidthF(1.5);
+    pen.setStyle(Qt::DashLine);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(shape);
+    painter.restore();
+}
+
+void Viewport::paintSession(QPainter& p)
+{
+    QElapsedTimer profile;
+    profile.start();
+
+    p.fillRect(rect(), QApplication::palette().color(QPalette::Window));
+
+    const QRectF canvas = canvasRect();
+    const Uuid camera = sessionCameraUuid();
+    const int expand = camera.isEmpty() ? sessionExpandPercent() : 0;
+
+    p.fillRect(canvas.translated(6, 6), QColor(0, 0, 0, 90));
+
+    const QImage image = ensureSessionImage();
+    QRectF target = rect();
+    if (!camera.isEmpty())
+        target = canvas;
+    else if (expand > 0)
+        target = sessionSceneRect();
+    if (!image.isNull())
+        p.drawImage(target, image);
+
+    p.setPen(QPen(QColor(70, 70, 80), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(canvas);
+
+    p.setPen(QPen(QColor(255, 255, 255, 18), 1, Qt::DashLine));
+    p.drawLine(QPointF(canvas.center().x(), canvas.top()),
+               QPointF(canvas.center().x(), canvas.bottom()));
+    p.drawLine(QPointF(canvas.left(), canvas.center().y()),
+               QPointF(canvas.right(), canvas.center().y()));
+
+    drawSessionSelection(p);
+
+    if (m_session->project().entities.isEmpty())
+    {
+        p.setPen(QColor(150, 150, 160));
+        QFont f = p.font();
+        f.setPointSize(12);
+        p.setFont(f);
+        p.drawText(rect(), Qt::AlignCenter,
+                   QStringLiteral("点击左上角工作台按钮\n创建图片 / 视频 / 文字 / 矢量"));
+    }
+
+    PerfMonitor::instance().recordScene(profile.nsecsElapsed() / 1e6);
+    PerfMonitor::instance().recordViewport(profile.nsecsElapsed() / 1e6);
+
+    if (!image.isNull() && !m_sessionMediaMissing)
+        emit framePresented(m_session->playhead());
 }
 
 EntityId Viewport::activeCameraEntity() const
@@ -1246,6 +1603,19 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
 
 void Viewport::paintEvent(QPaintEvent*)
 {
+    if (sessionMode())
+    {
+        QPainter sessionPainter(this);
+        paintSession(sessionPainter);
+        return;
+    }
+    if (!m_project)
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), QApplication::palette().color(QPalette::Window));
+        return;
+    }
+
     QElapsedTimer profile;
     profile.start();
     QPainter p(this);
@@ -1323,6 +1693,25 @@ void Viewport::paintEvent(QPaintEvent*)
 
 void Viewport::mousePressEvent(QMouseEvent* event)
 {
+    if (sessionMode())
+    {
+        if (event->button() == Qt::MiddleButton)
+        {
+            m_panning = true;
+            m_panLast = event->position();
+            setCursor(Qt::ClosedHandCursor);
+            return;
+        }
+        if (event->button() != Qt::LeftButton)
+            return;
+
+        setFocus(Qt::MouseFocusReason);
+        const model::Entity* hit = hitTestSession(event->position());
+        emit uuidSelected(hit ? hit->uuid : Uuid());
+        update();
+        return;
+    }
+
     if (event->button() == Qt::MiddleButton)
     {
         m_panning = true;
@@ -1426,6 +1815,18 @@ void Viewport::mousePressEvent(QMouseEvent* event)
 
 void Viewport::mouseMoveEvent(QMouseEvent* event)
 {
+    if (sessionMode())
+    {
+        if (m_panning)
+        {
+            m_pan += event->position() - m_panLast;
+            m_panLast = event->position();
+            emit viewChanged();
+            update();
+        }
+        return;
+    }
+
     if (m_cameraPart != CameraPart::None)
     {
         applyCameraDrag(event->position(), event->modifiers());
@@ -1833,6 +2234,16 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
 void Viewport::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (sessionMode())
+    {
+        if (event->button() == Qt::MiddleButton)
+        {
+            m_panning = false;
+            unsetCursor();
+        }
+        return;
+    }
+
     if (event->button() == Qt::MiddleButton)
     {
         m_panning = false;
@@ -1859,6 +2270,20 @@ void Viewport::wheelEvent(QWheelEvent* event)
         return;
 
     const double s0 = viewScale();
+    if (sessionMode())
+    {
+        const QPointF before = sessionScreenToProject(event->position());
+        m_zoom = std::clamp(m_zoom * std::pow(1.15, steps), 0.1, 8.0);
+        const double s1 = viewScale();
+        const QSize canvas = canvasSize();
+        m_pan += (s0 - s1)
+                 * (before - QPointF(canvas.width() / 2.0, canvas.height() / 2.0));
+        invalidateSessionImage();
+        emit viewChanged();
+        update();
+        return;
+    }
+
     const QPointF before = screenToCanvas(event->position());
     m_zoom = std::clamp(m_zoom * std::pow(1.15, steps), 0.1, 8.0);
     const double s1 = viewScale();
@@ -1870,6 +2295,8 @@ void Viewport::wheelEvent(QWheelEvent* event)
 void Viewport::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    if (sessionMode())
+        invalidateSessionImage();
     emit viewChanged();
 }
 

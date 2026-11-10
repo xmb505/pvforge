@@ -1,11 +1,17 @@
 #include "EditorSession.h"
 
 #include "EditActions.h"
+#include "next/app/MediaServices.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
+#include "next/app/WorkbenchServices.h"
 
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
 #include <QSettings>
+
+#include <algorithm>
 
 namespace pvf {
 
@@ -34,11 +40,35 @@ bool isProjectDirectory(const QString& path)
 
 EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     : m_document(std::move(document))
+    , m_settingsStore(std::make_unique<next::SettingsStore>())
 {
+    m_appSettings = m_settingsStore->load();
+
+    m_media = std::make_unique<next::MediaServices>(m_document.get(), m_appSettings);
+    QString ignored;
+    m_media->start(&ignored);
+
+    m_playback = std::make_unique<next::PlaybackController>();
+    m_playback->setWatchdogMs(m_appSettings.watchdogMs);
+    m_playback->setDocument(m_document.get());
+
     m_editActions = std::make_unique<EditActions>(this);
+
+    // Start the per-camera workbench cache so its directory exists even before
+    // the first paint; the prewarm scan is debounced internally.
+    workbench();
 }
 
-EditorSession::~EditorSession() = default;
+EditorSession::~EditorSession()
+{
+    // Explicit teardown keeps the documented order even if a future member is
+    // added: stop the frame clock, release the cache, then the media services.
+    if (m_playback)
+        m_playback->setDocument(nullptr);
+    m_workbench.reset();
+    if (m_media)
+        m_media->stop();
+}
 
 std::unique_ptr<EditorSession> EditorSession::createProject(
     const QString& projectDir, const model::ProjectSettings& settings,
@@ -116,6 +146,61 @@ QString EditorSession::name() const
 {
     const QString name = m_document->project().settings.name;
     return name.isEmpty() ? QFileInfo(root()).fileName() : name;
+}
+
+next::WorkbenchServices* EditorSession::workbench()
+{
+    if (!m_appSettings.workbenchCacheEnabled)
+    {
+        m_workbench.reset();
+        return nullptr;
+    }
+
+    const Uuid camera = activeCameraUuid();
+    const int expand =
+        camera.isEmpty()
+            ? std::clamp(m_appSettings.workbenchCacheExpandPercent, 0, 200)
+            : 0;
+    if (m_workbench && m_workbench->cameraUuid() == camera
+        && m_workbench->expandPercent() == expand)
+        return m_workbench.get();
+
+    m_workbench.reset();
+
+    next::WorkbenchServices::Providers providers;
+    providers.videoFrame = [this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->videoFrame(uuid, frame) : QImage();
+    };
+    providers.htmlFrame = [this](const Uuid& uuid, double frame) {
+        return m_media ? m_media->htmlFrame(uuid, frame) : QImage();
+    };
+    providers.htmlPending = [this] {
+        return m_media && m_media->htmlPending();
+    };
+
+    m_workbench = std::make_unique<next::WorkbenchServices>(
+        m_document.get(), m_appSettings, camera, providers);
+    if (m_playback)
+        m_workbench->setPlaybackActive(m_playback->isPlaying());
+    return m_workbench.get();
+}
+
+Uuid EditorSession::activeCameraUuid() const
+{
+    if (!m_document)
+        return {};
+
+    const model::Project& project = m_document->project();
+    const Uuid selected = m_document->selection();
+    const auto selectedIt = project.entities.constFind(selected);
+    if (selectedIt != project.entities.constEnd()
+        && selectedIt->content.kind == ContentKind::Camera
+        && !selectedIt->hidden)
+        return selected;
+
+    // The old viewport draws the whole canvas; a camera view is only used when
+    // the user selects that camera.  P3b adds the camera monitor/frame overlay.
+    return {};
 }
 
 int EditorSession::playhead() const
