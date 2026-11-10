@@ -1,5 +1,6 @@
 #include "workbench/Cache.h"
 #include "workbench/MetaBuilder.h"
+#include "workbench/PrewarmService.h"
 
 #include <QDir>
 #include <QFile>
@@ -8,8 +9,15 @@
 #include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
+
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <utility>
 
 using namespace pvf;
 
@@ -53,6 +61,71 @@ QImage testImage(const QSize& size)
     return image;
 }
 
+// A 10-frame-ish project whose single entity is active for [0, endFrame) and
+// moves on x, so every frame has a distinct pose/meta.
+std::shared_ptr<model::Project> prewarmProject(int endFrame)
+{
+    auto project = std::make_shared<model::Project>();
+    project->settings.width = 320;
+    project->settings.height = 180;
+    project->settings.fps = 30;
+
+    model::Entity entity = textEntity(QStringLiteral("e1"), 0, endFrame);
+    addKey(entity, QStringLiteral("x"), 0, 0.0);
+    addKey(entity, QStringLiteral("x"), endFrame - 1, double(endFrame * 10));
+    project->entities.insert(entity.uuid, entity);
+    return project;
+}
+
+workbench::Options prewarmOptions(const model::Project& project)
+{
+    workbench::Options options;
+    options.scalePercent = 50;
+    options.maxWidth = 0;
+    options.targetSize = workbench::cacheSizeFor(project, 50, 0);
+    options.diskBudgetBytes = 1LL << 30;
+    options.memoryBudgetBytes = 16LL * 1024 * 1024;
+    return options;
+}
+
+// Fake renderer: no Chrome/FFmpeg involvement, counts calls, optional delay so
+// cancel/pause tests can hit the mid-scan window deterministically.
+std::function<QImage(int)> solidRenderer(const QSize& size,
+                                         std::atomic<int>& renders,
+                                         int delayMs = 0)
+{
+    return [size, &renders, delayMs](int frame) {
+        ++renders;
+        if (delayMs > 0)
+            QThread::msleep(static_cast<unsigned long>(delayMs));
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(QColor(20 + (frame % 8) * 20, 60, 90));
+        return image;
+    };
+}
+
+workbench::PrewarmRequest prewarmRequest(
+    const QString& cacheRoot, const std::shared_ptr<model::Project>& project,
+    const std::shared_ptr<assets::AssetStore>& assets,
+    const workbench::Options& options, std::function<QImage(int)> renderer)
+{
+    workbench::PrewarmRequest request;
+    request.cacheRoot = cacheRoot;
+    request.options = options;
+    request.project = project;
+    request.assets = assets;
+    request.renderFrame = std::move(renderer);
+    return request;
+}
+
+// The scan can legally finish before wait() starts, so check the list first.
+bool waitForFinished(QSignalSpy& spy)
+{
+    if (!spy.isEmpty())
+        return true;
+    return spy.wait(30000);
+}
+
 void writeTextFile(const QString& path, const QByteArray& bytes)
 {
     QFile file(path);
@@ -82,6 +155,13 @@ private slots:
     void cacheMemoryBudget();
     void cacheClear();
     void cachePerCameraDirectories();
+    void prewarmInitialScan();
+    void prewarmSkipsCachedFrames();
+    void prewarmRerendersChangedProject();
+    void prewarmCancel();
+    void prewarmPauseResume();
+    void prewarmProgressIsMonotonic();
+    void prewarmFailedFrameContinues();
 };
 
 void WorkbenchCacheTests::metaIsStable()
@@ -638,6 +718,297 @@ void WorkbenchCacheTests::cachePerCameraDirectories()
     bool hit = true;
     QVERIFY(cameraB.lookup(3, meta, &hit).isNull());
     QVERIFY(!hit);
+}
+
+void WorkbenchCacheTests::prewarmInitialScan()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmService service;
+    QSignalSpy started(&service, &workbench::PrewarmService::started);
+    QSignalSpy skipped(&service, &workbench::PrewarmService::frameSkipped);
+    QSignalSpy cached(&service, &workbench::PrewarmService::frameCached);
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    QVERIFY(started.isValid());
+    QVERIFY(finished.isValid());
+
+    workbench::PrewarmRequest request =
+        prewarmRequest(cacheRoot, project, assets, options,
+                       solidRenderer(options.targetSize, renders));
+    QCOMPARE(request.endFrame, -1); // scan to the end of project content
+    service.start(request);
+    QVERIFY(waitForFinished(finished));
+
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(finished.first().at(0).toBool(), false);
+    QCOMPARE(started.first().at(0).toInt(), 10);
+    QCOMPARE(renders.load(), 10);
+    QCOMPARE(skipped.count(), 0);
+    QCOMPARE(cached.count(), 10);
+    QVERIFY(!service.isRunning());
+    QVERIFY(!service.isPaused());
+
+    const workbench::CacheStats stats = service.lastStats();
+    QCOMPARE(stats.entries, 10);
+    QCOMPARE(stats.stores, quint64(10));
+    QVERIFY(stats.diskBytes > 0);
+
+    workbench::Cache cache(cacheRoot, QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    QCOMPARE(cache.cachedFrames().size(), 10);
+    QVERIFY(cache.cachedFrames().contains(0));
+    QVERIFY(cache.cachedFrames().contains(9));
+}
+
+void WorkbenchCacheTests::prewarmSkipsCachedFrames()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmRequest request =
+        prewarmRequest(cacheRoot, project, assets, options,
+                       solidRenderer(options.targetSize, renders));
+
+    workbench::PrewarmService service;
+    {
+        QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+        service.start(request);
+        QVERIFY(waitForFinished(finished));
+        QCOMPARE(renders.load(), 10);
+    }
+
+    renders = 0;
+    QSignalSpy skipped(&service, &workbench::PrewarmService::frameSkipped);
+    QSignalSpy cached(&service, &workbench::PrewarmService::frameCached);
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    service.start(request);
+    QVERIFY(waitForFinished(finished));
+
+    QCOMPARE(finished.first().at(0).toBool(), false);
+    QCOMPARE(renders.load(), 0);
+    QCOMPARE(skipped.count(), 10);
+    QCOMPARE(cached.count(), 0);
+    QCOMPARE(service.lastStats().entries, 10);
+}
+
+void WorkbenchCacheTests::prewarmRerendersChangedProject()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmRequest request =
+        prewarmRequest(cacheRoot, project, assets, options,
+                       solidRenderer(options.targetSize, renders));
+
+    workbench::PrewarmService service;
+    {
+        QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+        service.start(request);
+        QVERIFY(waitForFinished(finished));
+    }
+
+    // Shift both x keys so every frame's evaluated pose changes.
+    auto changed = std::make_shared<model::Project>(*project);
+    auto& keys =
+        changed->entities[QStringLiteral("e1")].tracks[QStringLiteral("x")].keys;
+    keys[0].value += 50.0;
+    keys[1].value += 50.0;
+
+    renders = 0;
+    request.project = changed;
+    QSignalSpy skipped(&service, &workbench::PrewarmService::frameSkipped);
+    QSignalSpy cached(&service, &workbench::PrewarmService::frameCached);
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    service.start(request);
+    QVERIFY(waitForFinished(finished));
+
+    QCOMPARE(finished.first().at(0).toBool(), false);
+    QCOMPARE(renders.load(), 10);
+    QCOMPARE(skipped.count(), 0);
+    QCOMPARE(cached.count(), 10);
+    QCOMPARE(service.lastStats().stores, quint64(10));
+}
+
+void WorkbenchCacheTests::prewarmCancel()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmRequest request =
+        prewarmRequest(cacheRoot, project, assets, options,
+                       solidRenderer(options.targetSize, renders, 30));
+
+    int framesAfterCancel = 0;
+    {
+        workbench::PrewarmService service;
+        QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+        service.start(request);
+        QTRY_VERIFY_WITH_TIMEOUT(renders.load() >= 2, 10000);
+        QVERIFY(service.isRunning());
+
+        service.cancel();
+        QVERIFY(!service.isRunning());
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.first().at(0).toBool(), true);
+        QVERIFY(renders.load() < 10);
+
+        workbench::Cache cache(cacheRoot, QString(), options);
+        QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+        framesAfterCancel = cache.cachedFrames().size();
+        QVERIFY(framesAfterCancel >= 1);
+        QVERIFY(framesAfterCancel < 10);
+        QCOMPARE(service.lastStats().entries, framesAfterCancel);
+    } // service destructor must not hang or touch the worker cache
+
+    // The worker is gone: no delayed writes may appear afterwards.
+    QTest::qWait(150);
+    workbench::Cache cache(cacheRoot, QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    QCOMPARE(cache.cachedFrames().size(), framesAfterCancel);
+}
+
+void WorkbenchCacheTests::prewarmPauseResume()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmRequest request =
+        prewarmRequest(cacheRoot, project, assets, options,
+                       solidRenderer(options.targetSize, renders, 20));
+
+    workbench::PrewarmService service;
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    service.start(request);
+    QTRY_VERIFY_WITH_TIMEOUT(renders.load() >= 2, 10000);
+
+    service.pause();
+    QVERIFY(service.isPaused());
+    QTest::qWait(150); // let the in-flight frame finish
+    const int pausedAt = renders.load();
+    QTest::qWait(250);
+    QCOMPARE(renders.load(), pausedAt);
+    QVERIFY(service.isRunning());
+
+    service.resume();
+    QVERIFY(!service.isPaused());
+    QVERIFY(waitForFinished(finished));
+    QCOMPARE(finished.first().at(0).toBool(), false);
+    QCOMPARE(renders.load(), 10);
+    QVERIFY(!service.isPaused());
+}
+
+void WorkbenchCacheTests::prewarmProgressIsMonotonic()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    workbench::PrewarmService service;
+    QSignalSpy started(&service, &workbench::PrewarmService::started);
+    QSignalSpy progress(&service, &workbench::PrewarmService::progress);
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    service.start(prewarmRequest(cacheRoot, project, assets, options,
+                                 solidRenderer(options.targetSize, renders)));
+    QVERIFY(waitForFinished(finished));
+
+    QCOMPARE(started.first().at(0).toInt(), 10);
+    QCOMPARE(progress.count(), 10);
+    int previousDone = 0;
+    int previousFrame = -1;
+    for (const QList<QVariant>& args : progress)
+    {
+        const int done = args.at(0).toInt();
+        const int total = args.at(1).toInt();
+        const int frame = args.at(2).toInt();
+        QCOMPARE(total, 10);
+        QCOMPARE(done, previousDone + 1);
+        QCOMPARE(frame, previousFrame + 1);
+        previousDone = done;
+        previousFrame = frame;
+    }
+    QCOMPARE(previousDone, 10);
+    QCOMPARE(previousFrame, 9);
+}
+
+void WorkbenchCacheTests::prewarmFailedFrameContinues()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto assets = std::make_shared<assets::AssetStore>(root.path());
+    auto project = prewarmProject(10);
+    const workbench::Options options = prewarmOptions(*project);
+    const QString cacheRoot =
+        QDir(root.path()).filePath(QStringLiteral(".cache/workbench"));
+
+    std::atomic<int> renders{0};
+    const QSize size = options.targetSize;
+    auto renderer = [size, &renders](int frame) {
+        ++renders;
+        if (frame == 4)
+            return QImage(); // a missing video/HTML picture, not a crash
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(QColor(30, 60, 90));
+        return image;
+    };
+
+    workbench::PrewarmService service;
+    QSignalSpy progress(&service, &workbench::PrewarmService::progress);
+    QSignalSpy cached(&service, &workbench::PrewarmService::frameCached);
+    QSignalSpy failed(&service, &workbench::PrewarmService::frameFailed);
+    QSignalSpy finished(&service, &workbench::PrewarmService::finished);
+    service.start(prewarmRequest(cacheRoot, project, assets, options,
+                                 std::move(renderer)));
+    QVERIFY(waitForFinished(finished));
+
+    QCOMPARE(finished.first().at(0).toBool(), false);
+    QCOMPARE(renders.load(), 10);
+    QCOMPARE(failed.count(), 1);
+    QCOMPARE(failed.first().at(0).toInt(), 4);
+    QVERIFY(!failed.first().at(1).toString().isEmpty());
+    QCOMPARE(cached.count(), 9);
+    QCOMPARE(progress.count(), 10);
+    QCOMPARE(progress.last().at(0).toInt(), 10);
+
+    workbench::Cache cache(cacheRoot, QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    QCOMPARE(cache.cachedFrames().size(), 9);
+    QVERIFY(!cache.cachedFrames().contains(4));
 }
 
 QTEST_MAIN(WorkbenchCacheTests)

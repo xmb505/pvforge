@@ -24,6 +24,7 @@ endif()
 add_library(pvf_workbench STATIC
     Cache.cpp
     MetaBuilder.cpp
+    PrewarmService.cpp
 )
 
 target_include_directories(pvf_workbench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -56,6 +57,13 @@ if(BUILD_TESTING)
         cacheMemoryBudget
         cacheClear
         cachePerCameraDirectories
+        prewarmInitialScan
+        prewarmSkipsCachedFrames
+        prewarmRerendersChangedProject
+        prewarmCancel
+        prewarmPauseResume
+        prewarmProgressIsMonotonic
+        prewarmFailedFrameContinues
     )
 
     foreach(test_case IN LISTS PVF_WORKBENCH_TEST_CASES)
