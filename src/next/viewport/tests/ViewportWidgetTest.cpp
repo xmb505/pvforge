@@ -304,13 +304,22 @@ private slots:
     void projectCanvasRenders();
     void clickSelectsAndClears();
     void dragMoveXCommitsOnce();
+    void gizmoFollowsRotationTrack();
+    void gizmoFollowsStaticRotation();
+    void gizmoFollowsSpinSolver();
+    void gizmoWritesRotationKeyAtPlayhead();
+    void gizmoAutoKeyWritesMoveKey();
     void cornerScaleKeepsOppositeCorner();
     void centerScaleFlipsBothAxes();
     void rotateDragAndShiftSnap();
     void moveSnapsToCanvasCenter();
     void moveSnapsToEntityEdge();
-    void altDisablesSnapping();
-    void rotationSnapsTo15Degrees();
+    void moveSnapsToEdgeMidpointWhenEnabled();
+    void ctrlDisablesSnapping();
+    void altDoesNotDisableSnapping();
+    void rotationSnapsToRightAngles();
+    void rotationSnapsTo30WhenEnabled();
+    void snapThresholdComesFromSetting();
     void scaleSnapsToPixelGrid();
     void lockedEntityIgnoresGizmo();
     void hiddenEntityStillSelectable();
@@ -392,6 +401,237 @@ void ViewportWidgetTest::dragMoveXCommitsOnce()
     QVERIFY(std::abs(moved.transform.x - (startX + 40.0 / scale)) < 1.0);
     QVERIFY(qFuzzyCompare(moved.transform.y, entity.transform.y));
     QVERIFY(document.lastMessage().startsWith(QStringLiteral("pvf: move")));
+}
+
+void ViewportWidgetTest::gizmoFollowsRotationTrack()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+
+    model::Track rotation;
+    model::Keyframe first;
+    first.frame = 0;
+    first.value = 0.0;
+    model::Keyframe last;
+    last.frame = 30;
+    last.value = 90.0;
+    rotation.keys << first << last;
+    document.mutableProject().entities[uuid].tracks.insert(
+        QStringLiteral("rotation"), rotation);
+    document.setSelection(uuid);
+    // Half way through the 0 -> 90 ramp.
+    document.setPlayhead(15);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const gizmo::Bounds bounds = vectorBoundsOf(entity);
+    const double scale = projectScale(view);
+
+    gizmo::Transform at45 = gizmoTransformOf(entity);
+    at45.rotation = 45.0;
+    const QPointF expectedHandle = view.projectToWidget(
+        gizmo::handlePosition(gizmo::Handle::MoveX, at45, bounds, scale));
+    const QPointF unrotatedHandle = view.projectToWidget(
+        gizmo::handlePosition(gizmo::Handle::MoveX, gizmoTransformOf(entity),
+                              bounds, scale));
+    QVERIFY(QLineF(expectedHandle, unrotatedHandle).length() > 10.0);
+
+    // Pressing the arrow the gizmo draws at 45 degrees must start a MoveX
+    // drag, and the drag must project onto the rotated local X axis.
+    const QPointF target =
+        expectedHandle + rotateVector(QPointF(1.0, 0.0), 45.0) * 40.0;
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      expectedHandle.toPoint());
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+
+    const model::Entity moved = document.project().entities.value(uuid);
+    QCOMPARE(document.entityCommits(), 1);
+    QVERIFY(std::abs(moved.transform.x - (160.0 + 40.0 / scale)) < 1.5);
+    QVERIFY(std::abs(moved.transform.y - 90.0) < 1e-6);
+}
+
+void ViewportWidgetTest::gizmoFollowsStaticRotation()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+    document.mutableProject().entities[uuid].transform.rotation = 90.0;
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF expectedHandle = view.projectToWidget(
+        gizmo::handlePosition(gizmo::Handle::MoveX, gizmoTransformOf(entity),
+                              vectorBoundsOf(entity), projectScale(view)));
+    // At 90 degrees local +X points down the screen.
+    const QPointF axisTip = view.projectToWidget(
+        QPointF(160.0, 90.0 + 48.0 / projectScale(view)));
+    QVERIFY(QLineF(expectedHandle, axisTip).length() < 0.5);
+
+    const double scale = projectScale(view);
+    const QPointF target = expectedHandle + QPointF(0.0, 40.0);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      expectedHandle.toPoint());
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+
+    const model::Entity moved = document.project().entities.value(uuid);
+    QCOMPARE(document.entityCommits(), 1);
+    QVERIFY(std::abs(moved.transform.x - (160.0 + 40.0 / scale)) < 1.5);
+    QVERIFY(std::abs(moved.transform.y - 90.0) < 1e-6);
+}
+
+void ViewportWidgetTest::gizmoFollowsSpinSolver()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+
+    model::SolverSegment spin;
+    spin.id = QStringLiteral("spin");
+    spin.effect = SolverEffect::Spin;
+    spin.startFrame = 0;
+    spin.endFrame = -1;
+    document.mutableProject().entities[uuid].solvers.append(spin);
+    document.setSelection(uuid);
+    // The default spin is 6 degrees per frame, so frame 15 shows 90 degrees.
+    document.setPlayhead(15);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const double scale = projectScale(view);
+    const QPointF expectedHandle = view.projectToWidget(
+        QPointF(160.0, 90.0 + 48.0 / scale));
+
+    const QPointF target = expectedHandle + QPointF(0.0, 40.0);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      expectedHandle.toPoint());
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+
+    const model::Entity moved = document.project().entities.value(uuid);
+    QCOMPARE(document.entityCommits(), 1);
+    QVERIFY(std::abs(moved.transform.x - (160.0 + 40.0 / scale)) < 1.5);
+    QVERIFY(std::abs(moved.transform.y - 90.0) < 1e-6);
+}
+
+void ViewportWidgetTest::gizmoWritesRotationKeyAtPlayhead()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+
+    model::Track rotation;
+    model::Keyframe first;
+    first.frame = 0;
+    first.value = 0.0;
+    model::Keyframe last;
+    last.frame = 30;
+    last.value = 0.0;
+    rotation.keys << first << last;
+    document.mutableProject().entities[uuid].tracks.insert(
+        QStringLiteral("rotation"), rotation);
+    document.setSelection(uuid);
+    document.setPlayhead(15);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF pivot(entity.transform.x + entity.transform.pivotX,
+                        entity.transform.y + entity.transform.pivotY);
+    const QPointF handle = handleWidgetPosition(
+        view, entity, gizmo::Handle::RotateBottomRight);
+    const QPointF handleProject = view.widgetToProject(handle);
+    const QPointF target =
+        view.projectToWidget(pivot + rotateVector(handleProject - pivot, 30.0));
+
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, handle.toPoint());
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+
+    const model::Entity rotated = document.project().entities.value(uuid);
+    QCOMPARE(document.entityCommits(), 1);
+    const auto track = rotated.tracks.constFind(QStringLiteral("rotation"));
+    QVERIFY(track != rotated.tracks.constEnd());
+    double keyValue = 0.0;
+    bool found = false;
+    for (const model::Keyframe& key : track.value().keys)
+    {
+        if (key.frame == 15)
+        {
+            found = true;
+            keyValue = key.value;
+        }
+    }
+    QVERIFY(found);
+    QVERIFY(std::abs(keyValue - 30.0) < 0.5);
+    QVERIFY(std::abs(model::evaluateTrack(track.value(), 15).value_or(0.0)
+                     - 30.0)
+            < 0.5);
+}
+
+void ViewportWidgetTest::gizmoAutoKeyWritesMoveKey()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+    document.setPlayhead(7);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+    QVERIFY(!view.autoKeyEnabled());
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target = handle + QPointF(40.0, 0.0);
+
+    // Auto-key is off and the property is static: only the static transform
+    // may change, no track appears.
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, handle.toPoint());
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+    QVERIFY(document.project().entities.value(uuid).tracks.isEmpty());
+
+    view.setAutoKeyEnabled(true);
+    QVERIFY(view.autoKeyEnabled());
+    const model::Entity afterStatic =
+        document.project().entities.value(uuid);
+    const QPointF autoHandle =
+        handleWidgetPosition(view, afterStatic, gizmo::Handle::MoveX);
+    const QPointF autoTarget = autoHandle + QPointF(20.0, 0.0);
+    const double startX = afterStatic.transform.x;
+    const double scale = projectScale(view);
+
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      autoHandle.toPoint());
+    sendMouseMove(view, autoTarget, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        autoTarget.toPoint());
+
+    const model::Entity keyed = document.project().entities.value(uuid);
+    const auto track = keyed.tracks.constFind(QStringLiteral("x"));
+    QVERIFY(track != keyed.tracks.constEnd());
+    const auto value = model::evaluateTrack(track.value(), 7);
+    QVERIFY(value.has_value());
+    QVERIFY(std::abs(*value - (startX + 20.0 / scale)) < 1.5);
+    QVERIFY(keyed.tracks.constFind(QStringLiteral("y"))
+            == keyed.tracks.constEnd());
 }
 
 void ViewportWidgetTest::cornerScaleKeepsOppositeCorner()
@@ -493,7 +733,7 @@ void ViewportWidgetTest::rotateDragAndShiftSnap()
 
     const double snapped =
         document.project().entities.value(uuid).transform.rotation;
-    QVERIFY(std::abs(snapped - 15.0) < 1e-6);
+    QVERIFY(std::abs(snapped) < 1e-6);
 }
 
 void ViewportWidgetTest::moveSnapsToCanvasCenter()
@@ -518,6 +758,13 @@ void ViewportWidgetTest::moveSnapsToCanvasCenter()
 
     QCOMPARE(document.entityCommits(), 1);
     QCOMPARE(document.project().entities.value(uuid).transform.x, 160.0);
+
+    // Disabling canvas centre snapping leaves only the pixel grid.
+    document.mutableProject().entities[uuid] = entity;
+    view.setSnapCanvasCenter(false);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+    QCOMPARE(document.project().entities.value(uuid).transform.x, 159.0);
+    view.setSnapCanvasCenter(true);
 }
 
 void ViewportWidgetTest::moveSnapsToEntityEdge()
@@ -545,7 +792,67 @@ void ViewportWidgetTest::moveSnapsToEntityEdge()
     QCOMPARE(document.project().entities.value(mover).transform.x, 60.0);
 }
 
-void ViewportWidgetTest::altDisablesSnapping()
+void ViewportWidgetTest::moveSnapsToEdgeMidpointWhenEnabled()
+{
+    FakeDocument document;
+    // Anchor centre x = 100; the mover's right edge targets it.  No entity
+    // edge or canvas centre line is within reach, and the pixel grid is off.
+    document.addVector(QStringLiteral("Anchor"), 100.0, 90.0, 100.0, 60.0);
+    const Uuid mover = document.addVector(QStringLiteral("Mover"), 40.0, 30.0,
+                                          20.0, 20.0);
+    document.setSelection(mover);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+    QVERIFY(!view.snapEdgeMidpoints());
+    view.setSnapPixels(0);
+
+    const model::Entity entity = document.project().entities.value(mover);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target =
+        handle + QPointF((90.4 - entity.transform.x) * projectScale(view), 0.0);
+
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+    // Midpoints are off by default: the raw 90.4 is kept.
+    QVERIFY(std::abs(document.project().entities.value(mover).transform.x
+                     - 90.4)
+            < 0.5);
+
+    document.mutableProject().entities[mover] = entity;
+    view.setSnapEdgeMidpoints(true);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+    QVERIFY(std::abs(document.project().entities.value(mover).transform.x
+                     - 90.0)
+            < 1e-6);
+}
+
+void ViewportWidgetTest::ctrlDisablesSnapping()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 100.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    const QPointF target =
+        handle + QPointF((158.6 - entity.transform.x) * projectScale(view), 0.0);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target, Qt::ControlModifier);
+
+    // Ctrl turns every snap off: neither the centre line nor the pixel grid
+    // applies, so the raw drag result is kept.
+    const double x = document.project().entities.value(uuid).transform.x;
+    QVERIFY(std::abs(x - 158.6) < 1.0);
+    QVERIFY(std::abs(x - 160.0) > 1.0);
+    QVERIFY(std::abs(x - std::round(x)) > 1e-6);
+}
+
+void ViewportWidgetTest::altDoesNotDisableSnapping()
 {
     FakeDocument document;
     const Uuid uuid = document.addVector(QStringLiteral("Box"), 100.0, 90.0,
@@ -562,15 +869,12 @@ void ViewportWidgetTest::altDisablesSnapping()
         handle + QPointF((158.6 - entity.transform.x) * projectScale(view), 0.0);
     dragHandle(view, entity, gizmo::Handle::MoveX, target, Qt::AltModifier);
 
-    // Alt turns every snap off: neither the centre line nor the pixel grid
-    // applies, so the raw drag result is kept.
-    const double x = document.project().entities.value(uuid).transform.x;
-    QVERIFY(std::abs(x - 158.6) < 1.0);
-    QVERIFY(std::abs(x - 160.0) > 1.0);
-    QVERIFY(std::abs(x - std::round(x)) > 1e-6);
+    // Alt is only the around-centre rotation modifier; it no longer disables
+    // snapping, so the centre line wins.
+    QCOMPARE(document.project().entities.value(uuid).transform.x, 160.0);
 }
 
-void ViewportWidgetTest::rotationSnapsTo15Degrees()
+void ViewportWidgetTest::rotationSnapsToRightAngles()
 {
     FakeDocument document;
     const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
@@ -587,15 +891,89 @@ void ViewportWidgetTest::rotationSnapsTo15Degrees()
         view, entity, gizmo::Handle::RotateBottomRight);
     const QPointF handleProject = view.widgetToProject(handle);
 
-    // 16 degrees is within 3 degrees of the 15 degree grid.
-    const QPointF target =
-        view.projectToWidget(pivot + rotateVector(handleProject - pivot, 16.0));
-    dragHandle(view, entity, gizmo::Handle::RotateBottomRight, target);
+    const auto rotateTo = [&](double degrees) {
+        document.mutableProject().entities[uuid] = entity;
+        const QPointF target =
+            view.projectToWidget(pivot
+                                 + rotateVector(handleProject - pivot, degrees));
+        dragHandle(view, document.project().entities.value(uuid),
+                   gizmo::Handle::RotateBottomRight, target);
+        return document.project().entities.value(uuid).transform.rotation;
+    };
 
-    QCOMPARE(document.entityCommits(), 1);
-    QVERIFY(std::abs(document.project().entities.value(uuid).transform.rotation
-                     - 15.0)
-            < 1e-6);
+    QVERIFY(std::abs(rotateTo(88.0) - 90.0) < 1e-6);
+    QVERIFY(std::abs(rotateTo(178.0) - 180.0) < 1e-6);
+    QVERIFY(std::abs(rotateTo(267.0) - 270.0) < 1e-6);
+}
+
+void ViewportWidgetTest::rotationSnapsTo30WhenEnabled()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+                                         100.0, 60.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+    QVERIFY(view.snapAngles()
+            == QVector<double>({0.0, 90.0, 180.0, 270.0}));
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF pivot(entity.transform.x + entity.transform.pivotX,
+                        entity.transform.y + entity.transform.pivotY);
+    const QPointF handle = handleWidgetPosition(
+        view, entity, gizmo::Handle::RotateBottomRight);
+    const QPointF handleProject = view.widgetToProject(handle);
+
+    const auto rotateTo = [&](double degrees) {
+        document.mutableProject().entities[uuid] = entity;
+        const QPointF target =
+            view.projectToWidget(pivot
+                                 + rotateVector(handleProject - pivot, degrees));
+        dragHandle(view, document.project().entities.value(uuid),
+                   gizmo::Handle::RotateBottomRight, target);
+        return document.project().entities.value(uuid).transform.rotation;
+    };
+
+    // 32 degrees is 2 degrees from 30, but 30 is off by default.
+    QVERIFY(std::abs(rotateTo(32.0) - 32.0) < 0.5);
+
+    view.setSnapAngles({0.0, 30.0, 45.0, 90.0, 180.0, 270.0});
+    QVERIFY(std::abs(rotateTo(32.0) - 30.0) < 1e-6);
+}
+
+void ViewportWidgetTest::snapThresholdComesFromSetting()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 40.0, 90.0,
+                                         20.0, 20.0);
+    document.setSelection(uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    const model::Entity entity = document.project().entities.value(uuid);
+    const QPointF handle =
+        handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
+    // Raw x = 155 is 5 project pixels away from the canvas centre line.
+    const QPointF target =
+        handle + QPointF((155.0 - entity.transform.x) * projectScale(view), 0.0);
+
+    view.setSnapThresholdPixels(1);
+    QCOMPARE(view.snapThresholdPixels(), 1);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+    QCOMPARE(document.project().entities.value(uuid).transform.x, 155.0);
+
+    document.mutableProject().entities[uuid] = entity;
+    view.setSnapThresholdPixels(32);
+    QCOMPARE(view.snapThresholdPixels(), 32);
+    dragHandle(view, entity, gizmo::Handle::MoveX, target);
+    QCOMPARE(document.project().entities.value(uuid).transform.x, 160.0);
+
+    view.setSnapThresholdPixels(0);
+    QCOMPARE(view.snapThresholdPixels(), 1);
+    view.setSnapThresholdPixels(99);
+    QCOMPARE(view.snapThresholdPixels(), 32);
 }
 
 void ViewportWidgetTest::scaleSnapsToPixelGrid()

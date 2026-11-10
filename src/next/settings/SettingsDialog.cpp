@@ -56,6 +56,7 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("settingsTabs"));
 
+    buildEditorPage();
     buildHtmlPage();
     buildWorkbenchPage();
     buildVideoPage();
@@ -86,6 +87,64 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     root->addWidget(buttons);
 
     setSettings(m_store ? m_store->load() : AppSettings{});
+}
+
+void SettingsDialog::buildEditorPage()
+{
+    auto* page = new QWidget(m_tabs);
+    auto* form = new QFormLayout(page);
+
+    m_snapPixels = new QSpinBox(page);
+    m_snapPixels->setObjectName(QStringLiteral("snapPixels"));
+    m_snapPixels->setRange(1, 32);
+    m_snapPixels->setSuffix(QStringLiteral(" px"));
+    m_snapPixels->setToolTip(
+        QStringLiteral("画布中心线与实体边缘的吸附半径（屏幕像素）。"));
+    form->addRow(QStringLiteral("吸附阈值"), m_snapPixels);
+
+    m_snapCanvasCenter =
+        new QCheckBox(QStringLiteral("允许实体边缘吸附画布中心线"), page);
+    m_snapCanvasCenter->setObjectName(QStringLiteral("snapCanvasCenter"));
+    form->addRow(m_snapCanvasCenter);
+
+    m_snapEntityEdges =
+        new QCheckBox(QStringLiteral("吸附其他实体边缘"), page);
+    m_snapEntityEdges->setObjectName(QStringLiteral("snapEntityEdges"));
+    form->addRow(m_snapEntityEdges);
+
+    m_snapEdgeMidpoints =
+        new QCheckBox(QStringLiteral("吸附其他实体边缘中点"), page);
+    m_snapEdgeMidpoints->setObjectName(QStringLiteral("snapEdgeMidpoints"));
+    form->addRow(m_snapEdgeMidpoints);
+
+    auto* angles = new QGroupBox(QStringLiteral("旋转角度吸附"), page);
+    auto* angleLayout = new QHBoxLayout(angles);
+    angleLayout->setContentsMargins(8, 6, 8, 6);
+    m_snapAngle0 = new QCheckBox(QStringLiteral("0°"), angles);
+    m_snapAngle0->setObjectName(QStringLiteral("snapAngle0"));
+    m_snapAngle0->setToolTip(QStringLiteral("同时启用 180°。"));
+    m_snapAngle30 = new QCheckBox(QStringLiteral("30°"), angles);
+    m_snapAngle30->setObjectName(QStringLiteral("snapAngle30"));
+    m_snapAngle45 = new QCheckBox(QStringLiteral("45°"), angles);
+    m_snapAngle45->setObjectName(QStringLiteral("snapAngle45"));
+    m_snapAngle90 = new QCheckBox(QStringLiteral("90°"), angles);
+    m_snapAngle90->setObjectName(QStringLiteral("snapAngle90"));
+    m_snapAngle90->setToolTip(QStringLiteral("同时启用 270°。"));
+    angleLayout->addWidget(m_snapAngle0);
+    angleLayout->addWidget(m_snapAngle30);
+    angleLayout->addWidget(m_snapAngle45);
+    angleLayout->addWidget(m_snapAngle90);
+    angleLayout->addStretch(1);
+    form->addRow(angles);
+
+    form->addRow(selectableLabel(
+        QStringLiteral("按住 <b>Ctrl</b> 拖动可临时关闭吸附（中心线、实体边缘、"
+                       "边缘中点和像素网格）。Shift 旋转时强制吸附到勾选角度，"
+                       "Shift 四角缩放保持等比。勾选 0°/90° 会同时覆盖 "
+                       "180°/270°；边缘中点吸附默认关闭。"),
+        page));
+
+    m_tabs->addTab(page, QStringLiteral("编辑器 / 吸附"));
 }
 
 void SettingsDialog::buildHtmlPage()
@@ -350,6 +409,22 @@ AppSettings SettingsDialog::settings() const
     settings.workbenchCacheDiskBytes = qint64(m_workbenchDiskGb->value()) * kGiB;
     settings.workbenchCacheMemoryBytes = m_workbenchMemoryBytes;
 
+    settings.snapPixels = m_snapPixels->value();
+    settings.snapCanvasCenter = m_snapCanvasCenter->isChecked();
+    settings.snapEntityEdges = m_snapEntityEdges->isChecked();
+    settings.snapEdgeMidpoints = m_snapEdgeMidpoints->isChecked();
+    settings.snapAngles.clear();
+    if (m_snapAngle0->isChecked()) {
+        settings.snapAngles << 0.0 << 180.0;
+    }
+    if (m_snapAngle30->isChecked())
+        settings.snapAngles << 30.0;
+    if (m_snapAngle45->isChecked())
+        settings.snapAngles << 45.0;
+    if (m_snapAngle90->isChecked()) {
+        settings.snapAngles << 90.0 << 270.0;
+    }
+
     settings.mcpPort = static_cast<quint16>(m_mcpPort->value());
     settings.humanCommitDelayMs = m_humanCommitDelayMs->value();
     settings.gitEnabled = m_gitEnabled->isChecked();
@@ -388,6 +463,18 @@ void SettingsDialog::setSettings(const AppSettings& settings)
     m_workbenchExpandPercent->setValue(value.workbenchCacheExpandPercent);
     m_workbenchDiskGb->setValue(int(value.workbenchCacheDiskBytes / kGiB));
     m_workbenchMemoryBytes = value.workbenchCacheMemoryBytes;
+
+    m_snapPixels->setValue(value.snapPixels);
+    m_snapCanvasCenter->setChecked(value.snapCanvasCenter);
+    m_snapEntityEdges->setChecked(value.snapEntityEdges);
+    m_snapEdgeMidpoints->setChecked(value.snapEdgeMidpoints);
+    const auto hasAngle = [&value](double angle) {
+        return value.snapAngles.contains(angle);
+    };
+    m_snapAngle0->setChecked(hasAngle(0.0) || hasAngle(180.0));
+    m_snapAngle30->setChecked(hasAngle(30.0));
+    m_snapAngle45->setChecked(hasAngle(45.0));
+    m_snapAngle90->setChecked(hasAngle(90.0) || hasAngle(270.0));
 
     m_mcpPort->setValue(value.mcpPort);
     m_humanCommitDelayMs->setValue(value.humanCommitDelayMs);

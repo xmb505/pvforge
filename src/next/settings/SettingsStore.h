@@ -2,6 +2,7 @@
 
 #include <QSettings>
 #include <QString>
+#include <QVector>
 
 namespace pvf::next {
 
@@ -35,6 +36,16 @@ struct AppSettings
     int workbenchCacheExpandPercent = 50;
     qint64 workbenchCacheDiskBytes = 8LL * 1024 * 1024 * 1024;
     qint64 workbenchCacheMemoryBytes = 256LL * 1024 * 1024;
+
+    // Viewport snapping.  snapPixels is the screen-pixel threshold for canvas
+    // centre lines and entity edges (1..32); the pixel grid step stays at one
+    // project pixel.  Angles are absolute degrees; Ctrl disables snapping for
+    // the current drag.
+    int snapPixels = 6;
+    bool snapCanvasCenter = true;
+    bool snapEntityEdges = true;
+    bool snapEdgeMidpoints = false;
+    QVector<double> snapAngles{0.0, 90.0, 180.0, 270.0};
 
     // MCP/Git
     quint16 mcpPort = 47821;

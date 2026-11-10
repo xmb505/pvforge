@@ -2,10 +2,12 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QStringList>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
 
 namespace pvf::next {
 
@@ -51,6 +53,50 @@ int snapWorkbenchScalePercent(int value)
     return nearestOf(value, std::array<int, 4>{25, 50, 75, 100});
 }
 
+QString snapAnglesToString(const QVector<double>& angles)
+{
+    QStringList parts;
+    parts.reserve(angles.size());
+    for (double angle : angles)
+        parts.append(QString::number(angle, 'g', 12));
+    return parts.join(QLatin1Char(','));
+}
+
+QVector<double> snapAnglesFromString(const QString& text,
+                                     const QVector<double>& fallback)
+{
+    if (text.trimmed().isEmpty())
+        return {};
+
+    QVector<double> angles;
+    const QStringList parts = text.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        bool ok = false;
+        const double angle = part.trimmed().toDouble(&ok);
+        if (ok && std::isfinite(angle))
+            angles.append(angle);
+    }
+    return angles.isEmpty() ? fallback : angles;
+}
+
+QVector<double> sanitizedSnapAngles(QVector<double> angles)
+{
+    QVector<double> normalized;
+    normalized.reserve(angles.size());
+    for (double angle : angles) {
+        if (!std::isfinite(angle))
+            continue;
+        double value = std::fmod(angle, 360.0);
+        if (value < 0.0)
+            value += 360.0;
+        normalized.append(value);
+    }
+    std::sort(normalized.begin(), normalized.end());
+    normalized.erase(std::unique(normalized.begin(), normalized.end()),
+                     normalized.end());
+    return normalized;
+}
+
 } // namespace
 
 SettingsStore::SettingsStore(QString iniPath)
@@ -89,6 +135,9 @@ AppSettings SettingsStore::sanitized(AppSettings settings)
         std::clamp(settings.workbenchCacheDiskBytes, kMinDiskBytes, kMaxDiskBytes);
     settings.workbenchCacheMemoryBytes = std::clamp(
         settings.workbenchCacheMemoryBytes, kMinMemoryBytes, kMaxMemoryBytes);
+
+    settings.snapPixels = std::clamp(settings.snapPixels, 1, 32);
+    settings.snapAngles = sanitizedSnapAngles(std::move(settings.snapAngles));
 
     settings.mcpPort = static_cast<quint16>(
         std::clamp<int>(settings.mcpPort, kMinMcpPort, kMaxMcpPort));
@@ -153,6 +202,26 @@ AppSettings SettingsStore::load() const
                    settings.workbenchCacheMemoryBytes)
             .toLongLong();
 
+    settings.snapPixels =
+        m_settings.value(QStringLiteral("snap/pixels"), settings.snapPixels).toInt();
+    settings.snapCanvasCenter =
+        m_settings.value(QStringLiteral("snap/canvasCenter"),
+                         settings.snapCanvasCenter)
+            .toBool();
+    settings.snapEntityEdges =
+        m_settings.value(QStringLiteral("snap/entityEdges"),
+                         settings.snapEntityEdges)
+            .toBool();
+    settings.snapEdgeMidpoints =
+        m_settings.value(QStringLiteral("snap/edgeMidpoints"),
+                         settings.snapEdgeMidpoints)
+            .toBool();
+    settings.snapAngles = snapAnglesFromString(
+        m_settings.value(QStringLiteral("snap/angles"),
+                         snapAnglesToString(settings.snapAngles))
+            .toString(),
+        settings.snapAngles);
+
     settings.mcpPort = static_cast<quint16>(
         m_settings.value(QStringLiteral("mcp/port"), settings.mcpPort).toUInt());
     settings.humanCommitDelayMs =
@@ -193,6 +262,16 @@ void SettingsStore::save(const AppSettings& settings)
                         value.workbenchCacheDiskBytes);
     m_settings.setValue(QStringLiteral("workbench/memoryBytes"),
                         value.workbenchCacheMemoryBytes);
+
+    m_settings.setValue(QStringLiteral("snap/pixels"), value.snapPixels);
+    m_settings.setValue(QStringLiteral("snap/canvasCenter"),
+                        value.snapCanvasCenter);
+    m_settings.setValue(QStringLiteral("snap/entityEdges"),
+                        value.snapEntityEdges);
+    m_settings.setValue(QStringLiteral("snap/edgeMidpoints"),
+                        value.snapEdgeMidpoints);
+    m_settings.setValue(QStringLiteral("snap/angles"),
+                        snapAnglesToString(value.snapAngles));
 
     m_settings.setValue(QStringLiteral("mcp/port"), value.mcpPort);
     m_settings.setValue(QStringLiteral("git/humanCommitDelayMs"), value.humanCommitDelayMs);

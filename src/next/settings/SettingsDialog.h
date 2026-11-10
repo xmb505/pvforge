@@ -51,6 +51,7 @@ signals:
     void chromeDetectRequested();
 
 private:
+    void buildEditorPage();
     void buildHtmlPage();
     void buildWorkbenchPage();
     void buildVideoPage();
@@ -62,6 +63,15 @@ private:
     SettingsStore* m_store = nullptr;
 
     QTabWidget* m_tabs = nullptr;
+
+    QSpinBox* m_snapPixels = nullptr;
+    QCheckBox* m_snapCanvasCenter = nullptr;
+    QCheckBox* m_snapEntityEdges = nullptr;
+    QCheckBox* m_snapEdgeMidpoints = nullptr;
+    QCheckBox* m_snapAngle0 = nullptr;
+    QCheckBox* m_snapAngle30 = nullptr;
+    QCheckBox* m_snapAngle45 = nullptr;
+    QCheckBox* m_snapAngle90 = nullptr;
 
     QCheckBox* m_htmlCacheEnabled = nullptr;
     QSpinBox* m_htmlMemoryMb = nullptr;

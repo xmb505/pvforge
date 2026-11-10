@@ -50,6 +50,11 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.workbenchCacheExpandPercent, expected.workbenchCacheExpandPercent);
     QCOMPARE(actual.workbenchCacheDiskBytes, expected.workbenchCacheDiskBytes);
     QCOMPARE(actual.workbenchCacheMemoryBytes, expected.workbenchCacheMemoryBytes);
+    QCOMPARE(actual.snapPixels, expected.snapPixels);
+    QCOMPARE(actual.snapCanvasCenter, expected.snapCanvasCenter);
+    QCOMPARE(actual.snapEntityEdges, expected.snapEntityEdges);
+    QCOMPARE(actual.snapEdgeMidpoints, expected.snapEdgeMidpoints);
+    QVERIFY(actual.snapAngles == expected.snapAngles);
     QCOMPARE(int(actual.mcpPort), int(expected.mcpPort));
     QCOMPARE(actual.humanCommitDelayMs, expected.humanCommitDelayMs);
     QCOMPARE(actual.gitEnabled, expected.gitEnabled);
@@ -71,12 +76,15 @@ private slots:
     void workbenchDefaults();
     void workbenchStoreRoundTrip();
     void workbenchStoreSanitizes();
+    void editorSnapDefaults();
+    void editorSnapRoundTrip();
 
     void detectGitFindsExecutable();
 
     void dialogDefaults();
     void dialogRoundTrip();
     void dialogClampsValues();
+    void editorDialogRoundTrip();
     void workbenchDialogRoundTrip();
     void workbenchDialogCancelDoesNotSave();
     void workbenchDialogApplySaves();
@@ -158,6 +166,59 @@ void SettingsTests::storeRoundTrip()
     QCOMPARE(raw.value(QStringLiteral("mcp/port")).toInt(), 51234);
     QCOMPARE(raw.value(QStringLiteral("git/enabled")).toBool(), true);
     QCOMPARE(raw.value(QStringLiteral("app/onboardingDone")).toBool(), true);
+}
+
+void SettingsTests::editorSnapDefaults()
+{
+    const AppSettings defaults;
+    QCOMPARE(defaults.snapPixels, 6);
+    QCOMPARE(defaults.snapCanvasCenter, true);
+    QCOMPARE(defaults.snapEntityEdges, true);
+    QCOMPARE(defaults.snapEdgeMidpoints, false);
+    QVERIFY(defaults.snapAngles == QVector<double>({0.0, 90.0, 180.0, 270.0}));
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    verifySettingsEqual(store.load(), defaults);
+}
+
+void SettingsTests::editorSnapRoundTrip()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = temp.filePath(QStringLiteral("settings.ini"));
+    SettingsStore store(path);
+
+    AppSettings expected;
+    expected.snapPixels = 18;
+    expected.snapCanvasCenter = false;
+    expected.snapEntityEdges = false;
+    expected.snapEdgeMidpoints = true;
+    expected.snapAngles = {0.0, 30.0, 45.0, 90.0, 180.0, 270.0};
+    store.save(expected);
+
+    SettingsStore reopened(path);
+    verifySettingsEqual(reopened.load(), expected);
+
+    QSettings raw(path, QSettings::IniFormat);
+    QCOMPARE(raw.value(QStringLiteral("snap/pixels")).toInt(), 18);
+    QCOMPARE(raw.value(QStringLiteral("snap/canvasCenter")).toBool(), false);
+    QCOMPARE(raw.value(QStringLiteral("snap/entityEdges")).toBool(), false);
+    QCOMPARE(raw.value(QStringLiteral("snap/edgeMidpoints")).toBool(), true);
+    QCOMPARE(raw.value(QStringLiteral("snap/angles")).toString(),
+             QStringLiteral("0,30,45,90,180,270"));
+
+    AppSettings clamped;
+    clamped.snapPixels = 99;
+    const AppSettings sanitized = SettingsStore::sanitized(clamped);
+    QCOMPARE(sanitized.snapPixels, 32);
+    clamped.snapPixels = 0;
+    QCOMPARE(SettingsStore::sanitized(clamped).snapPixels, 1);
+
+    clamped.snapAngles = {90.0, -30.0, 90.0, 450.0};
+    QVERIFY(SettingsStore::sanitized(clamped).snapAngles
+            == QVector<double>({90.0, 330.0}));
 }
 
 void SettingsTests::detectGitFindsExecutable()
@@ -345,7 +406,7 @@ void SettingsTests::dialogDefaults()
     SettingsDialog dialog(&store);
 
     verifySettingsEqual(dialog.settings(), AppSettings{});
-    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 5);
+    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 6);
     QVERIFY(!findWidget<QCheckBox>(dialog, "gitEnabled")->isChecked());
     QVERIFY(!findWidget<QLabel>(dialog, "gitStatus")->text().isEmpty());
     QVERIFY(dialog.endpointPath().endsWith(
@@ -409,6 +470,49 @@ void SettingsTests::dialogClampsValues()
     QCOMPARE(settings.videoMemoryFrames, 32);
     QCOMPARE(int(settings.mcpPort), 1024);
     QCOMPARE(settings.humanCommitDelayMs, 200);
+}
+
+void SettingsTests::editorDialogRoundTrip()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SettingsStore store(temp.filePath(QStringLiteral("settings.ini")));
+    SettingsDialog dialog(&store);
+
+    QCOMPARE(findWidget<QSpinBox>(dialog, "snapPixels")->value(), 6);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "snapPixels")->minimum(), 1);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "snapPixels")->maximum(), 32);
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapCanvasCenter")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapEntityEdges")->isChecked());
+    QVERIFY(!findWidget<QCheckBox>(dialog, "snapEdgeMidpoints")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle0")->isChecked());
+    QVERIFY(!findWidget<QCheckBox>(dialog, "snapAngle30")->isChecked());
+    QVERIFY(!findWidget<QCheckBox>(dialog, "snapAngle45")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle90")->isChecked());
+
+    findWidget<QSpinBox>(dialog, "snapPixels")->setValue(20);
+    findWidget<QCheckBox>(dialog, "snapCanvasCenter")->setChecked(false);
+    findWidget<QCheckBox>(dialog, "snapEntityEdges")->setChecked(false);
+    findWidget<QCheckBox>(dialog, "snapEdgeMidpoints")->setChecked(true);
+    findWidget<QCheckBox>(dialog, "snapAngle30")->setChecked(true);
+    findWidget<QCheckBox>(dialog, "snapAngle45")->setChecked(true);
+
+    const AppSettings edited = dialog.settings();
+    QCOMPARE(edited.snapPixels, 20);
+    QCOMPARE(edited.snapCanvasCenter, false);
+    QCOMPARE(edited.snapEntityEdges, false);
+    QCOMPARE(edited.snapEdgeMidpoints, true);
+    QVERIFY(edited.snapAngles
+            == QVector<double>({0.0, 30.0, 45.0, 90.0, 180.0, 270.0}));
+
+    findWidget<QPushButton>(dialog, "applyButton")->click();
+    const AppSettings saved = store.load();
+    verifySettingsEqual(saved, edited);
+
+    dialog.setSettings(AppSettings{});
+    QCOMPARE(findWidget<QSpinBox>(dialog, "snapPixels")->value(), 6);
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle0")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle90")->isChecked());
 }
 
 void SettingsTests::workbenchDialogRoundTrip()

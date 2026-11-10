@@ -1,5 +1,6 @@
 #include "next/viewport/ViewportWidget.h"
 
+#include "anim/Anim.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
 #include "model/Model.h"
@@ -29,11 +30,8 @@ namespace pvf::next {
 
 namespace {
 
-// Snap radius in screen pixels for the canvas centre lines and other
-// entities' edges/midpoints.
-constexpr double kSnapThresholdPixels = 6.0;
-// A rotation result snaps when it is this close to a snapAngleDegrees()
-// multiple.  Shift forces the snap regardless of distance.
+// A rotation result snaps when it is this close to one of the configured
+// absolute snap angles.  Shift forces the snap regardless of distance.
 constexpr double kSnapAngleToleranceDegrees = 3.0;
 
 const QColor kWidgetBackground(20, 22, 26);
@@ -125,7 +123,7 @@ QPointF localCorner(const gizmo::Bounds& bounds, gizmo::Handle handle)
     }
 }
 
-bool transformsEqual(const model::Transform& a, const gizmo::Transform& b)
+bool transformsEqual(const gizmo::Transform& a, const gizmo::Transform& b)
 {
     constexpr double epsilon = 1e-9;
     return std::abs(a.x - b.x) <= epsilon && std::abs(a.y - b.y) <= epsilon
@@ -136,17 +134,101 @@ bool transformsEqual(const model::Transform& a, const gizmo::Transform& b)
            && std::abs(a.pivotY - b.pivotY) <= epsilon;
 }
 
-void clampCameraScale(model::Entity& entity)
+double clampedCameraScale(double value)
 {
-    if (entity.content.kind != ContentKind::Camera)
-        return;
+    const double magnitude = std::clamp(std::abs(value), 0.05, 1.0);
+    return value < 0.0 ? -magnitude : magnitude;
+}
 
-    const auto clampMagnitude = [](double value) {
-        const double magnitude = std::clamp(std::abs(value), 0.05, 1.0);
-        return value < 0.0 ? -magnitude : magnitude;
-    };
-    entity.transform.scaleX = clampMagnitude(entity.transform.scaleX);
-    entity.transform.scaleY = clampMagnitude(entity.transform.scaleY);
+// Value of an ordinary entity track at an entity-relative frame, or fallback
+// when the track does not exist.
+double trackValueOr(const model::Entity& entity, const char* property,
+                    double relativeFrame, double fallback)
+{
+    const auto it = entity.tracks.constFind(QLatin1String(property));
+    if (it == entity.tracks.constEnd())
+        return fallback;
+    return model::evaluateTrack(it.value(), relativeFrame).value_or(fallback);
+}
+
+bool setStaticGizmoValue(model::Entity& entity, const QString& property,
+                         double value)
+{
+    model::Transform& transform = entity.transform;
+    if (property == QLatin1String("x"))
+    {
+        transform.x = value;
+        return true;
+    }
+    if (property == QLatin1String("y"))
+    {
+        transform.y = value;
+        return true;
+    }
+    if (property == QLatin1String("rotation"))
+    {
+        transform.rotation = value;
+        return true;
+    }
+    if (property == QLatin1String("scaleX"))
+    {
+        transform.scaleX = value;
+        return true;
+    }
+    if (property == QLatin1String("scaleY"))
+    {
+        transform.scaleY = value;
+        return true;
+    }
+    if (property == QLatin1String("pivotX"))
+    {
+        transform.pivotX = value;
+        return true;
+    }
+    if (property == QLatin1String("pivotY"))
+    {
+        transform.pivotY = value;
+        return true;
+    }
+    return false;
+}
+
+void setTrackKeyValue(model::Entity& entity, const QString& property, int frame,
+                      double value)
+{
+    model::Track& track = entity.tracks[property];
+    for (model::Keyframe& keyframe : track.keys)
+    {
+        if (keyframe.frame == frame)
+        {
+            keyframe.value = value;
+            return;
+        }
+    }
+    model::Keyframe keyframe;
+    keyframe.frame = frame;
+    keyframe.value = value;
+    track.keys.append(keyframe);
+}
+
+// True when a solver segment at this relative frame owns the property.
+// validateSolvers() forbids ordinary keyframes inside a segment, so gizmo
+// drags must not write one there.
+bool solverDrivesProperty(const model::Entity& entity, const QString& property,
+                          int relativeFrame)
+{
+    const bool position = property == QLatin1String("x")
+                          || property == QLatin1String("y");
+    const bool rotation = property == QLatin1String("rotation");
+    if (!position && !rotation)
+        return false;
+
+    const model::SolverSegment* segment = anim::solverAt(entity, relativeFrame);
+    if (!segment)
+        return false;
+    if (segment->effect == SolverEffect::Spin)
+        return rotation;
+    return position;
 }
 
 void drawArrowLine(QPainter& painter, QPointF from, QPointF to, const QColor& color)
@@ -333,6 +415,11 @@ void ViewportWidget::setShowGizmo(bool show)
     update();
 }
 
+void ViewportWidget::setAutoKeyEnabled(bool enabled)
+{
+    m_autoKeyEnabled = enabled;
+}
+
 void ViewportWidget::setSnapEnabled(bool enabled)
 {
     m_snapEnabled = enabled;
@@ -343,9 +430,43 @@ void ViewportWidget::setSnapPixels(int pixels)
     m_snapPixels = std::max(0, pixels);
 }
 
-void ViewportWidget::setSnapAngleDegrees(double degrees)
+void ViewportWidget::setSnapThresholdPixels(int pixels)
 {
-    m_snapAngleDegrees = std::abs(degrees);
+    m_snapThresholdPixels = std::clamp(pixels, 1, 32);
+}
+
+void ViewportWidget::setSnapCanvasCenter(bool enabled)
+{
+    m_snapCanvasCenter = enabled;
+}
+
+void ViewportWidget::setSnapEntityEdges(bool enabled)
+{
+    m_snapEntityEdges = enabled;
+}
+
+void ViewportWidget::setSnapEdgeMidpoints(bool enabled)
+{
+    m_snapEdgeMidpoints = enabled;
+}
+
+void ViewportWidget::setSnapAngles(const QVector<double>& angles)
+{
+    QVector<double> normalized;
+    normalized.reserve(angles.size());
+    for (double angle : angles)
+    {
+        if (!std::isfinite(angle))
+            continue;
+        double value = std::fmod(angle, 360.0);
+        if (value < 0.0)
+            value += 360.0;
+        normalized.append(value);
+    }
+    std::sort(normalized.begin(), normalized.end());
+    normalized.erase(std::unique(normalized.begin(), normalized.end()),
+                     normalized.end());
+    m_snapAngles = std::move(normalized);
 }
 
 void ViewportWidget::refresh()
@@ -538,7 +659,97 @@ gizmo::Transform ViewportWidget::gizmoTransform(const model::Entity& entity) con
     transform.scaleY = entity.transform.scaleY;
     transform.pivotX = entity.transform.pivotX;
     transform.pivotY = entity.transform.pivotY;
+
+    if (!m_document)
+        return transform;
+
+    const int playhead = m_document->playhead();
+    const double relativeFrame = double(playhead - entity.start);
+
+    // Ordinary tracks.  The value is in the entity's parent space, which is
+    // exactly the space the gizmo draws in, so no parent transform is applied
+    // here.
+    transform.x = trackValueOr(entity, "x", relativeFrame, transform.x);
+    transform.y = trackValueOr(entity, "y", relativeFrame, transform.y);
+    transform.rotation =
+        trackValueOr(entity, "rotation", relativeFrame, transform.rotation);
+    transform.scaleX =
+        trackValueOr(entity, "scaleX", relativeFrame, transform.scaleX);
+    transform.scaleY =
+        trackValueOr(entity, "scaleY", relativeFrame, transform.scaleY);
+    transform.pivotX =
+        trackValueOr(entity, "pivotX", relativeFrame, transform.pivotX);
+    transform.pivotY =
+        trackValueOr(entity, "pivotY", relativeFrame, transform.pivotY);
+
+    if (entity.solvers.isEmpty())
+        return transform;
+
+    // Solver segments, and the anchored interpolation after a segment ends,
+    // only exist inside anim::evaluateEntity().  Pose exposes the world matrix,
+    // so strip the parent matrix to recover this entity's local matrix and
+    // decompose the solver-driven x/y/rotation back out of it.  Scale and
+    // pivot are never solver-driven and come from the tracks above.
+    const model::Project& project = m_document->project();
+    render2::SceneWorld world(project, m_document->assets());
+    anim::Cache cache;
+    const anim::Pose pose =
+        anim::evaluateEntity(project, entity.uuid, playhead, world, cache);
+
+    QTransform local = pose.world;
+    if (!entity.parentUuid.isEmpty()
+        && project.entities.contains(entity.parentUuid))
+    {
+        const anim::Pose parent = anim::evaluateEntity(
+            project, entity.parentUuid, playhead, world, cache);
+        bool invertible = false;
+        const QTransform inverse = parent.world.inverted(&invertible);
+        if (invertible)
+            local = local * inverse;
+    }
+
+    const double scaleX = transform.scaleX;
+    const double scaleY = transform.scaleY;
+    if (std::abs(scaleX) > 1e-9)
+    {
+        transform.rotation = qRadiansToDegrees(
+            std::atan2(local.m12() / scaleX, local.m11() / scaleX));
+    }
+    else if (std::abs(scaleY) > 1e-9)
+    {
+        transform.rotation = qRadiansToDegrees(
+            std::atan2(-local.m21() / scaleY, local.m22() / scaleY));
+    }
+
+    // local maps p to (x, y) + pivot + A * (p - pivot) with A the rotation *
+    // scale part, so invert the translation for x/y.
+    const double pivotLinearX =
+        local.m11() * transform.pivotX + local.m21() * transform.pivotY;
+    const double pivotLinearY =
+        local.m12() * transform.pivotX + local.m22() * transform.pivotY;
+    transform.x = local.dx() - transform.pivotX + pivotLinearX;
+    transform.y = local.dy() - transform.pivotY + pivotLinearY;
     return transform;
+}
+
+void ViewportWidget::writeGizmoValue(model::Entity& entity,
+                                     const QString& property, double value)
+{
+    if (!m_document)
+        return;
+
+    const int relativeFrame = m_document->playhead() - entity.start;
+    if (solverDrivesProperty(entity, property, relativeFrame))
+        return;
+
+    setStaticGizmoValue(entity, property, value);
+
+    const bool hasTrack = entity.tracks.contains(property);
+    if (!hasTrack && !m_autoKeyEnabled)
+        return;
+    if (relativeFrame < 0 || relativeFrame >= entity.duration())
+        return;
+    setTrackKeyValue(entity, property, relativeFrame, value);
 }
 
 QSizeF ViewportWidget::assetContentSize(const model::AssetContent& asset) const
@@ -571,6 +782,9 @@ QSizeF ViewportWidget::assetContentSize(const model::AssetContent& asset) const
 
 gizmo::Bounds ViewportWidget::gizmoBounds(const model::Entity& entity) const
 {
+    // The local content box (untransformed).  Callers must pair this with the
+    // frame-evaluated gizmoTransform(); the transform applies the current
+    // frame's scale and rotation, so applying them here too would double them.
     QSizeF size(100.0, 100.0);
     switch (entity.content.kind)
     {
@@ -694,8 +908,14 @@ void ViewportWidget::collectSnapTargets(const Uuid& draggedUuid)
         const QRectF bounds = entityWorldBounds(entity, pose.world);
         if (bounds.isEmpty())
             continue;
-        m_snapTargetsX << bounds.left() << bounds.center().x() << bounds.right();
-        m_snapTargetsY << bounds.top() << bounds.center().y() << bounds.bottom();
+        if (m_snapEntityEdges)
+            m_snapTargetsX << bounds.left() << bounds.right();
+        if (m_snapEdgeMidpoints)
+            m_snapTargetsX << bounds.center().x();
+        if (m_snapEntityEdges)
+            m_snapTargetsY << bounds.top() << bounds.bottom();
+        if (m_snapEdgeMidpoints)
+            m_snapTargetsY << bounds.center().y();
     }
 }
 
@@ -723,15 +943,19 @@ double ViewportWidget::snapMoveAxis(double value, bool xAxis) const
                   : std::array<double, 3>{bounds.top() + delta,
                                           bounds.center().y() + delta,
                                           bounds.bottom() + delta};
-        const double threshold = kSnapThresholdPixels / m_dragViewScale;
+        const double threshold =
+            double(m_snapThresholdPixels) / m_dragViewScale;
         const double canvasCenter =
             xAxis ? std::max(1, project.settings.width) / 2.0
                   : std::max(1, project.settings.height) / 2.0;
 
         // Canvas centre lines beat other entities, which beat the pixel grid.
-        if (const auto snap =
-                nearestFeatureSnap(features, {canvasCenter}, threshold))
-            return value + *snap;
+        if (m_snapCanvasCenter)
+        {
+            if (const auto snap =
+                    nearestFeatureSnap(features, {canvasCenter}, threshold))
+                return value + *snap;
+        }
         if (const auto snap = nearestFeatureSnap(
                 features, xAxis ? m_snapTargetsX : m_snapTargetsY, threshold))
             return value + *snap;
@@ -742,14 +966,24 @@ double ViewportWidget::snapMoveAxis(double value, bool xAxis) const
 
 double ViewportWidget::snapAngle(double degrees, bool force) const
 {
-    if (m_snapAngleDegrees <= 0.0)
+    if (m_snapAngles.isEmpty())
         return degrees;
-    const double snapped =
-        std::round(degrees / m_snapAngleDegrees) * m_snapAngleDegrees;
-    if (force
-        || std::abs(std::remainder(degrees - snapped, 360.0))
-               <= kSnapAngleToleranceDegrees)
-        return snapped;
+
+    double nearest = degrees;
+    double nearestDistance = 360.0;
+    for (double angle : m_snapAngles)
+    {
+        const double distance =
+            std::abs(std::remainder(degrees - angle, 360.0));
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            nearest = angle;
+        }
+    }
+
+    if (force || nearestDistance <= kSnapAngleToleranceDegrees)
+        return nearest;
     return degrees;
 }
 
@@ -840,6 +1074,7 @@ void ViewportWidget::startGizmoDrag(const Uuid& uuid, DragKind kind,
 
     m_dragKind = kind;
     m_dragEntity = uuid;
+    m_dragStartEntity = it.value();
     m_dragHandle = handle;
     m_dragStartTransform = gizmoTransform(it.value());
     m_dragStartBounds = gizmoBounds(it.value());
@@ -917,7 +1152,7 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
     const QPointF mouseParent = inverse.map(widgetPos);
     const QPointF parentDelta = mouseParent - m_dragStartParent;
     const bool snapActive =
-        m_snapEnabled && !modifiers.testFlag(Qt::AltModifier);
+        m_snapEnabled && !modifiers.testFlag(Qt::ControlModifier);
 
     switch (m_dragKind)
     {
@@ -933,16 +1168,16 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
                              : m_dragStartTransform.y + amount;
         if (snapActive)
             value = snapMoveAxis(value, moveX);
-        if (moveX)
-            entity.transform.x = value;
-        else
-            entity.transform.y = value;
+        writeGizmoValue(entity, moveX ? QStringLiteral("x") : QStringLiteral("y"),
+                        value);
         break;
     }
 
     case DragKind::Pivot:
-        entity.transform.pivotX = m_dragStartTransform.pivotX + parentDelta.x();
-        entity.transform.pivotY = m_dragStartTransform.pivotY + parentDelta.y();
+        writeGizmoValue(entity, QStringLiteral("pivotX"),
+                        m_dragStartTransform.pivotX + parentDelta.x());
+        writeGizmoValue(entity, QStringLiteral("pivotY"),
+                        m_dragStartTransform.pivotY + parentDelta.y());
         break;
 
     case DragKind::Rotate:
@@ -967,9 +1202,10 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
 
         const gizmo::DragResult result = gizmo::rotate(
             m_dragStartTransform, m_dragStartBounds, degrees, aroundCenter);
-        entity.transform.x = result.transform.x;
-        entity.transform.y = result.transform.y;
-        entity.transform.rotation = result.transform.rotation;
+        writeGizmoValue(entity, QStringLiteral("x"), result.transform.x);
+        writeGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        writeGizmoValue(entity, QStringLiteral("rotation"),
+                        result.transform.rotation);
         break;
     }
 
@@ -993,11 +1229,17 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
         const gizmo::DragResult result = gizmo::cornerScale(
             m_dragStartTransform, m_dragStartBounds, m_dragHandle, mouseLocal,
             uniform, true);
-        entity.transform.x = result.transform.x;
-        entity.transform.y = result.transform.y;
-        entity.transform.scaleX = result.transform.scaleX;
-        entity.transform.scaleY = result.transform.scaleY;
-        clampCameraScale(entity);
+        double scaleX = result.transform.scaleX;
+        double scaleY = result.transform.scaleY;
+        if (entity.content.kind == ContentKind::Camera)
+        {
+            scaleX = clampedCameraScale(scaleX);
+            scaleY = clampedCameraScale(scaleY);
+        }
+        writeGizmoValue(entity, QStringLiteral("x"), result.transform.x);
+        writeGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        writeGizmoValue(entity, QStringLiteral("scaleX"), scaleX);
+        writeGizmoValue(entity, QStringLiteral("scaleY"), scaleY);
         break;
     }
 
@@ -1016,9 +1258,15 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
         }
         const gizmo::DragResult result =
             gizmo::centerScale(m_dragStartTransform, mouseLocal, uniform);
-        entity.transform.scaleX = result.transform.scaleX;
-        entity.transform.scaleY = result.transform.scaleY;
-        clampCameraScale(entity);
+        double scaleX = result.transform.scaleX;
+        double scaleY = result.transform.scaleY;
+        if (entity.content.kind == ContentKind::Camera)
+        {
+            scaleX = clampedCameraScale(scaleX);
+            scaleY = clampedCameraScale(scaleY);
+        }
+        writeGizmoValue(entity, QStringLiteral("scaleX"), scaleX);
+        writeGizmoValue(entity, QStringLiteral("scaleY"), scaleY);
         break;
     }
 
@@ -1027,7 +1275,10 @@ void ViewportWidget::applyGizmoDrag(const QPointF& widgetPos,
         return;
     }
 
-    m_dragChanged = !transformsEqual(entity.transform, m_dragStartTransform);
+    // Compare the frame-evaluated result, not the static transform: animated
+    // tracks can leave the static fallback untouched outside the edited frame.
+    m_dragChanged =
+        !transformsEqual(gizmoTransform(entity), m_dragStartTransform);
     invalidateScene();
     update();
 }
@@ -1040,6 +1291,7 @@ void ViewportWidget::finishGizmoDrag()
 
     m_dragKind = DragKind::None;
     m_dragEntity.clear();
+    m_dragStartEntity = model::Entity();
     m_dragChanged = false;
     m_dragGrabOffset = QPointF();
 
@@ -1089,24 +1341,18 @@ void ViewportWidget::finishGizmoDrag()
 
 void ViewportWidget::cancelGizmoDrag()
 {
-    if (m_document && !m_dragEntity.isEmpty())
+    if (m_document && !m_dragEntity.isEmpty()
+        && !m_dragStartEntity.uuid.isEmpty())
     {
         auto it = m_document->mutableProject().entities.find(m_dragEntity);
         if (it != m_document->mutableProject().entities.end())
-        {
-            it.value().transform.x = m_dragStartTransform.x;
-            it.value().transform.y = m_dragStartTransform.y;
-            it.value().transform.rotation = m_dragStartTransform.rotation;
-            it.value().transform.scaleX = m_dragStartTransform.scaleX;
-            it.value().transform.scaleY = m_dragStartTransform.scaleY;
-            it.value().transform.pivotX = m_dragStartTransform.pivotX;
-            it.value().transform.pivotY = m_dragStartTransform.pivotY;
-        }
+            it.value() = m_dragStartEntity;
     }
 
     const bool wasPanning = m_dragKind == DragKind::Pan;
     m_dragKind = DragKind::None;
     m_dragEntity.clear();
+    m_dragStartEntity = model::Entity();
     m_dragChanged = false;
     m_dragGrabOffset = QPointF();
     if (wasPanning)

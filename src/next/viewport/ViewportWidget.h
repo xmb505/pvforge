@@ -2,6 +2,7 @@
 
 #include "common/Types.h"
 #include "gizmo/Gizmo.h"
+#include "model/Entity.h"
 #include "render2/Render.h"
 
 #include <QImage>
@@ -24,7 +25,6 @@ class QWheelEvent;
 
 namespace pvf::model {
 struct AssetContent;
-struct Entity;
 }
 
 namespace pvf::next {
@@ -84,17 +84,46 @@ public:
     void setShowGizmo(bool show);
     bool showGizmo() const { return m_showGizmo; }
 
-    // Snapping is on by default and Alt turns it off for the current drag.
+    // Auto-key, wired by the app shell to the project setting.  When enabled
+    // (or when the property already has a track) a gizmo drag also writes a
+    // keyframe at the playhead's entity-relative frame, so animated entities
+    // keep following the drag instead of only changing the static fallback.
+    // Off by default so the viewport stays a passive editor until the shell
+    // connects it.
+    void setAutoKeyEnabled(bool enabled);
+    bool autoKeyEnabled() const { return m_autoKeyEnabled; }
+
+    // Snapping is on by default and Ctrl turns it off for the current drag.
     // Move drags snap the canvas centre lines first, then other entities'
     // edges/midpoints, and fall back to the pixel grid.  Scale drags snap to
-    // the pixel grid; rotation snaps to snapAngleDegrees() multiples when the
-    // result is within 3 degrees.
+    // the pixel grid; rotation snaps to the nearest configured absolute angle
+    // when the result is within 3 degrees.  Shift forces an angle snap
+    // regardless of distance.
     void setSnapEnabled(bool enabled);
     bool snapEnabled() const { return m_snapEnabled; }
     // Pixel grid step in project pixels for moves and scales.  <= 0 disables
     // the pixel grid.
     void setSnapPixels(int pixels);
-    void setSnapAngleDegrees(double degrees);
+    int snapPixels() const { return m_snapPixels; }
+    // Screen-pixel radius for canvas centre lines and entity edge snapping.
+    // Clamped to 1..32; defaults to 6.
+    void setSnapThresholdPixels(int pixels);
+    int snapThresholdPixels() const { return m_snapThresholdPixels; }
+    // Whether entity features may snap to the canvas centre lines.
+    void setSnapCanvasCenter(bool enabled);
+    bool snapCanvasCenter() const { return m_snapCanvasCenter; }
+    // Whether other entities' edges participate as snap targets.
+    void setSnapEntityEdges(bool enabled);
+    bool snapEntityEdges() const { return m_snapEntityEdges; }
+    // Whether other entities' edge midpoints participate as snap targets.
+    // Off by default.
+    void setSnapEdgeMidpoints(bool enabled);
+    bool snapEdgeMidpoints() const { return m_snapEdgeMidpoints; }
+    // Absolute rotation angles in degrees that may be snapped to.  Values are
+    // normalised to [0, 360), deduplicated and sorted.  Empty disables angle
+    // snapping.  Defaults to {0, 90, 180, 270}.
+    void setSnapAngles(const QVector<double>& angles);
+    QVector<double> snapAngles() const { return m_snapAngles; }
 
     void refresh();
 
@@ -145,6 +174,14 @@ private:
     gizmo::Bounds gizmoBounds(const model::Entity& entity) const;
     QSizeF assetContentSize(const model::AssetContent& asset) const;
 
+    // Writes one transform property for a gizmo drag.  The static value always
+    // changes; when the property has a track (or auto-key is on) a keyframe is
+    // also written at the playhead's relative frame.  Solver-driven properties
+    // are skipped because a normal keyframe inside a solver segment would make
+    // the project invalid.
+    void writeGizmoValue(model::Entity& entity, const QString& property,
+                         double value);
+
     Uuid entityAt(const QPointF& widgetPos) const;
     std::optional<gizmo::Handle> hitGizmoHandle(const QPointF& widgetPos,
                                                 const model::Entity& entity,
@@ -187,7 +224,14 @@ private:
 
     bool m_snapEnabled = true;
     int m_snapPixels = 1;
-    double m_snapAngleDegrees = 15.0;
+    int m_snapThresholdPixels = 6;
+    bool m_snapCanvasCenter = true;
+    bool m_snapEntityEdges = true;
+    bool m_snapEdgeMidpoints = false;
+    // Sorted absolute angles in [0, 360); empty disables angle snapping.
+    QVector<double> m_snapAngles{0.0, 90.0, 180.0, 270.0};
+
+    bool m_autoKeyEnabled = false;
 
     double m_zoom = 1.0;
     QPointF m_pan;
@@ -198,6 +242,9 @@ private:
 
     DragKind m_dragKind = DragKind::None;
     Uuid m_dragEntity;
+    // Full copy from press so cancel can also restore keyframes written while
+    // dragging an animated property.
+    model::Entity m_dragStartEntity;
     gizmo::Handle m_dragHandle = gizmo::Handle::MoveX;
     gizmo::Transform m_dragStartTransform;
     gizmo::Bounds m_dragStartBounds;
