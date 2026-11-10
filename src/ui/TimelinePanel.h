@@ -36,10 +36,14 @@ struct KeyframeSelection
 {
     EntityId entity = kInvalidEntity;
     double frame = 0.0;
+    // Empty selects the merged diamond (every track at this frame); a track
+    // name selects one track for a single-track drag.
+    QString track;
 
     bool operator==(const KeyframeSelection& other) const
     {
-        return entity == other.entity && qFuzzyCompare(frame + 1.0, other.frame + 1.0);
+        return entity == other.entity && track == other.track
+               && qFuzzyCompare(frame + 1.0, other.frame + 1.0);
     }
 };
 
@@ -75,6 +79,12 @@ public:
     void setSelectedEntity(EntityId id);
     void setEditMode(EditMode mode);
     EditMode editMode() const { return m_editMode; }
+
+    // Track used by the next double-click key insertion.  Selecting a
+    // keyframe diamond also adopts its track.
+    void setSelectedTrack(const QString& track);
+    QString selectedTrackForTest() const { return m_selectedTrack; }
+    bool splitAtPlayheadForTest() { return splitAtPlayhead(); }
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
     int horizontalScrollForTest() const { return m_scrollX; }
@@ -257,6 +267,29 @@ private:
     int promptReparentMode(const Uuid& target);
     void deleteSelectedEntities();
 
+    // Session-backed keyframe editing.  Frames passed in are absolute project
+    // frames; the model stores entity-relative ones.
+    bool addKeyframeAt(EntityId id, int frame, const QString& track);
+    void promptTrackAndAddKey(EntityId id, int frame, const QPoint& globalPos);
+    QStringList tracksAtFrame(EntityId id, int frame) const;
+    bool keyframeSelectedAt(EntityId id, int frame) const;
+    QVector<KeyRef> selectedKeyRefs() const;
+    void deleteSelectedKeyframes();
+    void copySelectedKeyframes();
+    void pasteKeyframes();
+    void openEasingForSelection(const QPoint& globalPos);
+
+    // Split and marker edits, session mode only.
+    bool splitAtPlayhead();
+    bool splitEntityAtPlayhead(EntityId id);
+    void addMarkerAtPlayhead();
+    void editMarker(const QString& id);
+    void deleteMarkerWithConfirm(const QString& id);
+    QString markerAt(const QPoint& pos) const;
+    void beginMarkerDrag(const QString& id, int x);
+    void updateMarkerDrag(int x);
+    void finishMarkerDrag();
+
     void initPanel();
     const Entity* entityById(EntityId id) const;
     int currentFps() const;
@@ -272,7 +305,8 @@ private:
         MoveClip,
         TrimStart,
         TrimEnd,
-        MoveKeyframe
+        MoveKeyframe,
+        MoveMarker
     };
 
     // Row and range helpers.
@@ -351,6 +385,13 @@ private:
     EntityId m_selected = kInvalidEntity;
     QSet<EntityId> m_entitySelection;
     QVector<KeyframeSelection> m_selectedKeyframes;
+    QString m_selectedTrack;
+    QString m_dragKeyTrack;
+    QVector<TrackKey> m_keyClipboard;
+    Uuid m_keyClipboardEntity;
+    QString m_dragMarkerId;
+    int m_markerDragStartFrame = 0;
+    int m_markerDragFrame = 0;
 
     DragMode m_dragMode = DragMode::None;
     EntityId m_dragEntity = kInvalidEntity;

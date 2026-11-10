@@ -1035,7 +1035,7 @@ void MainWindow::createSessionMenus()
         [this] {
             QMessageBox::about(
                 this, QStringLiteral("关于 PVForge"),
-                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2b1：目录工程、工程属性、播放头与可编辑时间轴已接通。")
+                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2b2：目录工程、工程属性、播放头、可编辑时间轴、关键帧、标记与切分已接通。")
                     .arg(QStringLiteral(PVFORGE_VERSION)));
         });
 
@@ -1122,9 +1122,9 @@ void MainWindow::updateSessionPlaceholder()
             .arg(m_session->playhead()));
     m_sessionPath->setText(m_session->root());
     m_sessionHint->setText(
-        QStringLiteral("P2b1：时间轴可编辑（%1 个根实体，总长 %2 帧）。"
-                       "拖动、裁剪、换行、换父级和级联删除已接通；"
-                       "关键帧编辑、marker、切分在 P2b2，视口、属性面板、"
+        QStringLiteral("P2b2：时间轴可编辑（%1 个根实体，总长 %2 帧）。"
+                       "拖动、裁剪、换行、换父级、级联删除、关键帧、标记和"
+                       "播放头切分已接通；视口、属性面板、"
                        "素材箱和摄像机监视器随后接回。")
             .arg(roots.size())
             .arg(totalEnd));

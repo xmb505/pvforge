@@ -109,6 +109,8 @@ add_executable(pvforge
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp
+    src/next/timeline/MarkerDialog.cpp
+    src/next/timeline/MarkerDialog.h
     src/ui/WaveformView.cpp
     src/ui/WorkbenchPanel.cpp
 )

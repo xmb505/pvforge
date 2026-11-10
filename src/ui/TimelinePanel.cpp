@@ -4,9 +4,12 @@
 #include "app/TimelineAdapter.h"
 #include "core/Settings.h"
 #include "model/Query.h"
+#include "model/Uuid.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
+#include "next/timeline/MarkerDialog.h"
+#include "ui/EasingChooser.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -130,6 +133,28 @@ bool hasAssetMime(const QMimeData* mime)
                    QStringLiteral("application/x-pvforge-asset-template"))
                || mime->hasFormat(
                    QStringLiteral("application/x-pvforge-asset-html")));
+}
+
+EasingSpec legacyEasing(const model::EasingSpec& spec)
+{
+    EasingSpec result;
+    result.easing = easingFromName(spec.type);
+    result.inX = spec.inX;
+    result.inY = spec.inY;
+    result.outX = spec.outX;
+    result.outY = spec.outY;
+    return result;
+}
+
+model::EasingSpec modelEasing(const EasingSpec& spec)
+{
+    model::EasingSpec result;
+    result.type = easingName(spec.easing);
+    result.inX = spec.inX;
+    result.inY = spec.inY;
+    result.outX = spec.outX;
+    result.outY = spec.outY;
+    return result;
 }
 
 QPixmap themedGlyph(const QStringList& names, int size, const QColor& color)
@@ -1086,7 +1111,8 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
 {
     if (m_dragMode != DragMode::MoveClip
         && m_dragMode != DragMode::TrimStart
-        && m_dragMode != DragMode::TrimEnd)
+        && m_dragMode != DragMode::TrimEnd
+        && m_dragMode != DragMode::MoveKeyframe)
         return;
     if (!m_session || !m_session->editActions() || !m_adapter)
         return;
@@ -1097,6 +1123,40 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
 
     EditPlan plan;
     QString error;
+    if (m_dragMode == DragMode::MoveKeyframe)
+    {
+        const int delta = frameFromX(int(std::lround(pos.x()))) - m_keyDragStart;
+        if (delta != 0)
+        {
+            if (!actions->planMoveKeyframes(selectedKeyRefs(), delta, &plan,
+                                            &error))
+            {
+                m_snapshot = m_sessionBaseSnapshot;
+                m_sessionPlanValid = false;
+                m_moved = false;
+                update();
+                syncPopups();
+                return;
+            }
+        }
+        if (plan.isEmpty())
+        {
+            m_snapshot = m_sessionBaseSnapshot;
+            m_sessionPlanValid = false;
+            m_moved = false;
+            update();
+            syncPopups();
+            return;
+        }
+        m_sessionPlan = plan;
+        m_sessionPlanValid = true;
+        m_moved = true;
+        m_snapshot = m_adapter->buildSnapshot(plan.project, m_frame);
+        update();
+        syncPopups();
+        return;
+    }
+
     if (m_dragMode == DragMode::MoveClip)
     {
         int delta = frameFromX(int(std::lround(pos.x()))) - m_dragStartFrame;
@@ -1280,6 +1340,497 @@ void TimelinePanel::deleteSelectedEntities()
     emit editCommitted(QStringLiteral("删除片段"));
 }
 
+bool TimelinePanel::addKeyframeAt(EntityId id, int frame, const QString& track)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return false;
+    const Uuid uuid = uuidForEntityId(id);
+    const model::Entity* entity = sessionEntity(uuid);
+    if (!entity)
+        return false;
+    const int relative = frame - entity->start;
+    QString error;
+    if (!m_session->editActions()->addKeyframe(uuid, track, relative, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return false;
+    }
+    m_selectedTrack = track;
+    m_selectedKeyframes.clear();
+    m_selectedKeyframes.append(KeyframeSelection{id, double(frame), track});
+    emit keyframeSelectionChanged(m_selectedKeyframes);
+    emit editCommitted(QStringLiteral("设置关键帧 %1").arg(track));
+    refreshFromSession();
+    return true;
+}
+
+QStringList TimelinePanel::tracksAtFrame(EntityId id, int frame) const
+{
+    QStringList result;
+    const Entity* entity = entityById(id);
+    if (!entity)
+        return result;
+    for (auto track = entity->tracks.constBegin(); track != entity->tracks.constEnd();
+         ++track)
+    {
+        for (const Keyframe& key : track->keys)
+        {
+            if (int(std::lround(key.frame)) == frame)
+            {
+                result.append(track.key());
+                break;
+            }
+        }
+    }
+    return result;
+}
+
+void TimelinePanel::promptTrackAndAddKey(EntityId id, int frame,
+                                         const QPoint& globalPos)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const Uuid uuid = uuidForEntityId(id);
+    const QStringList tracks = m_session->editActions()->trackNames(uuid);
+    if (tracks.isEmpty())
+    {
+        emit editFailed(QStringLiteral("这个片段没有可打关键帧的轨道"));
+        return;
+    }
+
+    QMenu menu(this);
+    menu.setTitle(QStringLiteral("选择轨道"));
+    QHash<QAction*, QString> actions;
+    for (const QString& track : tracks)
+    {
+        QAction* action = menu.addAction(track);
+        actions.insert(action, track);
+    }
+    QAction* chosen = menu.exec(globalPos);
+    if (!chosen)
+        return;
+    const QString track = actions.value(chosen);
+    if (track.isEmpty())
+        return;
+    m_selectedTrack = track;
+    addKeyframeAt(id, frame, track);
+}
+
+bool TimelinePanel::keyframeSelectedAt(EntityId id, int frame) const
+{
+    for (const KeyframeSelection& selection : m_selectedKeyframes)
+    {
+        if (selection.entity == id
+            && int(std::lround(selection.frame)) == frame)
+            return true;
+    }
+    return false;
+}
+
+QVector<KeyRef> TimelinePanel::selectedKeyRefs() const
+{
+    QVector<KeyRef> result;
+    if (!sessionMode() || !m_session)
+        return result;
+    const model::Project& project = m_session->project();
+    for (const KeyframeSelection& selection : m_selectedKeyframes)
+    {
+        const Uuid uuid = uuidForEntityId(selection.entity);
+        const auto it = project.entities.constFind(uuid);
+        if (it == project.entities.constEnd())
+            continue;
+        KeyRef ref;
+        ref.entity = uuid;
+        ref.track = selection.track;
+        ref.frame = int(std::lround(selection.frame)) - it.value().start;
+        result.append(ref);
+    }
+    return result;
+}
+
+void TimelinePanel::deleteSelectedKeyframes()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const QVector<KeyRef> refs = selectedKeyRefs();
+    if (refs.isEmpty())
+        return;
+    QString error;
+    if (!m_session->editActions()->deleteKeyframes(refs, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    m_selectedKeyframes.clear();
+    emit keyframeSelectionChanged(m_selectedKeyframes);
+    emit editCommitted(QStringLiteral("删除关键帧"));
+    refreshFromSession();
+}
+
+void TimelinePanel::copySelectedKeyframes()
+{
+    if (!sessionMode() || !m_session)
+        return;
+    const QVector<KeyRef> refs = selectedKeyRefs();
+    if (refs.isEmpty())
+        return;
+
+    const model::Project& project = m_session->project();
+    QVector<TrackKey> copied;
+    QString entity;
+    for (const KeyRef& ref : refs)
+    {
+        if (entity.isEmpty())
+            entity = ref.entity;
+        else if (entity != ref.entity)
+        {
+            emit editFailed(QStringLiteral("一次只能复制同一个实体的关键帧"));
+            return;
+        }
+        const auto it = project.entities.constFind(ref.entity);
+        if (it == project.entities.constEnd())
+            continue;
+        const model::Entity& source = it.value();
+        auto collect = [&](const QString& trackName, const model::Track& track) {
+            for (const model::Keyframe& key : track.keys)
+            {
+                if (key.frame != ref.frame)
+                    continue;
+                TrackKey item;
+                item.track = trackName;
+                item.key = key;
+                copied.append(item);
+            }
+        };
+        if (ref.track.isEmpty())
+        {
+            for (auto track = source.tracks.constBegin();
+                 track != source.tracks.constEnd(); ++track)
+                collect(track.key(), track.value());
+        }
+        else
+        {
+            const auto track = source.tracks.constFind(ref.track);
+            if (track != source.tracks.constEnd())
+                collect(ref.track, track.value());
+        }
+    }
+
+    if (copied.isEmpty())
+        return;
+    m_keyClipboard = copied;
+    m_keyClipboardEntity = entity;
+    emit editCommitted(QStringLiteral("复制 %1 个关键帧").arg(copied.size()));
+}
+
+void TimelinePanel::pasteKeyframes()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    if (m_keyClipboard.isEmpty() || m_keyClipboardEntity.isEmpty())
+        return;
+
+    const Uuid target =
+        m_selected != kInvalidEntity ? uuidForEntityId(m_selected)
+                                     : m_keyClipboardEntity;
+    if (target != m_keyClipboardEntity)
+    {
+        emit editFailed(QStringLiteral("关键帧只能粘贴回原实体"));
+        return;
+    }
+    const auto entityIt = m_session->project().entities.constFind(target);
+    if (entityIt == m_session->project().entities.constEnd())
+        return;
+    const model::Entity& entity = entityIt.value();
+    const int duration = entity.duration();
+    if (duration <= 0)
+        return;
+
+    int first = m_keyClipboard.first().key.frame;
+    int last = first;
+    for (const TrackKey& item : m_keyClipboard)
+    {
+        first = std::min(first, item.key.frame);
+        last = std::max(last, item.key.frame);
+    }
+    const int span = last - first;
+    if (span >= duration)
+    {
+        emit editFailed(QStringLiteral("关键帧片段超出实体时长，无法粘贴"));
+        return;
+    }
+
+    const int relativePlayhead =
+        std::clamp(m_session->playhead() - entity.start, 0, duration - 1);
+    const int delta =
+        std::clamp(relativePlayhead - first, -first, duration - 1 - last);
+
+    QVector<TrackKey> placed;
+    placed.reserve(m_keyClipboard.size());
+    for (const TrackKey& item : m_keyClipboard)
+    {
+        TrackKey targetKey = item;
+        targetKey.key.frame += delta;
+        placed.append(targetKey);
+    }
+
+    QString error;
+    if (!m_session->editActions()->pasteKeyframes(target, placed, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+
+    m_selectedKeyframes.clear();
+    QSet<QString> seen;
+    const EntityId targetId =
+        m_selected != kInvalidEntity ? m_selected : entityIdForUuid(target);
+    for (const TrackKey& item : placed)
+    {
+        const QString key = QString::number(item.key.frame);
+        if (seen.contains(key))
+            continue;
+        seen.insert(key);
+        m_selectedKeyframes.append(
+            KeyframeSelection{targetId, double(entity.start + item.key.frame),
+                              QString()});
+    }
+    emit keyframeSelectionChanged(m_selectedKeyframes);
+    emit editCommitted(QStringLiteral("粘贴关键帧"));
+    refreshFromSession();
+}
+
+void TimelinePanel::openEasingForSelection(const QPoint& globalPos)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const QVector<KeyRef> refs = selectedKeyRefs();
+    if (refs.isEmpty())
+        return;
+
+    model::EasingSpec current;
+    const model::Project& project = m_session->project();
+    for (const KeyRef& ref : refs)
+    {
+        const auto entity = project.entities.constFind(ref.entity);
+        if (entity == project.entities.constEnd())
+            continue;
+        for (auto track = entity.value().tracks.constBegin();
+             track != entity.value().tracks.constEnd(); ++track)
+        {
+            if (!ref.track.isEmpty() && track.key() != ref.track)
+                continue;
+            for (const model::Keyframe& key : track.value().keys)
+            {
+                if (key.frame == ref.frame)
+                {
+                    current = key.easing;
+                    break;
+                }
+            }
+            break;
+        }
+        break;
+    }
+
+    EasingSpec chosen;
+    if (!EasingChooser::choose(this, legacyEasing(current), globalPos, &chosen,
+                               QStringLiteral("关键帧缓动")))
+        return;
+
+    QString error;
+    if (!m_session->editActions()->setKeyframeEasing(
+            refs, modelEasing(chosen), &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    emit editCommitted(QStringLiteral("修改关键帧缓动"));
+    refreshFromSession();
+}
+
+bool TimelinePanel::splitAtPlayhead()
+{
+    if (!sessionMode() || m_selected == kInvalidEntity)
+    {
+        emit editFailed(QStringLiteral("没有选中的片段，无法切分"));
+        return false;
+    }
+    return splitEntityAtPlayhead(m_selected);
+}
+
+bool TimelinePanel::splitEntityAtPlayhead(EntityId id)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return false;
+    const Uuid uuid = uuidForEntityId(id);
+    const model::Entity* entity = sessionEntity(uuid);
+    if (!entity)
+        return false;
+    const int cut = m_session->playhead();
+    if (cut <= entity->start || cut >= entity->end)
+    {
+        emit editFailed(QStringLiteral("播放头必须位于片段内部才能切分（%1–%2，播放头 %3）")
+                            .arg(entity->start)
+                            .arg(entity->end)
+                            .arg(cut));
+        return false;
+    }
+    QString error;
+    if (!m_session->editActions()->splitClip(uuid, cut, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return false;
+    }
+    emit editCommitted(QStringLiteral("在播放头切分片段"));
+    refreshFromSession();
+    return true;
+}
+
+void TimelinePanel::addMarkerAtPlayhead()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    model::Marker marker;
+    marker.id = model::newUuid();
+    marker.frame = std::max(0, m_session->playhead());
+    marker.title = QStringLiteral("标记 %1").arg(marker.frame);
+    marker.color = QStringLiteral("#ffbe3c");
+    QString error;
+    if (!m_session->editActions()->addMarker(marker, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    emit editCommitted(QStringLiteral("添加标记"));
+    refreshFromSession();
+}
+
+QString TimelinePanel::markerAt(const QPoint& pos) const
+{
+    if (!sessionMode())
+        return QString();
+    for (int i = 0; i < m_snapshot.markers.size(); ++i)
+    {
+        if (markerRect(i).contains(pos))
+            return m_snapshot.markers.at(i).id;
+    }
+    return QString();
+}
+
+void TimelinePanel::editMarker(const QString& id)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const model::Project& project = m_session->project();
+    for (const model::Marker& marker : project.markers)
+    {
+        if (marker.id != id)
+            continue;
+        next::MarkerDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("编辑标记"));
+        dialog.setMarker(marker);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        QString error;
+        if (!m_session->editActions()->updateMarker(dialog.marker(), &error))
+        {
+            if (!error.isEmpty())
+                emit editFailed(error);
+            return;
+        }
+        emit editCommitted(QStringLiteral("编辑标记"));
+        refreshFromSession();
+        return;
+    }
+}
+
+void TimelinePanel::deleteMarkerWithConfirm(const QString& id)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    QString title;
+    for (const model::Marker& marker : m_session->project().markers)
+        if (marker.id == id)
+            title = marker.title;
+    if (title.isEmpty())
+        title = id;
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("删除标记"),
+        QStringLiteral("确定删除标记「%1」？").arg(title),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+    QString error;
+    if (!m_session->editActions()->deleteMarker(id, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    emit editCommitted(QStringLiteral("删除标记"));
+    refreshFromSession();
+}
+
+void TimelinePanel::beginMarkerDrag(const QString& id, int x)
+{
+    m_dragMarkerId = id;
+    m_dragMode = DragMode::MoveMarker;
+    m_markerDragStartFrame = 0;
+    for (const TimelineMarkerView& marker : m_snapshot.markers)
+        if (marker.id == id)
+            m_markerDragStartFrame = marker.frame;
+    m_markerDragFrame = m_markerDragStartFrame;
+    m_lastDragPos = QPointF(x, kRulerHeight - 8);
+    setCursor(Qt::SizeHorCursor);
+    update();
+}
+
+void TimelinePanel::updateMarkerDrag(int x)
+{
+    if (m_dragMode != DragMode::MoveMarker || m_dragMarkerId.isEmpty())
+        return;
+    const int frame = std::max(0, frameFromX(x));
+    if (frame == m_markerDragFrame)
+        return;
+    m_markerDragFrame = frame;
+    for (TimelineMarkerView& marker : m_snapshot.markers)
+        if (marker.id == m_dragMarkerId)
+            marker.frame = frame;
+    update();
+}
+
+void TimelinePanel::finishMarkerDrag()
+{
+    const QString id = m_dragMarkerId;
+    const int frame = m_markerDragFrame;
+    const int start = m_markerDragStartFrame;
+    m_dragMarkerId.clear();
+    m_dragMode = DragMode::None;
+    unsetCursor();
+    if (!id.isEmpty() && frame != start && sessionMode() && m_session
+        && m_session->editActions())
+    {
+        QString error;
+        if (!m_session->editActions()->moveMarker(id, frame, &error))
+        {
+            if (!error.isEmpty())
+                emit editFailed(error);
+        }
+        else
+        {
+            emit editCommitted(QStringLiteral("移动标记"));
+        }
+    }
+    refreshFromSession();
+}
+
 void TimelinePanel::finishSessionDrag()
 {
     if (m_autoScroll)
@@ -1292,6 +1843,7 @@ void TimelinePanel::finishSessionDrag()
     m_dragging = false;
     m_dragMode = DragMode::None;
     m_dragEntity = kInvalidEntity;
+    m_dragKeyTrack.clear();
 
     if (!m_session || !m_session->editActions() || !m_adapter)
     {
@@ -1397,6 +1949,9 @@ void TimelinePanel::cancelSessionDrag()
     m_moved = false;
     m_dragMode = DragMode::None;
     m_dragEntity = kInvalidEntity;
+    m_dragKeyTrack.clear();
+    m_dragMarkerId.clear();
+    unsetCursor();
     refreshFromSession();
     update();
     syncPopups();
@@ -2115,9 +2670,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             if (x < clip.left() - 6 || x > clip.right() + 6)
                 continue;
             const bool keySelected =
-                std::find(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
-                          KeyframeSelection{entity->id, double(keyFrame)})
-                != m_selectedKeyframes.end();
+                keyframeSelectedAt(entity->id, keyFrame);
             const double radius = keySelected ? 5.5 : 4.5;
             QPolygonF diamond;
             diamond << QPointF(x, centerY - radius)
@@ -2223,6 +2776,15 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     const QPointF pos = event->position();
     if (pos.y() < kRulerHeight)
     {
+        if (sessionMode())
+        {
+            const QString markerId = markerAt(pos.toPoint());
+            if (!markerId.isEmpty())
+            {
+                beginMarkerDrag(markerId, int(std::lround(pos.x())));
+                return;
+            }
+        }
         m_dragMode = DragMode::Scrub;
         m_lastDragPos = pos;
         m_autoScroll->start(30);
@@ -2266,6 +2828,52 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         m_dragClipEnd = clipEndOf(*entity);
         m_lastDragPos = pos;
         m_moved = false;
+
+        if (m_editMode == EditMode::Keyframes && !isEntityLocked(id))
+        {
+            const int keyFrame = hitKeyframeRow(row, x);
+            if (keyFrame >= 0)
+            {
+                selectEntity(id, true);
+                const QStringList frameTracks = tracksAtFrame(id, keyFrame);
+                const bool singleTrack =
+                    (event->modifiers() & Qt::AltModifier) != 0
+                    && !frameTracks.isEmpty();
+                QString track;
+                if (singleTrack)
+                {
+                    track = frameTracks.contains(m_selectedTrack)
+                                ? m_selectedTrack
+                                : frameTracks.first();
+                }
+                KeyframeSelection selection{id, double(keyFrame), track};
+                const bool toggle =
+                    event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
+                if (!toggle)
+                    m_selectedKeyframes.clear();
+                auto it = std::find(m_selectedKeyframes.begin(),
+                                    m_selectedKeyframes.end(), selection);
+                if (toggle && it != m_selectedKeyframes.end())
+                    m_selectedKeyframes.erase(it);
+                else if (it == m_selectedKeyframes.end())
+                    m_selectedKeyframes.append(selection);
+                if (!track.isEmpty())
+                    m_selectedTrack = track;
+                else if (!frameTracks.isEmpty())
+                    m_selectedTrack = frameTracks.first();
+
+                m_dragMode = DragMode::MoveKeyframe;
+                m_dragKeyTrack = track;
+                m_keyDragStart = keyFrame;
+                m_dragStartFrame = keyFrame;
+                m_frame = std::max(0, keyFrame);
+                emit frameRequested(m_frame);
+                emit keyframeSelectionChanged(m_selectedKeyframes);
+                beginSessionDrag();
+                update();
+                return;
+            }
+        }
 
         if (m_editMode == EditMode::Clips && !isEntityLocked(id))
         {
@@ -2389,6 +2997,11 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
     if (!m_project && !sessionMode())
         return;
+    if (m_dragMode == DragMode::MoveMarker)
+    {
+        updateMarkerDrag(int(std::lround(event->position().x())));
+        return;
+    }
     if (m_dragMode == DragMode::Scrub)
     {
         m_lastDragPos = event->position();
@@ -2418,6 +3031,13 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 
     if (m_dragMode == DragMode::None)
     {
+        if (sessionMode() && event->position().y() < kRulerHeight)
+        {
+            setCursor(markerAt(event->position().toPoint()).isEmpty()
+                          ? Qt::ArrowCursor
+                          : Qt::SizeHorCursor);
+            return;
+        }
         const int row = rowAt(int(event->position().y()));
         const Entity* entity = entityById(entityAtRow(row));
         m_hoverRow = row;
@@ -2502,6 +3122,11 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_dragMode == DragMode::MoveMarker)
+    {
+        finishMarkerDrag();
+        return;
+    }
     if (m_dragMode == DragMode::PendingSelect)
     {
         m_dragMode = DragMode::None;
@@ -2606,8 +3231,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    // P2b1 does not edit keyframes from the session-backed timeline yet.
-    if (sessionMode() || !m_project || event->button() != Qt::LeftButton)
+    if ((!m_project && !sessionMode()) || event->button() != Qt::LeftButton)
         return;
     if (event->position().y() < kRulerHeight)
         return;
@@ -2616,6 +3240,24 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     const Entity* entity = entityById(id);
     if (!entity || isEntityLocked(id))
         return;
+
+    const int x = int(std::lround(event->position().x()));
+    const int keyFrame = hitKeyframeRow(row, x);
+    if (keyFrame >= 0)
+    {
+        selectEntity(id, true);
+        m_selectedKeyframes.clear();
+        m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame), QString()});
+        const QStringList frameTracks = tracksAtFrame(id, keyFrame);
+        if (!frameTracks.isEmpty())
+            m_selectedTrack = frameTracks.first();
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+        update();
+        if (sessionMode())
+            openEasingForSelection(event->globalPosition().toPoint());
+        return;
+    }
+
     const QRect clip = clipRect(*entity);
     if (!clip.contains(event->position().toPoint()))
         return;
@@ -2623,11 +3265,26 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     if (!plus.isEmpty() && plus.contains(event->position().toPoint()))
         return;
 
-    const int frame =
-        std::max(0, frameFromX(int(std::lround(event->position().x()))));
+    const int frame = std::max(0, frameFromX(x));
     m_frame = frame;
     emit frameRequested(m_frame);
     selectEntity(id, true);
+
+    if (sessionMode())
+    {
+        const Uuid uuid = uuidForEntityId(id);
+        const QStringList tracks =
+            (m_session && m_session->editActions())
+                ? m_session->editActions()->trackNames(uuid)
+                : QStringList();
+        if (m_selectedTrack.isEmpty() || !tracks.contains(m_selectedTrack))
+            promptTrackAndAddKey(id, frame, event->globalPosition().toPoint());
+        else
+            addKeyframeAt(id, frame, m_selectedTrack);
+        update();
+        return;
+    }
+
     emit keyframeAddRequested(id, frame);
     m_selectedKeyframes.clear();
     m_selectedKeyframes.append(KeyframeSelection{id, double(frame)});
@@ -2810,11 +3467,65 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
     if (!m_project && !sessionMode())
         return;
+
+    if (sessionMode() && event->pos().y() < kRulerHeight)
+    {
+        const QString markerId = markerAt(event->pos());
+        QMenu menu(this);
+        QAction* add = menu.addAction(QStringLiteral("在播放头添加标记"));
+        QAction* edit = nullptr;
+        QAction* remove = nullptr;
+        if (!markerId.isEmpty())
+        {
+            menu.addSeparator();
+            edit = menu.addAction(QStringLiteral("编辑标记…"));
+            remove = menu.addAction(QStringLiteral("删除标记"));
+        }
+        QAction* chosen = menu.exec(event->globalPos());
+        if (chosen == add)
+            addMarkerAtPlayhead();
+        else if (edit && chosen == edit)
+            editMarker(markerId);
+        else if (remove && chosen == remove)
+            deleteMarkerWithConfirm(markerId);
+        event->accept();
+        return;
+    }
+
     const int row = rowAt(event->pos().y());
     const EntityId id = entityAtRow(row);
     const Entity* entity = entityById(id);
     if (!entity)
         return;
+
+    const int hitX = event->pos().x();
+    const int keyFrame = hitKeyframeRow(row, hitX);
+    if (keyFrame >= 0)
+    {
+        selectEntity(id, true);
+        m_selectedKeyframes.clear();
+        m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame), QString()});
+        const QStringList frameTracks = tracksAtFrame(id, keyFrame);
+        if (!frameTracks.isEmpty())
+            m_selectedTrack = frameTracks.first();
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+        update();
+
+        QMenu menu(this);
+        QAction* easing = menu.addAction(QStringLiteral("编辑缓动…"));
+        QAction* copy = menu.addAction(QStringLiteral("复制关键帧"));
+        QAction* remove = menu.addAction(QStringLiteral("删除关键帧"));
+        QAction* chosen = menu.exec(event->globalPos());
+        if (chosen == easing && sessionMode())
+            openEasingForSelection(event->globalPos());
+        else if (chosen == copy && sessionMode())
+            copySelectedKeyframes();
+        else if (chosen == remove && sessionMode())
+            deleteSelectedKeyframes();
+        event->accept();
+        return;
+    }
+
     const QRect clip = clipRect(*entity);
     if (!clip.contains(event->pos()))
         return;
@@ -2823,11 +3534,18 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QMenu menu(this);
     QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
     QAction* remove = nullptr;
+    QAction* split = nullptr;
     QHash<QAction*, QPair<Uuid, bool>> reparents;
     if (sessionMode())
     {
         remove = menu.addAction(QStringLiteral("删除片段"));
         remove->setEnabled(!isEntityLocked(id));
+        split = menu.addAction(QStringLiteral("在播放头切分"));
+        const int playhead = m_session ? m_session->playhead() : 0;
+        const model::Entity* splitEntity = sessionEntity(uuidForEntityId(id));
+        split->setEnabled(splitEntity && playhead > splitEntity->start
+                          && playhead < splitEntity->end
+                          && !isEntityLocked(id));
 
         const Uuid source = uuidForEntityId(id);
         const model::Project& project = m_session->project();
@@ -2906,6 +3624,10 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
             emit deleteEntityRequested(id);
         }
     }
+    else if (split && chosen == split)
+    {
+        splitEntityAtPlayhead(id);
+    }
     else if (reparents.contains(chosen))
     {
         const auto target = reparents.value(chosen);
@@ -2955,14 +3677,48 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
 
 void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
-    if (event->key() == Qt::Key_Delete)
+    const Qt::KeyboardModifiers plain =
+        event->modifiers() & ~Qt::KeypadModifier;
+    if (sessionMode())
     {
-        if (sessionMode())
+        if (event->key() == Qt::Key_Escape && m_dragMode != DragMode::None)
         {
-            if (m_selected != kInvalidEntity)
+            cancelSessionDrag();
+            return;
+        }
+        if (event->key() == Qt::Key_Delete
+            || event->key() == Qt::Key_Backspace)
+        {
+            if (!m_selectedKeyframes.isEmpty())
+                deleteSelectedKeyframes();
+            else if (m_selected != kInvalidEntity)
                 deleteSelectedEntities();
             return;
         }
+        if (plain == Qt::ControlModifier && event->key() == Qt::Key_C)
+        {
+            copySelectedKeyframes();
+            return;
+        }
+        if (plain == Qt::ControlModifier && event->key() == Qt::Key_V)
+        {
+            pasteKeyframes();
+            return;
+        }
+        if (plain == Qt::NoModifier && event->key() == Qt::Key_S)
+        {
+            splitAtPlayhead();
+            return;
+        }
+        if (plain == Qt::NoModifier && event->key() == Qt::Key_M)
+        {
+            addMarkerAtPlayhead();
+            return;
+        }
+    }
+
+    if (event->key() == Qt::Key_Delete)
+    {
         if (!m_selectedKeyframes.isEmpty())
         {
             emit deleteKeyframesRequested();
@@ -2980,11 +3736,6 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     }
     if (event->key() == Qt::Key_Escape && m_dragMode != DragMode::None)
     {
-        if (sessionMode())
-        {
-            cancelSessionDrag();
-            return;
-        }
         if (m_autoScroll)
             m_autoScroll->stop();
         m_dragging = false;
@@ -3132,6 +3883,11 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     clampScroll();
     update();
     syncPopups();
+}
+
+void TimelinePanel::setSelectedTrack(const QString& track)
+{
+    m_selectedTrack = track;
 }
 
 void TimelinePanel::setEditMode(EditMode mode)

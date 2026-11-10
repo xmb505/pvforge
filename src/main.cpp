@@ -1220,6 +1220,778 @@ int timelineEditTest(QApplication& app)
     return 0;
 }
 
+int timelineKeysTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p2b2-keys.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P2b2 关键帧");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-keys-test: create failed" << error;
+        return 1;
+    }
+    auto* document = session->document();
+    auto* actions = session->editActions();
+    if (!actions)
+    {
+        qCritical() << "timeline-keys-test: no EditActions";
+        return 1;
+    }
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "timeline-keys-test:" << message;
+        return condition;
+    };
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int start, int end, int row) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        entity.content.kind = pvf::ContentKind::Text;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+    const pvf::Uuid clip = makeEntity(QStringLiteral("关键帧片段"), 0, 60, 0);
+    const pvf::Uuid other = makeEntity(QStringLiteral("其他片段"), 100, 160, 1);
+    const pvf::Uuid solver = makeEntity(QStringLiteral("求解片段"), 0, 60, 2);
+    pvf::model::SolverSegment segment;
+    segment.id = pvf::model::newUuid();
+    segment.effect = pvf::SolverEffect::Gravity;
+    segment.startFrame = 10;
+    segment.endFrame = 40;
+    segment.params.insert(QStringLiteral("targetUuid"), other);
+    project.entities[solver].solvers.append(segment);
+    pvf::model::Track solverX;
+    solverX.keys = {{10, 0.0, {}, {}}};
+    project.entities[solver].tracks.insert(QStringLiteral("x"), solverX);
+
+    if (!document->commitEntities({clip, other, solver},
+                                  QStringLiteral("p2b2 keys setup"), &error))
+    {
+        qCritical() << "timeline-keys-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    pvf::EditorSession* sessionPtr = session.get();
+    auto flush = [sessionPtr] {
+        QString flushError;
+        sessionPtr->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "timeline-keys-test: flush failed" << flushError;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto undo = [document, &flush] {
+        flush();
+        QString undoError;
+        if (!document->undo(&undoError))
+        {
+            qCritical() << "timeline-keys-test: undo failed" << undoError;
+            return false;
+        }
+        return true;
+    };
+    auto keyAt = [sessionPtr](const pvf::Uuid& uuid, const QString& track,
+                              int frame) {
+        const auto entity = sessionPtr->project().entities.constFind(uuid);
+        if (entity == sessionPtr->project().entities.constEnd())
+            return false;
+        const auto keys = entity.value().tracks.constFind(track);
+        if (keys == entity.value().tracks.constEnd())
+            return false;
+        for (const auto& key : keys.value().keys)
+            if (key.frame == frame)
+                return true;
+        return false;
+    };
+    auto keyCount = [sessionPtr](const pvf::Uuid& uuid, const QString& track) {
+        const auto entity = sessionPtr->project().entities.constFind(uuid);
+        if (entity == sessionPtr->project().entities.constEnd())
+            return 0;
+        const auto keys = entity.value().tracks.constFind(track);
+        return keys == entity.value().tracks.constEnd()
+                   ? 0
+                   : int(keys.value().keys.size());
+    };
+
+    // EditActions: insert, one commit, undo.
+    int beforeDepth = depth();
+    if (!check(actions->addKeyframe(clip, QStringLiteral("x"), 15, &error),
+               QStringLiteral("addKeyframe failed: %1").arg(error)))
+        return 1;
+    if (!check(keyAt(clip, QStringLiteral("x"), 15),
+               QStringLiteral("addKeyframe did not write the key")))
+        return 1;
+    flush();
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("addKeyframe did not commit once")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Panel: double-click inserts on the selected track.
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    auto* live = window->editorSessionForTest();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!check(live && timeline,
+               QStringLiteral("session window/timeline missing")))
+        return 1;
+    auto rowForName = [&](const QString& name) {
+        for (int row = 0; row < timeline->entityRowCountForTest(); ++row)
+            if (timeline->rowNameForTest(row) == name)
+                return row;
+        return -1;
+    };
+    QObject::connect(timeline, &pvf::TimelinePanel::editFailed,
+                     [](const QString& message) {
+                         qCritical() << "timeline-keys-test: panel edit failed"
+                                     << message;
+                     });
+
+    const int clipRow = rowForName(QStringLiteral("关键帧片段"));
+    if (!check(clipRow >= 0, QStringLiteral("clip row missing")))
+        return 1;
+    timeline->setSelectedTrack(QStringLiteral("x"));
+    beforeDepth = depth();
+    const QPoint dblPoint(timeline->frameXForTest(20),
+                          timeline->rowCenterYForTest(clipRow));
+    QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(dblPoint),
+                            QPointF(timeline->mapToGlobal(dblPoint)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &doubleClick);
+    QApplication::processEvents();
+    if (!check(keyAt(clip, QStringLiteral("x"), 20),
+               QStringLiteral("double-click did not insert a key")))
+        return 1;
+    live->flush();
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("double-click did not commit once")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Two tracks at one frame paint one merged diamond; dragging moves both.
+    if (!check(actions->addKeyframe(clip, QStringLiteral("x"), 10, &error)
+                   && actions->addKeyframe(clip, QStringLiteral("y"), 10, &error),
+               QStringLiteral("merged key setup failed: %1").arg(error)))
+        return 1;
+    live->flush();
+    timeline->setEditMode(pvf::TimelinePanel::EditMode::Keyframes);
+    timeline->setSelectedTrack(QStringLiteral("x"));
+    beforeDepth = depth();
+    const QPoint mergeFrom(timeline->frameXForTest(10),
+                           timeline->rowCenterYForTest(clipRow));
+    const QPoint mergeTo(timeline->frameXForTest(15),
+                         timeline->rowCenterYForTest(clipRow));
+    QMouseEvent mergePress(QEvent::MouseButtonPress, QPointF(mergeFrom),
+                           QPointF(timeline->mapToGlobal(mergeFrom)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent mergeMove(QEvent::MouseMove, QPointF(mergeTo),
+                          QPointF(timeline->mapToGlobal(mergeTo)), Qt::NoButton,
+                          Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent mergeRelease(QEvent::MouseButtonRelease, QPointF(mergeTo),
+                             QPointF(timeline->mapToGlobal(mergeTo)),
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &mergePress);
+    QApplication::sendEvent(timeline, &mergeMove);
+    QApplication::sendEvent(timeline, &mergeRelease);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("merged drag did not commit once")))
+        return 1;
+    if (!check(keyAt(clip, QStringLiteral("x"), 15)
+                   && keyAt(clip, QStringLiteral("y"), 15)
+                   && !keyAt(clip, QStringLiteral("x"), 10)
+                   && !keyAt(clip, QStringLiteral("y"), 10),
+               QStringLiteral("merged drag did not move both tracks")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Esc cancels a key drag without committing.
+    beforeDepth = depth();
+    const QPoint cancelFrom(timeline->frameXForTest(10),
+                            timeline->rowCenterYForTest(clipRow));
+    const QPoint cancelTo(timeline->frameXForTest(20),
+                          timeline->rowCenterYForTest(clipRow));
+    QMouseEvent cancelPress(QEvent::MouseButtonPress, QPointF(cancelFrom),
+                            QPointF(timeline->mapToGlobal(cancelFrom)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent cancelMove(QEvent::MouseMove, QPointF(cancelTo),
+                           QPointF(timeline->mapToGlobal(cancelTo)), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &cancelPress);
+    QApplication::sendEvent(timeline, &cancelMove);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &escape);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(depth() == beforeDepth,
+               QStringLiteral("Esc created an undo step")))
+        return 1;
+    if (!check(keyAt(clip, QStringLiteral("x"), 10)
+                   && keyAt(clip, QStringLiteral("y"), 10)
+                   && !keyAt(clip, QStringLiteral("x"), 20),
+               QStringLiteral("Esc did not restore the key preview")))
+        return 1;
+
+    // Alt-drag moves only the selected track.
+    timeline->setSelectedTrack(QStringLiteral("x"));
+    beforeDepth = depth();
+    const QPoint singleFrom(timeline->frameXForTest(10),
+                            timeline->rowCenterYForTest(clipRow));
+    const QPoint singleTo(timeline->frameXForTest(12),
+                          timeline->rowCenterYForTest(clipRow));
+    QMouseEvent singlePress(QEvent::MouseButtonPress, QPointF(singleFrom),
+                            QPointF(timeline->mapToGlobal(singleFrom)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+    QMouseEvent singleMove(QEvent::MouseMove, QPointF(singleTo),
+                           QPointF(timeline->mapToGlobal(singleTo)), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent singleRelease(QEvent::MouseButtonRelease, QPointF(singleTo),
+                              QPointF(timeline->mapToGlobal(singleTo)),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &singlePress);
+    QApplication::sendEvent(timeline, &singleMove);
+    QApplication::sendEvent(timeline, &singleRelease);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("single-track drag did not commit once")))
+        return 1;
+    if (!check(keyAt(clip, QStringLiteral("x"), 12)
+                   && keyAt(clip, QStringLiteral("y"), 10)
+                   && !keyAt(clip, QStringLiteral("x"), 10),
+               QStringLiteral("single-track drag moved the wrong tracks")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Click selects the merged diamond, Delete removes every track at the frame.
+    const QPoint selectPoint(timeline->frameXForTest(10),
+                             timeline->rowCenterYForTest(clipRow));
+    QMouseEvent selectPress(QEvent::MouseButtonPress, QPointF(selectPoint),
+                            QPointF(timeline->mapToGlobal(selectPoint)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selectRelease(QEvent::MouseButtonRelease, QPointF(selectPoint),
+                              QPointF(timeline->mapToGlobal(selectPoint)),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &selectPress);
+    QApplication::sendEvent(timeline, &selectRelease);
+    QApplication::processEvents();
+    if (!check(timeline->selectedKeyframeCount() == 1,
+               QStringLiteral("merged diamond was not selected")))
+        return 1;
+    QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &del);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(keyCount(clip, QStringLiteral("x")) == 0
+                   && keyCount(clip, QStringLiteral("y")) == 0,
+               QStringLiteral("Delete did not remove the merged keys")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Ctrl+C / Ctrl+V pastes at the playhead.
+    QApplication::sendEvent(timeline, &selectPress);
+    QApplication::sendEvent(timeline, &selectRelease);
+    QApplication::processEvents();
+    QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(timeline, &copy);
+    live->setPlayhead(40);
+    QKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+    QApplication::sendEvent(timeline, &paste);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(keyAt(clip, QStringLiteral("x"), 40)
+                   && keyAt(clip, QStringLiteral("y"), 40),
+               QStringLiteral("paste did not land on the playhead")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Easing write path; the timeline opens EasingChooser for a key.
+    pvf::model::EasingSpec easing;
+    easing.type = QStringLiteral("easeinoutcubic");
+    error.clear();
+    if (!check(actions->setKeyframeEasing(
+                   QVector<pvf::KeyRef>{{clip, QStringLiteral("x"), 10}}, easing,
+                   &error),
+               QStringLiteral("setKeyframeEasing failed: %1").arg(error)))
+        return 1;
+    {
+        bool eased = false;
+        const auto track = sessionPtr->project()
+                               .entities.value(clip)
+                               .tracks.value(QStringLiteral("x"));
+        for (const auto& key : track.keys)
+            if (key.frame == 10
+                && key.easing.type == QStringLiteral("easeinoutcubic"))
+                eased = true;
+        if (!check(eased, QStringLiteral("key easing was not written")))
+            return 1;
+    }
+    if (!undo())
+        return 1;
+
+    // Solver protection: the segment start key cannot be deleted or moved,
+    // and normal keys cannot be written inside the segment.
+    error.clear();
+    if (!check(!actions->deleteKeyframes(
+                   QVector<pvf::KeyRef>{{solver, QStringLiteral("x"), 10}},
+                   &error),
+               QStringLiteral("solver start key delete should fail")))
+        return 1;
+    error.clear();
+    if (!check(!actions->moveKeyframes(
+                   QVector<pvf::KeyRef>{{solver, QStringLiteral("x"), 10}}, 1,
+                   &error),
+               QStringLiteral("solver start key move should fail")))
+        return 1;
+    error.clear();
+    if (!check(!actions->addKeyframe(solver, QStringLiteral("x"), 20, &error),
+               QStringLiteral("key inside a solver segment should fail")))
+        return 1;
+    if (!check(keyAt(solver, QStringLiteral("x"), 10)
+                   && keyCount(solver, QStringLiteral("x")) == 1,
+               QStringLiteral("failed solver edits changed the keys")))
+        return 1;
+
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    if (!check(window->grab().save(
+                   QStringLiteral("/tmp/opencode/pvforge-p2b2-keys.png")),
+               QStringLiteral("screenshot failed")))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-keys-test OK: double-click add, merged/single-track drag,"
+               " Delete, copy/paste, solver start-key protection";
+    return 0;
+}
+
+int timelineSplitTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p2b2-split.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P2b2 切分");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-split-test: create failed" << error;
+        return 1;
+    }
+    auto* document = session->document();
+    auto* actions = session->editActions();
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "timeline-split-test:" << message;
+        return condition;
+    };
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int start, int end, int row,
+                                 const pvf::Uuid& parent = pvf::Uuid()) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        entity.parentUuid = parent;
+        entity.content.kind = pvf::ContentKind::Empty;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+    const pvf::Uuid parent = makeEntity(QStringLiteral("父级"), 0, 60, 0);
+    const pvf::Uuid child = makeEntity(QStringLiteral("子级"), 10, 50, 0, parent);
+    pvf::model::Track parentX;
+    parentX.keys = {{0, 0.0, {}, {}}, {10, 1.0, {}, {}},
+                    {30, 2.0, {}, {}}, {50, 3.0, {}, {}}};
+    project.entities[parent].tracks.insert(QStringLiteral("x"), parentX);
+
+    pvf::model::Entity video;
+    video.uuid = pvf::model::newUuid();
+    video.name = QStringLiteral("视频");
+    video.start = 0;
+    video.end = 40;
+    video.row = 1;
+    video.content.kind = pvf::ContentKind::Asset;
+    video.content.asset.type = pvf::AssetType::Video;
+    video.content.asset.hash = QString(64, QLatin1Char('c'));
+    video.content.asset.sourceIn = 5;
+    project.entities.insert(video.uuid, video);
+
+    const pvf::Uuid locked = makeEntity(QStringLiteral("锁定"), 0, 60, 2);
+    project.entities[locked].locked = true;
+
+    if (!document->commitEntities({parent, child, video.uuid, locked},
+                                  QStringLiteral("p2b2 split setup"), &error))
+    {
+        qCritical() << "timeline-split-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    pvf::EditorSession* sessionPtr = session.get();
+    auto flush = [sessionPtr] {
+        QString flushError;
+        sessionPtr->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "timeline-split-test: flush failed" << flushError;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto undo = [document, &flush] {
+        flush();
+        QString undoError;
+        if (!document->undo(&undoError))
+        {
+            qCritical() << "timeline-split-test: undo failed" << undoError;
+            return false;
+        }
+        return true;
+    };
+    auto findByName = [](const pvf::model::Project& p, const QString& name,
+                         int start, const pvf::Uuid& exclude) {
+        for (auto it = p.entities.constBegin(); it != p.entities.constEnd(); ++it)
+            if (it.key() != exclude && it.value().name == name
+                && it.value().start == start)
+                return it.key();
+        return pvf::Uuid();
+    };
+    auto keyFrames = [](const pvf::model::Project& p, const pvf::Uuid& uuid,
+                        const QString& track) {
+        QVector<int> frames;
+        const auto entity = p.entities.constFind(uuid);
+        if (entity == p.entities.constEnd())
+            return frames;
+        const auto keys = entity.value().tracks.constFind(track);
+        if (keys == entity.value().tracks.constEnd())
+            return frames;
+        for (const auto& key : keys.value().keys)
+            frames.append(key.frame);
+        std::sort(frames.begin(), frames.end());
+        return frames;
+    };
+
+    // Parent + child split: the right halves get fresh UUIDs and shifted keys.
+    int beforeDepth = depth();
+    pvf::EditPlan plan;
+    if (!check(actions->planSplit(parent, 30, &plan, &error),
+               QStringLiteral("planSplit failed: %1").arg(error)))
+        return 1;
+    const pvf::Uuid rightParent =
+        findByName(plan.project, QStringLiteral("父级"), 30, parent);
+    if (!check(!rightParent.isEmpty(),
+               QStringLiteral("right parent missing from the plan")))
+        return 1;
+    const pvf::Uuid rightChild =
+        findByName(plan.project, QStringLiteral("子级"), 30, child);
+    if (!check(!rightChild.isEmpty()
+                   && plan.project.entities.value(rightChild).parentUuid
+                          == rightParent,
+               QStringLiteral("child was not split under the right parent")))
+        return 1;
+    if (!check(plan.project.entities.value(parent).end == 30
+                   && plan.project.entities.value(rightParent).end == 60
+                   && plan.project.entities.value(child).end == 30
+                   && plan.project.entities.value(rightChild).end == 50,
+               QStringLiteral("split ranges are wrong")))
+        return 1;
+    if (!check(keyFrames(plan.project, parent, QStringLiteral("x"))
+                       == QVector<int>({0, 10})
+                   && keyFrames(plan.project, rightParent, QStringLiteral("x"))
+                          == QVector<int>({0, 20}),
+               QStringLiteral("split keys were not cropped/shifted")))
+        return 1;
+    if (!check(actions->apply(plan, &error),
+               QStringLiteral("split apply failed: %1").arg(error)))
+        return 1;
+    flush();
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("split did not commit once")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Video sourceIn shifts on the right half.
+    beforeDepth = depth();
+    if (!check(actions->splitClip(video.uuid, 20, &error),
+               QStringLiteral("video split failed: %1").arg(error)))
+        return 1;
+    const pvf::Uuid rightVideo = [&] {
+        for (auto it = session->project().entities.constBegin();
+             it != session->project().entities.constEnd(); ++it)
+            if (it.key() != video.uuid && it.value().name == QStringLiteral("视频"))
+                return it.key();
+        return pvf::Uuid();
+    }();
+    if (!check(!rightVideo.isEmpty()
+                   && session->project().entities.value(video.uuid).content.asset.sourceIn
+                          == 5
+                   && session->project().entities.value(rightVideo).content.asset.sourceIn
+                          == 25,
+               QStringLiteral("video sourceIn was not shifted")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Boundaries and locks reject without changing anything.
+    const int entityCount = session->project().entities.size();
+    if (!check(!actions->splitClip(video.uuid, 0, &error),
+               QStringLiteral("split at the start should fail"))
+        || !check(!actions->splitClip(video.uuid, 40, &error),
+                  QStringLiteral("split at the end should fail"))
+        || !check(!actions->splitClip(locked, 20, &error),
+                  QStringLiteral("split of a locked entity should fail"))
+        || !check(session->project().entities.size() == entityCount,
+                  QStringLiteral("failed splits changed the project")))
+        return 1;
+
+    // S in the panel splits the selected clip at the playhead.
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    auto* live = window->editorSessionForTest();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!check(live && timeline,
+               QStringLiteral("session window/timeline missing")))
+        return 1;
+    const pvf::EntityId parentId = timeline->entityIdForUuid(parent);
+    timeline->setSelectedEntity(parentId);
+    live->setPlayhead(15);
+    beforeDepth = depth();
+    QKeyEvent splitKey(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &splitKey);
+    QApplication::processEvents();
+    live->flush();
+    const pvf::Uuid rightByS = [&] {
+        for (auto it = live->project().entities.constBegin();
+             it != live->project().entities.constEnd(); ++it)
+            if (it.key() != parent && it.value().name == QStringLiteral("父级")
+                && it.value().start == 15)
+                return it.key();
+        return pvf::Uuid();
+    }();
+    if (!check(!rightByS.isEmpty()
+                   && live->project().entities.value(parent).end == 15,
+               QStringLiteral("S did not split at the playhead")))
+        return 1;
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("S split did not commit once")))
+        return 1;
+    if (!check(live->document()->undo(&error),
+               QStringLiteral("S split undo failed: %1").arg(error)))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-split-test OK: parent/child, video sourceIn,"
+               " boundary and lock rejection, S shortcut";
+    return 0;
+}
+
+int timelineMarkerTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p2b2-marker.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P2b2 标记");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-marker-test: create failed" << error;
+        return 1;
+    }
+    auto* document = session->document();
+    auto* actions = session->editActions();
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "timeline-marker-test:" << message;
+        return condition;
+    };
+
+    pvf::model::Entity entity;
+    entity.uuid = pvf::model::newUuid();
+    entity.name = QStringLiteral("片段");
+    entity.start = 0;
+    entity.end = 120;
+    entity.content.kind = pvf::ContentKind::Empty;
+    session->mutableProject().entities.insert(entity.uuid, entity);
+    if (!document->commitEntities({entity.uuid}, QStringLiteral("p2b2 marker setup"),
+                                  &error))
+    {
+        qCritical() << "timeline-marker-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    pvf::EditorSession* sessionPtr = session.get();
+    auto flush = [sessionPtr] {
+        QString flushError;
+        sessionPtr->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "timeline-marker-test: flush failed" << flushError;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    auto* live = window->editorSessionForTest();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!check(live && timeline,
+               QStringLiteral("session window/timeline missing")))
+        return 1;
+
+    // M adds a marker at the playhead.
+    live->setPlayhead(30);
+    int beforeDepth = depth();
+    QKeyEvent markerKey(QEvent::KeyPress, Qt::Key_M, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &markerKey);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(live->project().markers.size() == 1
+                   && live->project().markers.first().frame == 30,
+               QStringLiteral("M did not add a marker at the playhead")))
+        return 1;
+    if (!check(depth() == beforeDepth + 1,
+               QStringLiteral("marker add did not commit once")))
+        return 1;
+
+    // Dragging the marker changes its frame in one commit.
+    const QRect markerRect = timeline->markerRectForTest(0);
+    if (!check(!markerRect.isEmpty(), QStringLiteral("marker rect missing")))
+        return 1;
+    const QPoint markerFrom = markerRect.center();
+    const QPoint markerTo(timeline->frameXForTest(45), markerRect.center().y());
+    QMouseEvent markerPress(QEvent::MouseButtonPress, QPointF(markerFrom),
+                            QPointF(timeline->mapToGlobal(markerFrom)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent markerMove(QEvent::MouseMove, QPointF(markerTo),
+                           QPointF(timeline->mapToGlobal(markerTo)), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent markerRelease(QEvent::MouseButtonRelease, QPointF(markerTo),
+                              QPointF(timeline->mapToGlobal(markerTo)),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &markerPress);
+    QApplication::sendEvent(timeline, &markerMove);
+    QApplication::sendEvent(timeline, &markerRelease);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(live->project().markers.first().frame == 45,
+               QStringLiteral("marker drag did not change the frame")))
+        return 1;
+    if (!check(depth() == beforeDepth + 2,
+               QStringLiteral("marker drag did not commit once")))
+        return 1;
+    if (!check(live->document()->undo(&error),
+               QStringLiteral("marker drag undo failed: %1").arg(error)))
+        return 1;
+    if (!check(live->project().markers.first().frame == 30,
+               QStringLiteral("marker drag undo did not restore the frame")))
+        return 1;
+
+    // Edit title/color/note/tags; empty titles are rejected.
+    pvf::model::Marker marker = live->project().markers.first();
+    marker.title = QStringLiteral("高潮");
+    marker.color = QStringLiteral("#ff3355");
+    marker.note = QStringLiteral("副歌开始");
+    marker.tags = {QStringLiteral("音乐"), QStringLiteral("段落")};
+    if (!check(actions->updateMarker(marker, &error),
+               QStringLiteral("updateMarker failed: %1").arg(error)))
+        return 1;
+    const auto updated = live->project().markers.first();
+    if (!check(updated.title == QStringLiteral("高潮")
+                   && updated.color == QStringLiteral("#ff3355")
+                   && updated.note == QStringLiteral("副歌开始")
+                   && updated.tags.size() == 2,
+               QStringLiteral("marker fields were not saved")))
+        return 1;
+    live->flush();
+    pvf::model::Marker invalid = updated;
+    invalid.title.clear();
+    error.clear();
+    if (!check(!actions->updateMarker(invalid, &error),
+               QStringLiteral("empty marker title should fail")))
+        return 1;
+    if (!check(live->document()->undo(&error),
+               QStringLiteral("marker edit undo failed: %1").arg(error)))
+        return 1;
+
+    // Delete and undo.
+    const QString markerId = live->project().markers.first().id;
+    if (!check(actions->deleteMarker(markerId, &error),
+               QStringLiteral("deleteMarker failed: %1").arg(error)))
+        return 1;
+    if (!check(live->project().markers.isEmpty(),
+               QStringLiteral("marker was not deleted")))
+        return 1;
+    live->flush();
+    if (!check(live->document()->undo(&error),
+               QStringLiteral("marker delete undo failed: %1").arg(error)))
+        return 1;
+    if (!check(live->project().markers.size() == 1,
+               QStringLiteral("marker delete undo did not restore it")))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-marker-test OK: M add, drag frame, edit fields,"
+               " validation, delete and undo";
+    return 0;
+}
+
 int timelineEditE2eTest(QApplication& app, const QString& projectDir)
 {
     QString error;
@@ -14875,6 +15647,12 @@ int main(int argc, char* argv[])
         return timelineTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-edit-test")))
         return timelineEditTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-keys-test")))
+        return timelineKeysTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-split-test")))
+        return timelineSplitTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-marker-test")))
+        return timelineMarkerTest(app);
     const int e2eIndex = app.arguments().indexOf(
         QStringLiteral("--timeline-edit-e2e"));
     if (e2eIndex >= 0)
