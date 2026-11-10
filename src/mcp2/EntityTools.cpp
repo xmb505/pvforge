@@ -35,6 +35,213 @@ const QStringList kCreateKeys = {
     QStringLiteral("keyframes"), QStringLiteral("solvers"),
 };
 
+// ---- special content fields ---------------------------------------------
+// comicText / radialLines / flowLines / halftoneDots / brandWall live in the
+// entity content as a same-named sub-object.  mcp2 checks the field names and
+// JSON types here; model::contentFromJson validates the numeric ranges.
+
+struct SpecialContentField
+{
+    const char* name;
+    const char* type; // string | number | integer | boolean | string[]
+};
+
+std::optional<ContentKind> specialContentKindFromName(const QString& name)
+{
+    if (name == QLatin1String("comicText"))
+        return ContentKind::ComicText;
+    if (name == QLatin1String("radialLines"))
+        return ContentKind::RadialLines;
+    if (name == QLatin1String("flowLines"))
+        return ContentKind::FlowLines;
+    if (name == QLatin1String("halftoneDots"))
+        return ContentKind::HalftoneDots;
+    if (name == QLatin1String("brandWall"))
+        return ContentKind::BrandWall;
+    return std::nullopt;
+}
+
+QString specialContentContainer(ContentKind kind)
+{
+    switch (kind)
+    {
+    case ContentKind::ComicText:
+        return QStringLiteral("comicText");
+    case ContentKind::RadialLines:
+        return QStringLiteral("radialLines");
+    case ContentKind::FlowLines:
+        return QStringLiteral("flowLines");
+    case ContentKind::HalftoneDots:
+        return QStringLiteral("halftoneDots");
+    case ContentKind::BrandWall:
+        return QStringLiteral("brandWall");
+    default:
+        return QString();
+    }
+}
+
+const QVector<SpecialContentField>& specialContentFields(ContentKind kind)
+{
+    static const QVector<SpecialContentField> comic = {
+        {"text", "string"},          {"fontFamily", "string"},
+        {"pixelSize", "integer"},    {"color", "string"},
+        {"strokeColor", "string"},   {"strokeWidth", "number"},
+        {"align", "integer"},        {"lineHeight", "number"},
+        {"bold", "boolean"},         {"italic", "boolean"},
+        {"shape", "string"},         {"boxWidth", "number"},
+        {"boxHeight", "number"},     {"fillColor", "string"},
+        {"bubbleStrokeColor", "string"}, {"bubbleStrokeWidth", "number"},
+        {"cornerRadius", "number"},  {"tail", "boolean"},
+        {"tailX", "number"},         {"tailY", "number"},
+        {"rotation", "number"},      {"padding", "number"},
+        {"seed", "integer"},
+    };
+    static const QVector<SpecialContentField> radial = {
+        {"count", "integer"},  {"radius", "number"},
+        {"innerRatio", "number"}, {"width", "number"},
+        {"angle", "number"},   {"color", "string"},
+        {"seed", "integer"},
+    };
+    static const QVector<SpecialContentField> flow = {
+        {"count", "integer"},   {"length", "number"},
+        {"spacing", "number"},  {"thickness", "number"},
+        {"area", "number"},     {"bend", "number"},
+        {"angle", "number"},    {"phase", "number"},
+        {"color", "string"},    {"seed", "integer"},
+    };
+    static const QVector<SpecialContentField> halftone = {
+        {"layout", "string"},        {"area", "number"},
+        {"radius", "number"},        {"spacing", "number"},
+        {"dotSize", "number"},       {"angle", "number"},
+        {"gradientAngle", "number"}, {"minRatio", "number"},
+        {"jitter", "number"},        {"color", "string"},
+        {"seed", "integer"},
+    };
+    static const QVector<SpecialContentField> brandWall = {
+        {"logos", "string[]"},   {"columns", "integer"},
+        {"rows", "integer"},     {"spacing", "number"},
+        {"logoSize", "number"},  {"colors", "string[]"},
+        {"alternate", "boolean"}, {"angle", "number"},
+        {"background", "string"}, {"seed", "integer"},
+    };
+    static const QVector<SpecialContentField> none;
+
+    switch (kind)
+    {
+    case ContentKind::ComicText:
+        return comic;
+    case ContentKind::RadialLines:
+        return radial;
+    case ContentKind::FlowLines:
+        return flow;
+    case ContentKind::HalftoneDots:
+        return halftone;
+    case ContentKind::BrandWall:
+        return brandWall;
+    default:
+        return none;
+    }
+}
+
+bool matchesFieldType(const QJsonValue& value, const QString& type)
+{
+    if (type == QLatin1String("string"))
+        return value.isString();
+    if (type == QLatin1String("boolean"))
+        return value.isBool();
+    if (type == QLatin1String("number"))
+        return value.isDouble() && std::isfinite(value.toDouble());
+    if (type == QLatin1String("integer"))
+    {
+        if (!value.isDouble())
+            return false;
+        const double number = value.toDouble();
+        return std::isfinite(number) && std::floor(number) == number;
+    }
+    if (type == QLatin1String("string[]"))
+    {
+        if (!value.isArray())
+            return false;
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue& item : array)
+        {
+            if (!item.isString())
+                return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+Result validateSpecialContentFields(const QJsonObject& object, ContentKind kind)
+{
+    const QString container = specialContentContainer(kind);
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+    {
+        if (it.key() != QLatin1String("kind") && it.key() != container)
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("content 含未知字段 %1（kind=%2 只接受 "
+                                          "kind 与 %3）")
+                               .arg(it.key(), contentKindName(kind), container));
+    }
+
+    const QJsonValue nestedValue = object.value(container);
+    if (nestedValue.isUndefined() || nestedValue.isNull())
+        return success();
+    if (!nestedValue.isObject())
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("content.%1 必须是对象").arg(container));
+
+    const QVector<SpecialContentField>& fields = specialContentFields(kind);
+    QStringList allowed;
+    for (const SpecialContentField& field : fields)
+        allowed << QString::fromLatin1(field.name);
+
+    const QJsonObject nested = nestedValue.toObject();
+    for (auto it = nested.constBegin(); it != nested.constEnd(); ++it)
+    {
+        const SpecialContentField* match = nullptr;
+        for (const SpecialContentField& field : fields)
+        {
+            if (it.key() == QLatin1String(field.name))
+            {
+                match = &field;
+                break;
+            }
+        }
+
+        if (!match)
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("content.%1 含未知字段 %2（允许：%3）")
+                               .arg(container, it.key(),
+                                    allowed.join(QStringLiteral(", "))));
+
+        const QString type = QString::fromLatin1(match->type);
+        if (!matchesFieldType(it.value(), type))
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("content.%1.%2 必须是 %3")
+                               .arg(container, it.key(), type));
+    }
+    return success();
+}
+
+Result validateContentFieldsJson(const QJsonObject& object,
+                                 const QString& kindName)
+{
+    const auto kind = specialContentKindFromName(kindName);
+    if (!kind)
+        return success();
+    return validateSpecialContentFields(object, *kind);
+}
+
+Result validateContentFieldsForCreate(const QJsonObject& object)
+{
+    const QJsonValue kindValue = object.value(QStringLiteral("kind"));
+    if (!kindValue.isString())
+        return success();
+    return validateContentFieldsJson(object, kindValue.toString());
+}
+
 int assetDurationFrames(const assets::StoredAsset& asset)
 {
     return asset.metadata.value(QStringLiteral("durationFrames")).toInt(0);
@@ -80,8 +287,13 @@ Result parseContentForCreate(const assets::AssetStore& assetStore,
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("content 必须是对象"));
 
+    const QJsonObject object = value.toObject();
+    Result fieldCheck = validateContentFieldsForCreate(object);
+    if (!fieldCheck.ok)
+        return fieldCheck;
+
     QString error;
-    const auto parsed = model::contentFromJson(value.toObject(), &error);
+    const auto parsed = model::contentFromJson(object, &error);
     if (!parsed)
         return failure(QStringLiteral("invalid_argument"), error);
 
@@ -120,6 +332,16 @@ QString defaultNameForContent(const assets::AssetStore& assetStore,
         if (const auto asset = assetStore.get(content.asset.hash))
             return asset->name;
         return QStringLiteral("素材");
+    case ContentKind::ComicText:
+        return QStringLiteral("漫画文字");
+    case ContentKind::RadialLines:
+        return QStringLiteral("集中线");
+    case ContentKind::FlowLines:
+        return QStringLiteral("速度线");
+    case ContentKind::HalftoneDots:
+        return QStringLiteral("网点");
+    case ContentKind::BrandWall:
+        return QStringLiteral("品牌墙");
     }
     return QStringLiteral("实体");
 }
@@ -1113,6 +1335,10 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("content.kind 必须是字符串"));
 
+        Result fieldCheck = validateContentFieldsJson(update, kindName);
+        if (!fieldCheck.ok)
+            return fieldCheck;
+
         const ContentKind current = entity.content.kind;
         const auto isTextual = [](ContentKind kind) {
             return kind == ContentKind::Text || kind == ContentKind::Vector;
@@ -1128,6 +1354,8 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             target = ContentKind::Camera;
         else if (kindName == QLatin1String("asset"))
             target = ContentKind::Asset;
+        else if (const auto special = specialContentKindFromName(kindName))
+            target = *special;
         else
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("未知内容类型：%1").arg(kindName));
@@ -1140,12 +1368,11 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
                            QStringLiteral("换素材请用 asset.assign"));
         if (target != current)
         {
+            // empty 可以和任意非素材内容互转；text/vector 这组兼容规则不变。
             const bool allowedChange =
                 (current == ContentKind::Empty)
                 || (isTextual(current) && isTextual(target))
-                || (isTextual(current) && target == ContentKind::Empty)
-                || (current == ContentKind::Camera
-                    && target == ContentKind::Empty);
+                || (target == ContentKind::Empty);
             if (!allowedChange)
                 return failure(QStringLiteral("conflict"),
                                QStringLiteral("不允许从 %1 切换到 %2")
@@ -1218,10 +1445,10 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             {
                 if (it.key() == QLatin1String("kind"))
                     continue;
-                if ((it.key() == QLatin1String("text")
-                     || it.key() == QLatin1String("vector")
-                     || it.key() == QLatin1String("camera"))
-                    && it.value().isObject())
+                // Content structs are nested sub-objects (text/vector/... and the
+                // special kinds).  Merge a partial patch into the current value
+                // instead of replacing the whole struct.
+                if (it.value().isObject())
                 {
                     QJsonObject nested = merged.value(it.key()).toObject();
                     const QJsonObject patchObject = it.value().toObject();

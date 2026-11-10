@@ -198,6 +198,8 @@ private slots:
     void moveRowOnlyAndGetDefaults();
     void entityGetIncludesSolvers();
     void textualContentCanBecomeEmpty();
+    void specialContentCreateAndUpdate();
+    void specialContentRejectsUnknownFields();
     void writeFlagsReflectService();
     void previewDocumentContract();
     void previewRateLimit();
@@ -2309,6 +2311,316 @@ void Mcp2Tests::textualContentCanBecomeEmpty()
                        QJsonObject{{QStringLiteral("text"), QStringLiteral("A")}}}});
     check(QStringLiteral("vector"),
           QJsonObject{{QStringLiteral("kind"), QStringLiteral("vector")}});
+}
+
+void Mcp2Tests::specialContentCreateAndUpdate()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    struct Case
+    {
+        const char* kind;
+        const char* container;
+        ContentKind expected;
+        QJsonObject fields;
+    };
+
+    const QVector<Case> cases = {
+        { "comicText", "comicText", ContentKind::ComicText,
+          QJsonObject{{QStringLiteral("text"), QStringLiteral("第一句")},
+                      {QStringLiteral("pixelSize"), 96},
+                      {QStringLiteral("shape"), QStringLiteral("burst")},
+                      {QStringLiteral("seed"), 7}} },
+        { "radialLines", "radialLines", ContentKind::RadialLines,
+          QJsonObject{{QStringLiteral("count"), 24},
+                      {QStringLiteral("radius"), 300.0},
+                      {QStringLiteral("color"), QStringLiteral("#ff8800")}} },
+        { "flowLines", "flowLines", ContentKind::FlowLines,
+          QJsonObject{{QStringLiteral("count"), 12},
+                      {QStringLiteral("length"), 240.0},
+                      {QStringLiteral("phase"), 0.5}} },
+        { "halftoneDots", "halftoneDots", ContentKind::HalftoneDots,
+          QJsonObject{{QStringLiteral("layout"), QStringLiteral("radial")},
+                      {QStringLiteral("radius"), 200.0},
+                      {QStringLiteral("spacing"), 12.0}} },
+        { "brandWall", "brandWall", ContentKind::BrandWall,
+          QJsonObject{{QStringLiteral("logos"),
+                       QJsonArray{QStringLiteral("PV"), QStringLiteral("FORGE")}},
+                      {QStringLiteral("colors"),
+                       QJsonArray{QStringLiteral("#d246a0"),
+                                  QStringLiteral("#e8e8ee")}},
+                      {QStringLiteral("columns"), 3},
+                      {QStringLiteral("rows"), 2}} },
+    };
+
+    QStringList uuids;
+    for (const Case& item : cases)
+    {
+        const QString kind = QString::fromLatin1(item.kind);
+        QJsonObject content;
+        content.insert(QStringLiteral("kind"), kind);
+        content.insert(QString::fromLatin1(item.container), item.fields);
+
+        QJsonObject args = entityArgs(kind, 0, 60);
+        args.insert(QStringLiteral("content"), content);
+        const QJsonObject result =
+            fixture.call(QStringLiteral("entity.create"), args);
+        QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(QStringLiteral("%1: %2")
+                                .arg(errorCode(result),
+                                     result.value(QStringLiteral("error"))
+                                         .toObject()
+                                         .value(QStringLiteral("message"))
+                                         .toString())));
+
+        const QJsonObject data = result.value(QStringLiteral("data")).toObject();
+        const QString uuid = data.value(QStringLiteral("uuid")).toString();
+        QVERIFY(!uuid.isEmpty());
+        QCOMPARE(data.value(QStringLiteral("entity")).toObject()
+                     .value(QStringLiteral("contentKind")).toString(),
+                 kind);
+        QCOMPARE(fixture.store->project().entities.value(uuid).content.kind,
+                 item.expected);
+        uuids << uuid;
+    }
+
+    const model::Project& project = fixture.store->project();
+    QCOMPARE(project.entities.value(uuids.at(0)).content.comic.text,
+             QStringLiteral("第一句"));
+    QCOMPARE(project.entities.value(uuids.at(1)).content.radial.count, 24);
+    QCOMPARE(project.entities.value(uuids.at(2)).content.flow.count, 12);
+    QCOMPARE(project.entities.value(uuids.at(3)).content.halftone.layout,
+             QStringLiteral("radial"));
+    QCOMPARE(project.entities.value(uuids.at(4)).content.brandWall.logos.size(),
+             2);
+
+    // Same-kind partial patch merges into the existing struct.
+    QJsonObject nested;
+    nested.insert(QStringLiteral("text"), QStringLiteral("改过的台词"));
+    nested.insert(QStringLiteral("pixelSize"), 120);
+    QJsonObject contentPatch;
+    contentPatch.insert(QStringLiteral("comicText"), nested);
+    QJsonObject patch;
+    patch.insert(QStringLiteral("content"), contentPatch);
+    QJsonObject result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
+                    {QStringLiteral("patch"), patch}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.text,
+             QStringLiteral("改过的台词"));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.pixelSize,
+             120);
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.shape,
+             QStringLiteral("burst"));
+
+    // Explicit same kind plus one field.
+    nested = QJsonObject{{QStringLiteral("tail"), false}};
+    QJsonObject withKind;
+    withKind.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
+    withKind.insert(QStringLiteral("comicText"), nested);
+    patch.insert(QStringLiteral("content"), withKind);
+    result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
+                    {QStringLiteral("patch"), patch}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.tail,
+             false);
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.text,
+             QStringLiteral("改过的台词"));
+
+    // Special content goes back to empty, then empty can become another kind.
+    result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
+                    {QStringLiteral("patch"),
+                     QJsonObject{{QStringLiteral("content"),
+                                  QJsonObject{{QStringLiteral("kind"),
+                                               QStringLiteral("empty")}}}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.kind,
+             ContentKind::Empty);
+
+    QJsonObject backContent;
+    backContent.insert(QStringLiteral("kind"), QStringLiteral("halftoneDots"));
+    backContent.insert(QStringLiteral("halftoneDots"),
+                       QJsonObject{{QStringLiteral("layout"), QStringLiteral("grid")},
+                                   {QStringLiteral("area"), 900.0}});
+    result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
+                    {QStringLiteral("patch"),
+                     QJsonObject{{QStringLiteral("content"), backContent}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.kind,
+             ContentKind::HalftoneDots);
+
+    // asset.assign recognises the special kinds and demands empty first.
+    const QString imagePath = fixture.temp.filePath(QStringLiteral("special.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(imagePath));
+    result = fixture.call(QStringLiteral("asset.import"),
+                          QJsonObject{{QStringLiteral("path"), imagePath},
+                                      {QStringLiteral("confirm"), true}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    const QString hash = result.value(QStringLiteral("data")).toObject()
+                             .value(QStringLiteral("asset")).toObject()
+                             .value(QStringLiteral("hash")).toString();
+    QVERIFY(!hash.isEmpty());
+
+    const QJsonObject assignArgs{{QStringLiteral("entityUuid"), uuids.at(1)},
+                                 {QStringLiteral("assetHash"), hash}};
+    result = fixture.call(QStringLiteral("asset.assign"), assignArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
+
+    result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), uuids.at(1)},
+                    {QStringLiteral("patch"),
+                     QJsonObject{{QStringLiteral("content"),
+                                  QJsonObject{{QStringLiteral("kind"),
+                                               QStringLiteral("empty")}}}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("asset.assign"), assignArgs);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->project().entities.value(uuids.at(1)).content.kind,
+             ContentKind::Asset);
+
+    // Schema documents every kind and the special-kind fields.
+    result = fixture.call(QStringLiteral("schema.get"),
+                          QJsonObject{{QStringLiteral("topic"),
+                                       QStringLiteral("entity")}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    const QJsonObject contentSchema =
+        result.value(QStringLiteral("data")).toObject()
+            .value(QStringLiteral("schema")).toObject()
+            .value(QStringLiteral("properties")).toObject()
+            .value(QStringLiteral("content")).toObject();
+    const QJsonObject contentProperties =
+        contentSchema.value(QStringLiteral("properties")).toObject();
+    const QJsonArray kinds =
+        contentProperties.value(QStringLiteral("kind")).toObject()
+            .value(QStringLiteral("enum")).toArray();
+    QCOMPARE(kinds.size(), 10);
+    QVERIFY(kinds.contains(QJsonValue(QStringLiteral("comicText"))));
+    QVERIFY(kinds.contains(QJsonValue(QStringLiteral("brandWall"))));
+    QCOMPARE(contentProperties.value(QStringLiteral("comicText")).toObject()
+                 .value(QStringLiteral("properties")).toObject()
+                 .value(QStringLiteral("pixelSize")).toObject()
+                 .value(QStringLiteral("type")).toString(),
+             QStringLiteral("integer"));
+    QVERIFY(!contentProperties.value(QStringLiteral("halftoneDots")).toObject()
+                 .value(QStringLiteral("properties")).toObject()
+                 .value(QStringLiteral("radius")).toObject()
+                 .value(QStringLiteral("description")).toString().isEmpty());
+
+    result = fixture.call(QStringLiteral("guide.get"),
+                          QJsonObject{{QStringLiteral("topic"),
+                                       QStringLiteral("authoring")}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QVERIFY(result.value(QStringLiteral("data")).toObject()
+                .value(QStringLiteral("markdown")).toString()
+                .contains(QStringLiteral("一等公民")));
+}
+
+void Mcp2Tests::specialContentRejectsUnknownFields()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const auto create = [&](const QJsonObject& content) {
+        QJsonObject args = entityArgs(QStringLiteral("坏内容"), 0, 10);
+        args.insert(QStringLiteral("content"), content);
+        return fixture.call(QStringLiteral("entity.create"), args);
+    };
+
+    QJsonObject nested;
+    nested.insert(QStringLiteral("text"), QStringLiteral("x"));
+    QJsonObject content;
+    content.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
+    content.insert(QStringLiteral("comicText"), nested);
+    content.insert(QStringLiteral("bogus"), 1);
+    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
+
+    content.remove(QStringLiteral("bogus"));
+    nested.insert(QStringLiteral("rays"), 5);
+    content.insert(QStringLiteral("comicText"), nested);
+    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
+
+    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("x")},
+                         {QStringLiteral("pixelSize"), QStringLiteral("big")}};
+    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("comicText")},
+                          {QStringLiteral("comicText"), nested}};
+    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
+
+    content = QJsonObject{
+        {QStringLiteral("kind"), QStringLiteral("radialLines")},
+        {QStringLiteral("radialLines"),
+         QJsonObject{{QStringLiteral("count"), 0}}}};
+    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
+
+    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("nope")}};
+    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
+
+    // A valid entity for the update paths.
+    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("A")}};
+    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("comicText")},
+                          {QStringLiteral("comicText"), nested}};
+    const QJsonObject created = create(content);
+    QVERIFY2(created.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(created)));
+    const QString uuid = uuidOf(created);
+    QVERIFY(!uuid.isEmpty());
+
+    const auto update = [&](const QJsonObject& contentPatch) {
+        QJsonObject patch;
+        patch.insert(QStringLiteral("content"), contentPatch);
+        return fixture.call(QStringLiteral("entity.update"),
+                            QJsonObject{{QStringLiteral("uuid"), uuid},
+                                        {QStringLiteral("patch"), patch}});
+    };
+
+    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("B")},
+                         {QStringLiteral("bogus"), true}};
+    QJsonObject contentPatch;
+    contentPatch.insert(QStringLiteral("comicText"), nested);
+    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+
+    nested = QJsonObject{{QStringLiteral("pixelSize"), QStringLiteral("big")}};
+    contentPatch.insert(QStringLiteral("comicText"), nested);
+    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+
+    nested = QJsonObject{{QStringLiteral("pixelSize"), 0}};
+    contentPatch.insert(QStringLiteral("comicText"), nested);
+    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+
+    contentPatch = QJsonObject{
+        {QStringLiteral("kind"), QStringLiteral("comicText")},
+        {QStringLiteral("comicText"),
+         QJsonObject{{QStringLiteral("text"), QStringLiteral("B")}}},
+        {QStringLiteral("bogus"), 1}};
+    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+
+    contentPatch = QJsonObject{{QStringLiteral("kind"), QStringLiteral("nope")}};
+    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+
+    // Rejected patches leave the stored content untouched.
+    QCOMPARE(fixture.store->project().entities.value(uuid).content.comic.text,
+             QStringLiteral("A"));
+    QCOMPARE(fixture.store->project().entities.value(uuid).content.comic.pixelSize,
+             72);
 }
 
 void Mcp2Tests::writeFlagsReflectService()

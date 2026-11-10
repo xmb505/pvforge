@@ -70,6 +70,143 @@ QJsonObject toolSchema(const QString& name, const QString& description,
     return object;
 }
 
+// Content is a tagged union: `kind` plus a same-named sub-object (the special
+// kinds, text/vector/camera) or flat asset fields.  The special kinds reject
+// unknown fields in mcp2 and defer numeric ranges to model::validateContent,
+// so the ranges below are documentation.
+QJsonObject contentSchema()
+{
+    const QJsonObject comicText = objectSchema({
+        {QStringLiteral("text"), prop(QStringLiteral("string"), QStringLiteral("气泡文字，可含换行"))},
+        {QStringLiteral("fontFamily"), prop(QStringLiteral("string"), QStringLiteral("空 = 默认字体"))},
+        {QStringLiteral("pixelSize"), prop(QStringLiteral("integer"), QStringLiteral("1..8192，默认 72"))},
+        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 文字色"))},
+        {QStringLiteral("strokeColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 文字描边色"))},
+        {QStringLiteral("strokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000"))},
+        {QStringLiteral("align"), prop(QStringLiteral("integer"), QStringLiteral("0..65535（Qt 对齐标志）"))},
+        {QStringLiteral("lineHeight"), prop(QStringLiteral("number"), QStringLiteral("0.1..10"))},
+        {QStringLiteral("bold"), prop(QStringLiteral("boolean"), QString())},
+        {QStringLiteral("italic"), prop(QStringLiteral("boolean"), QString())},
+        {QStringLiteral("shape"), prop(QStringLiteral("string"), QStringLiteral("ellipse|rect|cloud|burst"))},
+        {QStringLiteral("boxWidth"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
+        {QStringLiteral("boxHeight"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
+        {QStringLiteral("fillColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 气泡填充色"))},
+        {QStringLiteral("bubbleStrokeColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 气泡描边色"))},
+        {QStringLiteral("bubbleStrokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000"))},
+        {QStringLiteral("cornerRadius"), prop(QStringLiteral("number"), QStringLiteral("0..1000000"))},
+        {QStringLiteral("tail"), prop(QStringLiteral("boolean"), QStringLiteral("是否画气泡尖角"))},
+        {QStringLiteral("tailX"), prop(QStringLiteral("number"), QStringLiteral("-16..16（半宽倍数）"))},
+        {QStringLiteral("tailY"), prop(QStringLiteral("number"), QStringLiteral("-16..16（半高倍数）"))},
+        {QStringLiteral("rotation"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
+        {QStringLiteral("padding"), prop(QStringLiteral("number"), QStringLiteral("0..100000"))},
+        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QStringLiteral("抖动种子"))},
+    });
+
+    const QJsonObject radialLines = objectSchema({
+        {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("1..512，默认 56"))},
+        {QStringLiteral("radius"), prop(QStringLiteral("number"), QStringLiteral("1..1000000，默认 420"))},
+        {QStringLiteral("innerRatio"), prop(QStringLiteral("number"), QStringLiteral("0..0.95"))},
+        {QStringLiteral("width"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000（外缘线宽）"))},
+        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
+        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
+    });
+
+    const QJsonObject flowLines = objectSchema({
+        {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("1..512，默认 26"))},
+        {QStringLiteral("length"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
+        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0.1..1000000"))},
+        {QStringLiteral("thickness"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
+        {QStringLiteral("area"), prop(QStringLiteral("number"), QStringLiteral("1..10000000"))},
+        {QStringLiteral("bend"), prop(QStringLiteral("number"), QStringLiteral("-1000000..1000000（曲线中点偏移 px）"))},
+        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
+        {QStringLiteral("phase"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
+        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
+    });
+
+    const QJsonObject halftoneDots = objectSchema({
+        {QStringLiteral("layout"), prop(QStringLiteral("string"), QStringLiteral("grid|radial"))},
+        {QStringLiteral("area"), prop(QStringLiteral("number"), QStringLiteral("1..10000000；grid 时 area/spacing<=512"))},
+        {QStringLiteral("radius"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；radial 时 radius/spacing<=256"))},
+        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
+        {QStringLiteral("dotSize"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
+        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
+        {QStringLiteral("gradientAngle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
+        {QStringLiteral("minRatio"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
+        {QStringLiteral("jitter"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
+        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
+    });
+
+    const QJsonObject brandWall = objectSchema({
+        {QStringLiteral("logos"), arrayOf(QStringLiteral("string"), QStringLiteral("最多 64 个，每项 1..128 字符"))},
+        {QStringLiteral("columns"), prop(QStringLiteral("integer"), QStringLiteral("1..64，默认 6"))},
+        {QStringLiteral("rows"), prop(QStringLiteral("integer"), QStringLiteral("1..64，默认 4"))},
+        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0..512"))},
+        {QStringLiteral("logoSize"), prop(QStringLiteral("number"), QStringLiteral("1..1024"))},
+        {QStringLiteral("colors"), arrayOf(QStringLiteral("string"), QStringLiteral("至少 1 个、最多 64 个 CSS hex"))},
+        {QStringLiteral("alternate"), prop(QStringLiteral("boolean"), QStringLiteral("棋盘式错位"))},
+        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("-360..360"))},
+        {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS hex；空 = 透明"))},
+        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
+    });
+
+    QJsonObject kind;
+    kind.insert(QStringLiteral("type"), QStringLiteral("string"));
+    kind.insert(QStringLiteral("enum"),
+                QJsonArray::fromStringList(
+                    {QStringLiteral("empty"), QStringLiteral("text"),
+                     QStringLiteral("vector"), QStringLiteral("camera"),
+                     QStringLiteral("asset"), QStringLiteral("comicText"),
+                     QStringLiteral("radialLines"), QStringLiteral("flowLines"),
+                     QStringLiteral("halftoneDots"), QStringLiteral("brandWall")}));
+    kind.insert(QStringLiteral("description"),
+                QStringLiteral("内容类型；特殊内容是一等公民，与 text/vector 同级"));
+
+    QJsonObject properties;
+    properties.insert(QStringLiteral("kind"), kind);
+    properties.insert(QStringLiteral("text"),
+                      prop(QStringLiteral("object"),
+                           QStringLiteral("kind=text：text/fontFamily/pixelSize/color/"
+                                          "strokeColor/strokeWidth/align/lineHeight/"
+                                          "letterSpacing/padding/boxWidth/boxHeight/"
+                                          "bold/italic/underline/vertical/verticalRtl")));
+    properties.insert(QStringLiteral("vector"),
+                      prop(QStringLiteral("object"),
+                           QStringLiteral("kind=vector：shape/width/height/cornerRadius/"
+                                          "sides/innerRatio/strokeWidth/fillColor/"
+                                          "strokeColor")));
+    properties.insert(QStringLiteral("camera"),
+                      prop(QStringLiteral("object"), QStringLiteral("kind=camera：空对象")));
+    properties.insert(QStringLiteral("assetHash"),
+                      prop(QStringLiteral("string"),
+                           QStringLiteral("kind=asset：64 位 sha256；换素材用 asset.assign")));
+    properties.insert(QStringLiteral("assetType"),
+                      prop(QStringLiteral("string"),
+                           QStringLiteral("kind=asset：image|video|audio|html")));
+    properties.insert(QStringLiteral("sourceIn"),
+                      prop(QStringLiteral("integer"), QStringLiteral("kind=asset：>= 0")));
+    properties.insert(QStringLiteral("volume"),
+                      prop(QStringLiteral("number"), QStringLiteral("kind=asset：>= 0")));
+    properties.insert(QStringLiteral("comicText"), comicText);
+    properties.insert(QStringLiteral("radialLines"), radialLines);
+    properties.insert(QStringLiteral("flowLines"), flowLines);
+    properties.insert(QStringLiteral("halftoneDots"), halftoneDots);
+    properties.insert(QStringLiteral("brandWall"), brandWall);
+
+    QJsonObject schema;
+    schema.insert(QStringLiteral("type"), QStringLiteral("object"));
+    schema.insert(
+        QStringLiteral("description"),
+        QStringLiteral("特殊内容（comicText/radialLines/flowLines/halftoneDots/"
+                       "brandWall）是一等公民：entity.create 直接可用，"
+                       "entity.update 可改同 kind 字段；字段写在同名子对象里，"
+                       "未知字段会被拒绝，数值范围由模型兜底。"));
+    schema.insert(QStringLiteral("properties"), properties);
+    return schema;
+}
+
 QJsonObject schemaTopic(const QString& topic)
 {
     if (topic == QLatin1String("project"))
@@ -97,7 +234,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
             {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("参与碰撞"))},
             {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity"))},
-            {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset"))},
+            {QStringLiteral("content"), contentSchema()},
             {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QStringLiteral("{track: [key,...]}"))},
             {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))},
         });
@@ -229,6 +366,7 @@ QString guideMarkdown(const QString& topic)
             "- 批量工具全成功或全回滚。\n"
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"
+            "- 特殊内容是一等公民：`comicText`/`radialLines`/`flowLines`/`halftoneDots`/`brandWall` 与 `text`/`vector` 一样直接放在实体 `content` 里，字段写在同名子对象（如 `{\"kind\":\"comicText\",\"comicText\":{\"text\":\"台词\"}}`）；`entity.update` 可改同 kind 字段，未知字段会被拒绝。\n"
             "- 改完用 `entity.get` 或 `keyframes.get` 自查。\n");
     if (topic == QLatin1String("workflow"))
         return QStringLiteral(
@@ -270,6 +408,11 @@ QString guideMarkdown(const QString& topic)
             "{\"root\":{\"name\":\"标题组\",\"start\":0,\"end\":90,"
             "\"children\":[{\"name\":\"标题\",\"content\":{\"kind\":\"text\","
             "\"text\":{\"text\":\"PVFORGE\",\"pixelSize\":180}}}]}}\n"
+            "```\n"
+            "```json\n"
+            "{\"name\":\"台词\",\"start\":0,\"end\":60,"
+            "\"content\":{\"kind\":\"comicText\",\"comicText\":"
+            "{\"text\":\"台词内容\",\"shape\":\"burst\",\"pixelSize\":96}}}\n"
             "```\n"
             "对所有关键帧调用 `keyframes.setMany`，帧号按各实体自己的 start 计算。\n");
     return QString();
@@ -358,7 +501,7 @@ QJsonObject listTools()
          {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("必填"))},
          {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("默认按内容类型"))},
          {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1"))},
-         {QStringLiteral("content"), prop(QStringLiteral("object"), QString())},
+         {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset|comicText|radialLines|flowLines|halftoneDots|brandWall；字段见 schema.get entity"))},
          {QStringLiteral("transform"), prop(QStringLiteral("object"), QString())},
          {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QString())},

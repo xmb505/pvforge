@@ -622,6 +622,12 @@ QStringList allowedTracks(const model::Project& project,
         }
         break;
     case ContentKind::Empty:
+    case ContentKind::ComicText:
+    case ContentKind::RadialLines:
+    case ContentKind::FlowLines:
+    case ContentKind::HalftoneDots:
+    case ContentKind::BrandWall:
+        // The special contents animate through the transform tracks only.
         break;
     }
 

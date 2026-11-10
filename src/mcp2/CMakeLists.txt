@@ -96,6 +96,8 @@ if(BUILD_TESTING)
         moveRowOnlyAndGetDefaults
         entityGetIncludesSolvers
         textualContentCanBecomeEmpty
+        specialContentCreateAndUpdate
+        specialContentRejectsUnknownFields
         writeFlagsReflectService
         previewDocumentContract
         previewRateLimit

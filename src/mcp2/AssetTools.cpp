@@ -421,12 +421,24 @@ Result assetAssign(Tx& tx, const QJsonObject& args)
         return error;
 
     const ContentKind current = entity->content.kind;
-    if (current == ContentKind::Camera)
+    switch (current)
+    {
+    case ContentKind::Camera:
         return failure(QStringLiteral("conflict"),
                        QStringLiteral("摄像机不能换素材"));
-    if (current == ContentKind::Text || current == ContentKind::Vector)
+    case ContentKind::Text:
+    case ContentKind::Vector:
+    case ContentKind::ComicText:
+    case ContentKind::RadialLines:
+    case ContentKind::FlowLines:
+    case ContentKind::HalftoneDots:
+    case ContentKind::BrandWall:
         return failure(QStringLiteral("conflict"),
                        QStringLiteral("请先把实体内容改为 empty 再换素材"));
+    case ContentKind::Empty:
+    case ContentKind::Asset:
+        break;
+    }
     if (current == ContentKind::Asset)
     {
         const AssetType previous = entity->content.asset.type;
