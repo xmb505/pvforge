@@ -39,6 +39,8 @@ add_library(pvf_next_properties STATIC
     PropertiesPanel.h
     SolverPreviewWidget.cpp
     SolverPreviewWidget.h
+    SpecialContentEditor.cpp
+    SpecialContentEditor.h
     TextLayoutDialog.cpp
     TextLayoutDialog.h
 )

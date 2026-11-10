@@ -1,7 +1,9 @@
 #include "PropertiesPanel.h"
 
 #include "SolverPreviewWidget.h"
+#include "SpecialContentEditor.h"
 #include "TextLayoutDialog.h"
+#include "common/Types.h"
 #include "model/Easing.h"
 #include "next/timeline/EntityRange.h"
 
@@ -245,6 +247,16 @@ QString contentKindLabel(ContentKind kind)
         return QStringLiteral("摄像机");
     case ContentKind::Asset:
         return QStringLiteral("素材");
+    case ContentKind::ComicText:
+        return QStringLiteral("漫画文字");
+    case ContentKind::RadialLines:
+        return QStringLiteral("径向线");
+    case ContentKind::FlowLines:
+        return QStringLiteral("流线");
+    case ContentKind::HalftoneDots:
+        return QStringLiteral("网点");
+    case ContentKind::BrandWall:
+        return QStringLiteral("品牌墙");
     }
     return QStringLiteral("空");
 }
@@ -678,6 +690,13 @@ QVector<TrackSpec> trackSpecsFor(const model::Entity& entity)
         break;
     case ContentKind::Empty:
     case ContentKind::Camera:
+        break;
+    case ContentKind::ComicText:
+    case ContentKind::RadialLines:
+    case ContentKind::FlowLines:
+    case ContentKind::HalftoneDots:
+    case ContentKind::BrandWall:
+        // Static special content this batch: no content keyframe tracks.
         break;
     }
     return specs;
@@ -1620,6 +1639,17 @@ void PropertiesPanel::buildContentSection()
         m_cameraPage);
     cameraHint->setWordWrap(true);
     cameraForm->addRow(cameraHint);
+
+    // Static special content (comicText / radialLines / flowLines /
+    // halftoneDots / brandWall).  One page per kind is inside the editor, so
+    // this is a single content page here.
+    m_specialEditor = new SpecialContentEditor(m_contentGroup);
+    m_specialEditor->setObjectName(QStringLiteral("specialContentPage"));
+    m_specialEditor->setVisible(false);
+    outer->addWidget(m_specialEditor);
+    addEditable(m_specialEditor);
+    connect(m_specialEditor, &SpecialContentEditor::edited, this,
+            &PropertiesPanel::commitSpecialContentEdit);
 }
 
 void PropertiesPanel::buildHtmlVariablesSection()
@@ -1965,6 +1995,10 @@ void PropertiesPanel::reloadContent(const model::Entity& entity)
     m_vectorPage->setVisible(kind == ContentKind::Vector);
     m_assetPage->setVisible(kind == ContentKind::Asset);
     m_cameraPage->setVisible(kind == ContentKind::Camera);
+    const bool special = SpecialContentEditor::handles(kind);
+    m_specialEditor->setVisible(special);
+    if (special)
+        m_specialEditor->setContent(content);
 
     const model::TextContent& text = content.text;
     m_textEdit->setText(text.text);
@@ -3058,6 +3092,41 @@ void PropertiesPanel::openTextLayoutDialog()
     refresh();
 }
 
+void PropertiesPanel::commitSpecialContentEdit()
+{
+    if (m_loading || m_committing || !m_document || !m_specialEditor)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity || !SpecialContentEditor::handles(entity->content.kind))
+        return;
+    if (m_specialEditor->kind() != entity->content.kind)
+        return;
+
+    model::Content content = entity->content;
+    m_specialEditor->applyTo(content);
+
+    // model::validateContent permits an empty brand-wall logo list (the
+    // renderer just draws empty tiles), but an editor save without a logo is
+    // meaningless.  Reject it here before the commit.
+    if (content.kind == ContentKind::BrandWall
+        && content.brandWall.logos.isEmpty())
+    {
+        setStatus(QStringLiteral("未修改：品牌墙至少需要一个 logo"));
+        refresh();
+        return;
+    }
+
+    commitEditWithMessage(
+        QStringLiteral("%1 内容").arg(contentKindLabel(content.kind)),
+        QStringLiteral("pvf: edit %1 content")
+            .arg(contentKindName(content.kind)),
+        [content](model::Entity& updated) {
+            updated.content = content;
+            return true;
+        });
+}
+
 void PropertiesPanel::chooseReplacementAsset()
 {
     if (m_loading || !m_document)
@@ -3529,6 +3598,18 @@ bool PropertiesPanel::commitEdit(const QString& what,
                                  const std::function<bool(model::Entity&)>& mutate,
                                  bool ignoreLock)
 {
+    const model::Entity* entity = selectedEntity();
+    if (!entity)
+        return false;
+    const QString message =
+        QStringLiteral("pvf: update entity \"%1\" %2").arg(entity->name, what);
+    return commitEditWithMessage(what, message, mutate, ignoreLock);
+}
+
+bool PropertiesPanel::commitEditWithMessage(
+    const QString& what, const QString& message,
+    const std::function<bool(model::Entity&)>& mutate, bool ignoreLock)
+{
     if (m_loading || !m_document)
         return false;
 
@@ -3558,8 +3639,6 @@ bool PropertiesPanel::commitEdit(const QString& what,
         return false;
 
     const Uuid uuid = updated.uuid;
-    const QString message =
-        QStringLiteral("pvf: update entity \"%1\" %2").arg(updated.name, what);
     *entity = updated;
 
     m_committing = true;

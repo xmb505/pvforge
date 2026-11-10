@@ -4,6 +4,7 @@
 
 #include <QColor>
 #include <QDialog>
+#include <QPixmap>
 
 class QCheckBox;
 class QComboBox;
@@ -15,6 +16,11 @@ class QPushButton;
 class QSpinBox;
 
 namespace pvf::next {
+
+// Same checkerboard text preview the dialog paints.  Shared with the
+// Properties comic-text page so both show identical layout and measurements.
+QPixmap renderTextLayoutPreview(const model::TextContent& content,
+                                const QSize& size);
 
 // Modal editor for model::TextContent. It edits a copy only; the caller reads
 // content() after exec() and writes the result back in one commit. The preview

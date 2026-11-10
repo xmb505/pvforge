@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
+#include <QFocusEvent>
 #include <QFont>
 #include <QGroupBox>
 #include <QImage>
@@ -22,6 +23,7 @@
 #include <QPlainTextEdit>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -60,7 +62,7 @@ public:
                       QString* error = nullptr) override
     {
         Q_UNUSED(uuid);
-        Q_UNUSED(message);
+        m_lastMessage = message;
         if (m_failCommit)
         {
             if (error)
@@ -188,6 +190,14 @@ public:
         return uuid;
     }
 
+    Uuid addSpecialEntity(const QString& name, ContentKind kind, int start = 0,
+                          int end = 60)
+    {
+        const Uuid uuid = addEntity(name, start, end);
+        m_project.entities[uuid].content.kind = kind;
+        return uuid;
+    }
+
     model::Entity& entity(const Uuid& uuid) { return m_project.entities[uuid]; }
 
     void addKey(const Uuid& uuid, const QString& trackName, int frame, double value)
@@ -203,6 +213,7 @@ public:
     int projectCommits() const { return m_projectCommits; }
     int changeCommits() const { return m_changeCommits; }
     int deleteCommits() const { return m_deleteCommits; }
+    QString lastMessage() const { return m_lastMessage; }
 
 private:
     QTemporaryDir m_tempDir;
@@ -215,6 +226,7 @@ private:
     int m_changeCommits = 0;
     int m_deleteCommits = 0;
     bool m_failCommit = false;
+    QString m_lastMessage;
 };
 
 template <typename T>
@@ -226,6 +238,14 @@ T* findWidget(QWidget& panel, const char* name)
 bool fireEditingFinished(QWidget* widget)
 {
     return QMetaObject::invokeMethod(widget, "editingFinished");
+}
+
+// QPlainTextEdit has no editingFinished; the special-content editor commits
+// multi-line fields on focus out.
+void fireFocusOut(QPlainTextEdit* editor)
+{
+    QFocusEvent event(QEvent::FocusOut);
+    QApplication::sendEvent(editor, &event);
 }
 
 QString hexHash(char digit)
@@ -363,6 +383,13 @@ private slots:
     void textLayoutDialogAppliesInOneCommit();
     void textLayoutDialogCancelDoesNotWrite();
     void textLayoutPreviewRendersTextAndPlaceholder();
+    void comicTextPageEditsAndPreviews();
+    void radialLinesPageEditsAndCommits();
+    void flowLinesPageEditsAndCommits();
+    void halftoneDotsPageEditsAndCommits();
+    void brandWallPageEditsAndCommits();
+    void specialContentRejectsInvalidValues();
+    void specialContentSwitchDoesNotWrite();
 };
 
 void PropertiesPanelTest::showsBasicFields()
@@ -1930,6 +1957,329 @@ void PropertiesPanelTest::assetPickerFiltersAndShowsPreview()
     button->click();
     QVERIFY(dialogChecked);
     QCOMPARE(document.entity(uuid).content.asset.hash, second);
+}
+
+void PropertiesPanelTest::comicTextPageEditsAndPreviews()
+{
+    FakeDocument document;
+    const Uuid uuid =
+        document.addSpecialEntity(QStringLiteral("漫画"), ContentKind::ComicText);
+    document.entity(uuid).content.comic.text = QStringLiteral("旧台词");
+    // The editor writes the whole comic struct; untouched colour strings and an
+    // empty font family must round-trip verbatim.
+    document.entity(uuid).content.comic.color = QStringLiteral("#fff");
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* page = findWidget<QWidget>(panel, "comicTextPage");
+    auto* radialPage = findWidget<QWidget>(panel, "radialLinesPage");
+    auto* text = findWidget<QPlainTextEdit>(panel, "comicTextEdit");
+    auto* shape = findWidget<QComboBox>(panel, "comicShapeCombo");
+    auto* pixelSize = findWidget<QSpinBox>(panel, "comicPixelSizeSpin");
+    auto* boxWidth = findWidget<QDoubleSpinBox>(panel, "comicBoxWidthSpin");
+    auto* tail = findWidget<QCheckBox>(panel, "comicTailCheck");
+    auto* preview = findWidget<QLabel>(panel, "comicPreviewLabel");
+    QVERIFY(page);
+    QVERIFY(radialPage);
+    QVERIFY(text);
+    QVERIFY(shape);
+    QVERIFY(pixelSize);
+    QVERIFY(boxWidth);
+    QVERIFY(tail);
+    QVERIFY(preview);
+    QVERIFY(!page->isHidden());
+    QVERIFY(radialPage->isHidden());
+    QCOMPARE(text->toPlainText(), QStringLiteral("旧台词"));
+    QCOMPARE(pixelSize->value(), 72);
+    // Static special content this batch: no comic-specific keyframe tracks.
+    QVERIFY(!findWidget<QPushButton>(panel, "keyDiamond_fontSize"));
+    QVERIFY(!findWidget<QPushButton>(panel, "keyDiamond_lineHeight"));
+
+    text->setPlainText(QStringLiteral("咚！\n第二行"));
+    fireFocusOut(text);
+    QCOMPARE(document.entity(uuid).content.comic.text,
+             QStringLiteral("咚！\n第二行"));
+    QCOMPARE(document.entity(uuid).content.comic.color, QStringLiteral("#fff"));
+    QVERIFY(document.entity(uuid).content.comic.fontFamily.isEmpty());
+    QCOMPARE(document.entityCommits(), 1);
+    QVERIFY(!preview->pixmap().isNull());
+
+    const int burst = shape->findData(QStringLiteral("burst"));
+    QVERIFY(burst >= 0);
+    shape->setCurrentIndex(burst);
+    QCOMPARE(document.entity(uuid).content.comic.shape, QStringLiteral("burst"));
+    QCOMPARE(document.entityCommits(), 2);
+
+    pixelSize->setValue(96);
+    QVERIFY(fireEditingFinished(pixelSize));
+    QCOMPARE(document.entity(uuid).content.comic.pixelSize, 96);
+    QCOMPARE(document.entityCommits(), 3);
+
+    boxWidth->setValue(320.0);
+    QVERIFY(fireEditingFinished(boxWidth));
+    QCOMPARE(document.entity(uuid).content.comic.boxWidth, 320.0);
+    QCOMPARE(document.entityCommits(), 4);
+
+    tail->setChecked(false);
+    QCOMPARE(document.entity(uuid).content.comic.tail, false);
+    QCOMPARE(document.entityCommits(), 5);
+}
+
+void PropertiesPanelTest::radialLinesPageEditsAndCommits()
+{
+    FakeDocument document;
+    const Uuid uuid =
+        document.addSpecialEntity(QStringLiteral("径向"), ContentKind::RadialLines);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* page = findWidget<QWidget>(panel, "radialLinesPage");
+    auto* count = findWidget<QSpinBox>(panel, "radialCountSpin");
+    auto* radius = findWidget<QDoubleSpinBox>(panel, "radialRadiusSpin");
+    auto* color = findWidget<QPushButton>(panel, "radialColorButton");
+    QVERIFY(page);
+    QVERIFY(count);
+    QVERIFY(radius);
+    QVERIFY(color);
+    QVERIFY(!page->isHidden());
+    QCOMPARE(count->value(), 56);
+    QCOMPARE(count->minimum(), 0);
+    QCOMPARE(count->maximum(), 512);
+
+    count->setValue(37);
+    QSignalSpy changedSpy(&document, &Document::changed);
+    QVERIFY(fireEditingFinished(count));
+    QCOMPARE(document.entity(uuid).content.radial.count, 37);
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(document.lastMessage(),
+             QStringLiteral("pvf: edit radialLines content"));
+    QCOMPARE(changedSpy.count(), 1);
+
+    radius->setValue(512.0);
+    QVERIFY(fireEditingFinished(radius));
+    QCOMPARE(document.entity(uuid).content.radial.radius, 512.0);
+    QCOMPARE(document.entityCommits(), 2);
+}
+
+void PropertiesPanelTest::flowLinesPageEditsAndCommits()
+{
+    FakeDocument document;
+    const Uuid uuid =
+        document.addSpecialEntity(QStringLiteral("流线"), ContentKind::FlowLines);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* page = findWidget<QWidget>(panel, "flowLinesPage");
+    auto* count = findWidget<QSpinBox>(panel, "flowCountSpin");
+    auto* bend = findWidget<QDoubleSpinBox>(panel, "flowBendSpin");
+    auto* phase = findWidget<QDoubleSpinBox>(panel, "flowPhaseSpin");
+    QVERIFY(page);
+    QVERIFY(count);
+    QVERIFY(bend);
+    QVERIFY(phase);
+    QVERIFY(!page->isHidden());
+    QCOMPARE(count->value(), 26);
+
+    count->setValue(12);
+    QVERIFY(fireEditingFinished(count));
+    QCOMPARE(document.entity(uuid).content.flow.count, 12);
+    QCOMPARE(document.entityCommits(), 1);
+
+    bend->setValue(-120.0);
+    QVERIFY(fireEditingFinished(bend));
+    QCOMPARE(document.entity(uuid).content.flow.bend, -120.0);
+    QCOMPARE(document.entityCommits(), 2);
+
+    phase->setValue(0.35);
+    QVERIFY(fireEditingFinished(phase));
+    QCOMPARE(document.entity(uuid).content.flow.phase, 0.35);
+    QCOMPARE(document.entityCommits(), 3);
+}
+
+void PropertiesPanelTest::halftoneDotsPageEditsAndCommits()
+{
+    FakeDocument document;
+    const Uuid uuid =
+        document.addSpecialEntity(QStringLiteral("网点"), ContentKind::HalftoneDots);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* page = findWidget<QWidget>(panel, "halftoneDotsPage");
+    auto* layout = findWidget<QComboBox>(panel, "halftoneLayoutCombo");
+    auto* dotSize = findWidget<QDoubleSpinBox>(panel, "halftoneDotSizeSpin");
+    auto* minRatio = findWidget<QDoubleSpinBox>(panel, "halftoneMinRatioSpin");
+    QVERIFY(page);
+    QVERIFY(layout);
+    QVERIFY(dotSize);
+    QVERIFY(minRatio);
+    QVERIFY(!page->isHidden());
+    QCOMPARE(layout->currentData().toString(), QStringLiteral("grid"));
+
+    const int radial = layout->findData(QStringLiteral("radial"));
+    QVERIFY(radial >= 0);
+    layout->setCurrentIndex(radial);
+    QCOMPARE(document.entity(uuid).content.halftone.layout,
+             QStringLiteral("radial"));
+    QCOMPARE(document.entityCommits(), 1);
+
+    dotSize->setValue(9.0);
+    QVERIFY(fireEditingFinished(dotSize));
+    QCOMPARE(document.entity(uuid).content.halftone.dotSize, 9.0);
+    QCOMPARE(document.entityCommits(), 2);
+
+    minRatio->setValue(0.25);
+    QVERIFY(fireEditingFinished(minRatio));
+    QCOMPARE(document.entity(uuid).content.halftone.minRatio, 0.25);
+    QCOMPARE(document.entityCommits(), 3);
+}
+
+void PropertiesPanelTest::brandWallPageEditsAndCommits()
+{
+    FakeDocument document;
+    const Uuid uuid =
+        document.addSpecialEntity(QStringLiteral("品牌墙"), ContentKind::BrandWall);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* page = findWidget<QWidget>(panel, "brandWallPage");
+    auto* logos = findWidget<QPlainTextEdit>(panel, "brandLogosEdit");
+    auto* columns = findWidget<QSpinBox>(panel, "brandColumnsSpin");
+    auto* colors = findWidget<QLineEdit>(panel, "brandColorsEdit");
+    auto* background = findWidget<QLineEdit>(panel, "brandBackgroundEdit");
+    auto* alternate = findWidget<QCheckBox>(panel, "brandAlternateCheck");
+    QVERIFY(page);
+    QVERIFY(logos);
+    QVERIFY(columns);
+    QVERIFY(colors);
+    QVERIFY(background);
+    QVERIFY(alternate);
+    QVERIFY(!page->isHidden());
+
+    logos->setPlainText(QStringLiteral("PV\nForge,动画"));
+    fireFocusOut(logos);
+    QCOMPARE(document.entity(uuid).content.brandWall.logos,
+             (QStringList{QStringLiteral("PV"), QStringLiteral("Forge"),
+                          QStringLiteral("动画")}));
+    QCOMPARE(document.entityCommits(), 1);
+
+    columns->setValue(4);
+    QVERIFY(fireEditingFinished(columns));
+    QCOMPARE(document.entity(uuid).content.brandWall.columns, 4);
+    QCOMPARE(document.entityCommits(), 2);
+
+    colors->setText(QStringLiteral("#ff0000, #00ff00"));
+    QVERIFY(fireEditingFinished(colors));
+    QCOMPARE(document.entity(uuid).content.brandWall.colors,
+             (QStringList{QStringLiteral("#ff0000"), QStringLiteral("#00ff00")}));
+    QCOMPARE(document.entityCommits(), 3);
+
+    background->setText(QStringLiteral("#101010"));
+    QVERIFY(fireEditingFinished(background));
+    QCOMPARE(document.entity(uuid).content.brandWall.background,
+             QStringLiteral("#101010"));
+    QCOMPARE(document.entityCommits(), 4);
+
+    alternate->setChecked(false);
+    QCOMPARE(document.entity(uuid).content.brandWall.alternate, false);
+    QCOMPARE(document.entityCommits(), 5);
+}
+
+void PropertiesPanelTest::specialContentRejectsInvalidValues()
+{
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addSpecialEntity(
+            QStringLiteral("径向"), ContentKind::RadialLines);
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        auto* count = findWidget<QSpinBox>(panel, "radialCountSpin");
+        auto* status = findWidget<QLabel>(panel, "statusLabel");
+        QVERIFY(count);
+        QVERIFY(status);
+
+        count->setValue(0);
+        QVERIFY(fireEditingFinished(count));
+        QCOMPARE(document.entity(uuid).content.radial.count, 56);
+        QCOMPARE(document.entityCommits(), 0);
+        QVERIFY(status->text().contains(QStringLiteral("count")));
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addSpecialEntity(
+            QStringLiteral("品牌墙"), ContentKind::BrandWall);
+        document.entity(uuid).content.brandWall.logos = {
+            QStringLiteral("PV")};
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        auto* logos = findWidget<QPlainTextEdit>(panel, "brandLogosEdit");
+        auto* status = findWidget<QLabel>(panel, "statusLabel");
+        QVERIFY(logos);
+        QVERIFY(status);
+
+        logos->clear();
+        fireFocusOut(logos);
+        QCOMPARE(document.entity(uuid).content.brandWall.logos,
+                 QStringList{QStringLiteral("PV")});
+        QCOMPARE(document.entityCommits(), 0);
+        QVERIFY(status->text().contains(QStringLiteral("至少需要一个 logo")));
+    }
+    {
+        FakeDocument document;
+        const Uuid uuid = document.addSpecialEntity(
+            QStringLiteral("品牌墙"), ContentKind::BrandWall);
+        document.entity(uuid).content.brandWall.logos = {
+            QStringLiteral("PV")};
+        PropertiesPanel panel(&document);
+        document.setSelection(uuid);
+
+        auto* colors = findWidget<QLineEdit>(panel, "brandColorsEdit");
+        auto* status = findWidget<QLabel>(panel, "statusLabel");
+        QVERIFY(colors);
+        QVERIFY(status);
+
+        colors->clear();
+        QVERIFY(fireEditingFinished(colors));
+        QCOMPARE(document.entity(uuid).content.brandWall.colors.size(), 6);
+        QCOMPARE(document.entityCommits(), 0);
+        QVERIFY(status->text().contains(QStringLiteral("colors")));
+    }
+}
+
+void PropertiesPanelTest::specialContentSwitchDoesNotWrite()
+{
+    FakeDocument document;
+    const Uuid comic = document.addSpecialEntity(
+        QStringLiteral("漫画"), ContentKind::ComicText);
+    const Uuid radial = document.addSpecialEntity(
+        QStringLiteral("径向"), ContentKind::RadialLines);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(comic);
+
+    auto* text = findWidget<QPlainTextEdit>(panel, "comicTextEdit");
+    auto* comicPage = findWidget<QWidget>(panel, "comicTextPage");
+    auto* radialPage = findWidget<QWidget>(panel, "radialLinesPage");
+    QVERIFY(text);
+    QVERIFY(comicPage);
+    QVERIFY(radialPage);
+
+    // Leaving the field without finishing must not write the draft.
+    text->setPlainText(QStringLiteral("未提交的台词"));
+    document.setSelection(radial);
+    QCOMPARE(document.entity(comic).content.comic.text, QString());
+    QCOMPARE(document.entityCommits(), 0);
+    QVERIFY(comicPage->isHidden());
+    QVERIFY(!radialPage->isHidden());
+
+    document.setSelection(comic);
+    QCOMPARE(text->toPlainText(), QString());
 }
 
 QTEST_MAIN(PropertiesPanelTest)

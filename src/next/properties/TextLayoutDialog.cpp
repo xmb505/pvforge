@@ -114,9 +114,12 @@ pvf::TextStyle textStyleFromContent(const model::TextContent& content)
     return style;
 }
 
+} // namespace
+
 // Dark checkerboard plus the TextBlock the scene draws. Empty text or an
 // unusable measurement falls back to placeholder text on the same background.
-QPixmap renderPreview(const model::TextContent& content, const QSize& size)
+QPixmap renderTextLayoutPreview(const model::TextContent& content,
+                                const QSize& size)
 {
     QPixmap pixmap(size);
     pixmap.fill(QColor(24, 24, 29));
@@ -171,6 +174,8 @@ QPixmap renderPreview(const model::TextContent& content, const QSize& size)
     block.paint(painter, QPointF());
     return pixmap;
 }
+
+namespace {
 
 QGroupBox* addGroup(QVBoxLayout* layout, QWidget* parent, const QString& title)
 {
@@ -474,7 +479,7 @@ model::TextContent TextLayoutDialog::content() const
 void TextLayoutDialog::refreshPreview()
 {
     const model::TextContent value = content();
-    m_preview->setPixmap(renderPreview(value, m_preview->size()));
+    m_preview->setPixmap(renderTextLayoutPreview(value, m_preview->size()));
 
     const pvf::TextStyle style = textStyleFromContent(value);
     const pvf::TextBlock block = pvf::TextBlock::measure(style);

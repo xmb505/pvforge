@@ -28,6 +28,7 @@ class QVBoxLayout;
 namespace pvf::next {
 
 class SolverPreviewWidget;
+class SpecialContentEditor;
 
 // Right side panel for one selected entity.  It only mutates the model through
 // Document::mutableProject() and then calls commitEntity() once per finished
@@ -147,6 +148,10 @@ private:
     // Opens the modal TextLayoutDialog and writes the whole edited
     // model::TextContent back in one commit ("pvf: edit text layout").
     void openTextLayoutDialog();
+    // Applies the special-content page (comic/radial/flow/halftone/brandWall)
+    // to the selected entity's content in one commit.  Invalid values are
+    // rejected by model::validateEntity or the brand-wall logo rule.
+    void commitSpecialContentEdit();
     // Decoded 320 px thumbnail cached by content hash; assets are immutable so
     // the cache never needs invalidation. Returns a null pixmap for
     // non-image/missing content.
@@ -169,6 +174,13 @@ private:
     bool commitEdit(const QString& what,
                     const std::function<bool(model::Entity&)>& mutate,
                     bool ignoreLock = false);
+    // Same validation/rollback path as commitEdit(), but with a caller-provided
+    // commit message (used by the special-content pages so the history entry is
+    // exactly "pvf: edit <kind> content").
+    bool commitEditWithMessage(
+        const QString& what, const QString& message,
+        const std::function<bool(model::Entity&)>& mutate,
+        bool ignoreLock = false);
     void bindTransform(QDoubleSpinBox* spin, const QString& field,
                        double model::Transform::*member);
     void bindCheckBox(QCheckBox* box, bool model::Entity::*member, const QString& field);
@@ -225,6 +237,7 @@ private:
     QWidget* m_vectorPage = nullptr;
     QWidget* m_assetPage = nullptr;
     QWidget* m_cameraPage = nullptr;
+    SpecialContentEditor* m_specialEditor = nullptr;
 
     QLineEdit* m_textEdit = nullptr;
     QFontComboBox* m_textFont = nullptr;
