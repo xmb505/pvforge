@@ -1,12 +1,17 @@
 #include "CameraMonitor.h"
 
+#include "app/EditorSession.h"
 #include "core/Camera.h"
 #include "core/Settings.h"
 #include "media/VideoDecoder.h"
 #include "media/VideoPlayer.h"
 #include "media/VideoProxy.h"
+#include "next/app/MediaServices.h"
+#include "next/app/ProjectDocument.h"
 #include "render/CameraRenderer.h"
+#include "render2/Render.h"
 #include "ui/Viewport.h"
+#include "video2/VideoFrames.h"
 
 #include <QAbstractSocket>
 #include <QAction>
@@ -200,6 +205,114 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     resize(Settings::monitorDockGeometry().size());
 }
 
+CameraMonitor::CameraMonitor(EditorSession* session, Viewport* viewport,
+                             QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+    , m_viewport(viewport)
+{
+    setObjectName(QStringLiteral("cameraMonitor"));
+    setMinimumSize(380, 150);
+    setFocusPolicy(Qt::NoFocus);
+    setWindowTitle(QStringLiteral("摄像机监视器"));
+
+    m_highQuality = Settings::monitorHighQuality();
+
+    m_cameraCombo = new QComboBox(this);
+    m_cameraCombo->setObjectName(QStringLiteral("monitorCameraCombo"));
+    m_cameraCombo->setFocusPolicy(Qt::NoFocus);
+    connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (!m_cameraCombo || m_cameraCombo->currentIndex() < 0 || !m_session)
+            return;
+        const Uuid uuid(m_cameraCombo->currentData().toString());
+        m_session->setMonitorCameraUuid(uuid);
+        invalidateSessionPreview();
+        emit cameraUuidActivated(uuid);
+        update();
+    });
+
+    m_qualityButton = new QToolButton(this);
+    m_qualityButton->setObjectName(QStringLiteral("monitorQualityButton"));
+    m_qualityButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_qualityButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_qualityButton, &QToolButton::clicked, this, &CameraMonitor::toggleQuality);
+
+    m_fpsLabel = new QLabel(this);
+    m_fpsLabel->setObjectName(QStringLiteral("monitorFpsLabel"));
+    m_fpsLabel->setAlignment(Qt::AlignCenter);
+    m_fpsLabel->setToolTip(
+        QStringLiteral("项目帧率；播放时显示监视器实际刷新帧率"));
+    m_fpsLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    QFont fpsFont = m_fpsLabel->font();
+    fpsFont.setPointSizeF(std::max(7.0, fpsFont.pointSizeF() - 1.0));
+    m_fpsLabel->setFont(fpsFont);
+
+    m_fpsTimer = new QTimer(this);
+    m_fpsTimer->setInterval(1000);
+    connect(m_fpsTimer, &QTimer::timeout, this, [this] {
+        if (!m_playing)
+            return;
+        const qint64 elapsed = m_fpsClock.restart();
+        m_displayFps = elapsed > 0 ? int(std::lround(m_fpsFrames * 1000.0 / elapsed))
+                                   : 0;
+        m_fpsFrames = 0;
+        updateFpsLabel();
+    });
+
+    m_pinButton = new QToolButton(this);
+    m_pinButton->setObjectName(QStringLiteral("monitorPinButton"));
+    m_pinButton->setText(QStringLiteral("置顶"));
+    m_pinButton->setCheckable(true);
+    m_pinButton->setFocusPolicy(Qt::NoFocus);
+    m_pinButton->setChecked(Settings::monitorAlwaysOnTop());
+    connect(m_pinButton, &QToolButton::toggled, this, [this](bool on) {
+        Settings::setMonitorAlwaysOnTop(on);
+        applyAlwaysOnTop();
+    });
+
+    m_detachButton = new QToolButton(this);
+    m_detachButton->setObjectName(QStringLiteral("monitorDetachButton"));
+    m_detachButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_detachButton, &QToolButton::clicked, this, [this] {
+        if (m_detached)
+            dockWindow();
+        else
+            detachWindow();
+    });
+
+    m_closeButton = new QToolButton(this);
+    m_closeButton->setObjectName(QStringLiteral("monitorCloseButton"));
+    m_closeButton->setText(QStringLiteral("×"));
+    m_closeButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_closeButton, &QToolButton::clicked, this, [this] {
+        if (m_detached)
+        {
+            dockWindow();
+            return;
+        }
+        hide();
+        Settings::setMonitorVisible(false);
+        emit visibilityChanged(false);
+    });
+
+    m_traceButton = new QToolButton(this);
+    m_traceButton->setObjectName(QStringLiteral("monitorTraceButton"));
+    m_traceButton->setText(QStringLiteral("临摹"));
+    m_traceButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_traceButton->setFocusPolicy(Qt::NoFocus);
+    m_traceButton->setToolTip(QStringLiteral("临摹参考视频"));
+    buildTraceMenu();
+    connect(m_traceButton, &QToolButton::clicked, this, [this] {
+        m_traceMenu->exec(
+            m_traceButton->mapToGlobal(QPoint(0, m_traceButton->height())));
+    });
+
+    rebuildSessionCameraCombo();
+    updateButtons();
+    updateFpsLabel();
+    resize(Settings::monitorDockGeometry().size());
+}
+
 CameraMonitor::~CameraMonitor()
 {
     if (m_streamTimer)
@@ -223,6 +336,7 @@ void CameraMonitor::setFrame(int frame)
 {
     m_frame = std::max(0, frame);
     updateTraceImage();
+    invalidateSessionPreview();
     if (isVisible())
         update();
 }
@@ -232,6 +346,7 @@ void CameraMonitor::setPlaying(bool playing)
     if (m_playing == playing)
         return;
     m_playing = playing;
+    invalidateSessionPreview();
     if (m_playing)
     {
         m_fpsFrames = 0;
@@ -250,6 +365,7 @@ void CameraMonitor::setPlaying(bool playing)
 
 void CameraMonitor::setProjectChanged()
 {
+    invalidateSessionPreview();
     rebuildCameraCombo();
     if (!m_playing)
         updateFpsLabel();
@@ -259,6 +375,7 @@ void CameraMonitor::setProjectChanged()
 void CameraMonitor::syncCameraView()
 {
     rebuildCameraCombo();
+    invalidateSessionPreview();
     update();
 }
 
@@ -290,6 +407,11 @@ void CameraMonitor::rebuildCameraCombo()
 {
     if (!m_cameraCombo)
         return;
+    if (m_session)
+    {
+        rebuildSessionCameraCombo();
+        return;
+    }
     const QSignalBlocker blocker(m_cameraCombo);
     m_cameraCombo->clear();
     m_cameraCombo->addItem(QStringLiteral("工作摄像机"), kWorkCameraView);
@@ -305,6 +427,105 @@ void CameraMonitor::rebuildCameraCombo()
         m_project->monitorView = kWorkCameraView;
     }
     m_cameraCombo->setCurrentIndex(index);
+}
+
+void CameraMonitor::rebuildSessionCameraCombo()
+{
+    if (!m_cameraCombo || !m_session)
+        return;
+    const QSignalBlocker blocker(m_cameraCombo);
+    m_cameraCombo->clear();
+    m_cameraCombo->addItem(QStringLiteral("整画布"), QString());
+    const model::Project& project = m_session->project();
+    QVector<const model::Entity*> cameras;
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+        if (it->content.kind == ContentKind::Camera && !it->hidden)
+            cameras.append(&it.value());
+    std::sort(cameras.begin(), cameras.end(),
+              [](const model::Entity* a, const model::Entity* b) {
+                  if (a->name != b->name)
+                      return a->name < b->name;
+                  return a->uuid < b->uuid;
+              });
+    for (const model::Entity* camera : cameras)
+        m_cameraCombo->addItem(
+            camera->name.isEmpty() ? camera->uuid : camera->name, camera->uuid);
+
+    const Uuid active = m_session->activeCameraUuid();
+    int index = active.isEmpty() ? 0 : m_cameraCombo->findData(active);
+    if (index < 0)
+        index = 0;
+    m_cameraCombo->setCurrentIndex(index);
+}
+
+void CameraMonitor::invalidateSessionPreview()
+{
+    m_sessionPreviewValid = false;
+}
+
+QImage CameraMonitor::renderSessionImage(const QSize& size) const
+{
+    if (!m_session || size.isEmpty())
+        return {};
+
+    render2::Options options;
+    options.projectFrame = m_session->playhead();
+    options.cameraUuid = m_session->activeCameraUuid();
+    options.outputSize = size;
+    if (m_session->media())
+    {
+        auto* media = m_session->media();
+        options.videoFrame = [media](const Uuid& uuid, double frame) {
+            return media->videoFrame(uuid, frame);
+        };
+        options.htmlFrame = [media](const Uuid& uuid, double frame) {
+            return media->htmlFrame(uuid, frame);
+        };
+    }
+
+    render2::SceneWorld world(m_session->project(), m_session->assets());
+    anim::Cache cache;
+    return render2::renderFrame(m_session->project(), m_session->assets(), options,
+                                world, cache);
+}
+
+QImage CameraMonitor::ensureSessionPreview()
+{
+    if (!m_session)
+        return {};
+
+    const QRect target = fitRect();
+    if (target.isEmpty())
+        return {};
+
+    const bool high = m_highQuality && !m_playing;
+    const QSize projectSize(std::max(1, m_session->settings().width),
+                            std::max(1, m_session->settings().height));
+    const QSize renderSize = high ? projectSize : target.size();
+    const int frame = m_session->playhead();
+    const Uuid camera = m_session->activeCameraUuid();
+
+    if (m_sessionPreviewValid && m_sessionPreviewFrame == frame
+        && m_sessionPreviewCamera == camera
+        && m_sessionPreviewSize == renderSize
+        && m_sessionPreviewHighQuality == high)
+        return m_sessionPreview;
+
+    m_sessionPreview = renderSessionImage(renderSize);
+    m_sessionPreviewFrame = frame;
+    m_sessionPreviewCamera = camera;
+    m_sessionPreviewSize = renderSize;
+    m_sessionPreviewHighQuality = high;
+    m_sessionPreviewValid = true;
+    return m_sessionPreview;
+}
+
+Uuid CameraMonitor::monitorCameraForTest() const
+{
+    if (m_session)
+        return m_session->activeCameraUuid();
+    return Uuid();
 }
 
 void CameraMonitor::updateButtons()
@@ -327,7 +548,9 @@ void CameraMonitor::updateFpsLabel()
 {
     if (!m_fpsLabel)
         return;
-    const int projectFps = std::max(1, m_project->fps);
+    const int projectFps = m_session
+                               ? std::max(1, m_session->settings().fps)
+                               : std::max(1, m_project->fps);
     const int shown = m_playing && m_displayFps > 0 ? m_displayFps : projectFps;
     m_fpsLabel->setText(QStringLiteral("%1 FPS").arg(shown));
     QPalette pal = m_fpsLabel->palette();
@@ -365,8 +588,14 @@ QRect CameraMonitor::fitRect() const
     if (area.isEmpty())
         return QRect();
 
-    double aspect = m_project->width / double(std::max(1, m_project->height));
-    if (m_project->monitorView == kWorkCameraView && m_viewport)
+    double aspect = 16.0 / 9.0;
+    if (m_session)
+        aspect = m_session->settings().width
+                 / double(std::max(1, m_session->settings().height));
+    else if (m_project)
+        aspect = m_project->width / double(std::max(1, m_project->height));
+    if (!m_session && m_project && m_project->monitorView == kWorkCameraView
+        && m_viewport)
         aspect = m_viewport->width() / double(std::max(1, m_viewport->height()));
 
     int w = area.width();
@@ -388,6 +617,8 @@ void CameraMonitor::layoutChildren()
     int right = width() - 4;
 
     auto place = [&](QToolButton* button, int buttonWidth) {
+        if (!button)
+            return;
         button->setGeometry(right - buttonWidth, 3, buttonWidth, 22);
         right -= buttonWidth + 2;
     };
@@ -453,6 +684,23 @@ void CameraMonitor::renderPreview(QPainter& painter)
     const QRect target = fitRect();
     if (target.isEmpty())
         return;
+
+    if (m_session)
+    {
+        const QImage image = ensureSessionPreview();
+        if (!image.isNull())
+        {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(target, image);
+        }
+        else
+        {
+            painter.setPen(QColor(150, 150, 160));
+            painter.drawText(target, Qt::AlignCenter,
+                             QStringLiteral("没有可用的相机画面"));
+        }
+        return;
+    }
 
     const bool high = m_highQuality && !m_playing;
     const int view = m_project->monitorView;
@@ -541,13 +789,21 @@ void CameraMonitor::updateTraceMenu()
     if (!m_traceNameAction || !m_clearTraceAction)
         return;
     m_traceNameAction->setText(
-        m_tracePath.isEmpty() ? QStringLiteral("未导入临摹视频")
-                              : QFileInfo(m_tracePath).fileName());
+        m_tracePath.isEmpty()
+            ? QStringLiteral("未导入临摹视频")
+            : (m_traceError.isEmpty()
+                   ? QFileInfo(m_tracePath).fileName()
+                   : QStringLiteral("%1（%2）")
+                         .arg(QFileInfo(m_tracePath).fileName(), m_traceError)));
     m_clearTraceAction->setEnabled(!m_tracePath.isEmpty());
     m_traceButton->setToolTip(
         m_tracePath.isEmpty()
             ? QStringLiteral("临摹参考视频")
-            : QStringLiteral("临摹：%1").arg(QFileInfo(m_tracePath).fileName()));
+            : (m_traceError.isEmpty()
+                   ? QStringLiteral("临摹：%1")
+                         .arg(QFileInfo(m_tracePath).fileName())
+                   : QStringLiteral("临摹：%1\n%2")
+                         .arg(QFileInfo(m_tracePath).fileName(), m_traceError)));
     if (m_traceOpacitySlider)
     {
         const QSignalBlocker blocker(m_traceOpacitySlider);
@@ -571,6 +827,36 @@ void CameraMonitor::importTraceVideo()
 
 bool CameraMonitor::loadTraceVideo(const QString& path)
 {
+    if (m_session)
+    {
+        if (!m_traceFrames)
+            m_traceFrames = std::make_unique<video2::VideoFrames>(960, 64);
+
+        video2::Request request;
+        request.path = path;
+        request.sourceFrame = m_frame;
+        request.fps = std::max(1, m_session->settings().fps);
+        request.proxy = true;
+        QString error;
+        const QImage first = m_traceFrames->frame(request, &error);
+        if (first.isNull())
+        {
+            m_traceError = error.isEmpty()
+                               ? QStringLiteral("无法解码这个视频文件")
+                               : error;
+            updateTraceMenu();
+            update();
+            return false;
+        }
+
+        m_tracePath = path;
+        m_traceError.clear();
+        m_traceImage = first;
+        updateTraceMenu();
+        update();
+        return true;
+    }
+
     QString error;
     double duration = 0.0;
     const QImage first = decodeVideoFirstFrame(path, &error, &duration);
@@ -618,15 +904,22 @@ void CameraMonitor::clearTraceVideo()
 {
     m_tracePlayer.reset();
     m_traceProject.reset();
+    m_traceFrames.reset();
     m_tracePath.clear();
     m_traceEntity = kInvalidEntity;
     m_traceImage = QImage();
+    m_traceError.clear();
     updateTraceMenu();
     update();
 }
 
 void CameraMonitor::updateTraceImage()
 {
+    if (m_session)
+    {
+        updateTraceImageSession();
+        return;
+    }
     if (!m_traceProject || !m_tracePlayer || m_traceEntity == kInvalidEntity)
     {
         m_traceImage = QImage();
@@ -636,6 +929,35 @@ void CameraMonitor::updateTraceImage()
     m_tracePlayer->update(*m_traceProject, m_frame);
     const Entity* entity = m_traceProject->entity(m_traceEntity);
     m_traceImage = entity ? entity->image : QImage();
+}
+
+void CameraMonitor::updateTraceImageSession()
+{
+    if (!m_session || m_tracePath.isEmpty() || !m_traceFrames)
+    {
+        m_traceImage = QImage();
+        return;
+    }
+
+    video2::Request request;
+    request.path = m_tracePath;
+    request.sourceFrame = m_frame;
+    request.fps = std::max(1, m_session->settings().fps);
+    request.proxy = true;
+    QString error;
+    const QImage image = m_traceFrames->frame(request, &error);
+    if (image.isNull())
+    {
+        m_traceError = error.isEmpty()
+                           ? QStringLiteral("临摹视频在当前帧无法解码")
+                           : error;
+        // Keep the last good frame so a transient decode failure does not
+        // flash the overlay away; the menu/tooltip shows the error.
+        updateTraceMenu();
+        return;
+    }
+    m_traceError.clear();
+    m_traceImage = image;
 }
 
 void CameraMonitor::setTraceOpacity(double opacity)
@@ -961,7 +1283,7 @@ QStringList CameraMonitor::codecArguments() const
 
 void CameraMonitor::startStreaming()
 {
-    if (m_streaming)
+    if (m_streaming || !m_project)
         return;
     if (m_streamMode == StreamMode::Http)
         startHttpStream();
@@ -1318,6 +1640,7 @@ void CameraMonitor::toggleQuality()
     m_highQuality = !m_highQuality;
     Settings::setMonitorHighQuality(m_highQuality);
     updateButtons();
+    invalidateSessionPreview();
     update();
 }
 

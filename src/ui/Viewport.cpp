@@ -1,7 +1,9 @@
 #include "core/ComicBox.h"
+#include "core/TextBlock.h"
 #include "core/TextStyle.h"
 #include "Viewport.h"
 
+#include "anim/Anim.h"
 #include "app/AppIcon.h"
 #include "app/EditorSession.h"
 #include "core/PerfMonitor.h"
@@ -19,6 +21,7 @@
 #include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -27,7 +30,9 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <optional>
 
 namespace pvf {
 
@@ -60,6 +65,248 @@ double distanceToSegment(const QPointF& point, const QPointF& a, const QPointF& 
                                 0.0, 1.0);
     const QPointF closest = a + ab * t;
     return std::hypot(point.x() - closest.x(), point.y() - closest.y());
+}
+
+// ---- session gizmo helpers ----------------------------------------------
+
+constexpr double kSessionSnapAngleTolerance = 3.0;
+
+QVariantMap textStyleData(const model::TextContent& text)
+{
+    QVariantMap data;
+    data.insert(QStringLiteral("text"), text.text);
+    data.insert(QStringLiteral("font"), text.fontFamily);
+    data.insert(QStringLiteral("size"), text.pixelSize);
+    data.insert(QStringLiteral("color"), QColor(text.color));
+    data.insert(QStringLiteral("textStrokeColor"), QColor(text.strokeColor));
+    data.insert(QStringLiteral("textStrokeWidth"), text.strokeWidth);
+    data.insert(QStringLiteral("align"), text.align);
+    data.insert(QStringLiteral("lineHeight"), text.lineHeight);
+    data.insert(QStringLiteral("letterSpacing"), text.letterSpacing);
+    data.insert(QStringLiteral("padding"), text.padding);
+    data.insert(QStringLiteral("boxWidth"), text.boxWidth);
+    data.insert(QStringLiteral("boxHeight"), text.boxHeight);
+    data.insert(QStringLiteral("bold"), text.bold);
+    data.insert(QStringLiteral("italic"), text.italic);
+    data.insert(QStringLiteral("underline"), text.underline);
+    data.insert(QStringLiteral("vertical"), text.vertical);
+    data.insert(QStringLiteral("verticalRtl"), text.verticalRtl);
+    return data;
+}
+
+QPointF localCorner(const gizmo::Bounds& bounds, gizmo::Handle handle)
+{
+    switch (handle)
+    {
+    case gizmo::Handle::ScaleTopLeft:
+    case gizmo::Handle::RotateTopLeft:
+        return QPointF(bounds.left, bounds.top);
+    case gizmo::Handle::ScaleTopRight:
+    case gizmo::Handle::RotateTopRight:
+        return QPointF(bounds.right, bounds.top);
+    case gizmo::Handle::ScaleBottomRight:
+    case gizmo::Handle::RotateBottomRight:
+        return QPointF(bounds.right, bounds.bottom);
+    case gizmo::Handle::ScaleBottomLeft:
+    case gizmo::Handle::RotateBottomLeft:
+        return QPointF(bounds.left, bounds.bottom);
+    default:
+        return gizmo::boundsCenter(bounds);
+    }
+}
+
+bool transformsEqual(const gizmo::Transform& a, const gizmo::Transform& b)
+{
+    constexpr double epsilon = 1e-9;
+    return std::abs(a.x - b.x) <= epsilon && std::abs(a.y - b.y) <= epsilon
+           && std::abs(a.rotation - b.rotation) <= epsilon
+           && std::abs(a.scaleX - b.scaleX) <= epsilon
+           && std::abs(a.scaleY - b.scaleY) <= epsilon
+           && std::abs(a.pivotX - b.pivotX) <= epsilon
+           && std::abs(a.pivotY - b.pivotY) <= epsilon;
+}
+
+double clampedCameraScale(double value)
+{
+    const double magnitude = std::clamp(std::abs(value), 0.05, 1.0);
+    return value < 0.0 ? -magnitude : magnitude;
+}
+
+double trackValueOr(const model::Entity& entity, const char* property,
+                    double relativeFrame, double fallback)
+{
+    const auto it = entity.tracks.constFind(QLatin1String(property));
+    if (it == entity.tracks.constEnd())
+        return fallback;
+    return model::evaluateTrack(it.value(), relativeFrame).value_or(fallback);
+}
+
+bool setStaticGizmoValue(model::Entity& entity, const QString& property,
+                         double value)
+{
+    model::Transform& transform = entity.transform;
+    if (property == QLatin1String("x"))
+    {
+        transform.x = value;
+        return true;
+    }
+    if (property == QLatin1String("y"))
+    {
+        transform.y = value;
+        return true;
+    }
+    if (property == QLatin1String("rotation"))
+    {
+        transform.rotation = value;
+        return true;
+    }
+    if (property == QLatin1String("scaleX"))
+    {
+        transform.scaleX = value;
+        return true;
+    }
+    if (property == QLatin1String("scaleY"))
+    {
+        transform.scaleY = value;
+        return true;
+    }
+    if (property == QLatin1String("pivotX"))
+    {
+        transform.pivotX = value;
+        return true;
+    }
+    if (property == QLatin1String("pivotY"))
+    {
+        transform.pivotY = value;
+        return true;
+    }
+    return false;
+}
+
+void setTrackKeyValue(model::Entity& entity, const QString& property, int frame,
+                      double value)
+{
+    model::Track& track = entity.tracks[property];
+    for (model::Keyframe& keyframe : track.keys)
+    {
+        if (keyframe.frame == frame)
+        {
+            keyframe.value = value;
+            return;
+        }
+    }
+    model::Keyframe keyframe;
+    keyframe.frame = frame;
+    keyframe.value = value;
+    track.keys.append(keyframe);
+}
+
+bool solverDrivesProperty(const model::Entity& entity, const QString& property,
+                          int relativeFrame)
+{
+    const bool position = property == QLatin1String("x")
+                          || property == QLatin1String("y");
+    const bool rotation = property == QLatin1String("rotation");
+    if (!position && !rotation)
+        return false;
+
+    const model::SolverSegment* segment = anim::solverAt(entity, relativeFrame);
+    if (!segment)
+        return false;
+    if (segment->effect == SolverEffect::Spin)
+        return rotation;
+    return position;
+}
+
+QPointF rotateVector(QPointF vector, double degrees)
+{
+    const double radians = qDegreesToRadians(degrees);
+    return QPointF(vector.x() * std::cos(radians) - vector.y() * std::sin(radians),
+                   vector.x() * std::sin(radians) + vector.y() * std::cos(radians));
+}
+
+std::optional<double> nearestFeatureSnap(const std::array<double, 3>& features,
+                                         const QVector<double>& targets,
+                                         double threshold)
+{
+    std::optional<double> best;
+    double bestDistance = threshold;
+    for (double target : targets)
+    {
+        for (double feature : features)
+        {
+            const double distance = std::abs(target - feature);
+            if (distance <= bestDistance)
+            {
+                bestDistance = distance;
+                best = target - feature;
+            }
+        }
+    }
+    return best;
+}
+
+gizmo::Handle scaleHandleForCorner(int corner)
+{
+    switch (corner)
+    {
+    case 0:
+        return gizmo::Handle::ScaleTopLeft;
+    case 1:
+        return gizmo::Handle::ScaleTopRight;
+    case 2:
+        return gizmo::Handle::ScaleBottomRight;
+    default:
+        return gizmo::Handle::ScaleBottomLeft;
+    }
+}
+
+gizmo::Handle rotateHandleForCorner(int corner)
+{
+    switch (corner)
+    {
+    case 0:
+        return gizmo::Handle::RotateTopLeft;
+    case 1:
+        return gizmo::Handle::RotateTopRight;
+    case 2:
+        return gizmo::Handle::RotateBottomRight;
+    default:
+        return gizmo::Handle::RotateBottomLeft;
+    }
+}
+
+void drawArrowLine(QPainter& painter, QPointF from, QPointF to,
+                   const QColor& color)
+{
+    QLineF line(from, to);
+    if (line.length() < 8.0)
+        return;
+    painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::FlatCap));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawLine(line);
+
+    const QPointF direction = (to - from) / line.length();
+    const QPointF perpendicular(-direction.y(), direction.x());
+    QPolygonF head;
+    head << to << to - direction * 8.0 + perpendicular * 4.0
+         << to - direction * 8.0 - perpendicular * 4.0;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawPolygon(head);
+}
+
+void drawRotateGlyph(QPainter& painter, QPointF center)
+{
+    painter.save();
+    painter.translate(center);
+    const QColor color(246, 249, 255);
+    painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::FlatCap));
+    painter.setBrush(Qt::NoBrush);
+    const QRectF arcRect(-7.0, -7.0, 14.0, 14.0);
+    painter.drawArc(arcRect, 30 * 16, 120 * 16);
+    painter.drawArc(arcRect, 210 * 16, 120 * 16);
+    painter.restore();
 }
 
 } // namespace
@@ -208,6 +455,7 @@ QPointF Viewport::screenToCanvas(const QPointF& pos) const
 
 Uuid Viewport::sessionCameraUuid() const
 {
+    // The old viewport always edits the canvas; the camera is an overlay.
     return m_session ? m_session->activeCameraUuid() : Uuid();
 }
 
@@ -301,8 +549,8 @@ QImage Viewport::ensureSessionImage()
 
     const QSize targetSize = size();
     const int frame = m_session->playhead();
-    const Uuid camera = sessionCameraUuid();
-    const int expand = camera.isEmpty() ? sessionExpandPercent() : 0;
+    const Uuid camera;
+    const int expand = sessionExpandPercent();
 
     if (m_sessionImageValid && m_sessionImageSize == targetSize
         && m_sessionImageFrame == frame && m_sessionImageCamera == camera
@@ -311,11 +559,18 @@ QImage Viewport::ensureSessionImage()
 
     m_sessionMediaMissing = false;
 
+    // A live gizmo drag is not representable by the stored frame meta until it
+    // commits, so both lookup and store are bypassed for the duration of the
+    // gesture.  After release the commit changes the meta and the next lookup
+    // misses, rendering and updating the cache.
+    const bool liveEdit = m_sessionDragKind != SessionDragKind::None
+                          && m_sessionDragChanged;
+
     // Whole-frame workbench cache: a hit is a finished picture and skips
     // render2 entirely.  Misses render live and store the result unless a
     // media provider returned a placeholder.
     next::WorkbenchServices* workbench = m_session->workbench();
-    if (workbench)
+    if (workbench && !liveEdit)
     {
         bool hit = false;
         const QImage cached = workbench->lookup(frame, camera, &hit);
@@ -342,7 +597,7 @@ QImage Viewport::ensureSessionImage()
     m_sessionImageValid = true;
     m_sessionMediaMissing = missing;
 
-    if (!missing && !image.isNull() && workbench)
+    if (!liveEdit && !missing && !image.isNull() && workbench)
         workbench->store(frame, camera, image);
     return m_sessionImage;
 }
@@ -423,26 +678,1143 @@ void Viewport::drawSessionSelection(QPainter& painter)
     const auto it = project.entities.constFind(selected);
     if (it == project.entities.constEnd())
         return;
-    if (it->hidden || it->locked || it->content.kind == ContentKind::Camera
-        || it->content.kind == ContentKind::Empty)
+    if (it->locked || it->content.kind == ContentKind::Camera)
         return;
+
+    drawSessionGizmo(painter);
+}
+
+// ---- session gizmo (gizmo:: math) ---------------------------------------
+
+gizmo::Transform Viewport::sessionGizmoTransform(const model::Entity& entity) const
+{
+    gizmo::Transform transform;
+    transform.x = entity.transform.x;
+    transform.y = entity.transform.y;
+    transform.rotation = entity.transform.rotation;
+    transform.scaleX = entity.transform.scaleX;
+    transform.scaleY = entity.transform.scaleY;
+    transform.pivotX = entity.transform.pivotX;
+    transform.pivotY = entity.transform.pivotY;
+
+    if (!m_session)
+        return transform;
+
+    const int playhead = m_session->playhead();
+    const double relativeFrame = double(playhead - entity.start);
+    transform.x = trackValueOr(entity, "x", relativeFrame, transform.x);
+    transform.y = trackValueOr(entity, "y", relativeFrame, transform.y);
+    transform.rotation =
+        trackValueOr(entity, "rotation", relativeFrame, transform.rotation);
+    transform.scaleX =
+        trackValueOr(entity, "scaleX", relativeFrame, transform.scaleX);
+    transform.scaleY =
+        trackValueOr(entity, "scaleY", relativeFrame, transform.scaleY);
+    transform.pivotX =
+        trackValueOr(entity, "pivotX", relativeFrame, transform.pivotX);
+    transform.pivotY =
+        trackValueOr(entity, "pivotY", relativeFrame, transform.pivotY);
+
+    if (entity.solvers.isEmpty())
+        return transform;
+
+    // Solver-driven x/y/rotation only exist inside anim::evaluateEntity().
+    const model::Project& project = m_session->project();
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    const anim::Pose pose =
+        anim::evaluateEntity(project, entity.uuid, playhead, world, cache);
+
+    QTransform local = pose.world;
+    if (!entity.parentUuid.isEmpty()
+        && project.entities.contains(entity.parentUuid))
+    {
+        const anim::Pose parent = anim::evaluateEntity(
+            project, entity.parentUuid, playhead, world, cache);
+        bool invertible = false;
+        const QTransform inverse = parent.world.inverted(&invertible);
+        if (invertible)
+            local = local * inverse;
+    }
+
+    const double scaleX = transform.scaleX;
+    const double scaleY = transform.scaleY;
+    if (std::abs(scaleX) > 1e-9)
+    {
+        transform.rotation = qRadiansToDegrees(
+            std::atan2(local.m12() / scaleX, local.m11() / scaleX));
+    }
+    else if (std::abs(scaleY) > 1e-9)
+    {
+        transform.rotation = qRadiansToDegrees(
+            std::atan2(-local.m21() / scaleY, local.m22() / scaleY));
+    }
+
+    const double pivotLinearX =
+        local.m11() * transform.pivotX + local.m21() * transform.pivotY;
+    const double pivotLinearY =
+        local.m12() * transform.pivotX + local.m22() * transform.pivotY;
+    transform.x = local.dx() - transform.pivotX + pivotLinearX;
+    transform.y = local.dy() - transform.pivotY + pivotLinearY;
+    return transform;
+}
+
+gizmo::Bounds Viewport::sessionGizmoBounds(const model::Entity& entity) const
+{
+    QSizeF size(100.0, 100.0);
+    const model::Content content =
+        m_session ? render2::animatedContent(entity, m_session->playhead())
+                  : entity.content;
+
+    switch (content.kind)
+    {
+    case ContentKind::Empty:
+        break;
+    case ContentKind::Vector:
+        size = QSizeF(std::max(1.0, content.vector.width),
+                      std::max(1.0, content.vector.height));
+        break;
+    case ContentKind::Text:
+    {
+        const TextBlock block = TextBlock::measure(
+            TextStyle::fromData(textStyleData(content.text)));
+        const QSizeF measured = block.size();
+        if (measured.width() >= 1.0 && measured.height() >= 1.0)
+            size = measured;
+        break;
+    }
+    case ContentKind::Asset:
+    {
+        size = QSizeF(320.0, 180.0);
+        if (content.asset.type == AssetType::Html)
+            size = QSizeF(800.0, 120.0);
+        if (m_session)
+        {
+            if (const auto stored = m_session->assets().get(content.asset.hash))
+            {
+                const int width =
+                    stored->metadata.value(QStringLiteral("width")).toInt();
+                const int height =
+                    stored->metadata.value(QStringLiteral("height")).toInt();
+                if (width > 0 && height > 0)
+                    size = QSizeF(width, height);
+            }
+        }
+        break;
+    }
+    case ContentKind::Camera:
+        if (m_session)
+        {
+            size = QSizeF(std::max(1, m_session->settings().width),
+                          std::max(1, m_session->settings().height));
+        }
+        break;
+    case ContentKind::ComicText:
+        size = QSizeF(std::max(1.0, content.comic.boxWidth),
+                      std::max(1.0, content.comic.boxHeight));
+        break;
+    case ContentKind::RadialLines:
+        size = QSizeF(std::max(1.0, content.radial.radius * 2.0),
+                      std::max(1.0, content.radial.radius * 2.0));
+        break;
+    case ContentKind::FlowLines:
+        size = QSizeF(std::max(1.0, content.flow.length),
+                      std::max(1.0, content.flow.area));
+        break;
+    case ContentKind::HalftoneDots:
+        size = QSizeF(std::max(1.0, content.halftone.area),
+                      std::max(1.0, content.halftone.area));
+        break;
+    case ContentKind::BrandWall:
+        size = QSizeF(
+            std::max(1.0, content.brandWall.columns * content.brandWall.logoSize
+                              + (content.brandWall.columns - 1)
+                                    * content.brandWall.spacing),
+            std::max(1.0, content.brandWall.rows * content.brandWall.logoSize
+                              + (content.brandWall.rows - 1)
+                                    * content.brandWall.spacing));
+        break;
+    }
+
+    gizmo::Bounds bounds;
+    bounds.left = -size.width() / 2.0;
+    bounds.right = size.width() / 2.0;
+    bounds.top = -size.height() / 2.0;
+    bounds.bottom = size.height() / 2.0;
+    return bounds;
+}
+
+QTransform Viewport::sessionParentToWidget(const model::Entity& entity) const
+{
+    if (!m_session || entity.parentUuid.isEmpty())
+        return sessionWorldToScreen();
+
+    const model::Project& project = m_session->project();
+    const auto parentIt = project.entities.constFind(entity.parentUuid);
+    if (parentIt == project.entities.constEnd())
+        return sessionWorldToScreen();
 
     render2::SceneWorld world(project, m_session->assets());
     anim::Cache cache;
-    const QPainterPath shape = world.shapeOf(selected, m_session->playhead());
-    if (shape.isEmpty())
+    const anim::Pose pose = anim::evaluateEntity(
+        project, entity.parentUuid, m_session->playhead(), world, cache);
+    return pose.world * sessionWorldToScreen();
+}
+
+double Viewport::sessionViewScaleFor(const QTransform& parentToWidget) const
+{
+    return std::max(1e-6, std::sqrt(std::abs(parentToWidget.determinant())));
+}
+
+std::optional<gizmo::Handle> Viewport::hitSessionGizmo(const QPointF& pos) const
+{
+    if (!m_session || !m_session->document())
+        return std::nullopt;
+    const Uuid selected = m_session->document()->selection();
+    const auto it = m_session->project().entities.constFind(selected);
+    if (it == m_session->project().entities.constEnd() || it->locked
+        || it->content.kind == ContentKind::Camera)
+        return std::nullopt;
+
+    const QTransform parentToWidget = sessionParentToWidget(it.value());
+    bool invertible = false;
+    const QTransform inverse = parentToWidget.inverted(&invertible);
+    if (!invertible)
+        return std::nullopt;
+
+    const QPointF parentPos = inverse.map(pos);
+    return gizmo::hitTest(parentPos, sessionGizmoTransform(it.value()),
+                          sessionGizmoBounds(it.value()),
+                          sessionViewScaleFor(parentToWidget));
+}
+
+void Viewport::collectSessionSnapTargets(const Uuid& uuid)
+{
+    m_sessionSnapTargetsX.clear();
+    m_sessionSnapTargetsY.clear();
+    m_sessionDragSnapRoot = false;
+    m_sessionDragStartWorldBounds = QRectF();
+    if (!m_session || uuid.isEmpty())
         return;
+
+    const next::AppSettings& settings = m_session->appSettings();
+    const model::Project& project = m_session->project();
+    const auto draggedIt = project.entities.constFind(uuid);
+    if (draggedIt == project.entities.constEnd())
+        return;
+
+    const model::Entity& dragged = draggedIt.value();
+    m_sessionDragSnapRoot = dragged.parentUuid.isEmpty()
+                            || !project.entities.contains(dragged.parentUuid);
+
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    const anim::Pose draggedPose = anim::evaluateEntity(
+        project, uuid, m_session->playhead(), world, cache);
+    const gizmo::Bounds bounds = sessionGizmoBounds(dragged);
+    QPolygonF box;
+    box << draggedPose.world.map(QPointF(bounds.left, bounds.top))
+        << draggedPose.world.map(QPointF(bounds.right, bounds.top))
+        << draggedPose.world.map(QPointF(bounds.right, bounds.bottom))
+        << draggedPose.world.map(QPointF(bounds.left, bounds.bottom));
+    m_sessionDragStartWorldBounds = box.boundingRect();
+
+    const int frame = m_session->playhead();
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (it.key() == uuid || entity.content.kind == ContentKind::Camera)
+            continue;
+        if (frame < entity.start || frame >= entity.end)
+            continue;
+
+        bool descendant = false;
+        for (Uuid parent = entity.parentUuid; !parent.isEmpty();)
+        {
+            if (parent == uuid)
+            {
+                descendant = true;
+                break;
+            }
+            const auto parentIt = project.entities.constFind(parent);
+            if (parentIt == project.entities.constEnd())
+                break;
+            parent = parentIt.value().parentUuid;
+        }
+        if (descendant)
+            continue;
+
+        const anim::Pose pose =
+            anim::evaluateEntity(project, it.key(), frame, world, cache);
+        if (!pose.visible)
+            continue;
+
+        const gizmo::Bounds entityBounds = sessionGizmoBounds(entity);
+        QPolygonF entityBox;
+        entityBox << pose.world.map(QPointF(entityBounds.left, entityBounds.top))
+                  << pose.world.map(QPointF(entityBounds.right, entityBounds.top))
+                  << pose.world.map(QPointF(entityBounds.right, entityBounds.bottom))
+                  << pose.world.map(QPointF(entityBounds.left, entityBounds.bottom));
+        const QRectF rect = entityBox.boundingRect();
+        if (rect.isEmpty())
+            continue;
+        if (settings.snapEntityEdges)
+        {
+            m_sessionSnapTargetsX << rect.left() << rect.right();
+            m_sessionSnapTargetsY << rect.top() << rect.bottom();
+        }
+        if (settings.snapEdgeMidpoints)
+        {
+            m_sessionSnapTargetsX << rect.center().x();
+            m_sessionSnapTargetsY << rect.center().y();
+        }
+    }
+}
+
+double Viewport::snapSessionPixel(double value) const
+{
+    return std::round(value);
+}
+
+double Viewport::snapSessionAxis(double value, bool xAxis)
+{
+    if (!m_session)
+        return snapSessionPixel(value);
+    const next::AppSettings& settings = m_session->appSettings();
+
+    if (m_sessionDragSnapRoot)
+    {
+        const model::Project& project = m_session->project();
+        const double startValue =
+            xAxis ? m_sessionDragTransform.x : m_sessionDragTransform.y;
+        const double delta = value - startValue;
+        const QRectF bounds = m_sessionDragStartWorldBounds;
+        const std::array<double, 3> features =
+            xAxis ? std::array<double, 3>{bounds.left() + delta,
+                                          bounds.center().x() + delta,
+                                          bounds.right() + delta}
+                  : std::array<double, 3>{bounds.top() + delta,
+                                          bounds.center().y() + delta,
+                                          bounds.bottom() + delta};
+        const double threshold =
+            double(std::max(1, settings.snapPixels)) / m_sessionDragViewScale;
+        const double canvasCenter =
+            xAxis ? std::max(1, project.settings.width) / 2.0
+                  : std::max(1, project.settings.height) / 2.0;
+
+        // Canvas centre lines beat other entities, which beat the pixel grid.
+        if (settings.snapCanvasCenter)
+        {
+            if (const auto snap =
+                    nearestFeatureSnap(features, {canvasCenter}, threshold))
+            {
+                m_showGuideX = m_showGuideX || xAxis;
+                m_showGuideY = m_showGuideY || !xAxis;
+                if (xAxis)
+                    m_guideX = canvasCenter;
+                else
+                    m_guideY = canvasCenter;
+                return value + *snap;
+            }
+        }
+        if (const auto snap = nearestFeatureSnap(
+                features, xAxis ? m_sessionSnapTargetsX : m_sessionSnapTargetsY,
+                threshold))
+        {
+            if (xAxis)
+            {
+                m_showGuideX = true;
+                m_guideX = features[1] + *snap;
+            }
+            else
+            {
+                m_showGuideY = true;
+                m_guideY = features[1] + *snap;
+            }
+            return value + *snap;
+        }
+    }
+
+    return snapSessionPixel(value);
+}
+
+double Viewport::snapSessionAngle(double degrees, bool force) const
+{
+    const QVector<double> angles =
+        m_session ? m_session->appSettings().snapAngles : QVector<double>();
+    if (angles.isEmpty())
+        return degrees;
+
+    double nearest = degrees;
+    double nearestDistance = 360.0;
+    for (double angle : angles)
+    {
+        const double distance =
+            std::abs(std::remainder(degrees - angle, 360.0));
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            nearest = angle;
+        }
+    }
+    if (force || nearestDistance <= kSessionSnapAngleTolerance)
+        return nearest;
+    return degrees;
+}
+
+void Viewport::writeSessionGizmoValue(model::Entity& entity,
+                                      const QString& property, double value)
+{
+    if (!m_session || !m_session->document())
+        return;
+    const int relativeFrame = m_session->playhead() - entity.start;
+    if (solverDrivesProperty(entity, property, relativeFrame))
+        return;
+
+    setStaticGizmoValue(entity, property, value);
+
+    const bool hasTrack = entity.tracks.contains(property);
+    if (!hasTrack && !m_autoKeyEnabled)
+        return;
+    if (relativeFrame < 0 || relativeFrame >= entity.duration())
+        return;
+    setTrackKeyValue(entity, property, relativeFrame, value);
+}
+
+void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
+                                     gizmo::Handle handle, const QPointF& pos)
+{
+    if (!m_session)
+        return;
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return;
+
+    m_sessionDragKind = kind;
+    m_sessionDragUuid = uuid;
+    m_sessionDragStart = it.value();
+    m_sessionDragHandle = handle;
+    m_sessionDragTransform = sessionGizmoTransform(it.value());
+    m_sessionDragBounds = sessionGizmoBounds(it.value());
+    m_sessionDragParentToWidget = sessionParentToWidget(it.value());
+    m_sessionDragViewScale = sessionViewScaleFor(m_sessionDragParentToWidget);
+    collectSessionSnapTargets(uuid);
+
+    bool invertible = false;
+    const QTransform inverse = m_sessionDragParentToWidget.inverted(&invertible);
+    m_sessionDragStartParent = invertible ? inverse.map(pos) : pos;
+    m_sessionDragPivotStart = gizmo::worldPivot(m_sessionDragTransform);
+    m_sessionDragCenterStart = gizmo::localToWorld(
+        m_sessionDragTransform, gizmo::boundsCenter(m_sessionDragBounds));
+
+    const auto angleAround = [this](QPointF center) {
+        return std::atan2(m_sessionDragStartParent.y() - center.y(),
+                          m_sessionDragStartParent.x() - center.x());
+    };
+    m_sessionDragAnglePivot = angleAround(m_sessionDragPivotStart);
+    m_sessionDragAngleCenter = angleAround(m_sessionDragCenterStart);
+
+    if (kind == SessionDragKind::Scale)
+    {
+        m_sessionDragGrabOffset =
+            localCorner(m_sessionDragBounds, handle)
+            - gizmo::worldToLocal(m_sessionDragTransform, m_sessionDragStartParent);
+    }
+
+    m_sessionDragChanged = false;
+    m_showGuideX = false;
+    m_showGuideY = false;
+    setCursor(kind == SessionDragKind::Rotate ? Qt::CrossCursor
+               : kind == SessionDragKind::Scale ? Qt::SizeFDiagCursor
+                                                : Qt::SizeAllCursor);
+}
+
+void Viewport::applySessionGizmoDrag(const QPointF& pos,
+                                     Qt::KeyboardModifiers modifiers)
+{
+    if (!m_session || m_sessionDragUuid.isEmpty()
+        || m_sessionDragKind == SessionDragKind::None)
+        return;
+
+    auto it = m_session->mutableProject().entities.find(m_sessionDragUuid);
+    if (it == m_session->mutableProject().entities.end())
+    {
+        cancelSessionDrag();
+        return;
+    }
+    model::Entity& entity = it.value();
+    if (entity.locked)
+        return;
+
+    bool invertible = false;
+    const QTransform inverse = m_sessionDragParentToWidget.inverted(&invertible);
+    if (!invertible)
+        return;
+    const QPointF mouseParent = inverse.map(pos);
+    const QPointF parentDelta = mouseParent - m_sessionDragStartParent;
+    const next::AppSettings& settings = m_session->appSettings();
+    const bool snapActive = !modifiers.testFlag(Qt::ControlModifier);
+    m_showGuideX = false;
+    m_showGuideY = false;
+
+    switch (m_sessionDragKind)
+    {
+    case SessionDragKind::Move:
+    {
+        double x = m_sessionDragTransform.x + parentDelta.x();
+        double y = m_sessionDragTransform.y + parentDelta.y();
+        if (snapActive)
+        {
+            x = snapSessionAxis(x, true);
+            y = snapSessionAxis(y, false);
+        }
+        writeSessionGizmoValue(entity, QStringLiteral("x"), x);
+        writeSessionGizmoValue(entity, QStringLiteral("y"), y);
+        break;
+    }
+
+    case SessionDragKind::MoveX:
+    case SessionDragKind::MoveY:
+    {
+        const bool moveX = m_sessionDragKind == SessionDragKind::MoveX;
+        const QPointF axis = rotateVector(
+            moveX ? QPointF(1.0, 0.0) : QPointF(0.0, 1.0),
+            m_sessionDragTransform.rotation);
+        const double amount = parentDelta.x() * axis.x() + parentDelta.y() * axis.y();
+        double value = moveX ? m_sessionDragTransform.x + amount
+                             : m_sessionDragTransform.y + amount;
+        if (snapActive)
+            value = snapSessionAxis(value, moveX);
+        writeSessionGizmoValue(entity, moveX ? QStringLiteral("x")
+                                             : QStringLiteral("y"),
+                               value);
+        break;
+    }
+
+    case SessionDragKind::Pivot:
+    {
+        double px = m_sessionDragTransform.pivotX + parentDelta.x();
+        double py = m_sessionDragTransform.pivotY + parentDelta.y();
+        if (snapActive)
+        {
+            px = snapSessionPixel(px);
+            py = snapSessionPixel(py);
+        }
+        writeSessionGizmoValue(entity, QStringLiteral("pivotX"), px);
+        writeSessionGizmoValue(entity, QStringLiteral("pivotY"), py);
+        break;
+    }
+
+    case SessionDragKind::Rotate:
+    {
+        const bool aroundCenter = modifiers.testFlag(Qt::AltModifier);
+        const QPointF center = aroundCenter ? m_sessionDragCenterStart
+                                            : m_sessionDragPivotStart;
+        const double startAngle =
+            aroundCenter ? m_sessionDragAngleCenter : m_sessionDragAnglePivot;
+        double delta = std::atan2(mouseParent.y() - center.y(),
+                                  mouseParent.x() - center.x())
+                       - startAngle;
+        delta = std::remainder(delta, 2.0 * M_PI);
+        double degrees = qRadiansToDegrees(delta);
+
+        if (snapActive)
+        {
+            const double targetRotation = snapSessionAngle(
+                m_sessionDragTransform.rotation + degrees,
+                modifiers.testFlag(Qt::ShiftModifier));
+            degrees = targetRotation - m_sessionDragTransform.rotation;
+        }
+
+        const gizmo::DragResult result = gizmo::rotate(
+            m_sessionDragTransform, m_sessionDragBounds, degrees, aroundCenter);
+        writeSessionGizmoValue(entity, QStringLiteral("x"), result.transform.x);
+        writeSessionGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        writeSessionGizmoValue(entity, QStringLiteral("rotation"),
+                               result.transform.rotation);
+        break;
+    }
+
+    case SessionDragKind::Scale:
+    {
+        const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
+        QPointF mouseLocal =
+            gizmo::worldToLocal(m_sessionDragTransform, mouseParent)
+            + m_sessionDragGrabOffset;
+        if (snapActive && m_sessionDragSnapRoot)
+        {
+            const QPointF cornerWorld =
+                gizmo::localToWorld(m_sessionDragTransform, mouseLocal);
+            mouseLocal = gizmo::worldToLocal(
+                m_sessionDragTransform,
+                QPointF(snapSessionPixel(cornerWorld.x()),
+                        snapSessionPixel(cornerWorld.y())));
+        }
+        const gizmo::DragResult result = gizmo::cornerScale(
+            m_sessionDragTransform, m_sessionDragBounds, m_sessionDragHandle,
+            mouseLocal, uniform, true);
+        writeSessionGizmoValue(entity, QStringLiteral("x"), result.transform.x);
+        writeSessionGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleX"),
+                               result.transform.scaleX);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleY"),
+                               result.transform.scaleY);
+        break;
+    }
+
+    case SessionDragKind::CenterScale:
+    {
+        const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
+        QPointF mouseLocal = gizmo::worldToLocalAxesPixels(
+            m_sessionDragTransform, mouseParent, m_sessionDragViewScale);
+        if (snapActive)
+            mouseLocal = QPointF(snapSessionPixel(mouseLocal.x()),
+                                 snapSessionPixel(mouseLocal.y()));
+        const gizmo::DragResult result =
+            gizmo::centerScale(m_sessionDragTransform, mouseLocal, uniform);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleX"),
+                               result.transform.scaleX);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleY"),
+                               result.transform.scaleY);
+        break;
+    }
+
+    case SessionDragKind::CameraMove:
+    case SessionDragKind::CameraRotate:
+    case SessionDragKind::CameraScale:
+    case SessionDragKind::None:
+        return;
+    }
+
+    // Compare the frame-evaluated result: animated tracks can leave the static
+    // fallback untouched outside the edited frame.
+    m_sessionDragChanged =
+        !transformsEqual(sessionGizmoTransform(entity), m_sessionDragTransform);
+    invalidateSessionImage();
+    update();
+}
+
+void Viewport::finishSessionGizmoDrag()
+{
+    const SessionDragKind kind = m_sessionDragKind;
+    const Uuid uuid = m_sessionDragUuid;
+    const bool changed = m_sessionDragChanged;
+    const bool cameraDrag = kind == SessionDragKind::CameraMove
+                            || kind == SessionDragKind::CameraRotate
+                            || kind == SessionDragKind::CameraScale;
+
+    m_sessionDragKind = SessionDragKind::None;
+    m_sessionDragUuid.clear();
+    m_sessionDragStart = model::Entity();
+    m_sessionDragChanged = false;
+    m_sessionDragGrabOffset = QPointF();
+    m_showGuideX = false;
+    m_showGuideY = false;
+    unsetCursor();
+
+    if (!m_session || !m_session->document() || !changed || uuid.isEmpty())
+    {
+        update();
+        return;
+    }
+
+    QString action;
+    if (cameraDrag)
+    {
+        action = kind == SessionDragKind::CameraMove
+                     ? QStringLiteral("move")
+                     : kind == SessionDragKind::CameraRotate
+                           ? QStringLiteral("rotate")
+                           : QStringLiteral("scale");
+    }
+    else
+    {
+        switch (kind)
+        {
+        case SessionDragKind::Move:
+        case SessionDragKind::MoveX:
+        case SessionDragKind::MoveY:
+            action = QStringLiteral("move");
+            break;
+        case SessionDragKind::Rotate:
+            action = QStringLiteral("rotate");
+            break;
+        case SessionDragKind::Scale:
+        case SessionDragKind::CenterScale:
+            action = QStringLiteral("scale");
+            break;
+        case SessionDragKind::Pivot:
+            action = QStringLiteral("pivot");
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (!action.isEmpty())
+    {
+        const auto found = m_session->project().entities.constFind(uuid);
+        const QString name =
+            found != m_session->project().entities.constEnd()
+                ? (found->name.isEmpty() ? uuid : found->name)
+                : uuid;
+        QString error;
+        if (!m_session->document()->commitEntity(
+                uuid, QStringLiteral("pvf: %1 entity \"%2\"").arg(action, name),
+                &error))
+            emit sessionEditFailed(error);
+    }
+    invalidateSessionImage();
+    update();
+}
+
+void Viewport::cancelSessionDrag()
+{
+    if (m_session && !m_sessionDragUuid.isEmpty()
+        && !m_sessionDragStart.uuid.isEmpty())
+    {
+        auto it = m_session->mutableProject().entities.find(m_sessionDragUuid);
+        if (it != m_session->mutableProject().entities.end())
+            it.value() = m_sessionDragStart;
+    }
+    m_sessionDragKind = SessionDragKind::None;
+    m_sessionDragUuid.clear();
+    m_sessionDragStart = model::Entity();
+    m_sessionDragChanged = false;
+    m_sessionDragGrabOffset = QPointF();
+    m_showGuideX = false;
+    m_showGuideY = false;
+    unsetCursor();
+    invalidateSessionImage();
+    update();
+}
+
+void Viewport::drawSessionGizmo(QPainter& painter)
+{
+    if (!m_session || !m_session->document())
+        return;
+    const Uuid selected = m_session->document()->selection();
+    const auto it = m_session->project().entities.constFind(selected);
+    if (it == m_session->project().entities.constEnd() || it->locked
+        || it->content.kind == ContentKind::Camera)
+        return;
+
+    const model::Entity& entity = it.value();
+    const QTransform parentToWidget = sessionParentToWidget(entity);
+    const double viewScale = sessionViewScaleFor(parentToWidget);
+    const gizmo::Transform transform = sessionGizmoTransform(entity);
+    const gizmo::Bounds bounds = sessionGizmoBounds(entity);
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setTransform(sessionWorldToScreen(), true);
-    QPen pen(QColor(77, 163, 255));
-    pen.setCosmetic(true);
-    pen.setWidthF(1.5);
-    pen.setStyle(Qt::DashLine);
-    painter.setPen(pen);
+    if (entity.hidden)
+        painter.setOpacity(0.45);
+
+    const auto screenPosition = [&](gizmo::Handle handle) {
+        return parentToWidget.map(
+            gizmo::handlePosition(handle, transform, bounds, viewScale));
+    };
+
+    QPolygonF box;
+    box << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.top)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.top)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.bottom)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.bottom)));
+    painter.setPen(QPen(QColor(116, 206, 255, 175), 1.0, Qt::DashLine));
     painter.setBrush(Qt::NoBrush);
-    painter.drawPath(shape);
+    painter.drawPolygon(box);
+
+    const QPointF pivotWidget =
+        parentToWidget.map(gizmo::worldPivot(transform));
+    drawArrowLine(painter, pivotWidget, screenPosition(gizmo::Handle::MoveX),
+                  QColor(255, 122, 122));
+    drawArrowLine(painter, pivotWidget, screenPosition(gizmo::Handle::MoveY),
+                  QColor(125, 255, 158));
+
+    painter.setPen(QPen(QColor(18, 21, 26), 1.0));
+    painter.setBrush(QColor(246, 249, 255));
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const QPointF position = screenPosition(scaleHandleForCorner(corner));
+        painter.drawRect(QRectF(position.x() - 3.5, position.y() - 3.5, 7.0, 7.0));
+    }
+
+    const QPointF centerScale = screenPosition(gizmo::Handle::CenterScale);
+    painter.setPen(QPen(QColor(116, 206, 255), 1.2));
+    painter.setBrush(QColor(34, 46, 58));
+    painter.drawRect(QRectF(centerScale.x() - 4.5, centerScale.y() - 4.5, 9.0,
+                            9.0));
+    painter.setPen(QPen(QColor(116, 206, 255, 90), 1.0, Qt::DotLine));
+    painter.drawLine(pivotWidget, centerScale);
+
+    for (int corner = 0; corner < 4; ++corner)
+        drawRotateGlyph(painter, screenPosition(rotateHandleForCorner(corner)));
+
+    painter.setPen(QPen(QColor(18, 21, 26), 1.5));
+    painter.setBrush(QColor(255, 255, 255));
+    painter.drawEllipse(pivotWidget, 4.0, 4.0);
+
+    painter.restore();
+}
+
+// ---- session camera viewfinder ------------------------------------------
+
+QPolygonF Viewport::sessionCameraPolygon() const
+{
+    if (!m_session || !m_showCameraFrame)
+        return QPolygonF();
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return QPolygonF();
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd()
+        || it->content.kind != ContentKind::Camera || it->hidden)
+        return QPolygonF();
+
+    const double width = double(std::max(1, project.settings.width));
+    const double height = double(std::max(1, project.settings.height));
+    QPolygonF source;
+    source << QPointF(-width / 2.0, -height / 2.0)
+           << QPointF(width / 2.0, -height / 2.0)
+           << QPointF(width / 2.0, height / 2.0)
+           << QPointF(-width / 2.0, height / 2.0);
+
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    const anim::Pose pose =
+        anim::evaluateEntity(project, uuid, m_session->playhead(), world, cache);
+    return sessionWorldToScreen().map(pose.world.map(source));
+}
+
+QPointF Viewport::sessionCameraScreenCenter() const
+{
+    if (!m_session)
+        return QPointF();
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return QPointF();
+    const model::Project& project = m_session->project();
+    render2::SceneWorld world(project, m_session->assets());
+    anim::Cache cache;
+    const anim::Pose pose = anim::evaluateEntity(
+        project, uuid, m_session->playhead(), world, cache);
+    return sessionWorldToScreen().map(pose.world.map(QPointF(0.0, 0.0)));
+}
+
+QPointF Viewport::sessionCameraRotationHandle() const
+{
+    const QPolygonF polygon = sessionCameraPolygon();
+    if (polygon.size() < 4)
+        return QPointF();
+    const QPointF topCenter = (polygon[0] + polygon[1]) / 2.0;
+    const QPointF center = sessionCameraScreenCenter();
+    QPointF up = topCenter - center;
+    const double length = std::hypot(up.x(), up.y());
+    if (length < 1e-6)
+        return topCenter;
+    return topCenter + up / length * 28.0;
+}
+
+QRectF Viewport::sessionCameraTitleRect() const
+{
+    if (!m_session)
+        return QRectF();
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return QRectF();
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return QRectF();
+    const QPolygonF polygon = sessionCameraPolygon();
+    if (polygon.isEmpty())
+        return QRectF();
+    const QRectF box = polygon.boundingRect();
+    const QFontMetrics metrics(font());
+    const int textWidth = metrics.horizontalAdvance(it->name);
+    const QRectF title(box.left(), box.top() - 24.0, textWidth + 16.0, 20.0);
+    if (title.top() < 2.0)
+        return QRectF(box.left(), box.top() + 4.0, textWidth + 16.0, 20.0);
+    return title;
+}
+
+Viewport::CameraPart Viewport::sessionCameraHitTest(const QPointF& pos) const
+{
+    if (!m_showCameraFrame || !m_session)
+        return CameraPart::None;
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return CameraPart::None;
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd()
+        || it->content.kind != ContentKind::Camera)
+        return CameraPart::None;
+
+    const bool selected =
+        m_session->document() && m_session->document()->selection() == uuid;
+    if (selected && !it->locked && it->parentUuid.isEmpty())
+    {
+        if (QLineF(pos, sessionCameraRotationHandle()).length() <= 10.0)
+            return CameraPart::Rotate;
+
+        const QPolygonF polygon = sessionCameraPolygon();
+        for (int i = 0; i < polygon.size(); ++i)
+        {
+            if (QLineF(pos, polygon[i]).length() <= 8.0)
+                return CameraPart(i == 0 ? CameraPart::Corner0
+                                  : i == 1 ? CameraPart::Corner1
+                                  : i == 2 ? CameraPart::Corner2
+                                           : CameraPart::Corner3);
+        }
+    }
+
+    if (sessionCameraTitleRect().contains(pos))
+        return CameraPart::Move;
+
+    const QPolygonF polygon = sessionCameraPolygon();
+    for (int i = 0; i < polygon.size(); ++i)
+    {
+        if (distanceToSegment(pos, polygon[i], polygon[(i + 1) % polygon.size()])
+            <= 6.0)
+            return CameraPart::Move;
+    }
+    return CameraPart::None;
+}
+
+bool Viewport::handleSessionCameraPress(QMouseEvent* event)
+{
+    if (!m_session || event->button() != Qt::LeftButton)
+        return false;
+
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return false;
+    const CameraPart part = sessionCameraHitTest(event->position());
+    if (part == CameraPart::None)
+        return false;
+
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return false;
+    if (m_session->document())
+        m_session->document()->setSelection(uuid);
+    emit uuidSelected(uuid);
+
+    if (it->locked || !it->parentUuid.isEmpty())
+        return true;
+
+    m_sessionDragKind = part == CameraPart::Move
+                            ? SessionDragKind::CameraMove
+                            : part == CameraPart::Rotate
+                                  ? SessionDragKind::CameraRotate
+                                  : SessionDragKind::CameraScale;
+    m_sessionDragUuid = uuid;
+    m_sessionDragStart = it.value();
+    m_sessionDragTransform = sessionGizmoTransform(it.value());
+    m_sessionDragBounds = sessionGizmoBounds(it.value());
+    m_sessionDragParentToWidget = sessionWorldToScreen();
+    m_sessionDragViewScale = viewScale();
+    m_sessionDragStartParent = sessionScreenToProject(event->position());
+    m_sessionDragPivotStart =
+        sessionWorldToScreen().map(gizmo::worldPivot(m_sessionDragTransform));
+    m_sessionCameraStartAngle =
+        std::atan2(event->position().y() - m_sessionDragPivotStart.y(),
+                   event->position().x() - m_sessionDragPivotStart.x())
+            * 180.0 / M_PI
+        + 90.0;
+    m_sessionDragChanged = false;
+    m_showGuideX = false;
+    m_showGuideY = false;
+    setCursor(part == CameraPart::Move ? Qt::SizeAllCursor
+               : part == CameraPart::Rotate ? Qt::CrossCursor
+                                            : Qt::SizeFDiagCursor);
+    return true;
+}
+
+void Viewport::applySessionCameraDrag(const QPointF& pos,
+                                      Qt::KeyboardModifiers modifiers)
+{
+    if (!m_session || m_sessionDragUuid.isEmpty())
+        return;
+    auto it = m_session->mutableProject().entities.find(m_sessionDragUuid);
+    if (it == m_session->mutableProject().entities.end() || it->locked)
+        return;
+    model::Entity& entity = it.value();
+    const gizmo::Transform start = m_sessionDragTransform;
+    const QPointF mouse = sessionScreenToProject(pos);
+    const QPointF delta = mouse - m_sessionDragStartParent;
+    const bool snapActive = !modifiers.testFlag(Qt::ControlModifier);
+    m_showGuideX = false;
+    m_showGuideY = false;
+
+    if (m_sessionDragKind == SessionDragKind::CameraMove)
+    {
+        double x = start.x + delta.x();
+        double y = start.y + delta.y();
+        if (snapActive)
+        {
+            const next::AppSettings& settings = m_session->appSettings();
+            const double threshold =
+                double(std::max(1, settings.snapPixels)) / viewScale();
+            const model::Project& project = m_session->project();
+            const QPointF center = QPointF(start.x + start.pivotX,
+                                           start.y + start.pivotY);
+            const double canvasCenterX = project.settings.width / 2.0;
+            const double canvasCenterY = project.settings.height / 2.0;
+            if (settings.snapCanvasCenter)
+            {
+                if (std::abs(center.x() - canvasCenterX) <= threshold)
+                {
+                    x += canvasCenterX - center.x();
+                    m_showGuideX = true;
+                    m_guideX = canvasCenterX;
+                }
+                if (std::abs(center.y() - canvasCenterY) <= threshold)
+                {
+                    y += canvasCenterY - center.y();
+                    m_showGuideY = true;
+                    m_guideY = canvasCenterY;
+                }
+            }
+            if (!m_sessionSnapTargetsX.isEmpty())
+            {
+                const auto snap = nearestFeatureSnap(
+                    {center.x(), center.x(), center.x()}, m_sessionSnapTargetsX,
+                    threshold);
+                if (snap)
+                {
+                    x += *snap;
+                    m_showGuideX = true;
+                    m_guideX = center.x() + *snap;
+                }
+            }
+            if (!m_sessionSnapTargetsY.isEmpty())
+            {
+                const auto snap = nearestFeatureSnap(
+                    {center.y(), center.y(), center.y()}, m_sessionSnapTargetsY,
+                    threshold);
+                if (snap)
+                {
+                    y += *snap;
+                    m_showGuideY = true;
+                    m_guideY = center.y() + *snap;
+                }
+            }
+        }
+        writeSessionGizmoValue(entity, QStringLiteral("x"), x);
+        writeSessionGizmoValue(entity, QStringLiteral("y"), y);
+    }
+    else if (m_sessionDragKind == SessionDragKind::CameraRotate)
+    {
+        const QPointF center = sessionCameraScreenCenter();
+        double angle =
+            std::atan2(pos.y() - center.y(), pos.x() - center.x()) * 180.0 / M_PI
+            + 90.0;
+        double rotationDelta = angle - m_sessionCameraStartAngle;
+        while (rotationDelta > 180.0)
+            rotationDelta -= 360.0;
+        while (rotationDelta < -180.0)
+            rotationDelta += 360.0;
+        double rotation = start.rotation + rotationDelta;
+        if (snapActive)
+            rotation = snapSessionAngle(rotation,
+                                        modifiers.testFlag(Qt::ShiftModifier));
+        writeSessionGizmoValue(entity, QStringLiteral("rotation"), rotation);
+    }
+    else if (m_sessionDragKind == SessionDragKind::CameraScale)
+    {
+        const QPointF center = QPointF(start.x + start.pivotX,
+                                       start.y + start.pivotY);
+        const QPointF local = rotateVector(mouse - center, -start.rotation);
+        const double width = std::max(1, m_session->settings().width);
+        const double height = std::max(1, m_session->settings().height);
+        double scale = std::max(std::abs(local.x()) * 2.0 / width,
+                                std::abs(local.y()) * 2.0 / height);
+        scale = std::clamp(scale, 0.05, 1.0);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleX"), scale);
+        writeSessionGizmoValue(entity, QStringLiteral("scaleY"), scale);
+    }
+    else
+    {
+        return;
+    }
+
+    m_sessionDragChanged =
+        !transformsEqual(sessionGizmoTransform(entity), start);
+    invalidateSessionImage();
+    update();
+}
+
+void Viewport::drawSessionCameraOverlay(QPainter& painter)
+{
+    if (!m_session || !m_showCameraFrame)
+        return;
+    const Uuid uuid = sessionCameraUuid();
+    if (uuid.isEmpty())
+        return;
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd()
+        || it->content.kind != ContentKind::Camera)
+        return;
+
+    const QPolygonF polygon = sessionCameraPolygon();
+    if (polygon.isEmpty())
+        return;
+
+    const bool selected =
+        m_session->document() && m_session->document()->selection() == uuid;
+    const bool locked = it->locked;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QPainterPath veil;
+    veil.setFillRule(Qt::OddEvenFill);
+    veil.addRect(QRectF(rect()));
+    veil.addPolygon(polygon);
+    veil.closeSubpath();
+    painter.fillPath(veil, QColor(10, 10, 14, 140));
+
+    QPen framePen(QColor(90, 210, 255, selected ? 255 : 200),
+                  selected ? 2.0 : 1.2, Qt::DashLine);
+    if (locked)
+        framePen.setColor(QColor(150, 150, 160, 200));
+    painter.setPen(framePen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPolygon(polygon);
+
+    const QRectF title = sessionCameraTitleRect();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(18, 20, 26, 225));
+    painter.drawRect(title);
+    painter.setPen(QColor(90, 210, 255, 220));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(title);
+    painter.setPen(locked ? QColor(170, 170, 180) : QColor(235, 245, 255));
+    painter.drawText(title.adjusted(7, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                     it->name);
+
+    if (selected && !locked && it->parentUuid.isEmpty())
+    {
+        painter.setPen(QPen(QColor(20, 20, 26), 1.0));
+        painter.setBrush(QColor(90, 210, 255));
+        for (const QPointF& corner : polygon)
+            painter.drawRect(QRectF(corner.x() - 4.0, corner.y() - 4.0, 8.0, 8.0));
+
+        const QPointF handle = sessionCameraRotationHandle();
+        const QPointF topCenter = (polygon[0] + polygon[1]) / 2.0;
+        painter.setPen(QPen(QColor(90, 210, 255), 1.5));
+        painter.drawLine(topCenter, handle);
+        painter.setBrush(QColor(20, 24, 30));
+        painter.drawEllipse(handle, 5.0, 5.0);
+    }
+
     painter.restore();
 }
 
@@ -454,16 +1826,13 @@ void Viewport::paintSession(QPainter& p)
     p.fillRect(rect(), QApplication::palette().color(QPalette::Window));
 
     const QRectF canvas = canvasRect();
-    const Uuid camera = sessionCameraUuid();
-    const int expand = camera.isEmpty() ? sessionExpandPercent() : 0;
+    const int expand = sessionExpandPercent();
 
     p.fillRect(canvas.translated(6, 6), QColor(0, 0, 0, 90));
 
     const QImage image = ensureSessionImage();
     QRectF target = rect();
-    if (!camera.isEmpty())
-        target = canvas;
-    else if (expand > 0)
+    if (expand > 0)
         target = sessionSceneRect();
     if (!image.isNull())
         p.drawImage(target, image);
@@ -478,7 +1847,22 @@ void Viewport::paintSession(QPainter& p)
     p.drawLine(QPointF(canvas.left(), canvas.center().y()),
                QPointF(canvas.right(), canvas.center().y()));
 
+    drawSessionCameraOverlay(p);
     drawSessionSelection(p);
+
+    // CAD-style alignment guides while dragging.
+    if (m_showGuideX)
+    {
+        const double gx = sessionWorldToScreen().map(QPointF(m_guideX, 0.0)).x();
+        p.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
+        p.drawLine(QPointF(gx, canvas.top()), QPointF(gx, canvas.bottom()));
+    }
+    if (m_showGuideY)
+    {
+        const double gy = sessionWorldToScreen().map(QPointF(0.0, m_guideY)).y();
+        p.setPen(QPen(QColor(90, 210, 255), 1.5, Qt::DashLine));
+        p.drawLine(QPointF(canvas.left(), gy), QPointF(canvas.right(), gy));
+    }
 
     if (m_session->project().entities.isEmpty())
     {
@@ -513,6 +1897,8 @@ Camera::State Viewport::cameraState(const Entity& e) const
 
 QPolygonF Viewport::cameraScreenPolygon() const
 {
+    if (sessionMode())
+        return sessionCameraPolygon();
     if (!m_showCameraFrame)
         return QPolygonF();
     const EntityId id = activeCameraEntity();
@@ -1706,8 +3092,50 @@ void Viewport::mousePressEvent(QMouseEvent* event)
             return;
 
         setFocus(Qt::MouseFocusReason);
+
+        // The camera frame is selected through its border/title; clicks inside
+        // pass through to the scene so entities remain editable.
+        if (handleSessionCameraPress(event))
+        {
+            update();
+            return;
+        }
+
+        if (const auto handle = hitSessionGizmo(event->position()))
+        {
+            const SessionDragKind kind =
+                *handle == gizmo::Handle::MoveX ? SessionDragKind::MoveX
+                : *handle == gizmo::Handle::MoveY ? SessionDragKind::MoveY
+                : *handle == gizmo::Handle::CenterScale
+                    ? SessionDragKind::CenterScale
+                : *handle == gizmo::Handle::ScaleTopLeft
+                          || *handle == gizmo::Handle::ScaleTopRight
+                          || *handle == gizmo::Handle::ScaleBottomRight
+                          || *handle == gizmo::Handle::ScaleBottomLeft
+                    ? SessionDragKind::Scale
+                    : SessionDragKind::Rotate;
+            startSessionGizmoDrag(m_session->document()->selection(), kind,
+                                  *handle, event->position());
+            update();
+            return;
+        }
+
         const model::Entity* hit = hitTestSession(event->position());
-        emit uuidSelected(hit ? hit->uuid : Uuid());
+        if (hit)
+        {
+            if (m_session->document())
+                m_session->document()->setSelection(hit->uuid);
+            emit uuidSelected(hit->uuid);
+            if (!hit->locked)
+                startSessionGizmoDrag(hit->uuid, SessionDragKind::Move,
+                                      gizmo::Handle::MoveX, event->position());
+        }
+        else
+        {
+            if (m_session->document())
+                m_session->document()->setSelection(Uuid());
+            emit uuidSelected(Uuid());
+        }
         update();
         return;
     }
@@ -1823,7 +3251,17 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             m_panLast = event->position();
             emit viewChanged();
             update();
+            return;
         }
+        if (m_sessionDragKind == SessionDragKind::CameraMove
+            || m_sessionDragKind == SessionDragKind::CameraRotate
+            || m_sessionDragKind == SessionDragKind::CameraScale)
+        {
+            applySessionCameraDrag(event->position(), event->modifiers());
+            return;
+        }
+        if (m_sessionDragKind != SessionDragKind::None)
+            applySessionGizmoDrag(event->position(), event->modifiers());
         return;
     }
 
@@ -2241,6 +3679,9 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
             m_panning = false;
             unsetCursor();
         }
+        if (event->button() == Qt::LeftButton
+            && m_sessionDragKind != SessionDragKind::None)
+            finishSessionGizmoDrag();
         return;
     }
 
@@ -2298,6 +3739,69 @@ void Viewport::resizeEvent(QResizeEvent* event)
     if (sessionMode())
         invalidateSessionImage();
     emit viewChanged();
+}
+
+void Viewport::keyPressEvent(QKeyEvent* event)
+{
+    if (sessionMode() && event->key() == Qt::Key_Escape
+        && m_sessionDragKind != SessionDragKind::None)
+    {
+        cancelSessionDrag();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+// ---- session gizmo test hooks -------------------------------------------
+
+gizmo::Transform Viewport::gizmoTransformForTest(const Uuid& uuid) const
+{
+    if (!m_session)
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    return it == m_session->project().entities.constEnd()
+               ? gizmo::Transform()
+               : sessionGizmoTransform(it.value());
+}
+
+gizmo::Bounds Viewport::gizmoBoundsForTest(const Uuid& uuid) const
+{
+    if (!m_session)
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    return it == m_session->project().entities.constEnd() ? gizmo::Bounds()
+                                                         : sessionGizmoBounds(it.value());
+}
+
+QPointF Viewport::gizmoHandleForTest(const Uuid& uuid, gizmo::Handle handle) const
+{
+    if (!m_session)
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return {};
+    const QTransform parentToWidget = sessionParentToWidget(it.value());
+    return parentToWidget.map(gizmo::handlePosition(
+        handle, sessionGizmoTransform(it.value()), sessionGizmoBounds(it.value()),
+        sessionViewScaleFor(parentToWidget)));
+}
+
+QPointF Viewport::sessionPivotForTest() const
+{
+    if (!m_session || !m_session->document())
+        return {};
+    const auto it =
+        m_session->project().entities.constFind(m_session->document()->selection());
+    if (it == m_session->project().entities.constEnd())
+        return {};
+    return sessionParentToWidget(it.value())
+        .map(gizmo::worldPivot(sessionGizmoTransform(it.value())));
+}
+
+double Viewport::snapAngleForTest(double degrees, bool force) const
+{
+    return snapSessionAngle(degrees, force);
 }
 
 } // namespace pvf

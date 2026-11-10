@@ -156,11 +156,11 @@ next::WorkbenchServices* EditorSession::workbench()
         return nullptr;
     }
 
-    const Uuid camera = activeCameraUuid();
-    const int expand =
-        camera.isEmpty()
-            ? std::clamp(m_appSettings.workbenchCacheExpandPercent, 0, 200)
-            : 0;
+    // The legacy viewport always edits the whole canvas (the camera is only a
+    // viewfinder overlay), so its whole-frame cache is the canvas cache.  The
+    // monitor renders camera views live and does not read this cache.
+    const Uuid camera;
+    const int expand = std::clamp(m_appSettings.workbenchCacheExpandPercent, 0, 200);
     if (m_workbench && m_workbench->cameraUuid() == camera
         && m_workbench->expandPercent() == expand)
         return m_workbench.get();
@@ -191,16 +191,64 @@ Uuid EditorSession::activeCameraUuid() const
         return {};
 
     const model::Project& project = m_document->project();
+    const auto isVisibleCamera = [&project](const Uuid& uuid) {
+        if (uuid.isEmpty())
+            return false;
+        const auto it = project.entities.constFind(uuid);
+        return it != project.entities.constEnd()
+               && it->content.kind == ContentKind::Camera && !it->hidden;
+    };
+
+    if (m_monitorCameraExplicit)
+        return isVisibleCamera(m_monitorCamera) ? m_monitorCamera : Uuid();
+
     const Uuid selected = m_document->selection();
-    const auto selectedIt = project.entities.constFind(selected);
-    if (selectedIt != project.entities.constEnd()
-        && selectedIt->content.kind == ContentKind::Camera
-        && !selectedIt->hidden)
+    if (isVisibleCamera(selected))
         return selected;
 
-    // The old viewport draws the whole canvas; a camera view is only used when
-    // the user selects that camera.  P3b adds the camera monitor/frame overlay.
     return {};
+}
+
+void EditorSession::setMonitorCameraUuid(const Uuid& uuid)
+{
+    if (uuid.isEmpty())
+    {
+        m_monitorCameraExplicit = true;
+        m_monitorCameraFromSelection = false;
+        m_monitorCamera.clear();
+        return;
+    }
+    if (!m_document)
+        return;
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (it == m_document->project().entities.constEnd()
+        || it->content.kind != ContentKind::Camera)
+        return;
+    m_monitorCamera = uuid;
+    m_monitorCameraExplicit = true;
+    m_monitorCameraFromSelection = false;
+}
+
+void EditorSession::syncSelectionCamera(const Uuid& selected)
+{
+    if (!m_document)
+        return;
+    const auto it = m_document->project().entities.constFind(selected);
+    if (it != m_document->project().entities.constEnd()
+        && it->content.kind == ContentKind::Camera && !it->hidden)
+    {
+        m_monitorCamera = selected;
+        m_monitorCameraExplicit = true;
+        m_monitorCameraFromSelection = true;
+        return;
+    }
+
+    if (m_monitorCameraFromSelection)
+    {
+        m_monitorCamera.clear();
+        m_monitorCameraExplicit = true;
+        m_monitorCameraFromSelection = false;
+    }
 }
 
 int EditorSession::playhead() const

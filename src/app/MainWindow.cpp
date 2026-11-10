@@ -774,6 +774,15 @@ void MainWindow::buildSessionShell()
     m_viewport->setObjectName(QStringLiteral("viewport"));
     m_viewport->setMinimumWidth(480);
 
+    // P3b: the legacy floating monitor, rendering through render2 and the
+    // per-project media services.  It starts docked in the viewport corner.
+    if (m_session)
+    {
+        m_monitor = new CameraMonitor(m_session, m_viewport, m_viewport);
+        m_monitor->setFrame(m_session->playhead());
+        m_monitor->setVisible(Settings::monitorVisible());
+    }
+
     m_sessionProps = new ProjectPropertiesPanel(m_session, this);
     m_sessionEnvironment = new EnvironmentPanel(m_session, this);
 
@@ -850,20 +859,27 @@ void MainWindow::buildSessionShell()
                 updateWindowTitle();
                 if (m_viewport)
                     m_viewport->refreshSession();
+                if (m_monitor)
+                    m_monitor->setProjectChanged();
                 updateSessionStatus();
             });
     connect(m_sessionEnvironment, &EnvironmentPanel::changed, this,
             [this] {
                 if (m_viewport)
                     m_viewport->refreshSession();
+                if (m_monitor)
+                    m_monitor->setProjectChanged();
                 updateSessionStatus();
             });
 
     if (m_session && m_session->document())
     {
         auto* document = m_session->document();
-        connect(document, &next::Document::changed, this,
-                &MainWindow::refreshSession);
+        connect(document, &next::Document::changed, this, [this] {
+            if (m_monitor)
+                m_monitor->setProjectChanged();
+            refreshSession();
+        });
         connect(document, &next::Document::pendingCommitChanged, this,
                 [this](bool) {
                     updateWindowTitle();
@@ -882,6 +898,8 @@ void MainWindow::buildSessionShell()
                 m_timeline->setCurrentFrame(m_frame);
             if (m_viewport)
                 m_viewport->setCurrentFrame(m_frame);
+            if (m_monitor)
+                m_monitor->setFrame(m_frame);
             updateSessionStatus();
         });
         connect(document, &next::Document::selectionChanged, this, [this] {
@@ -893,9 +911,14 @@ void MainWindow::buildSessionShell()
                              : kInvalidEntity;
             if (m_timeline)
                 m_timeline->setSelectedEntity(m_selected);
-            // A selected camera changes the render camera, so the workbench
-            // cache must be rebuilt for that camera before the next paint.
-            m_session->workbench();
+            // Selecting a camera makes it the framing camera and asks the
+            // monitor to show it, matching the legacy interaction.
+            const Uuid selected = m_session->document()->selection();
+            m_session->syncSelectionCamera(selected);
+            if (m_monitor)
+                m_monitor->syncCameraView();
+            // The canvas workbench cache does not depend on the selected
+            // camera, but the monitor and viewfinder do; repaint both.
             if (m_viewport)
                 m_viewport->refreshSession();
             updateSessionStatus();
@@ -908,6 +931,11 @@ void MainWindow::buildSessionShell()
                         if (m_session && m_session->document())
                             m_session->document()->setSelection(uuid);
                     });
+            connect(m_viewport, &Viewport::sessionEditFailed, this,
+                    [this](const QString& message) {
+                        statusBar()->showMessage(
+                            QStringLiteral("编辑失败：%1").arg(message), 5000);
+                    });
             if (auto* playback = m_session->playback())
             {
                 connect(m_viewport, &Viewport::framePresented, playback,
@@ -919,6 +947,36 @@ void MainWindow::buildSessionShell()
                             statusBar()->showMessage(message, 5000);
                         });
             }
+        }
+
+        if (m_monitor)
+        {
+            connect(m_viewport, &Viewport::viewChanged, m_monitor,
+                    &CameraMonitor::updateFromViewport);
+            connect(m_monitor, &CameraMonitor::cameraUuidActivated, this,
+                    [this](const Uuid& uuid) {
+                        if (!m_session)
+                            return;
+                        m_session->setMonitorCameraUuid(uuid);
+                        if (m_viewport)
+                            m_viewport->refreshSession();
+                        updateSessionStatus();
+                    });
+            connect(m_monitor, &CameraMonitor::visibilityChanged, this,
+                    [this](bool visible) {
+                        if (auto* action = findChild<QAction*>(
+                                QStringLiteral("monitorAction")))
+                        {
+                            QSignalBlocker blocker(action);
+                            action->setChecked(visible);
+                        }
+                    });
+            if (auto* playback = m_session->playback())
+                connect(playback, &next::PlaybackController::playbackStateChanged,
+                        m_monitor, [this](bool playing) {
+                            if (m_monitor)
+                                m_monitor->setPlaying(playing);
+                        });
         }
 
         if (m_timeline)
@@ -961,6 +1019,9 @@ void MainWindow::buildSessionShell()
 
     createSessionMenus();
     createSessionToolBar();
+    if (m_viewport)
+        m_viewport->setAutoKeyEnabled(!m_autoKeyAction
+                                      || m_autoKeyAction->isChecked());
     refreshSession();
     updateSessionPlaybackUi();
     updateWindowTitle();
@@ -1038,6 +1099,20 @@ void MainWindow::createSessionMenus()
     });
     addAction(m_redoAction);
     editMenu->addAction(m_redoAction);
+    editMenu->addSeparator();
+
+    m_autoKeyAction =
+        new QAction(Lang::t(QStringLiteral("action.autoKey"),
+                            QStringLiteral("自动关键帧")),
+                    this);
+    m_autoKeyAction->setObjectName(QStringLiteral("autoKeyAction"));
+    m_autoKeyAction->setCheckable(true);
+    m_autoKeyAction->setChecked(Settings::autoKeyDefault());
+    connect(m_autoKeyAction, &QAction::toggled, this, [this](bool on) {
+        if (m_viewport)
+            m_viewport->setAutoKeyEnabled(on);
+    });
+    editMenu->addAction(m_autoKeyAction);
 
     auto* playMenu =
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.play"), QStringLiteral("播放")));
@@ -1103,6 +1178,35 @@ void MainWindow::createSessionMenus()
     addAction(m_fitAction);
     playMenu->addAction(m_fitAction);
 
+    auto* viewMenu =
+        menuBar()->addMenu(Lang::t(QStringLiteral("menu.view"), QStringLiteral("视图")));
+    auto* cameraFrameAction = new QAction(
+        Lang::t(QStringLiteral("action.cameraFrame"),
+                QStringLiteral("显示摄像机取景框")),
+        this);
+    cameraFrameAction->setObjectName(QStringLiteral("cameraFrameAction"));
+    cameraFrameAction->setCheckable(true);
+    cameraFrameAction->setChecked(Settings::showCameraFrame());
+    connect(cameraFrameAction, &QAction::toggled, this, [this](bool on) {
+        Settings::setShowCameraFrame(on);
+        if (m_viewport)
+            m_viewport->setCameraFrameVisible(on);
+    });
+    viewMenu->addAction(cameraFrameAction);
+
+    auto* monitorAction = new QAction(
+        Lang::t(QStringLiteral("action.monitor"), QStringLiteral("摄像机监视器")),
+        this);
+    monitorAction->setObjectName(QStringLiteral("monitorAction"));
+    monitorAction->setCheckable(true);
+    monitorAction->setChecked(Settings::monitorVisible());
+    connect(monitorAction, &QAction::toggled, this, [this](bool on) {
+        if (m_monitor)
+            m_monitor->setVisibleFromMenu(on);
+    });
+    viewMenu->addAction(monitorAction);
+    viewMenu->addAction(m_fitAction);
+
     auto* helpMenu =
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.help"), QStringLiteral("帮助")));
     helpMenu->addAction(
@@ -1130,6 +1234,8 @@ void MainWindow::createSessionToolBar()
         bar->addAction(m_endAction);
     if (m_fitAction)
         bar->addAction(m_fitAction);
+    if (m_autoKeyAction)
+        bar->addAction(m_autoKeyAction);
 }
 
 void MainWindow::refreshSession()
@@ -1167,6 +1273,8 @@ void MainWindow::sessionGoToFrame(int frame)
         m_timeline->setCurrentFrame(clamped);
     if (m_viewport)
         m_viewport->setCurrentFrame(clamped);
+    if (m_monitor)
+        m_monitor->setFrame(clamped);
     updateSessionStatus();
 }
 

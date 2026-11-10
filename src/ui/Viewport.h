@@ -3,23 +3,25 @@
 #include "common/Types.h"
 #include "core/Camera.h"
 #include "core/Project.h"
+#include "gizmo/Gizmo.h"
+#include "model/Entity.h"
 
 #include <QImage>
 #include <QPointF>
 #include <QPolygonF>
 #include <QTransform>
+#include <QVector>
 #include <QWidget>
 
+#include <optional>
+
+class QKeyEvent;
 class QPainter;
 class QToolButton;
 
 namespace pvf {
 
 class EditorSession;
-
-namespace model {
-struct Entity;
-}
 
 class Viewport : public QWidget
 {
@@ -66,6 +68,23 @@ public:
     void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }
 
+    // Session gizmo: auto-key writes the current frame's keyframe in addition
+    // to the static value (same rule as the new viewport).
+    void setAutoKeyEnabled(bool on) { m_autoKeyEnabled = on; }
+    bool autoKeyEnabled() const { return m_autoKeyEnabled; }
+
+    // Session gizmo test hooks.
+    gizmo::Transform gizmoTransformForTest(const Uuid& uuid) const;
+    gizmo::Bounds gizmoBoundsForTest(const Uuid& uuid) const;
+    QPointF gizmoHandleForTest(const Uuid& uuid, gizmo::Handle handle) const;
+    QPointF sessionPivotForTest() const;
+    double snapAngleForTest(double degrees, bool force) const;
+    bool sessionDraggingForTest() const
+    {
+        return m_sessionDragKind != SessionDragKind::None;
+    }
+    Uuid sessionDragUuidForTest() const { return m_sessionDragUuid; }
+
 signals:
     void entitySelected(EntityId id);
     // Session shell selection: UUIDs are the new model's entity identity.
@@ -81,6 +100,8 @@ signals:
     void comicTipEdited(EntityId id, double tipX, double tipY);
     void workbenchRequested();
     void viewChanged();
+    // A session gizmo/camera commit failed; the shell shows the message.
+    void sessionEditFailed(const QString& message);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -89,6 +110,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     enum class GizmoMode
@@ -140,6 +162,50 @@ private:
     void paintSession(QPainter& painter);
     void drawSessionSelection(QPainter& painter);
     const model::Entity* hitTestSession(const QPointF& pos) const;
+
+    // ---- session gizmo (gizmo:: math) -----------------------------------
+    enum class SessionDragKind
+    {
+        None,
+        Move,
+        MoveX,
+        MoveY,
+        Rotate,
+        Scale,
+        CenterScale,
+        Pivot,
+        CameraMove,
+        CameraRotate,
+        CameraScale
+    };
+
+    gizmo::Transform sessionGizmoTransform(const model::Entity& entity) const;
+    gizmo::Bounds sessionGizmoBounds(const model::Entity& entity) const;
+    QTransform sessionParentToWidget(const model::Entity& entity) const;
+    double sessionViewScaleFor(const QTransform& parentToWidget) const;
+    std::optional<gizmo::Handle> hitSessionGizmo(const QPointF& pos) const;
+    void startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
+                               gizmo::Handle handle, const QPointF& pos);
+    void applySessionGizmoDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    void finishSessionGizmoDrag();
+    void cancelSessionDrag();
+    void writeSessionGizmoValue(model::Entity& entity, const QString& property,
+                                double value);
+    void drawSessionGizmo(QPainter& painter);
+    void collectSessionSnapTargets(const Uuid& uuid);
+    double snapSessionAxis(double value, bool xAxis);
+    double snapSessionPixel(double value) const;
+    double snapSessionAngle(double degrees, bool force) const;
+
+    // ---- session camera viewfinder --------------------------------------
+    QPolygonF sessionCameraPolygon() const;
+    QPointF sessionCameraScreenCenter() const;
+    QPointF sessionCameraRotationHandle() const;
+    QRectF sessionCameraTitleRect() const;
+    CameraPart sessionCameraHitTest(const QPointF& pos) const;
+    bool handleSessionCameraPress(QMouseEvent* event);
+    void applySessionCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    void drawSessionCameraOverlay(QPainter& painter);
 
     EntityId activeCameraEntity() const;
     Camera::State cameraState(const Entity& e) const;
@@ -229,6 +295,29 @@ private:
     int m_sessionImageFrame = -1;
     Uuid m_sessionImageCamera;
     int m_sessionImageExpand = -1;
+
+    // ---- session gizmo state --------------------------------------------
+    bool m_autoKeyEnabled = true;
+    SessionDragKind m_sessionDragKind = SessionDragKind::None;
+    Uuid m_sessionDragUuid;
+    model::Entity m_sessionDragStart;
+    gizmo::Handle m_sessionDragHandle = gizmo::Handle::MoveX;
+    gizmo::Transform m_sessionDragTransform;
+    gizmo::Bounds m_sessionDragBounds;
+    QTransform m_sessionDragParentToWidget;
+    double m_sessionDragViewScale = 1.0;
+    QPointF m_sessionDragStartParent;
+    QPointF m_sessionDragPivotStart;
+    QPointF m_sessionDragCenterStart;
+    double m_sessionDragAnglePivot = 0.0;
+    double m_sessionDragAngleCenter = 0.0;
+    QPointF m_sessionDragGrabOffset;
+    bool m_sessionDragChanged = false;
+    bool m_sessionDragSnapRoot = false;
+    QRectF m_sessionDragStartWorldBounds;
+    QVector<double> m_sessionSnapTargetsX;
+    QVector<double> m_sessionSnapTargetsY;
+    double m_sessionCameraStartAngle = 0.0;
 };
 
 } // namespace pvf

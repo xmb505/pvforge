@@ -1,8 +1,10 @@
 #pragma once
 
+#include "common/Types.h"
 #include "core/Project.h"
 
 #include <QElapsedTimer>
+#include <QImage>
 #include <QList>
 #include <QPoint>
 #include <QRect>
@@ -31,9 +33,14 @@ class QWidgetAction;
 
 namespace pvf {
 
+class EditorSession;
 class VideoPlayer;
 class VideoProxyGenerator;
 class Viewport;
+
+namespace video2 {
+class VideoFrames;
+}
 
 // OBS-style viewer for the final camera image. It starts as a floating child
 // in the bottom-right of the viewport and can be dragged out into its own
@@ -44,6 +51,10 @@ class CameraMonitor : public QWidget
 
 public:
     CameraMonitor(Project* project, Viewport* viewport, QWidget* parent = nullptr);
+    // Session shell: renders the camera through render2 + MediaServices and
+    // decodes the trace reference video through video2::VideoFrames.
+    CameraMonitor(EditorSession* session, Viewport* viewport,
+                  QWidget* parent = nullptr);
     ~CameraMonitor() override;
 
     void setFrame(int frame);
@@ -65,8 +76,18 @@ public:
     bool isStreaming() const { return m_streaming; }
     QString streamUrlForTest() const { return currentStreamUrl(); }
 
+    // Session test hooks.
+    QImage previewImageForTest() const { return m_sessionPreview; }
+    QImage traceImageForTest() const { return m_traceImage; }
+    double traceOpacityForTest() const { return m_traceOpacity; }
+    QString traceErrorForTest() const { return m_traceError; }
+    Uuid monitorCameraForTest() const;
+    bool sessionMode() const { return m_session != nullptr; }
+
 signals:
     void cameraActivated(EntityId id);
+    // Session shell: the monitor combo switched the framing camera.
+    void cameraUuidActivated(const Uuid& uuid);
     void visibilityChanged(bool visible);
 
 protected:
@@ -123,7 +144,15 @@ private:
     void restoreFromStreaming();
     QImage renderStreamImage() const;
 
+    // ---- session shell --------------------------------------------------
+    void rebuildSessionCameraCombo();
+    void invalidateSessionPreview();
+    QImage ensureSessionPreview();
+    QImage renderSessionImage(const QSize& size) const;
+    void updateTraceImageSession();
+
     Project* m_project = nullptr;
+    EditorSession* m_session = nullptr;
     Viewport* m_viewport = nullptr;
     QComboBox* m_cameraCombo = nullptr;
     QLabel* m_fpsLabel = nullptr;
@@ -146,6 +175,16 @@ private:
     EntityId m_traceEntity = kInvalidEntity;
     QImage m_traceImage;
     double m_traceOpacity = 0.45;
+
+    // Session shell: render2 preview and video2 trace decoder.
+    std::unique_ptr<video2::VideoFrames> m_traceFrames;
+    QString m_traceError;
+    QImage m_sessionPreview;
+    bool m_sessionPreviewValid = false;
+    int m_sessionPreviewFrame = -1;
+    QSize m_sessionPreviewSize;
+    Uuid m_sessionPreviewCamera;
+    bool m_sessionPreviewHighQuality = false;
 
     QMenu* m_streamMenu = nullptr;
     QAction* m_streamAction = nullptr;

@@ -130,6 +130,7 @@ target_include_directories(pvforge PRIVATE src)
 target_link_libraries(pvforge PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Multimedia Qt6::Network
     PkgConfig::FFMPEG
+    pvf_gizmo
 )
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)

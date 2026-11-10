@@ -74,10 +74,14 @@ public:
     next::WorkbenchServices* workbench();
     const next::AppSettings& appSettings() const { return m_appSettings; }
 
-    // Camera used for render2::Options::cameraUuid.  The selected camera wins;
-    // otherwise the old viewport's whole-canvas view is used (empty uuid).
-    // P3b adds the camera frame overlay and monitor.
+    // Camera used for the viewport viewfinder overlay and the camera monitor.
+    // The explicitly chosen monitor camera wins; otherwise the selected
+    // camera.  Empty means "whole canvas" and no frame.
     Uuid activeCameraUuid() const;
+    void setMonitorCameraUuid(const Uuid& uuid);
+    // Mirrors the legacy "selecting a camera makes it the framing camera"
+    // rule.  Clearing the selection returns to the explicit monitor choice.
+    void syncSelectionCamera(const Uuid& selected);
 
     int playhead() const;
     void setPlayhead(int frame);
@@ -102,6 +106,9 @@ private:
     std::unique_ptr<next::WorkbenchServices> m_workbench;
     std::unique_ptr<next::PlaybackController> m_playback;
     std::unique_ptr<EditActions> m_editActions;
+    Uuid m_monitorCamera;
+    bool m_monitorCameraExplicit = false;
+    bool m_monitorCameraFromSelection = false;
 };
 
 // Recent project directories, newest first.  Entries that are no longer a
