@@ -73,6 +73,25 @@ bool writeAssetName(const assets::StoredAsset& asset, const QString& name,
     return true;
 }
 
+// Paths inside the project need no confirmation. Anything else copies an
+// arbitrary local file/directory into the project, so the human has to say yes.
+// Canonical paths resolve symlinks, so a link inside the project that points
+// outside still counts as outside.
+QString normalizedPath(const QFileInfo& info)
+{
+    const QString canonical = info.canonicalFilePath();
+    return canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath())
+                               : canonical;
+}
+
+bool isInsideProject(const QString& root, const QFileInfo& source)
+{
+    const QString base = normalizedPath(QFileInfo(root));
+    const QString target = normalizedPath(source);
+    return target == base
+           || target.startsWith(base + QLatin1Char('/'));
+}
+
 bool isVisualGroup(AssetType type)
 {
     return type == AssetType::Image || type == AssetType::Video
@@ -150,6 +169,7 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     static const QStringList allowed = {
         QStringLiteral("path"), QStringLiteral("name"),
         QStringLiteral("type"), QStringLiteral("extractAudio"),
+        QStringLiteral("confirm"),
     };
     for (auto it = args.constBegin(); it != args.constEnd(); ++it)
     {
@@ -177,6 +197,18 @@ Result assetImport(Tx& tx, const QJsonObject& args)
         details.insert(QStringLiteral("size"), double(source.size()));
         return failure(QStringLiteral("limit_exceeded"),
                        QStringLiteral("素材文件超过 2GB 上限"), details);
+    }
+
+    bool confirm = false;
+    if (!readBool(args, "confirm", &confirm, &error))
+        return error;
+    if (!confirm && !isInsideProject(tx.store->root(), source))
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("path"), normalizedPath(source));
+        details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
+        return failure(QStringLiteral("confirm_required"),
+                       QStringLiteral("导入工程目录外的素材需要 confirm"), details);
     }
 
     QString name;

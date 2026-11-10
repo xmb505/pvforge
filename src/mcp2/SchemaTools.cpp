@@ -158,7 +158,8 @@ QJsonObject schemaTopic(const QString& topic)
                            QStringLiteral("allowedTracks"), QStringLiteral("missing"),
                            QStringLiteral("index"), QStringLiteral("lockedBy"),
                            QStringLiteral("conflicts"), QStringLiteral("requires"),
-                           QStringLiteral("affected"), QStringLiteral("reason")}));
+                           QStringLiteral("affected"), QStringLiteral("reason"),
+                           QStringLiteral("path")}));
         return schema;
     }
     if (topic == QLatin1String("solver"))
@@ -257,6 +258,7 @@ QString guideMarkdown(const QString& topic)
         return QStringLiteral(
             "# 素材\n"
             "- `asset.import` 只接受本地绝对路径；相同内容按 sha256 去重。\n"
+            "- 工程目录内的路径可直接导入；工程目录外（或从工程内软链到工程外）必须带 `confirm: true`，否则返回 `confirm_required`（details.path = 规范化后的路径）。\n"
             "- 素材存在 `assets/`，不进 git；纯素材导入没有文本 diff 时不产生 commit。\n"
             "- 视频默认拆出 WAV 音频素材，返回 `asset` 与 `audioAsset` 两个 hash。\n"
             "- HTML 必须两步：先 `asset.import` 导入 `.pvhtml`，再 `entity.create`/`asset.assign`。\n"
@@ -542,11 +544,13 @@ QJsonObject listTools()
 
     tools.append(toolSchema(
         QStringLiteral("asset.import"),
-        QStringLiteral("把本地文件/目录复制进工程素材库（单文件/包上限 2GB），视频自动拆 WAV"),
-        objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径"))},
+        QStringLiteral("把本地文件/目录复制进工程素材库（单文件/包上限 2GB），"
+                       "视频自动拆 WAV；工程外路径需 confirm"),
+        objectSchema({{QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("本地绝对路径；工程目录外需 confirm"))},
                       {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("type"), prop(QStringLiteral("string"), QStringLiteral("image|video|audio|html"))},
-                      {QStringLiteral("extractAudio"), prop(QStringLiteral("boolean"), QStringLiteral("视频默认 true"))}},
+                      {QStringLiteral("extractAudio"), prop(QStringLiteral("boolean"), QStringLiteral("视频默认 true"))},
+                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QStringLiteral("导入工程目录外的路径时必须为 true"))}},
                      {QStringLiteral("path")})));
     tools.append(toolSchema(
         QStringLiteral("asset.list"),

@@ -15,7 +15,7 @@ struct AppSettings
     // HTML
     bool htmlCacheEnabled = true;
     qint64 htmlMemoryBytes = 256LL * 1024 * 1024;
-    qint64 htmlDiskBytes = 2LL * 1024 * 1024 * 1024;
+    qint64 htmlDiskBytes = 1LL * 1024 * 1024 * 1024;
     double htmlScale = 0.5; // project-resolution factor: 0.25/0.5/0.75/1.0
     int htmlMaxWidth = 1280;
     int watchdogMs = 3000;

@@ -176,6 +176,7 @@ private slots:
     void lockedEntityRejectsWrite();
     void deleteRequiresConfirm();
     void assetImportDeduplicates();
+    void assetImportOutsideNeedsConfirm();
     void markersSetListRemove();
     void historyUndoRedo();
     void defaultRowIsHighestPlusOne();
@@ -870,7 +871,8 @@ void Mcp2Tests::assetImportDeduplicates()
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
                      QJsonObject{{QStringLiteral("path"), imagePath},
-                                 {QStringLiteral("name"), QStringLiteral("红图")}});
+                                 {QStringLiteral("name"), QStringLiteral("红图")},
+                                 {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
              qPrintable(result.value(QStringLiteral("error"))
                             .toObject()
@@ -890,7 +892,8 @@ void Mcp2Tests::assetImportDeduplicates()
 
     result = fixture.call(QStringLiteral("asset.import"),
                           QJsonObject{{QStringLiteral("path"), imagePath},
-                                      {QStringLiteral("name"), QStringLiteral("另一个名字")}});
+                                      {QStringLiteral("name"), QStringLiteral("另一个名字")},
+                                      {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     data = result.value(QStringLiteral("data")).toObject();
     QCOMPARE(data.value(QStringLiteral("deduplicated")).toBool(), true);
@@ -908,6 +911,46 @@ void Mcp2Tests::assetImportDeduplicates()
                  .toArray()
                  .size(),
              1);
+}
+
+void Mcp2Tests::assetImportOutsideNeedsConfirm()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString outsidePath = fixture.temp.filePath(QStringLiteral("outside.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::cyan);
+    QVERIFY(image.save(outsidePath));
+
+    QJsonObject result =
+        fixture.call(QStringLiteral("asset.import"),
+                     QJsonObject{{QStringLiteral("path"), outsidePath}});
+    QCOMPARE(errorCode(result), QStringLiteral("confirm_required"));
+    QCOMPARE(result.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("details")).toObject()
+                 .value(QStringLiteral("path")).toString(),
+             QFileInfo(outsidePath).canonicalFilePath());
+    QVERIFY(fixture.store->assets().list().isEmpty());
+
+    result = fixture.call(QStringLiteral("asset.import"),
+                          QJsonObject{{QStringLiteral("path"), outsidePath},
+                                      {QStringLiteral("confirm"), true}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("asset")).toObject()
+                 .value(QStringLiteral("hash")).toString().size(),
+             64);
+
+    // A file inside the project root imports without confirmation.
+    const QString insidePath = fixture.store->root() + QStringLiteral("/inside.png");
+    QImage inside(4, 4, QImage::Format_ARGB32);
+    inside.fill(Qt::yellow);
+    QVERIFY(inside.save(insidePath));
+    result = fixture.call(QStringLiteral("asset.import"),
+                          QJsonObject{{QStringLiteral("path"), insidePath}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(fixture.store->assets().list().size(), 2);
 }
 
 void Mcp2Tests::markersSetListRemove()
@@ -1127,7 +1170,8 @@ void Mcp2Tests::assetAssignAndUnassign()
 
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath}});
+                     QJsonObject{{QStringLiteral("path"), imagePath},
+                                 {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2222,7 +2266,8 @@ void Mcp2Tests::textualContentCanBecomeEmpty()
     QVERIFY(image.save(imagePath));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath}});
+                     QJsonObject{{QStringLiteral("path"), imagePath},
+                                 {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2420,7 +2465,8 @@ void Mcp2Tests::assetSourceInClamped()
     QVERIFY(writeWav(wavPath, 0.2, 44100));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), wavPath}});
+                     QJsonObject{{QStringLiteral("path"), wavPath},
+                                 {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2465,7 +2511,8 @@ void Mcp2Tests::assetMissingContentStillListed()
     QVERIFY(image.save(imagePath));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath}});
+                     QJsonObject{{QStringLiteral("path"), imagePath},
+                                 {QStringLiteral("confirm"), true}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()

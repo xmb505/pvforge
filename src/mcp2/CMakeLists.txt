@@ -75,6 +75,7 @@ if(BUILD_TESTING)
         lockedEntityRejectsWrite
         deleteRequiresConfirm
         assetImportDeduplicates
+        assetImportOutsideNeedsConfirm
         markersSetListRemove
         historyUndoRedo
         defaultRowIsHighestPlusOne
