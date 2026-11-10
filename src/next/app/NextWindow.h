@@ -21,6 +21,8 @@ class QComboBox;
 class QDialog;
 class QDockWidget;
 class QLabel;
+class QPushButton;
+class QSlider;
 class QSpinBox;
 class QTimer;
 
@@ -32,6 +34,7 @@ class Service;
 namespace pvf::next {
 
 class AssetPanel;
+class CameraMonitorWidget;
 class HistoryPanel;
 class McpLogPanel;
 class MediaServices;
@@ -182,6 +185,10 @@ public:
     QDockWidget* mcpLogDockForTest() const { return m_mcpLogDock; }
     QAction* mcpLogActionForTest() const { return m_mcpLogAction; }
 
+    CameraMonitorWidget* cameraMonitorForTest() const { return m_cameraMonitor; }
+    QDockWidget* cameraMonitorDockForTest() const { return m_cameraMonitorDock; }
+    QAction* cameraMonitorActionForTest() const { return m_cameraMonitorAction; }
+
     // Recent projects persisted under the QSettings key "recent/projects".
     int recentProjectCountForTest() const;
     QString recentProjectForTest(int index) const;
@@ -328,6 +335,14 @@ private:
     QDockWidget* m_mcpLogDock = nullptr;
     QAction* m_mcpLogAction = nullptr;
     bool m_mcpAutoShown = false;
+
+    CameraMonitorWidget* m_cameraMonitor = nullptr;
+    QDockWidget* m_cameraMonitorDock = nullptr;
+    QAction* m_cameraMonitorAction = nullptr;
+    QPushButton* m_cameraImportButton = nullptr;
+    QPushButton* m_cameraClearButton = nullptr;
+    QSlider* m_cameraOpacitySlider = nullptr;
+    QLabel* m_cameraOpacityLabel = nullptr;
 
     HistoryPanel* m_historyPanel = nullptr;
     QDockWidget* m_historyDock = nullptr;

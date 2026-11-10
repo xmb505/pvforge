@@ -91,6 +91,8 @@ add_library(pvf_next_app STATIC
     NextWindow.h
     MediaServices.cpp
     MediaServices.h
+    CameraMonitorWidget.cpp
+    CameraMonitorWidget.h
     WorkbenchServices.cpp
     WorkbenchServices.h
     WorkbenchPanel.cpp
@@ -186,5 +188,13 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_workbench_services_tests PRIVATE pvf_next_app Qt6::Test)
     add_test(NAME next.workbench_integration COMMAND pvf_workbench_services_tests)
     set_tests_properties(next.workbench_integration PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+
+    add_executable(pvf_camera_monitor_tests tests/CameraMonitorTests.cpp)
+    target_link_libraries(pvf_camera_monitor_tests PRIVATE pvf_next_app Qt6::Test)
+    target_compile_definitions(pvf_camera_monitor_tests PRIVATE
+        PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME next.camera_monitor COMMAND pvf_camera_monitor_tests)
+    set_tests_properties(next.camera_monitor PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

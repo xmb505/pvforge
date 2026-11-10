@@ -4,6 +4,7 @@
 #include "html/HtmlBrowser.h"
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
+#include "next/app/CameraMonitorWidget.h"
 #include "next/app/ExportDialog.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
@@ -63,6 +64,7 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStandardPaths>
@@ -941,6 +943,125 @@ void NextWindow::buildUi()
     viewMenu->addAction(m_fitViewAction);
 
     viewMenu->addSeparator();
+    m_cameraMonitorAction = new QAction(tr("相机监视器"), this);
+    m_cameraMonitorAction->setObjectName(
+        QStringLiteral("showCameraMonitorAction"));
+    m_cameraMonitorAction->setCheckable(true);
+    m_cameraMonitorAction->setChecked(true);
+    connect(m_cameraMonitorAction, &QAction::toggled, this,
+            [this](bool checked) {
+                if (!m_cameraMonitorDock)
+                    return;
+                m_cameraMonitorDock->setVisible(checked);
+                if (checked)
+                {
+                    m_cameraMonitorDock->raise();
+                    if (m_mcpLogDock && m_mcpLogDock->isVisible())
+                    {
+                        const int half = std::max(200, width() / 2);
+                        resizeDocks({m_cameraMonitorDock, m_mcpLogDock},
+                                    {half, half}, Qt::Horizontal);
+                    }
+                }
+            });
+    viewMenu->addAction(m_cameraMonitorAction);
+
+    m_cameraMonitor = new CameraMonitorWidget(nullptr, nullptr);
+    auto* monitorContainer = new QWidget(this);
+    monitorContainer->setObjectName(QStringLiteral("cameraMonitorContainer"));
+    auto* monitorLayout = new QVBoxLayout(monitorContainer);
+    monitorLayout->setContentsMargins(0, 0, 0, 0);
+    monitorLayout->setSpacing(0);
+    monitorLayout->addWidget(m_cameraMonitor, 1);
+
+    auto* monitorControls = new QHBoxLayout;
+    monitorControls->setContentsMargins(6, 2, 6, 2);
+    monitorControls->setSpacing(6);
+    m_cameraImportButton = new QPushButton(tr("临摹视频…"), monitorContainer);
+    m_cameraImportButton->setObjectName(
+        QStringLiteral("cameraMonitorImportButton"));
+    m_cameraImportButton->setToolTip(
+        tr("选择本地视频，按播放头时间叠加在相机画面下面。"));
+    monitorControls->addWidget(m_cameraImportButton);
+
+    m_cameraClearButton = new QPushButton(tr("清除"), monitorContainer);
+    m_cameraClearButton->setObjectName(
+        QStringLiteral("cameraMonitorClearButton"));
+    m_cameraClearButton->setEnabled(false);
+    monitorControls->addWidget(m_cameraClearButton);
+    monitorControls->addStretch(1);
+
+    auto* opacityLabel = new QLabel(tr("透明度"), monitorContainer);
+    monitorControls->addWidget(opacityLabel);
+    m_cameraOpacitySlider = new QSlider(Qt::Horizontal, monitorContainer);
+    m_cameraOpacitySlider->setObjectName(
+        QStringLiteral("cameraMonitorOpacitySlider"));
+    m_cameraOpacitySlider->setRange(0, 100);
+    m_cameraOpacitySlider->setValue(45);
+    m_cameraOpacitySlider->setMaximumWidth(120);
+    monitorControls->addWidget(m_cameraOpacitySlider);
+    m_cameraOpacityLabel = new QLabel(tr("45%"), monitorContainer);
+    m_cameraOpacityLabel->setMinimumWidth(34);
+    monitorControls->addWidget(m_cameraOpacityLabel);
+    monitorLayout->addLayout(monitorControls);
+
+    connect(m_cameraOpacitySlider, &QSlider::valueChanged, this,
+            [this](int value) {
+                if (m_cameraMonitor)
+                    m_cameraMonitor->setReferenceOpacity(value / 100.0);
+                if (m_cameraOpacityLabel)
+                    m_cameraOpacityLabel->setText(
+                        tr("%1%").arg(value));
+            });
+    connect(m_cameraImportButton, &QPushButton::clicked, this, [this] {
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("导入临摹视频"), m_lastBrowseDir,
+            tr("视频文件 (*.mp4 *.webm *.mov *.mkv *.avi *.m4v);;所有文件 (*)"));
+        if (path.isEmpty())
+            return;
+        m_lastBrowseDir = QFileInfo(path).absolutePath();
+        QString error;
+        if (!m_cameraMonitor || !m_cameraMonitor->setReferenceVideo(path, &error)) {
+            statusBar()->showMessage(
+                tr("无法加载临摹视频：%1").arg(error), 8000);
+            return;
+        }
+        statusBar()->showMessage(
+            tr("临摹视频已加载：%1").arg(QFileInfo(path).fileName()), 5000);
+    });
+    connect(m_cameraClearButton, &QPushButton::clicked, this, [this] {
+        if (m_cameraMonitor)
+            m_cameraMonitor->clearReference();
+    });
+    connect(m_cameraMonitor, &CameraMonitorWidget::referenceChanged, this,
+            [this] {
+                if (m_cameraClearButton && m_cameraMonitor) {
+                    m_cameraClearButton->setEnabled(
+                        !m_cameraMonitor->referencePath().isEmpty());
+                }
+            });
+
+    m_cameraMonitorDock = new QDockWidget(tr("相机监视器"), this);
+    m_cameraMonitorDock->setObjectName(QStringLiteral("cameraMonitorDock"));
+    m_cameraMonitorDock->setAllowedAreas(Qt::TopDockWidgetArea
+                                         | Qt::BottomDockWidgetArea);
+    m_cameraMonitorDock->setFeatures(QDockWidget::DockWidgetClosable
+                                     | QDockWidget::DockWidgetMovable
+                                     | QDockWidget::DockWidgetFloatable);
+    m_cameraMonitorDock->setWidget(monitorContainer);
+    addDockWidget(Qt::TopDockWidgetArea, m_cameraMonitorDock);
+
+    connect(m_cameraMonitorDock, &QDockWidget::visibilityChanged, this,
+            [this](bool visible) {
+                if (!isVisible())
+                    return;
+                if (m_cameraMonitorAction
+                    && m_cameraMonitorAction->isChecked() != visible) {
+                    QSignalBlocker blocker(m_cameraMonitorAction);
+                    m_cameraMonitorAction->setChecked(visible);
+                }
+            });
+
     m_mcpLogAction = new QAction(tr("MCP 日志"), this);
     m_mcpLogAction->setObjectName(QStringLiteral("showMcpLogAction"));
     m_mcpLogAction->setCheckable(true);
@@ -961,7 +1082,10 @@ void NextWindow::buildUi()
                               | QDockWidget::DockWidgetMovable
                               | QDockWidget::DockWidgetFloatable);
     m_mcpLogDock->setWidget(m_mcpLogPanel);
-    addDockWidget(Qt::BottomDockWidgetArea, m_mcpLogDock);
+    // Top dock area, right of the camera monitor (the view menu keeps its own
+    // 相机监视器 toggle).  Both docks share the top strip; neither fills it.
+    addDockWidget(Qt::TopDockWidgetArea, m_mcpLogDock);
+    splitDockWidget(m_cameraMonitorDock, m_mcpLogDock, Qt::Horizontal);
     m_mcpLogDock->hide();
 
     connect(m_mcpLogPanel, &McpLogPanel::visibilityChanged, this,
@@ -1149,6 +1273,9 @@ void NextWindow::buildUi()
     connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         if (m_viewport && m_cameraCombo)
             m_viewport->setCameraUuid(m_cameraCombo->currentData().toString());
+        if (m_cameraMonitor && m_cameraCombo)
+            m_cameraMonitor->setCameraUuid(
+                m_cameraCombo->currentData().toString());
         ensureWorkbenchServices();
     });
     toolbar->addWidget(m_cameraCombo);
@@ -1543,6 +1670,8 @@ void NextWindow::ensureMediaServices()
 
     if (!m_mediaProvidersAttached)
         attachMediaProviders();
+    if (m_cameraMonitor)
+        m_cameraMonitor->setContext(m_document, m_media.get());
 }
 
 void NextWindow::configureVideoExtraction()
@@ -1562,6 +1691,10 @@ void NextWindow::configureVideoExtraction()
 
 void NextWindow::resetMediaServices()
 {
+    // The monitor holds the media pointer for its frame providers; detach it
+    // before the service (and the document behind it) goes away.
+    if (m_cameraMonitor)
+        m_cameraMonitor->setContext(nullptr, nullptr);
     if (m_viewport) {
         m_viewport->setVideoFrameProvider({});
         m_viewport->setHtmlFrameProvider({});
@@ -1796,6 +1929,9 @@ void NextWindow::rebuildCameras()
 
     if (m_viewport)
         m_viewport->setCameraUuid(m_cameraCombo->currentData().toString());
+    if (m_cameraMonitor)
+        m_cameraMonitor->setCameraUuid(
+            m_cameraCombo->currentData().toString());
 }
 
 void NextWindow::createEntity(ContentKind kind)
@@ -2616,6 +2752,8 @@ void NextWindow::applySettings(const AppSettings& previous)
         m_media->applySettings(m_settings);
         if (m_viewport)
             m_viewport->refresh();
+        if (m_cameraMonitor)
+            m_cameraMonitor->refresh();
     }
 
     // The cache directory key includes the scale and expansion, so a workbench
@@ -2901,6 +3039,13 @@ void NextWindow::showMcpLog()
     if (!m_mcpLogDock)
         return;
     m_mcpLogDock->show();
+    // Keep the log beside the camera monitor instead of letting its wide size
+    // hint squeeze the monitor into a narrow strip.
+    if (m_cameraMonitorDock) {
+        const int half = std::max(200, width() / 2);
+        resizeDocks({m_cameraMonitorDock, m_mcpLogDock}, {half, half},
+                    Qt::Horizontal);
+    }
     if (m_mcpLogPanel) {
         m_mcpLogPanel->show();
         m_mcpLogPanel->raise();

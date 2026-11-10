@@ -2,6 +2,7 @@
 
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
+#include "next/app/CameraMonitorWidget.h"
 #include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
@@ -1873,6 +1874,69 @@ private slots:
         QVERIFY(window->viewportForTest()->isEnabled());
         verifyWriteActions(true);
         QVERIFY(statusAi->isHidden());
+    }
+
+    void cameraMonitorDockSharesTopAreaWithMcpLog()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+        window->show();
+        QCoreApplication::processEvents();
+
+        CameraMonitorWidget* monitor = window->cameraMonitorForTest();
+        QDockWidget* monitorDock = window->cameraMonitorDockForTest();
+        QDockWidget* logDock = window->mcpLogDockForTest();
+        QAction* monitorAction = window->cameraMonitorActionForTest();
+        QAction* logAction = window->mcpLogActionForTest();
+        QVERIFY(monitor != nullptr);
+        QVERIFY(monitorDock != nullptr);
+        QVERIFY(logDock != nullptr);
+        QVERIFY(monitorAction != nullptr);
+        QVERIFY(logAction != nullptr);
+
+        // Both docks live in the top strip; the log is closed by default and
+        // the camera monitor starts visible.
+        QCOMPARE(window->dockWidgetArea(monitorDock), Qt::TopDockWidgetArea);
+        QCOMPARE(window->dockWidgetArea(logDock), Qt::TopDockWidgetArea);
+        QVERIFY(monitorAction->isChecked());
+        QVERIFY(!monitorDock->isHidden());
+        QVERIFY(logDock->isHidden());
+
+        // The menu actions toggle the docks.
+        monitorAction->setChecked(false);
+        QVERIFY(monitorDock->isHidden());
+        monitorAction->setChecked(true);
+        QVERIFY(!monitorDock->isHidden());
+
+        logAction->setChecked(true);
+        QCoreApplication::processEvents();
+        QVERIFY(!logDock->isHidden());
+        // Side by side in the top strip, so the log keeps a bounded height and
+        // does not take over the whole window width.
+        QVERIFY(logDock->height() <= 260);
+        QVERIFY(logDock->width() < window->width());
+
+        // The moved panel still records events.
+        McpLogPanel* panel = window->mcpLogPanelForTest();
+        QVERIFY(panel != nullptr);
+        const int before = panel->entryCountForTest();
+        panel->addSystemEvent(QStringLiteral("测试"), QStringLiteral("顶部布局"));
+        QVERIFY(panel->entryCountForTest() > before);
+
+        // The monitor follows playback and the camera combo, and renders a
+        // non-empty frame at the dock size.
+        window->createEntity(ContentKind::Camera);
+        QComboBox* combo = window->cameraComboBoxForTest();
+        QCOMPARE(combo->count(), 2);
+        combo->setCurrentIndex(1);
+        QCOMPARE(monitor->cameraUuid(), combo->currentData().toString());
+        QVERIFY(!monitor->grabForTest().isNull());
+
+        logAction->setChecked(false);
+        QVERIFY(logDock->isHidden());
     }
 
     void mcpWriteReloadsEditorAndKeepsViewState()
