@@ -64,6 +64,11 @@ if(NOT TARGET pvf_next_mcp_log)
                      ${CMAKE_CURRENT_BINARY_DIR}/mcp_log_dep)
 endif()
 
+if(NOT TARGET pvf_next_history)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../history
+                     ${CMAKE_CURRENT_BINARY_DIR}/history_dep)
+endif()
+
 if(NOT TARGET pvf_html2)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../html2
                      ${CMAKE_CURRENT_BINARY_DIR}/html2_dep)
@@ -104,6 +109,7 @@ target_link_libraries(pvf_next_app PUBLIC
     pvf_audio2
     pvf_next_settings
     pvf_next_mcp_log
+    pvf_next_history
     pvf_html2
     pvf_video2
     Qt6::Core
@@ -129,6 +135,7 @@ target_link_libraries(pvforge-next PRIVATE
     pvf_audio2
     pvf_next_settings
     pvf_next_mcp_log
+    pvf_next_history
     pvf_html2
     pvf_video2
     Qt6::Widgets

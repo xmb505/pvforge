@@ -5,8 +5,10 @@
 #include "next/app/ExportDialog.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
+#include "next/history/HistoryPanel.h"
 #include "next/mcp/McpLogPanel.h"
 #include "next/properties/PropertiesPanel.h"
+#include "next/settings/OnboardingDialog.h"
 #include "next/settings/SettingsDialog.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
@@ -21,6 +23,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -169,6 +172,22 @@ QString createRecentProject(const QString& projectDir, const QString& name)
     return document->root();
 }
 
+// Writes an ephemeral-port MCP config so a window never races for the
+// production port during tests.
+QString writeMcpConfig(QTemporaryDir& temp)
+{
+    const QString configPath =
+        temp.path() + QStringLiteral("/mcp.json");
+    QJsonObject config;
+    config.insert(QStringLiteral("port"), 0);
+    config.insert(QStringLiteral("token"), QStringLiteral("test-token"));
+    QFile file(configPath);
+    if (!file.open(QIODevice::WriteOnly))
+        return QString();
+    file.write(QJsonDocument(config).toJson());
+    return configPath;
+}
+
 } // namespace
 
 class NextWindowTests : public QObject
@@ -176,10 +195,16 @@ class NextWindowTests : public QObject
     Q_OBJECT
 
 private slots:
-    // QSettings outlives one test function; start every case with no recents.
+    // QSettings outlives one test function; start every case with no recents,
+    // no first-run onboarding dialog and Git enabled, which the crash-recovery
+    // and history cases rely on.
     void init()
     {
         clearRecentProjectsSetting();
+        QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+        settings.setValue(QStringLiteral("app/onboardingDone"), true);
+        settings.setValue(QStringLiteral("git/enabled"), true);
+        settings.sync();
     }
 
     void shellExposesPanels()
@@ -662,6 +687,222 @@ private slots:
         window.setDocument(nullptr);
         QVERIFY(window.mcpServerForTest() == nullptr);
         QVERIFY(window.mcpServiceForTest() == nullptr);
+    }
+
+    void gitDisabledProjectOpensReadOnly()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+
+        ProjectSettings settings;
+        settings.name = QStringLiteral("Plain");
+        settings.width = 640;
+        settings.height = 360;
+        settings.fps = 24;
+
+        const QString projectDir =
+            temp.path() + QStringLiteral("/plain.pvproj");
+        QString error;
+        auto document =
+            ProjectDocument::create(projectDir, settings, &error, false);
+        QVERIFY2(document != nullptr, qPrintable(error));
+        QVERIFY(!document->store()->gitEnabled());
+
+        const QString configPath = writeMcpConfig(temp);
+        QVERIFY(!configPath.isEmpty());
+
+        NextWindow window(nullptr);
+        window.setMcpConfigPathForTest(configPath);
+        QVERIFY2(window.openProject(projectDir, &error), qPrintable(error));
+
+        QVERIFY(!window.document()->store()->gitEnabled());
+        QVERIFY(window.mcpServiceForTest() != nullptr);
+        QVERIFY(!window.mcpServiceForTest()->writesEnabled());
+        QVERIFY(window.mcpServerForTest() != nullptr);
+        QVERIFY(window.mcpServerForTest()->isRunning());
+        const QJsonArray tools =
+            window.mcpServiceForTest()->listTools()
+                .value(QStringLiteral("tools")).toArray();
+        QCOMPARE(tools.size(), 46);
+
+        const QJsonObject create = window.mcpServiceForTest()->execute(
+            QStringLiteral("entity.create"),
+            QJsonObject{{QStringLiteral("name"), QStringLiteral("标题")}});
+        QVERIFY(!create.value(QStringLiteral("ok")).toBool());
+        const QJsonObject createError =
+            create.value(QStringLiteral("error")).toObject();
+        QCOMPARE(createError.value(QStringLiteral("code")).toString(),
+                 QStringLiteral("permission_denied"));
+        QCOMPARE(createError.value(QStringLiteral("details")).toObject()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("git_disabled"));
+
+        const QJsonObject get = window.mcpServiceForTest()->execute(
+            QStringLiteral("project.get"), {});
+        QVERIFY(get.value(QStringLiteral("ok")).toBool());
+
+        HistoryPanel* history = window.historyPanelForTest();
+        QVERIFY(history != nullptr);
+        QCOMPARE(history->rowCountForTest(), 0);
+        auto* status =
+            history->findChild<QLabel*>(QStringLiteral("historyStatusLabel"));
+        QVERIFY(status != nullptr);
+        QCOMPARE(status->text(), QStringLiteral("Git 未启用"));
+    }
+
+    void settingsToggleEnablesAndDisablesGit()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        {
+            QSettings settings(QStringLiteral("PVForge"),
+                               QStringLiteral("PVForge"));
+            settings.setValue(QStringLiteral("git/enabled"), false);
+            settings.sync();
+        }
+
+        ProjectSettings projectSettings;
+        projectSettings.name = QStringLiteral("Toggle");
+        projectSettings.width = 640;
+        projectSettings.height = 360;
+        projectSettings.fps = 24;
+
+        QString error;
+        const QString projectDir =
+            temp.path() + QStringLiteral("/toggle.pvproj");
+        auto document =
+            ProjectDocument::create(projectDir, projectSettings, &error, false);
+        QVERIFY2(document != nullptr, qPrintable(error));
+        QVERIFY(!document->store()->gitEnabled());
+
+        NextWindow window(std::move(document));
+        QVERIFY(window.mcpServiceForTest() != nullptr);
+        QVERIFY(!window.mcpServiceForTest()->writesEnabled());
+
+        AppSettings settings = window.settingsForTest();
+        settings.onboardingDone = true;
+        settings.gitEnabled = true;
+        window.setSettingsForTest(settings);
+
+        QVERIFY(window.document()->store()->gitEnabled());
+        QVERIFY(window.mcpServiceForTest()->writesEnabled());
+        HistoryPanel* history = window.historyPanelForTest();
+        QVERIFY(history != nullptr);
+        QVERIFY(history->rowCountForTest() > 0);
+        auto* status =
+            history->findChild<QLabel*>(QStringLiteral("historyStatusLabel"));
+        QVERIFY(status != nullptr);
+        QVERIFY(!status->text().isEmpty());
+
+        settings.gitEnabled = false;
+        window.setSettingsForTest(settings);
+        QVERIFY(!window.document()->store()->gitEnabled());
+        QVERIFY(!window.mcpServiceForTest()->writesEnabled());
+        QCOMPARE(history->rowCountForTest(), 0);
+        QCOMPARE(status->text(), QStringLiteral("Git 未启用"));
+    }
+
+    void historyDockShowsCommits()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QVERIFY(window->historyDockForTest() != nullptr);
+        QVERIFY(window->historyPanelForTest() != nullptr);
+        QVERIFY(window->historyActionForTest() != nullptr);
+        QVERIFY(window->historyDockForTest()->isHidden());
+        QVERIFY(window->historyPanelForTest()->rowCountForTest() > 0);
+    }
+
+    void historyRestoreReturnsToCommit()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QVector<store::GitCommit> commits =
+            window->document()->store()->history(200, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!commits.isEmpty());
+        const QString initial = commits.last().hash;
+
+        window->createEntity(ContentKind::Empty);
+        window->document()->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(window->document()->project().entities.size(), 1);
+        const int afterEdit =
+            window->document()->store()->history(200, &error).size();
+        QVERIFY(afterEdit > commits.size());
+
+        QVERIFY2(window->restoreCommitForTest(initial, &error),
+                 qPrintable(error));
+        QCOMPARE(window->document()->project().entities.size(), 0);
+        QCOMPARE(window->document()->store()->history(200, &error).size(),
+                 afterEdit + 1);
+        QVERIFY(window->historyPanelForTest()->rowCountForTest() > 0);
+    }
+
+    void onboardingSkippedWhenDone()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QVERIFY(!window->onboardingShownForTest());
+        QVERIFY(window->findChild<OnboardingDialog*>() == nullptr);
+    }
+
+    void onboardingPromptOnceSavesChoice()
+    {
+        {
+            QSettings settings(QStringLiteral("PVForge"),
+                               QStringLiteral("PVForge"));
+            settings.setValue(QStringLiteral("app/onboardingDone"), false);
+            settings.setValue(QStringLiteral("git/enabled"), false);
+            settings.sync();
+        }
+
+        NextWindow window(nullptr);
+        QVERIFY(window.onboardingShownForTest());
+        auto* dialog = window.findChild<OnboardingDialog*>();
+        QVERIFY(dialog != nullptr);
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->gitEnabled());
+
+        auto* start =
+            dialog->findChild<QPushButton*>(QStringLiteral("onboardingStart"));
+        QVERIFY(start != nullptr);
+        start->click();
+
+        QVERIFY(window.settingsForTest().onboardingDone);
+        QVERIFY(!window.settingsForTest().gitEnabled);
+        {
+            QSettings settings(QStringLiteral("PVForge"),
+                               QStringLiteral("PVForge"));
+            QVERIFY(settings.value(QStringLiteral("app/onboardingDone")).toBool());
+        }
+
+        // The next launch does not ask again.
+        NextWindow second(nullptr);
+        QVERIFY(!second.onboardingShownForTest());
+        QVERIFY(second.findChild<OnboardingDialog*>() == nullptr);
+    }
+
+    void exportOpenFolderHandlerIsUsed()
+    {
+        NextWindow window(nullptr);
+        QString opened;
+        window.setOpenFolderHandlerForTest(
+            [&opened](const QString& path) { opened = path; });
+        window.openFolderForTest(QStringLiteral("/tmp/pvforge-export"));
+        QCOMPARE(opened, QStringLiteral("/tmp/pvforge-export"));
     }
 
     void playbackEmptyProjectIsNoOp()

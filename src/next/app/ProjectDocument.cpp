@@ -33,9 +33,10 @@ ProjectDocument::~ProjectDocument()
 }
 
 std::unique_ptr<ProjectDocument> ProjectDocument::create(
-    const QString& projectDir, const model::ProjectSettings& settings, QString* error)
+    const QString& projectDir, const model::ProjectSettings& settings, QString* error,
+    bool useGit)
 {
-    auto store = store::ProjectStore::create(projectDir, settings, error);
+    auto store = store::ProjectStore::create(projectDir, settings, error, useGit);
     if (!store)
         return nullptr;
     return std::unique_ptr<ProjectDocument>(
@@ -43,13 +44,18 @@ std::unique_ptr<ProjectDocument> ProjectDocument::create(
 }
 
 std::unique_ptr<ProjectDocument> ProjectDocument::open(const QString& projectDir,
-                                                       QString* error)
+                                                       QString* error, bool useGit)
 {
-    auto store = store::ProjectStore::open(projectDir, error);
+    auto store = store::ProjectStore::open(projectDir, error, useGit);
     if (!store)
         return nullptr;
     return std::unique_ptr<ProjectDocument>(
         new ProjectDocument(std::make_unique<store::ProjectStore>(std::move(*store))));
+}
+
+bool ProjectDocument::setGitEnabled(bool enabled, QString* error)
+{
+    return m_store->setGitEnabled(enabled, error);
 }
 
 const model::Project& ProjectDocument::project() const

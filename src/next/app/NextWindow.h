@@ -29,6 +29,7 @@ class Service;
 namespace pvf::next {
 
 class AssetPanel;
+class HistoryPanel;
 class McpLogPanel;
 class MediaServices;
 class PlaybackController;
@@ -88,6 +89,24 @@ public:
     // Test hook: apply a settings snapshot immediately, as if the settings
     // dialog had saved it.
     void setSettingsForTest(const AppSettings& settings);
+
+    // Test hook: capture the folder opened after a successful export instead
+    // of launching the desktop file manager.
+    void setOpenFolderHandlerForTest(std::function<void(const QString&)> handler);
+    void openFolderForTest(const QString& path) { openOutputFolder(path); }
+
+    // History dock accessors and a restore path that skips the modal
+    // confirmation, so tests can exercise the store round trip.
+    HistoryPanel* historyPanelForTest() const { return m_historyPanel; }
+    QDockWidget* historyDockForTest() const { return m_historyDock; }
+    QAction* historyActionForTest() const { return m_historyAction; }
+    bool restoreCommitForTest(const QString& hash, QString* error = nullptr)
+    {
+        return restoreCommitInternal(hash, error);
+    }
+
+    // True once the first-run onboarding dialog was shown by this window.
+    bool onboardingShownForTest() const { return m_onboardingShown; }
 
     mcp2::Service* mcpServiceForTest() const { return m_mcpService.get(); }
     mcp2::HttpServer* mcpServerForTest() const { return m_mcpServer.get(); }
@@ -182,6 +201,11 @@ private:
     void stopMcpServer();
     void applyHumanCommitDelay();
     void applySettings(const AppSettings& previous);
+    void showOnboardingIfNeeded();
+    void refreshHistory();
+    void restoreHistoryCommit(const QString& hash);
+    bool restoreCommitInternal(const QString& hash, QString* error);
+    void openOutputFolder(const QString& path);
     void refreshAiLock();
     void resetAiLock();
     bool mcpToolRunning() const { return m_activeToolCalls > 0; }
@@ -218,6 +242,13 @@ private:
     QDockWidget* m_mcpLogDock = nullptr;
     QAction* m_mcpLogAction = nullptr;
     bool m_mcpAutoShown = false;
+
+    HistoryPanel* m_historyPanel = nullptr;
+    QDockWidget* m_historyDock = nullptr;
+    QAction* m_historyAction = nullptr;
+
+    bool m_onboardingShown = false;
+    std::function<void(const QString&)> m_openFolderHandler;
     bool m_aiStopped = false;
     int m_activeToolCalls = 0;
     int m_aiBusyWrites = 0;

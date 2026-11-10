@@ -16,11 +16,16 @@ class ProjectDocument : public Document
     Q_OBJECT
 
 public:
+    // `useGit` only expresses intent: create() fails without a git binary when
+    // true, open() falls back to a plain text store when git is missing or the
+    // project has no repository.
     static std::unique_ptr<ProjectDocument> create(const QString& projectDir,
                                                    const model::ProjectSettings& settings,
-                                                   QString* error = nullptr);
+                                                   QString* error = nullptr,
+                                                   bool useGit = true);
     static std::unique_ptr<ProjectDocument> open(const QString& projectDir,
-                                                 QString* error = nullptr);
+                                                 QString* error = nullptr,
+                                                 bool useGit = true);
 
     ~ProjectDocument() override;
 
@@ -59,6 +64,10 @@ public:
 
     store::ProjectStore* store() { return m_store.get(); }
     const store::ProjectStore* store() const { return m_store.get(); }
+
+    // Enables/disables git on the backing store.  Enabling a project without a
+    // repository runs git init and creates the initial "pvf: init" commit.
+    bool setGitEnabled(bool enabled, QString* error = nullptr);
 
     QString root() const;
     void reloadAfterHistory(QString* error = nullptr);

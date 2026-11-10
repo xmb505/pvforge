@@ -9,8 +9,10 @@
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/assets/AssetPanel.h"
+#include "next/history/HistoryPanel.h"
 #include "next/mcp/McpLogPanel.h"
 #include "next/properties/PropertiesPanel.h"
+#include "next/settings/OnboardingDialog.h"
 #include "next/settings/SettingsDialog.h"
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
@@ -24,6 +26,7 @@
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -61,6 +64,7 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
 #include <QtConcurrent/QtConcurrentRun>
@@ -417,6 +421,8 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
     updateStatus();
     rebuildCameras();
     startMcpServer();
+    refreshHistory();
+    showOnboardingIfNeeded();
 }
 
 NextWindow::~NextWindow()
@@ -534,6 +540,7 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     updateStatus();
     rebuildCameras();
     startMcpServer();
+    refreshHistory();
     updateSettingsDialogContext();
 }
 
@@ -729,6 +736,48 @@ void NextWindow::buildUi()
         else
             statusBar()->showMessage(tr("MCP 未启动，无需恢复"), 4000);
     });
+
+    viewMenu->addSeparator();
+    m_historyAction = new QAction(tr("Git 历史"), this);
+    m_historyAction->setObjectName(QStringLiteral("showHistoryAction"));
+    m_historyAction->setCheckable(true);
+    connect(m_historyAction, &QAction::toggled, this, [this](bool checked) {
+        if (!m_historyDock)
+            return;
+        m_historyDock->setVisible(checked);
+        if (checked)
+            m_historyDock->raise();
+    });
+    viewMenu->addAction(m_historyAction);
+
+    m_historyPanel = new HistoryPanel(this);
+    m_historyDock = new QDockWidget(tr("Git 历史"), this);
+    m_historyDock->setObjectName(QStringLiteral("historyDock"));
+    m_historyDock->setAllowedAreas(Qt::RightDockWidgetArea
+                                   | Qt::BottomDockWidgetArea);
+    m_historyDock->setFeatures(QDockWidget::DockWidgetClosable
+                               | QDockWidget::DockWidgetMovable
+                               | QDockWidget::DockWidgetFloatable);
+    m_historyDock->setWidget(m_historyPanel);
+    addDockWidget(Qt::RightDockWidgetArea, m_historyDock);
+    m_historyDock->hide();
+
+    connect(m_historyDock, &QDockWidget::visibilityChanged, this,
+            [this](bool visible) {
+                if (!isVisible())
+                    return;
+                if (m_historyAction
+                    && m_historyAction->isChecked() != visible) {
+                    QSignalBlocker blocker(m_historyAction);
+                    m_historyAction->setChecked(visible);
+                }
+            });
+    connect(m_historyPanel, &HistoryPanel::refreshRequested, this,
+            &NextWindow::refreshHistory);
+    connect(m_historyPanel, &HistoryPanel::restoreRequested, this,
+            [this](const QString& hash, const QString&) {
+                restoreHistoryCommit(hash);
+            });
 
     QToolBar* toolbar = addToolBar(tr("主工具栏"));
     toolbar->setObjectName(QStringLiteral("mainToolBar"));
@@ -1071,7 +1120,13 @@ void NextWindow::connectDocument()
     });
 
     connect(m_document, &Document::pendingCommitChanged, this,
-            [this](bool) { updateStatus(); });
+            [this](bool pending) {
+                updateStatus();
+                // A successful flush turned the debounced edit into a commit;
+                // the history row only exists after that.
+                if (!pending)
+                    refreshHistory();
+            });
     connect(m_document, &Document::commitFailed, this,
             [this](const QString& message) {
                 statusBar()->showMessage(tr("提交失败：%1").arg(message), 8000);
@@ -1371,6 +1426,168 @@ void NextWindow::setSettingsForTest(const AppSettings& settings)
     applySettings(previous);
 }
 
+void NextWindow::setOpenFolderHandlerForTest(
+    std::function<void(const QString&)> handler)
+{
+    m_openFolderHandler = std::move(handler);
+}
+
+void NextWindow::showOnboardingIfNeeded()
+{
+    if (m_settings.onboardingDone)
+        return;
+
+    m_onboardingShown = true;
+    auto* dialog = new OnboardingDialog(m_settings, this);
+    dialog->setObjectName(QStringLiteral("onboardingDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // Non-modal keeps the shell usable and lets tests accept it without a
+    // nested event loop.
+    dialog->setModal(false);
+
+    connect(dialog, &QDialog::accepted, this, [this, dialog] {
+        const AppSettings previous = m_settings;
+        m_settings.gitEnabled = dialog->gitEnabled();
+        m_settings.onboardingDone = true;
+        if (m_settingsStore)
+            m_settingsStore->save(m_settings);
+        applySettings(previous);
+    });
+    connect(dialog, &QDialog::rejected, this, [this] {
+        // Dismissing the welcome page still counts as "asked once"; Git stays
+        // off until the human enables it in the settings dialog.
+        m_settings.onboardingDone = true;
+        if (m_settingsStore)
+            m_settingsStore->save(m_settings);
+    });
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void NextWindow::refreshHistory()
+{
+    if (!m_historyPanel)
+        return;
+
+    if (!m_document || !m_document->store()) {
+        m_historyPanel->setCommits({});
+        m_historyPanel->setStatus(tr("未打开工程"));
+        return;
+    }
+
+    store::ProjectStore* store = m_document->store();
+    if (!store->gitEnabled()) {
+        m_historyPanel->setCommits({});
+        m_historyPanel->setStatus(tr("Git 未启用"));
+        return;
+    }
+
+    QString error;
+    const QVector<store::GitCommit> commits = store->history(200, &error);
+    if (!error.isEmpty()) {
+        m_historyPanel->setCommits({});
+        m_historyPanel->setStatus(tr("读取历史失败：%1").arg(error));
+        return;
+    }
+
+    m_historyPanel->setCommits(commits);
+    m_historyPanel->setStatus(commits.isEmpty()
+                                  ? tr("还没有提交")
+                                  : tr("%1 个提交").arg(commits.size()));
+}
+
+void NextWindow::restoreHistoryCommit(const QString& hash)
+{
+    if (!m_document || !m_document->store() || hash.isEmpty())
+        return;
+
+    if (m_historyPanel)
+        m_historyPanel->setBusy(true);
+
+    QMessageBox box(QMessageBox::Question, tr("恢复 Git 历史"),
+                    tr("恢复到 %1？会丢弃当前未提交文本。").arg(hash.left(7)),
+                    QMessageBox::NoButton, this);
+    QPushButton* restore =
+        box.addButton(tr("恢复"), QMessageBox::AcceptRole);
+    QPushButton* cancel = box.addButton(tr("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(cancel);
+    box.setEscapeButton(cancel);
+    box.exec();
+
+    QString error;
+    const bool ok = box.clickedButton() == restore
+                    && restoreCommitInternal(hash, &error);
+    if (m_historyPanel)
+        m_historyPanel->setBusy(false);
+
+    if (!ok) {
+        if (!error.isEmpty()) {
+            statusBar()->showMessage(tr("恢复失败：%1").arg(error), 8000);
+            QMessageBox::warning(this, tr("恢复失败"), error);
+        }
+        return;
+    }
+
+    statusBar()->showMessage(tr("已恢复到 %1").arg(hash.left(7)), 5000);
+    if (m_mcpLogPanel)
+        m_mcpLogPanel->addSystemEvent(tr("恢复历史"),
+                                      tr("已恢复到 %1").arg(hash.left(7)));
+}
+
+bool NextWindow::restoreCommitInternal(const QString& hash, QString* error)
+{
+    if (error)
+        error->clear();
+    if (!m_document || !m_document->store()) {
+        if (error)
+            *error = tr("没有打开的工程");
+        return false;
+    }
+    if (hash.isEmpty()) {
+        if (error)
+            *error = tr("未选择提交");
+        return false;
+    }
+
+    store::ProjectStore* store = m_document->store();
+    if (!store->gitEnabled()) {
+        if (error)
+            *error = tr("Git 未启用");
+        return false;
+    }
+
+    // Restoring requires a clean text tree; push the debounced human edit out
+    // first so it is either committed (and then discarded by the restore) or
+    // reported instead of leaving a half-restored project.
+    QString flushError;
+    if (m_document->hasPendingCommit())
+        m_document->flush(&flushError);
+    if (!flushError.isEmpty()) {
+        if (error)
+            *error = flushError;
+        return false;
+    }
+
+    if (!store->restoreCommit(hash, error))
+        return false;
+
+    m_document->reloadAfterHistory(error);
+    refreshAll();
+    refreshHistory();
+    return true;
+}
+
+void NextWindow::openOutputFolder(const QString& path)
+{
+    if (m_openFolderHandler) {
+        m_openFolderHandler(path);
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
 void NextWindow::startMcpServer()
 {
     stopMcpServer();
@@ -1384,6 +1601,10 @@ void NextWindow::startMcpServer()
 
     m_mcpService = std::make_unique<mcp2::Service>(
         m_document->store(), &m_document->assets());
+    // Git is the write audit trail.  Without it the MCP surface stays
+    // readable but every write tool is denied with permission_denied.
+    m_mcpService->setWritesEnabled(m_document->store()->gitEnabled());
+    const bool writesEnabled = m_mcpService->writesEnabled();
     m_mcpService->setViewStateProvider([this] {
         mcp2::ViewState state;
         if (m_document) {
@@ -1464,6 +1685,10 @@ void NextWindow::startMcpServer()
                 if (m_mcpLogPanel)
                     m_mcpLogPanel->addToolInvocation(name, argsJson, resultJson,
                                                      ms, ok);
+                // Write tools commit straight through the store, so the
+                // history dock would otherwise stay on the previous rows.
+                if (ok && mcp2::Service::isWriteTool(name))
+                    refreshHistory();
                 refreshAiLock();
                 statusBar()->showMessage(
                     ok ? tr("AI %1 完成（%2 ms）").arg(name).arg(ms)
@@ -1508,6 +1733,10 @@ void NextWindow::startMcpServer()
         m_mcpLogPanel->addSystemEvent(port != 0 ? tr("MCP 已启动")
                                                 : tr("MCP 启动失败"),
                                       port != 0 ? m_mcpStatus : m_mcpError);
+        if (!writesEnabled)
+            m_mcpLogPanel->addSystemEvent(
+                tr("MCP 只读"),
+                tr("Git 未启用：写工具返回 permission_denied（git_disabled），读取工具仍可用"));
     }
     refreshAiLock();
     updateStatus();
@@ -1622,6 +1851,42 @@ void NextWindow::applySettings(const AppSettings& previous)
     if (m_mcpLogPanel && portChanged)
         m_mcpLogPanel->addSystemEvent(tr("设置已更新"),
                                       tr("MCP 端口：%1").arg(m_settings.mcpPort));
+
+    if (m_document && previous.gitEnabled != m_settings.gitEnabled) {
+        QString error;
+        if (!m_document->setGitEnabled(m_settings.gitEnabled, &error)) {
+            // Settings is only a wish; the store reports what actually
+            // happened (for example no git binary).  Persist the truth so the
+            // next launch does not claim a repository that is not there.
+            const bool actual = m_document->store()
+                                 && m_document->store()->gitEnabled();
+            m_settings.gitEnabled = actual;
+            if (m_settingsStore)
+                m_settingsStore->save(m_settings);
+            const QString text = tr("Git 切换失败：%1")
+                                     .arg(error.isEmpty() ? tr("未知错误")
+                                                          : error);
+            statusBar()->showMessage(text, 8000);
+            if (m_mcpLogPanel)
+                m_mcpLogPanel->addSystemEvent(tr("Git 切换失败"), text);
+        } else {
+            statusBar()->showMessage(m_settings.gitEnabled ? tr("Git 已启用")
+                                                           : tr("Git 已关闭"),
+                                     5000);
+            if (m_mcpLogPanel)
+                m_mcpLogPanel->addSystemEvent(
+                    m_settings.gitEnabled ? tr("Git 已启用")
+                                          : tr("Git 已关闭"),
+                    m_settings.gitEnabled
+                        ? tr("MCP 写工具可用")
+                        : tr("MCP 只读：写工具返回 permission_denied"));
+        }
+        if (m_mcpService)
+            m_mcpService->setWritesEnabled(m_document->store()->gitEnabled());
+        refreshHistory();
+        updateSettingsDialogContext();
+    }
+
     updateStatus();
 }
 
@@ -1954,7 +2219,20 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
                                        .arg(QDir::toNativeSeparators(outputPath));
                     if (!result.warnings.isEmpty())
                         text += QStringLiteral("\n\n") + result.warnings.join('\n');
-                    QMessageBox::information(this, tr("导出完成"), text);
+
+                    const QString folder = QFileInfo(outputPath).absolutePath();
+                    openOutputFolder(folder);
+
+                    QMessageBox box(QMessageBox::Information, tr("导出完成"),
+                                    text, QMessageBox::NoButton, this);
+                    QPushButton* openFolderButton =
+                        box.addButton(tr("打开文件夹"), QMessageBox::ActionRole);
+                    QPushButton* okButton =
+                        box.addButton(tr("确定"), QMessageBox::AcceptRole);
+                    box.setDefaultButton(okButton);
+                    box.exec();
+                    if (box.clickedButton() == openFolderButton)
+                        openOutputFolder(folder);
                 } else if (result.error == QStringLiteral("cancelled")) {
                     statusBar()->showMessage(tr("导出已取消"), 5000);
                 } else {
@@ -2241,7 +2519,8 @@ void NextWindow::chooseNewProject()
 
     const QString projectDir = dialog.projectDir();
     QString error;
-    auto document = ProjectDocument::create(projectDir, dialog.settings(), &error);
+    auto document = ProjectDocument::create(projectDir, dialog.settings(), &error,
+                                            m_settings.gitEnabled);
     if (!document) {
         showError(tr("新建工程失败"), error);
         return;
@@ -2352,7 +2631,7 @@ bool NextWindow::openProject(const QString& path, QString* error)
                         .arg(QDir::toNativeSeparators(projectDir)));
     }
 
-    auto document = ProjectDocument::open(projectDir, error);
+    auto document = ProjectDocument::open(projectDir, error, m_settings.gitEnabled);
     if (!document)
         return false;
 
