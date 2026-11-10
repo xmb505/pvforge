@@ -50,6 +50,10 @@ struct AppSettings
     // MCP/Git
     quint16 mcpPort = 47821;
     int humanCommitDelayMs = 1000;
+    // Wall-clock interval for the shell's autosave timer.  The timer only
+    // flushes a debounced human edit that is still pending, so an idle project
+    // never produces empty commits.
+    int autoSaveMinutes = 5;
     // Git is an optional prerequisite and stays off until the user enables it,
     // either in the first-run onboarding or in the settings dialog.
     bool gitEnabled = false;

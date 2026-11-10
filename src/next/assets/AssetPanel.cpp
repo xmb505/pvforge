@@ -1366,7 +1366,7 @@ void AssetPanel::chooseImportFiles()
     m_lastImportDir = QFileInfo(paths.first()).absolutePath();
     QString error;
     if (!importPaths(paths, &error) && !error.isEmpty())
-        QMessageBox::warning(this, tr("导入素材"), error);
+        setStatus(error);
 }
 
 void AssetPanel::chooseImportPvhtml()
@@ -1379,7 +1379,7 @@ void AssetPanel::chooseImportPvhtml()
     m_lastImportDir = QFileInfo(directory).absolutePath();
     QString error;
     if (!importPaths({directory}, &error) && !error.isEmpty())
-        QMessageBox::warning(this, tr("导入素材"), error);
+        setStatus(error);
 }
 
 void AssetPanel::renameSelected()
@@ -1547,7 +1547,9 @@ void AssetPanel::dropEvent(QDropEvent* event)
         return;
     }
 
-    importPaths(paths, nullptr);
+    QString error;
+    if (!importPaths(paths, &error) && !error.isEmpty())
+        setStatus(error);
     event->acceptProposedAction();
 }
 

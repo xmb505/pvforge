@@ -57,6 +57,7 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QVERIFY(actual.snapAngles == expected.snapAngles);
     QCOMPARE(int(actual.mcpPort), int(expected.mcpPort));
     QCOMPARE(actual.humanCommitDelayMs, expected.humanCommitDelayMs);
+    QCOMPARE(actual.autoSaveMinutes, expected.autoSaveMinutes);
     QCOMPARE(actual.gitEnabled, expected.gitEnabled);
     QCOMPARE(actual.onboardingDone, expected.onboardingDone);
 }
@@ -252,6 +253,7 @@ void SettingsTests::storeClampsLoadedValues()
         raw.setValue(QStringLiteral("video/memoryFrames"), 1);
         raw.setValue(QStringLiteral("mcp/port"), 80);
         raw.setValue(QStringLiteral("git/humanCommitDelayMs"), 99999);
+        raw.setValue(QStringLiteral("app/autoSaveMinutes"), 0);
         raw.sync();
     }
 
@@ -269,6 +271,7 @@ void SettingsTests::storeClampsLoadedValues()
     QCOMPARE(settings.videoMemoryFrames, 32);
     QCOMPARE(int(settings.mcpPort), 1024);
     QCOMPARE(settings.humanCommitDelayMs, 5000);
+    QCOMPARE(settings.autoSaveMinutes, 1);
 }
 
 void SettingsTests::storeSanitizesSavedValues()
@@ -287,6 +290,7 @@ void SettingsTests::storeSanitizesSavedValues()
     invalid.videoMemoryFrames = 999;
     invalid.mcpPort = 65535;
     invalid.humanCommitDelayMs = 0;
+    invalid.autoSaveMinutes = 999;
     store.save(invalid);
 
     const AppSettings settings = store.load();
@@ -406,7 +410,10 @@ void SettingsTests::dialogDefaults()
     SettingsDialog dialog(&store);
 
     verifySettingsEqual(dialog.settings(), AppSettings{});
-    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 6);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "autoSaveMinutes")->value(), 5);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "autoSaveMinutes")->minimum(), 1);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "autoSaveMinutes")->maximum(), 60);
+    QCOMPARE(findWidget<QTabWidget>(dialog, "settingsTabs")->count(), 7);
     QVERIFY(!findWidget<QCheckBox>(dialog, "gitEnabled")->isChecked());
     QVERIFY(!findWidget<QLabel>(dialog, "gitStatus")->text().isEmpty());
     QVERIFY(dialog.endpointPath().endsWith(
@@ -458,6 +465,7 @@ void SettingsTests::dialogClampsValues()
     invalid.videoMemoryFrames = 1;
     invalid.mcpPort = 80;
     invalid.humanCommitDelayMs = 1;
+    invalid.autoSaveMinutes = 999;
 
     dialog.setSettings(invalid);
     const AppSettings settings = dialog.settings();
@@ -470,6 +478,7 @@ void SettingsTests::dialogClampsValues()
     QCOMPARE(settings.videoMemoryFrames, 32);
     QCOMPARE(int(settings.mcpPort), 1024);
     QCOMPARE(settings.humanCommitDelayMs, 200);
+    QCOMPARE(settings.autoSaveMinutes, 60);
 }
 
 void SettingsTests::editorDialogRoundTrip()
@@ -491,6 +500,7 @@ void SettingsTests::editorDialogRoundTrip()
     QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle90")->isChecked());
 
     findWidget<QSpinBox>(dialog, "snapPixels")->setValue(20);
+    findWidget<QSpinBox>(dialog, "autoSaveMinutes")->setValue(12);
     findWidget<QCheckBox>(dialog, "snapCanvasCenter")->setChecked(false);
     findWidget<QCheckBox>(dialog, "snapEntityEdges")->setChecked(false);
     findWidget<QCheckBox>(dialog, "snapEdgeMidpoints")->setChecked(true);
@@ -499,6 +509,7 @@ void SettingsTests::editorDialogRoundTrip()
 
     const AppSettings edited = dialog.settings();
     QCOMPARE(edited.snapPixels, 20);
+    QCOMPARE(edited.autoSaveMinutes, 12);
     QCOMPARE(edited.snapCanvasCenter, false);
     QCOMPARE(edited.snapEntityEdges, false);
     QCOMPARE(edited.snapEdgeMidpoints, true);

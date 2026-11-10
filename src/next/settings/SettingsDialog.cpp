@@ -56,6 +56,7 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("settingsTabs"));
 
+    buildGeneralPage();
     buildEditorPage();
     buildHtmlPage();
     buildWorkbenchPage();
@@ -87,6 +88,27 @@ SettingsDialog::SettingsDialog(SettingsStore* store, QWidget* parent)
     root->addWidget(buttons);
 
     setSettings(m_store ? m_store->load() : AppSettings{});
+}
+
+void SettingsDialog::buildGeneralPage()
+{
+    auto* page = new QWidget(m_tabs);
+    auto* form = new QFormLayout(page);
+
+    m_autoSaveMinutes = new QSpinBox(page);
+    m_autoSaveMinutes->setObjectName(QStringLiteral("autoSaveMinutes"));
+    m_autoSaveMinutes->setRange(1, 60);
+    m_autoSaveMinutes->setSuffix(QStringLiteral(" 分钟"));
+    m_autoSaveMinutes->setToolTip(
+        QStringLiteral("有未提交编辑时，每隔这么久自动保存一次。"));
+    form->addRow(QStringLiteral("自动保存间隔"), m_autoSaveMinutes);
+
+    form->addRow(selectableLabel(
+        QStringLiteral("只保存有未提交编辑的工程；播放头位置单独记在工程目录的 "
+                       ".pvforge/playhead.json，不会进入 Git 提交。"),
+        page));
+
+    m_tabs->addTab(page, QStringLiteral("常规"));
 }
 
 void SettingsDialog::buildEditorPage()
@@ -427,6 +449,7 @@ AppSettings SettingsDialog::settings() const
 
     settings.mcpPort = static_cast<quint16>(m_mcpPort->value());
     settings.humanCommitDelayMs = m_humanCommitDelayMs->value();
+    settings.autoSaveMinutes = m_autoSaveMinutes->value();
     settings.gitEnabled = m_gitEnabled->isChecked();
     settings.onboardingDone = m_onboardingDone;
 
@@ -478,6 +501,7 @@ void SettingsDialog::setSettings(const AppSettings& settings)
 
     m_mcpPort->setValue(value.mcpPort);
     m_humanCommitDelayMs->setValue(value.humanCommitDelayMs);
+    m_autoSaveMinutes->setValue(value.autoSaveMinutes);
     m_gitEnabled->setChecked(value.gitEnabled);
     m_onboardingDone = value.onboardingDone;
 }

@@ -51,6 +51,7 @@ signals:
     void chromeDetectRequested();
 
 private:
+    void buildGeneralPage();
     void buildEditorPage();
     void buildHtmlPage();
     void buildWorkbenchPage();
@@ -65,6 +66,7 @@ private:
     QTabWidget* m_tabs = nullptr;
 
     QSpinBox* m_snapPixels = nullptr;
+    QSpinBox* m_autoSaveMinutes = nullptr;
     QCheckBox* m_snapCanvasCenter = nullptr;
     QCheckBox* m_snapEntityEdges = nullptr;
     QCheckBox* m_snapEdgeMidpoints = nullptr;

@@ -97,6 +97,12 @@ public:
     // dialog had saved it.
     void setSettingsForTest(const AppSettings& settings);
 
+    // Autosave: the production interval comes from settings.autoSaveMinutes;
+    // tests inject a short one and tick the timer directly.
+    int autoSaveIntervalMsForTest() const;
+    void setAutoSaveIntervalForTest(int ms);
+    void triggerAutoSaveForTest();
+
     // Test hook: capture the folder opened after a successful export instead
     // of launching the desktop file manager.
     void setOpenFolderHandlerForTest(std::function<void(const QString&)> handler);
@@ -279,6 +285,8 @@ private:
     void stopMcpServer();
     void applyHumanCommitDelay();
     void applyViewportSnapSettings();
+    void applyAutoSaveInterval();
+    void autoSavePending();
     void applySettings(const AppSettings& previous);
     void showOnboardingIfNeeded();
     void refreshHistory();
@@ -355,6 +363,8 @@ private:
     QAction* m_cachePlayheadAction = nullptr;
     QAction* m_cacheClearAction = nullptr;
     QTimer* m_workbenchUiTimer = nullptr;
+    // Flushes a still-pending human edit every settings.autoSaveMinutes.
+    QTimer* m_autoSaveTimer = nullptr;
 
     bool m_onboardingShown = false;
     std::function<void(const QString&)> m_openFolderHandler;
@@ -394,6 +404,11 @@ private:
     QAction* m_createTextAction = nullptr;
     QAction* m_createVectorAction = nullptr;
     QAction* m_createCameraAction = nullptr;
+    QAction* m_createComicAction = nullptr;
+    QAction* m_createRadialAction = nullptr;
+    QAction* m_createFlowAction = nullptr;
+    QAction* m_createHalftoneAction = nullptr;
+    QAction* m_createBrandWallAction = nullptr;
     QAction* m_exportAction = nullptr;
     QAction* m_deleteAction = nullptr;
     QAction* m_playPauseAction = nullptr;

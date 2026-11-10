@@ -38,6 +38,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTcpSocket>
 #include <QTimer>
@@ -353,6 +354,193 @@ private slots:
         QCOMPARE(spin->value(), 7);
     }
 
+    void autoSaveFlushesPendingEdit()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        // Production default: five minutes.
+        QCOMPARE(window->autoSaveIntervalMsForTest(), 5 * 60 * 1000);
+
+        // Short injected interval and a long human debounce isolate the
+        // autosave timer from the ordinary 1 s commit debounce.
+        AppSettings settings = window->settingsForTest();
+        settings.humanCommitDelayMs = 60000;
+        window->setSettingsForTest(settings);
+        window->setAutoSaveIntervalForTest(50);
+        QCOMPARE(window->autoSaveIntervalMsForTest(), 50);
+
+        const int before = commitCount(window.get());
+        window->document()->setPlayhead(3);
+        window->createEntity(ContentKind::Empty);
+        QVERIFY(window->document()->hasPendingCommit());
+        QVERIFY(window->windowTitle().startsWith(QLatin1Char('*')));
+
+        QTRY_VERIFY_WITH_TIMEOUT(!window->document()->hasPendingCommit(), 3000);
+        QCOMPARE(commitCount(window.get()), before + 1);
+        QVERIFY(!window->windowTitle().startsWith(QLatin1Char('*')));
+
+        const QString statePath = QDir(window->document()->root())
+                                      .filePath(QStringLiteral(".pvforge/playhead.json"));
+        QFile state(statePath);
+        QVERIFY2(state.open(QIODevice::ReadOnly), qPrintable(statePath));
+        QCOMPARE(QJsonDocument::fromJson(state.readAll())
+                     .object()
+                     .value(QStringLiteral("frame"))
+                     .toInt(-1),
+                 3);
+
+        // An idle tick must not create an empty commit.
+        window->triggerAutoSaveForTest();
+        QCOMPARE(commitCount(window.get()), before + 1);
+    }
+
+    void autoSaveReportsCommitFailure()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QDir root(window->document()->root());
+        QVERIFY(root.rename(QStringLiteral(".git"),
+                            QStringLiteral(".git-disabled")));
+
+        window->createEntity(ContentKind::Empty);
+        QVERIFY(window->document()->hasPendingCommit());
+
+        window->triggerAutoSaveForTest();
+        // The entity bytes are on disk; only the cold backup failed, so the
+        // edit stays pending and the status bar says why.
+        QVERIFY(window->document()->hasPendingCommit());
+        QVERIFY(window->statusBar()->currentMessage().contains(
+            QStringLiteral("自动保存失败")));
+
+        QVERIFY(root.rename(QStringLiteral(".git-disabled"),
+                            QStringLiteral(".git")));
+    }
+
+    void windowTitleMarksPendingCommit()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QCOMPARE(window->windowTitle(), QStringLiteral("Shell — PVForge Next"));
+
+        window->createEntity(ContentKind::Empty);
+        QVERIFY(window->windowTitle().startsWith(QLatin1Char('*')));
+        QVERIFY(window->windowTitle().contains(QStringLiteral("Shell")));
+
+        window->document()->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(window->windowTitle(), QStringLiteral("Shell — PVForge Next"));
+
+        // Closing the document resets the marker as well.
+        window->createEntity(ContentKind::Empty);
+        QVERIFY(window->windowTitle().startsWith(QLatin1Char('*')));
+        window->setDocument(nullptr);
+        QCOMPARE(window->windowTitle(), QStringLiteral("PVForge Next"));
+    }
+
+    void closeSavesPlayhead()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        window->document()->setPlayhead(9);
+        window->close();
+
+        const QString statePath = QDir(window->document()->root())
+                                      .filePath(QStringLiteral(".pvforge/playhead.json"));
+        QFile state(statePath);
+        QVERIFY2(state.open(QIODevice::ReadOnly), qPrintable(statePath));
+        const QJsonObject object =
+            QJsonDocument::fromJson(state.readAll()).object();
+        QCOMPARE(object.value(QStringLiteral("frame")).toInt(-1), 9);
+
+        // The next open() restores it.
+        const QString root = window->document()->root();
+        auto reopened = ProjectDocument::open(root, &error);
+        QVERIFY2(reopened != nullptr, qPrintable(error));
+        QCOMPARE(reopened->playhead(), 9);
+    }
+
+    void createSpecialContentActionsPickDefaults()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        document->setPlayhead(10);
+        const int commitsBefore = commitCount(window.get());
+
+        struct Case
+        {
+            ContentKind kind;
+            QString name;
+            int row;
+        };
+        const QVector<Case> cases = {
+            {ContentKind::ComicText, QStringLiteral("漫画文字"), 0},
+            {ContentKind::RadialLines, QStringLiteral("径向线"), 1},
+            {ContentKind::FlowLines, QStringLiteral("流线"), 2},
+            {ContentKind::HalftoneDots, QStringLiteral("点阵"), 3},
+            {ContentKind::BrandWall, QStringLiteral("品牌墙"), 4},
+        };
+
+        for (const Case& item : cases)
+        {
+            QAction* action = window->createEntityActionForTest(item.kind);
+            QVERIFY2(action != nullptr, qPrintable(item.name));
+            QVERIFY2(action->isEnabled(), qPrintable(item.name));
+            action->trigger();
+
+            const Uuid uuid = document->selection();
+            QVERIFY2(!uuid.isEmpty(), qPrintable(item.name));
+            const Entity entity = document->project().entities.value(uuid);
+            QCOMPARE(entity.content.kind, item.kind);
+            QCOMPARE(entity.name, item.name);
+            QCOMPARE(entity.start, 10);
+            QCOMPARE(entity.end, 34);
+            QCOMPARE(entity.row, item.row);
+            QVERIFY(entity.parentUuid.isEmpty());
+        }
+
+        const auto& entities = document->project().entities;
+        QCOMPARE(entities.size(), 5);
+        Uuid comicUuid;
+        for (auto it = entities.constBegin(); it != entities.constEnd(); ++it) {
+            if (it.value().content.kind == ContentKind::ComicText)
+                comicUuid = it.key();
+        }
+        QVERIFY(!comicUuid.isEmpty());
+        const Content comic = entities.value(comicUuid).content;
+        QCOMPARE(comic.comic.shape, QStringLiteral("ellipse"));
+        QCOMPARE(comic.comic.boxWidth, 480.0);
+        QCOMPARE(comic.radial.count, 56);
+        QCOMPARE(comic.flow.count, 26);
+        QCOMPARE(comic.halftone.layout, QStringLiteral("grid"));
+        QCOMPARE(comic.brandWall.columns, 6);
+
+        // Five rapid human actions still coalesce into one git commit.
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(commitCount(window.get()), commitsBefore + 1);
+    }
+
     void cameraComboListsCameraEntities()
     {
         QTemporaryDir temp;
@@ -588,7 +776,12 @@ private slots:
     {
         NextWindow window(nullptr);
         for (ContentKind kind : {ContentKind::Empty, ContentKind::Text,
-                                 ContentKind::Vector, ContentKind::Camera}) {
+                                 ContentKind::Vector, ContentKind::Camera,
+                                 ContentKind::ComicText,
+                                 ContentKind::RadialLines,
+                                 ContentKind::FlowLines,
+                                 ContentKind::HalftoneDots,
+                                 ContentKind::BrandWall}) {
             QAction* action = window.createEntityActionForTest(kind);
             QVERIFY(action != nullptr);
             QVERIFY(!action->isEnabled());

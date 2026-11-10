@@ -21,6 +21,7 @@
 #include <memory>
 
 using pvf::next::AssetPanel;
+using pvf::AssetType;
 
 namespace {
 
@@ -81,6 +82,44 @@ bool writePng(const QString& path, const QColor& color)
     return image.save(path, "PNG");
 }
 
+// Minimal 8 kHz mono 8-bit PCM WAV; libavformat can probe it without ffmpeg.
+bool writeWav(const QString& path)
+{
+    const quint32 sampleRate = 8000;
+    const qint32 sampleCount = 800;
+    const QByteArray samples(sampleCount, '\x80');
+
+    QByteArray bytes;
+    auto put16 = [&bytes](quint16 value) {
+        bytes.append(char(value & 0xff));
+        bytes.append(char((value >> 8) & 0xff));
+    };
+    auto put32 = [&bytes](quint32 value) {
+        bytes.append(char(value & 0xff));
+        bytes.append(char((value >> 8) & 0xff));
+        bytes.append(char((value >> 16) & 0xff));
+        bytes.append(char((value >> 24) & 0xff));
+    };
+
+    bytes.append("RIFF");
+    put32(quint32(36 + samples.size()));
+    bytes.append("WAVE");
+    bytes.append("fmt ");
+    put32(16);
+    put16(1); // PCM
+    put16(1); // mono
+    put32(sampleRate);
+    put32(sampleRate); // byte rate
+    put16(1);          // block align
+    put16(8);          // bits per sample
+    bytes.append("data");
+    put32(quint32(samples.size()));
+    bytes.append(samples);
+
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+}
+
 QString makeVideo(const QString& path, int seconds)
 {
     if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty())
@@ -133,6 +172,7 @@ class AssetPanelTest : public QObject
 
 private slots:
     void importPngAppears();
+    void importDetectsTypesAndRejectsUnknown();
     void searchFilters();
     void tagsShowInListAndSearch();
     void tagFilterShowsMatchingOnly();
@@ -168,6 +208,65 @@ void AssetPanelTest::importPngAppears()
     QVERIFY(document.assets().get(panel.assetHashAt(0)).has_value());
     QVERIFY(!document.commits().isEmpty());
     QVERIFY(document.commits().last().startsWith(QStringLiteral("pvf: import asset")));
+}
+
+void AssetPanelTest::importDetectsTypesAndRejectsUnknown()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    AssetPanel panel(&document);
+
+    const QString png = directory.path() + QStringLiteral("/photo.png");
+    QVERIFY(writePng(png, QColor(QStringLiteral("#336699"))));
+    const QString wav = directory.path() + QStringLiteral("/line.wav");
+    QVERIFY(writeWav(wav));
+
+    const QString bundle = directory.path() + QStringLiteral("/scene.pvhtml");
+    QVERIFY(QDir().mkpath(bundle));
+    QFile entry(bundle + QStringLiteral("/index.html"));
+    QVERIFY(entry.open(QIODevice::WriteOnly));
+    entry.write("<html><body>scene</body></html>");
+    entry.close();
+
+    QString error;
+    QVERIFY2(panel.importPaths({png, wav, bundle}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 3);
+
+    auto typeOf = [&panel, &document](const QString& name) {
+        for (int i = 0; i < panel.assetCount(); ++i) {
+            if (panel.assetNameAt(i) != name)
+                continue;
+            const auto asset = document.assets().get(panel.assetHashAt(i));
+            return asset ? asset->type : AssetType::Image;
+        }
+        return AssetType::Image;
+    };
+    QVERIFY(typeOf(QStringLiteral("photo.png")) == AssetType::Image);
+    QVERIFY(typeOf(QStringLiteral("line.wav")) == AssetType::Audio);
+    QVERIFY(typeOf(QStringLiteral("scene.pvhtml")) == AssetType::Html);
+
+    // An extensionless PNG is recognised through its magic bytes.
+    const QString bare = directory.path() + QStringLiteral("/bare");
+    QVERIFY(writePng(bare, QColor(QStringLiteral("#993366"))));
+    QVERIFY2(panel.importPaths({bare}, &error), qPrintable(error));
+    QCOMPARE(panel.assetCount(), 4);
+
+    // Unknown bytes are refused, reported, and do not change the bin.
+    const QString unknown = directory.path() + QStringLiteral("/notes.xyz");
+    QFile file(unknown);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("plain text, not media");
+    file.close();
+    error.clear();
+    QVERIFY(!panel.importPaths({unknown}, &error));
+    QVERIFY(error.contains(QStringLiteral("不支持的素材类型")));
+    QCOMPARE(panel.assetCount(), 4);
+
+    // A missing path is reported instead of throwing.
+    QVERIFY(!panel.importPaths({directory.path() + QStringLiteral("/gone.png")},
+                               &error));
+    QVERIFY(error.contains(QStringLiteral("文件不存在")));
 }
 
 void AssetPanelTest::searchFilters()

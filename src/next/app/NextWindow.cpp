@@ -524,6 +524,16 @@ QString defaultEntityName(ContentKind kind)
         return QStringLiteral("矢量");
     case ContentKind::Camera:
         return QStringLiteral("摄像机");
+    case ContentKind::ComicText:
+        return QStringLiteral("漫画文字");
+    case ContentKind::RadialLines:
+        return QStringLiteral("径向线");
+    case ContentKind::FlowLines:
+        return QStringLiteral("流线");
+    case ContentKind::HalftoneDots:
+        return QStringLiteral("点阵");
+    case ContentKind::BrandWall:
+        return QStringLiteral("品牌墙");
     case ContentKind::Asset:
         break;
     }
@@ -604,6 +614,13 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
             &NextWindow::updateWorkbenchStatus);
     m_workbenchUiTimer->start();
 
+    // Autosave only pushes a debounced edit that is still pending; an idle
+    // project produces no commits.
+    m_autoSaveTimer = new QTimer(this);
+    m_autoSaveTimer->setObjectName(QStringLiteral("autoSaveTimer"));
+    connect(m_autoSaveTimer, &QTimer::timeout, this, &NextWindow::autoSavePending);
+    applyAutoSaveInterval();
+
     if (m_document) {
         connectDocument();
         buildEditor();
@@ -650,6 +667,7 @@ void NextWindow::closeEvent(QCloseEvent* event)
 
     if (m_document)
     {
+        m_document->savePlayheadState();
         QString error;
         m_document->flush(&error);
         if (!error.isEmpty())
@@ -684,6 +702,7 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
     // Commit any debounced human edit before the old document goes away.
     if (m_document)
     {
+        m_document->savePlayheadState();
         QString error;
         m_document->flush(&error);
         if (!error.isEmpty())
@@ -867,6 +886,22 @@ void NextWindow::buildUi()
                     QStringLiteral("createVectorEntityAction"), ContentKind::Vector);
     addCreateAction(m_createCameraAction, tr("新建摄像机"),
                     QStringLiteral("createCameraEntityAction"), ContentKind::Camera);
+    entityMenu->addSeparator();
+    addCreateAction(m_createComicAction, tr("新建漫画文字"),
+                    QStringLiteral("createComicTextEntityAction"),
+                    ContentKind::ComicText);
+    addCreateAction(m_createRadialAction, tr("新建径向线"),
+                    QStringLiteral("createRadialLinesEntityAction"),
+                    ContentKind::RadialLines);
+    addCreateAction(m_createFlowAction, tr("新建流线"),
+                    QStringLiteral("createFlowLinesEntityAction"),
+                    ContentKind::FlowLines);
+    addCreateAction(m_createHalftoneAction, tr("新建点阵"),
+                    QStringLiteral("createHalftoneDotsEntityAction"),
+                    ContentKind::HalftoneDots);
+    addCreateAction(m_createBrandWallAction, tr("新建品牌墙"),
+                    QStringLiteral("createBrandWallEntityAction"),
+                    ContentKind::BrandWall);
 
     QMenu* playbackMenu = menuBar()->addMenu(tr("播放(&P)"));
     m_playPauseAction = new QAction(tr("播放"), this);
@@ -1237,6 +1272,12 @@ void NextWindow::buildUi()
     toolbar->addAction(m_createTextAction);
     toolbar->addAction(m_createVectorAction);
     toolbar->addAction(m_createCameraAction);
+    toolbar->addSeparator();
+    toolbar->addAction(m_createComicAction);
+    toolbar->addAction(m_createRadialAction);
+    toolbar->addAction(m_createFlowAction);
+    toolbar->addAction(m_createHalftoneAction);
+    toolbar->addAction(m_createBrandWallAction);
     toolbar->addSeparator();
 
     auto* playheadLabel = new QLabel(tr("播放头"), toolbar);
@@ -2009,6 +2050,13 @@ void NextWindow::createEntity(ContentKind kind)
     case ContentKind::Empty:
     case ContentKind::Camera:
     case ContentKind::Asset:
+    case ContentKind::ComicText:
+    case ContentKind::RadialLines:
+    case ContentKind::FlowLines:
+    case ContentKind::HalftoneDots:
+    case ContentKind::BrandWall:
+        // Model defaults are the intended starting point for these kinds; a
+        // human edits the fields in the properties panel.
         break;
     }
 
@@ -2041,6 +2089,16 @@ QAction* NextWindow::createEntityActionForTest(ContentKind kind) const
         return m_createVectorAction;
     case ContentKind::Camera:
         return m_createCameraAction;
+    case ContentKind::ComicText:
+        return m_createComicAction;
+    case ContentKind::RadialLines:
+        return m_createRadialAction;
+    case ContentKind::FlowLines:
+        return m_createFlowAction;
+    case ContentKind::HalftoneDots:
+        return m_createHalftoneAction;
+    case ContentKind::BrandWall:
+        return m_createBrandWallAction;
     case ContentKind::Asset:
         break;
     }
@@ -2730,6 +2788,50 @@ void NextWindow::applyHumanCommitDelay()
         m_document->setHumanCommitDelayMs(m_settings.humanCommitDelayMs);
 }
 
+void NextWindow::applyAutoSaveInterval()
+{
+    if (!m_autoSaveTimer)
+        return;
+
+    const int minutes = std::clamp(m_settings.autoSaveMinutes, 1, 60);
+    m_autoSaveTimer->setInterval(minutes * 60 * 1000);
+    if (!m_autoSaveTimer->isActive())
+        m_autoSaveTimer->start();
+}
+
+void NextWindow::autoSavePending()
+{
+    if (!m_document || !m_document->hasPendingCommit())
+        return;
+
+    QString error;
+    m_document->flush(&error);
+    if (!error.isEmpty()) {
+        statusBar()->showMessage(tr("自动保存失败：%1").arg(error), 8000);
+        return;
+    }
+    // "保存工程" also records the playhead, so a crash restores the last
+    // autosaved position instead of the one from the previous clean exit.
+    m_document->savePlayheadState();
+    statusBar()->showMessage(tr("已自动保存"), 3000);
+}
+
+int NextWindow::autoSaveIntervalMsForTest() const
+{
+    return m_autoSaveTimer ? m_autoSaveTimer->interval() : 0;
+}
+
+void NextWindow::setAutoSaveIntervalForTest(int ms)
+{
+    if (m_autoSaveTimer)
+        m_autoSaveTimer->setInterval(std::max(1, ms));
+}
+
+void NextWindow::triggerAutoSaveForTest()
+{
+    autoSavePending();
+}
+
 void NextWindow::applyViewportSnapSettings()
 {
     if (!m_viewport)
@@ -2744,6 +2846,8 @@ void NextWindow::applyViewportSnapSettings()
 void NextWindow::applySettings(const AppSettings& previous)
 {
     applyHumanCommitDelay();
+    if (previous.autoSaveMinutes != m_settings.autoSaveMinutes)
+        applyAutoSaveInterval();
     applyViewportSnapSettings();
     if (m_playback)
         m_playback->setWatchdogMs(m_settings.watchdogMs);
@@ -3430,7 +3534,10 @@ void NextWindow::updateActions()
         m_pasteEntityAction->setEnabled(editing && m_hasEntityClipboard);
 
     for (QAction* action : {m_createEmptyAction, m_createTextAction,
-                            m_createVectorAction, m_createCameraAction}) {
+                            m_createVectorAction, m_createCameraAction,
+                            m_createComicAction, m_createRadialAction,
+                            m_createFlowAction, m_createHalftoneAction,
+                            m_createBrandWallAction}) {
         if (action)
             action->setEnabled(editing);
     }
@@ -3479,7 +3586,11 @@ void NextWindow::updateStatus()
     QString name = settings.name.trimmed();
     if (name.isEmpty())
         name = tr("未命名项目");
-    setWindowTitle(tr("%1 — PVForge Next").arg(name));
+    // A debounced human edit has reached disk but not the cold backup yet;
+    // the asterisk mirrors the usual "unsaved" marker.
+    setWindowTitle(m_document->hasPendingCommit()
+                       ? tr("* %1 — PVForge Next").arg(name)
+                       : tr("%1 — PVForge Next").arg(name));
 
     if (m_statusDir)
         m_statusDir->setText(
@@ -3677,6 +3788,10 @@ bool NextWindow::openProject(const QString& path, QString* error)
             return fail(QString());
         }
     }
+
+    // Crash recovery may have changed the content; re-clamp the restored
+    // playhead to what the project actually contains now.
+    document->loadPlayheadState();
 
     setDocument(std::move(document));
     // Shown after setDocument(): building the editor may enqueue video

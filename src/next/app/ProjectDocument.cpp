@@ -2,6 +2,13 @@
 
 #include "next/timeline/EntityRange.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
+
 #include <algorithm>
 
 namespace pvf::next {
@@ -10,6 +17,11 @@ namespace {
 
 constexpr int kHumanCommitDelayMs = 1000;
 constexpr char kHumanCommitMessage[] = "pvf: human edit";
+
+QString playheadStatePath(const QString& root)
+{
+    return QDir(root).filePath(QStringLiteral(".pvforge/playhead.json"));
+}
 
 void setError(QString* error, const QString& message)
 {
@@ -72,6 +84,9 @@ ProjectDocument::ProjectDocument(std::unique_ptr<store::ProjectStore> store,
 
 ProjectDocument::~ProjectDocument()
 {
+    // The playhead lives outside project.json so restoring it never shows up
+    // as a git change.
+    savePlayheadState();
     // Best effort cold backup: a document can be destroyed without going
     // through the window's closeEvent (tests, project replacement, ...).
     QString ignored;
@@ -95,8 +110,10 @@ std::unique_ptr<ProjectDocument> ProjectDocument::open(const QString& projectDir
     auto store = store::ProjectStore::open(projectDir, error, useGit);
     if (!store)
         return nullptr;
-    return std::unique_ptr<ProjectDocument>(
+    auto document = std::unique_ptr<ProjectDocument>(
         new ProjectDocument(std::make_unique<store::ProjectStore>(std::move(*store))));
+    document->loadPlayheadState();
+    return document;
 }
 
 bool ProjectDocument::setGitEnabled(bool enabled, QString* error)
@@ -338,6 +355,63 @@ void ProjectDocument::scheduleCommit()
 QString ProjectDocument::root() const
 {
     return m_store->root();
+}
+
+int ProjectDocument::contentEnd() const
+{
+    // Same definition as PlaybackController::contentEnd(): the furthest frame
+    // reached by any root entity.  Private timeline children stay inside their
+    // parent's range.
+    int end = 0;
+    const auto& entities = m_store->project().entities;
+    for (auto it = entities.constBegin(); it != entities.constEnd(); ++it)
+    {
+        if (it.value().parentUuid.isEmpty())
+            end = std::max(end, it.value().end);
+    }
+    return std::max(0, end);
+}
+
+void ProjectDocument::savePlayheadState() const
+{
+    const QString path = playheadStatePath(m_store->root());
+    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+        return;
+
+    QJsonObject object;
+    object.insert(QStringLiteral("frame"), m_playhead);
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
+    // Best effort: a read-only project keeps working without a saved playhead.
+    file.commit();
+}
+
+void ProjectDocument::loadPlayheadState()
+{
+    QFile file(playheadStatePath(m_store->root()));
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        return;
+
+    const QJsonValue value = document.object().value(QStringLiteral("frame"));
+    if (!value.isDouble())
+        return;
+
+    // With content, the playhead must stay inside it.  An empty project has an
+    // open timeline (docs/DESIGN.md), so only the toolbar spin box's sanity
+    // bound applies.
+    const int end = contentEnd();
+    const int frame = value.toInt();
+    m_playhead = end > 0 ? std::clamp(frame, 0, end)
+                         : std::clamp(frame, 0, 100000);
 }
 
 void ProjectDocument::reloadAfterHistory(QString* error)

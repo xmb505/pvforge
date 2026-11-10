@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
@@ -101,6 +102,62 @@ private slots:
 
         QVERIFY2(document->redo(&error), qPrintable(error));
         QVERIFY(document->project().entities.contains(entity.uuid));
+    }
+
+    void playheadRestoredFromProjectState()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString projectDir = temp.path() + QStringLiteral("/playhead.pvproj");
+
+        ProjectSettings settings;
+        settings.name = QStringLiteral("playhead");
+        QString error;
+        {
+            auto document = ProjectDocument::create(projectDir, settings, &error);
+            QVERIFY2(document != nullptr, qPrintable(error));
+
+            Entity entity = makeEntity(QStringLiteral("range"), 0, 100);
+            document->mutableProject().entities.insert(entity.uuid, entity);
+            QVERIFY2(document->commitEntity(entity.uuid,
+                                            QStringLiteral("pvf: create range"),
+                                            &error),
+                     qPrintable(error));
+            document->flush(&error);
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+
+            document->setPlayhead(42);
+            document->savePlayheadState();
+        }
+
+        auto reopened = ProjectDocument::open(projectDir, &error);
+        QVERIFY2(reopened != nullptr, qPrintable(error));
+        QCOMPARE(reopened->playhead(), 42);
+        reopened.reset();
+
+        // The state file lives outside project.json and is clamped to the
+        // project content when it is stale.
+        const QString statePath =
+            projectDir + QStringLiteral("/.pvforge/playhead.json");
+        QVERIFY(QFileInfo::exists(statePath));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        state.write(R"({"frame": 9999})");
+        state.close();
+
+        auto clamped = ProjectDocument::open(projectDir, &error);
+        QVERIFY2(clamped != nullptr, qPrintable(error));
+        QCOMPARE(clamped->playhead(), 100);
+        clamped.reset();
+
+        // A corrupt file is ignored instead of failing the open.
+        QVERIFY(state.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        state.write("{not json");
+        state.close();
+
+        auto corrupt = ProjectDocument::open(projectDir, &error);
+        QVERIFY2(corrupt != nullptr, qPrintable(error));
+        QCOMPARE(corrupt->playhead(), 0);
     }
 
     void commitChangesUpsertsAndDeletesAtomically()

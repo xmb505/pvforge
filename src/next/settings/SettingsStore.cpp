@@ -29,6 +29,8 @@ constexpr int kMinMcpPort = 1024;
 constexpr int kMaxMcpPort = 65535;
 constexpr int kMinCommitDelayMs = 200;
 constexpr int kMaxCommitDelayMs = 5000;
+constexpr int kMinAutoSaveMinutes = 1;
+constexpr int kMaxAutoSaveMinutes = 60;
 
 template <typename T, std::size_t N>
 T nearestOf(T value, const std::array<T, N>& choices)
@@ -143,6 +145,8 @@ AppSettings SettingsStore::sanitized(AppSettings settings)
         std::clamp<int>(settings.mcpPort, kMinMcpPort, kMaxMcpPort));
     settings.humanCommitDelayMs =
         std::clamp(settings.humanCommitDelayMs, kMinCommitDelayMs, kMaxCommitDelayMs);
+    settings.autoSaveMinutes = std::clamp(
+        settings.autoSaveMinutes, kMinAutoSaveMinutes, kMaxAutoSaveMinutes);
     return settings;
 }
 
@@ -228,6 +232,10 @@ AppSettings SettingsStore::load() const
         m_settings
             .value(QStringLiteral("git/humanCommitDelayMs"), settings.humanCommitDelayMs)
             .toInt();
+    settings.autoSaveMinutes =
+        m_settings
+            .value(QStringLiteral("app/autoSaveMinutes"), settings.autoSaveMinutes)
+            .toInt();
     settings.gitEnabled =
         m_settings.value(QStringLiteral("git/enabled"), settings.gitEnabled).toBool();
     settings.onboardingDone =
@@ -275,6 +283,7 @@ void SettingsStore::save(const AppSettings& settings)
 
     m_settings.setValue(QStringLiteral("mcp/port"), value.mcpPort);
     m_settings.setValue(QStringLiteral("git/humanCommitDelayMs"), value.humanCommitDelayMs);
+    m_settings.setValue(QStringLiteral("app/autoSaveMinutes"), value.autoSaveMinutes);
     m_settings.setValue(QStringLiteral("git/enabled"), value.gitEnabled);
     m_settings.setValue(QStringLiteral("app/onboardingDone"), value.onboardingDone);
 
