@@ -533,6 +533,15 @@ Result exportVideo(const model::Project& project,
     if (options.outputPath.trimmed().isEmpty())
         return fail(QStringLiteral("输出路径为空"));
 
+    // Check overwrite before any expensive work and before creating the
+    // temporary sibling: an existing file is never touched without consent.
+    const QFileInfo outputInfo(options.outputPath);
+    if (!outputInfo.absoluteDir().exists())
+        return fail(QStringLiteral("输出目录不存在"));
+    const QString outputPath = outputInfo.absoluteFilePath();
+    if (!options.overwrite && QFileInfo::exists(outputPath))
+        return fail(QStringLiteral("output_exists"));
+
     const int projectFps = project.settings.fps;
     if (projectFps <= 0)
         return fail(QStringLiteral("工程帧率无效"));
@@ -606,10 +615,6 @@ Result exportVideo(const model::Project& project,
             mixProjectAudio(project, assets, start, projectFrames, projectFps);
     result.warnings = audioMix.warnings;
 
-    const QFileInfo outputInfo(options.outputPath);
-    if (!outputInfo.absoluteDir().exists())
-        return fail(QStringLiteral("输出目录不存在"));
-    const QString outputPath = outputInfo.absoluteFilePath();
     const QString partPath = outputPath + QStringLiteral(".part.mp4");
     QFile::remove(partPath);
 

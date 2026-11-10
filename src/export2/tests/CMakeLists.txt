@@ -15,6 +15,8 @@ set(PVF_EXPORT2_TEST_CASES
     audioSourceOffset
     missingAudioSkipped
     missingCamera
+    existingOutputBlocked
+    overwriteExistingOutput
     cancelRemovesFile
     oversizedOutput
     frameProviders

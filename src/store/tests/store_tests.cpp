@@ -125,7 +125,7 @@ private slots:
     void corruptProjectJson();
     void corruptEntityJson();
     void nonGitDirectoryRejected();
-    void missingGitToolReportsError();
+    void missingGitCreateFallsBack();
     void createRejectsInvalidInput();
     void cleanProjectHasNoDirtyText();
     void dirtyTextDetectedOnOpen();
@@ -889,7 +889,7 @@ void StoreTests::nonGitDirectoryRejected()
     QVERIFY2(error.contains(QStringLiteral("不存在")), qPrintable(error));
 }
 
-void StoreTests::missingGitToolReportsError()
+void StoreTests::missingGitCreateFallsBack()
 {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -903,13 +903,24 @@ void StoreTests::missingGitToolReportsError()
     PathGuard guard;
     QVERIFY(qputenv("PATH", QByteArray("/nonexistent")));
 
-    // Creating with an explicit git request still fails without git.
+    // Creating with an explicit git request still creates a plain store.
+    const QString withGit = temp.filePath(QStringLiteral("WithGit.pvproj"));
     error.clear();
-    auto rejected = ProjectStore::create(
-        temp.filePath(QStringLiteral("WithGit.pvproj")),
-        model::ProjectSettings(), &error);
-    QVERIFY(!rejected.has_value());
-    QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
+    auto fallback =
+        ProjectStore::create(withGit, model::ProjectSettings(), &error);
+    QVERIFY2(fallback.has_value(), qPrintable(error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(!fallback->gitEnabled());
+    QVERIFY(!QFileInfo::exists(withGit + QStringLiteral("/.git")));
+    QVERIFY(QFileInfo::exists(withGit + QStringLiteral("/project.json")));
+
+    // The fallback store still commits to its in-memory undo stack.
+    model::Entity entity = makeEntity();
+    fallback->mutableProject().entities.insert(entity.uuid, entity);
+    QVERIFY2(fallback->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY2(fallback->commit(QStringLiteral("pvf: plain"), &error),
+             qPrintable(error));
+    QCOMPARE(fallback->undoDepth(), 1);
 
     // Opening falls back to a plain text store.
     error.clear();

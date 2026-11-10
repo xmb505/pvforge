@@ -798,8 +798,9 @@ std::optional<ProjectStore> ProjectStore::create(
     if (!model::validateProject(initialProject, error))
         return std::nullopt;
 
-    if (useGit && !checkGit(error))
-        return std::nullopt;
+    // Missing git is not an error: the project is still created as a plain
+    // text store with in-memory undo, just like create(useGit=false).
+    const bool useRepo = useGit && gitBinaryAvailable();
 
     const QString root =
         QDir::cleanPath(QFileInfo(projectDir).absoluteFilePath());
@@ -837,7 +838,7 @@ std::optional<ProjectStore> ProjectStore::create(
         return std::nullopt;
     }
 
-    if (useGit)
+    if (useRepo)
     {
         const ProcessResult init =
             runGit(root, {QStringLiteral("init")});
@@ -874,7 +875,7 @@ std::optional<ProjectStore> ProjectStore::create(
     }
 
     ProjectStore store(root, std::move(initialProject));
-    store.m_gitEnabled = useGit;
+    store.m_gitEnabled = useRepo;
     return std::move(store);
 }
 

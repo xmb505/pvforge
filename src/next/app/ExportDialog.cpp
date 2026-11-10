@@ -149,6 +149,8 @@ ExportDialog::ExportDialog(const model::Project& project, const Uuid& preferredC
     connect(buttons, &QDialogButtonBox::accepted, this, [this] {
         if (cameraUuid().isEmpty() || outputPath().isEmpty())
             return;
+        if (!confirmOverwrite())
+            return;
         if (!confirmLargeExport())
             return;
         accept();
@@ -221,6 +223,25 @@ void ExportDialog::updateStartEnabled()
 {
     if (m_startButton)
         m_startButton->setEnabled(!cameraUuid().isEmpty() && !outputPath().isEmpty());
+}
+
+bool ExportDialog::confirmOverwrite()
+{
+    const QString path = outputPath();
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        m_overwriteExisting = false;
+        return true;
+    }
+
+    m_overwriteExisting =
+        m_hasOverwriteOverride
+            ? m_overwriteOverride
+            : QMessageBox::question(
+                  this, tr("文件已存在"),
+                  tr("%1 已存在。\n\n要覆盖它吗？").arg(path),
+                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                  == QMessageBox::Yes;
+    return m_overwriteExisting;
 }
 
 bool ExportDialog::confirmLargeExport()

@@ -73,9 +73,9 @@ struct UndoEntry
 class ProjectStore
 {
 public:
-    // `useGit` only expresses intent. create(useGit=true) requires a git
-    // binary and fails without one; open(useGit=true) falls back to a plain
-    // text store when git is missing or the directory has no .git.
+    // `useGit` only expresses intent. When git is missing, both
+    // create(useGit=true) and open(useGit=true) fall back to a plain text store
+    // (gitEnabled() == false) with in-memory undo instead of failing.
     static std::optional<ProjectStore> create(const QString& projectDir,
                                               const model::ProjectSettings& settings,
                                               QString* error = nullptr,

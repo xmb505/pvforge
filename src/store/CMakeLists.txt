@@ -49,7 +49,7 @@ if(BUILD_TESTING)
         corruptProjectJson
         corruptEntityJson
         nonGitDirectoryRejected
-        missingGitToolReportsError
+        missingGitCreateFallsBack
         createRejectsInvalidInput
         cleanProjectHasNoDirtyText
         dirtyTextDetectedOnOpen

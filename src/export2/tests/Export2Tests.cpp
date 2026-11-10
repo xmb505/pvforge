@@ -1016,6 +1016,65 @@ void testParentHiddenMutesChild()
     CHECK(peakOf(decodeMono(independentPath)) > 0.05);
 }
 
+void testExistingOutputBlocked()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/existing.mp4");
+
+    // A sentinel stands in for a previous export; it must survive untouched.
+    QFile sentinel(path);
+    CHECK(sentinel.open(QIODevice::WriteOnly));
+    CHECK(sentinel.write("do-not-touch") == 12);
+    sentinel.close();
+
+    const export2::Result result =
+        export2::exportVideo(project, store, makeOptions(path));
+
+    CHECK(!result.ok);
+    CHECK(result.error == QStringLiteral("output_exists"));
+    CHECK(result.framesWritten == 0);
+
+    QFile kept(path);
+    CHECK(kept.open(QIODevice::ReadOnly));
+    CHECK(kept.readAll() == QByteArray("do-not-touch"));
+    CHECK(!QFileInfo::exists(path + QStringLiteral(".part.mp4")));
+}
+
+void testOverwriteExistingOutput()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/replace.mp4");
+
+    QFile sentinel(path);
+    CHECK(sentinel.open(QIODevice::WriteOnly));
+    CHECK(sentinel.write("old") == 3);
+    sentinel.close();
+
+    export2::Options options = makeOptions(path);
+    options.overwrite = true;
+    const export2::Result result =
+        export2::exportVideo(project, store, options);
+
+    CHECK(result.ok);
+    CHECK(result.error.isEmpty());
+    CHECK(result.framesWritten == 10);
+    CHECK(QFileInfo(path).size() > 3);
+
+    AVFormatContext* input = openInput(path);
+    CHECK(input != nullptr);
+    if (input)
+    {
+        CHECK(audioStreamOf(input) == nullptr);
+        avformat_close_input(&input);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1031,6 +1090,8 @@ int main(int argc, char** argv)
         {QStringLiteral("audioSourceOffset"), testAudioSourceOffset},
         {QStringLiteral("missingAudioSkipped"), testMissingAudioSkipped},
         {QStringLiteral("missingCamera"), testMissingCamera},
+        {QStringLiteral("existingOutputBlocked"), testExistingOutputBlocked},
+        {QStringLiteral("overwriteExistingOutput"), testOverwriteExistingOutput},
         {QStringLiteral("cancelRemovesFile"), testCancelRemovesFile},
         {QStringLiteral("oversizedOutput"), testOversizedOutput},
         {QStringLiteral("outputFpsMultipliers"), testOutputFpsMultipliers},

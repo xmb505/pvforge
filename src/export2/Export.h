@@ -65,6 +65,10 @@ struct Options
     int resolutionScale = 1; // 1, 2 or 4
     int crf = 18;
     bool includeAudio = true;
+    // When false (default), an existing output file makes the export fail with
+    // error "output_exists" and the file is left untouched.  Set true only
+    // after the user confirmed overwriting.
+    bool overwrite = false;
 
     // Optional decoded-frame sources for video and HTML assets, forwarded to
     // render2::Options for every frame.  Unset providers render placeholders.
