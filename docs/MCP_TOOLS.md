@@ -1741,10 +1741,12 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | `name` | string | 否 | 文件名 | 素材显示名，1..256 字符 |
 | `type` | string | 否 | 自动检测 | `image` / `video` / `audio` / `html` |
 | `extractAudio` | boolean | 否 | 视频为 true | 视频是否拆出无损 WAV 音频素材 |
+| `confirm` | boolean | 否 | false | 路径在工程目录外时必须为 `true` |
 
 **规则**：
 
 - 只接受本地路径，不接受 URL、`~`、相对路径。
+- **工程目录外的路径需要 `confirm: true`**；工程内路径可直接导入。软链指向工程外也按工程外处理。
 - 素材文件进工程 `assets/`，但**不进 git**；纯素材导入没有文本 diff 时可能没有 commit。
 - 视频设置 `extractAudio: true` 时同时写入视频素材和 WAV 音频素材；返回两个 hash。
 - `ffmpeg` 缺失且 `extractAudio: true` → `not_available`，整次导入回滚，不留半个素材。

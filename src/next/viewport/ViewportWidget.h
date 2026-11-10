@@ -141,6 +141,12 @@ public:
 
     QSize minimumSizeHint() const override { return QSize(320, 180); }
 
+signals:
+    // Emitted after paintEvent() drew a non-empty scene image that is not a
+    // media placeholder, and only when the frame or the rendered image is new.
+    // The playback watchdog feeds on this instead of the clock timer.
+    void framePresented(int frame);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -279,6 +285,12 @@ private:
     int m_sceneFrame = -1;
     int m_sceneExpand = 0;
     bool m_sceneValid = false;
+    bool m_sceneMediaMissing = false;
+    // Bumped whenever ensureSceneImage() replaces the scene image.  paintEvent
+    // uses it to avoid feeding the watchdog on pure exposure repaints.
+    quint64 m_sceneGeneration = 0;
+    int m_lastPresentedFrame = -1;
+    quint64 m_lastPresentedGeneration = 0;
 
     static constexpr double kCanvasMargin = 24.0;
     static constexpr double kPivotHitRadius = 7.0;

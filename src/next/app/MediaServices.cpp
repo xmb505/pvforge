@@ -28,10 +28,23 @@ namespace {
 constexpr qint64 kVideoDiskBudgetBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDefaultVideoProxyWidth = 960;
 constexpr int kDefaultVideoMemoryFrames = 64;
+constexpr int kMaxHtmlPrefetchFrames = 60;
 
 int floorFrame(double value)
 {
     return int(std::floor(value));
+}
+
+int projectContentEnd(const model::Project& project)
+{
+    int end = 0;
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        if (it.value().parentUuid.isEmpty())
+            end = std::max(end, it.value().end);
+    }
+    return end;
 }
 
 } // namespace
@@ -98,6 +111,7 @@ void MediaServices::stop()
         m_html->stop();
     m_htmlInFlight = false;
     m_htmlPending = false;
+    m_lastPrefetchFrame = -1;
 }
 
 void MediaServices::applySettings(const AppSettings& settings)
@@ -124,6 +138,7 @@ void MediaServices::applySettings(const AppSettings& settings)
                 Qt::QueuedConnection);
         m_htmlInFlight = false;
         m_htmlPending = false;
+        m_lastPrefetchFrame = -1;
         m_htmlStartFailed = false;
         m_htmlError.clear();
         if (projectHasHtml())
@@ -355,6 +370,108 @@ void MediaServices::prepareHtmlPreview(int maxWaitMs){
         if (!image.isNull())
             m_htmlPending = false;
     }
+}
+
+void MediaServices::prefetchHtml(int frame, bool force)
+{
+    if (!m_html || !m_document)
+        return;
+    if (force)
+        m_lastPrefetchFrame = -1;
+    if (m_lastPrefetchFrame == frame)
+        return;
+    if (!m_prefetchSink && !m_html->isRunning())
+        return;
+
+    const QVector<html2::FrameRequest> requests =
+        buildHtmlPrefetchRequests(frame);
+    // Record the frame even for an empty plan: repeating it would only rebuild
+    // the same empty list.
+    m_lastPrefetchFrame = frame;
+    if (requests.isEmpty())
+        return;
+
+    if (m_prefetchSink)
+        m_prefetchSink(requests);
+    else
+        m_html->prefetch(requests);
+}
+
+QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
+    int frame) const
+{
+    QVector<html2::FrameRequest> requests;
+    if (!m_document)
+        return requests;
+
+    const model::Project& project = m_document->project();
+    const int contentEnd = projectContentEnd(project);
+    int remaining = kMaxHtmlPrefetchFrames;
+
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (entity.content.kind != ContentKind::Asset
+            || entity.content.asset.type != AssetType::Html)
+            continue;
+        if (frame < entity.start || frame >= entity.end)
+            continue;
+
+        const auto asset = m_document->assets().get(entity.content.asset.hash);
+        if (!asset)
+            continue;
+
+        int segmentEnd = entity.end;
+        if (contentEnd > 0)
+            segmentEnd = std::min(segmentEnd, contentEnd);
+        if (segmentEnd <= frame)
+            continue;
+
+        // The next variable keyframe is the first frame whose cache key differs
+        // from the current one; stop before it because the frontend browser
+        // renders that frame when playback reaches it.
+        int boundary = segmentEnd;
+        for (auto track = entity.tracks.constBegin();
+             track != entity.tracks.constEnd(); ++track)
+        {
+            if (!track.key().startsWith(QStringLiteral("var."),
+                                        Qt::CaseInsensitive))
+                continue;
+            for (const model::Keyframe& key : track.value().keys)
+            {
+                const qint64 absolute = qint64(entity.start) + key.frame;
+                if (absolute > frame && absolute < boundary)
+                    boundary = int(absolute);
+            }
+        }
+
+        const html2::FrameRequest current =
+            makeHtmlRequest(entity, *asset, double(frame));
+        // A static page shares one cache entry for every timeline frame.
+        if (!current.timeDependent)
+        {
+            requests.append(current);
+            if (--remaining <= 0)
+                break;
+            continue;
+        }
+
+        for (int f = frame; f < boundary && remaining > 0; ++f)
+        {
+            requests.append(makeHtmlRequest(entity, *asset, double(f)));
+            --remaining;
+        }
+        // Then fill the frames before the playhead for scrubbing backwards.
+        for (int f = frame - 1; f >= entity.start && remaining > 0; --f)
+        {
+            requests.append(makeHtmlRequest(entity, *asset, double(f)));
+            --remaining;
+        }
+        if (remaining <= 0)
+            break;
+    }
+    return requests;
 }
 
 QImage MediaServices::htmlFrameBlocking(const Uuid& entityUuid,

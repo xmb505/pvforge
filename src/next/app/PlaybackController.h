@@ -5,7 +5,6 @@
 #include <QString>
 #include <QTimer>
 
-#include <functional>
 #include <memory>
 
 namespace pvf::audio2 {
@@ -40,14 +39,11 @@ public:
     // Highest end frame among root entities.  0 means no content.
     int contentEnd() const;
 
-    // Frame watchdog (docs/ENTITY_MODEL.md 6.5).  While playing, a real frame
-    // reaching the screen must call noteFramePresented(); when the media
-    // provider says a frame is still pending and none has arrived for longer
-    // than watchdogMs(), playback pauses and stalled() fires.
+    // Frame watchdog (docs/ENTITY_MODEL.md 6.5).  While playing, every real
+    // frame that reaches the screen must call noteFramePresented(); when no
+    // such frame arrives for longer than watchdogMs(), playback pauses and
+    // stalled() fires.  The clock timer never feeds the watchdog itself.
     void noteFramePresented();
-    // Empty provider means "no media is pending": every watchdog tick feeds the
-    // clock.  The provider is queried on the UI thread only.
-    void setMediaPendingProvider(std::function<bool()> provider);
     void setWatchdogMs(int ms);
     int watchdogMs() const { return m_watchdogMs; }
 
@@ -68,7 +64,6 @@ private:
     QTimer* m_timer = nullptr;
     QTimer m_watchdog;
     QElapsedTimer m_lastFrame;
-    std::function<bool()> m_mediaPending;
     QMetaObject::Connection m_playheadConnection;
     bool m_playing = false;
     bool m_advancing = false;

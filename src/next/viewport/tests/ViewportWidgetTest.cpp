@@ -302,6 +302,8 @@ class ViewportWidgetTest : public QObject
 
 private slots:
     void projectCanvasRenders();
+    void framePresentedOnlyForNewScenes();
+    void framePresentedSkipsMediaPlaceholder();
     void clickSelectsAndClears();
     void dragMoveXCommitsOnce();
     void gizmoFollowsRotationTrack();
@@ -355,6 +357,57 @@ void ViewportWidgetTest::projectCanvasRenders()
         view.widgetToProject(view.projectToWidget(projectPoint));
     QVERIFY(QLineF(roundTrip, projectPoint).length() < 1e-6);
     QVERIFY(view.zoom() > 0.0);
+}
+
+void ViewportWidgetTest::framePresentedOnlyForNewScenes()
+{
+    FakeDocument document;
+    document.addVector(QStringLiteral("box"), 120.0, 60.0, 80.0, 60.0);
+
+    ViewportWidget view(&document);
+    QSignalSpy presented(&view, &ViewportWidget::framePresented);
+    showWidget(view);
+
+    QTRY_VERIFY(presented.count() >= 1);
+    QCOMPARE(presented.last().at(0).toInt(), 0);
+
+    // Repainting the same cached scene is an exposure event, not a new frame.
+    const int before = presented.count();
+    view.grab();
+    QTest::qWait(20);
+    QCOMPARE(presented.count(), before);
+
+    document.setPlayhead(1);
+    view.refresh();
+    view.grab();
+    QTRY_COMPARE(presented.count(), before + 1);
+    QCOMPARE(presented.last().at(0).toInt(), 1);
+}
+
+void ViewportWidgetTest::framePresentedSkipsMediaPlaceholder()
+{
+    FakeDocument document;
+    const AssetHash hash = document.registerAsset(
+        AssetType::Video, QStringLiteral("Video"), 320, 180);
+    document.addAsset(QStringLiteral("video"), AssetType::Video, hash);
+
+    ViewportWidget view(&document);
+    view.setVideoFrameProvider(
+        [](const Uuid&, double) { return QImage(); });
+    QSignalSpy presented(&view, &ViewportWidget::framePresented);
+    showWidget(view);
+    view.grab();
+    QTest::qWait(20);
+
+    // render2 drew its placeholder: nothing reached the screen.
+    QCOMPARE(presented.count(), 0);
+
+    view.setVideoFrameProvider(
+        [](const Uuid&, double) { return redFrame(); });
+    view.refresh();
+    view.grab();
+    QTRY_COMPARE(presented.count(), 1);
+    QCOMPARE(presented.last().at(0).toInt(), 0);
 }
 
 void ViewportWidgetTest::clickSelectsAndClears()

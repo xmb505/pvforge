@@ -2,6 +2,7 @@
 
 #include "assets/AssetStore.h"
 #include "html/HtmlBrowser.h"
+#include "html2/HtmlFrameService.h"
 #include "next/app/NextWindow.h"
 #include "next/app/ProjectDocument.h"
 #include "next/viewport/ViewportWidget.h"
@@ -129,6 +130,9 @@ private slots:
     void videoProviderWithoutAssetIsEmpty();
     void exportVideoFrameUsesFullResolution();
     void htmlProviderRendersBundle();
+    void htmlPrefetchStopsAtVariableChange();
+    void htmlPrefetchCapsAtSixtyFrames();
+    void htmlPrefetchFillsCache();
     void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
     void switchingProjectsUsesNewAssets();
@@ -306,6 +310,138 @@ void MediaServicesTests::htmlProviderRendersBundle()
     const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
     QVERIFY2(center.red() > 200 && center.green() < 60 && center.blue() < 60,
              qPrintable(center.name()));
+}
+
+void MediaServicesTests::htmlPrefetchStopsAtVariableChange()
+{
+    if (!gitLfsAvailable())
+        QSKIP("store creation is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/prefetch.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 10, 0);
+    entity.end = 200;
+    Track speed;
+    speed.keys.append(Keyframe{30, 1.0, EasingSpec(), QString()});
+    speed.keys.append(Keyframe{60, 2.0, EasingSpec(), QString()});
+    entity.tracks.insert(QStringLiteral("var.speed"), speed);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    QVector<html2::FrameRequest> captured;
+    media.setHtmlPrefetchSinkForTest(
+        [&captured](const QVector<html2::FrameRequest>& requests) {
+            captured = requests;
+        });
+
+    // The next var.* key is at entity-relative 30, i.e. project frame 40.
+    media.prefetchHtml(20, true);
+    QCOMPARE(captured.size(), 30);
+
+    // Forward first: project frames 20..39 -> local 10..29.
+    QCOMPARE(captured.at(0).localFrame, 10);
+    QCOMPARE(captured.at(19).localFrame, 29);
+    // Then backwards: local 9 down to 0.
+    QCOMPARE(captured.at(20).localFrame, 9);
+    QCOMPARE(captured.last().localFrame, 0);
+    for (const html2::FrameRequest& request : captured) {
+        QVERIFY(request.localFrame < 30);
+        QCOMPARE(request.vars.value(QStringLiteral("speed")).toDouble(), 1.0);
+    }
+}
+
+void MediaServicesTests::htmlPrefetchCapsAtSixtyFrames()
+{
+    if (!gitLfsAvailable())
+        QSKIP("store creation is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/cap.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 0, 0);
+    entity.end = 10000;
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    int calls = 0;
+    QVector<html2::FrameRequest> captured;
+    media.setHtmlPrefetchSinkForTest(
+        [&](const QVector<html2::FrameRequest>& requests) {
+            ++calls;
+            captured = requests;
+        });
+
+    media.prefetchHtml(0, true);
+    QCOMPARE(calls, 1);
+    QCOMPARE(captured.size(), 60);
+    QCOMPARE(captured.at(0).localFrame, 0);
+    QCOMPARE(captured.last().localFrame, 59);
+
+    // The same playhead does not resubmit the batch.
+    media.prefetchHtml(0);
+    QCOMPARE(calls, 1);
+    // A document edit forces a rebuild at the same playhead.
+    media.prefetchHtml(0, true);
+    QCOMPARE(calls, 2);
+}
+
+void MediaServicesTests::htmlPrefetchFillsCache()
+{
+    if (!gitLfsAvailable())
+        QSKIP("store creation is unavailable");
+    if (!chromeAvailable())
+        QSKIP("Chrome/Chromium is not installed");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/warm.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 10, 0);
+    entity.end = 16;
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    QString startError;
+    if (!media.start(&startError))
+        QSKIP("the HTML service could not start");
+
+    media.prefetchHtml(12, true);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        media.htmlServiceForTest()->stats().prefetched > 0, 120000);
+
+    // The prefetched frame is a cache hit, so the cache-only provider returns
+    // it immediately instead of queuing another render.
+    QVERIFY(!media.htmlFrame(entity.uuid, 12.0).isNull());
 }
 
 void MediaServicesTests::exportHtmlFrameUsesRequestedSize()

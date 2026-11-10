@@ -582,6 +582,8 @@ NextWindow::NextWindow(std::unique_ptr<ProjectDocument> document, QWidget* paren
                 updatePlaybackAction();
                 if (m_workbench)
                     m_workbench->setPlaybackActive(playing);
+                if (!playing && m_media && m_document)
+                    m_media->prefetchHtml(m_document->playhead(), true);
                 updateStatus();
             });
     connect(m_playback.get(), &PlaybackController::stalled, this,
@@ -1224,6 +1226,12 @@ void NextWindow::buildEditor()
 
     m_assetPanel = new AssetPanel(m_document, top);
     m_viewport = new ViewportWidget(m_document, top);
+    // The watchdog is fed only by pictures that actually reached the screen.
+    connect(m_viewport, &ViewportWidget::framePresented, this,
+            [this](int) {
+                if (m_playback)
+                    m_playback->noteFramePresented();
+            });
     m_viewport->setSceneExpandPercent(
         m_settings.workbenchCacheExpandPercent);
     m_viewport->setAutoKeyEnabled(!m_autoKeyCheck
@@ -1291,6 +1299,8 @@ void NextWindow::buildEditor()
 
     rebuildCameras();
     ensureMediaServices();
+    if (m_media && m_document)
+        m_media->prefetchHtml(m_document->playhead(), true);
     ensureWorkbenchServices();
     configureVideoExtraction();
 }
@@ -1447,8 +1457,13 @@ void NextWindow::connectDocument()
             m_timeline->refresh();
         // Give the current HTML frame its 300 ms miss budget outside
         // paintEvent(); the subsequent paint is cache-only.
-        if (m_media)
+        if (m_media) {
             m_media->prepareHtmlPreview(300);
+            // The cache browser idles during active playback; once paused or
+            // while scrubbing it fills the frames ahead of the playhead.
+            if (!m_playback || !m_playback->isPlaying())
+                m_media->prefetchHtml(m_document->playhead());
+        }
         if (m_viewport)
             m_viewport->refresh();
         updateStatus();
@@ -1477,8 +1492,11 @@ void NextWindow::refreshAll()
         m_propertiesPanel->refresh();
     if (m_timeline)
         m_timeline->refresh();
-    if (m_media)
+    if (m_media) {
         m_media->prepareHtmlPreview(300);
+        if ((!m_playback || !m_playback->isPlaying()) && m_document)
+            m_media->prefetchHtml(m_document->playhead(), true);
+    }
     if (m_viewport)
         m_viewport->refresh();
 
@@ -1523,11 +1541,6 @@ void NextWindow::ensureMediaServices()
         m_mediaProvidersAttached = false;
     }
 
-    if (m_playback) {
-        m_playback->setMediaPendingProvider(
-            [this] { return m_media && m_media->htmlPending(); });
-    }
-
     if (!m_mediaProvidersAttached)
         attachMediaProviders();
 }
@@ -1549,8 +1562,6 @@ void NextWindow::configureVideoExtraction()
 
 void NextWindow::resetMediaServices()
 {
-    if (m_playback)
-        m_playback->setMediaPendingProvider({});
     if (m_viewport) {
         m_viewport->setVideoFrameProvider({});
         m_viewport->setHtmlFrameProvider({});

@@ -80,7 +80,7 @@ class PlaybackControllerTests : public QObject
     Q_OBJECT
 
 private slots:
-    void stallsAfterPendingTimeout()
+    void stallsWithoutPresentedFrames()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -90,14 +90,14 @@ private slots:
         PlaybackController playback;
         playback.setDocument(&document);
         playback.setWatchdogMs(100);
-        playback.setMediaPendingProvider([] { return true; });
 
         QSignalSpy stalled(&playback, &PlaybackController::stalled);
         playback.play();
         QVERIFY(playback.isPlaying());
 
-        QTest::qWait(250);
-        QVERIFY(!playback.isPlaying());
+        // The clock timer keeps advancing the playhead, but without a real
+        // viewport frame the watchdog must still pause playback.
+        QTRY_VERIFY_WITH_TIMEOUT(!playback.isPlaying(), 2000);
         QCOMPARE(stalled.count(), 1);
         QCOMPARE(stalled.at(0).at(0).toString(),
                  QStringLiteral("帧渲染超时，已暂停"));
@@ -107,7 +107,7 @@ private slots:
         QCOMPARE(stalled.count(), 1);
     }
 
-    void keepsPlayingWhenNothingPending()
+    void presentedFramesKeepPlaying()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -116,13 +116,15 @@ private slots:
 
         PlaybackController playback;
         playback.setDocument(&document);
-        playback.setWatchdogMs(100);
-        playback.setMediaPendingProvider([] { return false; });
+        playback.setWatchdogMs(2000);
 
         QSignalSpy stalled(&playback, &PlaybackController::stalled);
         const int before = document.playhead();
         playback.play();
-        QTest::qWait(250);
+        for (int i = 0; i < 5; ++i) {
+            QTest::qWait(100);
+            playback.noteFramePresented();
+        }
 
         QVERIFY(playback.isPlaying());
         QVERIFY(document.playhead() > before);
@@ -138,16 +140,15 @@ private slots:
 
         PlaybackController playback;
         playback.setDocument(&document);
-        playback.setWatchdogMs(500);
-        playback.setMediaPendingProvider([] { return true; });
+        playback.setWatchdogMs(1500);
 
         QSignalSpy stalled(&playback, &PlaybackController::stalled);
         playback.play();
-        QTest::qWait(350);
+        QTest::qWait(500);
         playback.noteFramePresented();
-        QTest::qWait(350);
+        QTest::qWait(500);
 
-        // 700 ms since play but only 350 ms since the presented frame.
+        // 1000 ms since play but only 500 ms since the presented frame.
         QVERIFY(playback.isPlaying());
         QCOMPARE(stalled.count(), 0);
     }
@@ -162,7 +163,6 @@ private slots:
         PlaybackController playback;
         playback.setDocument(&document);
         playback.setWatchdogMs(100);
-        playback.setMediaPendingProvider([] { return true; });
 
         QSignalSpy stalled(&playback, &PlaybackController::stalled);
         playback.play();
@@ -171,6 +171,32 @@ private slots:
 
         QVERIFY(!playback.isPlaying());
         QCOMPARE(stalled.count(), 0);
+    }
+
+    void manualSeekResetsStallClock()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        FakeDocument document(temp.path());
+        addLongClip(document);
+
+        PlaybackController playback;
+        playback.setDocument(&document);
+        playback.setWatchdogMs(1000);
+
+        QSignalSpy stalled(&playback, &PlaybackController::stalled);
+        playback.play();
+        QTest::qWait(400);
+        document.setPlayhead(500);
+
+        // Only 400 ms have passed since the seek, not since play().
+        QTest::qWait(400);
+        QVERIFY(playback.isPlaying());
+        QCOMPARE(stalled.count(), 0);
+
+        // With no new frame after the seek the watchdog eventually fires.
+        QTRY_VERIFY_WITH_TIMEOUT(!playback.isPlaying(), 3000);
+        QCOMPARE(stalled.count(), 1);
     }
 
     void watchdogMsIsSynchronised()

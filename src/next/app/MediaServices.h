@@ -1,15 +1,19 @@
 #pragma once
 
 #include "common/Types.h"
+#include "html2/PvhtmlRenderer.h"
 #include "next/settings/SettingsStore.h"
 
 #include <QImage>
 #include <QObject>
 #include <QSize>
 #include <QString>
+#include <QVector>
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <utility>
 
 namespace pvf::assets {
 struct StoredAsset;
@@ -17,7 +21,6 @@ struct StoredAsset;
 
 namespace pvf::html2 {
 class HtmlFrameService;
-struct FrameRequest;
 }
 
 namespace pvf::model {
@@ -75,6 +78,20 @@ public:
     // Blocks up to maxWaitMs for the HTML entities under the current playhead
     // (the documented 300 ms miss budget).  Must be called outside paintEvent().
     void prepareHtmlPreview(int maxWaitMs = 300);
+    // Queues background low-resolution renders for the active HTML entities:
+    // from `frame` forward to the next var.* keyframe, clip end or project end,
+    // then backwards for earlier frames.  At most 60 requests per call and
+    // never blocks.  A repeated call for the same frame is ignored unless
+    // force is set (used after document edits).  No-op while the service is
+    // stopped; callers should skip this during active playback.
+    void prefetchHtml(int frame, bool force = false);
+    // Test hook replacing the cache browser submit with a capture sink.
+    using HtmlPrefetchSink =
+        std::function<void(const QVector<html2::FrameRequest>&)>;
+    void setHtmlPrefetchSinkForTest(HtmlPrefetchSink sink)
+    {
+        m_prefetchSink = std::move(sink);
+    }
     // Single-entity blocking render for MCP preview.render_frame; safe on the
     // UI thread because it never runs inside paintEvent().
     QImage htmlFrameBlocking(const Uuid& entityUuid, double projectFrame,
@@ -103,7 +120,8 @@ public:
     void stopExportHtml();
     // True while the latest htmlFrame() missed the cache and timed out: the
     // frontend browser is still rendering it and htmlFrameReady will follow.
-    // The playback watchdog treats this as "no frame on screen yet".
+    // The viewport shows render2's placeholder meanwhile, so framePresented
+    // stays silent; the workbench prewarm also waits for this signal.
     bool htmlPending() const { return m_htmlPending; }
     bool htmlStartFailed() const { return m_htmlStartFailed; }
     QString htmlError() const { return m_htmlError; }
@@ -133,6 +151,7 @@ private:
     html2::FrameRequest makeHtmlRequest(const model::Entity& entity,
                                         const assets::StoredAsset& asset,
                                         double projectFrame) const;
+    QVector<html2::FrameRequest> buildHtmlPrefetchRequests(int frame) const;
     std::unique_ptr<video2::VideoFrames> makeVideoFrames() const;
 
     ProjectDocument* m_document = nullptr;
@@ -147,6 +166,10 @@ private:
     std::unique_ptr<video2::VideoFrames> m_exportVideoFrames;
     std::map<AssetHash, std::unique_ptr<video2::VideoSequenceService>> m_sequences;
     std::unique_ptr<html2::HtmlFrameService> m_html;
+    HtmlPrefetchSink m_prefetchSink;
+    // Last frame passed to prefetchHtml(); avoids re-submitting the same batch
+    // on every repaint.  force or a document edit resets it.
+    int m_lastPrefetchFrame = -1;
     // Guards against a queued update() re-entering htmlFrame() while
     // prepareHtmlPreview() pumps a nested event loop.
     bool m_htmlInFlight = false;

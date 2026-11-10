@@ -1400,6 +1400,8 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
             m_sceneFrame = frame;
             m_sceneExpand = expand;
             m_sceneValid = true;
+            m_sceneMediaMissing = false;
+            ++m_sceneGeneration;
             return m_sceneImage;
         }
     }
@@ -1411,6 +1413,8 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
     m_sceneFrame = frame;
     m_sceneExpand = expand;
     m_sceneValid = true;
+    m_sceneMediaMissing = mediaMissing;
+    ++m_sceneGeneration;
 
     if (!liveEdit && !mediaMissing && m_sceneStore && !m_sceneImage.isNull())
         m_sceneStore(frame, m_cameraUuid, m_sceneImage);
@@ -1599,6 +1603,17 @@ void ViewportWidget::paintEvent(QPaintEvent*)
     const QImage scene = ensureSceneImage(imageSize);
     if (!scene.isNull())
         painter.drawImage(sceneRect, scene);
+
+    // Only a real, complete scene counts as a presented frame.  A render that
+    // fell back to render2's media placeholder is not fed to the watchdog.
+    const int presentedFrame = m_document->playhead();
+    if (!scene.isNull() && !m_sceneMediaMissing
+        && (presentedFrame != m_lastPresentedFrame
+            || m_sceneGeneration != m_lastPresentedGeneration)) {
+        m_lastPresentedFrame = presentedFrame;
+        m_lastPresentedGeneration = m_sceneGeneration;
+        emit framePresented(presentedFrame);
+    }
 
     const model::Project& project = m_document->project();
     const QRectF canvas(0.0, 0.0, std::max(1, project.settings.width),

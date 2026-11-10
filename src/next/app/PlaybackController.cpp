@@ -109,11 +109,6 @@ void PlaybackController::noteFramePresented()
     m_lastFrame.start();
 }
 
-void PlaybackController::setMediaPendingProvider(std::function<bool()> provider)
-{
-    m_mediaPending = std::move(provider);
-}
-
 void PlaybackController::setWatchdogMs(int ms)
 {
     m_watchdogMs = std::max(1, ms);
@@ -127,13 +122,9 @@ void PlaybackController::checkWatchdog()
         return;
     }
 
-    // No media layer is late, so the clock is not blocked: feed it every tick.
-    if (!m_mediaPending || !m_mediaPending())
-    {
-        noteFramePresented();
-        return;
-    }
-
+    // The watchdog only feeds on real frames via noteFramePresented().  The
+    // clock timer advancing or a media provider being busy is not evidence
+    // that anything reached the screen.
     if (m_lastFrame.isValid() && m_lastFrame.elapsed() > m_watchdogMs)
     {
         pause();
@@ -188,10 +179,11 @@ void PlaybackController::onPlayheadChanged()
     if (!m_document || m_advancing)
         return;
 
-    // A manual seek/playhead set restarts the stall clock.
-    noteFramePresented();
+    // A manual seek resets the stall clock.  Playback ticks are excluded above,
+    // so an advancing clock can never feed the watchdog.
     if (!m_playing)
         return;
+    m_lastFrame.start();
 
     const int frame = m_document->playhead();
     if (frame >= m_endFrame) {
