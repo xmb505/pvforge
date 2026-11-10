@@ -1,9 +1,10 @@
 # PVForge 新模型状态与交接
 
-> 日期：2026-11-10  
-> 分支：`new-entity-model`  
-> 最新已提交：`ba07a59 docs: plan the legacy ui backend integration`  
+> 日期：2026-11-11  
+> 分支：`new-entity-model`（已合并 `ui-backend-integration`）  
+> 最新已提交：`491c270 chore: retire the legacy export path and reference shell target`  
 > **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端模块逐步接入旧壳；`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。本文以下历史描述以本段为准。  
+> **2026-11-11 旧 UI 接入完成**：P1–P7 已合并；最终二进制 `dist/pvforge`（9.5MB）与 `dist/pvforge-mcp`。旧 UI 的时间轴/属性/视口/Gizmo/相机监视器/素材箱/MCP/设置/导出均已接新后端。  
 > 设计主文档：`docs/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/INTEGRATION_PLAN.md`  
@@ -170,6 +171,35 @@
 10. **旧 app 删除**：~~`pvforge-next` parity 后再删旧 `src/core/Project.*`、旧时间轴/场景/测试。~~（2026-11-10 方向修正：取消。旧 app 是交付壳，不删除；旧模型源码等新后端接入完成后只清理内部实现。）
 11. **旧测试**：大量旧测试是旧模型断言，未迁移；新目标测试已独立。
 12. **求解段递归守卫**：现在同一实体在求解中重新求值会退回无求解的 plain pose；跨实体循环仍由父链/目标校验拦截。
+
+### 4.0 2026-11-11 旧 UI 接入完成
+
+已合并分支 `ui-backend-integration`（P1–P7）：
+
+- P1 旧 MainWindow 打开/新建目录工程，旧布局/项目属性；`1e875d1`
+- P2a 旧时间轴只读显示新实体；`7c1bed7`
+- P2b1 片段拖动/裁剪/换行/换父级/级联删除；`f19a465`
+- P2b2 关键帧/marker/S 切分；`311ab94`
+- P3a 旧视口 render2/播放/缓存；`a355f6a`
+- P3b Gizmo/吸附/相机监视器/临摹；`d2b3cf5`
+- P4a 旧属性面板实体/Content/关键帧/33 缓动/求解；`c0459de`
+- P4b 特殊内容/HTML 变量/文字排版/品牌墙；`fce5675`
+- P5 旧素材箱/导入/拖拽/换素材；`45d62e2`
+- P6 MCP/Git/历史/崩溃恢复/设置；`32def53`
+- P7a 旧导出 UI 接 export2（fps/分辨率/CRF/编码器/ETA/取消/覆盖）；`b1dc1f7`
+- P7b 移除 `pvforge-next` 交付目标与旧导出管线；`491c270`
+
+最终二进制：`dist/pvforge`（Release，9.5MB）、`dist/pvforge-mcp`；启动说明 `dist/RUN.txt`。
+
+验收：`--self-test`、`--session-test`、`--viewport-test`、`--timeline-test`、`--properties-test`、`--assets-test`、`--mcp-test`、`--git-test`、`--export-test` 全部通过；`--open /tmp/pvfe2e/proj` 启动不崩；`ldd` 无缺失。
+
+已知剩余：
+
+1. 旧栈更广清理（History/Commands/CheckpointManager、SceneRenderer/CameraRenderer、VideoPlayer/VideoProxy、HtmlRenderer/McpServer）未做，旧自测仍在用。
+2. `src/next/app` 参考壳内部仍有 `PVForge Next` 文案，但已无交付目标、不进入 `pvforge`。
+3. `htmlCacheEnabled` / `videoProxyEnabled` 只持久化显示，底层关闭缓存入口未接。
+4. 真实人工验收：2x/HTML 高清/VAAPI/4x 8K 压力、打开文件夹按钮。
+5. 旧 `--timeline-frame-test`/`--timeline-interaction-test`/`--timeline-rowbuttons-test` 是基线既有失败，未修。
 
 ### 4.1 2026-11-10 晚间进展
 
