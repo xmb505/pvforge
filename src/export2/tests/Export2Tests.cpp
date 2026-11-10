@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QScopeGuard>
 #include <QSize>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -19,7 +20,9 @@
 #include <algorithm>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/error.h>
 }
 
 using namespace pvf;
@@ -202,6 +205,137 @@ double inputDuration(AVFormatContext* input)
                 duration, stream->duration * av_q2d(stream->time_base));
     }
     return duration;
+}
+
+// Decodes the first audio stream into mono float samples.  Empty when the file
+// has no audio stream or decoding fails.
+QVector<float> decodeMono(const QString& path)
+{
+    QVector<float> samples;
+    AVFormatContext* input = nullptr;
+    if (avformat_open_input(&input, path.toUtf8().constData(), nullptr,
+                            nullptr)
+        < 0)
+        return samples;
+    const auto inputGuard =
+        qScopeGuard([&] { avformat_close_input(&input); });
+    if (avformat_find_stream_info(input, nullptr) < 0)
+        return samples;
+
+    const int index =
+        av_find_best_stream(input, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (index < 0)
+        return samples;
+
+    const AVCodec* codec =
+        avcodec_find_decoder(input->streams[index]->codecpar->codec_id);
+    if (!codec)
+        return samples;
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    if (!context)
+        return samples;
+    const auto contextGuard =
+        qScopeGuard([&] { avcodec_free_context(&context); });
+    if (avcodec_parameters_to_context(context, input->streams[index]->codecpar)
+        < 0)
+        return samples;
+    if (avcodec_open2(context, codec, nullptr) < 0)
+        return samples;
+
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    if (!packet || !frame)
+    {
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        return samples;
+    }
+    const auto packetGuard = qScopeGuard([&] { av_packet_free(&packet); });
+    const auto frameGuard = qScopeGuard([&] { av_frame_free(&frame); });
+
+    auto append = [&](const AVFrame* decoded) {
+        const int channels = decoded->ch_layout.nb_channels;
+        if (channels <= 0 || decoded->nb_samples <= 0)
+            return;
+        for (int i = 0; i < decoded->nb_samples; ++i)
+        {
+            double sum = 0.0;
+            for (int channel = 0; channel < channels; ++channel)
+            {
+                if (decoded->format == AV_SAMPLE_FMT_FLTP)
+                    sum += reinterpret_cast<const float*>(
+                        decoded->extended_data[channel])[i];
+                else if (decoded->format == AV_SAMPLE_FMT_FLT)
+                    sum += reinterpret_cast<const float*>(
+                        decoded->extended_data[0])[i * channels + channel];
+                else if (decoded->format == AV_SAMPLE_FMT_S16P)
+                    sum += reinterpret_cast<const qint16*>(
+                               decoded->extended_data[channel])[i]
+                           / 32768.0;
+                else if (decoded->format == AV_SAMPLE_FMT_S16)
+                    sum += reinterpret_cast<const qint16*>(
+                               decoded->extended_data[0])[i * channels
+                                                          + channel]
+                           / 32768.0;
+            }
+            samples.append(float(sum / channels));
+        }
+    };
+
+    auto receive = [&]() {
+        while (true)
+        {
+            const int status = avcodec_receive_frame(context, frame);
+            if (status == AVERROR(EAGAIN) || status == AVERROR_EOF)
+                return;
+            if (status < 0)
+                return;
+            append(frame);
+            av_frame_unref(frame);
+        }
+    };
+
+    while (av_read_frame(input, packet) >= 0)
+    {
+        if (packet->stream_index == index)
+        {
+            if (avcodec_send_packet(context, packet) < 0)
+                break;
+            av_packet_unref(packet);
+            receive();
+            continue;
+        }
+        av_packet_unref(packet);
+    }
+    avcodec_send_packet(context, nullptr);
+    receive();
+    return samples;
+}
+
+double rmsBetween(const QVector<float>& samples, int sampleRate,
+                  double fromSeconds, double toSeconds)
+{
+    if (samples.isEmpty() || sampleRate <= 0)
+        return 0.0;
+    const int from =
+        std::clamp(int(fromSeconds * sampleRate), 0, int(samples.size()));
+    const int to =
+        std::clamp(int(toSeconds * sampleRate), 0, int(samples.size()));
+    if (to <= from)
+        return 0.0;
+
+    double sum = 0.0;
+    for (int i = from; i < to; ++i)
+        sum += double(samples.at(i)) * double(samples.at(i));
+    return std::sqrt(sum / double(to - from));
+}
+
+double peakOf(const QVector<float>& samples)
+{
+    double peak = 0.0;
+    for (const float sample : samples)
+        peak = std::max(peak, std::abs(double(sample)));
+    return peak;
 }
 
 void testExportRedVector()
@@ -766,6 +900,122 @@ void testNoFrameProviderPlaceholder()
     CHECK(QFileInfo::exists(path));
 }
 
+void testHiddenAudioMuted()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    const QString wav =
+        writeToneWav(directory.path() + QStringLiteral("/tone.wav"), 48000, 1);
+    const auto stored = store.importFile(wav);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(30);
+    Entity audio =
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+    audio.hidden = true;
+    project.entities.insert(audio.uuid, audio);
+
+    const QString path = directory.path() + QStringLiteral("/hidden.mp4");
+    const export2::Result result =
+        export2::exportVideo(project, store, makeOptions(path));
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 30);
+
+    const QVector<float> samples = decodeMono(path);
+    CHECK(peakOf(samples) < 1e-4);
+}
+
+void testVisibleTrackMutesRange()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    const QString wav =
+        writeToneWav(directory.path() + QStringLiteral("/tone.wav"), 48000, 1);
+    const auto stored = store.importFile(wav);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(30);
+    Entity audio =
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+    Track visible;
+    visible.keys.append(Keyframe{0, 1.0});
+    visible.keys.append(Keyframe{10, 0.0});
+    visible.keys.append(Keyframe{20, 1.0});
+    audio.tracks.insert(QStringLiteral("visible"), visible);
+    project.entities.insert(audio.uuid, audio);
+
+    const QString path = directory.path() + QStringLiteral("/visible.mp4");
+    const export2::Result result =
+        export2::exportVideo(project, store, makeOptions(path));
+
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 30);
+
+    const QVector<float> samples = decodeMono(path);
+    CHECK(!samples.isEmpty());
+    constexpr int rate = 48000;
+    CHECK(rmsBetween(samples, rate, 0.05, 0.25) > 0.05);  // frames 0..9
+    CHECK(rmsBetween(samples, rate, 0.40, 0.60) < 1e-3);  // frames 10..19
+    CHECK(rmsBetween(samples, rate, 0.75, 0.95) > 0.05);  // frames 20..29
+}
+
+void testParentHiddenMutesChild()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    const QString wav =
+        writeToneWav(directory.path() + QStringLiteral("/tone.wav"), 48000, 1);
+    const auto stored = store.importFile(wav);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(30);
+    Entity parent = makeEntity(QStringLiteral("parent"), 0, 30);
+    parent.content.kind = ContentKind::Vector;
+    parent.content.vector.shape = 0;
+    parent.content.vector.width = 10.0;
+    parent.content.vector.height = 10.0;
+    parent.hidden = true;
+    project.entities.insert(parent.uuid, parent);
+
+    Entity audio =
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+    audio.parentUuid = parent.uuid;
+    project.entities.insert(audio.uuid, audio);
+
+    const QString inheritedPath =
+        directory.path() + QStringLiteral("/inherited.mp4");
+    const export2::Result inherited =
+        export2::exportVideo(project, store, makeOptions(inheritedPath));
+    CHECK(inherited.ok);
+    CHECK(inherited.framesWritten == 30);
+    CHECK(peakOf(decodeMono(inheritedPath)) < 1e-4);
+
+    // Control: disabling inheritance keeps the child audible under a hidden
+    // parent, proving the parent chain caused the mute above.
+    audio.inheritVisibility = false;
+    project.entities.insert(audio.uuid, audio);
+    const QString independentPath =
+        directory.path() + QStringLiteral("/independent.mp4");
+    const export2::Result independent =
+        export2::exportVideo(project, store, makeOptions(independentPath));
+    CHECK(independent.ok);
+    CHECK(independent.framesWritten == 30);
+    CHECK(peakOf(decodeMono(independentPath)) > 0.05);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -793,6 +1043,10 @@ int main(int argc, char** argv)
         {QStringLiteral("frameProviders"), testFrameProviders},
         {QStringLiteral("noFrameProviderPlaceholder"),
          testNoFrameProviderPlaceholder},
+        {QStringLiteral("hiddenAudioMuted"), testHiddenAudioMuted},
+        {QStringLiteral("visibleTrackMutesRange"), testVisibleTrackMutesRange},
+        {QStringLiteral("parentHiddenMutesChild"),
+         testParentHiddenMutesChild},
     };
 
     QString requested;

@@ -20,6 +20,9 @@ set(PVF_EXPORT2_TEST_CASES
     frameProviders
     noFrameProviderPlaceholder
     resolutionScale4
+    hiddenAudioMuted
+    visibleTrackMutesRange
+    parentHiddenMutesChild
 )
 
 foreach(test_case IN LISTS PVF_EXPORT2_TEST_CASES)

@@ -42,10 +42,14 @@ namespace pvf::export2 {
 // scale.
 //
 // Audio: every Asset entity with assetType Audio that overlaps the export
-// range is decoded through FFmpeg, resampled to 48 kHz stereo float and mixed
-// additively.  The entity's immutable `content.asset.volume` is applied; a
-// `volume` keyframe track overrides it per decoded block.  The mix is encoded
-// as AAC (192 kbit/s) and muxed into the MP4 when at least one audio entity was
+// range and is visible during that overlap is decoded through FFmpeg,
+// resampled to 48 kHz stereo float and mixed additively.  Visibility follows
+// the Anim rule: `hidden`, the step-evaluated `visible` track and inherited
+// parent visibility; an entity hidden for the whole overlap is not decoded,
+// and invisible stretches of a partially visible entity stay silent.  The
+// entity's immutable `content.asset.volume` is applied; a `volume` keyframe
+// track overrides it per decoded block.  The mix is encoded as AAC
+// (192 kbit/s) and muxed into the MP4 when at least one audio entity was
 // usable.  Missing/unsupported audio assets are skipped with a warning, and a
 // project with no usable audio still exports as a video-only MP4.  Set
 // `includeAudio = false` to force a video-only export.

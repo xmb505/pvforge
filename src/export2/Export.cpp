@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QScopeGuard>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
@@ -92,12 +93,97 @@ double audioGainAt(const model::Entity& entity, int projectFrame)
     return std::min(gain, 4.0);
 }
 
+// Mirrors the Anim visibility rule: hidden always hides, the visible track is
+// step-evaluated, and a parent hiding its child is controlled by
+// inheritVisibility.
+bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
+                     int projectFrame, QSet<Uuid>& visiting)
+{
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+        return true;
+    if (visiting.contains(uuid))
+        return true;
+
+    visiting.insert(uuid);
+    const model::Entity& entity = it.value();
+
+    bool visible = !entity.hidden;
+    if (visible)
+    {
+        double value = entity.visible ? 1.0 : 0.0;
+        const auto track = entity.tracks.constFind(QStringLiteral("visible"));
+        if (track != entity.tracks.constEnd())
+        {
+            value = model::evaluateTrack(track.value(),
+                                         projectFrame - entity.start, true)
+                        .value_or(value);
+        }
+        visible = value != 0.0;
+    }
+
+    if (visible && !entity.parentUuid.isEmpty() && entity.inheritVisibility)
+        visible = entityVisibleAt(project, entity.parentUuid, projectFrame,
+                                  visiting);
+
+    visiting.remove(uuid);
+    return visible;
+}
+
+bool entityVisibleAt(const model::Project& project, const model::Entity& entity,
+                     int projectFrame)
+{
+    QSet<Uuid> visiting;
+    return entityVisibleAt(project, entity.uuid, projectFrame, visiting);
+}
+
+// Visibility only changes on an integer frame that holds a `visible` key on
+// the entity or one of its ancestors (`hidden` is constant and the track is
+// step-evaluated), so sampling those breakpoints is enough to know whether the
+// entity is visible anywhere in [startFrame, endFrame).
+bool visibleAtAnyFrame(const model::Project& project,
+                       const model::Entity& entity, int startFrame,
+                       int endFrame)
+{
+    QVector<int> frames{startFrame};
+    QSet<Uuid> seen;
+    Uuid uuid = entity.uuid;
+    while (!uuid.isEmpty() && !seen.contains(uuid))
+    {
+        seen.insert(uuid);
+        const auto it = project.entities.constFind(uuid);
+        if (it == project.entities.constEnd())
+            break;
+        const model::Entity& node = it.value();
+        const auto track = node.tracks.constFind(QStringLiteral("visible"));
+        if (track != node.tracks.constEnd())
+        {
+            for (const model::Keyframe& key : track->keys)
+            {
+                const int frame = node.start + key.frame;
+                if (frame > startFrame && frame < endFrame)
+                    frames.append(frame);
+            }
+        }
+        uuid = node.parentUuid;
+    }
+
+    for (const int frame : frames)
+    {
+        if (entityVisibleAt(project, entity, frame))
+            return true;
+    }
+    return false;
+}
+
 // Decodes one audio entity and adds its overlapping part into `mix`, an
 // interleaved 48 kHz stereo float buffer whose sample 0 is the first exported
 // frame.  Frames before entity.start or outside the export range are ignored;
 // frame n of the entity maps to asset time
-// (sourceIn + n - entity.start) / fps seconds.
-bool mixAudioEntity(const assets::AssetStore& assets,
+// (sourceIn + n - entity.start) / fps seconds.  Samples are skipped while the
+// entity (or an inherited parent) is invisible at that project frame.
+bool mixAudioEntity(const model::Project& project,
+                    const assets::AssetStore& assets,
                     const model::Entity& entity, int exportStart,
                     int totalFrames, int fps, std::vector<float>& mix,
                     QString* error)
@@ -224,15 +310,29 @@ bool mixAudioEntity(const assets::AssetStore& assets,
             destinationStart + decodedSamples - sourceStart;
         const int64_t firstFrameSample =
             std::clamp<int64_t>(firstOutput, 0, std::max<int64_t>(0, mixFrames - 1));
-        const int projectFrame =
+        const int gainFrame =
             exportStart + int(firstFrameSample * fps / kAudioSampleRate);
-        const double gain = audioGainAt(entity, projectFrame);
+        // Gain keeps its existing per-decoded-block sampling; visibility is
+        // checked per project frame so a step-evaluated `visible` track cuts
+        // the mix at frame boundaries.
+        const double gain = audioGainAt(entity, gainFrame);
 
+        int visibleFrame = -1;
+        bool audible = false;
         for (int i = 0; i < count; ++i)
         {
             const int64_t output =
                 destinationStart + decodedSamples + i - sourceStart;
             if (output < 0 || output >= mixFrames)
+                continue;
+            const int projectFrame =
+                exportStart + int(output * fps / kAudioSampleRate);
+            if (projectFrame != visibleFrame)
+            {
+                visibleFrame = projectFrame;
+                audible = entityVisibleAt(project, entity, projectFrame);
+            }
+            if (!audible)
                 continue;
             const size_t index = size_t(output) * kAudioChannels;
             mix[index] += data[i * kAudioChannels] * float(gain);
@@ -392,9 +492,13 @@ AudioMix mixProjectAudio(const model::Project& project,
         if (overlapEnd <= overlapStart)
             continue;
 
+        // Fully invisible in the exported overlap: skip decoding entirely.
+        if (!visibleAtAnyFrame(project, entity, overlapStart, overlapEnd))
+            continue;
+
         QString error;
-        if (mixAudioEntity(assets, entity, exportStart, totalFrames, fps,
-                           mix.samples, &error))
+        if (mixAudioEntity(project, assets, entity, exportStart, totalFrames,
+                           fps, mix.samples, &error))
         {
             mix.hasAudio = true;
         }
