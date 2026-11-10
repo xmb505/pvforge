@@ -7722,6 +7722,9 @@ int settingsTest(QApplication& app)
                    && mcpPort->value() == 47821 && !gitEnabled->isChecked(),
                QStringLiteral("app settings defaults mismatch"));
 
+        dialog->grab().toImage().save(
+            QStringLiteral("/tmp/opencode/pvforge-p6-settings.png"));
+
         const quint16 newPort = quint16(
             40000 + (QCoreApplication::applicationPid() % 20000));
         autoSave->setValue(3);
