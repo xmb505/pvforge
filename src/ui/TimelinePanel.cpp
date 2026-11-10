@@ -1,6 +1,10 @@
 #include "TimelinePanel.h"
 
+#include "app/EditorSession.h"
+#include "app/TimelineAdapter.h"
 #include "core/Settings.h"
+#include "next/app/ProjectDocument.h"
+#include "next/core/Document.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -154,8 +158,19 @@ class ClipPopup : public QWidget
 {
 public:
     ClipPopup(Project* project, EntityId ownerId, TimelinePanel* source)
+        : ClipPopup(project, nullptr, ownerId, source)
+    {
+    }
+
+    ClipPopup(EntityId ownerId, TimelinePanel* source, TimelineAdapter* adapter)
+        : ClipPopup(nullptr, adapter, ownerId, source)
+    {
+    }
+
+private:
+    ClipPopup(Project* project, TimelineAdapter* adapter, EntityId ownerId,
+              TimelinePanel* source)
         : QWidget(source->window())
-        , m_project(project)
         , m_ownerId(ownerId)
         , m_source(source)
     {
@@ -211,7 +226,8 @@ public:
         headerLayout->addWidget(close);
         layout->addWidget(header);
 
-        m_panel = new TimelinePanel(project, this);
+        m_panel = adapter ? new TimelinePanel(adapter, this)
+                          : new TimelinePanel(project, this);
         m_panel->m_owner = ownerId;
         m_panel->m_popup = true;
         m_panel->m_sourcePanel = source;
@@ -262,9 +278,10 @@ public:
         syncGeometry();
     }
 
+public:
     void syncGeometry()
     {
-        const Entity* entity = m_project->entity(m_ownerId);
+        const Entity* entity = m_source->entityById(m_ownerId);
         const QRect clip = m_source->clipRectFor(m_ownerId);
         if (!entity || clip.isEmpty() || m_source->window() == nullptr)
         {
@@ -273,7 +290,11 @@ public:
         }
 
         m_panel->m_pixelsPerFrame = m_source->m_pixelsPerFrame;
-        if (m_source->m_dragging)
+        if (m_source->m_readOnly)
+        {
+            m_panel->setReadOnlySnapshot(m_source->m_snapshot);
+        }
+        else if (m_source->m_dragging)
         {
             m_panel->m_externalPreview = m_source->m_preview;
             m_panel->m_hasExternalPreview = true;
@@ -337,7 +358,6 @@ public:
     TimelinePanel* panel() const { return m_panel; }
 
 private:
-    Project* m_project = nullptr;
     EntityId m_ownerId = kInvalidEntity;
     TimelinePanel* m_source = nullptr;
     TimelinePanel* m_panel = nullptr;
@@ -350,6 +370,64 @@ private:
 TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
+{
+    initPanel();
+    if (!m_project)
+        return;
+    connect(m_project, &Project::changed, this, [this] {
+        assignMissingRows();
+        if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
+        {
+            m_selected = kInvalidEntity;
+            m_entitySelection.clear();
+        }
+        clampScroll();
+        syncPopups();
+        update();
+    });
+    assignMissingRows();
+}
+
+TimelinePanel::TimelinePanel(EditorSession* session, QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+{
+    m_readOnly = true;
+    if (m_session)
+    {
+        m_ownedAdapter = std::make_unique<TimelineAdapter>(m_session);
+        m_adapter = m_ownedAdapter.get();
+    }
+    initPanel();
+    if (m_session && m_session->document())
+    {
+        auto* document = m_session->document();
+        connect(document, &next::Document::changed, this,
+                &TimelinePanel::refreshFromSession);
+        connect(document, &next::Document::playheadChanged, this, [this] {
+            if (m_session)
+                setCurrentFrame(m_session->playhead());
+        });
+        connect(document, &next::Document::selectionChanged, this, [this] {
+            if (m_session && m_adapter && m_session->document())
+                setSelectedEntity(m_adapter->idForUuid(
+                    m_session->document()->selection()));
+        });
+    }
+    refreshFromSession();
+}
+
+TimelinePanel::TimelinePanel(TimelineAdapter* adapter, QWidget* parent)
+    : QWidget(parent)
+    , m_adapter(adapter)
+{
+    m_readOnly = true;
+    initPanel();
+    if (m_adapter)
+        setReadOnlySnapshot(m_adapter->snapshot());
+}
+
+void TimelinePanel::initPanel()
 {
     setMinimumHeight(140);
     setFocusPolicy(Qt::ClickFocus);
@@ -406,27 +484,88 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
         setEditMode(m_editMode == EditMode::Clips ? EditMode::Keyframes
                                                   : EditMode::Clips);
     });
-
-    if (m_project)
-    {
-        connect(m_project, &Project::changed, this, [this] {
-            assignMissingRows();
-            if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
-            {
-                m_selected = kInvalidEntity;
-                m_entitySelection.clear();
-            }
-            clampScroll();
-            syncPopups();
-            update();
-        });
-        assignMissingRows();
-    }
 }
 
 TimelinePanel::~TimelinePanel()
 {
     closeAllPopups();
+}
+
+const Entity* TimelinePanel::entityById(EntityId id) const
+{
+    if (m_readOnly)
+        return findEntity(m_snapshot.entities, id);
+    return m_project ? m_project->entity(id) : nullptr;
+}
+
+int TimelinePanel::currentFps() const
+{
+    if (m_project)
+        return std::max(1, m_project->fps);
+    return std::max(1, m_snapshot.fps);
+}
+
+bool TimelinePanel::isEntityLocked(EntityId id) const
+{
+    if (m_readOnly)
+    {
+        const Entity* entity = entityById(id);
+        return entity && entity->locked;
+    }
+    return m_project && id != kInvalidEntity && m_project->isEffectivelyLocked(id);
+}
+
+EntityId TimelinePanel::entityIdForUuid(const Uuid& uuid) const
+{
+    return m_adapter ? m_adapter->idForUuid(uuid) : kInvalidEntity;
+}
+
+Uuid TimelinePanel::uuidForEntityId(EntityId id) const
+{
+    return m_adapter ? m_adapter->uuidForId(id) : Uuid();
+}
+
+void TimelinePanel::refreshFromSession()
+{
+    if (!m_adapter)
+        return;
+    m_adapter->refresh();
+    setReadOnlySnapshot(m_adapter->snapshot());
+    if (m_session)
+    {
+        if (m_frame != m_session->playhead())
+            setCurrentFrame(m_session->playhead());
+        if (auto* document = m_session->document())
+        {
+            const EntityId selected =
+                m_adapter->idForUuid(document->selection());
+            if (selected != m_selected)
+                setSelectedEntity(selected);
+        }
+    }
+    for (ClipPopup* popup : m_popups)
+        if (popup && popup->panel())
+            popup->panel()->setReadOnlySnapshot(m_snapshot);
+    syncPopups();
+}
+
+void TimelinePanel::setReadOnlySnapshot(const TimelineSnapshot& snapshot)
+{
+    if (!m_readOnly)
+        return;
+    m_snapshot = snapshot;
+    if (m_selected != kInvalidEntity && !entityById(m_selected))
+    {
+        m_selected = kInvalidEntity;
+        m_entitySelection.clear();
+    }
+    if (m_owner != kInvalidEntity && !entityById(m_owner))
+    {
+        hide();
+        return;
+    }
+    clampScroll();
+    update();
 }
 
 void TimelinePanel::setCurrentFrame(int frame)
@@ -444,9 +583,7 @@ void TimelinePanel::setCurrentFrame(int frame)
 
 void TimelinePanel::setSelectedEntity(EntityId id)
 {
-    if (!m_project)
-        return;
-    const Entity* entity = m_project->entity(id);
+    const Entity* entity = entityById(id);
     if (!entity)
     {
         selectEntity(kInvalidEntity, false);
@@ -475,7 +612,7 @@ void TimelinePanel::setSelectedEntity(EntityId id)
     {
         seen.insert(current);
         chain.prepend(current);
-        const Entity* parent = m_project->entity(current);
+        const Entity* parent = entityById(current);
         current = parent ? parent->parent : kInvalidEntity;
     }
 
@@ -518,12 +655,12 @@ int TimelinePanel::depthOf(EntityId id) const
 {
     int depth = 0;
     QSet<EntityId> seen;
-    const Entity* entity = m_project ? m_project->entity(id) : nullptr;
+    const Entity* entity = entityById(id);
     while (entity && entity->parent != kInvalidEntity && !seen.contains(entity->parent))
     {
         seen.insert(entity->parent);
         ++depth;
-        entity = m_project->entity(entity->parent);
+        entity = entityById(entity->parent);
     }
     return depth;
 }
@@ -535,7 +672,7 @@ int TimelinePanel::rowOfEntity(const Entity& entity) const
 
 void TimelinePanel::assignMissingRows()
 {
-    if (!m_project)
+    if (m_readOnly || !m_project)
         return;
     QVector<Entity>& entities = m_project->mutableEntities();
     QSet<int> used;
@@ -584,8 +721,8 @@ QVector<EntityId> TimelinePanel::rowIds() const
     int maxRow = -1;
     for (const Entity& entity : activeEntities())
     {
-        const bool dangling = m_project && entity.parent != kInvalidEntity
-                              && m_project->entity(entity.parent) == nullptr;
+        const bool dangling = entity.parent != kInvalidEntity
+                              && entityById(entity.parent) == nullptr;
         if (entity.parent != m_owner
             && !(m_owner == kInvalidEntity && dangling))
             continue;
@@ -628,7 +765,7 @@ int TimelinePanel::rowAt(int y) const
 
 int TimelinePanel::contentStart() const
 {
-    if (m_owner < 0 || !m_project)
+    if (m_owner < 0)
         return 0;
     const Entity* ownerEntity = rangeOwner();
     return ownerEntity ? clipStartOf(*ownerEntity) : 0;
@@ -637,6 +774,8 @@ int TimelinePanel::contentStart() const
 const QVector<Entity>& TimelinePanel::activeEntities() const
 {
     static const QVector<Entity> empty;
+    if (m_readOnly)
+        return m_snapshot.entities;
     if (!m_project)
         return empty;
     if (m_hasExternalPreview)
@@ -653,7 +792,7 @@ const Entity* TimelinePanel::rangeOwner() const
 
 Entity* TimelinePanel::activeEntity(EntityId id)
 {
-    if (!m_project)
+    if (m_readOnly || !m_project)
         return nullptr;
     if (!m_dragging)
         return m_project->entity(id);
@@ -662,6 +801,8 @@ Entity* TimelinePanel::activeEntity(EntityId id)
 
 int TimelinePanel::clipStartOf(const Entity& entity) const
 {
+    if (m_readOnly)
+        return std::max(0, entity.data.value(QStringLiteral("clipStart"), 0).toInt());
     if (entity.isAudio())
         return std::max(0, int(std::floor(
                                entity.data.value(QStringLiteral("startFrame"), 0.0)
@@ -672,6 +813,12 @@ int TimelinePanel::clipStartOf(const Entity& entity) const
 int TimelinePanel::clipEndOf(const Entity& entity) const
 {
     const int start = clipStartOf(entity);
+    if (m_readOnly)
+    {
+        const int stored = entity.data.value(QStringLiteral("clipEnd"), start)
+                               .toInt();
+        return std::max(start + 1, stored);
+    }
     if (entity.isAudio()
         && entity.data.contains(QStringLiteral("duration")))
     {
@@ -707,6 +854,8 @@ int TimelinePanel::contentEnd() const
         end = std::max(end, clipEndOf(entity));
     if (m_project)
         end = std::max(end, m_project->timelineLength());
+    if (m_readOnly)
+        end = std::max(end, m_snapshot.contentEnd);
     return end;
 }
 
@@ -745,7 +894,7 @@ QVector<int> TimelinePanel::keyframeFrames(const Entity& entity) const
 QVector<KeyframeRecord> TimelinePanel::keyframeRecords(EntityId id, int frame) const
 {
     QVector<KeyframeRecord> result;
-    const Entity* entity = m_project ? m_project->entity(id) : nullptr;
+    const Entity* entity = entityById(id);
     if (!entity)
         return result;
     for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
@@ -769,7 +918,7 @@ QVector<KeyframeRecord> TimelinePanel::keyframeRecords(EntityId id, int frame) c
 
 bool TimelinePanel::keyframeHasNote(EntityId id, double frame) const
 {
-    const Entity* entity = m_project ? m_project->entity(id) : nullptr;
+    const Entity* entity = entityById(id);
     if (!entity)
         return false;
     for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
@@ -803,7 +952,7 @@ int TimelinePanel::frameFromX(int x) const
 
 void TimelinePanel::clampScroll()
 {
-    if (!m_project)
+    if (!m_project && !m_readOnly)
         return;
     const int visible = visibleWidth();
     const int tailPad = std::max(400, visible);
@@ -872,6 +1021,8 @@ void TimelinePanel::setScrubFrame(double rawX)
 
 void TimelinePanel::beginDrag()
 {
+    if (!m_project)
+        return;
     m_before = m_project->entities();
     m_preview = m_before;
     m_dragging = false;
@@ -1191,7 +1342,7 @@ void TimelinePanel::moveKeys(QVector<Entity>& entities,
 
 void TimelinePanel::updateDragPreview(const QPointF& pos)
 {
-    if (!m_project || m_dragMode == DragMode::None)
+    if (m_readOnly || !m_project || m_dragMode == DragMode::None)
         return;
     if (!m_dragging)
     {
@@ -1269,7 +1420,7 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
 
 void TimelinePanel::autoScrollTick()
 {
-    if (!m_project || m_dragMode == DragMode::None)
+    if ((!m_project && !m_readOnly) || m_dragMode == DragMode::None)
         return;
     if (m_dragMode == DragMode::Scrub)
     {
@@ -1326,7 +1477,7 @@ void TimelinePanel::drawAudioClip(QPainter& p, const Entity& entity,
         return;
     }
 
-    const int fps = std::max(1, m_project ? m_project->fps : 30);
+    const int fps = currentFps();
     const double trimStart =
         entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
     const double x0 = xFromFrame(clipStartOf(entity));
@@ -1359,7 +1510,7 @@ void TimelinePanel::drawAudioClip(QPainter& p, const Entity& entity,
 
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
-    if (!m_project)
+    if (!m_project && !m_readOnly)
         return;
     clampScroll();
 
@@ -1378,7 +1529,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.fillRect(rect(), base);
     p.fillRect(QRect(0, 0, width(), kRulerHeight), alt);
 
-    const int fps = std::max(1, m_project->fps);
+    const int fps = currentFps();
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
@@ -1416,6 +1567,34 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.setPen(mid);
     p.drawLine(0, kRulerHeight, width(), kRulerHeight);
 
+    if (m_readOnly)
+    {
+        for (int i = 0; i < m_snapshot.markers.size(); ++i)
+        {
+            const QRect marker = markerRect(i);
+            if (marker.isEmpty())
+                continue;
+            const TimelineMarkerView& view = m_snapshot.markers.at(i);
+            QColor color = view.color.isValid() ? view.color
+                                                : QColor(255, 190, 60);
+            QColor lineColor = color;
+            lineColor.setAlpha(90);
+            p.setPen(QPen(lineColor, 1.0));
+            p.drawLine(marker.left() + 3, marker.bottom(), marker.left() + 3,
+                       bottom);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawRoundedRect(QRectF(marker).adjusted(0.5, 0.5, -0.5, -0.5),
+                              3.0, 3.0);
+            if (!view.title.isEmpty())
+            {
+                p.setPen(QColor(24, 26, 30));
+                p.drawText(marker.adjusted(6, 0, -3, 0),
+                           Qt::AlignLeft | Qt::AlignVCenter, view.title);
+            }
+        }
+    }
+
     const QVector<EntityId> rows = rowIds();
     p.save();
     p.setClipRect(QRect(0, kRulerHeight, right, bottom - kRulerHeight));
@@ -1445,7 +1624,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const bool selected =
             entity->id == m_selected
             || m_entitySelection.contains(entity->id);
-        const bool hidden = m_project->isEffectivelyHidden(entity->id);
+        const bool hidden = m_readOnly ? entity->hidden
+                                       : m_project->isEffectivelyHidden(entity->id);
         const int alpha = hidden ? 80 : (selected ? 245 : 215);
         QColor topColor = color.lighter(112);
         QColor bottomColor = color.darker(108);
@@ -1465,6 +1645,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(accent, 2));
             p.drawRoundedRect(QRectF(clip).adjusted(1.5, 1.5, -1.5, -1.5), 4.0,
+                              4.0);
+        }
+        if (m_readOnly && isEntityLocked(entity->id))
+        {
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor(255, 255, 255, 150), 1, Qt::DashLine));
+            p.drawRoundedRect(QRectF(clip).adjusted(2.5, 2.5, -2.5, -2.5), 4.0,
                               4.0);
         }
 
@@ -1495,16 +1682,38 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
 
         const int nameRight = plus.isEmpty() ? clip.right() - 8 : plus.left() - 6;
+        const QFontMetrics metrics(p.font());
+        QString rangeInfo;
+        if (m_readOnly)
+        {
+            const int startFrame = clipStartOf(*entity);
+            const int endFrame = clipEndOf(*entity);
+            rangeInfo = QStringLiteral("%1–%2 · %3f")
+                            .arg(startFrame)
+                            .arg(endFrame)
+                            .arg(endFrame - startFrame);
+            if (entity->isAudio())
+            {
+                const double seconds = entity->data
+                                           .value(QStringLiteral(
+                                               "assetDurationSeconds"))
+                                           .toDouble();
+                if (seconds > 0.0)
+                    rangeInfo += QStringLiteral(" · %1s").arg(seconds, 0, 'f', 2);
+            }
+        }
+        const int infoWidth =
+            rangeInfo.isEmpty() ? 0 : metrics.horizontalAdvance(rangeInfo) + 10;
+        const int nameWidth =
+            std::max(0, nameRight - clip.left() - 8 - infoWidth);
         if (nameRight > clip.left() + 12)
         {
             const QColor nameColor =
                 color.lightness() > 150 ? QColor(24, 26, 30) : QColor(255, 255, 255);
-            const QFontMetrics metrics(p.font());
-            const QString name = metrics.elidedText(
-                entity->name, Qt::ElideRight,
-                std::max(0, nameRight - clip.left() - 8));
-            const QRect nameRect(clip.left() + 8, clip.top(),
-                                 nameRight - clip.left() - 8, clip.height());
+            const QString name = metrics.elidedText(entity->name, Qt::ElideRight,
+                                                    nameWidth);
+            const QRect nameRect(clip.left() + 8, clip.top(), nameWidth,
+                                 clip.height());
             if (entity->isAudio())
             {
                 p.setPen(QColor(0, 0, 0, 160));
@@ -1517,6 +1726,27 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                 p.setPen(nameColor);
             }
             p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, name);
+        }
+        if (!rangeInfo.isEmpty() && nameRight > clip.left() + 12)
+        {
+            const QRect infoRect(nameRight - infoWidth, clip.top(), infoWidth,
+                                 clip.height());
+            p.setPen(QColor(255, 255, 255, 205));
+            p.drawText(infoRect, Qt::AlignVCenter | Qt::AlignRight, rangeInfo);
+        }
+        QString badges;
+        if (m_readOnly)
+        {
+            if (isEntityLocked(entity->id))
+                badges += QStringLiteral("锁");
+            if (hidden)
+                badges += QStringLiteral("隐");
+        }
+        if (!badges.isEmpty() && clip.height() >= 20)
+        {
+            p.setPen(QColor(255, 255, 255, 200));
+            p.drawText(QRect(clip.left() + 6, clip.bottom() - 14, 40, 12),
+                       Qt::AlignLeft | Qt::AlignVCenter, badges);
         }
 
         const int centerY = clip.center().y();
@@ -1626,7 +1856,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
 void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
-    if (!m_project || event->button() != Qt::LeftButton)
+    if ((!m_project && !m_readOnly) || event->button() != Qt::LeftButton)
         return;
     setFocus(Qt::MouseFocusReason);
     if (m_popup)
@@ -1646,7 +1876,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     const int row = rowAt(int(pos.y()));
     const EntityId id = entityAtRow(row);
-    const Entity* entity = m_project->entity(id);
+    const Entity* entity = entityById(id);
     const int pressX = int(std::lround(pos.x()));
     if (!entity)
     {
@@ -1669,6 +1899,19 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     const int x = int(std::lround(pos.x()));
+    if (m_readOnly)
+    {
+        // Read-only: pressing a clip or keyframe only moves the playhead and
+        // selects the row on release.  No drag, trim or keyframe edit starts.
+        m_dragMode = DragMode::PendingSelect;
+        m_pressPos = pos;
+        m_boxStart = pos;
+        m_boxEnd = pos;
+        m_pressFrame = std::max(0, frameFromX(x));
+        m_pressEntity = id;
+        update();
+        return;
+    }
     m_dragEntity = id;
     m_dragRow = row;
     m_dragStartFrame = frameFromX(x);
@@ -1756,7 +1999,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
-    if (!m_project)
+    if (!m_project && !m_readOnly)
         return;
     if (m_dragMode == DragMode::Scrub)
     {
@@ -1770,6 +2013,8 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 
     if (m_dragMode == DragMode::PendingSelect)
     {
+        if (m_readOnly)
+            return;
         const QPointF delta = event->position() - m_pressPos;
         if (std::abs(delta.x()) + std::abs(delta.y()) <= 5.0)
             return;
@@ -1786,8 +2031,7 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
     if (m_dragMode == DragMode::None)
     {
         const int row = rowAt(int(event->position().y()));
-        const Entity* entity =
-            m_project->entity(entityAtRow(row));
+        const Entity* entity = entityById(entityAtRow(row));
         m_hoverRow = row;
         m_hoverLeft = false;
         m_hoverRight = false;
@@ -1795,6 +2039,34 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         {
             const QRect clip = clipRect(*entity);
             const int x = int(std::lround(event->position().x()));
+            if (m_readOnly)
+            {
+                const int startFrame = clipStartOf(*entity);
+                const int endFrame = clipEndOf(*entity);
+                QString tip = QStringLiteral("%1\n%2–%3 帧 · 时长 %4 帧")
+                                  .arg(entity->name)
+                                  .arg(startFrame)
+                                  .arg(endFrame)
+                                  .arg(endFrame - startFrame);
+                if (entity->locked)
+                    tip += QStringLiteral("\n已锁定");
+                if (entity->hidden)
+                    tip += QStringLiteral("\n已隐藏");
+                if (entity->isAudio())
+                {
+                    const QString hash =
+                        entity->data.value(QStringLiteral("assetHash")).toString();
+                    if (!hash.isEmpty())
+                        tip += QStringLiteral("\n素材 %1…").arg(hash.left(12));
+                }
+                setToolTip(tip);
+                if (clip.contains(event->position().toPoint()))
+                    setCursor(Qt::PointingHandCursor);
+                else
+                    unsetCursor();
+                update();
+                return;
+            }
             m_hoverLeft = !entity->isAudio()
                           && std::abs(x - clip.left()) <= kTrimGrab;
             m_hoverRight = !entity->isAudio()
@@ -1814,6 +2086,8 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         else
         {
             unsetCursor();
+            if (m_readOnly)
+                setToolTip(QString());
         }
         update();
         return;
@@ -1843,13 +2117,18 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         m_selectedKeyframes.clear();
         emit keyframeSelectionChanged(m_selectedKeyframes);
         if (m_pressEntity != kInvalidEntity
-            && !m_project->isEffectivelyLocked(m_pressEntity))
+            && !isEntityLocked(m_pressEntity))
             selectEntity(m_pressEntity, true);
         update();
         return;
     }
     if (m_dragMode == DragMode::BoxSelect)
     {
+        if (m_readOnly)
+        {
+            m_dragMode = DragMode::None;
+            return;
+        }
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
         const QVector<EntityId> rows = rowIds();
         if (m_editMode == EditMode::Keyframes)
@@ -1928,14 +2207,14 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if (!m_project || event->button() != Qt::LeftButton)
+    if (m_readOnly || !m_project || event->button() != Qt::LeftButton)
         return;
     if (event->position().y() < kRulerHeight)
         return;
     const int row = rowAt(int(event->position().y()));
     const EntityId id = entityAtRow(row);
-    const Entity* entity = m_project->entity(id);
-    if (!entity || m_project->isEffectivelyLocked(id))
+    const Entity* entity = entityById(id);
+    if (!entity || isEntityLocked(id))
         return;
     const QRect clip = clipRect(*entity);
     if (!clip.contains(event->position().toPoint()))
@@ -1958,7 +2237,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if (m_readOnly || !m_project || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -1971,7 +2250,7 @@ void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 
 void TimelinePanel::dragMoveEvent(QDragMoveEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if (m_readOnly || !m_project || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -1991,7 +2270,7 @@ void TimelinePanel::dragLeaveEvent(QDragLeaveEvent* event)
 
 void TimelinePanel::dropEvent(QDropEvent* event)
 {
-    if (!m_project || !hasAssetMime(event->mimeData()))
+    if (m_readOnly || !m_project || !hasAssetMime(event->mimeData()))
     {
         m_dropActive = false;
         update();
@@ -2015,7 +2294,7 @@ void TimelinePanel::dropEvent(QDropEvent* event)
 
 EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 {
-    if (!m_project || !hasAssetMime(&mime))
+    if (m_readOnly || !m_project || !hasAssetMime(&mime))
         return kInvalidEntity;
 
     frame = std::max(contentStart(), frame);
@@ -2129,11 +2408,11 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
-    if (!m_project)
+    if (!m_project && !m_readOnly)
         return;
     const int row = rowAt(event->pos().y());
     const EntityId id = entityAtRow(row);
-    const Entity* entity = m_project->entity(id);
+    const Entity* entity = entityById(id);
     if (!entity)
         return;
     const QRect clip = clipRect(*entity);
@@ -2143,12 +2422,21 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     selectEntity(id, true);
     QMenu menu(this);
     QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
-    QAction* remove = menu.addAction(QStringLiteral("删除片段"));
-    remove->setEnabled(!m_project->isEffectivelyLocked(id));
+    QAction* remove = nullptr;
+    if (m_readOnly)
+    {
+        QAction* readOnly = menu.addAction(QStringLiteral("只读：编辑将在 P2b 接入"));
+        readOnly->setEnabled(false);
+    }
+    else
+    {
+        remove = menu.addAction(QStringLiteral("删除片段"));
+        remove->setEnabled(!m_project->isEffectivelyLocked(id));
+    }
     QAction* chosen = menu.exec(event->globalPos());
     if (chosen == open)
         openPopup(id);
-    else if (chosen == remove)
+    else if (remove && chosen == remove)
         emit deleteEntityRequested(id);
     event->accept();
 }
@@ -2190,6 +2478,8 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Delete)
     {
+        if (m_readOnly)
+            return;
         if (!m_selectedKeyframes.isEmpty())
         {
             emit deleteKeyframesRequested();
@@ -2266,7 +2556,8 @@ bool TimelinePanel::eventFilter(QObject* watched, QEvent* event)
 
 TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
 {
-    if (!m_project || ownerId == kInvalidEntity || ownerId == m_owner)
+    if ((!m_project && !m_readOnly) || ownerId == kInvalidEntity
+        || ownerId == m_owner)
         return nullptr;
     if (m_popups.contains(ownerId))
     {
@@ -2275,7 +2566,7 @@ TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
         popup->raise();
         return popup->panel();
     }
-    const Entity* entity = m_project->entity(ownerId);
+    const Entity* entity = entityById(ownerId);
     if (!entity)
         return nullptr;
     if (depthOf(ownerId) >= 8)
@@ -2284,7 +2575,9 @@ TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
     {
         ensureFrameVisible(clipStartOf(*entity));
     }
-    auto* popup = new ClipPopup(m_project, ownerId, this);
+    auto* popup = m_readOnly && m_adapter
+                      ? new ClipPopup(ownerId, this, m_adapter)
+                      : new ClipPopup(m_project, ownerId, this);
     m_popups.insert(ownerId, popup);
     popup->panel()->setCurrentFrame(m_frame);
     popup->syncGeometry();
@@ -2313,7 +2606,7 @@ void TimelinePanel::syncPopups()
         ClipPopup* popup = it.value();
         if (!popup)
             continue;
-        if (!m_project->entity(it.key()) || clipRectFor(it.key()).isEmpty())
+        if (!entityById(it.key()) || clipRectFor(it.key()).isEmpty())
         {
             popup->hide();
             continue;
@@ -2400,7 +2693,7 @@ int TimelinePanel::rulerLabelStepForTest() const
 
 int TimelinePanel::secondsCellStepForTest() const
 {
-    const int fps = std::max(1, m_project ? m_project->fps : 30);
+    const int fps = currentFps();
     int cell = fps;
     while (cell * m_pixelsPerFrame < 5.0)
         cell *= 2;
@@ -2409,7 +2702,7 @@ int TimelinePanel::secondsCellStepForTest() const
 
 int TimelinePanel::secondsLabelStepForTest() const
 {
-    const int fps = std::max(1, m_project ? m_project->fps : 30);
+    const int fps = currentFps();
     int label = fps;
     while (label * m_pixelsPerFrame < 48.0)
         label *= 2;
@@ -2423,9 +2716,89 @@ EntityId TimelinePanel::rowEntityForTest(int row) const
     return entityAtRow(row);
 }
 
+int TimelinePanel::entityRowCountForTest() const
+{
+    int count = 0;
+    for (EntityId id : rowIds())
+        if (id != kInvalidEntity)
+            ++count;
+    return count;
+}
+
+QString TimelinePanel::rowNameForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    return entity ? entity->name : QString();
+}
+
+int TimelinePanel::rowStartForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    if (!entity)
+        return -1;
+    return entity->data.value(QStringLiteral("modelStart"),
+                              clipStartOf(*entity))
+        .toInt();
+}
+
+int TimelinePanel::rowEndForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    if (!entity)
+        return -1;
+    return entity->data.value(QStringLiteral("modelEnd"), clipEndOf(*entity))
+        .toInt();
+}
+
+bool TimelinePanel::rowIsAudioForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    return entity && entity->isAudio();
+}
+
+QString TimelinePanel::rowAssetHashForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    return entity ? entity->data.value(QStringLiteral("assetHash")).toString()
+                  : QString();
+}
+
+double TimelinePanel::rowAssetSecondsForTest(int row) const
+{
+    const Entity* entity = entityById(entityAtRow(row));
+    return entity ? entity->data
+                        .value(QStringLiteral("assetDurationSeconds"))
+                        .toDouble()
+                  : 0.0;
+}
+
+int TimelinePanel::markerFrameForTest(int index) const
+{
+    return index >= 0 && index < m_snapshot.markers.size()
+               ? m_snapshot.markers.at(index).frame
+               : -1;
+}
+
+QRect TimelinePanel::markerRect(int index) const
+{
+    if (index < 0 || index >= m_snapshot.markers.size())
+        return QRect();
+    const TimelineMarkerView& marker = m_snapshot.markers.at(index);
+    if (marker.frame < contentStart() || marker.frame > contentEnd())
+        return QRect();
+    const int x = xFromFrame(marker.frame);
+    const int right = width() - kScrollBarSize;
+    if (x < 0 || x > right)
+        return QRect();
+    const QFontMetrics metrics(font());
+    const int markerWidth = std::max(
+        10, std::min(140, metrics.horizontalAdvance(marker.title) + 12));
+    return QRect(x + 1, kRulerHeight - 14, markerWidth, 12);
+}
+
 int TimelinePanel::rowForEntityForTest(EntityId id) const
 {
-    const Entity* entity = m_project ? m_project->entity(id) : nullptr;
+    const Entity* entity = entityById(id);
     return entity ? rowOfEntity(*entity) : -1;
 }
 
@@ -2443,7 +2816,7 @@ bool TimelinePanel::verticalScrollVisibleForTest() const
 
 int TimelinePanel::hitKeyframeRow(int row, int x) const
 {
-    const Entity* entity = m_project->entity(entityAtRow(row));
+    const Entity* entity = entityById(entityAtRow(row));
     if (!entity)
         return -1;
     int best = -1;
@@ -2462,7 +2835,7 @@ int TimelinePanel::hitKeyframeRow(int row, int x) const
 
 EntityId TimelinePanel::hitClipRow(int row, int x) const
 {
-    const Entity* entity = m_project->entity(entityAtRow(row));
+    const Entity* entity = entityById(entityAtRow(row));
     if (!entity)
         return kInvalidEntity;
     const QRect clip = clipRect(*entity);

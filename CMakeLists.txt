@@ -88,6 +88,8 @@ add_executable(pvforge
     src/app/MainWindow.cpp
     src/app/EditorSession.cpp
     src/app/EditorSession.h
+    src/app/TimelineAdapter.cpp
+    src/app/TimelineAdapter.h
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp

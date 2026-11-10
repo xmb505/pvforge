@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/Project.h"
+#include "ui/TimelineData.h"
 
 #include <QHash>
 #include <QRect>
 #include <QSet>
 #include <QVector>
 #include <QWidget>
+
+#include <memory>
 
 class QKeyEvent;
 class QContextMenuEvent;
@@ -23,6 +26,9 @@ class QToolButton;
 class QWheelEvent;
 
 namespace pvf {
+
+class EditorSession;
+class TimelineAdapter;
 
 // A keyframe position, identified by its entity and frame.
 struct KeyframeSelection
@@ -48,7 +54,17 @@ class TimelinePanel : public QWidget
 
 public:
     explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
+    // P2a read-only mode backed by the new entity model.  Painting, rows,
+    // scrolling and the private timeline overlay are shared with the legacy
+    // mode; all editing gestures are disabled.
+    explicit TimelinePanel(EditorSession* session, QWidget* parent = nullptr);
     ~TimelinePanel() override;
+
+    bool readOnly() const { return m_readOnly; }
+    void refreshFromSession();
+    void setReadOnlySnapshot(const TimelineSnapshot& snapshot);
+    EntityId entityIdForUuid(const Uuid& uuid) const;
+    Uuid uuidForEntityId(EntityId id) const;
 
     enum class EditMode { Clips, Keyframes };
 
@@ -86,9 +102,21 @@ public:
     int secondsCellStepForTest() const;
     int secondsLabelStepForTest() const;
     int rowCountForTest() const { return int(rowIds().size()); }
+    // Rows that actually contain an entity (rowIds() pads the view).
+    int entityRowCountForTest() const;
     EntityId rowEntityForTest(int row) const;
     int rowForEntityForTest(EntityId id) const;
     int rowDepthForTest(int row) const { return depthOf(rowEntityForTest(row)); }
+    QString rowNameForTest(int row) const;
+    int rowStartForTest(int row) const;
+    int rowEndForTest(int row) const;
+    bool rowIsAudioForTest(int row) const;
+    QString rowAssetHashForTest(int row) const;
+    double rowAssetSecondsForTest(int row) const;
+    int currentFrameForTest() const { return m_frame; }
+    int markerCountForTest() const { return int(m_snapshot.markers.size()); }
+    int markerFrameForTest(int index) const;
+    QRect markerRectForTest(int index) const { return markerRect(index); }
     bool rowCollapsedForTest(EntityId id) const
     {
         Q_UNUSED(id);
@@ -203,6 +231,16 @@ protected:
 private:
     friend class ClipPopup;
 
+    // Child panels of a read-only panel share the adapter so int ids stay
+    // identical between the main timeline and its private timelines.
+    TimelinePanel(TimelineAdapter* adapter, QWidget* parent);
+
+    void initPanel();
+    const Entity* entityById(EntityId id) const;
+    int currentFps() const;
+    bool isEntityLocked(EntityId id) const;
+    QRect markerRect(int index) const;
+
     enum class DragMode
     {
         None,
@@ -279,6 +317,11 @@ private:
     EntityId dropAsset(const QMimeData& mime, int frame, int row);
 
     Project* m_project = nullptr;
+    EditorSession* m_session = nullptr;   // read-only main panel only
+    bool m_readOnly = false;
+    TimelineAdapter* m_adapter = nullptr;
+    std::unique_ptr<TimelineAdapter> m_ownedAdapter;
+    TimelineSnapshot m_snapshot;
     EntityId m_owner = kInvalidEntity;   // kInvalidEntity = main timeline
     bool m_popup = false;
     TimelinePanel* m_sourcePanel = nullptr;  // popup only

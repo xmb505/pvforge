@@ -67,6 +67,9 @@ public:
     ~MainWindow() override;
 
     Project* project() const { return m_project; }
+    // P2a session shell: the window owns the session; tests read the Document
+    // through this accessor instead of reaching into private members.
+    EditorSession* editorSessionForTest() const { return m_session; }
     EntityId importImageFile(const QString& path);
     void goToFrame(int frame) { setFrame(frame); }
     int currentFrame() const { return m_frame; }

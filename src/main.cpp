@@ -26,6 +26,8 @@
 #include "html/HtmlLayerTest.h"
 #include "core/Project.h"
 #include "model/Project.h"
+#include "model/Uuid.h"
+#include "next/app/ProjectDocument.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
@@ -318,6 +320,286 @@ int sessionTest()
     }
 
     qInfo() << "session-test OK: 640x360@30 create/open/rename/playhead";
+    return 0;
+}
+
+int timelineTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    const QString projectDir = QDir(temp.path()).filePath(
+        QStringLiteral("p2a-timeline.pvproj"));
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P2a 时间轴");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int start, int end, int row) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid camera = makeEntity(QStringLiteral("摄像机"), 0, 60, 0);
+    project.entities[camera].content.kind = pvf::ContentKind::Camera;
+
+    const pvf::Uuid title = makeEntity(QStringLiteral("标题"), 0, 90, 1);
+    project.entities[title].content.kind = pvf::ContentKind::Text;
+    project.entities[title].content.text.text = QStringLiteral("PVForge");
+
+    const pvf::Uuid vector = makeEntity(QStringLiteral("矢量"), 10, 50, 2);
+    project.entities[vector].content.kind = pvf::ContentKind::Vector;
+
+    const pvf::Uuid image = makeEntity(QStringLiteral("图片"), 20, 40, 3);
+    project.entities[image].content.kind = pvf::ContentKind::Asset;
+    project.entities[image].content.asset.type = pvf::AssetType::Image;
+    project.entities[image].content.asset.hash = QStringLiteral("imagehash");
+
+    const pvf::Uuid video = makeEntity(QStringLiteral("视频"), 0, 60, 4);
+    project.entities[video].content.kind = pvf::ContentKind::Asset;
+    project.entities[video].content.asset.type = pvf::AssetType::Video;
+    project.entities[video].content.asset.hash = QStringLiteral("videohash");
+
+    const pvf::Uuid audio = makeEntity(QStringLiteral("音频"), 5, 65, 5);
+    project.entities[audio].content.kind = pvf::ContentKind::Asset;
+    project.entities[audio].content.asset.type = pvf::AssetType::Audio;
+    project.entities[audio].content.asset.hash = QStringLiteral("audiohash");
+
+    const pvf::Uuid html = makeEntity(QStringLiteral("HTML"), 15, 75, 6);
+    project.entities[html].content.kind = pvf::ContentKind::Asset;
+    project.entities[html].content.asset.type = pvf::AssetType::Html;
+    project.entities[html].content.asset.hash = QStringLiteral("htmlhash");
+
+    // A child of "标题" exercises the private timeline and depth reporting.
+    pvf::model::Entity child;
+    child.uuid = pvf::model::newUuid();
+    child.name = QStringLiteral("标题子层");
+    child.parentUuid = title;
+    child.start = 10;
+    child.end = 40;
+    child.row = 0;
+    child.content.kind = pvf::ContentKind::Text;
+    project.entities.insert(child.uuid, child);
+
+    // Keyframes are stored relative to entity.start and must be shown at
+    // absolute frames by the read-only adapter.
+    pvf::model::Track track;
+    track.keys = {{0, 0.0, {}, {}}, {30, 1.0, {}, {}}};
+    project.entities[title].tracks.insert(QStringLiteral("opacity"), track);
+
+    pvf::model::Marker markerA;
+    markerA.id = QStringLiteral("m1");
+    markerA.frame = 20;
+    markerA.title = QStringLiteral("开场");
+    markerA.color = QStringLiteral("#ffbe3c");
+    pvf::model::Marker markerB;
+    markerB.id = QStringLiteral("m2");
+    markerB.frame = 55;
+    markerB.title = QStringLiteral("结尾");
+    markerB.color = QStringLiteral("#ff5a5f");
+    project.markers = {markerA, markerB};
+
+    QVector<pvf::Uuid> uuids = {camera, title, vector, image, video, audio,
+                                html, child.uuid};
+    if (!session->document()->commitEntities(uuids,
+                                             QStringLiteral("timeline-test"), &error)
+        || !session->commitProject(QStringLiteral("timeline-test markers"),
+                                   &error))
+    {
+        qCritical() << "timeline-test: commit failed" << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!timeline)
+    {
+        qCritical() << "timeline-test: no timeline panel";
+        return 1;
+    }
+    auto* sessionPtr = window->editorSessionForTest();
+    if (!sessionPtr || !sessionPtr->document())
+    {
+        qCritical() << "timeline-test: window has no session";
+        return 1;
+    }
+    if (!timeline->readOnly())
+    {
+        qCritical() << "timeline-test: session timeline is not read-only";
+        return 1;
+    }
+    if (timeline->entityRowCountForTest() != 7)
+    {
+        qCritical() << "timeline-test: expected 7 rows, got"
+                    << timeline->entityRowCountForTest()
+                    << "rowCount" << timeline->rowCountForTest();
+        return 1;
+    }
+
+    const QStringList expectedNames = {
+        QStringLiteral("摄像机"), QStringLiteral("标题"), QStringLiteral("矢量"),
+        QStringLiteral("图片"),   QStringLiteral("视频"), QStringLiteral("音频"),
+        QStringLiteral("HTML")};
+    for (int row = 0; row < expectedNames.size(); ++row)
+    {
+        if (timeline->rowNameForTest(row) != expectedNames.at(row))
+        {
+            qCritical() << "timeline-test: row" << row << "expected"
+                        << expectedNames.at(row) << "got"
+                        << timeline->rowNameForTest(row);
+            return 1;
+        }
+        if (timeline->rowDepthForTest(row) != 0)
+        {
+            qCritical() << "timeline-test: root row" << row << "has depth"
+                        << timeline->rowDepthForTest(row);
+            return 1;
+        }
+    }
+    if (timeline->rowStartForTest(3) != 20 || timeline->rowEndForTest(3) != 40)
+    {
+        qCritical() << "timeline-test: image range"
+                    << timeline->rowStartForTest(3)
+                    << timeline->rowEndForTest(3);
+        return 1;
+    }
+    if (timeline->rowStartForTest(1) != 0 || timeline->rowEndForTest(1) != 90)
+    {
+        qCritical() << "timeline-test: title range"
+                    << timeline->rowStartForTest(1)
+                    << timeline->rowEndForTest(1);
+        return 1;
+    }
+    if (!timeline->rowIsAudioForTest(5)
+        || timeline->rowAssetHashForTest(5) != QStringLiteral("audiohash"))
+    {
+        qCritical() << "timeline-test: audio row metadata missing"
+                    << timeline->rowAssetHashForTest(5);
+        return 1;
+    }
+    if (timeline->markerCountForTest() != 2
+        || timeline->markerFrameForTest(0) != 20
+        || timeline->markerFrameForTest(1) != 55
+        || timeline->markerRectForTest(0).isEmpty())
+    {
+        qCritical() << "timeline-test: markers"
+                    << timeline->markerCountForTest()
+                    << timeline->markerFrameForTest(0)
+                    << timeline->markerFrameForTest(1);
+        return 1;
+    }
+
+    // Playhead follows ProjectDocument and is drawn in the panel.
+    // The window owns the session; drive the playhead through the panel signal
+    // path by simulating a ruler click, then verify via the exposed frame.
+    const QPoint rulerPoint(120, 10);
+    QMouseEvent rulerPress(QEvent::MouseButtonPress, QPointF(rulerPoint),
+                           QPointF(timeline->mapToGlobal(rulerPoint)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent rulerRelease(QEvent::MouseButtonRelease, QPointF(rulerPoint),
+                             QPointF(timeline->mapToGlobal(rulerPoint)),
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &rulerPress);
+    QApplication::sendEvent(timeline, &rulerRelease);
+    QApplication::processEvents();
+    if (timeline->currentFrameForTest() != 20
+        || sessionPtr->playhead() != 20)
+    {
+        qCritical() << "timeline-test: ruler click frame"
+                    << timeline->currentFrameForTest()
+                    << "playhead" << sessionPtr->playhead();
+        return 1;
+    }
+
+    // Clicking a clip selects it in the Document (read-only, no edit).
+    const QPoint vectorPoint(timeline->frameXForTest(30),
+                             timeline->rowCenterYForTest(2));
+    QMouseEvent clipPress(QEvent::MouseButtonPress, QPointF(vectorPoint),
+                          QPointF(timeline->mapToGlobal(vectorPoint)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent clipRelease(QEvent::MouseButtonRelease, QPointF(vectorPoint),
+                            QPointF(timeline->mapToGlobal(vectorPoint)),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &clipPress);
+    QApplication::sendEvent(timeline, &clipRelease);
+    QApplication::processEvents();
+    if (timeline->uuidForEntityId(timeline->rowEntityForTest(2)) != vector)
+    {
+        qCritical() << "timeline-test: row id does not map back to uuid";
+        return 1;
+    }
+    const pvf::Uuid selectionUuid =
+        timeline->uuidForEntityId(timeline->entityIdForUuid(vector));
+    if (selectionUuid != vector)
+    {
+        qCritical() << "timeline-test: selection mapping broken";
+        return 1;
+    }
+    if (sessionPtr->document()->selection() != vector)
+    {
+        qCritical() << "timeline-test: clip click did not select in Document"
+                    << sessionPtr->document()->selection();
+        return 1;
+    }
+
+    // Private timeline: only the children of the owner, with depth 1.
+    auto* popup = timeline->openPopup(timeline->entityIdForUuid(title));
+    QApplication::processEvents();
+    if (!popup)
+    {
+        qCritical() << "timeline-test: private timeline did not open";
+        return 1;
+    }
+    if (popup->entityRowCountForTest() != 1
+        || popup->rowNameForTest(0) != QStringLiteral("标题子层")
+        || popup->rowDepthForTest(0) != 1
+        || popup->rowStartForTest(0) != 10 || popup->rowEndForTest(0) != 40)
+    {
+        qCritical() << "timeline-test: private timeline rows"
+                    << popup->entityRowCountForTest()
+                    << popup->rowNameForTest(0) << popup->rowDepthForTest(0)
+                    << popup->rowStartForTest(0) << popup->rowEndForTest(0);
+        return 1;
+    }
+    timeline->closeAllPopups();
+    QApplication::processEvents();
+
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    if (!window->grab().save(
+            QStringLiteral("/tmp/opencode/pvforge-p2a-timeline-test.png")))
+    {
+        qCritical() << "timeline-test: screenshot failed";
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-test OK: 7 rows, ranges, depth, markers, playhead,"
+               " private timeline";
     return 0;
 }
 
@@ -13846,6 +14128,8 @@ int main(int argc, char* argv[])
         return selfTest();
     if (app.arguments().contains(QStringLiteral("--session-test")))
         return sessionTest();
+    if (app.arguments().contains(QStringLiteral("--timeline-test")))
+        return timelineTest(app);
     if (app.arguments().contains(QStringLiteral("--save-test")))
         return saveTest();
     if (app.arguments().contains(QStringLiteral("--scene-test")))
@@ -13990,6 +14274,7 @@ int main(int argc, char* argv[])
     // P1: `--open <project-dir>` opens a `.pvproj` directory directly.  The
     // legacy single-file format is rejected by EditorSession with a hint.
     QString openPath;
+    QString shotPath;
     const QStringList arguments = app.arguments();
     for (int i = 1; i < arguments.size(); ++i)
     {
@@ -14001,6 +14286,15 @@ int main(int argc, char* argv[])
         else if (arguments.at(i).startsWith(QStringLiteral("--open=")))
         {
             openPath = arguments.at(i).mid(QStringLiteral("--open=").size());
+        }
+        else if (arguments.at(i) == QStringLiteral("--shot")
+                 && i + 1 < arguments.size())
+        {
+            shotPath = arguments.at(++i);
+        }
+        else if (arguments.at(i).startsWith(QStringLiteral("--shot=")))
+        {
+            shotPath = arguments.at(i).mid(QStringLiteral("--shot=").size());
         }
     }
     if (!openPath.isEmpty())
@@ -14014,7 +14308,20 @@ int main(int argc, char* argv[])
         }
         auto* window = new pvf::MainWindow(session.release());
         window->setAttribute(Qt::WA_DeleteOnClose);
+        window->resize(1440, 900);
         window->show();
+        if (!shotPath.isEmpty())
+        {
+            const QString target = shotPath;
+            QTimer::singleShot(800, window, [window, target, &app] {
+                QDir().mkpath(QFileInfo(target).absolutePath());
+                if (!window->grab().save(target))
+                    qCritical().noquote() << "screenshot failed:" << target;
+                else
+                    qInfo().noquote() << "screenshot:" << target;
+                app.quit();
+            });
+        }
         return app.exec();
     }
 

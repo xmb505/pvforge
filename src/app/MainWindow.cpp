@@ -24,6 +24,7 @@
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "model/Project.h"
+#include "model/Query.h"
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
@@ -849,7 +850,22 @@ void MainWindow::buildSessionShell()
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    layout->addWidget(top);
+
+    // Legacy arrangement: the editing surface sits above the timeline.  P2a
+    // brings the old TimelinePanel back below the placeholder; the right-hand
+    // project properties tab is unchanged.
+    auto* mainSplit = new QSplitter(Qt::Vertical, central);
+    mainSplit->setObjectName(QStringLiteral("sessionMainSplit"));
+    mainSplit->setChildrenCollapsible(false);
+    mainSplit->addWidget(top);
+    m_timeline = new TimelinePanel(
+        static_cast<EditorSession*>(m_session), mainSplit);
+    m_timeline->setObjectName(QStringLiteral("timelinePanel"));
+    mainSplit->addWidget(m_timeline);
+    mainSplit->setStretchFactor(0, 1);
+    mainSplit->setStretchFactor(1, 0);
+    mainSplit->setSizes({620, 280});
+    layout->addWidget(mainSplit);
     setCentralWidget(central);
 
     m_status = new QLabel(this);
@@ -876,6 +892,50 @@ void MainWindow::buildSessionShell()
                     statusBar()->showMessage(
                         QStringLiteral("提交失败：%1").arg(message), 5000);
                 });
+        connect(document, &next::Document::playheadChanged, this, [this] {
+            if (m_session)
+            {
+                m_frame = m_session->playhead();
+                if (m_timeline)
+                    m_timeline->setCurrentFrame(m_frame);
+            }
+            updateSessionPlaceholder();
+        });
+        connect(document, &next::Document::selectionChanged, this, [this] {
+            if (m_session && m_timeline)
+            {
+                m_selected = m_timeline->entityIdForUuid(
+                    m_session->document()->selection());
+                m_timeline->setSelectedEntity(m_selected);
+            }
+            updateSessionPlaceholder();
+        });
+
+        if (m_timeline)
+        {
+            connect(m_timeline, &TimelinePanel::frameRequested, this,
+                    [this](int frame) {
+                        if (!m_session)
+                            return;
+                        m_frame = frame;
+                        m_session->setPlayhead(frame);
+                        updateSessionPlaceholder();
+                    });
+            connect(m_timeline, &TimelinePanel::entitySelected, this,
+                    [this](EntityId id) {
+                        if (!m_session || !m_timeline)
+                            return;
+                        m_selected = id;
+                        m_session->document()->setSelection(
+                            m_timeline->uuidForEntityId(id));
+                        updateSessionPlaceholder();
+                    });
+        }
+
+        m_frame = m_session->playhead();
+        m_selected = m_timeline
+                         ? m_timeline->entityIdForUuid(document->selection())
+                         : kInvalidEntity;
     }
 
     createSessionMenus();
@@ -963,7 +1023,7 @@ void MainWindow::createSessionMenus()
         [this] {
             QMessageBox::about(
                 this, QStringLiteral("关于 PVForge"),
-                QStringLiteral("PVForge %1\n\n旧 UI 接入 P1：目录工程、工程属性与播放头已接通。")
+                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2a：目录工程、工程属性、播放头与只读时间轴已接通。")
                     .arg(QStringLiteral(PVFORGE_VERSION)));
         });
 
@@ -1023,6 +1083,24 @@ void MainWindow::updateSessionPlaceholder()
         label->setStyleSheet(QStringLiteral("color: %1;").arg(foreground));
 
     m_sessionTitle->setText(m_session->name());
+
+    const model::Project& project = m_session->project();
+    const QVector<Uuid> roots = model::rootEntities(project);
+    int totalEnd = 0;
+    for (const Uuid& uuid : roots)
+    {
+        const auto found = project.entities.constFind(uuid);
+        if (found != project.entities.constEnd())
+            totalEnd = std::max(totalEnd, found->end);
+    }
+    QString selection = QStringLiteral("无");
+    if (auto* document = m_session->document())
+    {
+        const auto found = project.entities.constFind(document->selection());
+        if (found != project.entities.constEnd())
+            selection = found->name.isEmpty() ? found->uuid : found->name;
+    }
+
     m_sessionDetails->setText(
         QStringLiteral("%1 × %2 · %3 fps · 背景色 %4 · 播放头 %5")
             .arg(settings.width)
@@ -1031,15 +1109,21 @@ void MainWindow::updateSessionPlaceholder()
             .arg(background.name().toUpper())
             .arg(m_session->playhead()));
     m_sessionPath->setText(m_session->root());
-    m_sessionHint->setText(QStringLiteral(
-        "P1 里程碑：工程生命周期已接通。时间轴、视口、属性面板、素材箱和"
-        "摄像机监视器将在 P2–P5 逐个接回。"));
+    m_sessionHint->setText(
+        QStringLiteral("P2a：时间轴只读显示已接通（%1 个根实体，总长 %2 帧）。"
+                       "拖动/裁剪/关键帧编辑在 P2b 接入；视口、属性面板、"
+                       "素材箱和摄像机监视器随后接回。")
+            .arg(roots.size())
+            .arg(totalEnd));
     if (m_status)
         m_status->setText(
-            QStringLiteral("%1 × %2 @ %3 fps")
+            QStringLiteral("%1 × %2 @ %3 fps · 总长 %4 帧 · 播放头 %5 · 选中 %6")
                 .arg(settings.width)
                 .arg(settings.height)
-                .arg(settings.fps));
+                .arg(settings.fps)
+                .arg(totalEnd)
+                .arg(m_session->playhead())
+                .arg(selection));
 }
 
 bool MainWindow::saveSessionProject()
@@ -1502,6 +1586,12 @@ void MainWindow::deleteSelectedEntity()
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
+    if (m_session)
+    {
+        // P2a has no session-level delete; the timeline is read-only.
+        QMainWindow::keyPressEvent(event);
+        return;
+    }
     if (event->key() == Qt::Key_Delete && m_selected != kInvalidEntity)
     {
         deleteSelectedEntity();
