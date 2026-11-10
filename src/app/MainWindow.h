@@ -2,16 +2,19 @@
 
 #include "core/History.h"
 #include "core/Project.h"
+#include "export2/Export.h"
 #include "html/HtmlAsset.h"
 #include "media/VideoPlayer.h"
 #include "next/settings/SettingsStore.h"
 #include "store/Store.h"
 
 #include <QElapsedTimer>
+#include <QFutureWatcher>
 #include <QHash>
 #include <QMainWindow>
 #include <QSet>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -49,6 +52,7 @@ class CheckpointManager;
 class CurveEditor;
 class EditorSession;
 class EnvironmentPanel;
+class ExportProgressDialog;
 class McpCommandService;
 class McpLogPanel;
 class McpServer;
@@ -153,6 +157,37 @@ public:
     void triggerSessionAutoSaveForTest();
     bool restoreSessionCommitForTest(const QString& hash, QString* error = nullptr);
 
+    // ---- P7a export test hooks ------------------------------------------
+    bool exportRunningForTest() const { return m_exportRunning; }
+    void cancelSessionExportForTest();
+    void startSessionExportForTest(const Uuid& cameraUuid, int startFrame,
+                                   int endFrame, const QString& outputPath,
+                                   bool includeAudio, int outputFps,
+                                   int resolutionScale, int crf,
+                                   const QString& encoder, const QString& preset,
+                                   bool overwrite);
+    void setExportOptionsProbeForTest(
+        std::function<void(const export2::Options&)> probe)
+    {
+        m_exportOptionsProbe = std::move(probe);
+    }
+    void setExportFinishedHandlerForTest(
+        std::function<void(bool, const QString&)> handler)
+    {
+        m_exportFinishedHandler = std::move(handler);
+    }
+    void setExportProgressHandlerForTest(
+        std::function<void(int, int, double)> handler)
+    {
+        m_exportProgressHandler = std::move(handler);
+    }
+    // Tests assert the result through the finished handler instead of a modal
+    // completion box.
+    void setSuppressExportCompletionDialogForTest(bool suppress)
+    {
+        m_suppressExportCompletionDialog = suppress;
+    }
+
     // Scene and annotation UI tests drive the same code paths as the menus
     // without opening modal dialogs.
     QString addSceneForTest(const QString& name, int startFrame, int endFrame,
@@ -255,6 +290,11 @@ private:
     void createSessionProject();
     void showSessionWindow(std::unique_ptr<EditorSession> session);
     void exportVideo();
+    void startSessionExport(const Uuid& cameraUuid, int startFrame, int endFrame,
+                            const QString& outputPath, bool includeAudio,
+                            int outputFps, int resolutionScale, int crf,
+                            const QString& encoder, const QString& preset,
+                            bool overwrite);
     void autoSave();
     void updateAutosaveTimer();
 
@@ -407,6 +447,20 @@ private:
     QAction* m_saveAction = nullptr;
     QAction* m_saveAsAction = nullptr;
     QAction* m_exportAction = nullptr;
+    // P7a export worker.  The dialog and watcher live on the UI thread; the
+    // atomics are the only state the worker touches.
+    QFutureWatcher<export2::Result>* m_exportWatcher = nullptr;
+    ExportProgressDialog* m_exportProgress = nullptr;
+    QTimer* m_exportTimer = nullptr;
+    std::shared_ptr<std::atomic_bool> m_exportCancelled;
+    std::shared_ptr<std::atomic_int> m_exportFrame;
+    std::shared_ptr<std::atomic_int> m_exportTotal;
+    std::shared_ptr<std::atomic<double>> m_exportEta;
+    bool m_exportRunning = false;
+    bool m_suppressExportCompletionDialog = false;
+    std::function<void(const export2::Options&)> m_exportOptionsProbe;
+    std::function<void(bool, const QString&)> m_exportFinishedHandler;
+    std::function<void(int, int, double)> m_exportProgressHandler;
     QAction* m_homeAction = nullptr;
     QAction* m_endAction = nullptr;
     QAction* m_fitAction = nullptr;

@@ -72,6 +72,8 @@ void ExportProgressDialog::setPreview(const QImage& image)
 
 void ExportProgressDialog::setProgress(int done, int total)
 {
+    if (m_image.isNull())
+        m_preview->setText(QStringLiteral("正在导出…"));
     m_bar->setMaximum(std::max(1, total));
     m_bar->setValue(std::clamp(done, 0, std::max(1, total)));
     if (m_cancelling)
@@ -118,6 +120,31 @@ void ExportProgressDialog::setProgress(int done, int total)
     {
         m_status->setText(QStringLiteral("%1 / %2 帧").arg(done).arg(total));
     }
+}
+
+void ExportProgressDialog::setProgress(int done, int total, double etaSeconds)
+{
+    if (m_image.isNull())
+        m_preview->setText(QStringLiteral("正在导出…"));
+    const int maximum = std::max(1, total);
+    const int value = std::clamp(done, 0, maximum);
+    m_bar->setMaximum(maximum);
+    m_bar->setValue(value);
+    if (m_cancelling)
+        return;
+    if (done >= total)
+    {
+        m_status->setText(QStringLiteral("正在完成… %1 / %2 帧")
+                              .arg(done)
+                              .arg(total));
+        return;
+    }
+    const int percent = total > 0 ? int(done * 100.0 / total) : 0;
+    m_status->setText(QStringLiteral("%1 / %2 帧 · %3% · 剩余 %4")
+                          .arg(done)
+                          .arg(total)
+                          .arg(percent)
+                          .arg(formatRemaining(etaSeconds)));
 }
 
 void ExportProgressDialog::finish()

@@ -23,6 +23,8 @@ public:
 
     void setPreview(const QImage& image);
     void setProgress(int done, int total);
+    // export2 reports the ETA directly; prefer this overload during export.
+    void setProgress(int done, int total, double etaSeconds);
     void finish();
 
 signals:
