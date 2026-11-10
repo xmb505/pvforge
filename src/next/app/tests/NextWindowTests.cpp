@@ -27,6 +27,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -36,6 +37,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QWheelEvent>
 #include <QtTest>
 
 #include <memory>
@@ -186,6 +188,17 @@ QString writeMcpConfig(QTemporaryDir& temp)
         return QString();
     file.write(QJsonDocument(config).toJson());
     return configPath;
+}
+
+void wheelViewport(ViewportWidget* viewport, int angleDelta)
+{
+    const QPointF position(viewport->width() / 2.0,
+                           viewport->height() / 2.0);
+    QWheelEvent event(position,
+                      QPointF(viewport->mapToGlobal(position.toPoint())),
+                      QPoint(), QPoint(0, angleDelta), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(viewport, &event);
 }
 
 } // namespace
@@ -1685,6 +1698,425 @@ private slots:
                         QStringLiteral("recentProjectsEmpty"))
                     != nullptr);
         QVERIFY(storedRecentProjects().isEmpty());
+    }
+
+    void projectPropertiesDialogUpdatesNameAndBackground()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        const int commitsBefore = commitCount(window.get());
+
+        QAction* action = window->projectPropertiesActionForTest();
+        QVERIFY(action != nullptr);
+        QVERIFY(action->isEnabled());
+        action->trigger();
+        QCoreApplication::processEvents();
+
+        QDialog* dialog = window->projectPropertiesDialogForTest();
+        QVERIFY(dialog != nullptr);
+        QVERIFY(dialog->isVisible());
+
+        auto* nameEdit = dialog->findChild<QLineEdit*>(
+            QStringLiteral("projectNameEdit"));
+        QVERIFY(nameEdit != nullptr);
+        QCOMPARE(nameEdit->text(), QStringLiteral("Shell"));
+
+        auto* resolution = dialog->findChild<QLabel*>(
+            QStringLiteral("projectResolutionLabel"));
+        QVERIFY(resolution != nullptr);
+        QCOMPARE(resolution->text(),
+                 QStringLiteral("640 × 360（创建后锁定）"));
+
+        auto* fps = dialog->findChild<QLabel*>(
+            QStringLiteral("projectFpsLabel"));
+        QVERIFY(fps != nullptr);
+        QCOMPARE(fps->text(), QStringLiteral("24（创建后锁定）"));
+        // Both locked values are labels, not editable spin boxes.
+        QVERIFY(dialog->findChild<QSpinBox*>() == nullptr);
+
+        QVERIFY(dialog->findChild<QPushButton*>(
+                    QStringLiteral("projectBackgroundButton"))
+                != nullptr);
+        auto* hex = dialog->findChild<QLineEdit*>(
+            QStringLiteral("projectBackgroundHex"));
+        QVERIFY(hex != nullptr);
+        QCOMPARE(hex->text(), QStringLiteral("#101014"));
+
+        nameEdit->setText(QStringLiteral("改名工程"));
+        hex->setText(QStringLiteral("#204060"));
+
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        QVERIFY(buttons != nullptr);
+        QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+        QVERIFY(ok != nullptr);
+        QVERIFY(ok->isEnabled());
+        ok->click();
+
+        QString flushError;
+        document->flush(&flushError);
+        QVERIFY2(flushError.isEmpty(), qPrintable(flushError));
+
+        QCOMPARE(document->project().settings.name,
+                 QStringLiteral("改名工程"));
+        QCOMPARE(document->project().settings.background,
+                 QStringLiteral("#204060"));
+        QCOMPARE(commitCount(window.get()), commitsBefore + 1);
+        QVERIFY(window->windowTitle().contains(QStringLiteral("改名工程")));
+    }
+
+    void projectPropertiesDialogRejectsEmptyName()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        const int commitsBefore = commitCount(window.get());
+
+        window->openProjectPropertiesForTest();
+        QCoreApplication::processEvents();
+
+        QDialog* dialog = window->projectPropertiesDialogForTest();
+        QVERIFY(dialog != nullptr);
+        auto* nameEdit = dialog->findChild<QLineEdit*>(
+            QStringLiteral("projectNameEdit"));
+        QVERIFY(nameEdit != nullptr);
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        QVERIFY(buttons != nullptr);
+        QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+        QVERIFY(ok != nullptr);
+
+        nameEdit->setText(QStringLiteral("   "));
+        QVERIFY(!ok->isEnabled());
+        dialog->accept();
+        QVERIFY(dialog->result() != int(QDialog::Accepted));
+        QCOMPARE(document->project().settings.name, QStringLiteral("Shell"));
+        QCOMPARE(commitCount(window.get()), commitsBefore);
+        QVERIFY(dialog->isVisible());
+
+        dialog->close();
+    }
+
+    void duplicateEntityCopiesContentWithoutChildren()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+
+        Entity parent;
+        parent.uuid = model::newUuid();
+        parent.name = QStringLiteral("父");
+        parent.start = 0;
+        parent.end = 60;
+
+        Entity child;
+        child.uuid = model::newUuid();
+        child.name = QStringLiteral("子");
+        child.parentUuid = parent.uuid;
+        child.start = 0;
+        child.end = 30;
+
+        Entity source;
+        source.uuid = model::newUuid();
+        source.name = QStringLiteral("源");
+        source.start = 10;
+        source.end = 40;
+        source.row = 3;
+        source.transform.x = 25.0;
+        source.transform.y = -4.0;
+        source.transform.rotation = 30.0;
+        source.transform.scaleX = 1.5;
+        source.transform.scaleY = 0.5;
+        source.transform.pivotX = 2.0;
+        source.transform.pivotY = 3.0;
+        source.transform.opacity = 0.75;
+        model::Keyframe opacityKey;
+        opacityKey.frame = 0;
+        opacityKey.value = 0.75;
+        source.tracks[QStringLiteral("opacity")].keys.append(opacityKey);
+        SolverSegment solver;
+        solver.id = model::newUuid();
+        solver.effect = SolverEffect::Gravity;
+        solver.startFrame = 0;
+        solver.endFrame = 20;
+        source.solvers.append(solver);
+
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        document->mutableProject().entities.insert(source.uuid, source);
+        QVERIFY2(document->commitEntities(
+                     {parent.uuid, child.uuid, source.uuid},
+                     QStringLiteral("pvf: create tree"), &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        document->setSelection(source.uuid);
+        const int commitsBefore = commitCount(window.get());
+        QAction* duplicate = window->duplicateActionForTest();
+        QVERIFY(duplicate != nullptr);
+        QVERIFY(duplicate->isEnabled());
+        duplicate->trigger();
+
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // Parent, child, source and exactly one copy; the child is not cloned.
+        QCOMPARE(document->project().entities.size(), 4);
+        const Uuid copyUuid = document->selection();
+        QVERIFY(!copyUuid.isEmpty());
+        QVERIFY(copyUuid != source.uuid);
+        QVERIFY(document->project().entities.contains(copyUuid));
+
+        const Entity copy =
+            document->project().entities.value(copyUuid);
+        QCOMPARE(copy.name, source.name);
+        QCOMPARE(copy.parentUuid, source.parentUuid);
+        QCOMPARE(copy.start, source.start);
+        QCOMPARE(copy.end, source.end);
+        QCOMPARE(copy.row, source.row);
+        QCOMPARE(copy.transform.x, source.transform.x);
+        QCOMPARE(copy.transform.y, source.transform.y);
+        QCOMPARE(copy.transform.rotation, source.transform.rotation);
+        QCOMPARE(copy.transform.scaleX, source.transform.scaleX);
+        QCOMPARE(copy.transform.scaleY, source.transform.scaleY);
+        QCOMPARE(copy.transform.pivotX, source.transform.pivotX);
+        QCOMPARE(copy.transform.pivotY, source.transform.pivotY);
+        QCOMPARE(copy.transform.opacity, source.transform.opacity);
+        QCOMPARE(copy.tracks.size(), source.tracks.size());
+        QCOMPARE(copy.tracks.value(QStringLiteral("opacity")).keys.size(), 1);
+        QCOMPARE(copy.solvers.size(), 1);
+        QCOMPARE(copy.solvers.first().effect, SolverEffect::Gravity);
+        QCOMPARE(copy.solvers.first().startFrame, 0);
+        QCOMPARE(copy.solvers.first().endFrame, 20);
+        QCOMPARE(commitCount(window.get()), commitsBefore + 1);
+    }
+
+    void copyPasteEntityUsesInternalClipboard()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+
+        Entity source;
+        source.uuid = model::newUuid();
+        source.name = QStringLiteral("可复制");
+        source.start = 5;
+        source.end = 35;
+        source.row = 2;
+        source.transform.x = 12.0;
+        source.transform.y = -6.0;
+        source.content.kind = ContentKind::Text;
+        source.content.text.text = QStringLiteral("复制我");
+        model::Keyframe key;
+        key.frame = 4;
+        key.value = 0.5;
+        source.tracks[QStringLiteral("opacity")].keys.append(key);
+
+        document->mutableProject().entities.insert(source.uuid, source);
+        QVERIFY2(document->commitEntity(source.uuid,
+                                        QStringLiteral("pvf: create source"),
+                                        &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        document->setSelection(source.uuid);
+        const int entitiesBefore = document->project().entities.size();
+        const int commitsBefore = commitCount(window.get());
+
+        QAction* copy = window->copyEntityActionForTest();
+        QVERIFY(copy != nullptr);
+        QVERIFY(copy->isEnabled());
+        copy->trigger();
+        QCOMPARE(document->project().entities.size(), entitiesBefore);
+
+        QAction* paste = window->pasteEntityActionForTest();
+        QVERIFY(paste != nullptr);
+        QVERIFY(paste->isEnabled());
+        paste->trigger();
+
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        QCOMPARE(document->project().entities.size(), entitiesBefore + 1);
+        const Uuid pastedUuid = document->selection();
+        QVERIFY(!pastedUuid.isEmpty());
+        QVERIFY(pastedUuid != source.uuid);
+
+        const Entity pasted =
+            document->project().entities.value(pastedUuid);
+        QCOMPARE(pasted.name, source.name);
+        QCOMPARE(pasted.start, source.start);
+        QCOMPARE(pasted.end, source.end);
+        QCOMPARE(pasted.row, source.row);
+        // Pasted copies are offset by 8 px so they are visible on top.
+        QCOMPARE(pasted.transform.x, source.transform.x + 8.0);
+        QCOMPARE(pasted.transform.y, source.transform.y + 8.0);
+        QCOMPARE(pasted.content.kind, ContentKind::Text);
+        QCOMPARE(pasted.content.text.text, QStringLiteral("复制我"));
+        QCOMPARE(pasted.tracks.value(QStringLiteral("opacity")).keys.size(),
+                 1);
+        QCOMPARE(pasted.tracks.value(QStringLiteral("opacity"))
+                     .keys.first().frame,
+                 4);
+        QCOMPARE(commitCount(window.get()), commitsBefore + 1);
+    }
+
+    void timelineKeyframeClipboardStillWinsWhenFocused()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        ProjectDocument* document = window->document();
+        Entity clip;
+        clip.uuid = model::newUuid();
+        clip.name = QStringLiteral("关键帧片段");
+        clip.start = 0;
+        clip.end = 60;
+        model::Keyframe key;
+        key.frame = 5;
+        key.value = 0.5;
+        clip.tracks[QStringLiteral("opacity")].keys.append(key);
+        document->mutableProject().entities.insert(clip.uuid, clip);
+        QVERIFY2(document->commitEntity(clip.uuid,
+                                        QStringLiteral("pvf: create clip"),
+                                        &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        window->resize(1280, 800);
+        window->show();
+        QTest::qWait(50);
+
+        document->setSelection(clip.uuid);
+
+        // Fill the entity clipboard first, so both clipboard actions stay
+        // enabled later and really exercise the timeline forwarding path.
+        ViewportWidget* viewport = window->viewportForTest();
+        QVERIFY(viewport != nullptr);
+        viewport->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+        QAction* copy = window->copyEntityActionForTest();
+        QVERIFY(copy != nullptr);
+        QVERIFY(copy->isEnabled());
+        copy->trigger();
+
+        TimelineWidget* timeline = window->timelineForTest();
+        QVERIFY(timeline != nullptr);
+        timeline->setFocus(Qt::OtherFocusReason);
+        QCoreApplication::processEvents();
+
+        const QRect bar = timeline->entityBarRect(clip.uuid);
+        QVERIFY(bar.isValid());
+        QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(timeline->xFromFrame(5), bar.center().y()));
+        QCOMPARE(document->selection(), clip.uuid);
+        QSignalSpy timelineStatus(timeline, &TimelineWidget::statusMessage);
+
+        // The entity action is what a real Ctrl+C would trigger; it must replay
+        // the key on the focused timeline instead of copying the entity.
+        copy->trigger();
+        QCOMPARE(timelineStatus.count(), 1);
+        QVERIFY(timelineStatus.last().first().toString().contains(
+            QStringLiteral("复制")));
+
+        document->setPlayhead(25);
+        timeline->refresh();
+        const int entitiesBefore = document->project().entities.size();
+        QAction* paste = window->pasteEntityActionForTest();
+        QVERIFY(paste != nullptr);
+        QVERIFY(paste->isEnabled());
+        paste->trigger();
+
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // No entity was pasted; the keyframe landed on the timeline instead.
+        QCOMPARE(document->project().entities.size(), entitiesBefore);
+        const Entity after =
+            document->project().entities.value(clip.uuid);
+        const auto keys =
+            after.tracks.value(QStringLiteral("opacity")).keys;
+        QCOMPARE(keys.size(), 2);
+        bool pastedAtPlayhead = false;
+        for (const model::Keyframe& pasted : keys) {
+            if (pasted.frame == 25 && qFuzzyCompare(pasted.value, 0.5))
+                pastedAtPlayhead = true;
+        }
+        QVERIFY(pastedAtPlayhead);
+    }
+
+    void commonShortcutsTriggerActions()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto window = makeWindow(temp, &error);
+        QVERIFY2(window != nullptr, qPrintable(error));
+
+        QAction* copy = window->copyEntityActionForTest();
+        QAction* paste = window->pasteEntityActionForTest();
+        QAction* duplicate = window->duplicateActionForTest();
+        QAction* fit = window->fitViewActionForTest();
+        QAction* exportAction = window->exportActionForTest();
+        QVERIFY(copy != nullptr);
+        QVERIFY(paste != nullptr);
+        QVERIFY(duplicate != nullptr);
+        QVERIFY(fit != nullptr);
+        QVERIFY(exportAction != nullptr);
+        QCOMPARE(copy->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_C));
+        QCOMPARE(paste->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_V));
+        QCOMPARE(duplicate->shortcut(),
+                 QKeySequence(Qt::CTRL | Qt::Key_D));
+        QCOMPARE(fit->shortcut(), QKeySequence(Qt::Key_F));
+        QCOMPARE(exportAction->shortcut(),
+                 QKeySequence(Qt::CTRL | Qt::Key_E));
+        QCOMPARE(copy->shortcutContext(), Qt::WindowShortcut);
+        QCOMPARE(paste->shortcutContext(), Qt::WindowShortcut);
+        QCOMPARE(duplicate->shortcutContext(), Qt::WindowShortcut);
+        QCOMPARE(fit->shortcutContext(), Qt::WindowShortcut);
+        QCOMPARE(exportAction->shortcutContext(), Qt::WindowShortcut);
+
+        // Ctrl+E goes through the export command; the hook keeps the modal
+        // export dialog out of the test.
+        window->createEntity(ContentKind::Camera);
+        QVERIFY(exportAction->isEnabled());
+        int exports = 0;
+        window->setExportHandlerForTest([&exports] { ++exports; });
+        exportAction->trigger();
+        QCOMPARE(exports, 1);
+
+        // F fits the viewport back to its baseline zoom.
+        window->resize(1280, 800);
+        window->show();
+        QTest::qWait(50);
+        ViewportWidget* viewport = window->viewportForTest();
+        QVERIFY(viewport != nullptr);
+        QVERIFY(viewport->width() > 100);
+        wheelViewport(viewport, 240);
+        QVERIFY(qAbs(viewport->zoom() - 1.44) < 0.05);
+        fit->trigger();
+        QVERIFY(qAbs(viewport->zoom() - 1.0) < 0.01);
     }
 
     void appWordingHasNoGitLfs()

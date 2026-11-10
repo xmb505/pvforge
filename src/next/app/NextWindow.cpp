@@ -18,7 +18,9 @@
 #include "next/timeline/TimelineWidget.h"
 #include "next/viewport/ViewportWidget.h"
 
+#include <QAbstractSpinBox>
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QColor>
@@ -44,6 +46,7 @@
 #include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -52,6 +55,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -63,11 +67,13 @@
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolBar>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
+#include <QWheelEvent>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -173,6 +179,173 @@ protected:
 private:
     std::function<void()> m_open;
     std::function<void()> m_remove;
+};
+
+class ProjectPropertiesDialog : public QDialog
+{
+public:
+    explicit ProjectPropertiesDialog(const model::ProjectSettings& settings,
+                                     QWidget* parent = nullptr)
+        : QDialog(parent)
+    {
+        setObjectName(QStringLiteral("projectPropertiesDialog"));
+        setWindowTitle(tr("工程属性"));
+        setModal(false);
+        resize(460, 240);
+
+        auto* root = new QVBoxLayout(this);
+
+        auto* form = new QFormLayout;
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        m_name = new QLineEdit(settings.name, this);
+        m_name->setObjectName(QStringLiteral("projectNameEdit"));
+        m_name->setMaxLength(256);
+        m_name->setPlaceholderText(tr("工程名称"));
+        form->addRow(tr("名称"), m_name);
+
+        // fps and resolution are locked once the project exists; they are
+        // labels, not editors, so the UI cannot imply they are editable.
+        m_resolution = new QLabel(
+            tr("%1 × %2（创建后锁定）")
+                .arg(settings.width)
+                .arg(settings.height),
+            this);
+        m_resolution->setObjectName(QStringLiteral("projectResolutionLabel"));
+        m_resolution->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        form->addRow(tr("分辨率"), m_resolution);
+
+        m_fps = new QLabel(tr("%1（创建后锁定）").arg(settings.fps), this);
+        m_fps->setObjectName(QStringLiteral("projectFpsLabel"));
+        m_fps->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        form->addRow(tr("帧率"), m_fps);
+
+        auto* backgroundRow = new QHBoxLayout;
+        backgroundRow->setContentsMargins(0, 0, 0, 0);
+        m_backgroundButton = new QPushButton(this);
+        m_backgroundButton->setObjectName(
+            QStringLiteral("projectBackgroundButton"));
+        m_backgroundButton->setFixedWidth(44);
+        m_backgroundButton->setToolTip(tr("选择背景色"));
+        m_backgroundHex = new QLineEdit(this);
+        m_backgroundHex->setObjectName(
+            QStringLiteral("projectBackgroundHex"));
+        m_backgroundHex->setPlaceholderText(QStringLiteral("#101014"));
+        m_backgroundHex->setMaxLength(16);
+        backgroundRow->addWidget(m_backgroundButton);
+        backgroundRow->addWidget(m_backgroundHex, 1);
+        form->addRow(tr("背景色"), backgroundRow);
+
+        root->addLayout(form);
+
+        m_error = new QLabel(this);
+        m_error->setObjectName(QStringLiteral("projectPropertiesError"));
+        m_error->setStyleSheet(QStringLiteral("color: #e08a3c;"));
+        m_error->hide();
+        root->addWidget(m_error);
+        root->addStretch(1);
+
+        m_buttons = new QDialogButtonBox(
+            QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        root->addWidget(m_buttons);
+
+        connect(m_buttons, &QDialogButtonBox::accepted, this,
+                [this] { accept(); });
+        connect(m_buttons, &QDialogButtonBox::rejected, this,
+                &QDialog::reject);
+        connect(m_name, &QLineEdit::textChanged, this,
+                [this] { validate(); });
+        connect(m_backgroundHex, &QLineEdit::textChanged, this,
+                [this] { validate(); });
+        connect(m_backgroundButton, &QPushButton::clicked, this,
+                [this] { chooseBackground(); });
+
+        const QColor background(settings.background);
+        m_backgroundHex->setText(background.isValid()
+                                     ? background.name()
+                                     : QStringLiteral("#101014"));
+        updateBackgroundSwatch();
+        validate();
+    }
+
+    // Called from accept() while the widgets are still alive, so the shell can
+    // read the edited values without relying on signal/deletion ordering.
+    std::function<void()> onAccepted;
+
+    QString name() const { return m_name->text().trimmed(); }
+    QString background() const
+    {
+        return QColor(m_backgroundHex->text().trimmed()).name();
+    }
+
+    void accept() override
+    {
+        if (!isValid())
+        {
+            validate();
+            return;
+        }
+        if (onAccepted)
+            onAccepted();
+        QDialog::accept();
+    }
+
+private:
+    bool isValid() const
+    {
+        const QString trimmed = name();
+        return !trimmed.isEmpty() && trimmed.size() <= 256
+               && QColor(m_backgroundHex->text().trimmed()).isValid();
+    }
+
+    void validate()
+    {
+        const bool ok = isValid();
+        if (m_buttons) {
+            if (QPushButton* button =
+                    m_buttons->button(QDialogButtonBox::Ok))
+                button->setEnabled(ok);
+        }
+        if (!m_error)
+            return;
+        if (name().isEmpty())
+            m_error->setText(tr("名称不能为空（1..256 个字符）"));
+        else if (name().size() > 256)
+            m_error->setText(tr("名称最多 256 个字符"));
+        else if (!QColor(m_backgroundHex->text().trimmed()).isValid())
+            m_error->setText(tr("背景色不是有效颜色，例如 #101014"));
+        m_error->setVisible(!ok);
+        updateBackgroundSwatch();
+    }
+
+    void chooseBackground()
+    {
+        const QColor current(m_backgroundHex->text().trimmed());
+        const QColor color = QColorDialog::getColor(
+            current.isValid() ? current : QColor(QStringLiteral("#101014")),
+            this, tr("选择背景色"));
+        if (!color.isValid())
+            return;
+        m_backgroundHex->setText(color.name());
+    }
+
+    void updateBackgroundSwatch()
+    {
+        const QColor color(m_backgroundHex->text().trimmed());
+        if (!color.isValid())
+            return;
+        QPixmap swatch(16, 16);
+        swatch.fill(color);
+        m_backgroundButton->setIcon(QIcon(swatch));
+    }
+
+    QLineEdit* m_name = nullptr;
+    QLabel* m_resolution = nullptr;
+    QLabel* m_fps = nullptr;
+    QPushButton* m_backgroundButton = nullptr;
+    QLineEdit* m_backgroundHex = nullptr;
+    QLabel* m_error = nullptr;
+    QDialogButtonBox* m_buttons = nullptr;
 };
 
 class NewProjectDialog : public QDialog
@@ -366,6 +539,14 @@ QString formatBytes(qint64 bytes)
     return QStringLiteral("%1 B").arg(bytes);
 }
 
+bool isTextInputWidget(const QWidget* widget)
+{
+    return qobject_cast<const QLineEdit*>(widget)
+           || qobject_cast<const QTextEdit*>(widget)
+           || qobject_cast<const QPlainTextEdit*>(widget)
+           || qobject_cast<const QAbstractSpinBox*>(widget);
+}
+
 void collectSubtree(const model::Project& project, const Uuid& uuid,
                     QSet<Uuid>& visited, QVector<Uuid>& out)
 {
@@ -511,6 +692,13 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
         m_playback->setDocument(nullptr);
     stopMcpServer();
     closeAllPrivateTimelines();
+    // The properties dialog edits the current project; it must not survive a
+    // project switch and write the old values into the new project.
+    if (m_projectPropertiesDialog)
+    {
+        m_projectPropertiesDialog->close();
+        m_projectPropertiesDialog = nullptr;
+    }
 
     // The media services hold a raw ProjectDocument* and their HTML threads
     // must stop before the document goes away.  The workbench hooks reference
@@ -530,6 +718,11 @@ void NextWindow::setDocument(std::unique_ptr<ProjectDocument> document)
 
     m_ownedDocument = std::move(document);
     m_document = m_ownedDocument.get();
+
+    // Entity copies may reference parent/solver UUIDs that only exist in the
+    // old project; never let them leak into the new one.
+    m_entityClipboard = model::Entity();
+    m_hasEntityClipboard = false;
 
     // A newly created or opened project becomes the most recent one.  This is
     // the common tail of chooseNewProject() and openProject().
@@ -577,6 +770,8 @@ void NextWindow::buildUi()
 
     m_exportAction = new QAction(tr("导出视频…"), this);
     m_exportAction->setObjectName(QStringLiteral("exportVideoAction"));
+    m_exportAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
+    m_exportAction->setShortcutContext(Qt::WindowShortcut);
     connect(m_exportAction, &QAction::triggered, this, &NextWindow::exportVideo);
     fileMenu->addAction(m_exportAction);
 
@@ -594,6 +789,15 @@ void NextWindow::buildUi()
     connect(m_quitAction, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(m_quitAction);
 
+    QMenu* projectMenu = menuBar()->addMenu(tr("工程(&O)"));
+    m_projectPropertiesAction = new QAction(tr("工程属性…"), this);
+    m_projectPropertiesAction->setObjectName(
+        QStringLiteral("projectPropertiesAction"));
+    m_projectPropertiesAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_projectPropertiesAction, &QAction::triggered, this,
+            &NextWindow::openProjectProperties);
+    projectMenu->addAction(m_projectPropertiesAction);
+
     QMenu* editMenu = menuBar()->addMenu(tr("编辑(&E)"));
     m_undoAction = new QAction(tr("撤销"), this);
     m_undoAction->setObjectName(QStringLiteral("undoAction"));
@@ -606,6 +810,31 @@ void NextWindow::buildUi()
     m_redoAction->setShortcut(QKeySequence::Redo);
     connect(m_redoAction, &QAction::triggered, this, &NextWindow::redo);
     editMenu->addAction(m_redoAction);
+
+    editMenu->addSeparator();
+    m_copyEntityAction = new QAction(tr("复制实体"), this);
+    m_copyEntityAction->setObjectName(QStringLiteral("copyEntityAction"));
+    m_copyEntityAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_C));
+    m_copyEntityAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_copyEntityAction, &QAction::triggered, this,
+            &NextWindow::copySelectedEntity);
+    editMenu->addAction(m_copyEntityAction);
+
+    m_pasteEntityAction = new QAction(tr("粘贴实体"), this);
+    m_pasteEntityAction->setObjectName(QStringLiteral("pasteEntityAction"));
+    m_pasteEntityAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_V));
+    m_pasteEntityAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_pasteEntityAction, &QAction::triggered, this,
+            &NextWindow::pasteEntity);
+    editMenu->addAction(m_pasteEntityAction);
+
+    m_duplicateAction = new QAction(tr("原地复制实体"), this);
+    m_duplicateAction->setObjectName(QStringLiteral("duplicateEntityAction"));
+    m_duplicateAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+    m_duplicateAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_duplicateAction, &QAction::triggered, this,
+            &NextWindow::duplicateSelectedEntity);
+    editMenu->addAction(m_duplicateAction);
 
     editMenu->addSeparator();
     m_deleteAction = new QAction(tr("删除实体"), this);
@@ -701,6 +930,13 @@ void NextWindow::buildUi()
             m_viewport->setShowGizmo(checked);
     });
     viewMenu->addAction(m_gizmoAction);
+
+    m_fitViewAction = new QAction(tr("适配画布"), this);
+    m_fitViewAction->setObjectName(QStringLiteral("fitViewAction"));
+    m_fitViewAction->setShortcut(QKeySequence(Qt::Key_F));
+    m_fitViewAction->setShortcutContext(Qt::WindowShortcut);
+    connect(m_fitViewAction, &QAction::triggered, this, &NextWindow::fitView);
+    viewMenu->addAction(m_fitViewAction);
 
     viewMenu->addSeparator();
     m_mcpLogAction = new QAction(tr("MCP 日志"), this);
@@ -1650,6 +1886,257 @@ QAction* NextWindow::createEntityActionForTest(ContentKind kind) const
     return nullptr;
 }
 
+void NextWindow::openProjectProperties()
+{
+    if (!m_document)
+    {
+        statusBar()->showMessage(tr("没有打开的工程"), 4000);
+        return;
+    }
+    if (m_projectPropertiesDialog)
+    {
+        m_projectPropertiesDialog->raise();
+        m_projectPropertiesDialog->activateWindow();
+        return;
+    }
+
+    auto* dialog =
+        new ProjectPropertiesDialog(m_document->project().settings, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // The callback runs inside accept(), before the dialog starts closing, so
+    // the edited values are still readable.
+    dialog->onAccepted = [this, dialog] {
+        applyProjectSettings(dialog->name(), dialog->background());
+    };
+    m_projectPropertiesDialog = dialog;
+    connect(dialog, &QObject::destroyed, this,
+            [this] { m_projectPropertiesDialog = nullptr; });
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void NextWindow::applyProjectSettings(const QString& name,
+                                      const QString& background)
+{
+    if (!m_document)
+        return;
+
+    const QString trimmed = name.trimmed();
+    const QColor color(background);
+    if (trimmed.isEmpty() || trimmed.size() > 256)
+    {
+        showError(tr("工程属性"), tr("名称不能为空，最多 256 个字符。"));
+        return;
+    }
+    if (!color.isValid())
+    {
+        showError(tr("工程属性"), tr("背景色不是有效颜色。"));
+        return;
+    }
+
+    model::ProjectSettings& settings = m_document->mutableProject().settings;
+    const QString previousName = settings.name;
+    const QString previousBackground = settings.background;
+    settings.name = trimmed;
+    settings.background = color.name();
+
+    QString error;
+    if (!m_document->commitProject(
+            QStringLiteral("pvf: edit project settings"), &error))
+    {
+        settings.name = previousName;
+        settings.background = previousBackground;
+        refreshAll();
+        showError(tr("工程属性保存失败"), error);
+        return;
+    }
+
+    refreshAll();
+    statusBar()->showMessage(tr("工程属性已更新：%1").arg(trimmed), 5000);
+}
+
+Uuid NextWindow::insertEntityCopy(const model::Entity& source, int offsetX,
+                                  int offsetY, const QString& message)
+{
+    if (!m_document)
+        return {};
+
+    model::Entity copy = source;
+    copy.uuid = model::newUuid();
+    copy.transform.x += offsetX;
+    copy.transform.y += offsetY;
+
+    m_document->mutableProject().entities.insert(copy.uuid, copy);
+
+    QString error;
+    if (!m_document->commitEntity(copy.uuid, message, &error))
+    {
+        m_document->mutableProject().entities.remove(copy.uuid);
+        refreshAll();
+        showError(tr("复制实体失败"), error);
+        return {};
+    }
+
+    m_document->setSelection(copy.uuid);
+    refreshAll();
+    return copy.uuid;
+}
+
+void NextWindow::duplicateSelectedEntity()
+{
+    if (!m_document)
+        return;
+    // Ctrl+D inside a text editor is the editor's shortcut, not ours.
+    if (focusIsTextInput())
+        return;
+
+    const Uuid uuid = m_document->selection();
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (uuid.isEmpty() || it == m_document->project().entities.constEnd())
+    {
+        statusBar()->showMessage(tr("没有选中实体"), 4000);
+        return;
+    }
+    if (it.value().locked)
+    {
+        statusBar()->showMessage(tr("实体已锁定，不能复制"), 4000);
+        return;
+    }
+
+    const QString name = it.value().name;
+    insertEntityCopy(it.value(), 0, 0,
+                     QStringLiteral("pvf: duplicate entity \"%1\"").arg(name));
+}
+
+void NextWindow::copySelectedEntity()
+{
+    // Timeline focus means the keyframe clipboard owns Ctrl+C.
+    if (forwardClipboardKey(Qt::Key_C))
+        return;
+    if (!m_document)
+        return;
+
+    const Uuid uuid = m_document->selection();
+    const auto it = m_document->project().entities.constFind(uuid);
+    if (uuid.isEmpty() || it == m_document->project().entities.constEnd())
+    {
+        statusBar()->showMessage(tr("没有选中实体"), 4000);
+        return;
+    }
+    if (it.value().locked)
+    {
+        statusBar()->showMessage(tr("实体已锁定，不能复制"), 4000);
+        return;
+    }
+
+    m_entityClipboard = it.value();
+    m_hasEntityClipboard = true;
+    updateActions();
+    statusBar()->showMessage(tr("已复制实体：%1").arg(it.value().name), 3000);
+}
+
+void NextWindow::pasteEntity()
+{
+    // Timeline focus means the keyframe clipboard owns Ctrl+V.
+    if (forwardClipboardKey(Qt::Key_V))
+        return;
+    if (!m_document)
+        return;
+    if (!m_hasEntityClipboard)
+    {
+        statusBar()->showMessage(tr("实体剪贴板为空"), 4000);
+        return;
+    }
+
+    // The source parent may have been deleted after the copy.  A paste that
+    // silently promotes the entity to root would change its world transform.
+    if (!m_entityClipboard.parentUuid.isEmpty()
+        && !m_document->project().entities.contains(
+            m_entityClipboard.parentUuid))
+    {
+        statusBar()->showMessage(tr("原父实体已不存在，无法粘贴"), 4000);
+        return;
+    }
+
+    insertEntityCopy(
+        m_entityClipboard, 8, 8,
+        QStringLiteral("pvf: paste entity \"%1\"")
+            .arg(m_entityClipboard.name));
+}
+
+void NextWindow::fitView()
+{
+    if (!m_viewport || !m_document)
+        return;
+
+    // ViewportWidget's documented fit state is zoom == 1.0 (the canvas is
+    // scaled to the widget).  The only public control is the wheel handler, so
+    // replay one wheel step that lands exactly on the baseline zoom.  Pan is a
+    // separate user offset and is intentionally left alone.
+    const double zoom = m_viewport->zoom();
+    if (!qFuzzyCompare(zoom, 1.0))
+    {
+        const double delta =
+            120.0 * std::log(1.0 / zoom) / std::log(1.2);
+        const int angle = int(std::lround(delta));
+        if (angle != 0)
+        {
+            const QPointF position(m_viewport->width() / 2.0,
+                                   m_viewport->height() / 2.0);
+            QWheelEvent event(
+                position,
+                QPointF(m_viewport->mapToGlobal(position.toPoint())),
+                QPoint(), QPoint(0, angle), Qt::NoButton, Qt::NoModifier,
+                Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(m_viewport, &event);
+        }
+    }
+
+    statusBar()->showMessage(tr("视图已适配画布"), 3000);
+}
+
+bool NextWindow::focusIsTextInput() const
+{
+    return isTextInputWidget(QApplication::focusWidget());
+}
+
+bool NextWindow::forwardClipboardKey(int key) const
+{
+    QWidget* focus = QApplication::focusWidget();
+    if (!focus)
+        return false;
+
+    // A focused timeline (including its scroll bar child) owns Ctrl+C/V for
+    // keyframes.  The action already consumed the real shortcut, so replay it
+    // on the timeline widget.
+    TimelineWidget* timeline = qobject_cast<TimelineWidget*>(focus);
+    for (QWidget* parent = focus->parentWidget();
+         parent && !timeline; parent = parent->parentWidget())
+    {
+        timeline = qobject_cast<TimelineWidget*>(parent);
+    }
+    if (timeline)
+    {
+        QKeyEvent event(QEvent::KeyPress, key, Qt::ControlModifier);
+        // Deliver straight to the widget's event handler.  sendEvent() would
+        // run the shortcut map again and re-enter this slot.
+        static_cast<QObject*>(timeline)->event(&event);
+        return true;
+    }
+
+    // Standard editors keep their native copy/paste.
+    if (isTextInputWidget(focus))
+    {
+        QKeyEvent event(QEvent::KeyPress, key, Qt::ControlModifier);
+        static_cast<QObject*>(focus)->event(&event);
+        return true;
+    }
+
+    return false;
+}
+
 void NextWindow::setMcpConfigPathForTest(const QString& path)
 {
     m_mcpConfigPath = path;
@@ -2350,6 +2837,12 @@ void NextWindow::exportVideo()
     if (!m_document)
         return;
 
+    if (m_exportHandler)
+    {
+        m_exportHandler();
+        return;
+    }
+
     QString flushError;
     m_document->flush(&flushError);
     if (!flushError.isEmpty())
@@ -2677,15 +3170,28 @@ void NextWindow::updateActions()
     if (m_exportAction)
         m_exportAction->setEnabled(open && hasCamera);
 
-    bool canDelete = false;
+    if (m_projectPropertiesAction)
+        m_projectPropertiesAction->setEnabled(open);
+    if (m_fitViewAction)
+        m_fitViewAction->setEnabled(open);
+
+    bool canEditSelection = false;
     if (m_document) {
         const Uuid selection = m_document->selection();
         const auto it = m_document->project().entities.constFind(selection);
-        canDelete = it != m_document->project().entities.constEnd()
-                    && !it.value().locked;
+        canEditSelection = it != m_document->project().entities.constEnd()
+                           && !it.value().locked;
     }
     if (m_deleteAction)
-        m_deleteAction->setEnabled(canDelete);
+        m_deleteAction->setEnabled(canEditSelection);
+    // Copy/duplicate act on the selected editable entity.  Paste only needs a
+    // snapshot; the parent check happens when it is actually pasted.
+    if (m_copyEntityAction)
+        m_copyEntityAction->setEnabled(canEditSelection);
+    if (m_duplicateAction)
+        m_duplicateAction->setEnabled(canEditSelection);
+    if (m_pasteEntityAction)
+        m_pasteEntityAction->setEnabled(open && m_hasEntityClipboard);
 
     for (QAction* action : {m_createEmptyAction, m_createTextAction,
                             m_createVectorAction, m_createCameraAction}) {

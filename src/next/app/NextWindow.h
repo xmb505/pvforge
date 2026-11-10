@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <memory>
+#include <utility>
 
 class QAction;
 class QCheckBox;
@@ -147,6 +148,26 @@ public:
     SettingsDialog* settingsDialogForTest() const { return m_settingsDialog; }
     void openSettingsForTest() { openSettings(); }
 
+    // Project properties dialog and the common editing shortcuts.
+    QAction* projectPropertiesActionForTest() const
+    {
+        return m_projectPropertiesAction;
+    }
+    QDialog* projectPropertiesDialogForTest() const
+    {
+        return m_projectPropertiesDialog;
+    }
+    void openProjectPropertiesForTest() { openProjectProperties(); }
+    QAction* copyEntityActionForTest() const { return m_copyEntityAction; }
+    QAction* pasteEntityActionForTest() const { return m_pasteEntityAction; }
+    QAction* duplicateActionForTest() const { return m_duplicateAction; }
+    QAction* fitViewActionForTest() const { return m_fitViewAction; }
+    // Test hook: observe the export command without opening the modal dialog.
+    void setExportHandlerForTest(std::function<void()> handler)
+    {
+        m_exportHandler = std::move(handler);
+    }
+
     McpLogPanel* mcpLogPanelForTest() const { return m_mcpLogPanel; }
     QDockWidget* mcpLogDockForTest() const { return m_mcpLogDock; }
     QAction* mcpLogActionForTest() const { return m_mcpLogAction; }
@@ -190,6 +211,11 @@ private slots:
     void chooseNewProject();
     void chooseOpenProject();
     void exportVideo();
+    void duplicateSelectedEntity();
+    void copySelectedEntity();
+    void pasteEntity();
+    void fitView();
+    void openProjectProperties();
     void deleteSelectedEntity();
     void undo();
     void redo();
@@ -247,6 +273,16 @@ private:
     void startExport(const Uuid& cameraUuid, int startFrame, int endFrame,
                      const QString& outputPath, bool includeAudio,
                      int outputFps = 0, int resolutionScale = 1);
+    void applyProjectSettings(const QString& name, const QString& background);
+    // Clones `source` with a fresh UUID and commits it once.  Children are not
+    // copied.  Returns the new UUID, or an empty one on failure.
+    Uuid insertEntityCopy(const model::Entity& source, int offsetX, int offsetY,
+                          const QString& message);
+    // Ctrl+C/V belong to a focused timeline (keyframes) or text editor.  When
+    // such a widget has focus the shortcut is replayed there and the entity
+    // clipboard action must not consume it.
+    bool forwardClipboardKey(int key) const;
+    bool focusIsTextInput() const;
     QVector<Uuid> collectDeletionSet(QString* error) const;
     bool deleteEntitySet(const QVector<Uuid>& uuids, QString* error);
     void closeOrphanedPrivateTimelines();
@@ -272,6 +308,7 @@ private:
     std::unique_ptr<SettingsStore> m_settingsStore;
     AppSettings m_settings;
     SettingsDialog* m_settingsDialog = nullptr;
+    QDialog* m_projectPropertiesDialog = nullptr;
 
     McpLogPanel* m_mcpLogPanel = nullptr;
     QDockWidget* m_mcpLogDock = nullptr;
@@ -292,6 +329,10 @@ private:
 
     bool m_onboardingShown = false;
     std::function<void(const QString&)> m_openFolderHandler;
+    std::function<void()> m_exportHandler;
+    // Application-internal clipboard; only one entity is supported.
+    model::Entity m_entityClipboard;
+    bool m_hasEntityClipboard = false;
     bool m_aiStopped = false;
     int m_activeToolCalls = 0;
     int m_aiBusyWrites = 0;
@@ -306,10 +347,15 @@ private:
     QAction* m_newAction = nullptr;
     QAction* m_openAction = nullptr;
     QAction* m_settingsAction = nullptr;
+    QAction* m_projectPropertiesAction = nullptr;
     QAction* m_quitAction = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
     QAction* m_gizmoAction = nullptr;
+    QAction* m_copyEntityAction = nullptr;
+    QAction* m_pasteEntityAction = nullptr;
+    QAction* m_duplicateAction = nullptr;
+    QAction* m_fitViewAction = nullptr;
     QAction* m_createEmptyAction = nullptr;
     QAction* m_createTextAction = nullptr;
     QAction* m_createVectorAction = nullptr;
