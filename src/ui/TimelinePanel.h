@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Project.h"
+#include "app/EditActions.h"
 #include "ui/TimelineData.h"
 
 #include <QHash>
@@ -54,13 +55,15 @@ class TimelinePanel : public QWidget
 
 public:
     explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
-    // P2a read-only mode backed by the new entity model.  Painting, rows,
-    // scrolling and the private timeline overlay are shared with the legacy
-    // mode; all editing gestures are disabled.
+    // Session-backed mode.  Painting, rows, scrolling and the private timeline
+    // overlay are shared with the legacy mode; clip gestures commit through
+    // EditorSession::editActions().
     explicit TimelinePanel(EditorSession* session, QWidget* parent = nullptr);
     ~TimelinePanel() override;
 
-    bool readOnly() const { return m_readOnly; }
+    // Legacy query kept for the UI self-tests; session-backed panels are
+    // editable through EditActions.
+    bool readOnly() const { return false; }
     void refreshFromSession();
     void setReadOnlySnapshot(const TimelineSnapshot& snapshot);
     EntityId entityIdForUuid(const Uuid& uuid) const;
@@ -211,6 +214,11 @@ signals:
                                const QVector<Entity>& after,
                                const QString& text);
 
+    // Session-backed edits report their result so the shell can show it in the
+    // status bar; a failed commit has already been rolled back.
+    void editCommitted(const QString& text);
+    void editFailed(const QString& message);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -231,9 +239,23 @@ protected:
 private:
     friend class ClipPopup;
 
-    // Child panels of a read-only panel share the adapter so int ids stay
+    // Child panels of a session-backed panel share the adapter so int ids stay
     // identical between the main timeline and its private timelines.
     TimelinePanel(TimelineAdapter* adapter, QWidget* parent);
+
+    bool sessionMode() const { return m_adapter != nullptr; }
+    const model::Entity* sessionEntity(const Uuid& uuid) const;
+    void beginSessionDrag();
+    void updateSessionDragPreview(const QPointF& pos);
+    void finishSessionDrag();
+    void cancelSessionDrag();
+    bool isReparentCandidate(const Uuid& entity, const Uuid& target) const;
+    QVector<Uuid> siblingOrderForDrop(const Uuid& entity, const Uuid& target,
+                                      bool after) const;
+    EntityId sessionBaseEntityAtRow(int row) const;
+    QRect sessionBaseClipRect(const Entity& entity) const;
+    int promptReparentMode(const Uuid& target);
+    void deleteSelectedEntities();
 
     void initPanel();
     const Entity* entityById(EntityId id) const;
@@ -317,8 +339,7 @@ private:
     EntityId dropAsset(const QMimeData& mime, int frame, int row);
 
     Project* m_project = nullptr;
-    EditorSession* m_session = nullptr;   // read-only main panel only
-    bool m_readOnly = false;
+    EditorSession* m_session = nullptr;   // session-backed main/popup panels
     TimelineAdapter* m_adapter = nullptr;
     std::unique_ptr<TimelineAdapter> m_ownedAdapter;
     TimelineSnapshot m_snapshot;
@@ -356,6 +377,12 @@ private:
     int m_hoverRow = -1;
     bool m_hoverLeft = false;
     bool m_hoverRight = false;
+
+    // Session-backed drag preview.  One plan is produced repeatedly without
+    // writing, then committed exactly once on release.
+    EditPlan m_sessionPlan;
+    bool m_sessionPlanValid = false;
+    TimelineSnapshot m_sessionBaseSnapshot;
 
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;

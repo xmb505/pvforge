@@ -120,16 +120,23 @@ Uuid TimelineAdapter::uuidForId(int id) const
 
 void TimelineAdapter::refresh()
 {
-    TimelineSnapshot snapshot;
     if (!m_session)
     {
-        m_snapshot = snapshot;
+        m_snapshot = TimelineSnapshot();
         return;
     }
+    m_snapshot = buildSnapshot(m_session->project(), m_session->playhead());
+}
 
-    const model::Project& project = m_session->project();
+TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
+                                                int playhead)
+{
+    TimelineSnapshot snapshot;
+    if (!m_session)
+        return snapshot;
+
     snapshot.fps = std::max(1, project.settings.fps);
-    snapshot.playhead = m_session->playhead();
+    snapshot.playhead = playhead;
 
     // Parent before children; each sibling group is already sorted by
     // row, start then uuid (model::childrenOf).
@@ -238,7 +245,7 @@ void TimelineAdapter::refresh()
                   return a.id < b.id;
               });
 
-    m_snapshot = snapshot;
+    return snapshot;
 }
 
 } // namespace pvf

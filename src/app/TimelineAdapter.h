@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/TimelineData.h"
+#include "model/Project.h"
 
 #include <QHash>
 
@@ -19,6 +20,12 @@ public:
 
     void refresh();
     const TimelineSnapshot& snapshot() const { return m_snapshot; }
+
+    EditorSession* session() const { return m_session; }
+
+    // Builds a display snapshot for an arbitrary project copy.  Used by the
+    // timeline drag preview; the int <-> uuid mapping stays session-stable.
+    TimelineSnapshot buildSnapshot(const model::Project& project, int playhead);
 
     // Session-stable entity ids for the legacy int based signals.
     int idForUuid(const Uuid& uuid) const;

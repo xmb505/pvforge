@@ -88,6 +88,8 @@ add_executable(pvforge
     src/app/MainWindow.cpp
     src/app/EditorSession.cpp
     src/app/EditorSession.h
+    src/app/EditActions.cpp
+    src/app/EditActions.h
     src/app/TimelineAdapter.cpp
     src/app/TimelineAdapter.h
     src/app/WelcomeWindow.cpp
@@ -162,6 +164,7 @@ add_subdirectory(src/next/properties)
 add_subdirectory(src/next/viewport)
 add_subdirectory(src/next/app)
 
-# P1 delivery shell: link only the document slice of the new backend.
-# `pvforge-next` (and its main.cpp) stays a separate, reference-only target.
-target_link_libraries(pvforge PRIVATE pvf_next_document)
+# P1/P2 delivery shell: link only the document slice and the shared entity
+# range helpers. `pvforge-next` (and its main.cpp) stays a separate,
+# reference-only target.
+target_link_libraries(pvforge PRIVATE pvf_next_document pvf_entity_range)

@@ -886,7 +886,10 @@ void MainWindow::buildSessionShell()
         connect(document, &next::Document::changed, this,
                 &MainWindow::refreshSession);
         connect(document, &next::Document::pendingCommitChanged, this,
-                [this](bool) { updateWindowTitle(); });
+                [this](bool) {
+                    updateWindowTitle();
+                    refreshSession();
+                });
         connect(document, &next::Document::commitFailed, this,
                 [this](const QString& message) {
                     statusBar()->showMessage(
@@ -929,6 +932,15 @@ void MainWindow::buildSessionShell()
                         m_session->document()->setSelection(
                             m_timeline->uuidForEntityId(id));
                         updateSessionPlaceholder();
+                    });
+            connect(m_timeline, &TimelinePanel::editCommitted, this,
+                    [this](const QString& text) {
+                        statusBar()->showMessage(text, 2000);
+                    });
+            connect(m_timeline, &TimelinePanel::editFailed, this,
+                    [this](const QString& message) {
+                        statusBar()->showMessage(
+                            QStringLiteral("编辑失败：%1").arg(message), 5000);
                     });
         }
 
@@ -1023,7 +1035,7 @@ void MainWindow::createSessionMenus()
         [this] {
             QMessageBox::about(
                 this, QStringLiteral("关于 PVForge"),
-                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2a：目录工程、工程属性、播放头与只读时间轴已接通。")
+                QStringLiteral("PVForge %1\n\n旧 UI 接入 P2b1：目录工程、工程属性、播放头与可编辑时间轴已接通。")
                     .arg(QStringLiteral(PVFORGE_VERSION)));
         });
 
@@ -1110,8 +1122,9 @@ void MainWindow::updateSessionPlaceholder()
             .arg(m_session->playhead()));
     m_sessionPath->setText(m_session->root());
     m_sessionHint->setText(
-        QStringLiteral("P2a：时间轴只读显示已接通（%1 个根实体，总长 %2 帧）。"
-                       "拖动/裁剪/关键帧编辑在 P2b 接入；视口、属性面板、"
+        QStringLiteral("P2b1：时间轴可编辑（%1 个根实体，总长 %2 帧）。"
+                       "拖动、裁剪、换行、换父级和级联删除已接通；"
+                       "关键帧编辑、marker、切分在 P2b2，视口、属性面板、"
                        "素材箱和摄像机监视器随后接回。")
             .arg(roots.size())
             .arg(totalEnd));

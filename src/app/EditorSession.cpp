@@ -1,5 +1,6 @@
 #include "EditorSession.h"
 
+#include "EditActions.h"
 #include "next/app/ProjectDocument.h"
 
 #include <QDir>
@@ -34,6 +35,7 @@ bool isProjectDirectory(const QString& path)
 EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     : m_document(std::move(document))
 {
+    m_editActions = std::make_unique<EditActions>(this);
 }
 
 EditorSession::~EditorSession() = default;

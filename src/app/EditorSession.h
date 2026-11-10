@@ -20,6 +20,8 @@ namespace next {
 class ProjectDocument;
 }
 
+class EditActions;
+
 // Thin adapter between the legacy application shell and the new
 // next::ProjectDocument.  It owns the document and exposes only the pieces the
 // P1 shell needs; it deliberately keeps no shadow copy of the project model.
@@ -44,6 +46,8 @@ public:
                                                       bool useGit = false);
 
     next::ProjectDocument* document() const { return m_document.get(); }
+    // The only human write entry point; one gesture becomes one commit.
+    EditActions* editActions() const { return m_editActions.get(); }
 
     const model::Project& project() const;
     model::Project& mutableProject();
@@ -69,6 +73,7 @@ private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
     std::unique_ptr<next::ProjectDocument> m_document;
+    std::unique_ptr<EditActions> m_editActions;
 };
 
 // Recent project directories, newest first.  Entries that are no longer a
