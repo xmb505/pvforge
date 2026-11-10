@@ -7,17 +7,25 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
+#include <QFileInfo>
 #include <QFont>
 #include <QFontComboBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QImage>
+#include <QImageReader>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -236,6 +244,272 @@ QString contentKindLabel(ContentKind kind)
     }
     return QStringLiteral("空");
 }
+
+QString assetTypeLabel(AssetType type)
+{
+    switch (type)
+    {
+    case AssetType::Image:
+        return QStringLiteral("图片");
+    case AssetType::Video:
+        return QStringLiteral("视频");
+    case AssetType::Audio:
+        return QStringLiteral("音频");
+    case AssetType::Html:
+        return QStringLiteral("HTML");
+    }
+    return QStringLiteral("素材");
+}
+
+// docs/ENTITY_MODEL.md 6.2: images, video and HTML swap freely; audio only
+// swaps with audio.
+bool isVisualAsset(AssetType type)
+{
+    return type == AssetType::Image || type == AssetType::Video
+        || type == AssetType::Html;
+}
+
+bool isTimedAsset(AssetType type)
+{
+    return type == AssetType::Video || type == AssetType::Audio;
+}
+
+bool sameAssetGroup(AssetType a, AssetType b)
+{
+    if (a == AssetType::Audio || b == AssetType::Audio)
+        return a == b;
+    return isVisualAsset(a) && isVisualAsset(b);
+}
+
+QString assetContentPath(const assets::StoredAsset& asset)
+{
+    const QStringList files = QDir(asset.directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    if (files.isEmpty())
+        return {};
+    return asset.directory + QLatin1Char('/') + files.first();
+}
+
+// Decoded thumbnail capped at maxSize on its longest edge. Null for missing or
+// non-image assets.
+QPixmap assetThumbnail(const assets::StoredAsset& asset, int maxSize)
+{
+    if (asset.type != AssetType::Image)
+        return {};
+    const QString path = assetContentPath(asset);
+    if (path.isEmpty())
+        return {};
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QImage image = reader.read();
+    if (image.isNull())
+        return {};
+    return QPixmap::fromImage(
+        image.scaled(maxSize, maxSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
+QString assetInfoText(const assets::StoredAsset& asset)
+{
+    QStringList parts;
+    parts.append(assetTypeLabel(asset.type));
+    const int width = asset.metadata.value(QStringLiteral("width")).toInt(0);
+    const int height = asset.metadata.value(QStringLiteral("height")).toInt(0);
+    if (width > 0 && height > 0)
+        parts.append(QStringLiteral("%1×%2").arg(width).arg(height));
+    const int frames = asset.metadata.value(QStringLiteral("durationFrames")).toInt(0);
+    if (frames > 0)
+        parts.append(QStringLiteral("%1 帧").arg(frames));
+    else
+    {
+        const double seconds =
+            asset.metadata.value(QStringLiteral("durationSeconds")).toDouble(0.0);
+        if (seconds > 0.0)
+            parts.append(QStringLiteral("%1 秒").arg(seconds, 0, 'f', 2));
+    }
+    return parts.join(QStringLiteral(" · "));
+}
+
+QString jsonValueText(const QJsonValue& value)
+{
+    if (value.isBool())
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    if (value.isDouble())
+        return QString::number(value.toDouble(), 'g', 8);
+    if (value.isString())
+        return value.toString();
+    if (value.isNull() || value.isUndefined())
+        return QStringLiteral("null");
+    return QString::fromUtf8(
+        QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
+}
+
+// Manifest variables may be plain defaults ({"speed": 2.5}) or descriptor
+// objects ({"speed": {"type": "number", "default": 2.5, "min": 0, "max": 10}}).
+// ENTITY_MODEL.md 6.4 only promises an object, so accept both shapes.
+struct HtmlVarSpec
+{
+    QString name;
+    QString track;
+    bool numeric = false;
+    double defaultValue = 0.0;
+    double minimum = -1000000000.0;
+    double maximum = 1000000000.0;
+    double step = 0.01;
+    int decimals = 3;
+    QString text;
+};
+
+HtmlVarSpec htmlVarSpec(const QString& name, const QJsonValue& value)
+{
+    HtmlVarSpec spec;
+    spec.name = name;
+    spec.track = QStringLiteral("var.") + name;
+
+    QJsonValue defaultValue = value;
+    if (value.isObject())
+    {
+        const QJsonObject object = value.toObject();
+        if (object.contains(QStringLiteral("default")))
+            defaultValue = object.value(QStringLiteral("default"));
+        const double minimum = object.value(QStringLiteral("min"))
+                                   .toDouble(spec.minimum);
+        const double maximum = object.value(QStringLiteral("max"))
+                                   .toDouble(spec.maximum);
+        if (maximum > minimum)
+        {
+            spec.minimum = minimum;
+            spec.maximum = maximum;
+        }
+        const bool integer = object.value(QStringLiteral("integer")).toBool(false);
+        spec.decimals = integer ? 0 : 3;
+        spec.step = integer ? 1.0 : 0.01;
+        if (object.value(QStringLiteral("type")).toString() == QLatin1String("number"))
+            spec.numeric = true;
+    }
+
+    if (defaultValue.isDouble())
+        spec.numeric = true;
+    if (spec.numeric)
+        spec.defaultValue = defaultValue.toDouble();
+    else
+        spec.text = jsonValueText(defaultValue);
+    return spec;
+}
+
+// Mirrors the MCP asset.assign sizing rule (src/mcp2/AssetTools.cpp applyAsset):
+// timed assets clamp sourceIn into 0..frames-1 and trim the entity when the
+// remaining material is shorter; images and HTML keep the entity duration.
+struct AssetReplacementPlan
+{
+    int sourceIn = 0;
+    int duration = 1;
+    bool needsTrim = false;
+};
+
+AssetReplacementPlan planAssetReplacement(const model::Entity& entity,
+                                          const assets::StoredAsset& asset)
+{
+    AssetReplacementPlan plan;
+    plan.duration = entity.duration();
+
+    if (!isTimedAsset(asset.type))
+        return plan;
+
+    if (entity.content.kind == ContentKind::Asset
+        && isTimedAsset(entity.content.asset.type))
+    {
+        plan.sourceIn = entity.content.asset.sourceIn;
+    }
+
+    const int frames = asset.metadata.value(QStringLiteral("durationFrames")).toInt(0);
+    if (frames <= 0)
+        return plan;
+
+    plan.sourceIn = qBound(0, plan.sourceIn, qMax(0, frames - 1));
+    const int available = frames - plan.sourceIn;
+    if (entity.duration() > available)
+        plan.duration = available;
+    plan.needsTrim = plan.duration != entity.duration();
+    return plan;
+}
+
+void applyAssetReplacement(model::Entity& entity, const assets::StoredAsset& asset,
+                           const AssetReplacementPlan& plan)
+{
+    if (plan.needsTrim)
+    {
+        entity.end = entity.start + plan.duration;
+        // docs/ENTITY_MODEL.md 6.2: trimming end drops keyframes at or past the
+        // new duration.
+        for (auto it = entity.tracks.begin(); it != entity.tracks.end();)
+        {
+            QVector<model::Keyframe>& keys = it.value().keys;
+            keys.erase(std::remove_if(keys.begin(), keys.end(),
+                                      [duration = plan.duration](
+                                          const model::Keyframe& keyframe) {
+                                          return keyframe.frame >= duration;
+                                      }),
+                       keys.end());
+            if (keys.isEmpty())
+                it = entity.tracks.erase(it);
+            else
+                ++it;
+        }
+
+        // docs/ENTITY_MODEL.md 5.4: a trim that cuts into a solver moves its
+        // end marker to the new last frame; segments entirely outside are
+        // dropped. Legacy solver endFrame must stay inside the clip.
+        QVector<model::SolverSegment> solvers;
+        for (model::SolverSegment& solver : entity.solvers)
+        {
+            if (solver.startFrame >= plan.duration)
+                continue;
+            if (solver.endFrame != -1 && solver.endFrame >= plan.duration)
+                solver.endFrame = plan.duration - 1;
+            solvers.append(solver);
+        }
+        entity.solvers = solvers;
+    }
+
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.hash = asset.hash;
+    entity.content.asset.type = asset.type;
+    entity.content.asset.sourceIn = plan.sourceIn;
+}
+
+// QListWidget that forwards hovered items so the asset picker can show a
+// thumbnail preview without selecting the row.
+class HoverListWidget : public QListWidget
+{
+public:
+    explicit HoverListWidget(QWidget* parent = nullptr)
+        : QListWidget(parent)
+    {
+    }
+
+    std::function<void(QListWidgetItem*)> hovered;
+
+protected:
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        QListWidget::mouseMoveEvent(event);
+        QListWidgetItem* item = itemAt(event->position().toPoint());
+        if (item == m_hovered)
+            return;
+        m_hovered = item;
+        if (hovered)
+            hovered(item);
+    }
+
+    void leaveEvent(QEvent* event) override
+    {
+        m_hovered = nullptr;
+        QListWidget::leaveEvent(event);
+    }
+
+private:
+    QListWidgetItem* m_hovered = nullptr;
+};
 
 QString solverRangeText(const model::SolverSegment& solver)
 {
@@ -626,7 +900,8 @@ void removeKeyframeAt(model::Entity& entity, const QString& track, int frame)
 }
 
 double currentTrackValue(const model::Entity& entity, const QString& track,
-                         int relativeFrame, bool step)
+                         int relativeFrame, bool step,
+                         std::optional<double> fallback = std::nullopt)
 {
     if (relativeFrame >= 0 && relativeFrame < entity.duration())
     {
@@ -637,11 +912,19 @@ double currentTrackValue(const model::Entity& entity, const QString& track,
                 return *value;
         }
     }
+    if (fallback)
+        return *fallback;
     return staticTrackValue(entity, track).value_or(0.0);
 }
 
 bool entitySupportsTrack(const model::Entity& entity, const QString& track)
 {
+    // HTML manifest variables become numeric tracks named var.<name>.
+    if (track.startsWith(QLatin1String("var.")))
+    {
+        return entity.content.kind == ContentKind::Asset
+            && entity.content.asset.type == AssetType::Html;
+    }
     for (const TrackSpec& spec : trackSpecsFor(entity))
     {
         if (spec.name == track)
@@ -737,6 +1020,7 @@ void PropertiesPanel::buildUi()
     buildTransformSection();
     buildKeyframeSection();
     buildContentSection();
+    buildHtmlVariablesSection();
     buildSolverSection();
     m_contentLayout->addStretch(1);
 
@@ -1231,6 +1515,13 @@ void PropertiesPanel::buildContentSection()
     m_assetHash->setReadOnly(true);
     assetForm->addRow(QStringLiteral("素材 hash"), m_assetHash);
 
+    m_assetPreview = new QLabel(m_assetPage);
+    m_assetPreview->setObjectName(QStringLiteral("assetPreviewLabel"));
+    m_assetPreview->setAlignment(Qt::AlignCenter);
+    m_assetPreview->setWordWrap(true);
+    m_assetPreview->setVisible(false);
+    assetForm->addRow(QStringLiteral("预览"), m_assetPreview);
+
     m_assetType = new QComboBox(m_assetPage);
     m_assetType->setObjectName(QStringLiteral("assetTypeCombo"));
     m_assetType->addItem(QStringLiteral("图片"), int(AssetType::Image));
@@ -1279,6 +1570,16 @@ void PropertiesPanel::buildContentSection()
         });
     });
 
+    m_assetReplaceButton = new QPushButton(QStringLiteral("更换素材…"), m_assetPage);
+    m_assetReplaceButton->setObjectName(QStringLiteral("assetReplaceButton"));
+    m_assetReplaceButton->setToolTip(
+        QStringLiteral("从素材箱里选一个同组素材（视觉：图片/视频/HTML；音频：音频）。"
+                       "视频/音频比实体短时，实体结束帧会按素材长度裁短。"));
+    assetForm->addRow(m_assetReplaceButton);
+    addEditable(m_assetReplaceButton);
+    connect(m_assetReplaceButton, &QPushButton::clicked, this,
+            &PropertiesPanel::chooseReplacementAsset);
+
     // camera
     QFormLayout* cameraForm = addPage(QStringLiteral("cameraPage"));
     m_cameraPage = cameraForm->parentWidget();
@@ -1288,6 +1589,48 @@ void PropertiesPanel::buildContentSection()
         m_cameraPage);
     cameraHint->setWordWrap(true);
     cameraForm->addRow(cameraHint);
+}
+
+void PropertiesPanel::buildHtmlVariablesSection()
+{
+    auto* group = new QGroupBox(QStringLiteral("HTML 变量"), m_content);
+    m_htmlGroup = group;
+    auto* outer = new QVBoxLayout(group);
+    outer->setContentsMargins(10, 8, 10, 8);
+    outer->setSpacing(6);
+
+    m_htmlStatus = new QLabel(group);
+    m_htmlStatus->setObjectName(QStringLiteral("htmlTimeDependentLabel"));
+    m_htmlStatus->setWordWrap(true);
+    m_htmlStatus->setToolTip(
+        QStringLiteral("timeDependent=true 的 HTML 每帧渲染；false 时可以只缓存一张图。"
+                       "变量值来自 .pvhtml manifest，轨道名是 var.<变量名>。"));
+    outer->addWidget(m_htmlStatus);
+
+    m_htmlEmpty = new QLabel(QStringLiteral("（manifest 未声明变量）"), group);
+    m_htmlEmpty->setObjectName(QStringLiteral("htmlVariablesEmptyLabel"));
+    m_htmlEmpty->setWordWrap(true);
+    outer->addWidget(m_htmlEmpty);
+
+    m_htmlGrid = new QGridLayout();
+    m_htmlGrid->setContentsMargins(0, 0, 0, 0);
+    m_htmlGrid->setHorizontalSpacing(6);
+    m_htmlGrid->setVerticalSpacing(4);
+    m_htmlGrid->setColumnStretch(2, 1);
+    const QStringList headers = {QStringLiteral("变量"), QStringLiteral("关键帧"),
+                                 QStringLiteral("当前值")};
+    for (int column = 0; column < headers.size(); ++column)
+    {
+        auto* header = new QLabel(headers.at(column), group);
+        QFont headerFont = header->font();
+        headerFont.setBold(true);
+        header->setFont(headerFont);
+        m_htmlGrid->addWidget(header, 0, column);
+    }
+    outer->addLayout(m_htmlGrid);
+
+    group->setVisible(false);
+    m_contentLayout->addWidget(group);
 }
 
 void PropertiesPanel::buildSolverSection()
@@ -1553,6 +1896,17 @@ void PropertiesPanel::reloadKeyframes(const model::Entity& entity)
     applyKeyframeEnabledState();
 }
 
+QPixmap PropertiesPanel::cachedAssetThumbnail(const AssetHash& hash,
+                                             const assets::StoredAsset& asset)
+{
+    const auto cached = m_assetThumbnails.constFind(hash);
+    if (cached != m_assetThumbnails.constEnd())
+        return *cached;
+    const QPixmap pixmap = assetThumbnail(asset, 320);
+    m_assetThumbnails.insert(hash, pixmap);
+    return pixmap;
+}
+
 void PropertiesPanel::reloadContent(const model::Entity& entity)
 {
     const model::Content& content = entity.content;
@@ -1592,6 +1946,260 @@ void PropertiesPanel::reloadContent(const model::Entity& entity)
     selectComboData(m_assetType, int(asset.type));
     m_assetSourceIn->setValue(asset.sourceIn);
     m_assetVolume->setValue(asset.volume);
+
+    const std::optional<assets::StoredAsset> stored =
+        m_document ? m_document->assets().get(asset.hash) : std::nullopt;
+    m_assetMissing = !stored;
+    if (stored && stored->type == AssetType::Image)
+    {
+        QPixmap thumbnail = cachedAssetThumbnail(asset.hash, *stored);
+        if (thumbnail.width() > 280 || thumbnail.height() > 280)
+        {
+            thumbnail = thumbnail.scaled(280, 280, Qt::KeepAspectRatio,
+                                         Qt::SmoothTransformation);
+        }
+        m_assetPreview->setPixmap(thumbnail);
+        m_assetPreview->setText(thumbnail.isNull()
+                                    ? QStringLiteral("图片无法解码")
+                                    : QString());
+        m_assetPreview->setToolTip(stored->name);
+        m_assetPreview->setVisible(true);
+    }
+    else
+    {
+        m_assetPreview->clear();
+        m_assetPreview->setToolTip(QString());
+        m_assetPreview->setVisible(false);
+    }
+}
+
+void PropertiesPanel::reloadHtmlVariables(const model::Entity& entity)
+{
+    const bool isHtml = entity.content.kind == ContentKind::Asset
+        && entity.content.asset.type == AssetType::Html;
+    m_htmlGroup->setVisible(isHtml);
+    if (!isHtml)
+    {
+        m_htmlUuid.clear();
+        m_htmlHash.clear();
+        m_htmlVariableDefs = QJsonObject();
+        return;
+    }
+
+    const AssetHash hash = entity.content.asset.hash;
+    if (entity.uuid != m_htmlUuid || hash != m_htmlHash)
+    {
+        m_htmlUuid = entity.uuid;
+        m_htmlHash = hash;
+        m_htmlVariableDefs = QJsonObject();
+        m_htmlAssetPresent = false;
+        if (m_document)
+        {
+            if (const auto stored = m_document->assets().get(hash))
+            {
+                m_htmlAssetPresent = true;
+                m_htmlTimeDependent = stored->metadata
+                                          .value(QStringLiteral("timeDependent"))
+                                          .toBool(true);
+                m_htmlVariableDefs = stored->metadata
+                                         .value(QStringLiteral("variables"))
+                                         .toObject();
+            }
+        }
+        rebuildHtmlVariableRows();
+    }
+
+    if (!m_htmlAssetPresent)
+    {
+        m_htmlStatus->setText(QStringLiteral("timeDependent：未知（素材缺失）"));
+        m_htmlEmpty->setText(QStringLiteral("素材缺失，无法读取 manifest 变量。"));
+        m_htmlEmpty->setVisible(true);
+    }
+    else
+    {
+        m_htmlStatus->setText(
+            QStringLiteral("timeDependent：%1")
+                .arg(m_htmlTimeDependent ? QStringLiteral("是（每帧渲染）")
+                                         : QStringLiteral("否（可静态缓存）")));
+        m_htmlEmpty->setText(QStringLiteral("（manifest 未声明变量）"));
+        m_htmlEmpty->setVisible(m_htmlRows.isEmpty());
+    }
+
+    const int relativeFrame = m_document ? m_document->playhead() - entity.start : -1;
+    const int duration = entity.duration();
+    const bool inRange = relativeFrame >= 0 && relativeFrame < duration;
+    const int sampleFrame = qBound(0, relativeFrame, qMax(0, duration - 1));
+
+    for (HtmlVariableRow& row : m_htmlRows)
+    {
+        row.inRange = inRange;
+        const auto trackIt = entity.tracks.constFind(row.track);
+        if (!row.numeric)
+        {
+            QString text = row.readOnlyText;
+            if (trackIt != entity.tracks.constEnd())
+            {
+                if (const auto value =
+                        model::evaluateTrack(trackIt.value(), sampleFrame, false))
+                {
+                    text = QString::number(*value, 'g', 8);
+                }
+            }
+            row.readOnlyValue->setText(text);
+            continue;
+        }
+
+        double value = row.defaultValue;
+        if (trackIt != entity.tracks.constEnd())
+        {
+            if (const auto evaluated =
+                    model::evaluateTrack(trackIt.value(), sampleFrame, false))
+            {
+                value = *evaluated;
+            }
+        }
+
+        const bool hasKey = inRange && hasKeyAt(entity, row.track, relativeFrame);
+        {
+            QSignalBlocker blocker(row.value);
+            row.value->setValue(value);
+        }
+        row.diamond->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
+        if (!inRange)
+        {
+            row.diamond->setToolTip(
+                QStringLiteral("播放头不在实体范围内（相对帧 %1），不能打关键帧")
+                    .arg(relativeFrame));
+        }
+        else if (hasKey)
+        {
+            row.diamond->setToolTip(
+                QStringLiteral("删除当前帧（%1）的「%2」关键帧")
+                    .arg(relativeFrame)
+                    .arg(row.name));
+        }
+        else
+        {
+            row.diamond->setToolTip(
+                QStringLiteral("在当前帧（%1）给「%2」打关键帧，初值为 manifest 默认 %3")
+                    .arg(relativeFrame)
+                    .arg(row.name)
+                    .arg(row.defaultValue));
+        }
+    }
+
+    applyKeyframeEnabledState();
+}
+
+void PropertiesPanel::rebuildHtmlVariableRows()
+{
+    // Clear every row below the header; widgets are owned by the grid.
+    for (int row = m_htmlGrid->rowCount() - 1; row >= 1; --row)
+    {
+        for (int column = 0; column < m_htmlGrid->columnCount(); ++column)
+        {
+            QLayoutItem* item = m_htmlGrid->itemAtPosition(row, column);
+            if (!item)
+                continue;
+            m_htmlGrid->removeItem(item);
+            delete item->widget();
+            delete item;
+        }
+    }
+    m_htmlRows.clear();
+
+    int gridRow = 1;
+    for (auto it = m_htmlVariableDefs.constBegin();
+         it != m_htmlVariableDefs.constEnd(); ++it)
+    {
+        const HtmlVarSpec spec = htmlVarSpec(it.key(), it.value());
+        HtmlVariableRow row;
+        row.name = spec.name;
+        row.track = spec.track;
+        row.numeric = spec.numeric;
+        row.defaultValue = spec.defaultValue;
+        row.minimum = spec.minimum;
+        row.maximum = spec.maximum;
+        row.step = spec.step;
+        row.decimals = spec.decimals;
+        row.readOnlyText = spec.text;
+
+        auto* nameLabel = new QLabel(spec.name, m_htmlGroup);
+        nameLabel->setObjectName(QStringLiteral("htmlVarName_%1").arg(spec.track));
+        nameLabel->setToolTip(spec.track);
+        m_htmlGrid->addWidget(nameLabel, gridRow, 0);
+
+        if (spec.numeric)
+        {
+            row.diamond = new QPushButton(QStringLiteral("◇"), m_htmlGroup);
+            row.diamond->setObjectName(QStringLiteral("htmlVarDiamond_%1").arg(spec.track));
+            row.diamond->setFixedWidth(28);
+            m_htmlGrid->addWidget(row.diamond, gridRow, 1);
+
+            row.value = new QDoubleSpinBox(m_htmlGroup);
+            row.value->setObjectName(QStringLiteral("htmlVarValue_%1").arg(spec.track));
+            row.value->setRange(spec.minimum, spec.maximum);
+            row.value->setDecimals(spec.decimals);
+            row.value->setSingleStep(spec.step);
+            row.value->setKeyboardTracking(false);
+            row.value->setToolTip(
+                QStringLiteral("manifest 默认值 %1；修改后按 Auto-key 规则写入 %2 轨道。")
+                    .arg(spec.defaultValue)
+                    .arg(spec.track));
+            m_htmlGrid->addWidget(row.value, gridRow, 2);
+
+            const QString track = spec.track;
+            const double fallback = spec.defaultValue;
+            connect(row.diamond, &QPushButton::clicked, this, [this, track, fallback] {
+                toggleKeyframe(track, fallback);
+            });
+            connect(row.value, &QDoubleSpinBox::editingFinished, this,
+                    [this, track, spin = row.value] {
+                        if (m_loading)
+                            return;
+                        const model::Entity* entity = selectedEntity();
+                        if (!entity || !m_document)
+                            return;
+                        const int relativeFrame =
+                            m_document->playhead() - entity->start;
+                        if (relativeFrame < 0
+                            || relativeFrame >= entity->duration())
+                        {
+                            setStatus(QStringLiteral(
+                                "播放头不在实体范围内，无法修改变量"));
+                            refresh();
+                            return;
+                        }
+                        if (!m_autoKey && !hasKeyAt(*entity, track, relativeFrame))
+                        {
+                            setStatus(QStringLiteral(
+                                "HTML 变量没有静态值：先点菱形打关键帧，或开启 Auto-key"));
+                            refresh();
+                            return;
+                        }
+                        editKeyframeValue(track, spin->value());
+                    });
+        }
+        else
+        {
+            auto* placeholder = new QLabel(QStringLiteral("—"), m_htmlGroup);
+            placeholder->setObjectName(
+                QStringLiteral("htmlVarDiamondPlaceholder_%1").arg(spec.track));
+            placeholder->setAlignment(Qt::AlignCenter);
+            m_htmlGrid->addWidget(placeholder, gridRow, 1);
+            // The placeholder only exists for column alignment; not tracked.
+
+            row.readOnlyValue = new QLabel(spec.text, m_htmlGroup);
+            row.readOnlyValue->setObjectName(
+                QStringLiteral("htmlVarReadOnly_%1").arg(spec.track));
+            row.readOnlyValue->setToolTip(
+                QStringLiteral("布尔/字符串变量第一版只读；数值变量才能打关键帧。"));
+            m_htmlGrid->addWidget(row.readOnlyValue, gridRow, 2);
+        }
+
+        m_htmlRows.append(row);
+        ++gridRow;
+    }
 }
 
 void PropertiesPanel::updateSolverCards(const model::Entity& entity)
@@ -2248,6 +2856,261 @@ void PropertiesPanel::deleteSolverSegment(const Uuid& solverId)
     refresh();
 }
 
+bool PropertiesPanel::replaceAsset(const AssetHash& hash, QString* error)
+{
+    if (!m_document)
+    {
+        if (error)
+            *error = QStringLiteral("没有打开的工程");
+        return false;
+    }
+
+    model::Entity* entity = selectedEntity();
+    if (!entity)
+    {
+        if (error)
+            *error = QStringLiteral("未选择实体");
+        return false;
+    }
+    if (entity->locked)
+    {
+        if (error)
+            *error = QStringLiteral("实体已锁定");
+        setStatus(QStringLiteral("实体已锁定，不能更换素材"));
+        return false;
+    }
+    if (entity->content.kind != ContentKind::Asset)
+    {
+        if (error)
+            *error = QStringLiteral("实体不是素材内容");
+        return false;
+    }
+
+    const auto stored = m_document->assets().get(hash);
+    if (!stored)
+    {
+        if (error)
+            *error = QStringLiteral("素材不存在：%1").arg(hash);
+        return false;
+    }
+    if (!sameAssetGroup(entity->content.asset.type, stored->type))
+    {
+        if (error)
+            *error = QStringLiteral("素材类型不兼容：%1 → %2")
+                         .arg(assetTypeLabel(entity->content.asset.type),
+                              assetTypeLabel(stored->type));
+        setStatus(QStringLiteral("不能把 %1 换成 %2 素材")
+                      .arg(assetTypeLabel(entity->content.asset.type),
+                           assetTypeLabel(stored->type)));
+        return false;
+    }
+    if (hash == entity->content.asset.hash)
+    {
+        if (error)
+            *error = QStringLiteral("已经使用该素材");
+        return false;
+    }
+
+    const AssetReplacementPlan plan = planAssetReplacement(*entity, *stored);
+    if (plan.needsTrim)
+    {
+        // MCP rejects the swap when trimming would delete child entities; do
+        // the same here instead of leaving children outside the new range.
+        const Uuid self = entity->uuid;
+        const int newEnd = entity->start + plan.duration;
+        for (auto it = m_document->project().entities.constBegin();
+             it != m_document->project().entities.constEnd(); ++it)
+        {
+            if (it.value().parentUuid != self)
+                continue;
+            if (it.value().end > newEnd)
+            {
+                if (error)
+                    *error = QStringLiteral(
+                        "换素材会裁剪子实体 %1，请先裁剪子实体").arg(it.value().name);
+                setStatus(QStringLiteral(
+                    "换素材会裁剪子实体，请先裁剪子实体：%1").arg(it.value().name));
+                return false;
+            }
+        }
+    }
+
+    const assets::StoredAsset asset = *stored;
+    const bool ok = commitEdit(
+        QStringLiteral("content.asset"), [asset, plan](model::Entity& target) {
+            applyAssetReplacement(target, asset, plan);
+            return true;
+        });
+    if (ok)
+    {
+        setStatus(QStringLiteral("已更换素材：%1%2")
+                      .arg(asset.name,
+                           plan.needsTrim
+                               ? QStringLiteral("（时长裁到 %1 帧）").arg(plan.duration)
+                               : QString()));
+    }
+    return ok;
+}
+
+void PropertiesPanel::chooseReplacementAsset()
+{
+    if (m_loading || !m_document)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity || entity->locked || entity->content.kind != ContentKind::Asset)
+        return;
+
+    const AssetType currentType = entity->content.asset.type;
+    if (!m_document->assets().get(entity->content.asset.hash))
+    {
+        setStatus(QStringLiteral("素材缺失，无法更换；请先把素材放回 assets/"));
+        refresh();
+        return;
+    }
+
+    QVector<assets::StoredAsset> candidates;
+    for (const assets::StoredAsset& asset : m_document->assets().list())
+    {
+        if (sameAssetGroup(currentType, asset.type))
+            candidates.append(asset);
+    }
+    if (candidates.isEmpty())
+    {
+        QMessageBox::information(
+            this, QStringLiteral("更换素材"),
+            QStringLiteral("素材箱里没有与当前实体兼容的素材。"));
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("更换素材 · %1").arg(entity->name));
+    dialog.resize(560, 520);
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 8);
+    layout->setSpacing(8);
+
+    auto* search = new QLineEdit(&dialog);
+    search->setObjectName(QStringLiteral("assetPickSearch"));
+    search->setPlaceholderText(QStringLiteral("搜索名称、类型或 hash…"));
+    search->setClearButtonEnabled(true);
+    layout->addWidget(search);
+
+    auto* list = new HoverListWidget(&dialog);
+    list->setObjectName(QStringLiteral("assetPickList"));
+    list->setIconSize(QSize(64, 40));
+    layout->addWidget(list, 1);
+
+    auto* preview = new QLabel(&dialog);
+    preview->setObjectName(QStringLiteral("assetPickPreview"));
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setMinimumSize(200, 160);
+    preview->setText(QStringLiteral("选择或悬停一个素材查看预览"));
+    layout->addWidget(preview);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("更换"));
+
+    auto makeItem = [](const assets::StoredAsset& asset) {
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1 — %2").arg(asset.name, assetInfoText(asset)));
+        item->setData(Qt::UserRole, asset.hash);
+        item->setToolTip(asset.name);
+        return item;
+    };
+    for (const assets::StoredAsset& asset : candidates)
+        list->addItem(makeItem(asset));
+
+    auto showPreview = [this, preview, list](QListWidgetItem* item) {
+        if (!item || !m_document)
+        {
+            preview->setPixmap(QPixmap());
+            preview->setText(QStringLiteral("选择或悬停一个素材查看预览"));
+            return;
+        }
+        const auto asset = m_document->assets().get(item->data(Qt::UserRole).toString());
+        if (!asset || asset->type != AssetType::Image)
+        {
+            preview->setPixmap(QPixmap());
+            preview->setText(asset
+                                 ? QStringLiteral("%1 素材没有图片预览").arg(
+                                       assetTypeLabel(asset->type))
+                                 : QStringLiteral("素材缺失"));
+            return;
+        }
+        const QPixmap thumbnail = cachedAssetThumbnail(asset->hash, *asset);
+        if (thumbnail.isNull())
+        {
+            preview->setPixmap(QPixmap());
+            preview->setText(QStringLiteral("图片无法解码"));
+            return;
+        }
+        preview->setText(QString());
+        preview->setPixmap(thumbnail);
+    };
+    list->hovered = showPreview;
+
+    auto currentHash = [list]() -> AssetHash {
+        QListWidgetItem* item = list->currentItem();
+        if (!item || item->isHidden())
+            return {};
+        return item->data(Qt::UserRole).toString();
+    };
+    auto updateOk = [buttons, currentHash]() {
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!currentHash().isEmpty());
+    };
+
+    connect(list, &QListWidget::currentItemChanged, this,
+            [showPreview, updateOk](QListWidgetItem* current, QListWidgetItem*) {
+                showPreview(current);
+                updateOk();
+            });
+    connect(list, &QListWidget::itemActivated, &dialog, [&dialog, currentHash] {
+        if (!currentHash().isEmpty())
+            dialog.accept();
+    });
+    connect(search, &QLineEdit::textChanged, &dialog,
+            [list, updateOk](const QString& text) {
+                const QString query = text.trimmed();
+                for (int i = 0; i < list->count(); ++i)
+                {
+                    QListWidgetItem* item = list->item(i);
+                    item->setHidden(!query.isEmpty()
+                                    && !item->text().contains(query,
+                                                              Qt::CaseInsensitive));
+                }
+                if (QListWidgetItem* current = list->currentItem();
+                    current && current->isHidden())
+                {
+                    current->setSelected(false);
+                    list->setCurrentItem(nullptr);
+                }
+                updateOk();
+            });
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, currentHash] {
+        if (!currentHash().isEmpty())
+            dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (!list->count())
+        return;
+    list->setCurrentRow(0);
+    updateOk();
+
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const AssetHash chosen = currentHash();
+    if (chosen.isEmpty())
+        return;
+    QString error;
+    if (!replaceAsset(chosen, &error) && !error.isEmpty())
+        setStatus(QStringLiteral("更换素材失败：%1").arg(error));
+}
+
 void PropertiesPanel::setAutoKey(bool on)
 {
     m_autoKey = on;
@@ -2263,7 +3126,8 @@ bool PropertiesPanel::autoKey() const
     return m_autoKey;
 }
 
-void PropertiesPanel::toggleKeyframe(const QString& track)
+void PropertiesPanel::toggleKeyframe(const QString& track,
+                                     std::optional<double> fallback)
 {
     if (m_loading || !m_document)
         return;
@@ -2290,7 +3154,7 @@ void PropertiesPanel::toggleKeyframe(const QString& track)
 
     const bool remove = hasKeyAt(*entity, track, relativeFrame);
     const double value =
-        currentTrackValue(*entity, track, relativeFrame, isStepTrack(track));
+        currentTrackValue(*entity, track, relativeFrame, isStepTrack(track), fallback);
     const bool ok = commitEdit(
         QStringLiteral("关键帧 %1@%2").arg(track).arg(relativeFrame),
         [track, relativeFrame, value, remove](model::Entity& target) {
@@ -2474,6 +3338,10 @@ void PropertiesPanel::applyEditingState()
     for (QWidget* widget : m_editable)
         widget->setEnabled(canEdit);
 
+    // The replacement dialog needs the current asset to exist; with a missing
+    // asset the entity shows a placeholder and the button stays disabled.
+    m_assetReplaceButton->setEnabled(canEdit && !m_assetMissing);
+
     m_lockedCheck->setEnabled(selectedEntity() != nullptr);
     applyKeyframeEnabledState();
     applySolverEnabledState();
@@ -2487,6 +3355,14 @@ void PropertiesPanel::applyKeyframeEnabledState()
         row.diamond->setEnabled(canEdit);
         row.value->setEnabled(canEdit);
         row.easing->setEnabled(canEdit && row.hasKey && !row.step);
+    }
+    for (HtmlVariableRow& row : m_htmlRows)
+    {
+        if (!row.numeric)
+            continue;
+        const bool rangeOk = canEdit && row.inRange;
+        row.diamond->setEnabled(rangeOk);
+        row.value->setEnabled(rangeOk);
     }
 }
 
@@ -2670,6 +3546,7 @@ void PropertiesPanel::refresh()
         reloadTransform(*entity);
         reloadKeyframes(*entity);
         reloadContent(*entity);
+        reloadHtmlVariables(*entity);
         updateSolverCards(*entity);
     }
 

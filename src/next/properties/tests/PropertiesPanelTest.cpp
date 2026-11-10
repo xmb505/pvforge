@@ -1,14 +1,24 @@
 #include "next/properties/PropertiesPanel.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
+#include <QFile>
 #include <QGroupBox>
+#include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 using namespace pvf;
@@ -116,6 +126,19 @@ public:
         return uuid;
     }
 
+    Uuid addAssetEntity(const QString& name, const AssetHash& hash, AssetType type,
+                        int start = 0, int end = 60)
+    {
+        const Uuid uuid = addEntity(name, start, end);
+        model::Entity& entity = m_project.entities[uuid];
+        entity.content.kind = ContentKind::Asset;
+        entity.content.asset.hash = hash;
+        entity.content.asset.type = type;
+        return uuid;
+    }
+
+    QString projectRoot() const { return m_tempDir.path(); }
+
     Uuid addCameraEntity(const QString& name, int start = 0, int end = 60)
     {
         const Uuid uuid = addEntity(name, start, end);
@@ -159,6 +182,90 @@ bool fireEditingFinished(QWidget* widget)
     return QMetaObject::invokeMethod(widget, "editingFinished");
 }
 
+QString hexHash(char digit)
+{
+    return QString(64, QChar::fromLatin1(digit));
+}
+
+QString writeAsset(const QString& root, const QString& hash, const QString& type,
+                   const QString& name, const QJsonObject& extra = QJsonObject())
+{
+    const QString directory = QDir(root).filePath(QStringLiteral("assets/") + hash);
+    if (!QDir().mkpath(directory))
+        return {};
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("hash"), hash);
+    metadata.insert(QStringLiteral("type"), type);
+    metadata.insert(QStringLiteral("name"), name);
+    metadata.insert(QStringLiteral("mime"), QStringLiteral("application/octet-stream"));
+    for (auto it = extra.constBegin(); it != extra.constEnd(); ++it)
+        metadata.insert(it.key(), it.value());
+
+    QFile file(directory + QStringLiteral("/asset.json"));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return {};
+    file.write(QJsonDocument(metadata).toJson());
+    file.close();
+    return directory;
+}
+
+AssetHash makeImageAsset(const QString& root, char digit, const QString& name)
+{
+    const AssetHash hash = hexHash(digit);
+    const QString directory = writeAsset(root, hash, QStringLiteral("image"), name);
+    if (directory.isEmpty())
+        return {};
+    QImage image(64, 40, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    if (!image.save(directory + QStringLiteral("/content.png"), "PNG"))
+        return {};
+    return hash;
+}
+
+AssetHash makeHtmlAsset(const QString& root, char digit, const QString& name,
+                        const QJsonObject& variables, bool timeDependent)
+{
+    const AssetHash hash = hexHash(digit);
+    QJsonObject extra;
+    extra.insert(QStringLiteral("width"), 800);
+    extra.insert(QStringLiteral("height"), 120);
+    extra.insert(QStringLiteral("entry"), QStringLiteral("index.html"));
+    extra.insert(QStringLiteral("variables"), variables);
+    extra.insert(QStringLiteral("timeDependent"), timeDependent);
+    const QString directory =
+        writeAsset(root, hash, QStringLiteral("html"), name, extra);
+    if (directory.isEmpty())
+        return {};
+    if (!QDir(directory).mkpath(QStringLiteral("bundle")))
+        return {};
+    QFile index(directory + QStringLiteral("/bundle/index.html"));
+    if (!index.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return {};
+    index.write("<!doctype html><html><body>hud</body></html>");
+    index.close();
+    return hash;
+}
+
+AssetHash makeVideoAsset(const QString& root, char digit, const QString& name,
+                         int frames)
+{
+    const AssetHash hash = hexHash(digit);
+    QJsonObject extra;
+    extra.insert(QStringLiteral("width"), 160);
+    extra.insert(QStringLiteral("height"), 90);
+    extra.insert(QStringLiteral("durationFrames"), frames);
+    const QString directory =
+        writeAsset(root, hash, QStringLiteral("video"), name, extra);
+    if (directory.isEmpty())
+        return {};
+    QFile content(directory + QStringLiteral("/content.mp4"));
+    if (!content.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return {};
+    content.write("not a real video");
+    content.close();
+    return hash;
+}
+
 } // namespace
 
 class PropertiesPanelTest : public QObject
@@ -193,6 +300,12 @@ private slots:
     void keyframeEasingPresetAndBezier();
     void keyframeRowsDoNotLeakBetweenEntities();
     void lockedEntityDisablesKeyframeControls();
+    void htmlVariablesUseManifestDefaults();
+    void htmlVariableEditAutoKeysTrack();
+    void replaceImageAssetKeepsDuration();
+    void replaceWithShorterVideoTrimsEnd();
+    void missingAssetDisablesReplaceButton();
+    void assetPickerFiltersAndShowsPreview();
 };
 
 void PropertiesPanelTest::showsBasicFields()
@@ -1034,6 +1147,238 @@ void PropertiesPanelTest::lockedEntityDisablesKeyframeControls()
     QVERIFY(!diamond->isEnabled());
     QVERIFY(!value->isEnabled());
     QVERIFY(!easing->isEnabled());
+}
+
+void PropertiesPanelTest::htmlVariablesUseManifestDefaults()
+{
+    FakeDocument document;
+    QJsonObject variables;
+    variables.insert(QStringLiteral("speed"), 2.5);
+    variables.insert(QStringLiteral("show"), true);
+    variables.insert(QStringLiteral("label"), QStringLiteral("hello"));
+    const AssetHash hash =
+        makeHtmlAsset(document.projectRoot(), 'a', QStringLiteral("hud"), variables, false);
+    QVERIFY(!hash.isEmpty());
+    const Uuid uuid =
+        document.addAssetEntity(QStringLiteral("HUD"), hash, AssetType::Html, 0, 60);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* status = findWidget<QLabel>(panel, "htmlTimeDependentLabel");
+    QVERIFY(status);
+    QVERIFY(status->text().contains(QStringLiteral("否")));
+
+    auto* value = findWidget<QDoubleSpinBox>(panel, "htmlVarValue_var.speed");
+    QVERIFY(value);
+    QCOMPARE(value->value(), 2.5);
+
+    auto* readOnlyBool = findWidget<QLabel>(panel, "htmlVarReadOnly_var.show");
+    QVERIFY(readOnlyBool);
+    QCOMPARE(readOnlyBool->text(), QStringLiteral("true"));
+    QVERIFY(!findWidget<QPushButton>(panel, "htmlVarDiamond_var.show"));
+
+    auto* readOnlyString = findWidget<QLabel>(panel, "htmlVarReadOnly_var.label");
+    QVERIFY(readOnlyString);
+    QCOMPARE(readOnlyString->text(), QStringLiteral("hello"));
+
+    auto* diamond = findWidget<QPushButton>(panel, "htmlVarDiamond_var.speed");
+    QVERIFY(diamond);
+    QVERIFY(diamond->isEnabled());
+    diamond->click();
+
+    QVERIFY(document.entity(uuid).tracks.contains(QStringLiteral("var.speed")));
+    const QVector<model::Keyframe> keys =
+        document.entity(uuid).tracks.value(QStringLiteral("var.speed")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.first().frame, 0);
+    QCOMPARE(keys.first().value, 2.5);
+    QCOMPARE(document.entityCommits(), 1);
+    QCOMPARE(diamond->text(), QStringLiteral("◆"));
+}
+
+void PropertiesPanelTest::htmlVariableEditAutoKeysTrack()
+{
+    FakeDocument document;
+    QJsonObject variables;
+    variables.insert(QStringLiteral("speed"), 1.0);
+    const AssetHash hash =
+        makeHtmlAsset(document.projectRoot(), 'b', QStringLiteral("hud"), variables, true);
+    QVERIFY(!hash.isEmpty());
+    const Uuid uuid =
+        document.addAssetEntity(QStringLiteral("HUD"), hash, AssetType::Html, 0, 60);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    document.setPlayhead(10);
+
+    auto* value = findWidget<QDoubleSpinBox>(panel, "htmlVarValue_var.speed");
+    QVERIFY(value);
+    QCOMPARE(value->value(), 1.0);
+    value->setValue(7.5);
+    QVERIFY(fireEditingFinished(value));
+
+    const QVector<model::Keyframe> keys =
+        document.entity(uuid).tracks.value(QStringLiteral("var.speed")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.first().frame, 10);
+    QCOMPARE(keys.first().value, 7.5);
+}
+
+void PropertiesPanelTest::replaceImageAssetKeepsDuration()
+{
+    FakeDocument document;
+    const AssetHash first =
+        makeImageAsset(document.projectRoot(), 'c', QStringLiteral("one.png"));
+    const AssetHash second =
+        makeImageAsset(document.projectRoot(), 'd', QStringLiteral("two.png"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    const Uuid uuid =
+        document.addAssetEntity(QStringLiteral("图片"), first, AssetType::Image, 10, 50);
+    document.addKey(uuid, QStringLiteral("x"), 30, 1.0);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* button = findWidget<QPushButton>(panel, "assetReplaceButton");
+    QVERIFY(button);
+    QVERIFY(button->isEnabled());
+
+    QString error;
+    QVERIFY2(panel.replaceAsset(second, &error), qPrintable(error));
+    QCOMPARE(document.entity(uuid).content.asset.hash, second);
+    QCOMPARE(document.entity(uuid).content.asset.type, AssetType::Image);
+    QCOMPARE(document.entity(uuid).content.asset.sourceIn, 0);
+    QCOMPARE(document.entity(uuid).start, 10);
+    QCOMPARE(document.entity(uuid).end, 50);
+    QVERIFY(document.entity(uuid).tracks.contains(QStringLiteral("x")));
+}
+
+void PropertiesPanelTest::replaceWithShorterVideoTrimsEnd()
+{
+    FakeDocument document;
+    const AssetHash longVideo =
+        makeVideoAsset(document.projectRoot(), 'e', QStringLiteral("long.mp4"), 300);
+    const AssetHash shortVideo =
+        makeVideoAsset(document.projectRoot(), 'f', QStringLiteral("short.mp4"), 20);
+    QVERIFY(!longVideo.isEmpty());
+    QVERIFY(!shortVideo.isEmpty());
+    const Uuid uuid =
+        document.addAssetEntity(QStringLiteral("视频"), longVideo, AssetType::Video, 0, 60);
+    document.addKey(uuid, QStringLiteral("x"), 10, 1.0);
+    document.addKey(uuid, QStringLiteral("x"), 30, 2.0);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    QString error;
+    QVERIFY2(panel.replaceAsset(shortVideo, &error), qPrintable(error));
+    QCOMPARE(document.entity(uuid).content.asset.hash, shortVideo);
+    QCOMPARE(document.entity(uuid).content.asset.type, AssetType::Video);
+    QCOMPARE(document.entity(uuid).end, 20);
+    const QVector<model::Keyframe> keys =
+        document.entity(uuid).tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.first().frame, 10);
+
+    // sourceIn stays and is clamped into the new material length: 20 - 15 = 5.
+    FakeDocument clamped;
+    const AssetHash longAgain =
+        makeVideoAsset(clamped.projectRoot(), '1', QStringLiteral("long.mp4"), 300);
+    const AssetHash shortAgain =
+        makeVideoAsset(clamped.projectRoot(), '2', QStringLiteral("short.mp4"), 20);
+    const Uuid clampedUuid = clamped.addAssetEntity(
+        QStringLiteral("视频"), longAgain, AssetType::Video, 0, 60);
+    clamped.entity(clampedUuid).content.asset.sourceIn = 15;
+
+    PropertiesPanel clampedPanel(&clamped);
+    clamped.setSelection(clampedUuid);
+    QVERIFY2(clampedPanel.replaceAsset(shortAgain, &error), qPrintable(error));
+    QCOMPARE(clamped.entity(clampedUuid).content.asset.sourceIn, 15);
+    QCOMPARE(clamped.entity(clampedUuid).end, 5);
+}
+
+void PropertiesPanelTest::missingAssetDisablesReplaceButton()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addAssetEntity(
+        QStringLiteral("缺素材"), hexHash('9'), AssetType::Image, 0, 60);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+
+    auto* button = findWidget<QPushButton>(panel, "assetReplaceButton");
+    QVERIFY(button);
+    QVERIFY(!button->isEnabled());
+}
+
+void PropertiesPanelTest::assetPickerFiltersAndShowsPreview()
+{
+    FakeDocument document;
+    const AssetHash first =
+        makeImageAsset(document.projectRoot(), '7', QStringLiteral("alpha.png"));
+    const AssetHash second =
+        makeImageAsset(document.projectRoot(), '8', QStringLiteral("beta.png"));
+    QVERIFY(!first.isEmpty());
+    QVERIFY(!second.isEmpty());
+    const Uuid uuid =
+        document.addAssetEntity(QStringLiteral("图片"), first, AssetType::Image, 0, 60);
+
+    PropertiesPanel panel(&document);
+    panel.show();
+    document.setSelection(uuid);
+
+    auto* button = findWidget<QPushButton>(panel, "assetReplaceButton");
+    QVERIFY(button);
+    QVERIFY(button->isEnabled());
+
+    bool dialogChecked = false;
+    QTimer::singleShot(0, &panel, [&dialogChecked] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        auto* search = dialog->findChild<QLineEdit*>(QStringLiteral("assetPickSearch"));
+        auto* list = dialog->findChild<QListWidget*>(QStringLiteral("assetPickList"));
+        auto* preview = dialog->findChild<QLabel*>(QStringLiteral("assetPickPreview"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        if (!search || !list || !preview || !buttons)
+        {
+            dialog->reject();
+            return;
+        }
+
+        search->setText(QStringLiteral("beta"));
+        int visibleRow = -1;
+        int visible = 0;
+        for (int i = 0; i < list->count(); ++i)
+        {
+            if (list->item(i)->isHidden())
+                continue;
+            visibleRow = i;
+            ++visible;
+        }
+        if (visible != 1 || visibleRow < 0)
+        {
+            dialog->reject();
+            return;
+        }
+        list->setCurrentRow(visibleRow);
+        const QPixmap pixmap = preview->pixmap();
+        if (pixmap.isNull() || pixmap.width() > 320 || pixmap.height() > 320)
+        {
+            dialog->reject();
+            return;
+        }
+        dialogChecked = true;
+        buttons->button(QDialogButtonBox::Ok)->click();
+        if (dialog->isVisible())
+            dialog->reject();
+    });
+
+    button->click();
+    QVERIFY(dialogChecked);
+    QCOMPARE(document.entity(uuid).content.asset.hash, second);
 }
 
 QTEST_MAIN(PropertiesPanelTest)

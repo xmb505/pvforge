@@ -4,9 +4,13 @@
 
 #include <QColor>
 #include <QHash>
+#include <QJsonObject>
+#include <QPixmap>
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
+#include <optional>
 
 class QCheckBox;
 class QComboBox;
@@ -47,6 +51,14 @@ public:
     // The custom-bezier dialog calls this after collecting its four handles.
     bool setTrackEasing(const QString& track, const model::EasingSpec& easing);
 
+    // Replaces the selected entity's asset with `hash` in one commit. Only
+    // assets from the same compatibility group are accepted (image/video/html
+    // or audio). Timed assets trim the entity end to the available material
+    // length and drop keyframes past the new duration; still images and HTML
+    // keep the current duration. sourceIn is clamped into the new asset.
+    // Used by the "更换素材…" dialog and by tests.
+    bool replaceAsset(const AssetHash& hash, QString* error = nullptr);
+
 public slots:
     void refresh();
 
@@ -60,6 +72,26 @@ private:
         QPushButton* diamond = nullptr;
         QDoubleSpinBox* value = nullptr;
         QComboBox* easing = nullptr;
+    };
+
+    // One row of the HTML manifest variables section. Numeric variables get a
+    // double spin box and a keyframe diamond backed by the `var.<name>` track;
+    // boolean/string variables are read-only in this first version.
+    struct HtmlVariableRow
+    {
+        QString name;
+        QString track;
+        bool numeric = false;
+        bool inRange = false;
+        double defaultValue = 0.0;
+        double minimum = -1000000000.0;
+        double maximum = 1000000000.0;
+        double step = 0.01;
+        int decimals = 3;
+        QString readOnlyText;
+        QPushButton* diamond = nullptr;
+        QDoubleSpinBox* value = nullptr;
+        QLabel* readOnlyValue = nullptr;
     };
 
     struct SolverCard
@@ -81,6 +113,7 @@ private:
     void buildTransformSection();
     void buildKeyframeSection();
     void buildContentSection();
+    void buildHtmlVariablesSection();
     void buildSolverSection();
 
     void reloadBasic(const model::Entity& entity);
@@ -88,6 +121,8 @@ private:
     void reloadKeyframes(const model::Entity& entity);
     void rebuildKeyframeRows(const model::Entity& entity);
     void reloadContent(const model::Entity& entity);
+    void reloadHtmlVariables(const model::Entity& entity);
+    void rebuildHtmlVariableRows();
     void updateSolverCards(const model::Entity& entity);
     void rebuildSolverCards(const Uuid& entityUuid,
                             const QVector<model::SolverSegment>& solvers);
@@ -103,7 +138,15 @@ private:
     void deleteSolverSegment(const Uuid& solverId);
     SolverEffect selectedSolverEffect() const;
 
-    void toggleKeyframe(const QString& track);
+    void chooseReplacementAsset();
+    // Decoded 320 px thumbnail cached by content hash; assets are immutable so
+    // the cache never needs invalidation. Returns a null pixmap for
+    // non-image/missing content.
+    QPixmap cachedAssetThumbnail(const AssetHash& hash,
+                                 const assets::StoredAsset& asset);
+
+    void toggleKeyframe(const QString& track,
+                        std::optional<double> fallback = std::nullopt);
     void editKeyframeValue(const QString& track, double value);
     void applyAutoKey(model::Entity& entity, const QString& track, double value);
     void promptCustomEasing(const QString& track);
@@ -199,6 +242,22 @@ private:
     QComboBox* m_assetType = nullptr;
     QSpinBox* m_assetSourceIn = nullptr;
     QDoubleSpinBox* m_assetVolume = nullptr;
+    QPushButton* m_assetReplaceButton = nullptr;
+    QLabel* m_assetPreview = nullptr;
+    bool m_assetMissing = false;
+    QHash<AssetHash, QPixmap> m_assetThumbnails;
+
+    // HTML manifest variables (docs/ENTITY_MODEL.md 6.4)
+    QGroupBox* m_htmlGroup = nullptr;
+    QLabel* m_htmlStatus = nullptr;
+    QLabel* m_htmlEmpty = nullptr;
+    QGridLayout* m_htmlGrid = nullptr;
+    QVector<HtmlVariableRow> m_htmlRows;
+    Uuid m_htmlUuid;
+    AssetHash m_htmlHash;
+    QJsonObject m_htmlVariableDefs;
+    bool m_htmlAssetPresent = false;
+    bool m_htmlTimeDependent = true;
 
     // Solvers
     QLabel* m_solverEmpty = nullptr;
