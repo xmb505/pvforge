@@ -3,6 +3,7 @@
 #include "SolverPreviewWidget.h"
 #include "TextLayoutDialog.h"
 #include "model/Easing.h"
+#include "next/timeline/EntityRange.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -36,6 +37,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 namespace pvf::next {
 
@@ -540,6 +542,18 @@ bool hasKeyAt(const model::Entity& entity, const QString& trackName, int frame)
     for (const model::Keyframe& keyframe : track.value().keys)
     {
         if (keyframe.frame == frame)
+            return true;
+    }
+    return false;
+}
+
+bool isSolverStartKey(const model::Entity& entity, const QString& trackName,
+                      int frame)
+{
+    for (const model::SolverSegment& solver : entity.solvers)
+    {
+        if (solver.startFrame == frame
+            && solverDrivenTracks(solver.effect).contains(trackName))
             return true;
     }
     return false;
@@ -1064,11 +1078,13 @@ void PropertiesPanel::buildBasicSection()
     form->addRow(QStringLiteral("开始帧"), m_startSpin);
     addEditable(m_startSpin);
     connect(m_startSpin, &QSpinBox::editingFinished, this, [this] {
-        const int value = m_startSpin->value();
-        commitEdit(QStringLiteral("start"), [value](model::Entity& entity) {
-            entity.start = value;
-            return true;
-        });
+        if (m_loading)
+            return;
+        const model::Entity* entity = selectedEntity();
+        if (!entity)
+            return;
+        applyRangeEdit(m_startSpin->value(), entity->end,
+                       QStringLiteral("start"));
     });
 
     m_endSpin = new QSpinBox(m_content);
@@ -1078,11 +1094,13 @@ void PropertiesPanel::buildBasicSection()
     form->addRow(QStringLiteral("结束帧"), m_endSpin);
     addEditable(m_endSpin);
     connect(m_endSpin, &QSpinBox::editingFinished, this, [this] {
-        const int value = m_endSpin->value();
-        commitEdit(QStringLiteral("end"), [value](model::Entity& entity) {
-            entity.end = value;
-            return true;
-        });
+        if (m_loading)
+            return;
+        const model::Entity* entity = selectedEntity();
+        if (!entity)
+            return;
+        applyRangeEdit(entity->start, m_endSpin->value(),
+                       QStringLiteral("end"));
     });
 
     m_rowSpin = new QSpinBox(m_content);
@@ -2657,9 +2675,9 @@ void PropertiesPanel::createSolverFromPlayhead()
     model::Entity* entity = selectedEntity();
     if (!entity)
         return;
-    if (entity->locked)
+    if (isEntityLocked(m_document->project(), entity->uuid))
     {
-        setStatus(QStringLiteral("实体已锁定，不能创建求解段"));
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能创建求解段"));
         return;
     }
 
@@ -2834,9 +2852,9 @@ void PropertiesPanel::deleteSolverSegment(const Uuid& solverId)
     model::Entity* entity = selectedEntity();
     if (!entity)
         return;
-    if (entity->locked)
+    if (isEntityLocked(m_document->project(), entity->uuid))
     {
-        setStatus(QStringLiteral("实体已锁定，不能删除求解段"));
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能删除求解段"));
         return;
     }
 
@@ -2901,11 +2919,11 @@ bool PropertiesPanel::replaceAsset(const AssetHash& hash, QString* error)
             *error = QStringLiteral("未选择实体");
         return false;
     }
-    if (entity->locked)
+    if (isEntityLocked(m_document->project(), entity->uuid))
     {
         if (error)
-            *error = QStringLiteral("实体已锁定");
-        setStatus(QStringLiteral("实体已锁定，不能更换素材"));
+            *error = QStringLiteral("实体或其祖先已锁定");
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能更换素材"));
         return false;
     }
     if (entity->content.kind != ContentKind::Asset)
@@ -2987,7 +3005,9 @@ void PropertiesPanel::openTextLayoutDialog()
         return;
 
     model::Entity* entity = selectedEntity();
-    if (!entity || entity->locked || entity->content.kind != ContentKind::Text)
+    if (!entity
+        || isEntityLocked(m_document->project(), entity->uuid)
+        || entity->content.kind != ContentKind::Text)
         return;
 
     const Uuid uuid = entity->uuid;
@@ -3044,7 +3064,9 @@ void PropertiesPanel::chooseReplacementAsset()
         return;
 
     model::Entity* entity = selectedEntity();
-    if (!entity || entity->locked || entity->content.kind != ContentKind::Asset)
+    if (!entity
+        || isEntityLocked(m_document->project(), entity->uuid)
+        || entity->content.kind != ContentKind::Asset)
         return;
 
     const AssetType currentType = entity->content.asset.type;
@@ -3221,9 +3243,9 @@ void PropertiesPanel::toggleKeyframe(const QString& track,
     model::Entity* entity = selectedEntity();
     if (!entity)
         return;
-    if (entity->locked)
+    if (isEntityLocked(m_document->project(), entity->uuid))
     {
-        setStatus(QStringLiteral("实体已锁定，不能编辑关键帧"));
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能编辑关键帧"));
         return;
     }
 
@@ -3239,6 +3261,12 @@ void PropertiesPanel::toggleKeyframe(const QString& track,
     }
 
     const bool remove = hasKeyAt(*entity, track, relativeFrame);
+    if (remove && isSolverStartKey(*entity, track, relativeFrame))
+    {
+        setStatus(QStringLiteral("求解段开始帧的关键帧不能删除，请先删除求解段"));
+        refresh();
+        return;
+    }
     const double value =
         currentTrackValue(*entity, track, relativeFrame, isStepTrack(track), fallback);
     const bool ok = commitEdit(
@@ -3268,7 +3296,7 @@ void PropertiesPanel::editKeyframeValue(const QString& track, double value)
         return;
 
     model::Entity* entity = selectedEntity();
-    if (!entity || entity->locked)
+    if (!entity || isEntityLocked(m_document->project(), entity->uuid))
         return;
 
     const int relativeFrame = m_document->playhead() - entity->start;
@@ -3314,9 +3342,9 @@ bool PropertiesPanel::setTrackEasing(const QString& track,
     model::Entity* entity = selectedEntity();
     if (!entity)
         return false;
-    if (entity->locked)
+    if (isEntityLocked(m_document->project(), entity->uuid))
     {
-        setStatus(QStringLiteral("实体已锁定，不能修改关键帧缓动"));
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能修改关键帧缓动"));
         return false;
     }
 
@@ -3428,7 +3456,10 @@ void PropertiesPanel::applyEditingState()
     // asset the entity shows a placeholder and the button stays disabled.
     m_assetReplaceButton->setEnabled(canEdit && !m_assetMissing);
 
-    m_lockedCheck->setEnabled(selectedEntity() != nullptr);
+    const model::Entity* selected = selectedEntity();
+    m_lockedCheck->setEnabled(
+        selected != nullptr
+        && !hasLockedAncestor(m_document->project(), selected->uuid));
     applyKeyframeEnabledState();
     applySolverEnabledState();
 }
@@ -3491,7 +3522,7 @@ model::Entity* PropertiesPanel::selectedEntity() const
 bool PropertiesPanel::editable() const
 {
     const model::Entity* entity = selectedEntity();
-    return entity && !entity->locked;
+    return entity && !isEntityLocked(m_document->project(), entity->uuid);
 }
 
 bool PropertiesPanel::commitEdit(const QString& what,
@@ -3504,7 +3535,7 @@ bool PropertiesPanel::commitEdit(const QString& what,
     model::Entity* entity = selectedEntity();
     if (!entity)
         return false;
-    if (entity->locked && !ignoreLock)
+    if (isEntityLocked(m_document->project(), entity->uuid) && !ignoreLock)
         return false;
 
     const QJsonObject before = model::toJson(*entity);
@@ -3550,6 +3581,64 @@ bool PropertiesPanel::commitEdit(const QString& what,
     setStatus(QStringLiteral("已保存：%1").arg(what));
     refresh();
     return true;
+}
+
+void PropertiesPanel::applyRangeEdit(int newStart, int newEnd,
+                                     const QString& what)
+{
+    if (m_loading || !m_document)
+        return;
+
+    model::Entity* entity = selectedEntity();
+    if (!entity)
+        return;
+    if (isEntityLocked(m_document->project(), entity->uuid))
+    {
+        setStatus(QStringLiteral("实体或其祖先已锁定，不能修改时间范围"));
+        refresh();
+        return;
+    }
+
+    const Uuid uuid = entity->uuid;
+    const QString name = entity->name;
+    if (newStart == entity->start && newEnd == entity->end)
+        return;
+
+    const model::Project snapshot = m_document->project();
+    model::Project updated;
+    QVector<Uuid> upserts;
+    QVector<Uuid> deletes;
+    QString error;
+    if (!applyEntityRange(snapshot, m_document->assets(), uuid, newStart,
+                          newEnd, &updated, &upserts, &deletes, &error))
+    {
+        setStatus(QStringLiteral("未修改：%1").arg(error));
+        if (isVisible())
+            QMessageBox::warning(this, QStringLiteral("不能修改时间范围"), error);
+        refresh();
+        return;
+    }
+    if (upserts.isEmpty() && deletes.isEmpty())
+        return;
+
+    m_document->mutableProject() = std::move(updated);
+    m_committing = true;
+    const bool ok = m_document->commitChanges(
+        upserts, deletes,
+        QStringLiteral("pvf: change entity range \"%1\" %2").arg(name, what),
+        &error);
+    m_committing = false;
+
+    if (!ok)
+    {
+        m_document->mutableProject() = snapshot;
+        showSaveError(error);
+        refresh();
+        return;
+    }
+
+    setStatus(QStringLiteral("已保存：%1").arg(what));
+    refresh();
 }
 
 void PropertiesPanel::bindTransform(QDoubleSpinBox* spin, const QString& field,
@@ -3621,7 +3710,7 @@ void PropertiesPanel::refresh()
         QString title =
             QStringLiteral("%1 · %2")
                 .arg(entity->name, contentKindLabel(entity->content.kind));
-        if (entity->locked)
+        if (isEntityLocked(m_document->project(), entity->uuid))
             title += QStringLiteral(" · 已锁定");
         m_title->setText(title);
         m_title->setToolTip(entity->uuid);

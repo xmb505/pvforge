@@ -72,6 +72,42 @@ public:
         return true;
     }
 
+    bool deleteEntities(const QVector<Uuid>& uuids, const QString& message,
+                        QString* error = nullptr) override
+    {
+        Q_UNUSED(message);
+        if (m_failCommit)
+        {
+            if (error)
+                *error = QStringLiteral("fake commit failure");
+            return false;
+        }
+        for (const Uuid& uuid : uuids)
+            m_project.entities.remove(uuid);
+        ++m_deleteCommits;
+        emit changed();
+        return true;
+    }
+
+    bool commitChanges(const QVector<Uuid>& upserts,
+                       const QVector<Uuid>& deletes,
+                       const QString& message,
+                       QString* error = nullptr) override
+    {
+        Q_UNUSED(upserts);
+        if (m_failCommit)
+        {
+            if (error)
+                *error = QStringLiteral("fake commit failure");
+            return false;
+        }
+        for (const Uuid& uuid : deletes)
+            m_project.entities.remove(uuid);
+        ++m_changeCommits;
+        emit changed();
+        return true;
+    }
+
     bool commitProject(const QString& message, QString* error = nullptr) override
     {
         Q_UNUSED(message);
@@ -165,6 +201,8 @@ public:
     void setFailCommit(bool fail) { m_failCommit = fail; }
     int entityCommits() const { return m_entityCommits; }
     int projectCommits() const { return m_projectCommits; }
+    int changeCommits() const { return m_changeCommits; }
+    int deleteCommits() const { return m_deleteCommits; }
 
 private:
     QTemporaryDir m_tempDir;
@@ -174,6 +212,8 @@ private:
     Uuid m_selection;
     int m_entityCommits = 0;
     int m_projectCommits = 0;
+    int m_changeCommits = 0;
+    int m_deleteCommits = 0;
     bool m_failCommit = false;
 };
 
@@ -296,6 +336,13 @@ private slots:
     void lockedEntityDisablesSolverControls();
     void switchingSelectionDoesNotLeak();
     void invalidRangeIsRejected();
+    void propertyStartTrimCascadesChildren();
+    void propertyEndTrimCascadesAndPinsSolver();
+    void propertyRangeOutsideParentRejected();
+    void propertyVideoEndBeyondMaterialRejected();
+    void propertyStartLeftMoveNegativeSourceInRejected();
+    void lockedAncestorDisablesChildEditing();
+    void solverStartKeyDeleteRejectedFromProperties();
     void diamondTogglesKeyframe();
     void diamondOutsideRangeIsRejected();
     void diamondFailureRestoresEntity();
@@ -1085,6 +1132,212 @@ void PropertiesPanelTest::invalidRangeIsRejected()
     QCOMPARE(document.entity(uuid).end, 50);
     QCOMPARE(document.entityCommits(), 0);
     QCOMPARE(end->value(), 50);
+}
+
+void PropertiesPanelTest::propertyStartTrimCascadesChildren()
+{
+    FakeDocument document;
+    const Uuid parent = document.addEntity(QStringLiteral("父"), 0, 60);
+    const Uuid child = document.addEntity(QStringLiteral("子"), 10, 50);
+    document.entity(child).parentUuid = parent;
+    document.addKey(child, QStringLiteral("x"), 0, 0.0);
+    document.addKey(child, QStringLiteral("x"), 10, 10.0);
+    document.addKey(child, QStringLiteral("x"), 20, 20.0);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(parent);
+
+    auto* start = findWidget<QSpinBox>(panel, "startSpin");
+    QVERIFY(start);
+    start->setValue(20);
+    QVERIFY(fireEditingFinished(start));
+
+    QCOMPARE(document.entity(parent).start, 20);
+    QCOMPARE(document.entity(parent).end, 60);
+    QCOMPARE(document.entity(child).start, 20);
+    QCOMPARE(document.entity(child).end, 50);
+
+    const auto keys =
+        document.entity(child).tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 2);
+    QCOMPARE(keys.at(0).frame, 0);
+    QCOMPARE(keys.at(0).value, 10.0);
+    QCOMPARE(keys.at(1).frame, 10);
+    QCOMPARE(keys.at(1).value, 20.0);
+    QCOMPARE(document.changeCommits(), 1);
+    QCOMPARE(document.entityCommits(), 0);
+}
+
+void PropertiesPanelTest::propertyEndTrimCascadesAndPinsSolver()
+{
+    FakeDocument document;
+    const Uuid parent = document.addEntity(QStringLiteral("父"), 0, 60);
+    const Uuid child = document.addEntity(QStringLiteral("子"), 10, 50);
+    document.entity(child).parentUuid = parent;
+    document.addKey(child, QStringLiteral("x"), 0, 0.0);
+    document.addKey(child, QStringLiteral("x"), 10, 10.0);
+    document.addKey(child, QStringLiteral("x"), 20, 20.0);
+    document.addKey(child, QStringLiteral("x"), 35, 35.0);
+
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Spin;
+    solver.startFrame = 0;
+    solver.endFrame = -1;
+    document.entity(parent).solvers.append(solver);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(parent);
+
+    auto* end = findWidget<QSpinBox>(panel, "endSpin");
+    QVERIFY(end);
+    end->setValue(40);
+    QVERIFY(fireEditingFinished(end));
+
+    QCOMPARE(document.entity(parent).end, 40);
+    QCOMPARE(document.entity(parent).solvers.size(), 1);
+    QCOMPARE(document.entity(parent).solvers.at(0).endFrame, 39);
+    QCOMPARE(document.entity(child).end, 40);
+    const auto keys =
+        document.entity(child).tracks.value(QStringLiteral("x")).keys;
+    QCOMPARE(keys.size(), 3);
+    QCOMPARE(keys.at(2).frame, 20);
+    QCOMPARE(document.changeCommits(), 1);
+}
+
+void PropertiesPanelTest::propertyRangeOutsideParentRejected()
+{
+    FakeDocument document;
+    const Uuid parent = document.addEntity(QStringLiteral("父"), 10, 60);
+    const Uuid child = document.addEntity(QStringLiteral("子"), 10, 50);
+    document.entity(child).parentUuid = parent;
+
+    PropertiesPanel panel(&document);
+    document.setSelection(child);
+    auto* start = findWidget<QSpinBox>(panel, "startSpin");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(start);
+    QVERIFY(status);
+
+    start->setValue(5);
+    QVERIFY(fireEditingFinished(start));
+
+    QCOMPARE(document.entity(child).start, 10);
+    QCOMPARE(document.entity(child).end, 50);
+    QCOMPARE(start->value(), 10);
+    QCOMPARE(document.changeCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("超出父实体")));
+}
+
+void PropertiesPanelTest::propertyVideoEndBeyondMaterialRejected()
+{
+    FakeDocument document;
+    const AssetHash hash =
+        makeVideoAsset(document.projectRoot(), 'd', QStringLiteral("clip.mp4"),
+                       20);
+    QVERIFY(!hash.isEmpty());
+    const Uuid uuid = document.addAssetEntity(QStringLiteral("clip"), hash,
+                                              AssetType::Video, 0, 10);
+    document.entity(uuid).content.asset.sourceIn = 5;
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    auto* end = findWidget<QSpinBox>(panel, "endSpin");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(end);
+    QVERIFY(status);
+
+    end->setValue(20);
+    QVERIFY(fireEditingFinished(end));
+    QCOMPARE(document.entity(uuid).end, 10);
+    QCOMPARE(document.changeCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("源素材")));
+
+    end->setValue(15);
+    QVERIFY(fireEditingFinished(end));
+    QCOMPARE(document.entity(uuid).end, 15);
+    QCOMPARE(document.changeCommits(), 1);
+}
+
+void PropertiesPanelTest::propertyStartLeftMoveNegativeSourceInRejected()
+{
+    FakeDocument document;
+    const AssetHash hash =
+        makeVideoAsset(document.projectRoot(), 'e', QStringLiteral("clip.mp4"),
+                       30);
+    QVERIFY(!hash.isEmpty());
+    const Uuid uuid = document.addAssetEntity(QStringLiteral("clip"), hash,
+                                              AssetType::Video, 10, 20);
+    document.entity(uuid).content.asset.sourceIn = 3;
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    auto* start = findWidget<QSpinBox>(panel, "startSpin");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(start);
+    QVERIFY(status);
+
+    start->setValue(5);
+    QVERIFY(fireEditingFinished(start));
+
+    QCOMPARE(document.entity(uuid).start, 10);
+    QCOMPARE(document.entity(uuid).end, 20);
+    QCOMPARE(document.entity(uuid).content.asset.sourceIn, 3);
+    QCOMPARE(document.changeCommits(), 0);
+    QVERIFY(status->text().contains(QStringLiteral("源起点")));
+}
+
+void PropertiesPanelTest::lockedAncestorDisablesChildEditing()
+{
+    FakeDocument document;
+    const Uuid parent = document.addEntity(QStringLiteral("父"), 0, 60);
+    const Uuid child = document.addEntity(QStringLiteral("子"), 0, 30);
+    document.entity(child).parentUuid = parent;
+    document.entity(parent).locked = true;
+
+    PropertiesPanel panel(&document);
+    document.setSelection(child);
+
+    auto* name = findWidget<QLineEdit>(panel, "nameEdit");
+    auto* start = findWidget<QSpinBox>(panel, "startSpin");
+    QVERIFY(name);
+    QVERIFY(start);
+    QVERIFY(!name->isEnabled());
+    QVERIFY(!start->isEnabled());
+
+    name->setText(QStringLiteral("偷偷改名"));
+    QVERIFY(fireEditingFinished(name));
+    QCOMPARE(document.entity(child).name, QStringLiteral("子"));
+    QCOMPARE(document.entityCommits(), 0);
+}
+
+void PropertiesPanelTest::solverStartKeyDeleteRejectedFromProperties()
+{
+    FakeDocument document;
+    const Uuid uuid = document.addEntity(QStringLiteral("实体"), 0, 30);
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Spin;
+    solver.startFrame = 10;
+    solver.endFrame = 20;
+    document.entity(uuid).solvers.append(solver);
+    document.addKey(uuid, QStringLiteral("rotation"), 10, 42.0);
+    document.setPlayhead(10);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(uuid);
+    auto* diamond = findWidget<QPushButton>(panel, "keyDiamond_rotation");
+    auto* status = findWidget<QLabel>(panel, "statusLabel");
+    QVERIFY(diamond);
+    QVERIFY(status);
+    QCOMPARE(diamond->text(), QStringLiteral("◆"));
+
+    diamond->click();
+
+    QCOMPARE(document.entityCommits(), 0);
+    QCOMPARE(diamond->text(), QStringLiteral("◆"));
+    QVERIFY(document.entity(uuid).tracks.contains(QStringLiteral("rotation")));
+    QVERIFY(status->text().contains(QStringLiteral("求解段开始帧")));
 }
 
 void PropertiesPanelTest::diamondTogglesKeyframe()

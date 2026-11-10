@@ -29,6 +29,11 @@ if(NOT TARGET pvf_render2)
                      ${CMAKE_CURRENT_BINARY_DIR}/render2_dep)
 endif()
 
+if(NOT TARGET pvf_next_timeline)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../timeline
+                     ${CMAKE_CURRENT_BINARY_DIR}/timeline_dep)
+endif()
+
 add_library(pvf_next_properties STATIC
     PropertiesPanel.cpp
     PropertiesPanel.h
@@ -44,6 +49,7 @@ target_include_directories(pvf_next_properties PUBLIC
 
 target_link_libraries(pvf_next_properties PUBLIC
     pvf_next_core
+    pvf_next_timeline
     pvf_solver
     pvf_anim
     pvf_render2

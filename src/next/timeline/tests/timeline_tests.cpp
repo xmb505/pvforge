@@ -1,6 +1,8 @@
+#include "anim/Anim.h"
 #include "next/core/Document.h"
 #include "next/timeline/MarkerDialog.h"
 #include "next/timeline/TimelineWidget.h"
+#include "render2/Render.h"
 
 #include <QApplication>
 #include <QDir>
@@ -308,8 +310,11 @@ private slots:
     void trimParentClipsChild();
     void trimParentDeletesChild();
     void trimExpandShiftsKeysAndSourceIn();
+    void trimStartRejectsNegativeSourceIn();
+    void trimEndRejectsMissingMaterial();
     void trimSolverStartCutsSegment();
     void trimSolverEndClamps();
+    void trimSolverOpenEndPins();
     void trimFailureRestoresSnapshot();
     void solverBandPaints();
     void privateTimelineShowsOnlyChildren();
@@ -321,10 +326,13 @@ private slots:
     void keyframeDeleteRemovesSelection();
     void keyframeCopyPasteSameEntity();
     void lockedEntityRejectsKeyframeEdits();
+    void lockedAncestorRejectsChildEdits();
+    void solverStartKeyDeleteRejected();
     void solverSegmentRejectsKeyframeMove();
     void dropAssetCreatesEntity();
     void dropOntoOccupiedRowUsesNextRow();
     void dropVideoCreatesAudioEntity();
+    void dropAssetOutsidePrivateParentRejected();
     void dragEnterRejectsUnknownMime();
     void markersAddEditDelete();
     void markerDragChangesFrame();
@@ -638,7 +646,8 @@ void TimelineWidgetTest::trimExpandShiftsKeysAndSourceIn()
     pvf::model::Entity& entity = document.mutableProject().entities[uuid];
     entity.content.kind = ContentKind::Asset;
     entity.content.asset.type = AssetType::Video;
-    entity.content.asset.sourceIn = 3;
+    entity.content.asset.hash = QString(64, QLatin1Char('f'));
+    entity.content.asset.sourceIn = 15;
     addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
     addKey(document, uuid, QStringLiteral("x"), 2, 2.0);
     addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
@@ -652,7 +661,7 @@ void TimelineWidgetTest::trimExpandShiftsKeysAndSourceIn()
     QCOMPARE(expanded.start, 5);
     QCOMPARE(expanded.end, 20);
     QCOMPARE(expanded.duration(), 15);
-    QCOMPARE(expanded.content.asset.sourceIn, 0);
+    QCOMPARE(expanded.content.asset.sourceIn, 10);
 
     const auto keys = expanded.tracks.value(QStringLiteral("x")).keys;
     QCOMPARE(keys.size(), 3);
@@ -660,6 +669,65 @@ void TimelineWidgetTest::trimExpandShiftsKeysAndSourceIn()
     QCOMPARE(keys.at(1).frame, 7);
     QCOMPARE(keys.at(2).frame, 10);
     QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimStartRejectsNegativeSourceIn()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("expand"), 10, 20, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Video;
+    entity.content.asset.hash = QString(64, QLatin1Char('c'));
+    entity.content.asset.sourceIn = 3;
+    addKey(document, uuid, QStringLiteral("x"), 0, 0.0);
+    addKey(document, uuid, QStringLiteral("x"), 5, 5.0);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+    trimLeftEdge(widget, uuid, -5);
+
+    const pvf::model::Entity unchanged =
+        document.project().entities.value(uuid);
+    QCOMPARE(unchanged.start, 10);
+    QCOMPARE(unchanged.end, 20);
+    QCOMPARE(unchanged.content.asset.sourceIn, 3);
+    QCOMPARE(unchanged.tracks.value(QStringLiteral("x")).keys.size(), 2);
+    QCOMPARE(document.commitChangesCount, 0);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(QStringLiteral("源起点")));
+}
+
+void TimelineWidgetTest::trimEndRejectsMissingMaterial()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    FakeDocument document(temp.path());
+    const QString hash(64, QLatin1Char('d'));
+    QVERIFY(writeFakeAsset(temp.path(), hash, QStringLiteral("video"),
+                           QStringLiteral("short"), 10));
+
+    const Uuid uuid = addEntity(document, QStringLiteral("clip"), 0, 5, 0);
+    pvf::model::Entity& entity = document.mutableProject().entities[uuid];
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Video;
+    entity.content.asset.hash = hash;
+    entity.content.asset.sourceIn = 5;
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+    trimRightEdge(widget, uuid, 10);
+
+    const pvf::model::Entity unchanged =
+        document.project().entities.value(uuid);
+    QCOMPARE(unchanged.start, 0);
+    QCOMPARE(unchanged.end, 5);
+    QCOMPARE(unchanged.content.asset.sourceIn, 5);
+    QCOMPARE(document.commitChangesCount, 0);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(QStringLiteral("源素材")));
 }
 
 void TimelineWidgetTest::trimSolverStartCutsSegment()
@@ -673,6 +741,13 @@ void TimelineWidgetTest::trimSolverStartCutsSegment()
     solver.endFrame = 20;
     document.mutableProject().entities[uuid].solvers.append(solver);
     addKey(document, uuid, QStringLiteral("x"), 5, 42.0);
+    addKey(document, uuid, QStringLiteral("x"), 20, 100.0);
+
+    const Project before = document.project();
+    pvf::render2::SceneWorld world(before, document.assets());
+    const double expected =
+        pvf::anim::evaluateEntity(before, uuid, 10, world).world.dx();
+    QVERIFY(qAbs(expected - 42.0) > 1.0);
 
     TimelineWidget widget(&document);
     widget.resize(800, 300);
@@ -684,9 +759,35 @@ void TimelineWidgetTest::trimSolverStartCutsSegment()
     QVERIFY(entity.solvers.isEmpty());
 
     const auto keys = entity.tracks.value(QStringLiteral("x")).keys;
-    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.size(), 2);
     QCOMPARE(keys.at(0).frame, 0);
-    QCOMPARE(keys.at(0).value, 42.0);
+    QVERIFY(qAbs(keys.at(0).value - expected) < 1e-9);
+    QCOMPARE(keys.at(1).frame, 10);
+    QCOMPARE(keys.at(1).value, 100.0);
+    QCOMPARE(document.commitChangesCount, 1);
+}
+
+void TimelineWidgetTest::trimSolverOpenEndPins()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 30, 0);
+    pvf::model::SolverSegment solver;
+    solver.id = pvf::model::newUuid();
+    solver.effect = SolverEffect::Spin;
+    solver.startFrame = 5;
+    solver.endFrame = -1;
+    document.mutableProject().entities[uuid].solvers.append(solver);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    trimRightEdge(widget, uuid, -10);
+
+    const pvf::model::Entity entity = document.project().entities.value(uuid);
+    QCOMPARE(entity.start, 0);
+    QCOMPARE(entity.end, 20);
+    QCOMPARE(entity.solvers.size(), 1);
+    QCOMPARE(entity.solvers.at(0).startFrame, 5);
+    QCOMPARE(entity.solvers.at(0).endFrame, 19);
     QCOMPARE(document.commitChangesCount, 1);
 }
 
@@ -696,7 +797,7 @@ void TimelineWidgetTest::trimSolverEndClamps()
     const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 30, 0);
     pvf::model::SolverSegment solver;
     solver.id = pvf::model::newUuid();
-    solver.effect = SolverEffect::Gravity;
+    solver.effect = SolverEffect::Spin;
     solver.startFrame = 5;
     solver.endFrame = 25;
     document.mutableProject().entities[uuid].solvers.append(solver);
@@ -1096,6 +1197,62 @@ void TimelineWidgetTest::lockedEntityRejectsKeyframeEdits()
     QCOMPARE(spy.count(), 2);
 }
 
+void TimelineWidgetTest::lockedAncestorRejectsChildEdits()
+{
+    FakeDocument document;
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 0, 60, 0);
+    const Uuid child =
+        addEntity(document, QStringLiteral("child"), 0, 30, 0, parent);
+    document.mutableProject().entities[parent].locked = true;
+    document.setSelection(child);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    widget.setParentUuid(parent);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+
+    QTest::mouseDClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                       diamondPoint(widget, child, 10));
+
+    QCOMPARE(document.commitCount, 0);
+    QVERIFY(document.project().entities.value(child).tracks.isEmpty());
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(QStringLiteral("锁定")));
+}
+
+void TimelineWidgetTest::solverStartKeyDeleteRejected()
+{
+    FakeDocument document;
+    const Uuid uuid = addEntity(document, QStringLiteral("solver"), 0, 30, 0);
+    pvf::model::SolverSegment solver;
+    solver.id = pvf::model::newUuid();
+    solver.effect = SolverEffect::Spin;
+    solver.startFrame = 5;
+    solver.endFrame = 20;
+    document.mutableProject().entities[uuid].solvers.append(solver);
+    addKey(document, uuid, QStringLiteral("rotation"), 5, 42.0);
+    document.setSelection(uuid);
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+
+    QTest::mouseClick(&widget, Qt::LeftButton, Qt::NoModifier,
+                      diamondPoint(widget, uuid, 5));
+    QTest::keyClick(&widget, Qt::Key_Delete);
+
+    QCOMPARE(document.commitCount, 0);
+    const auto keys =
+        document.project().entities.value(uuid).tracks.value(
+            QStringLiteral("rotation")).keys;
+    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.at(0).frame, 5);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(
+        QStringLiteral("求解段开始帧")));
+}
+
 void TimelineWidgetTest::solverSegmentRejectsKeyframeMove()
 {
     FakeDocument document;
@@ -1238,6 +1395,32 @@ void TimelineWidgetTest::dropVideoCreatesAudioEntity()
     QCOMPARE(audio.content.asset.hash, audioHash);
     QCOMPARE(audio.content.asset.type, AssetType::Audio);
     QCOMPARE(document.selection(), videoUuid);
+}
+
+void TimelineWidgetTest::dropAssetOutsidePrivateParentRejected()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    FakeDocument document(directory.path());
+    const Uuid parent =
+        addEntity(document, QStringLiteral("parent"), 0, 30, 0);
+
+    const QString hash(64, QLatin1Char('e'));
+    QVERIFY(writeFakeAsset(directory.path(), hash, QStringLiteral("image"),
+                           QStringLiteral("too-long"), 30));
+
+    TimelineWidget widget(&document);
+    widget.resize(800, 300);
+    widget.setParentUuid(parent);
+    QSignalSpy spy(&widget, &TimelineWidget::statusMessage);
+
+    const QPoint dropPosition(widget.xFromFrame(10), rowCenterY(widget, 0));
+    QVERIFY(!sendAssetDrop(widget, hash, dropPosition));
+
+    QCOMPARE(document.commitCount, 0);
+    QCOMPARE(int(document.project().entities.size()), 1);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.at(0).at(0).toString().contains(QStringLiteral("超出父实体")));
 }
 
 void TimelineWidgetTest::dragEnterRejectsUnknownMime()

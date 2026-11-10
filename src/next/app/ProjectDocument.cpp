@@ -1,5 +1,7 @@
 #include "next/app/ProjectDocument.h"
 
+#include "next/timeline/EntityRange.h"
+
 #include <algorithm>
 
 namespace pvf::next {
@@ -8,6 +10,50 @@ namespace {
 
 constexpr int kHumanCommitDelayMs = 1000;
 constexpr char kHumanCommitMessage[] = "pvf: human edit";
+
+void setError(QString* error, const QString& message)
+{
+    if (error)
+        *error = message;
+}
+
+// Validates the project as it will exist after the write.  Upserts are already
+// present in the in-memory project; deletes are removed from a copy first.
+bool validateForWrite(const model::Project& project,
+                      const QVector<Uuid>& upserts,
+                      const QVector<Uuid>& deletes, QString* error)
+{
+    model::Project check = project;
+    for (const Uuid& uuid : upserts)
+    {
+        if (!check.entities.contains(uuid))
+        {
+            setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+            return false;
+        }
+    }
+
+    for (const Uuid& uuid : deletes)
+    {
+        const auto it = check.entities.constFind(uuid);
+        if (it == check.entities.constEnd())
+        {
+            setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+            return false;
+        }
+        if (isEntityLocked(check, uuid))
+        {
+            setError(error,
+                     QStringLiteral("实体 %1 或其祖先已锁定，不能删除")
+                         .arg(it.value().name.isEmpty() ? uuid
+                                                        : it.value().name));
+            return false;
+        }
+        check.entities.remove(uuid);
+    }
+
+    return model::validateProject(check, error);
+}
 
 } // namespace
 
@@ -107,6 +153,8 @@ bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
                                    QString* error)
 {
     Q_UNUSED(message);
+    if (!validateForWrite(m_store->project(), {uuid}, {}, error))
+        return false;
     if (!m_store->saveEntity(uuid, error))
         return false;
     scheduleCommit();
@@ -118,6 +166,8 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
+    if (!validateForWrite(m_store->project(), uuids, {}, error))
+        return false;
     for (const Uuid& uuid : uuids)
     {
         if (!m_store->saveEntity(uuid, error))
@@ -132,6 +182,8 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
+    if (!validateForWrite(m_store->project(), {}, uuids, error))
+        return false;
     for (const Uuid& uuid : uuids)
     {
         if (!m_store->deleteEntity(uuid, error))
@@ -150,6 +202,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
                                     QString* error)
 {
     Q_UNUSED(message);
+    if (!validateForWrite(m_store->project(), upserts, deletes, error))
+        return false;
     for (const Uuid& uuid : upserts)
     {
         if (!m_store->saveEntity(uuid, error))
@@ -170,6 +224,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
     Q_UNUSED(message);
+    if (!validateForWrite(m_store->project(), {}, {}, error))
+        return false;
     if (!m_store->saveProject(error))
         return false;
     scheduleCommit();

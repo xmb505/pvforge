@@ -19,7 +19,14 @@ if(NOT TARGET pvf_audio2)
                      ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
 endif()
 
+if(NOT TARGET pvf_render2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../render2
+                     ${CMAKE_CURRENT_BINARY_DIR}/render2_dep)
+endif()
+
 add_library(pvf_next_timeline STATIC
+    EntityRange.cpp
+    EntityRange.h
     MarkerDialog.cpp
     MarkerDialog.h
     TimelineWidget.cpp
@@ -33,6 +40,7 @@ target_include_directories(pvf_next_timeline PUBLIC
 target_link_libraries(pvf_next_timeline PUBLIC
     pvf_next_core
     pvf_audio2
+    pvf_render2
     Qt6::Widgets
     Qt6::Test
 )
@@ -61,8 +69,11 @@ if(BUILD_TESTING)
         trimParentClipsChild
         trimParentDeletesChild
         trimExpandShiftsKeysAndSourceIn
+        trimStartRejectsNegativeSourceIn
+        trimEndRejectsMissingMaterial
         trimSolverStartCutsSegment
         trimSolverEndClamps
+        trimSolverOpenEndPins
         trimFailureRestoresSnapshot
         solverBandPaints
         privateTimelineShowsOnlyChildren
@@ -74,10 +85,13 @@ if(BUILD_TESTING)
         keyframeDeleteRemovesSelection
         keyframeCopyPasteSameEntity
         lockedEntityRejectsKeyframeEdits
+        lockedAncestorRejectsChildEdits
+        solverStartKeyDeleteRejected
         solverSegmentRejectsKeyframeMove
         dropAssetCreatesEntity
         dropOntoOccupiedRowUsesNextRow
         dropVideoCreatesAudioEntity
+        dropAssetOutsidePrivateParentRejected
         dragEnterRejectsUnknownMime
         markersAddEditDelete
         markerDragChangesFrame

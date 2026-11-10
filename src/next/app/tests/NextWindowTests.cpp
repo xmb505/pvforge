@@ -555,6 +555,7 @@ private slots:
         QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier, childBar.center());
         QCOMPARE(document->selection(), child.uuid);
 
+        QVERIFY2(document->store()->deleteEntity(child.uuid, &error), qPrintable(error));
         QVERIFY2(document->store()->deleteEntity(parent.uuid, &error), qPrintable(error));
         QVERIFY2(document->commitProject(QStringLiteral("pvf: delete parent"), &error),
                  qPrintable(error));
@@ -1850,6 +1851,7 @@ private slots:
         solver.effect = SolverEffect::Gravity;
         solver.startFrame = 0;
         solver.endFrame = 20;
+        solver.params.insert(QStringLiteral("targetUuid"), parent.uuid);
         source.solvers.append(solver);
 
         document->mutableProject().entities.insert(parent.uuid, parent);

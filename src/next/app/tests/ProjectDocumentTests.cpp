@@ -2,6 +2,9 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -20,6 +23,29 @@ Entity makeEntity(const QString& name, int start, int end)
     entity.start = start;
     entity.end = end;
     return entity;
+}
+
+QString entityPath(const ProjectDocument& document, const Uuid& uuid)
+{
+    return document.root() + QStringLiteral("/entities/") + uuid
+           + QStringLiteral(".json");
+}
+
+QByteArray readBytes(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+int entityJsonInt(const QString& path, const QString& key)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return -1;
+    return QJsonDocument::fromJson(file.readAll())
+        .object()
+        .value(key)
+        .toInt(-1);
 }
 
 } // namespace
@@ -259,6 +285,189 @@ private slots:
 
         QTest::qWait(1300);
         QCOMPARE(document->store()->history(100).size(), commits);
+    }
+
+    void invalidChildRangeRejectedWithoutWrite()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/invalid.pvproj"), ProjectSettings(),
+            &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        const QString childPath = entityPath(*document, child.uuid);
+        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+
+        document->mutableProject().entities[child.uuid].end = 90;
+        error.clear();
+        QVERIFY(!document->commitEntity(child.uuid,
+                                        QStringLiteral("pvf: break range"),
+                                        &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+        QVERIFY(!document->hasPendingCommit());
+    }
+
+    void deleteParentWithoutCascadeIsRejected()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/delete-parent.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        const int historyBefore = document->store()->history(100).size();
+        error.clear();
+        QVERIFY(!document->deleteEntities({parent.uuid},
+                                          QStringLiteral("pvf: delete parent"),
+                                          &error));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(document->project().entities.contains(parent.uuid));
+        QVERIFY(document->project().entities.contains(child.uuid));
+        QVERIFY(QFile::exists(entityPath(*document, parent.uuid)));
+        QVERIFY(QFile::exists(entityPath(*document, child.uuid)));
+        QCOMPARE(document->store()->history(100).size(), historyBefore);
+
+        QVERIFY2(document->deleteEntities(
+                     {child.uuid, parent.uuid},
+                     QStringLiteral("pvf: delete subtree"), &error),
+                 qPrintable(error));
+        QVERIFY(!document->project().entities.contains(parent.uuid));
+        QVERIFY(!document->project().entities.contains(child.uuid));
+    }
+
+    void commitChangesInvalidUpsertLeavesFilesUntouched()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/changes-invalid.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        const QString childPath = entityPath(*document, child.uuid);
+        const QByteArray before = readBytes(childPath);
+        QVERIFY(!before.isEmpty());
+
+        document->mutableProject().entities[child.uuid].end = 90;
+        document->mutableProject().entities[child.uuid].name =
+            QStringLiteral("越界");
+        error.clear();
+        QVERIFY(!document->commitChanges({child.uuid}, {},
+                                         QStringLiteral("pvf: break tree"),
+                                         &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(readBytes(childPath), before);
+        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+    }
+
+    void commitProjectRejectsInconsistentTree()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/project-invalid.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        const QString projectPath =
+            document->root() + QStringLiteral("/project.json");
+        const QByteArray before = readBytes(projectPath);
+        QVERIFY(!before.isEmpty());
+
+        // A caller that deletes only the parent leaves a dangling child.
+        QVERIFY2(document->store()->deleteEntity(parent.uuid, &error),
+                 qPrintable(error));
+        error.clear();
+        QVERIFY(!document->commitProject(QStringLiteral("pvf: delete parent"),
+                                         &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(readBytes(projectPath), before);
+    }
+
+    void deleteChildOfLockedParentIsRejected()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/locked-delete.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        parent.locked = true;
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        error.clear();
+        QVERIFY(!document->deleteEntities({child.uuid},
+                                          QStringLiteral("pvf: delete child"),
+                                          &error));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(document->project().entities.contains(child.uuid));
     }
 
     void commitFailureIsReportedThroughSignal()

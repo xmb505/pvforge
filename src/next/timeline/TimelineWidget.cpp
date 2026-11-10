@@ -2,6 +2,7 @@
 
 #include "audio2/Peaks.h"
 #include "next/core/Document.h"
+#include "next/timeline/EntityRange.h"
 #include "next/timeline/MarkerDialog.h"
 
 #include <QContextMenuEvent>
@@ -53,30 +54,24 @@ QStringList drivenTracks(SolverEffect effect)
     return {QStringLiteral("x"), QStringLiteral("y")};
 }
 
-double keyValueAt(const model::Track& track, int frame)
+bool solverStartKey(const model::Entity& entity, const QString& track, int frame)
 {
-    for (const auto& key : track.keys)
+    for (const auto& solver : entity.solvers)
     {
-        if (key.frame == frame)
-            return key.value;
+        if (solver.startFrame == frame
+            && drivenTracks(solver.effect).contains(track))
+            return true;
     }
-    if (const auto value = track.valueAt(frame))
-        return *value;
-    return 0.0;
+    return false;
+}
+
+bool entityIsLocked(const Document* document, const Uuid& uuid)
+{
+    return document && isEntityLocked(document->project(), uuid);
 }
 
 void collectSubtree(const model::Project& project, const Uuid& uuid,
                     QVector<Uuid>& out, QSet<Uuid>& visited);
-
-void appendSubtreeDeletes(const model::Project& project, const Uuid& uuid,
-                          QVector<Uuid>& deletes)
-{
-    QVector<Uuid> doomed;
-    QSet<Uuid> visited;
-    collectSubtree(project, uuid, doomed, visited);
-    for (const Uuid& id : doomed)
-        deletes.append(id);
-}
 
 QColor contentColor(const model::Entity& entity)
 {
@@ -1555,9 +1550,7 @@ void TimelineWidget::updateHoverCursor(const QPoint& pos)
         return;
     }
 
-    const auto it = m_document->project().entities.constFind(hit.uuid);
-    if (it != m_document->project().entities.constEnd()
-        && it.value().locked)
+    if (entityIsLocked(m_document, hit.uuid))
     {
         unsetCursor();
         return;
@@ -1644,7 +1637,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
             return;
 
         const model::Entity& entity = entityIt.value();
-        if (entity.locked)
+        if (entityIsLocked(m_document, entity.uuid))
         {
             emit statusMessage(
                 tr("实体已锁定：%1").arg(entityDisplayName(entity)));
@@ -1709,7 +1702,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
     m_dragOriginalEnd = it.value().end;
     m_dragChanged = false;
 
-    if (it.value().locked)
+    if (entityIsLocked(m_document, hit.uuid))
     {
         m_dragMode = DragMode::None;
         setCursor(Qt::ArrowCursor);
@@ -1734,9 +1727,21 @@ void TimelineWidget::mousePressEvent(QMouseEvent* event)
         {
             const auto entity =
                 m_document->project().entities.constFind(uuid);
-            if (entity != m_document->project().entities.constEnd())
-                m_dragOriginalRanges.insert(
-                    uuid, qMakePair(entity.value().start, entity.value().end));
+            if (entity == m_document->project().entities.constEnd())
+                continue;
+            if (entityIsLocked(m_document, uuid))
+            {
+                emit statusMessage(
+                    tr("子树包含锁定实体，不能移动：%1")
+                        .arg(entityDisplayName(entity.value())));
+                m_dragMode = DragMode::None;
+                m_dragMoveUuids.clear();
+                setCursor(Qt::ArrowCursor);
+                update();
+                return;
+            }
+            m_dragOriginalRanges.insert(
+                uuid, qMakePair(entity.value().start, entity.value().end));
         }
         setCursor(Qt::ClosedHandCursor);
     }
@@ -1876,7 +1881,7 @@ void TimelineWidget::insertKeyframesAt(const Uuid& uuid, int relativeFrame)
         return;
 
     model::Entity& entity = entityIt.value();
-    if (entity.locked)
+    if (entityIsLocked(m_document, entity.uuid))
     {
         emit statusMessage(
             tr("实体已锁定：%1").arg(entityDisplayName(entity)));
@@ -2050,11 +2055,26 @@ void TimelineWidget::deleteSelectedKeyframes()
         return;
 
     model::Entity& entity = entityIt.value();
-    if (entity.locked)
+    if (entityIsLocked(m_document, entity.uuid))
     {
         emit statusMessage(
             tr("实体已锁定：%1").arg(entityDisplayName(entity)));
         return;
+    }
+
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd();
+         ++it)
+    {
+        for (const model::Keyframe& key : it.value().keys)
+        {
+            if (m_selectedKeyframes.contains(key.frame)
+                && solverStartKey(entity, it.key(), key.frame))
+            {
+                emit statusMessage(
+                    tr("求解段开始帧的关键帧不能删除，请先删除求解段"));
+                return;
+            }
+        }
     }
 
     const QHash<QString, model::Track> before = entity.tracks;
@@ -2155,7 +2175,7 @@ void TimelineWidget::pasteKeyframes()
         return;
 
     model::Entity& entity = entityIt.value();
-    if (entity.locked)
+    if (entityIsLocked(m_document, entity.uuid))
     {
         emit statusMessage(
             tr("实体已锁定：%1").arg(entityDisplayName(entity)));
@@ -2424,8 +2444,34 @@ void TimelineWidget::dropEvent(QDropEvent* event)
     }
 
     const QPoint pos = event->position().toPoint();
-    const int start = std::max(0, frameFromX(pos.x()));
+    const int start = m_parentUuid.isEmpty()
+                          ? std::max(0, frameFromX(pos.x()))
+                          : frameFromX(pos.x());
     const int end = start + assetDurationFrames(*asset);
+
+    if (!m_parentUuid.isEmpty())
+    {
+        const auto parent =
+            m_document->project().entities.constFind(m_parentUuid);
+        if (parent == m_document->project().entities.constEnd())
+        {
+            emit statusMessage(tr("父实体不存在，不能拖入素材"));
+            event->ignore();
+            return;
+        }
+        if (start < parent.value().start || end > parent.value().end)
+        {
+            emit statusMessage(
+                tr("素材范围 [%1, %2) 超出父实体 [%3, %4)")
+                    .arg(start)
+                    .arg(end)
+                    .arg(parent.value().start)
+                    .arg(parent.value().end));
+            event->ignore();
+            return;
+        }
+    }
+
     const int row = dropRowFor(pos.y(), start, end);
     const QVector<Uuid> created = createEntitiesForAsset(*asset, start, row);
     if (created.isEmpty())
@@ -2443,170 +2489,25 @@ void TimelineWidget::dropEvent(QDropEvent* event)
     event->acceptProposedAction();
 }
 
-void TimelineWidget::trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
+bool TimelineWidget::trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
                                     QVector<Uuid>& upserts,
-                                    QVector<Uuid>& deletes)
+                                    QVector<Uuid>& deletes, QString* error)
 {
-    if (!m_document || newStart >= newEnd)
-        return;
+    if (!m_document)
+        return false;
 
-    auto entityIt = m_document->mutableProject().entities.find(uuid);
-    if (entityIt == m_document->mutableProject().entities.end())
-        return;
+    model::Project trimmed;
+    QVector<Uuid> localUpserts;
+    QVector<Uuid> localDeletes;
+    if (!applyEntityRange(m_document->project(), m_document->assets(), uuid,
+                          newStart, newEnd, &trimmed, &localUpserts,
+                          &localDeletes, error))
+        return false;
 
-    model::Entity& entity = entityIt.value();
-    const int oldStart = entity.start;
-    const int oldEnd = entity.end;
-
-    // The whole subtree is outside the new range: delete it explicitly.
-    if (oldStart >= newEnd || oldEnd <= newStart)
-    {
-        appendSubtreeDeletes(m_document->project(), uuid, deletes);
-        return;
-    }
-
-    // A child fully inside the parent's new range is untouched.
-    if (newStart == oldStart && newEnd == oldEnd)
-        return;
-
-    const int oldDuration = std::max(1, oldEnd - oldStart);
-    const int deltaStart = newStart - oldStart;
-    const int newDuration = newEnd - newStart;
-
-    // Solver frames are entity-relative. Work on a copy first so a segment cut
-    // by the new start can contribute its start key before keys are shifted.
-    QVector<model::SolverSegment> shiftedSolvers;
-    QVector<QPair<QString, double>> cutKeys;
-    for (const model::SolverSegment& oldSolver : entity.solvers)
-    {
-        const int oldEffectiveEnd =
-            oldSolver.endFrame < 0 ? oldDuration - 1 : oldSolver.endFrame;
-        if (deltaStart > 0 && oldSolver.startFrame < deltaStart
-            && deltaStart <= oldEffectiveEnd)
-        {
-            // Crop start cuts into this segment. The segment dies; approximate
-            // the frozen pose with the normal key at the segment start.
-            // TODO(solver-timeline): replace this with the exact evaluated
-            // pose from anim::evaluateEntity at the cut frame.
-            for (const QString& track : drivenTracks(oldSolver.effect))
-            {
-                const auto trackIt = entity.tracks.constFind(track);
-                const double value =
-                    trackIt == entity.tracks.constEnd()
-                        ? 0.0
-                        : keyValueAt(trackIt.value(), oldSolver.startFrame);
-                cutKeys.append(qMakePair(track, value));
-            }
-            continue;
-        }
-
-        model::SolverSegment shifted = oldSolver;
-        shifted.startFrame -= deltaStart;
-        if (shifted.endFrame != -1)
-            shifted.endFrame -= deltaStart;
-
-        const int shiftedEnd =
-            shifted.endFrame < 0 ? newDuration - 1 : shifted.endFrame;
-        if (shiftedEnd < 0)
-            continue; // segment ended before the new start
-        shiftedSolvers.append(shifted);
-    }
-
-    // Shift / crop every normal track.
-    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
-         ++trackIt)
-    {
-        QVector<model::Keyframe> kept;
-        kept.reserve(trackIt.value().keys.size());
-        for (model::Keyframe key : trackIt.value().keys)
-        {
-            if (deltaStart > 0)
-            {
-                if (key.frame < deltaStart)
-                    continue;
-                key.frame -= deltaStart;
-            }
-            else if (deltaStart < 0)
-            {
-                key.frame += -deltaStart;
-            }
-            if (key.frame < 0 || key.frame >= newDuration)
-                continue;
-            kept.append(key);
-        }
-        trackIt.value().keys = kept;
-    }
-
-    // A segment cut by the new start freezes at frame 0.
-    for (const auto& cut : cutKeys)
-    {
-        model::Track& track = entity.tracks[cut.first];
-        for (int i = track.keys.size() - 1; i >= 0; --i)
-        {
-            if (track.keys.at(i).frame == 0)
-                track.keys.removeAt(i);
-        }
-        model::Keyframe key;
-        key.frame = 0;
-        key.value = cut.second;
-        track.keys.append(key);
-    }
-
-    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
-         ++trackIt)
-    {
-        std::sort(trackIt.value().keys.begin(), trackIt.value().keys.end(),
-                  [](const model::Keyframe& a, const model::Keyframe& b) {
-                      return a.frame < b.frame;
-                  });
-    }
-
-    if (entity.content.kind == ContentKind::Asset
-        && (entity.content.asset.type == AssetType::Video
-            || entity.content.asset.type == AssetType::Audio))
-    {
-        entity.content.asset.sourceIn += deltaStart;
-        // Expanding before the first material frame clamps at the material
-        // boundary; no source frames exist before sourceIn 0.
-        if (entity.content.asset.sourceIn < 0)
-            entity.content.asset.sourceIn = 0;
-    }
-
-    QVector<model::SolverSegment> finalSolvers;
-    for (model::SolverSegment solver : shiftedSolvers)
-    {
-        if (solver.startFrame >= newDuration)
-            continue;
-        if (solver.endFrame != -1 && solver.endFrame >= newDuration)
-            solver.endFrame = newDuration - 1;
-        if (solver.endFrame != -1 && solver.endFrame < solver.startFrame)
-            continue;
-        finalSolvers.append(solver);
-    }
-    entity.solvers = finalSolvers;
-
-    entity.start = newStart;
-    entity.end = newEnd;
-    upserts.append(uuid);
-
-    const QVector<Uuid> children =
-        model::childrenOf(m_document->project(), uuid);
-    for (const Uuid& child : children)
-    {
-        const auto childIt =
-            m_document->mutableProject().entities.constFind(child);
-        if (childIt == m_document->mutableProject().entities.constEnd())
-            continue;
-
-        const int childStart = std::max(childIt.value().start, newStart);
-        const int childEnd = std::min(childIt.value().end, newEnd);
-        if (childStart >= childEnd)
-        {
-            appendSubtreeDeletes(m_document->project(), child, deletes);
-            continue;
-        }
-        trimEntityTree(child, childStart, childEnd, upserts, deletes);
-    }
+    m_document->mutableProject() = std::move(trimmed);
+    upserts = localUpserts;
+    deletes = localDeletes;
+    return true;
 }
 
 void TimelineWidget::applyKeyframeDrag(const QPoint& pos)
@@ -2621,6 +2522,8 @@ void TimelineWidget::applyKeyframeDrag(const QPoint& pos)
     model::Entity& entity = it.value();
     const int duration = entity.duration();
     if (duration <= 0)
+        return;
+    if (entityIsLocked(m_document, entity.uuid))
         return;
 
     int minFrame = INT_MAX;
@@ -2655,7 +2558,10 @@ void TimelineWidget::applyKeyframeDrag(const QPoint& pos)
         {
             if (!m_dragKeyFrames.contains(key.frame))
                 continue;
-            if (trackBlockedAt(entity, trackIt.key(), key.frame + delta))
+            const int targetFrame = key.frame + delta;
+            if (solverStartKey(entity, trackIt.key(), key.frame)
+                || solverStartKey(entity, trackIt.key(), targetFrame)
+                || trackBlockedAt(entity, trackIt.key(), targetFrame))
             {
                 conflict = true;
                 break;
@@ -2928,7 +2834,8 @@ void TimelineWidget::finishDrag()
             restoreTracks();
             m_keyframeSelectionUuid = uuid;
             m_selectedKeyframes = keyFrames;
-            emit statusMessage(tr("关键帧不能移入求解段驱动的区间"));
+            emit statusMessage(
+                tr("关键帧不能移动求解段开始帧，也不能移入求解段驱动的区间"));
             update();
             return;
         }
@@ -3011,9 +2918,19 @@ void TimelineWidget::finishDrag()
 
     QVector<Uuid> upserts;
     QVector<Uuid> deletes;
-    trimEntityTree(uuid, previewStart, previewEnd, upserts, deletes);
-
     QString error;
+    if (!trimEntityTree(uuid, previewStart, previewEnd, upserts, deletes,
+                        &error))
+    {
+        m_document->mutableProject() = trimSnapshot;
+        emit statusMessage(
+            error.isEmpty() ? tr("裁剪失败")
+                            : tr("裁剪失败：%1").arg(error));
+        updateScrollBar();
+        update();
+        return;
+    }
+
     const bool committed = m_document->commitChanges(
         upserts, deletes,
         QStringLiteral("pvf: trim entity \"%1\"").arg(name), &error);

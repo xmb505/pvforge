@@ -138,6 +138,11 @@ private:
     void deleteSolverSegment(const Uuid& solverId);
     SolverEffect selectedSolverEffect() const;
 
+    // Applies a start/end change through the shared timeline range logic
+    // (parent bounds, key/solver/sourceIn edits, child cascade) and commits the
+    // whole subtree in one operation.  Failures leave the project untouched.
+    void applyRangeEdit(int newStart, int newEnd, const QString& what);
+
     void chooseReplacementAsset();
     // Opens the modal TextLayoutDialog and writes the whole edited
     // model::TextContent back in one commit ("pvf: edit text layout").

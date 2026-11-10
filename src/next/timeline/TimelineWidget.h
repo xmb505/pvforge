@@ -196,8 +196,9 @@ private:
     QVector<Uuid> createEntitiesForAsset(const assets::StoredAsset& asset,
                                          int startFrame, int row);
 
-    void trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
-                        QVector<Uuid>& upserts, QVector<Uuid>& deletes);
+    bool trimEntityTree(const Uuid& uuid, int newStart, int newEnd,
+                        QVector<Uuid>& upserts, QVector<Uuid>& deletes,
+                        QString* error = nullptr);
 
     void paintToolbar(QPainter& painter);
     void paintRuler(QPainter& painter);
