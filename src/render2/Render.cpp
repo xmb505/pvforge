@@ -1042,12 +1042,26 @@ QPainterPath localCollisionPath(const model::Entity& entity,
     return path;
 }
 
+QTransform canvasView(const QSize& output, const QRectF& worldRect)
+{
+    const double width = std::max(1e-9, worldRect.width());
+    const double height = std::max(1e-9, worldRect.height());
+    const double scaleX = double(output.width()) / width;
+    const double scaleY = double(output.height()) / height;
+
+    QTransform transform;
+    transform.setMatrix(scaleX, 0.0, 0.0,
+                        0.0, scaleY, 0.0,
+                        -worldRect.left() * scaleX,
+                        -worldRect.top() * scaleY, 1.0);
+    return transform;
+}
+
 QTransform canvasView(const QSize& output, const model::ProjectSettings& settings)
 {
-    QTransform transform;
-    transform.scale(double(output.width()) / std::max(1, settings.width),
-                    double(output.height()) / std::max(1, settings.height));
-    return transform;
+    return canvasView(output, QRectF(0.0, 0.0,
+                                     double(std::max(1, settings.width)),
+                                     double(std::max(1, settings.height))));
 }
 
 QTransform cameraView(const model::Project& project, const Options& options,
@@ -1198,8 +1212,22 @@ QImage renderFrame(const model::Project& project,
     if (!background.isValid())
         background = Qt::black;
 
+    const bool canvasMode = options.cameraUuid.isEmpty();
+    const QRectF projectCanvas(0.0, 0.0,
+                               double(std::max(1, project.settings.width)),
+                               double(std::max(1, project.settings.height)));
+    const bool customWorld =
+        canvasMode && options.worldRect.isValid()
+        && options.worldRect.width() > 0.0 && options.worldRect.height() > 0.0;
+    const QRectF worldRect = customWorld ? options.worldRect : projectCanvas;
+    // Only the expanded editor preview asks for a transparent surround.  The
+    // canvas itself keeps the project background so the cached image still
+    // carries the real picture inside the frame.
+    const bool transparent =
+        canvasMode && customWorld && options.transparentOutsideCanvas;
+
     QImage image(output, QImage::Format_ARGB32_Premultiplied);
-    image.fill(background);
+    image.fill(transparent ? QColor(Qt::transparent) : background);
 
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -1207,10 +1235,11 @@ QImage renderFrame(const model::Project& project,
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
     const QTransform view =
-        options.cameraUuid.isEmpty()
-            ? canvasView(output, project.settings)
-            : cameraView(project, options, world, cache, output);
+        canvasMode ? canvasView(output, worldRect)
+                   : cameraView(project, options, world, cache, output);
     painter.setTransform(view);
+    if (transparent)
+        painter.fillRect(projectCanvas, background);
 
     QSet<Uuid> visited;
     drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,

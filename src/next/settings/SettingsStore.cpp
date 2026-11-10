@@ -83,6 +83,8 @@ AppSettings SettingsStore::sanitized(AppSettings settings)
 
     settings.workbenchCacheScalePercent =
         snapWorkbenchScalePercent(settings.workbenchCacheScalePercent);
+    settings.workbenchCacheExpandPercent =
+        std::clamp(settings.workbenchCacheExpandPercent, 0, 200);
     settings.workbenchCacheDiskBytes =
         std::clamp(settings.workbenchCacheDiskBytes, kMinDiskBytes, kMaxDiskBytes);
     settings.workbenchCacheMemoryBytes = std::clamp(
@@ -136,6 +138,11 @@ AppSettings SettingsStore::load() const
             .value(QStringLiteral("workbench/scalePercent"),
                    settings.workbenchCacheScalePercent)
             .toInt();
+    settings.workbenchCacheExpandPercent =
+        m_settings
+            .value(QStringLiteral("workbench/expandPercent"),
+                   settings.workbenchCacheExpandPercent)
+            .toInt();
     settings.workbenchCacheDiskBytes =
         m_settings
             .value(QStringLiteral("workbench/diskBytes"), settings.workbenchCacheDiskBytes)
@@ -180,6 +187,8 @@ void SettingsStore::save(const AppSettings& settings)
     m_settings.setValue(QStringLiteral("workbench/enabled"), value.workbenchCacheEnabled);
     m_settings.setValue(QStringLiteral("workbench/scalePercent"),
                         value.workbenchCacheScalePercent);
+    m_settings.setValue(QStringLiteral("workbench/expandPercent"),
+                        value.workbenchCacheExpandPercent);
     m_settings.setValue(QStringLiteral("workbench/diskBytes"),
                         value.workbenchCacheDiskBytes);
     m_settings.setValue(QStringLiteral("workbench/memoryBytes"),

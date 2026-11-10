@@ -322,6 +322,9 @@ private slots:
     void sceneCacheLookupSkipsRender();
     void sceneCacheMissStoresRenderedFrame();
     void sceneCacheBypassedDuringGizmoDrag();
+    void sceneExpandShowsOutsideEntity();
+    void sceneExpandZeroHidesOutsideEntity();
+    void cameraViewIgnoresSceneExpand();
 };
 
 void ViewportWidgetTest::projectCanvasRenders()
@@ -824,20 +827,24 @@ void ViewportWidgetTest::sceneCacheLookupSkipsRender()
         },
         [&](int, const Uuid&, const QImage&) { ++stores; });
 
+    // MCP grabFrame always renders the project canvas live and never reads the
+    // workbench cache (which may be the expanded image).
     const QImage frame = view.grabFrame();
-    QCOMPARE(lookupFrame, 0);
     QCOMPARE(frame.size(), QSize(320, 180));
-    QCOMPARE(frame.pixelColor(160, 90), QColor(Qt::green));
-    QCOMPARE(providerCalls, 0);
+    QVERIFY(isRed(frame.pixelColor(160, 90)));
+    QVERIFY(providerCalls > 0);
+    QCOMPARE(lookups, 0);
     QCOMPARE(stores, 0);
 
-    // The widget paint path uses ensureSceneImage and must hit too.
+    // The widget paint path uses ensureSceneImage and hits the cache.
+    const int providerCallsAfterGrab = providerCalls;
     const QImage painted = view.grab().toImage();
     const QColor center = painted.pixelColor(painted.width() / 2,
                                              painted.height() / 2);
     QVERIFY(center.green() > 200 && center.red() < 60);
-    QCOMPARE(providerCalls, 0);
-    QVERIFY(lookups >= 2);
+    QCOMPARE(providerCalls, providerCallsAfterGrab);
+    QCOMPARE(lookupFrame, 0);
+    QVERIFY(lookups >= 1);
 }
 
 void ViewportWidgetTest::sceneCacheMissStoresRenderedFrame()
@@ -862,13 +869,23 @@ void ViewportWidgetTest::sceneCacheMissStoresRenderedFrame()
             stored = image;
         });
 
+    // grabFrame bypasses the cache entirely.
     const QImage frame = view.grabFrame();
-    QCOMPARE(lookups, 1);
-    QCOMPARE(stores, 1);
+    QCOMPARE(lookups, 0);
+    QCOMPARE(stores, 0);
     QCOMPARE(frame.size(), QSize(320, 180));
-    QCOMPARE(stored.size(), QSize(320, 180));
     QVERIFY(isRed(frame.pixelColor(160, 90)));
-    QVERIFY(isRed(stored.pixelColor(160, 90)));
+
+    // The paint path renders at the widget view size and stores that frame.
+    const QImage painted = view.grab().toImage();
+    QVERIFY(lookups >= 1);
+    QCOMPARE(stores, 1);
+    QVERIFY(!stored.isNull());
+    QVERIFY(stored.width() > 0 && stored.height() > 0);
+    QVERIFY(isRed(stored.pixelColor(stored.width() / 2,
+                                    stored.height() / 2)));
+    QVERIFY(isRed(painted.pixelColor(painted.width() / 2,
+                                     painted.height() / 2)));
 }
 
 void ViewportWidgetTest::sceneCacheBypassedDuringGizmoDrag()
@@ -893,28 +910,109 @@ void ViewportWidgetTest::sceneCacheBypassedDuringGizmoDrag()
         },
         [&](int, const Uuid&, const QImage&) { ++stores; });
 
-    QVERIFY(isGreen(view.grabFrame().pixelColor(160, 90)));
+    const auto centerIsGreen = [&](const QImage& image) {
+        const QColor color =
+            image.pixelColor(view.projectToWidget(QPointF(100.0, 60.0)).toPoint());
+        return color.green() > 200 && color.red() < 60;
+    };
+    const auto centerIsRed = [&](const QImage& image) {
+        return isRed(image.pixelColor(
+            view.projectToWidget(QPointF(100.0, 60.0)).toPoint()));
+    };
+
+    QVERIFY(centerIsGreen(view.grab().toImage()));
 
     const model::Entity entity = document.project().entities.value(uuid);
     const QPointF handle =
         handleWidgetPosition(view, entity, gizmo::Handle::MoveX);
 
-    // A click that only shows the gizmo keeps the cached frame.
+    // A click that only shows the gizmo keeps using the cached frame.
     QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
                       handle.toPoint());
-    QVERIFY(isGreen(view.grabFrame().pixelColor(160, 90)));
+    QVERIFY(centerIsGreen(view.grab().toImage()));
 
     // Actual movement edits mutableProject() before the commit that clears the
     // meta cache; the scene must come from render2 until release.
-    const int lookupsBeforeDrag = lookups;
     QTest::mouseMove(&view, (handle + QPointF(24.0, 0.0)).toPoint());
-    const QImage live = view.grabFrame();
+    const int lookupsBeforeDrag = lookups;
+    const QImage live = view.grab().toImage();
     QCOMPARE(lookups, lookupsBeforeDrag);
-    QVERIFY(isRed(live.pixelColor(160, 90)));
+    QVERIFY(centerIsRed(live));
 
     QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
                         (handle + QPointF(24.0, 0.0)).toPoint());
     QCOMPARE(stores, 0);
+}
+
+void ViewportWidgetTest::sceneExpandShowsOutsideEntity()
+{
+    FakeDocument document;
+    document.mutableProject().settings.width = 100;
+    document.mutableProject().settings.height = 100;
+    document.addVector(QStringLiteral("Outside"), -30.0, 50.0, 20.0, 20.0);
+
+    ViewportWidget view(&document);
+    view.setSceneExpandPercent(50);
+    showWidget(view);
+
+    const QPointF point = view.projectToWidget(QPointF(-30.0, 50.0));
+    QVERIFY(view.rect().contains(point.toPoint()));
+
+    const QImage painted = view.grab().toImage();
+    QVERIFY2(isRed(painted.pixelColor(point.toPoint())),
+             qPrintable(QStringLiteral("pixel %1,%2 = %3")
+                            .arg(point.x())
+                            .arg(point.y())
+                            .arg(painted.pixelColor(point.toPoint()).name())));
+}
+
+void ViewportWidgetTest::sceneExpandZeroHidesOutsideEntity()
+{
+    FakeDocument document;
+    document.mutableProject().settings.width = 100;
+    document.mutableProject().settings.height = 100;
+    document.addVector(QStringLiteral("Outside"), -30.0, 50.0, 20.0, 20.0);
+
+    ViewportWidget view(&document);
+    view.setSceneExpandPercent(0);
+    showWidget(view);
+
+    const QPointF point = view.projectToWidget(QPointF(-30.0, 50.0));
+    QVERIFY(view.rect().contains(point.toPoint()));
+
+    const QImage painted = view.grab().toImage();
+    const QColor color = painted.pixelColor(point.toPoint());
+    QVERIFY(!isRed(color));
+    QCOMPARE(color, QColor(20, 22, 26));
+}
+
+void ViewportWidgetTest::cameraViewIgnoresSceneExpand()
+{
+    FakeDocument document;
+    document.mutableProject().settings.width = 100;
+    document.mutableProject().settings.height = 100;
+    const Uuid camera = document.addCamera(50.0, 50.0, 1.0, 1.0);
+
+    ViewportWidget view(&document);
+    view.setSceneExpandPercent(0);
+    view.setCameraUuid(camera);
+    showWidget(view);
+
+    const QPointF beforeOrigin = view.projectToWidget(QPointF(0.0, 0.0));
+    const QPointF beforeCorner = view.projectToWidget(QPointF(100.0, 100.0));
+
+    view.setSceneExpandPercent(50);
+    const QPointF afterOrigin = view.projectToWidget(QPointF(0.0, 0.0));
+    const QPointF afterCorner = view.projectToWidget(QPointF(100.0, 100.0));
+
+    QCOMPARE(afterOrigin, beforeOrigin);
+    QCOMPARE(afterCorner, beforeCorner);
+    QCOMPARE(view.grabFrame().size(), QSize(100, 100));
+
+    // Painting the camera view still starts from the opaque background even
+    // though the editor canvas expansion is enabled.
+    const QImage painted = view.grab().toImage();
+    QVERIFY(!painted.isNull());
 }
 
 QTEST_MAIN(ViewportWidgetTest)

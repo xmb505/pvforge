@@ -241,6 +241,20 @@ gizmo::Handle rotateHandleForCorner(int corner)
     }
 }
 
+// Same formula as workbench::renderRect().  The viewport intentionally does
+// not link the workbench module (it only needs render2), so the tiny geometry
+// helper is duplicated here.
+QRectF expandedCanvasRect(const model::Project& project, int expandPercent)
+{
+    const double width = double(std::max(1, project.settings.width));
+    const double height = double(std::max(1, project.settings.height));
+    const double factor = double(std::clamp(expandPercent, 0, 200)) / 100.0;
+    const double expandX = width * factor;
+    const double expandY = height * factor;
+    return QRectF(-expandX, -expandY, width + 2.0 * expandX,
+                  height + 2.0 * expandY);
+}
+
 } // namespace
 
 ViewportWidget::ViewportWidget(Document* document, QWidget* parent)
@@ -275,6 +289,16 @@ void ViewportWidget::setCameraUuid(const Uuid& uuid)
     if (m_cameraUuid == uuid)
         return;
     m_cameraUuid = uuid;
+    invalidateScene();
+    update();
+}
+
+void ViewportWidget::setSceneExpandPercent(int percent)
+{
+    const int clamped = std::clamp(percent, 0, 200);
+    if (m_sceneExpandPercent == clamped)
+        return;
+    m_sceneExpandPercent = clamped;
     invalidateScene();
     update();
 }
@@ -338,37 +362,29 @@ QImage ViewportWidget::grabFrame() const
     const model::Project& project = m_document->project();
     const QSize output(std::max(1, project.settings.width),
                        std::max(1, project.settings.height));
-    const int frame = m_document->playhead();
-    // A gizmo drag edits mutableProject() directly and does not emit
-    // Document::changed until release, so the cache meta for this frame is
-    // still the pre-drag one.  Draw and keep the live preview uncached; a
-    // click that only shows the gizmo still uses the cache.
-    const bool liveEdit = m_dragKind != DragKind::None
-                          && m_dragKind != DragKind::Pan && m_dragChanged;
-
-    if (m_sceneLookup && !liveEdit) {
-        bool hit = false;
-        const QImage cached = m_sceneLookup(frame, m_cameraUuid, &hit);
-        if (hit && !cached.isNull())
-            return cached;
-    }
-
     bool mediaMissing = false;
-    const QImage image = renderScene(output, &mediaMissing);
-    // A frame containing a pending HTML/video placeholder must never become
-    // the cached "final" picture.
-    if (!liveEdit && !mediaMissing && m_sceneStore && !image.isNull())
-        m_sceneStore(frame, m_cameraUuid, image);
-    return image;
+    // Never return the expanded workbench image: MCP previews expect exactly
+    // the project canvas (or the camera view) at project resolution.
+    return renderScene(output, &mediaMissing, 0);
 }
 
-QImage ViewportWidget::renderScene(const QSize& size, bool* mediaMissing) const
+QImage ViewportWidget::renderScene(const QSize& size, bool* mediaMissing,
+                                   int expandPercent) const
 {
     bool missing = false;
+    const model::Project& project = m_document->project();
+    const int expand =
+        m_cameraUuid.isEmpty() ? std::clamp(expandPercent, 0, 200) : 0;
+
     render2::Options options;
     options.projectFrame = m_document->playhead();
     options.cameraUuid = m_cameraUuid;
     options.outputSize = size;
+    if (expand > 0)
+    {
+        options.worldRect = sceneWorldRect(expand);
+        options.transparentOutsideCanvas = true;
+    }
     options.videoFrame = [this, &missing](const Uuid& uuid, double frame) {
         const QImage image =
             m_videoFrameProvider ? m_videoFrameProvider(uuid, frame) : QImage();
@@ -384,7 +400,6 @@ QImage ViewportWidget::renderScene(const QSize& size, bool* mediaMissing) const
         return image;
     };
 
-    const model::Project& project = m_document->project();
     render2::SceneWorld world(project, m_document->assets());
     anim::Cache cache;
     const QImage image = render2::renderFrame(project, m_document->assets(),
@@ -427,6 +442,13 @@ QRectF ViewportWidget::viewRect() const
     const QPointF center(width() / 2.0 + m_pan.x(), height() / 2.0 + m_pan.y());
     return QRectF(center.x() - size.width() / 2.0, center.y() - size.height() / 2.0,
                   size.width(), size.height());
+}
+
+QRectF ViewportWidget::sceneWorldRect(int expandPercent) const
+{
+    if (!m_document)
+        return {};
+    return expandedCanvasRect(m_document->project(), expandPercent);
 }
 
 QTransform ViewportWidget::projectToWidgetTransform() const
@@ -1107,13 +1129,15 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
         std::clamp(size.width(), 1, kMaxRenderDimension),
         std::clamp(size.height(), 1, kMaxRenderDimension));
     const int frame = m_document->playhead();
+    const int expand =
+        m_cameraUuid.isEmpty() ? m_sceneExpandPercent : 0;
     if (m_sceneValid && m_sceneSize == clamped && m_sceneCamera == m_cameraUuid
-        && m_sceneFrame == frame)
+        && m_sceneFrame == frame && m_sceneExpand == expand)
         return m_sceneImage;
 
-    // See grabFrame(): live gizmo edits are not representable by the stored
-    // frame meta until the drag commits. A plain click that only shows the
-    // gizmo must keep using the cached frame; only actual movement bypasses it.
+    // Live gizmo edits are not representable by the stored frame meta until
+    // the drag commits.  A plain click that only shows the gizmo must keep
+    // using the cached frame; only actual movement bypasses it.
     const bool liveEdit = m_dragKind != DragKind::None
                           && m_dragKind != DragKind::Pan && m_dragChanged;
 
@@ -1127,16 +1151,18 @@ QImage ViewportWidget::ensureSceneImage(const QSize& size)
             m_sceneSize = clamped;
             m_sceneCamera = m_cameraUuid;
             m_sceneFrame = frame;
+            m_sceneExpand = expand;
             m_sceneValid = true;
             return m_sceneImage;
         }
     }
 
     bool mediaMissing = false;
-    m_sceneImage = renderScene(clamped, &mediaMissing);
+    m_sceneImage = renderScene(clamped, &mediaMissing, expand);
     m_sceneSize = clamped;
     m_sceneCamera = m_cameraUuid;
     m_sceneFrame = frame;
+    m_sceneExpand = expand;
     m_sceneValid = true;
 
     if (!liveEdit && !mediaMissing && m_sceneStore && !m_sceneImage.isNull())
@@ -1309,17 +1335,29 @@ void ViewportWidget::paintEvent(QPaintEvent*)
     if (rect.width() < 1.0 || rect.height() < 1.0)
         return;
 
-    const QSize imageSize(std::max(1, int(std::lround(rect.width()))),
-                          std::max(1, int(std::lround(rect.height()))));
+    const QTransform toWidget = projectToWidgetTransform();
+    QRectF sceneRect = rect;
+    if (m_cameraUuid.isEmpty() && m_sceneExpandPercent > 0)
+    {
+        // The expanded cache covers the canvas plus its surround; map that
+        // world rectangle instead of stretching it into the canvas viewRect.
+        const QRectF mapped =
+            toWidget.mapRect(sceneWorldRect(m_sceneExpandPercent));
+        if (mapped.width() >= 1.0 && mapped.height() >= 1.0)
+            sceneRect = mapped;
+    }
+
+    const QSize imageSize(std::max(1, int(std::lround(sceneRect.width()))),
+                          std::max(1, int(std::lround(sceneRect.height()))));
     const QImage scene = ensureSceneImage(imageSize);
     if (!scene.isNull())
-        painter.drawImage(rect, scene);
+        painter.drawImage(sceneRect, scene);
 
     const model::Project& project = m_document->project();
     const QRectF canvas(0.0, 0.0, std::max(1, project.settings.width),
                         std::max(1, project.settings.height));
     const QPolygonF canvasPolygon =
-        projectToWidgetTransform().map(QPolygonF(canvas));
+        toWidget.map(QPolygonF(canvas));
     painter.setPen(QPen(kCanvasBorder, 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawPolygon(canvasPolygon);
@@ -1327,7 +1365,7 @@ void ViewportWidget::paintEvent(QPaintEvent*)
     const Uuid selected = m_document->selection();
     if (!selected.isEmpty() && m_showGizmo)
     {
-        drawCameraFrame(painter, selected, projectToWidgetTransform());
+        drawCameraFrame(painter, selected, toWidget);
         drawSelection(painter, selected);
     }
 }

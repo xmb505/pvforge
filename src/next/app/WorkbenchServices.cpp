@@ -34,8 +34,17 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
 
     m_options.scalePercent = settings.workbenchCacheScalePercent;
     m_options.maxWidth = kMaxCacheWidth;
+    // Only the editor canvas view expands; a camera frame is cropped to the
+    // camera, so its cache stays exactly the canvas size.
+    m_options.expandPercent = m_cameraUuid.isEmpty()
+                                  ? std::clamp(
+                                        settings.workbenchCacheExpandPercent, 0,
+                                        200)
+                                  : 0;
+    m_options.transparentOutsideCanvas = m_options.expandPercent > 0;
     m_options.targetSize = workbench::cacheSizeFor(
-        m_document->project(), m_options.scalePercent, kMaxCacheWidth);
+        m_document->project(), m_options.scalePercent, kMaxCacheWidth,
+        m_options.expandPercent);
     m_options.diskBudgetBytes = settings.workbenchCacheDiskBytes;
     m_options.memoryBudgetBytes = settings.workbenchCacheMemoryBytes;
     m_options.rendererVersion = QStringLiteral("1");
@@ -362,6 +371,12 @@ QImage WorkbenchServices::renderForCache(int frame, bool* htmlMissing,
     options.projectFrame = frame;
     options.cameraUuid = m_cameraUuid;
     options.outputSize = m_options.targetSize;
+    if (m_options.expandPercent > 0 && m_cameraUuid.isEmpty()) {
+        options.worldRect = workbench::renderRect(
+            m_document->project(), m_options.expandPercent);
+        options.transparentOutsideCanvas =
+            m_options.transparentOutsideCanvas;
+    }
     options.videoFrame = [this, &missingVideo](const Uuid& uuid, double at) {
         const QImage image = m_providers.videoFrame
                                  ? m_providers.videoFrame(uuid, at)

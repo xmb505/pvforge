@@ -4,10 +4,12 @@
 #include "model/Model.h"
 
 #include <QColor>
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
 #include <QImage>
+#include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSize>
@@ -103,6 +105,35 @@ QImage render(const Project& project, const assets::AssetStore& store,
     render2::SceneWorld world(project, store);
     anim::Cache cache;
     return render2::renderFrame(project, store, options, world, cache);
+}
+
+QImage renderWorld(const Project& project, const assets::AssetStore& store,
+                   const QRectF& worldRect, bool transparent,
+                   const Uuid& camera = Uuid(),
+                   const QSize& outputSize = QSize())
+{
+    render2::Options options;
+    options.cameraUuid = camera;
+    options.worldRect = worldRect;
+    options.transparentOutsideCanvas = transparent;
+    options.outputSize = outputSize;
+
+    render2::SceneWorld world(project, store);
+    anim::Cache cache;
+    return render2::renderFrame(project, store, options, world, cache);
+}
+
+QByteArray encodeWebp(const QImage& image)
+{
+    QByteArray data;
+    QBuffer buffer(&data);
+    if (!buffer.open(QIODevice::WriteOnly))
+        return {};
+    QImageWriter writer(&buffer, QByteArrayLiteral("webp"));
+    writer.setQuality(80);
+    if (!writer.write(image))
+        return {};
+    return data;
 }
 
 bool nearColor(const QColor& actual, const QColor& expected, int tolerance = 3)
@@ -753,6 +784,118 @@ void testCameraNegativeScaleFlips()
                     QColor(QStringLiteral("#101014"))));
 }
 
+void testWorldRectRendersOutsideCanvas()
+{
+    Project project = makeProject(100, 100);
+    Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::red);
+    outside.transform.x = -50.0;
+    outside.transform.y = -50.0;
+    add(project, outside);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QRectF world(-100, -100, 300, 300);
+    const QImage image =
+        renderWorld(project, store, world, false, Uuid(), QSize(300, 300));
+
+    // World (-50,-50) maps to output (50,50); the canvas centre stays the
+    // project background.
+    CHECK(nearColor(image.pixelColor(50, 50), Qt::red));
+    CHECK(nearColor(image.pixelColor(150, 150),
+                    QColor(QStringLiteral("#101014"))));
+    CHECK(nearColor(image.pixelColor(0, 0),
+                    QColor(QStringLiteral("#101014"))));
+}
+
+void testCameraIgnoresWorldRect()
+{
+    Project project = makeProject(200, 200);
+    add(project, makeVector(QStringLiteral("red"), 40, 40, Qt::red));
+    project.entities[QStringLiteral("red")].transform.x = 100.0;
+    project.entities[QStringLiteral("red")].transform.y = 100.0;
+
+    Entity camera = makeEntity(QStringLiteral("camera"));
+    camera.content.kind = ContentKind::Camera;
+    camera.transform.x = 100.0;
+    camera.transform.y = 100.0;
+    camera.transform.scaleX = 0.5;
+    camera.transform.scaleY = 0.5;
+    add(project, camera);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QImage baseline =
+        render(project, store, 0, QStringLiteral("camera"), QSize(100, 100));
+    const QImage withWorld =
+        renderWorld(project, store, QRectF(-100, -100, 300, 300), true,
+                    QStringLiteral("camera"), QSize(100, 100));
+
+    CHECK(baseline == withWorld);
+    CHECK(withWorld.pixelColor(0, 0).alpha() == 255);
+    CHECK(nearColor(withWorld.pixelColor(50, 50), Qt::red));
+}
+
+void testTransparentOutsideCanvas()
+{
+    Project project = makeProject(100, 100);
+    Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::red);
+    outside.transform.x = -50.0;
+    outside.transform.y = -50.0;
+    add(project, outside);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QRectF world(-100, -100, 300, 300);
+    const QImage image =
+        renderWorld(project, store, world, true, Uuid(), QSize(300, 300));
+
+    CHECK(image.pixelColor(0, 0).alpha() == 0);
+    CHECK(image.pixelColor(299, 299).alpha() == 0);
+    CHECK(nearColor(image.pixelColor(150, 150),
+                    QColor(QStringLiteral("#101014"))));
+    CHECK(image.pixelColor(150, 150).alpha() == 255);
+    CHECK(nearColor(image.pixelColor(50, 50), Qt::red));
+    CHECK(image.pixelColor(50, 50).alpha() == 255);
+
+    const QImage opaque =
+        renderWorld(project, store, world, false, Uuid(), QSize(300, 300));
+    CHECK(opaque.pixelColor(0, 0).alpha() == 255);
+}
+
+void testTransparentWebpOverheadIsSmall()
+{
+    Project project = makeProject(100, 100);
+    Entity centre = makeVector(QStringLiteral("centre"), 60, 60, Qt::red);
+    centre.transform.x = 50.0;
+    centre.transform.y = 50.0;
+    add(project, centre);
+    Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::blue);
+    outside.transform.x = -50.0;
+    outside.transform.y = -50.0;
+    add(project, outside);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    const QRectF world(-200, -200, 500, 500);
+    const QImage opaque =
+        renderWorld(project, store, world, false, Uuid(), QSize(500, 500));
+    const QImage transparent =
+        renderWorld(project, store, world, true, Uuid(), QSize(500, 500));
+
+    const QByteArray opaqueBytes = encodeWebp(opaque);
+    const QByteArray transparentBytes = encodeWebp(transparent);
+    CHECK(!opaqueBytes.isEmpty());
+    CHECK(!transparentBytes.isEmpty());
+    // WebP spends a tiny constant on the alpha plane.  The project background
+    // is a flat colour that lossy WebP already compresses to almost nothing,
+    // so the transparent file is not guaranteed to be globally smaller; the
+    // point here is that a 25x larger world does not multiply its size.
+    CHECK_DETAIL(transparentBytes.size() < opaqueBytes.size() + 4096,
+                 QStringLiteral("transparent %1 bytes, opaque %2 bytes")
+                     .arg(transparentBytes.size())
+                     .arg(opaqueBytes.size()));
+}
+
 void testWorldPoseAndShape()
 {
     Project project = makeProject(100, 100);
@@ -1010,6 +1153,13 @@ int main(int argc, char** argv)
          testCameraKeepsCanvasCoordinates},
         {QStringLiteral("cameraNegativeScaleFlips"),
          testCameraNegativeScaleFlips},
+        {QStringLiteral("worldRectRendersOutsideCanvas"),
+         testWorldRectRendersOutsideCanvas},
+        {QStringLiteral("cameraIgnoresWorldRect"), testCameraIgnoresWorldRect},
+        {QStringLiteral("transparentOutsideCanvas"),
+         testTransparentOutsideCanvas},
+        {QStringLiteral("transparentWebpOverheadIsSmall"),
+         testTransparentWebpOverheadIsSmall},
         {QStringLiteral("worldPoseAndShape"), testWorldPoseAndShape},
         {QStringLiteral("solverSelfShapeTerminates"),
          testSolverSelfShapeTerminates},

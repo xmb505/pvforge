@@ -1222,6 +1222,8 @@ void NextWindow::buildEditor()
 
     m_assetPanel = new AssetPanel(m_document, top);
     m_viewport = new ViewportWidget(m_document, top);
+    m_viewport->setSceneExpandPercent(
+        m_settings.workbenchCacheExpandPercent);
     m_propertiesPanel = new PropertiesPanel(m_document, top);
 
     m_propertiesPanel->setAutoKey(!m_autoKeyCheck
@@ -1579,7 +1581,12 @@ void NextWindow::ensureWorkbenchServices()
     }
 
     const Uuid camera = m_viewport ? m_viewport->cameraUuid() : Uuid();
-    if (m_workbench && m_workbench->cameraUuid() == camera)
+    const int expand = camera.isEmpty()
+                           ? std::clamp(
+                                 m_settings.workbenchCacheExpandPercent, 0, 200)
+                           : 0;
+    if (m_workbench && m_workbench->cameraUuid() == camera
+        && m_workbench->expandPercent() == expand)
         return;
 
     resetWorkbenchServices();
@@ -2548,16 +2555,21 @@ void NextWindow::applySettings(const AppSettings& previous)
             m_viewport->refresh();
     }
 
-    // The cache directory key includes the scale, so a workbench settings
-    // change rebuilds the service (and its scan) instead of reusing the old
-    // one.
+    // The cache directory key includes the scale and expansion, so a workbench
+    // settings change rebuilds the service (and its scan) instead of reusing
+    // the old one.
     if (previous.workbenchCacheEnabled != m_settings.workbenchCacheEnabled
         || previous.workbenchCacheScalePercent
                != m_settings.workbenchCacheScalePercent
+        || previous.workbenchCacheExpandPercent
+               != m_settings.workbenchCacheExpandPercent
         || previous.workbenchCacheDiskBytes
                != m_settings.workbenchCacheDiskBytes
         || previous.workbenchCacheMemoryBytes
                != m_settings.workbenchCacheMemoryBytes) {
+        if (m_viewport)
+            m_viewport->setSceneExpandPercent(
+                m_settings.workbenchCacheExpandPercent);
         resetWorkbenchServices();
         ensureWorkbenchServices();
     }

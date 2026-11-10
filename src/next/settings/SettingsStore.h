@@ -27,9 +27,12 @@ struct AppSettings
 
     // Workbench cache: whole-frame prerendered scene, hit during playback.
     // Scale is snapped to 25/50/75/100 percent; the memory budget is fixed at
-    // 256 MB and intentionally not exposed in the UI.
+    // 256 MB and intentionally not exposed in the UI.  The canvas view caches
+    // a world rectangle expanded by this percentage on every side; camera
+    // views and exports never expand.
     bool workbenchCacheEnabled = true;
     int workbenchCacheScalePercent = 50;
+    int workbenchCacheExpandPercent = 50;
     qint64 workbenchCacheDiskBytes = 8LL * 1024 * 1024 * 1024;
     qint64 workbenchCacheMemoryBytes = 256LL * 1024 * 1024;
 

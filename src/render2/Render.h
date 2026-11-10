@@ -7,6 +7,7 @@
 #include <QColor>
 #include <QImage>
 #include <QPainterPath>
+#include <QRectF>
 #include <QSize>
 #include <QVector>
 
@@ -23,6 +24,12 @@ using FrameProvider = std::function<QImage(const Uuid& entityUuid,
 // One rendered frame request.  An empty outputSize means the project canvas
 // size; an invalid background means project.settings.background.  An empty
 // cameraUuid renders the whole project canvas (0,0,width,height).
+// `worldRect` overrides that canvas rectangle for the canvas view; it may
+// contain negative coordinates so editor-only previews can show entities
+// outside the canvas.  Camera views ignore it.
+// `transparentOutsideCanvas` only applies when cameraUuid is empty and
+// worldRect is valid: the image starts fully transparent, the project canvas
+// is filled with the background and only entities are drawn outside it.
 // `projectFrame` is fractional during 2x/4x fps export sampling.
 struct Options
 {
@@ -30,6 +37,8 @@ struct Options
     Uuid cameraUuid;
     QSize outputSize;
     QColor background;
+    QRectF worldRect;
+    bool transparentOutsideCanvas = false;
     FrameProvider videoFrame;
     FrameProvider htmlFrame;
 };

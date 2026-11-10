@@ -45,12 +45,15 @@ void addKey(model::Entity& entity, const QString& track, int frame, double value
 }
 
 workbench::Options metaOptions(const model::Project& project,
-                               int scalePercent = 50, int maxWidth = 1280)
+                               int scalePercent = 50, int maxWidth = 1280,
+                               int expandPercent = 0)
 {
     workbench::Options options;
     options.scalePercent = scalePercent;
     options.maxWidth = maxWidth;
-    options.targetSize = workbench::cacheSizeFor(project, scalePercent, maxWidth);
+    options.expandPercent = expandPercent;
+    options.targetSize =
+        workbench::cacheSizeFor(project, scalePercent, maxWidth, expandPercent);
     return options;
 }
 
@@ -149,6 +152,9 @@ private slots:
     void metaTracksHtmlVariables();
     void metaTracksGenerativeContent();
     void signatureAndSize();
+    void renderRectAndExpandedSize();
+    void metaTracksExpandAndTransparency();
+    void signatureTracksExpandAndTransparency();
     void cacheStoreLookup();
     void cacheMetaMismatch();
     void cacheSurvivesRestart();
@@ -570,6 +576,83 @@ void WorkbenchCacheTests::signatureAndSize()
     QVERIFY(signature != workbench::renderSignature(project, noChrome));
     QVERIFY(workbench::renderSignature(project, options)
             != workbench::renderSignature(project, noChrome));
+}
+
+void WorkbenchCacheTests::renderRectAndExpandedSize()
+{
+    model::Project project;
+    project.settings.width = 1920;
+    project.settings.height = 1080;
+
+    QCOMPARE(workbench::renderRect(project, 0), QRectF(0, 0, 1920, 1080));
+    QCOMPARE(workbench::renderRect(project, 50),
+             QRectF(-960, -540, 3840, 2160));
+    QCOMPARE(workbench::renderRect(project, 200),
+             QRectF(-3840, -2160, 9600, 5400));
+    QCOMPARE(workbench::renderRect(project, -10), QRectF(0, 0, 1920, 1080));
+    QCOMPARE(workbench::renderRect(project, 500),
+             workbench::renderRect(project, 200));
+
+    // The 3-argument overload keeps the canvas-only size.
+    QCOMPARE(workbench::cacheSizeFor(project, 50, 0), QSize(960, 540));
+    QCOMPARE(workbench::cacheSizeFor(project, 50, 0, 0), QSize(960, 540));
+    QCOMPARE(workbench::cacheSizeFor(project, 50, 0, 50), QSize(1920, 1080));
+    QCOMPARE(workbench::cacheSizeFor(project, 50, 1280, 50), QSize(1280, 720));
+    QCOMPARE(workbench::cacheSizeFor(project, 25, 0, 200), QSize(2400, 1350));
+}
+
+void WorkbenchCacheTests::metaTracksExpandAndTransparency()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    project.settings.width = 320;
+    project.settings.height = 180;
+    project.settings.fps = 30;
+    const model::Entity entity = textEntity(QStringLiteral("e1"), 0, 30);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options canvas = metaOptions(project, 50, 1280, 0);
+    const workbench::Options expanded = metaOptions(project, 50, 1280, 50);
+    workbench::MetaBuilder builder(project, assets);
+
+    const workbench::FrameMeta canvasMeta = builder.build(5, QString(), canvas);
+    const workbench::FrameMeta expandedMeta =
+        builder.build(5, QString(), expanded);
+    QVERIFY(!canvasMeta.equals(expandedMeta));
+
+    workbench::Options transparent = expanded;
+    transparent.transparentOutsideCanvas = true;
+    const workbench::FrameMeta transparentMeta =
+        builder.build(5, QString(), transparent);
+    QVERIFY(!expandedMeta.equals(transparentMeta));
+
+    workbench::Options wider = metaOptions(project, 50, 1280, 100);
+    QVERIFY(!expandedMeta.equals(builder.build(5, QString(), wider)));
+}
+
+void WorkbenchCacheTests::signatureTracksExpandAndTransparency()
+{
+    model::Project project;
+    project.settings.width = 320;
+    project.settings.height = 180;
+    project.settings.fps = 30;
+
+    workbench::Options options;
+    options.scalePercent = 50;
+    options.expandPercent = 0;
+    const QString canvas = workbench::renderSignature(project, options);
+
+    workbench::Options expanded = options;
+    expanded.expandPercent = 50;
+    QVERIFY(canvas != workbench::renderSignature(project, expanded));
+
+    workbench::Options transparent = expanded;
+    transparent.transparentOutsideCanvas = true;
+    QVERIFY(workbench::renderSignature(project, expanded)
+            != workbench::renderSignature(project, transparent));
 }
 
 void WorkbenchCacheTests::cacheStoreLookup()

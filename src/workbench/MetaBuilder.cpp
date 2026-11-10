@@ -18,7 +18,7 @@
 namespace pvf::workbench {
 namespace {
 
-constexpr quint32 kMetaFormat = 1;
+constexpr quint32 kMetaFormat = 2;
 
 // Explicit, ordered QVariant serialisation.  QVariant's own stream operator is
 // stable for a given Qt build but depends on the exact stored type, while
@@ -312,8 +312,14 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     out << qint32(frame) << qint32(m_project.settings.fps)
         << qint32(m_project.settings.width) << qint32(m_project.settings.height)
         << m_project.settings.background << options.targetSize
-        << qint32(options.scalePercent) << options.rendererVersion
-        << options.chromeVersion << cameraUuid;
+        << qint32(options.scalePercent) << qint32(options.expandPercent)
+        << quint8(options.transparentOutsideCanvas ? 1 : 0)
+        << options.rendererVersion << options.chromeVersion << cameraUuid;
+
+    const QRectF worldRect = renderRect(m_project, options.expandPercent);
+    out << worldRect.left() << worldRect.top() << worldRect.width()
+        << worldRect.height();
+
     out << cameraPose.world << cameraPose.opacity << cameraPose.visible;
 
     QSet<Uuid> collected = collectEntities(m_project, frame);
@@ -357,8 +363,14 @@ QString renderSignature(const model::Project& project, const Options& options)
     out.setVersion(QDataStream::Qt_6_0);
 
     out << quint32(1) << options.rendererVersion << qint32(options.scalePercent)
+        << qint32(options.expandPercent)
+        << quint8(options.transparentOutsideCanvas ? 1 : 0)
         << qint32(project.settings.fps) << qint32(project.settings.width)
         << qint32(project.settings.height);
+
+    const QRectF worldRect = renderRect(project, options.expandPercent);
+    out << worldRect.left() << worldRect.top() << worldRect.width()
+        << worldRect.height();
 
     const bool html = projectHasHtml(project);
     out << html;
@@ -368,11 +380,24 @@ QString renderSignature(const model::Project& project, const Options& options)
     return QStringLiteral("wb1-") + sha1Hex(payload);
 }
 
-QSize cacheSizeFor(const model::Project& project, int scalePercent, int maxWidth)
+QRectF renderRect(const model::Project& project, int expandPercent)
 {
+    const double width = double(std::max(1, project.settings.width));
+    const double height = double(std::max(1, project.settings.height));
+    const double factor = double(std::clamp(expandPercent, 0, 200)) / 100.0;
+    const double expandX = width * factor;
+    const double expandY = height * factor;
+    return QRectF(-expandX, -expandY, width + 2.0 * expandX,
+                  height + 2.0 * expandY);
+}
+
+QSize cacheSizeFor(const model::Project& project, int scalePercent, int maxWidth,
+                   int expandPercent)
+{
+    const QRectF world = renderRect(project, expandPercent);
     const double scale = double(scalePercent) / 100.0;
-    int width = std::max(1, int(std::lround(project.settings.width * scale)));
-    int height = std::max(1, int(std::lround(project.settings.height * scale)));
+    int width = std::max(1, int(std::lround(world.width() * scale)));
+    int height = std::max(1, int(std::lround(world.height() * scale)));
 
     if (maxWidth > 0 && width > maxWidth)
     {

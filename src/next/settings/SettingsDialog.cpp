@@ -190,6 +190,17 @@ void SettingsDialog::buildWorkbenchPage()
     m_workbenchScale->addItem(QStringLiteral("100%"), 100);
     form->addRow(QStringLiteral("清晰度（工程分辨率比例）"), m_workbenchScale);
 
+    m_workbenchExpandPercent = new QSpinBox(page);
+    m_workbenchExpandPercent->setObjectName(QStringLiteral("workbenchExpandPercent"));
+    m_workbenchExpandPercent->setRange(0, 200);
+    m_workbenchExpandPercent->setSingleStep(5);
+    m_workbenchExpandPercent->setSuffix(QStringLiteral(" %"));
+    form->addRow(QStringLiteral("工作台缓存向外扩展"), m_workbenchExpandPercent);
+    form->addRow(selectableLabel(
+        QStringLiteral("缓存世界矩形在画布四周各扩展宽高的该比例；只影响编辑器画布视图，"
+                       "相机视图和导出不扩展。扩展区域透明，便于显示画布外实体。"),
+        page));
+
     m_workbenchDiskGb = new QSpinBox(page);
     m_workbenchDiskGb->setObjectName(QStringLiteral("workbenchDiskGb"));
     m_workbenchDiskGb->setRange(1, 64);
@@ -335,6 +346,7 @@ AppSettings SettingsDialog::settings() const
 
     settings.workbenchCacheEnabled = m_workbenchCacheEnabled->isChecked();
     settings.workbenchCacheScalePercent = m_workbenchScale->currentData().toInt();
+    settings.workbenchCacheExpandPercent = m_workbenchExpandPercent->value();
     settings.workbenchCacheDiskBytes = qint64(m_workbenchDiskGb->value()) * kGiB;
     settings.workbenchCacheMemoryBytes = m_workbenchMemoryBytes;
 
@@ -373,6 +385,7 @@ void SettingsDialog::setSettings(const AppSettings& settings)
         m_workbenchScale->findData(value.workbenchCacheScalePercent);
     if (workbenchScaleIndex >= 0)
         m_workbenchScale->setCurrentIndex(workbenchScaleIndex);
+    m_workbenchExpandPercent->setValue(value.workbenchCacheExpandPercent);
     m_workbenchDiskGb->setValue(int(value.workbenchCacheDiskBytes / kGiB));
     m_workbenchMemoryBytes = value.workbenchCacheMemoryBytes;
 

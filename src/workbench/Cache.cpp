@@ -41,6 +41,8 @@ QString directorySignature(const Options& options)
     QDataStream out(&payload, QIODevice::WriteOnly);
     out.setVersion(QDataStream::Qt_6_0);
     out << quint32(1) << options.rendererVersion << qint32(options.scalePercent)
+        << qint32(options.expandPercent)
+        << quint8(options.transparentOutsideCanvas ? 1 : 0)
         << options.targetSize << options.chromeVersion;
     return QStringLiteral("wb1-") + sha1Hex(payload);
 }

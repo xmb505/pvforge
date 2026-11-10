@@ -47,6 +47,7 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.videoMemoryFrames, expected.videoMemoryFrames);
     QCOMPARE(actual.workbenchCacheEnabled, expected.workbenchCacheEnabled);
     QCOMPARE(actual.workbenchCacheScalePercent, expected.workbenchCacheScalePercent);
+    QCOMPARE(actual.workbenchCacheExpandPercent, expected.workbenchCacheExpandPercent);
     QCOMPARE(actual.workbenchCacheDiskBytes, expected.workbenchCacheDiskBytes);
     QCOMPARE(actual.workbenchCacheMemoryBytes, expected.workbenchCacheMemoryBytes);
     QCOMPARE(int(actual.mcpPort), int(expected.mcpPort));
@@ -244,6 +245,7 @@ void SettingsTests::workbenchDefaults()
     const AppSettings defaults;
     QCOMPARE(defaults.workbenchCacheEnabled, true);
     QCOMPARE(defaults.workbenchCacheScalePercent, 50);
+    QCOMPARE(defaults.workbenchCacheExpandPercent, 50);
     QCOMPARE(defaults.workbenchCacheDiskBytes, 8 * kGiB);
     QCOMPARE(defaults.workbenchCacheMemoryBytes, 256 * kMiB);
 
@@ -263,6 +265,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     AppSettings expected;
     expected.workbenchCacheEnabled = false;
     expected.workbenchCacheScalePercent = 75;
+    expected.workbenchCacheExpandPercent = 125;
     expected.workbenchCacheDiskBytes = 24 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
     store.save(expected);
@@ -271,12 +274,14 @@ void SettingsTests::workbenchStoreRoundTrip()
     const AppSettings loaded = reopened.load();
     QCOMPARE(loaded.workbenchCacheEnabled, false);
     QCOMPARE(loaded.workbenchCacheScalePercent, 75);
+    QCOMPARE(loaded.workbenchCacheExpandPercent, 125);
     QCOMPARE(loaded.workbenchCacheDiskBytes, 24 * kGiB);
     QCOMPARE(loaded.workbenchCacheMemoryBytes, 512 * kMiB);
 
     QSettings raw(path, QSettings::IniFormat);
     QCOMPARE(raw.value(QStringLiteral("workbench/enabled")).toBool(), false);
     QCOMPARE(raw.value(QStringLiteral("workbench/scalePercent")).toInt(), 75);
+    QCOMPARE(raw.value(QStringLiteral("workbench/expandPercent")).toInt(), 125);
     QCOMPARE(raw.value(QStringLiteral("workbench/diskBytes")).toLongLong(), 24 * kGiB);
     QCOMPARE(raw.value(QStringLiteral("workbench/memoryBytes")).toLongLong(), 512 * kMiB);
 }
@@ -289,6 +294,7 @@ void SettingsTests::workbenchStoreSanitizes()
     {
         QSettings raw(path, QSettings::IniFormat);
         raw.setValue(QStringLiteral("workbench/scalePercent"), 60);
+        raw.setValue(QStringLiteral("workbench/expandPercent"), 900);
         raw.setValue(QStringLiteral("workbench/diskBytes"), Q_INT64_C(0));
         raw.setValue(QStringLiteral("workbench/memoryBytes"), Q_INT64_C(1));
         raw.sync();
@@ -297,6 +303,7 @@ void SettingsTests::workbenchStoreSanitizes()
     SettingsStore store(path);
     const AppSettings loaded = store.load();
     QCOMPARE(loaded.workbenchCacheScalePercent, 50);
+    QCOMPARE(loaded.workbenchCacheExpandPercent, 200);
     QCOMPARE(loaded.workbenchCacheDiskBytes, 1 * kGiB);
     QCOMPARE(loaded.workbenchCacheMemoryBytes, 32 * kMiB);
 
@@ -310,6 +317,17 @@ void SettingsTests::workbenchStoreSanitizes()
     QCOMPARE(snapped(70), 75);
     QCOMPARE(snapped(90), 100);
     QCOMPARE(snapped(1000), 100);
+
+    const auto expanded = [](int percent) {
+        AppSettings settings;
+        settings.workbenchCacheExpandPercent = percent;
+        return SettingsStore::sanitized(settings).workbenchCacheExpandPercent;
+    };
+    QCOMPARE(expanded(-10), 0);
+    QCOMPARE(expanded(0), 0);
+    QCOMPARE(expanded(50), 50);
+    QCOMPARE(expanded(200), 200);
+    QCOMPARE(expanded(201), 200);
 
     AppSettings tooBig;
     tooBig.workbenchCacheDiskBytes = 1024 * kGiB;
@@ -402,17 +420,20 @@ void SettingsTests::workbenchDialogRoundTrip()
 
     QVERIFY(findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 50);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 50);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 8);
 
     AppSettings expected;
     expected.workbenchCacheEnabled = false;
     expected.workbenchCacheScalePercent = 100;
+    expected.workbenchCacheExpandPercent = 150;
     expected.workbenchCacheDiskBytes = 32 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
 
     dialog.setSettings(expected);
     QVERIFY(!findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 100);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 150);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 32);
     verifySettingsEqual(dialog.settings(), expected);
 }
@@ -428,6 +449,7 @@ void SettingsTests::workbenchDialogCancelDoesNotSave()
     auto* scale = findWidget<QComboBox>(dialog, "workbenchScale");
     scale->setCurrentIndex(scale->findData(25));
     findWidget<QSpinBox>(dialog, "workbenchDiskGb")->setValue(2);
+    findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->setValue(180);
     findWidget<QDialogButtonBox>(dialog, "settingsButtons")
         ->button(QDialogButtonBox::Cancel)
         ->click();
@@ -436,6 +458,7 @@ void SettingsTests::workbenchDialogCancelDoesNotSave()
     const AppSettings saved = store.load();
     QCOMPARE(saved.workbenchCacheEnabled, true);
     QCOMPARE(saved.workbenchCacheScalePercent, 50);
+    QCOMPARE(saved.workbenchCacheExpandPercent, 50);
     QCOMPARE(saved.workbenchCacheDiskBytes, 8 * kGiB);
 }
 
@@ -450,12 +473,14 @@ void SettingsTests::workbenchDialogApplySaves()
     auto* scale = findWidget<QComboBox>(dialog, "workbenchScale");
     scale->setCurrentIndex(scale->findData(25));
     findWidget<QSpinBox>(dialog, "workbenchDiskGb")->setValue(16);
+    findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->setValue(25);
     findWidget<QPushButton>(dialog, "applyButton")->click();
 
     QCOMPARE(dialog.result(), 0);
     const AppSettings saved = store.load();
     QCOMPARE(saved.workbenchCacheEnabled, false);
     QCOMPARE(saved.workbenchCacheScalePercent, 25);
+    QCOMPARE(saved.workbenchCacheExpandPercent, 25);
     QCOMPARE(saved.workbenchCacheDiskBytes, 16 * kGiB);
     QCOMPARE(saved.workbenchCacheMemoryBytes, 256 * kMiB);
 }
@@ -469,21 +494,27 @@ void SettingsTests::workbenchDialogSnapsAndClamps()
 
     AppSettings invalid;
     invalid.workbenchCacheScalePercent = 60;
+    invalid.workbenchCacheExpandPercent = -20;
     invalid.workbenchCacheDiskBytes = 0;
     invalid.workbenchCacheMemoryBytes = -5;
     dialog.setSettings(invalid);
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 50);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 0);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 1);
     QCOMPARE(dialog.settings().workbenchCacheScalePercent, 50);
+    QCOMPARE(dialog.settings().workbenchCacheExpandPercent, 0);
     QCOMPARE(dialog.settings().workbenchCacheDiskBytes, 1 * kGiB);
     QCOMPARE(dialog.settings().workbenchCacheMemoryBytes, 32 * kMiB);
 
     invalid.workbenchCacheScalePercent = 70;
+    invalid.workbenchCacheExpandPercent = 500;
     invalid.workbenchCacheDiskBytes = 100 * kGiB;
     dialog.setSettings(invalid);
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 75);
+    QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 200);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 64);
     QCOMPARE(dialog.settings().workbenchCacheDiskBytes, 64 * kGiB);
+    QCOMPARE(dialog.settings().workbenchCacheExpandPercent, 200);
 }
 
 void SettingsTests::dialogGitCheckboxRoundTrip()

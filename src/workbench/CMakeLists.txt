@@ -51,6 +51,9 @@ if(BUILD_TESTING)
         metaTracksHtmlVariables
         metaTracksGenerativeContent
         signatureAndSize
+        renderRectAndExpandedSize
+        metaTracksExpandAndTransparency
+        signatureTracksExpandAndTransparency
         cacheStoreLookup
         cacheMetaMismatch
         cacheSurvivesRestart

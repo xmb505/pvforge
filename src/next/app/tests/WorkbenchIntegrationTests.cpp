@@ -65,6 +65,30 @@ Uuid addRedRect(ProjectDocument* document)
     return uuid;
 }
 
+Uuid addRectAt(ProjectDocument* document, double x, double y, double width,
+               double height, const QString& color)
+{
+    Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("Rect");
+    entity.start = 0;
+    entity.end = kLastFrame;
+    entity.transform.x = x;
+    entity.transform.y = y;
+    entity.content.kind = ContentKind::Vector;
+    entity.content.vector.shape = 0;
+    entity.content.vector.width = width;
+    entity.content.vector.height = height;
+    entity.content.vector.fillColor = color;
+
+    const Uuid uuid = entity.uuid;
+    document->mutableProject().entities.insert(uuid, entity);
+    QString ignored;
+    document->commitEntity(uuid, QStringLiteral("pvf: create rect"), &ignored);
+    document->flush(&ignored);
+    return uuid;
+}
+
 Uuid addCamera(ProjectDocument* document)
 {
     Entity entity;
@@ -172,6 +196,9 @@ private slots:
     void playbackPausesAndResumesScan();
     void cacheToPlayheadLimitsRange();
     void panelShowsStatsAndClears();
+    void expandSettingChangesCacheKey();
+    void expandedCanvasCachesOutsideEntity();
+    void cameraCacheDoesNotExpand();
 };
 
 void WorkbenchIntegrationTest::autoScanStartsAfterOpen()
@@ -224,11 +251,14 @@ void WorkbenchIntegrationTest::prewarmFillsCacheThenRescanHits()
     QVERIFY(!window.workbenchCacheDirForTest().isEmpty());
     QVERIFY(QDir(window.workbenchCacheDirForTest()).exists());
 
-    // The viewport grabs the cached (50%) frame and scales it while painting.
+    // The viewport grabs the project canvas live; the workbench cache holds
+    // the 50% expanded (320x180) image.
     const QImage frame = window.viewportForTest()->grabFrame();
-    QCOMPARE(frame.size(), QSize(160, 90));
-    QVERIFY(isRed(frame.pixelColor(80, 45)));
-    QVERIFY(isRed(window.lookupForTest(0, Uuid()).pixelColor(80, 45)));
+    QCOMPARE(frame.size(), QSize(320, 180));
+    QVERIFY(isRed(frame.pixelColor(160, 90)));
+    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 50);
+    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(320, 180));
+    QVERIFY(isRed(window.lookupForTest(0, Uuid()).pixelColor(160, 90)));
 
     // Second pass: meta matches everywhere, nothing is rendered or written.
     window.startWorkbenchScanForTest();
@@ -351,6 +381,10 @@ void WorkbenchIntegrationTest::cameraSwitchRebuildsCachePerCamera()
 
     combo->setCurrentIndex(1);
     QCOMPARE(window.workbenchServicesForTest()->cameraUuid(), cameraUuid);
+    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 0);
+    QCOMPARE(window.workbenchServicesForTest()->transparentOutsideCanvas(),
+             false);
+    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(160, 90));
     QVERIFY(window.workbenchCacheDirForTest().contains(cameraUuid));
 
     window.startWorkbenchScanForTest();
@@ -362,6 +396,8 @@ void WorkbenchIntegrationTest::cameraSwitchRebuildsCachePerCamera()
     // uuid no longer matches.
     combo->setCurrentIndex(0);
     QVERIFY(window.workbenchServicesForTest()->cameraUuid().isEmpty());
+    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 50);
+    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(320, 180));
     QVERIFY(window.lookupForTest(0, cameraUuid).isNull());
 }
 
@@ -437,6 +473,7 @@ void WorkbenchIntegrationTest::panelShowsStatsAndClears()
     QCOMPARE(panel->servicesForTest(), window.workbenchServicesForTest());
     panel->refreshForTest();
     QVERIFY(panel->statusTextForTest().contains(QStringLiteral("比例 50%")));
+    QVERIFY(panel->statusTextForTest().contains(QStringLiteral("扩展 50%")));
     QVERIFY(panel->statsTextForTest().contains(QStringLiteral("已缓存")));
     QVERIFY(panel->statsTextForTest().contains(
         QString::number(kLastFrame)));
@@ -451,6 +488,98 @@ void WorkbenchIntegrationTest::panelShowsStatsAndClears()
     QVERIFY(window.cacheAllActionForTest() != nullptr);
     QVERIFY(window.clearWorkbenchCacheActionForTest() != nullptr);
     QVERIFY(window.workbenchPanelActionForTest() != nullptr);
+}
+
+void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/expand.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+
+    NextWindow window(std::move(document));
+    WorkbenchServices* first = window.workbenchServicesForTest();
+    QVERIFY(first != nullptr);
+    QCOMPARE(first->expandPercent(), 50);
+    QCOMPARE(first->targetSize(), QSize(320, 180));
+    const QString directory50 = first->cacheDirectory();
+
+    AppSettings settings = window.settingsForTest();
+    settings.workbenchCacheExpandPercent = 25;
+    window.setSettingsForTest(settings);
+
+    WorkbenchServices* second = window.workbenchServicesForTest();
+    QVERIFY(second != nullptr);
+    QCOMPARE(second->expandPercent(), 25);
+    QCOMPARE(second->targetSize(), QSize(240, 135));
+    QVERIFY(second->cacheDirectory() != directory50);
+}
+
+void WorkbenchIntegrationTest::expandedCanvasCachesOutsideEntity()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/outside.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+    addRectAt(document.get(), -50.0, -50.0, 20.0, 20.0,
+              QStringLiteral("#0000ff"));
+
+    NextWindow window(std::move(document));
+    window.startWorkbenchScanForTest();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+
+    const QImage cached = window.lookupForTest(0, Uuid());
+    QVERIFY(!cached.isNull());
+    QCOMPARE(cached.size(), QSize(320, 180));
+
+    // Expanded world (-160,-90,640,360) at 50%: world (-50,-50) lands on
+    // (55,20), while the extended corner is transparent.
+    const QColor outside = cached.pixelColor(55, 20);
+    QVERIFY(outside.blue() > 200 && outside.red() < 60);
+    QCOMPARE(outside.alpha(), 255);
+    QCOMPARE(cached.pixelColor(0, 0).alpha(), 0);
+    QVERIFY(isRed(cached.pixelColor(160, 90)));
+    QCOMPARE(cached.pixelColor(160, 90).alpha(), 255);
+}
+
+void WorkbenchIntegrationTest::cameraCacheDoesNotExpand()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/cam-flat.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+    const Uuid cameraUuid = addCamera(document.get());
+
+    NextWindow window(std::move(document));
+    QComboBox* combo = window.cameraComboBoxForTest();
+    QVERIFY(combo != nullptr && combo->count() == 2);
+    combo->setCurrentIndex(1);
+
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+    QCOMPARE(services->cameraUuid(), cameraUuid);
+    QCOMPARE(services->expandPercent(), 0);
+    QCOMPARE(services->transparentOutsideCanvas(), false);
+    QCOMPARE(services->targetSize(), QSize(160, 90));
+
+    window.startWorkbenchScanForTest();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    const QImage cached = window.lookupForTest(0, cameraUuid);
+    QCOMPARE(cached.size(), QSize(160, 90));
+    QVERIFY(isRed(cached.pixelColor(80, 45)));
+    QCOMPARE(cached.pixelColor(0, 0).alpha(), 255);
 }
 
 QTEST_MAIN(WorkbenchIntegrationTest)

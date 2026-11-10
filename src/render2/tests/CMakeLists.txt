@@ -24,6 +24,10 @@ set(PVF_RENDER2_TEST_CASES
     cameraCrop
     cameraKeepsCanvasCoordinates
     cameraNegativeScaleFlips
+    worldRectRendersOutsideCanvas
+    cameraIgnoresWorldRect
+    transparentOutsideCanvas
+    transparentWebpOverheadIsSmall
     worldPoseAndShape
     solverSelfShapeTerminates
     fractionalProjectFrame

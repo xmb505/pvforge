@@ -59,6 +59,12 @@ public:
     void setCameraUuid(const Uuid& uuid);
     Uuid cameraUuid() const { return m_cameraUuid; }
 
+    // Editor canvas view only: the rendered/cached world rectangle covers the
+    // project canvas plus this percentage of its width/height on every side.
+    // Camera views always use 0.  Clamped to 0..200.
+    void setSceneExpandPercent(int percent);
+    int sceneExpandPercent() const { return m_sceneExpandPercent; }
+
     // Optional decoded-frame sources for video and HTML assets.  An unset
     // provider leaves render2's placeholder visible.
     void setVideoFrameProvider(render2::FrameProvider provider);
@@ -93,9 +99,9 @@ public:
     void refresh();
 
     // Renders the current project canvas/camera at the project resolution.
-    // The widget background and gizmo are not included.  With the workbench
-    // cache installed a cache hit returns the stored whole frame instead,
-    // which may be smaller than the project resolution.
+    // The widget background and gizmo are not included.  This always renders
+    // the canvas live (never the expanded cache image) so MCP previews keep
+    // exactly project width x height; the workbench cache is not read here.
     QImage grabFrame() const;
 
     QPointF projectToWidget(QPointF projectPos) const;
@@ -163,16 +169,20 @@ private:
                          const QTransform& projectToWidget) const;
 
     void invalidateScene();
+    QRectF sceneWorldRect(int expandPercent) const;
     QImage ensureSceneImage(const QSize& size);
     // render2 pass with the current providers.  *mediaMissing is set when an
     // asset provider was asked for a picture and returned nothing, so the
     // result contains render2's placeholder and must not enter the cache.
-    QImage renderScene(const QSize& size, bool* mediaMissing) const;
+    // expandPercent <= 0 renders the plain canvas; camera views ignore it.
+    QImage renderScene(const QSize& size, bool* mediaMissing,
+                       int expandPercent) const;
 
     void updateHoverCursor(const QPointF& widgetPos);
 
     Document* m_document = nullptr;
     Uuid m_cameraUuid;
+    int m_sceneExpandPercent = 0;
     bool m_showGizmo = true;
 
     bool m_snapEnabled = true;
@@ -220,6 +230,7 @@ private:
     QSize m_sceneSize;
     Uuid m_sceneCamera;
     int m_sceneFrame = -1;
+    int m_sceneExpand = 0;
     bool m_sceneValid = false;
 
     static constexpr double kCanvasMargin = 24.0;

@@ -77,6 +77,11 @@ public:
     QString cacheDirectory() const;
     Uuid cameraUuid() const { return m_cameraUuid; }
     int scalePercent() const { return m_options.scalePercent; }
+    int expandPercent() const { return m_options.expandPercent; }
+    bool transparentOutsideCanvas() const
+    {
+        return m_options.transparentOutsideCanvas;
+    }
     QSize targetSize() const { return m_options.targetSize; }
     // Frames 0..totalFrames()-1 cover the project content.
     int totalFrames() const;

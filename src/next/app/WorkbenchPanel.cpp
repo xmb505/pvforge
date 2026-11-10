@@ -110,8 +110,9 @@ void WorkbenchPanel::refresh()
                                ? tr("全画布")
                                : m_services->cameraUuid().left(8);
     const QSize target = m_services->targetSize();
-    QString status = tr("状态：启用 · 比例 %1% · 目标 %2 × %3\n相机：%4")
+    QString status = tr("状态：启用 · 比例 %1% · 扩展 %2% · 目标 %3 × %4\n相机：%5")
                          .arg(m_services->scalePercent())
+                         .arg(m_services->expandPercent())
                          .arg(target.width())
                          .arg(target.height())
                          .arg(camera);
