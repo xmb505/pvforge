@@ -3037,7 +3037,6 @@ void NextWindow::startExport(const Uuid& cameraUuid, int startFrame, int endFram
                         text += QStringLiteral("\n\n") + result.warnings.join('\n');
 
                     const QString folder = QFileInfo(outputPath).absolutePath();
-                    openOutputFolder(folder);
 
                     QMessageBox box(QMessageBox::Information, tr("导出完成"),
                                     text, QMessageBox::NoButton, this);

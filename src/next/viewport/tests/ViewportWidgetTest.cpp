@@ -309,6 +309,7 @@ private slots:
     void gizmoFollowsSpinSolver();
     void gizmoWritesRotationKeyAtPlayhead();
     void gizmoAutoKeyWritesMoveKey();
+    void childGizmoUsesParentTransform();
     void cornerScaleKeepsOppositeCorner();
     void centerScaleFlipsBothAxes();
     void rotateDragAndShiftSnap();
@@ -632,6 +633,68 @@ void ViewportWidgetTest::gizmoAutoKeyWritesMoveKey()
     QVERIFY(std::abs(*value - (startX + 20.0 / scale)) < 1.5);
     QVERIFY(keyed.tracks.constFind(QStringLiteral("y"))
             == keyed.tracks.constEnd());
+}
+
+void ViewportWidgetTest::childGizmoUsesParentTransform()
+{
+    FakeDocument document;
+
+    model::Entity parent;
+    parent.uuid = model::newUuid();
+    parent.name = QStringLiteral("Parent");
+    parent.start = 0;
+    parent.end = 30;
+    parent.transform.x = 160.0;
+    parent.transform.y = 90.0;
+    parent.transform.rotation = 90.0;
+    parent.content.kind = ContentKind::Vector;
+    parent.content.vector.shape = 0;
+    parent.content.vector.width = 40.0;
+    parent.content.vector.height = 20.0;
+    parent.content.vector.fillColor = QStringLiteral("#00ff00");
+
+    model::Entity child;
+    child.uuid = model::newUuid();
+    child.name = QStringLiteral("Child");
+    child.parentUuid = parent.uuid;
+    child.start = 0;
+    child.end = 30;
+    child.transform.x = 20.0;
+    child.transform.y = 0.0;
+    child.content.kind = ContentKind::Vector;
+    child.content.vector.shape = 0;
+    child.content.vector.width = 40.0;
+    child.content.vector.height = 20.0;
+    child.content.vector.fillColor = QStringLiteral("#ff0000");
+
+    document.mutableProject().entities.insert(parent.uuid, parent);
+    document.mutableProject().entities.insert(child.uuid, child);
+    document.setSelection(child.uuid);
+
+    ViewportWidget view(&document);
+    showWidget(view);
+
+    // Parent rotates 90°: child local +X points along project +Y.
+    QTransform parentWorld;
+    parentWorld.translate(parent.transform.x, parent.transform.y);
+    parentWorld.rotate(parent.transform.rotation);
+    const QPointF localHandle = gizmo::handlePosition(
+        gizmo::Handle::MoveX, gizmoTransformOf(child), vectorBoundsOf(child),
+        projectScale(view));
+    const QPointF screenHandle =
+        view.projectToWidget(parentWorld.map(localHandle));
+
+    const double before = document.project().entities.value(child.uuid).transform.x;
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                      screenHandle.toPoint());
+    const QPointF target = screenHandle + QPointF(0.0, 40.0);
+    sendMouseMove(view, target, Qt::ControlModifier);
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                        target.toPoint());
+
+    const double after = document.project().entities.value(child.uuid).transform.x;
+    QVERIFY2(std::abs(after - before) > 1.0,
+             "the gizmo handle must be hit in parent-transformed space");
 }
 
 void ViewportWidgetTest::cornerScaleKeepsOppositeCorner()

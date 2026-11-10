@@ -640,7 +640,8 @@ QTransform ViewportWidget::parentWorldTransform(const Uuid& uuid) const
 
 QTransform ViewportWidget::parentToWidgetTransform(const Uuid& uuid) const
 {
-    return projectToWidgetTransform() * parentWorldTransform(uuid);
+    // Qt uses row-vector transforms: local -> parent -> project -> widget.
+    return parentWorldTransform(uuid) * projectToWidgetTransform();
 }
 
 double ViewportWidget::viewScaleFor(const QTransform& parentToWidget) const
