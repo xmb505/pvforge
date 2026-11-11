@@ -41,6 +41,7 @@
 #include <QPropertyAnimation>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -90,7 +91,11 @@ void WorkbenchPanel::buildUi()
     setFrameShape(QFrame::StyledPanel);
     setStyleSheet(QStringLiteral(
         "QFrame#workbench { background: palette(window); border: 1px solid palette(mid); }"));
-    setFixedSize(640, 560);
+    // The old wall is 640x560, but it must fit above the timeline in smaller
+    // viewports. showAt() shrinks it to the viewport; the page stack scrolls
+    // while the create button stays outside the scroll area.
+    setMinimumSize(420, 300);
+    resize(640, 560);
 
     auto* shadow = new QGraphicsDropShadowEffect(this);
     shadow->setBlurRadius(28);
@@ -173,7 +178,14 @@ void WorkbenchPanel::buildUi()
     }
     root->addWidget(m_types);
 
-    right->addWidget(m_pages, 1);
+    auto* pageScroll = new QScrollArea(this);
+    pageScroll->setObjectName(QStringLiteral("workbenchPageScroll"));
+    pageScroll->setWidgetResizable(true);
+    pageScroll->setFrameShape(QFrame::NoFrame);
+    pageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    pageScroll->setWidget(m_pages);
+
+    right->addWidget(pageScroll, 1);
 
     m_create = new QPushButton(
         Lang::t(QStringLiteral("workbench.create"), QStringLiteral("创建")), this);
@@ -917,6 +929,14 @@ void WorkbenchPanel::showAt(const QPoint& pos)
         updateSessionWallSummary();
 
     QWidget* parent = parentWidget();
+    QSize panelSize = size();
+    if (parent)
+    {
+        panelSize.setWidth(std::min(640, std::max(420, parent->width() - 16)));
+        panelSize.setHeight(std::min(560, std::max(300, parent->height() - 16)));
+    }
+    resize(panelSize);
+
     QPoint target = pos;
     if (parent)
     {

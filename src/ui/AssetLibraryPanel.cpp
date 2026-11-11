@@ -833,25 +833,38 @@ void AssetLibraryPanel::buildUi()
         m_progressArea->hide();
         layout->addWidget(m_progressArea);
     }
+
+    // Legacy visible workflow: 创建实体 / 删除. Dragging an asset to the
+    // timeline remains the second entry point.
+    auto* buttons = new QHBoxLayout();
+    buttons->setSpacing(6);
+    m_create = new QPushButton(QStringLiteral("创建实体"), this);
+    m_create->setObjectName(QStringLiteral("assetCreate"));
+    m_create->setEnabled(false);
+    buttons->addWidget(m_create, 1);
+    m_remove = new QPushButton(QStringLiteral("删除"), this);
+    m_remove->setObjectName(QStringLiteral("assetRemove"));
+    if (m_sessionMode)
+    {
+        m_remove->setToolTip(
+            QStringLiteral("只删除素材库条目，引用它的实体显示“素材缺失”"));
+        connect(m_create, &QPushButton::clicked, this,
+                &AssetLibraryPanel::createSelectedSession);
+        connect(m_remove, &QPushButton::clicked, this,
+                &AssetLibraryPanel::removeSelectedSession);
+    }
     else
     {
-        // The visible workflow is drag-to-timeline. The old buttons stay as
-        // hidden objects only so the existing self-tests can still drive them.
-        m_create = new QPushButton(QStringLiteral("创建实体"), this);
-        m_create->setObjectName(QStringLiteral("assetCreate"));
-        m_create->setEnabled(false);
-        m_create->hide();
-        m_remove = new QPushButton(QStringLiteral("删除"), this);
-        m_remove->setObjectName(QStringLiteral("assetRemove"));
         m_remove->setToolTip(
             QStringLiteral("只删除素材模板，不影响场景中已创建的实体"));
-        m_remove->setEnabled(false);
-        m_remove->hide();
         connect(m_create, &QPushButton::clicked, this,
                 &AssetLibraryPanel::createSelected);
         connect(m_remove, &QPushButton::clicked, this,
                 &AssetLibraryPanel::removeSelected);
     }
+    m_remove->setEnabled(false);
+    buttons->addWidget(m_remove);
+    layout->addLayout(buttons);
 
     m_info = new QLabel(this);
     m_info->setObjectName(QStringLiteral("assetInfo"));
@@ -1158,6 +1171,15 @@ QListWidgetItem* AssetLibraryPanel::makeSessionItem(const SessionEntry& entry)
 void AssetLibraryPanel::updateSessionSelection()
 {
     const QListWidgetItem* item = m_list ? m_list->currentItem() : nullptr;
+    const QString hash = item ? item->data(Qt::UserRole).toString() : QString();
+    const bool missing =
+        item && !item->data(Qt::UserRole + 2).toString().isEmpty();
+    if (m_create)
+        m_create->setEnabled(item && !missing);
+    if (m_remove)
+        m_remove->setEnabled(
+            item && m_session
+            && m_session->assets().getIncludingMissing(hash).has_value());
     if (!item)
     {
         if (m_info)
@@ -1169,7 +1191,6 @@ void AssetLibraryPanel::updateSessionSelection()
         return;
     }
 
-    const QString hash = item->data(Qt::UserRole).toString();
     const auto found = std::find_if(
         m_entries.cbegin(), m_entries.cend(),
         [&hash](const SessionEntry& entry) { return entry.hash == hash; });
@@ -2639,6 +2660,34 @@ void AssetLibraryPanel::removeSelected()
     m_project->removeTemplate(index);
     for (EntityId id : instances)
         m_project->removeEntity(id);
+}
+
+void AssetLibraryPanel::createSelectedSession()
+{
+    if (!m_session || !m_session->editActions())
+        return;
+    const QString hash = selectedHash();
+    if (hash.isEmpty())
+        return;
+
+    QString error;
+    const QVector<Uuid> created = m_session->editActions()->addAssetEntities(
+        hash, m_session->playhead(), -1, Uuid(), &error);
+    if (created.isEmpty())
+    {
+        setStatus(error.isEmpty() ? QStringLiteral("无法创建实体") : error);
+        return;
+    }
+    if (m_session->document())
+        m_session->document()->setSelection(created.first());
+    const auto asset = m_session->assets().get(hash);
+    const QString name = asset && !asset->name.isEmpty() ? asset->name : hash;
+    setStatus(QStringLiteral("已创建实体 \"%1\"").arg(name));
+}
+
+void AssetLibraryPanel::removeSelectedSession()
+{
+    deleteSessionSelected();
 }
 
 } // namespace pvf

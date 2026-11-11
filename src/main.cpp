@@ -19050,6 +19050,18 @@ int assetsTest(QApplication& app)
     check(removeButton && removeButton->isVisible(),
           QStringLiteral("delete button is not visible"));
 
+    auto* sessionTimeline = window->timelineForTest();
+    auto* sessionViewport = window->viewportForTest();
+    check(sessionTimeline && sessionTimeline->height() >= 190
+              && sessionTimeline->height() <= 260,
+          QStringLiteral("timeline height is not about 220"));
+    check(sessionTimeline
+              && sessionTimeline->width() >= window->centralWidget()->width() - 2,
+          QStringLiteral("timeline is not full width"));
+    check(sessionViewport && sessionViewport->width() > 1000
+              && sessionViewport->height() > 520,
+          QStringLiteral("viewport did not regain its v0.2.0 height"));
+
     if (auto* scroll =
             window->findChild<QScrollArea*>(QStringLiteral("projectScroll")))
         scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());

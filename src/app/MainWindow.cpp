@@ -417,11 +417,15 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         new CollapsibleSection(Lang::t(QStringLiteral("section.projectSettings"), QStringLiteral("项目设置")), m_projectProps, projectContent);
     auto* environmentSection =
         new CollapsibleSection(Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")), m_environment, projectContent);
+    auto* librarySection =
+        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")), m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
+    librarySection->setExpanded(true);
 
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
+    projectLayout->addWidget(librarySection);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -458,32 +462,11 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
-
-    // Asset box on the left of the clip timeline, like the prototype.
-    auto* bottom = new QSplitter(Qt::Horizontal, this);
-    auto* libraryHost = new QWidget(bottom);
-    libraryHost->setObjectName(QStringLiteral("libraryHost"));
-    auto* libraryLayout = new QVBoxLayout(libraryHost);
-    libraryLayout->setContentsMargins(0, 0, 0, 0);
-    libraryLayout->setSpacing(0);
-    libraryLayout->addWidget(m_library);
-    libraryHost->setMinimumWidth(240);
-    libraryHost->setMaximumWidth(420);
-    bottom->addWidget(libraryHost);
-    bottom->addWidget(m_timeline);
-    bottom->setChildrenCollapsible(false);
-    bottom->setStretchFactor(0, 0);
-    bottom->setStretchFactor(1, 1);
-    bottom->setSizes({300, 1100});
-    mainSplit->addWidget(bottom);
-
-    // The clip timeline is the only timeline surface. The curve editor and
-    // waveform view stay constructed for their existing signal wiring, but
-    // they are no longer tabs in the main layout.
+    mainSplit->addWidget(m_timeline);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
-    mainSplit->setSizes({520, 380});
+    mainSplit->setSizes({640, 220});
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
@@ -846,6 +829,7 @@ void MainWindow::buildSessionShell()
 
     m_sessionProps = new ProjectPropertiesPanel(m_session, this);
     m_sessionEnvironment = new EnvironmentPanel(m_session, this);
+    m_library = new AssetLibraryPanel(m_session, this);
 
     // P4a: the legacy entity properties panel comes back next to the project
     // tab. It shows a placeholder until an entity is selected.
@@ -874,10 +858,15 @@ void MainWindow::buildSessionShell()
     auto* environmentSection = new CollapsibleSection(
         Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")),
         m_sessionEnvironment, projectContent);
+    auto* librarySection = new CollapsibleSection(
+        Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")),
+        m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
+    librarySection->setExpanded(true);
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
+    projectLayout->addWidget(librarySection);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -905,40 +894,20 @@ void MainWindow::buildSessionShell()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Legacy arrangement: the asset box sits left of the clip timeline, below
-    // the editing surface.  P2a brought the timeline back; P5 brings the asset
-    // bin back on the new AssetStore.
+    // Legacy arrangement: the timeline spans the full width below the editing
+    // surface. The asset library lives in the right "项目属性" tab again.
     auto* mainSplit = new QSplitter(Qt::Vertical, central);
     mainSplit->setObjectName(QStringLiteral("sessionMainSplit"));
     mainSplit->setChildrenCollapsible(false);
     mainSplit->addWidget(top);
 
-    auto* bottom = new QSplitter(Qt::Horizontal, mainSplit);
-    bottom->setObjectName(QStringLiteral("sessionBottomSplit"));
-    auto* libraryHost = new QWidget(bottom);
-    libraryHost->setObjectName(QStringLiteral("libraryHost"));
-    auto* libraryLayout = new QVBoxLayout(libraryHost);
-    libraryLayout->setContentsMargins(0, 0, 0, 0);
-    libraryLayout->setSpacing(0);
-    m_library = new AssetLibraryPanel(m_session, libraryHost);
-    libraryLayout->addWidget(m_library);
-    libraryHost->setMinimumWidth(240);
-    libraryHost->setMaximumWidth(420);
-
     m_timeline = new TimelinePanel(
-        static_cast<EditorSession*>(m_session), bottom);
+        static_cast<EditorSession*>(m_session), mainSplit);
     m_timeline->setObjectName(QStringLiteral("timelinePanel"));
-    bottom->addWidget(libraryHost);
-    bottom->addWidget(m_timeline);
-    bottom->setChildrenCollapsible(false);
-    bottom->setStretchFactor(0, 0);
-    bottom->setStretchFactor(1, 1);
-    bottom->setSizes({300, 1100});
-
-    mainSplit->addWidget(bottom);
+    mainSplit->addWidget(m_timeline);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
-    mainSplit->setSizes({620, 280});
+    mainSplit->setSizes({640, 220});
     layout->addWidget(mainSplit);
     setCentralWidget(central);
 

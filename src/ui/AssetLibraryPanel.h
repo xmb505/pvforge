@@ -149,6 +149,8 @@ private:
     QString selectedHtmlAsset() const;
     void createSelected();
     void removeSelected();
+    void createSelectedSession();
+    void removeSelectedSession();
     void importHtmlAsset();
 
     void buildSessionUi();
