@@ -80,6 +80,8 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -128,6 +130,12 @@ private:
     bool m_dragging = false;
     bool m_dragMoved = false;
     QPointF m_dragOriginalVelocity;
+
+    // Background pan: keeps the auto-fit until the user drags, then the view
+    // stays where it was put.  Double-click refits.
+    bool m_panning = false;
+    QPointF m_panLast;
+    QPointF m_panCenterStart;
 };
 
 } // namespace pvf::next

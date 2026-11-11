@@ -13,6 +13,7 @@
 #include <QPolygonF>
 #include <QResizeEvent>
 #include <QTransform>
+#include <QWheelEvent>
 #include <QtMath>
 
 #include <algorithm>
@@ -267,6 +268,7 @@ SolverPreviewWidget::SolverPreviewWidget(Document* document, QWidget* parent)
     setMinimumHeight(160);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setMouseTracking(true);
+    setToolTip(QStringLiteral("拖动空白处平移 · 滚轮缩放 · 双击自适应"));
     // Needed for Esc-to-cancel: clicking the handle gives the widget keyboard
     // focus so the key press arrives here instead of the shell.
     setFocusPolicy(Qt::StrongFocus);
@@ -622,8 +624,11 @@ QPointF SolverPreviewWidget::mapSolverToWidget(const QPointF& point) const
     if (!m_fitValid)
         return {};
     const QPointF center = m_plotRect.center();
+    // Solver space is Y-up (the project convention); widget space is Y-down,
+    // so a positive solver Y must move the point up on screen.  Without this
+    // flip the preview is a vertical mirror of the canvas.
     return QPointF(center.x() + (point.x() - m_solverCenter.x()) * m_scale,
-                   center.y() + (point.y() - m_solverCenter.y()) * m_scale);
+                   center.y() - (point.y() - m_solverCenter.y()) * m_scale);
 }
 
 QPointF SolverPreviewWidget::mapWidgetToSolver(const QPointF& point) const
@@ -632,7 +637,7 @@ QPointF SolverPreviewWidget::mapWidgetToSolver(const QPointF& point) const
         return {};
     const QPointF center = m_plotRect.center();
     return QPointF(m_solverCenter.x() + (point.x() - center.x()) / m_scale,
-                   m_solverCenter.y() + (point.y() - center.y()) / m_scale);
+                   m_solverCenter.y() - (point.y() - center.y()) / m_scale);
 }
 
 QPointF SolverPreviewWidget::startPoint() const
@@ -892,6 +897,20 @@ bool SolverPreviewWidget::nearArrowTip(const QPointF& widgetPos) const
 
 void SolverPreviewWidget::mousePressEvent(QMouseEvent* event)
 {
+    // Background drag pans the view; the velocity handle keeps priority so a
+    // click near the arrow tip never turns into a pan.
+    if (event->button() == Qt::LeftButton && m_fitValid
+        && m_effect != SolverEffect::Spin
+        && !nearArrowTip(event->position()))
+    {
+        m_panning = true;
+        m_panLast = event->position();
+        m_panCenterStart = m_solverCenter;
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+
     if (event->button() != Qt::LeftButton || !m_document
         || !m_error.isEmpty() || !nearArrowTip(event->position()))
     {
@@ -924,6 +943,25 @@ void SolverPreviewWidget::mousePressEvent(QMouseEvent* event)
 
 void SolverPreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_panning)
+    {
+        if (!m_fitValid || m_scale <= 0.0)
+        {
+            event->accept();
+            return;
+        }
+        const QPointF delta = event->position() - m_panLast;
+        m_panLast = event->position();
+        // Screen Y is down while solver Y is up: dragging down must increase
+        // the solver-space centre Y to make the content follow the pointer.
+        m_solverCenter = QPointF(m_panCenterStart.x() - delta.x() / m_scale,
+                                 m_panCenterStart.y() + delta.y() / m_scale);
+        m_panCenterStart = m_solverCenter;
+        update();
+        event->accept();
+        return;
+    }
+
     if (!m_dragging)
     {
         setCursor(nearArrowTip(event->position()) ? Qt::SizeAllCursor
@@ -968,6 +1006,16 @@ void SolverPreviewWidget::mouseMoveEvent(QMouseEvent* event)
 
 void SolverPreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::LeftButton && m_panning)
+    {
+        m_panning = false;
+        setCursor(nearArrowTip(event->position()) ? Qt::SizeAllCursor
+                                                  : Qt::ArrowCursor);
+        update();
+        event->accept();
+        return;
+    }
+
     if (event->button() != Qt::LeftButton || !m_dragging)
     {
         QWidget::mouseReleaseEvent(event);
@@ -1038,6 +1086,46 @@ void SolverPreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     event->accept();
 }
 
+void SolverPreviewWidget::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && m_document
+        && !nearArrowTip(event->position()))
+    {
+        // Discard the manual pan/zoom and fit the current trajectory again.
+        m_fitValid = false;
+        computePreview(false);
+        event->accept();
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
+void SolverPreviewWidget::wheelEvent(QWheelEvent* event)
+{
+    if (!m_fitValid || m_scale <= 0.0 || m_effect == SolverEffect::Spin)
+    {
+        QWidget::wheelEvent(event);
+        return;
+    }
+    const double steps = event->angleDelta().y() / 120.0;
+    if (std::abs(steps) < 1e-9)
+    {
+        event->ignore();
+        return;
+    }
+
+    const QPointF cursor = event->position();
+    const QPointF anchorSolver = mapWidgetToSolver(cursor);
+    m_scale = std::clamp(m_scale * std::pow(1.15, steps), 1e-4, 1e6);
+    const QPointF center = m_plotRect.center();
+    // Keep the solver point under the cursor pinned while zooming.
+    m_solverCenter = QPointF(
+        anchorSolver.x() - (cursor.x() - center.x()) / m_scale,
+        anchorSolver.y() + (cursor.y() - center.y()) / m_scale);
+    update();
+    event->accept();
+}
+
 bool SolverPreviewWidget::restoreOriginalVelocity()
 {
     if (!m_document || !m_dragMoved)
@@ -1099,7 +1187,7 @@ void SolverPreviewWidget::resizeEvent(QResizeEvent* event)
 
 void SolverPreviewWidget::leaveEvent(QEvent* event)
 {
-    if (!m_dragging)
+    if (!m_dragging && !m_panning)
         setCursor(Qt::ArrowCursor);
     QWidget::leaveEvent(event);
 }

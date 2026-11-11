@@ -1572,6 +1572,73 @@ int solverMiniPreviewTest(QApplication& app)
                   QStringLiteral("start and target collapse onto one point")))
         return 1;
 
+    // Solver space is Y-up, the widget is Y-down: the start (solver y=200)
+    // must be above the target (solver y=-100) on screen, exactly like the
+    // canvas.  A missing flip mirrored the preview vertically.
+    if (!check(mini->startPoint().y() < mini->targetPoint().y(),
+               QStringLiteral("preview is vertically mirrored: start y %1, "
+                              "target y %2")
+                   .arg(mini->startPoint().y())
+                   .arg(mini->targetPoint().y())))
+        return 1;
+
+    // Background drag pans the view and wheel zooms around the cursor;
+    // double-click returns to the automatic fit.
+    const QPointF fittedStart = mini->startPoint();
+    const QPointF fittedTarget = mini->targetPoint();
+    const QPointF panFrom(10.0, mini->height() - 10.0);
+    const QPointF panTo = panFrom + QPointF(24.0, 12.0);
+    QMouseEvent panPress(QEvent::MouseButtonPress, panFrom,
+                         mini->mapToGlobal(panFrom.toPoint()), Qt::LeftButton,
+                         Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent panMove(QEvent::MouseMove, panTo,
+                        mini->mapToGlobal(panTo.toPoint()), Qt::NoButton,
+                        Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent panRelease(QEvent::MouseButtonRelease, panTo,
+                           mini->mapToGlobal(panTo.toPoint()), Qt::LeftButton,
+                           Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(mini, &panPress);
+    QApplication::sendEvent(mini, &panMove);
+    QApplication::sendEvent(mini, &panRelease);
+    QApplication::processEvents();
+    const QPointF pannedDelta = mini->startPoint() - fittedStart;
+    if (!check(std::hypot(pannedDelta.x() - 24.0, pannedDelta.y() - 12.0) < 1.0,
+               QStringLiteral("pan did not follow the pointer: %1,%2")
+                   .arg(pannedDelta.x())
+                   .arg(pannedDelta.y())))
+        return 1;
+
+    const double fittedSpan =
+        std::hypot(fittedTarget.x() - fittedStart.x(),
+                   fittedTarget.y() - fittedStart.y());
+    const QPointF zoomAt = mini->rect().center();
+    QWheelEvent zoomEvent(zoomAt, mini->mapToGlobal(zoomAt.toPoint()),
+                          QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(mini, &zoomEvent);
+    QApplication::processEvents();
+    const QPointF zoomedStart = mini->startPoint();
+    const QPointF zoomedTarget = mini->targetPoint();
+    const double zoomedSpan =
+        std::hypot(zoomedTarget.x() - zoomedStart.x(),
+                   zoomedTarget.y() - zoomedStart.y());
+    if (!check(fittedSpan > 1.0
+                   && std::abs(zoomedSpan / fittedSpan - 1.15) < 0.02,
+               QStringLiteral("wheel zoom factor: %1 -> %2")
+                   .arg(fittedSpan)
+                   .arg(zoomedSpan)))
+        return 1;
+
+    QMouseEvent resetEvent(QEvent::MouseButtonDblClick, panFrom,
+                           mini->mapToGlobal(panFrom.toPoint()), Qt::LeftButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mini, &resetEvent);
+    QApplication::processEvents();
+    if (!check(std::hypot(mini->startPoint().x() - fittedStart.x(),
+                          mini->startPoint().y() - fittedStart.y()) < 1.0,
+               QStringLiteral("double-click did not restore the fit")))
+        return 1;
+
     // Black hole target sitting exactly on the launch point, on a clip much
     // longer than the preview cap.  The physical capture happens early, so the
     // preview must still name both dots and must not report truncation.
