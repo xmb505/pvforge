@@ -478,10 +478,13 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
 
     // The session cache is authoritative when it already holds this segment:
     // the trajectory shown here is the one the canvas and the timeline use.
-    // Standalone widgets (tests) have no cache and keep the local evaluation.
+    // Never use it during a live velocity drag: the model edit is not committed
+    // yet, so the cached samples still describe the old velocity and the
+    // trajectory would freeze until the mouse is released.
     if (const solver::Result* cached =
-            m_animCache ? anim::cachedSolverResultFor(entity, *solver, *m_animCache)
-                        : nullptr)
+            (!duringDrag && m_animCache)
+                ? anim::cachedSolverResultFor(entity, *solver, *m_animCache)
+                : nullptr)
     {
         if (cached->samples.isEmpty())
         {
@@ -751,6 +754,15 @@ QPointF SolverPreviewWidget::currentPoint() const
 {
     const int index = currentSampleIndex();
     if (index < 0)
+        return {};
+    if (m_effect == SolverEffect::Spin)
+        return spinPoint(m_samples, spinPlotRect(rect()), m_samples.at(index));
+    return mapSolverToWidget(m_samples.at(index).pose.position);
+}
+
+QPointF SolverPreviewWidget::pathPoint(int index) const
+{
+    if (index < 0 || index >= m_samples.size())
         return {};
     if (m_effect == SolverEffect::Spin)
         return spinPoint(m_samples, spinPlotRect(rect()), m_samples.at(index));

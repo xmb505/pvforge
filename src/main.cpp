@@ -1704,6 +1704,7 @@ int solverMiniPreviewTest(QApplication& app)
     };
     const int beforeDrag = undoDepth();
     const QPointF tip = mini->arrowTip();
+    const QPointF pathBeforeDrag = mini->pathPoint(10);
     const QPoint dragTo = (tip + QPointF(55.0, -35.0)).toPoint();
     sendMouseTo(mini, QEvent::MouseButtonPress, tip, Qt::LeftButton,
                 Qt::LeftButton);
@@ -1712,6 +1713,7 @@ int solverMiniPreviewTest(QApplication& app)
     // While the handle is held the tip tracks the pointer exactly (the fit is
     // frozen during the drag).
     const QPointF duringDragTip = mini->arrowTip();
+    const QPointF pathDuringDrag = mini->pathPoint(10);
     sendMouseTo(mini, QEvent::MouseButtonRelease, dragTo, Qt::LeftButton,
                 Qt::NoButton);
     QApplication::processEvents();
@@ -1730,7 +1732,14 @@ int solverMiniPreviewTest(QApplication& app)
                       .arg(duringDragTip.x())
                       .arg(duringDragTip.y()))
         || !check(QLineF(mini->arrowTip(), mini->startPoint()).length() > 1.0,
-                  QStringLiteral("arrow tip stayed on the start point")))
+                  QStringLiteral("arrow tip stayed on the start point"))
+        || !check(QLineF(pathBeforeDrag, pathDuringDrag).length() > 1.0,
+                  QStringLiteral("trajectory did not update during the "
+                                 "velocity drag: %1,%2 -> %3,%4")
+                      .arg(pathBeforeDrag.x())
+                      .arg(pathBeforeDrag.y())
+                      .arg(pathDuringDrag.x())
+                      .arg(pathDuringDrag.y())))
         return 1;
 
     // Switching the selection rebinds the window; entities without solvers

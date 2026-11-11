@@ -87,6 +87,9 @@ public:
     QPointF currentPoint() const;
     QPointF mapSolverToWidget(const QPointF& point) const;
     QPointF mapWidgetToSolver(const QPointF& point) const;
+    // Widget-space trajectory point at one sample index; useful for verifying
+    // that a live velocity drag updates the path, not just the arrow.
+    QPointF pathPoint(int index) const;
 
     // Solver-space values (parent space, px/s for velocities).
     QPointF startPose() const { return m_startPose; }
