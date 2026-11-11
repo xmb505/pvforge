@@ -18,9 +18,10 @@ namespace pvf::next {
 
 class ProjectDocument;
 
-// Progress of the UI-thread prewarm pass.  `done` counts frames that need no
-// further work (meta hit, cached, or skipped for missing media); a frame held
-// for a pending HTML render is retried instead of being counted twice.
+// Progress of an explicitly requested cache pass.  `done` counts frames that
+// need no further work (meta hit, cached, or skipped for missing media); a
+// frame held for a pending HTML render is retried instead of being counted
+// twice.  Nothing starts this pass automatically.
 struct WorkbenchPrewarmProgress
 {
     bool scanning = false;
@@ -38,18 +39,24 @@ struct WorkbenchPrewarmProgress
 
 // Whole-frame workbench cache for one project and one camera.
 //
-// Owns the workbench::Cache (at <project>/.cache/workbench) and runs the
-// prewarm pass on the UI thread with a 20 ms QTimer, because the render
-// providers (video sequences and the HTML frontend) belong to the UI thread.
-// One frame is built and rendered per tick; frames whose meta already matches
-// are skipped without rendering.
+// Frames are cached strictly on demand: the viewport calls lookup() for every
+// frame it is about to draw; a miss renders normally and store() writes the
+// picture plus its meta.  Opening a project, switching cameras or editing does
+// not scan anything, and the cache directory is created by the first store.
+// Returning to a frame later is a plain meta hit.
 //
-// A prewarm frame containing an HTML/video asset whose provider returns an
-// empty image is never stored: render2 drew a placeholder and caching that
-// would poison the frame.  For HTML the pass holds the frame and retries after
+// startScanNow() remains available for an explicit "cache all"/"cache to
+// playhead" command (and for tests).  It runs on the UI thread with a 20 ms
+// QTimer because the render providers (video sequences and the HTML frontend)
+// belong to the UI thread.  One frame is built and rendered per tick; frames
+// whose meta already matches are skipped without rendering.
+//
+// A scan frame containing an HTML/video asset whose provider returns an empty
+// image is never stored: render2 drew a placeholder and caching that would
+// poison the frame.  For HTML the pass holds the frame and retries after
 // MediaServices emits htmlFrameReady (notifyHtmlFrameReady), so every HTML
 // frame gets a real picture in the first pass.  Missing video frames are
-// skipped and picked up by the next scan.
+// skipped and picked up by the next manual pass.
 class WorkbenchServices : public QObject
 {
     Q_OBJECT
@@ -74,6 +81,8 @@ public:
     bool enabled() const { return m_enabled; }
     bool cacheValid() const;
     QString cacheError() const;
+    // Empty until the first store (or an explicit manual scan) creates the
+    // per-camera directory.
     QString cacheDirectory() const;
     Uuid cameraUuid() const { return m_cameraUuid; }
     int scalePercent() const { return m_options.scalePercent; }
@@ -86,28 +95,30 @@ public:
     // Frames 0..totalFrames()-1 cover the project content.
     int totalFrames() const;
 
-    // Viewport hooks.  lookup() may build the frame meta and read/decode the
-    // WebP on the UI thread; store() writes synchronously (5-20 ms WebP
-    // encode), which is acceptable until a background writer lands.
+    // Viewport hooks.  lookup() builds the frame meta and reads/decodes the
+    // WebP on the UI thread; it never creates the cache directory.  store()
+    // writes synchronously (5-20 ms WebP encode) and creates the directory on
+    // the first miss.  No timer or signal starts a scan on its own.
     QImage lookup(int frame, const Uuid& cameraUuid, bool* hit);
     void store(int frame, const Uuid& cameraUuid, const QImage& image);
 
-    // Full pass from 0 after a 500 ms debounce (open project, camera switch,
-    // settings change).  startScanNow() ignores the debounce and can stop at
-    // an explicit end frame ("缓存到播放头").  endFrame < 0 means the last
-    // frame of project content.
-    void scheduleScan();
+    // Explicit cache pass.  Nothing calls these automatically: they back the
+    // optional "cache all", "cache to playhead" and "rescan" commands.
+    // startScanNow() runs from startFrame to endFrame; endFrame < 0 means the
+    // last frame of project content.
     void startScanNow(int startFrame = 0, int endFrame = -1);
     void cancelScan();
 
-    // Playback pauses the scan; stopping resumes it from the held frame.
+    // Playback pauses an explicitly started pass; stopping resumes it from the
+    // held frame.  It does not start a pass.
     void setPlaybackActive(bool active);
 
     // Called when MediaServices finished an asynchronous HTML frame.  Releases
-    // a frame held waiting for HTML.
+    // a scan frame held waiting for HTML.
     void notifyHtmlFrameReady();
 
-    // Drops every cached frame of this camera, then schedules a fresh scan.
+    // Drops every cached frame of this camera.  Does not start a new scan;
+    // frames come back on demand.
     void clearCache();
 
     workbench::CacheStats stats() const;
@@ -124,7 +135,7 @@ private:
     void tick();
     void onDocumentChanged();
     void onHtmlWaitTimeout();
-    void beginScan();
+    void ensureCache();
     void finishScan();
     void enterHtmlWait();
     void invalidateMeta();
@@ -136,11 +147,11 @@ private:
     ProjectDocument* m_document = nullptr;
     Providers m_providers;
     Uuid m_cameraUuid;
+    QString m_cacheRoot;
     workbench::Options m_options;
     std::unique_ptr<workbench::Cache> m_cache;
     bool m_enabled = false;
 
-    QTimer m_debounce;
     QTimer m_tick;
     QTimer m_htmlWaitTimeout;
 

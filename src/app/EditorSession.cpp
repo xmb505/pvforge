@@ -60,9 +60,8 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
 
     m_editActions = std::make_unique<EditActions>(this);
 
-    // Start the per-camera workbench cache so its directory exists even before
-    // the first paint; the prewarm scan is debounced internally.
-    workbench();
+    // The workbench cache is created lazily by the first viewport lookup; do
+    // not open it here, so merely opening a project creates no cache files.
 
     // The MCP endpoint belongs to the open project: a switch destroys the
     // session (and its listener) before the next project starts one.
@@ -193,7 +192,8 @@ bool EditorSession::applyAppSettings(const next::AppSettings& settings,
         m_document->setHumanCommitDelayMs(m_appSettings.humanCommitDelayMs);
 
     // Scale/expansion/disk budget are baked into the cache directory key, so
-    // the service is rebuilt (and rescanned) on the next workbench() call.
+    // the service is rebuilt on the next viewport request.  Frames are cached
+    // on demand; nothing is rescanned in the background.
     invalidateWorkbench();
 
     bool ok = true;

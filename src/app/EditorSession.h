@@ -76,7 +76,8 @@ public:
     next::PlaybackController* playback() const { return m_playback.get(); }
     // Returns the workbench cache for the current camera, rebuilding it when
     // the active camera or the expand setting changed.  May return nullptr when
-    // the cache is disabled.
+    // the cache is disabled.  Creating the service does not create files;
+    // frames are written only when the viewport requests and misses them.
     next::WorkbenchServices* workbench();
     const next::AppSettings& appSettings() const { return m_appSettings; }
     next::SettingsStore* settingsStore() const { return m_settingsStore.get(); }
@@ -89,8 +90,9 @@ public:
     bool applyAppSettings(const next::AppSettings& settings,
                           QString* error = nullptr);
 
-    // Drops the workbench cache; the next workbench() call rebuilds and
-    // rescans it.  MCP write tools call this after changing project bytes.
+    // Drops the workbench cache; the next workbench() call rebuilds it.
+    // Frames return on demand; this never starts a scan.  MCP write tools call
+    // this after changing project bytes.
     void invalidateWorkbench();
 
     // MCP endpoint.  The service and HTTP listener belong to the session and

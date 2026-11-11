@@ -48,8 +48,8 @@ Uuid addRedRect(ProjectDocument* document)
     entity.name = QStringLiteral("Red");
     entity.start = 0;
     entity.end = kLastFrame;
-    entity.transform.x = 160.0;
-    entity.transform.y = 90.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Vector;
     entity.content.vector.shape = 0;
     entity.content.vector.width = 320.0;
@@ -187,8 +187,10 @@ class WorkbenchIntegrationTest : public QObject
     Q_OBJECT
 
 private slots:
-    void autoScanStartsAfterOpen();
-    void prewarmFillsCacheThenRescanHits();
+    void openDoesNotScanOrCreateCache();
+    void onDemandLookupStoresThenHitsAndEditMisses();
+    void scrubCachesOnlyVisitedFrames();
+    void manualScanFillsCacheThenRescanHits();
     void cacheSurvivesReopen();
     void disabledCacheDoesNotLookupOrStore();
     void htmlMissIsNotCached();
@@ -201,27 +203,134 @@ private slots:
     void cameraCacheDoesNotExpand();
 };
 
-void WorkbenchIntegrationTest::autoScanStartsAfterOpen()
+void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
 {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
     QString error;
-    auto document = createProject(temp.path() + QStringLiteral("/auto.pvproj"),
-                                  &error);
+    const QString projectDir = temp.path() + QStringLiteral("/open.pvproj");
+    auto document = createProject(projectDir, &error);
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
     NextWindow window(std::move(document));
     QVERIFY(window.workbenchServicesForTest() != nullptr);
 
-    // No manual kick: the 500 ms debounce after opening must start the scan.
-    QTRY_VERIFY_WITH_TIMEOUT(window.workbenchStatsForTest().entries > 0, 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    QCOMPARE(window.workbenchStatsForTest().entries, kLastFrame);
+    // Opening only constructs the service.  No debounce, idle timer or
+    // document signal may scan; wait past the old 500 ms debounce.
+    QTest::qWait(1500);
+    QCOMPARE(window.workbenchStatsForTest().entries, 0);
+    QVERIFY(!window.prewarmProgressForTest().scanning);
+    QVERIFY(window.workbenchCacheDirForTest().isEmpty());
+    QVERIFY(!QDir(projectDir + QStringLiteral("/.cache/workbench")).exists());
+    QCOMPARE(webpCount(projectDir + QStringLiteral("/.cache/workbench")), 0);
 }
 
-void WorkbenchIntegrationTest::prewarmFillsCacheThenRescanHits()
+void WorkbenchIntegrationTest::onDemandLookupStoresThenHitsAndEditMisses()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    const QString projectDir = temp.path() + QStringLiteral("/demand.pvproj");
+    auto document = createProject(projectDir, &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const Uuid red = addRedRect(document.get());
+
+    NextWindow window(std::move(document));
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+
+    const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
+    constexpr int frame = 5;
+
+    // A lookup is the only entry point; a miss without a write leaves no
+    // directory behind.
+    QVERIFY(window.lookupForTest(frame, Uuid()).isNull());
+    QVERIFY(!QDir(cacheRoot).exists());
+    QCOMPARE(services->stats().entries, 0);
+
+    // Simulate the viewport render that follows the miss, then store it.
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(255, 0, 0));
+    services->store(frame, Uuid(), rendered);
+
+    QVERIFY(QDir(cacheRoot).exists());
+    QCOMPARE(services->stats().entries, 1);
+    QCOMPARE(services->stats().stores, quint64(1));
+    const QImage hit = window.lookupForTest(frame, Uuid());
+    QVERIFY(!hit.isNull());
+    QCOMPARE(hit.pixelColor(160, 90), QColor(255, 0, 0));
+    QCOMPARE(services->stats().hits, quint64(1));
+
+    // Committing an edit changes the frame meta: the same frame must miss.
+    QVERIFY(window.document()->project().entities.contains(red));
+    Entity moved = window.document()->project().entities.value(red);
+    moved.transform.x = 10.0;
+    window.document()->mutableProject().entities.insert(red, moved);
+    QVERIFY2(window.document()->commitEntity(
+                 red, QStringLiteral("pvf: move red"), &error),
+             qPrintable(error));
+    window.document()->flush(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    QVERIFY(window.lookupForTest(frame, Uuid()).isNull());
+    QVERIFY(services->stats().misses >= 1);
+}
+
+void WorkbenchIntegrationTest::scrubCachesOnlyVisitedFrames()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    const QString projectDir = temp.path() + QStringLiteral("/scrub.pvproj");
+    auto document = createProject(projectDir, &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+
+    NextWindow window(std::move(document));
+    window.resize(1280, 800);
+    window.show();
+    QTest::qWait(100);
+
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+    const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
+    QVERIFY(QDir(cacheRoot).exists());
+
+    // Frame 0 was actually painted, so only it may be cached.
+    QCOMPARE(services->stats().entries, 1);
+    QVERIFY(!window.lookupForTest(0, Uuid()).isNull());
+    QVERIFY(window.lookupForTest(4, Uuid()).isNull());
+    QVERIFY(window.lookupForTest(5, Uuid()).isNull());
+    QVERIFY(window.lookupForTest(6, Uuid()).isNull());
+
+    // Scrub to frame 5 and paint it; no other frame is prefetched.
+    window.document()->setPlayhead(5);
+    window.viewportForTest()->refresh();
+    window.viewportForTest()->repaint();
+    QTest::qWait(100);
+    QVERIFY(!window.lookupForTest(5, Uuid()).isNull());
+    QVERIFY(window.lookupForTest(4, Uuid()).isNull());
+    QVERIFY(window.lookupForTest(6, Uuid()).isNull());
+    const int visited = services->stats().entries;
+
+    // Idle waiting must not fill anything else.
+    QTest::qWait(800);
+    QCOMPARE(services->stats().entries, visited);
+
+    // Returning to a visited frame is a hit.
+    const quint64 hitsBefore = services->stats().hits;
+    window.document()->setPlayhead(5);
+    window.viewportForTest()->refresh();
+    window.viewportForTest()->repaint();
+    QTest::qWait(100);
+    QVERIFY(services->stats().hits > hitsBefore);
+}
+
+void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
 {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -385,10 +494,12 @@ void WorkbenchIntegrationTest::cameraSwitchRebuildsCachePerCamera()
     QCOMPARE(window.workbenchServicesForTest()->transparentOutsideCanvas(),
              false);
     QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(160, 90));
-    QVERIFY(window.workbenchCacheDirForTest().contains(cameraUuid));
+    // Switching camera must not create or scan a cache by itself.
+    QVERIFY(window.workbenchCacheDirForTest().isEmpty());
 
     window.startWorkbenchScanForTest();
     QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    QVERIFY(window.workbenchCacheDirForTest().contains(cameraUuid));
     QCOMPARE(window.workbenchStatsForTest().entries, kLastFrame);
     QVERIFY(!window.lookupForTest(0, cameraUuid).isNull());
 
@@ -506,7 +617,14 @@ void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
     QVERIFY(first != nullptr);
     QCOMPARE(first->expandPercent(), 50);
     QCOMPARE(first->targetSize(), QSize(320, 180));
+
+    // Creating the service does not create files; an on-demand store does.
+    QVERIFY(first->cacheDirectory().isEmpty());
+    QImage image(320, 180, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::red);
+    first->store(0, Uuid(), image);
     const QString directory50 = first->cacheDirectory();
+    QVERIFY(!directory50.isEmpty());
 
     AppSettings settings = window.settingsForTest();
     settings.workbenchCacheExpandPercent = 25;
@@ -516,6 +634,8 @@ void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
     QVERIFY(second != nullptr);
     QCOMPARE(second->expandPercent(), 25);
     QCOMPARE(second->targetSize(), QSize(240, 135));
+    second->store(0, Uuid(), image);
+    QVERIFY(!second->cacheDirectory().isEmpty());
     QVERIFY(second->cacheDirectory() != directory50);
 }
 
@@ -529,7 +649,7 @@ void WorkbenchIntegrationTest::expandedCanvasCachesOutsideEntity()
                                   &error);
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
-    addRectAt(document.get(), -50.0, -50.0, 20.0, 20.0,
+    addRectAt(document.get(), -200.0, -120.0, 20.0, 20.0,
               QStringLiteral("#0000ff"));
 
     NextWindow window(std::move(document));
@@ -540,9 +660,9 @@ void WorkbenchIntegrationTest::expandedCanvasCachesOutsideEntity()
     QVERIFY(!cached.isNull());
     QCOMPARE(cached.size(), QSize(320, 180));
 
-    // Expanded world (-160,-90,640,360) at 50%: world (-50,-50) lands on
-    // (55,20), while the extended corner is transparent.
-    const QColor outside = cached.pixelColor(55, 20);
+    // Expanded world (-320,-180,640,360) at 50%: world (-200,-120) lands on
+    // (60,150), while the extended corner is transparent.
+    const QColor outside = cached.pixelColor(60, 150);
     QVERIFY(outside.blue() > 200 && outside.red() < 60);
     QCOMPARE(outside.alpha(), 255);
     QCOMPARE(cached.pixelColor(0, 0).alpha(), 0);

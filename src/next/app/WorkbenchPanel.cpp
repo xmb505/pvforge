@@ -119,7 +119,11 @@ void WorkbenchPanel::refresh()
     if (!m_services->cacheValid()) {
         status += tr("\n缓存不可用：%1").arg(m_services->cacheError());
     } else {
-        status += tr("\n目录：%1").arg(m_services->cacheDirectory());
+        const QString directory = m_services->cacheDirectory();
+        status += tr("\n目录：%1")
+                      .arg(directory.isEmpty()
+                               ? tr("（首次访问帧时创建）")
+                               : directory);
     }
     m_status->setText(status);
 
@@ -136,7 +140,7 @@ void WorkbenchPanel::refresh()
             .arg(formatBytes(cache.budgetBytes));
 
     if (progress.scanning) {
-        stats += tr("\n预渲染：%1 / %2（当前帧 %3）%4")
+        stats += tr("\n手动扫描：%1 / %2（当前帧 %3）%4")
                      .arg(progress.done)
                      .arg(progress.total)
                      .arg(progress.frame)
@@ -145,7 +149,7 @@ void WorkbenchPanel::refresh()
                               : (progress.paused ? tr(" · 播放中暂停")
                                                  : QString()));
     } else {
-        stats += tr("\n预渲染：空闲");
+        stats += tr("\n手动扫描：空闲");
     }
     stats += tr("\n本次：写入 %1 · 命中跳过 %2 · 跳过 %3 · 失败 %4")
                  .arg(progress.cached)

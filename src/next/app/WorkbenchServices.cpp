@@ -9,10 +9,9 @@
 namespace pvf::next {
 namespace {
 
-// The prewarm pass is deliberately slow enough for the HTML/video decoders to
-// breathe between frames.
+// The explicit cache pass is deliberately slow enough for the HTML/video
+// decoders to breathe between frames.
 constexpr int kTickIntervalMs = 20;
-constexpr int kScanDebounceMs = 500;
 // A held frame waits at most this long for the asynchronous HTML renderer.
 constexpr int kHtmlWaitMs = 3000;
 constexpr int kMaxCacheWidth = 1280;
@@ -51,15 +50,12 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
     // full frames and must not reuse images from the old top-left/Y-down era.
     m_options.rendererVersion = QStringLiteral("yup-2");
 
-    const QString root =
+    m_cacheRoot =
         QDir(m_document->root()).filePath(QStringLiteral(".cache/workbench"));
-    // No QObject parent: the unique_ptr owns it.
-    m_cache = std::make_unique<workbench::Cache>(root, m_cameraUuid, m_options);
 
-    m_debounce.setSingleShot(true);
-    m_debounce.setInterval(kScanDebounceMs);
-    connect(&m_debounce, &QTimer::timeout, this, &WorkbenchServices::beginScan);
-
+    // No Cache is constructed here: the directory and index appear on the
+    // first store, so opening a project does not create cache files.  A
+    // previous session's cache is opened lazily by the first lookup.
     m_tick.setInterval(kTickIntervalMs);
     connect(&m_tick, &QTimer::timeout, this, &WorkbenchServices::tick);
 
@@ -68,11 +64,11 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
     connect(&m_htmlWaitTimeout, &QTimer::timeout, this,
             &WorkbenchServices::onHtmlWaitTimeout);
 
+    // Edits invalidate the memoised meta; they never start a scan.
     connect(m_document, &Document::changed, this,
             &WorkbenchServices::onDocumentChanged);
 
     m_progress.total = std::max(1, contentEnd());
-    scheduleScan();
 }
 
 WorkbenchServices::~WorkbenchServices()
@@ -82,7 +78,10 @@ WorkbenchServices::~WorkbenchServices()
 
 bool WorkbenchServices::cacheValid() const
 {
-    return m_cache && m_cache->isValid();
+    if (!m_enabled)
+        return false;
+    // Not created yet is still a usable cache: the first store creates it.
+    return !m_cache || m_cache->isValid();
 }
 
 QString WorkbenchServices::cacheError() const
@@ -99,7 +98,17 @@ QImage WorkbenchServices::lookup(int frame, const Uuid& cameraUuid, bool* hit)
 {
     if (hit)
         *hit = false;
-    if (!m_enabled || !cacheValid() || cameraUuid != m_cameraUuid)
+    if (!m_enabled || cameraUuid != m_cameraUuid)
+        return {};
+
+    // Do not create the cache tree for a lookup.  If no previous session left
+    // a cache behind this is a plain miss; store() creates it after rendering.
+    if (!m_cache) {
+        if (!QDir(m_cacheRoot).exists())
+            return {};
+        ensureCache();
+    }
+    if (!m_cache || !m_cache->isValid())
         return {};
 
     return m_cache->lookup(frame, buildMeta(frame), hit);
@@ -108,37 +117,27 @@ QImage WorkbenchServices::lookup(int frame, const Uuid& cameraUuid, bool* hit)
 void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
                               const QImage& image)
 {
-    if (!m_enabled || !cacheValid() || image.isNull()
-        || cameraUuid != m_cameraUuid)
+    if (!m_enabled || image.isNull() || cameraUuid != m_cameraUuid)
+        return;
+
+    // First miss creates the directory, index and WebP.
+    ensureCache();
+    if (!m_cache || !m_cache->isValid())
         return;
 
     m_cache->store(frame, buildMeta(frame), image);
-}
-
-void WorkbenchServices::scheduleScan()
-{
-    if (!m_enabled || !m_document)
-        return;
-
-    m_debounce.stop();
-    m_tick.stop();
-    m_htmlWaitTimeout.stop();
-    m_waitingHtml = false;
-    m_progress = WorkbenchPrewarmProgress{};
-    m_progress.total = std::max(1, contentEnd());
-    m_debounce.start();
 }
 
 void WorkbenchServices::startScanNow(int startFrame, int endFrame)
 {
     if (!m_enabled || !m_document)
         return;
-    if (!cacheValid()) {
+    ensureCache();
+    if (!m_cache || !m_cache->isValid()) {
         m_progress.total = std::max(1, contentEnd());
         return;
     }
 
-    m_debounce.stop();
     m_tick.stop();
     m_htmlWaitTimeout.stop();
     m_waitingHtml = false;
@@ -171,7 +170,6 @@ void WorkbenchServices::startScanNow(int startFrame, int endFrame)
 
 void WorkbenchServices::cancelScan()
 {
-    m_debounce.stop();
     m_tick.stop();
     m_htmlWaitTimeout.stop();
     m_waitingHtml = false;
@@ -214,8 +212,6 @@ void WorkbenchServices::clearCache()
     invalidateMeta();
     if (m_cache && m_cache->isValid())
         m_cache->clear();
-    if (m_enabled)
-        scheduleScan();
 }
 
 workbench::CacheStats WorkbenchServices::stats() const
@@ -291,11 +287,9 @@ void WorkbenchServices::tick()
 
 void WorkbenchServices::onDocumentChanged()
 {
-    // Any committed edit can change a frame's meta.  A fresh pass from 0 is
-    // cheap because unchanged frames only build their meta and match.
+    // Any committed edit can change a frame's meta.  The next viewport lookup
+    // builds a fresh meta and misses; nothing is rendered in the background.
     invalidateMeta();
-    if (m_enabled)
-        scheduleScan();
 }
 
 void WorkbenchServices::onHtmlWaitTimeout()
@@ -317,11 +311,6 @@ void WorkbenchServices::onHtmlWaitTimeout()
     } else if (!m_playbackActive) {
         m_tick.start();
     }
-}
-
-void WorkbenchServices::beginScan()
-{
-    startScanNow(0, -1);
 }
 
 void WorkbenchServices::finishScan()
@@ -426,6 +415,18 @@ int WorkbenchServices::contentEnd() const
 bool WorkbenchServices::htmlPending() const
 {
     return m_providers.htmlPending && m_providers.htmlPending();
+}
+
+void WorkbenchServices::ensureCache()
+{
+    if (m_cache || !m_enabled || m_cacheRoot.isEmpty())
+        return;
+
+    // No QObject parent: the unique_ptr owns it.  Constructing the Cache
+    // creates the per-camera directory, so this is only called from store()
+    // (first miss) or from an explicit manual scan.
+    m_cache = std::make_unique<workbench::Cache>(m_cacheRoot, m_cameraUuid,
+                                                 m_options);
 }
 
 } // namespace pvf::next
