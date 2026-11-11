@@ -14,7 +14,10 @@ namespace {
 
 constexpr QChar kKeySeparator(0x1f);
 
-int effectiveEnd(const model::Entity& entity, const model::SolverSegment& segment)
+// Range end without solving physics: explicit endFrame, or the clip end.
+// Used by solverAt() (no World available) and as the fallback when a segment
+// cannot be evaluated.
+int structuralEnd(const model::Entity& entity, const model::SolverSegment& segment)
 {
     const int lastFrame = entity.duration() - 1;
     if (lastFrame < 0)
@@ -237,10 +240,16 @@ private:
 
     const model::SolverSegment* activeSegment(const model::Entity& entity,
                                               double relativeFrame,
-                                              bool rotationTrack) const;
+                                              bool rotationTrack);
     const model::SolverSegment* latestEndedSegment(const model::Entity& entity,
                                                    double relativeFrame,
-                                                   bool rotationTrack) const;
+                                                   bool rotationTrack);
+
+    // Effective end of the segment: the physical stop frame for automatic
+    // segments, the explicit endFrame otherwise.  Falls back to the clip end
+    // when the segment cannot be solved (missing target, empty solve).
+    int endFrameFor(const model::Entity& entity,
+                    const model::SolverSegment& segment);
 
     std::optional<double> anchoredValue(const model::Entity& entity,
                                         const QString& track,
@@ -249,8 +258,8 @@ private:
     std::optional<solver::Sample> sampleAt(const model::Entity& entity,
                                            const model::SolverSegment& segment,
                                            double relativeFrame);
-    QVector<solver::Sample> samplesFor(const model::Entity& entity,
-                                       const model::SolverSegment& segment);
+    const solver::Result* resultFor(const model::Entity& entity,
+                                    const model::SolverSegment& segment);
 
     const model::Project& m_project;
     const anim::World& m_world;
@@ -418,7 +427,7 @@ double EvalContext::drivenValue(const model::Entity& entity,
 }
 
 const model::SolverSegment* EvalContext::activeSegment(
-    const model::Entity& entity, double relativeFrame, bool rotationTrack) const
+    const model::Entity& entity, double relativeFrame, bool rotationTrack)
 {
     if (entity.duration() <= 0)
         return nullptr;
@@ -431,10 +440,11 @@ const model::SolverSegment* EvalContext::activeSegment(
         if (!drives || segment.startFrame < 0
             || segment.startFrame >= entity.duration())
             continue;
+        if (relativeFrame < segment.startFrame)
+            continue;
 
-        const int end = effectiveEnd(entity, segment);
-        if (end < segment.startFrame || relativeFrame < segment.startFrame
-            || relativeFrame > end)
+        const int end = endFrameFor(entity, segment);
+        if (end < segment.startFrame || relativeFrame > end)
             continue;
 
         if (!best || segment.startFrame > best->startFrame)
@@ -444,7 +454,7 @@ const model::SolverSegment* EvalContext::activeSegment(
 }
 
 const model::SolverSegment* EvalContext::latestEndedSegment(
-    const model::Entity& entity, double relativeFrame, bool rotationTrack) const
+    const model::Entity& entity, double relativeFrame, bool rotationTrack)
 {
     if (entity.duration() <= 0)
         return nullptr;
@@ -457,8 +467,12 @@ const model::SolverSegment* EvalContext::latestEndedSegment(
         if (!drives || segment.startFrame < 0
             || segment.startFrame >= entity.duration())
             continue;
+        // A segment that starts at or after this frame cannot have ended yet;
+        // skip it before solving (automatic ends need a full evaluation).
+        if (segment.startFrame >= relativeFrame)
+            continue;
 
-        const int end = effectiveEnd(entity, segment);
+        const int end = endFrameFor(entity, segment);
         if (end < segment.startFrame || end >= relativeFrame)
             continue;
 
@@ -468,11 +482,26 @@ const model::SolverSegment* EvalContext::latestEndedSegment(
     return best;
 }
 
+int EvalContext::endFrameFor(const model::Entity& entity,
+                             const model::SolverSegment& segment)
+{
+    const int lastFrame = entity.duration() - 1;
+    if (lastFrame < 0)
+        return -1;
+    if (segment.endFrame >= 0)
+        return std::min(segment.endFrame, lastFrame);
+
+    const solver::Result* result = resultFor(entity, segment);
+    if (result && result->stopFrame >= segment.startFrame)
+        return std::min(result->stopFrame, lastFrame);
+    return lastFrame;
+}
+
 std::optional<double> EvalContext::anchoredValue(
     const model::Entity& entity, const QString& track, double relativeFrame,
     const model::SolverSegment& segment)
 {
-    const int end = effectiveEnd(entity, segment);
+    const int end = endFrameFor(entity, segment);
     if (end < segment.startFrame)
         return std::nullopt;
 
@@ -516,9 +545,10 @@ std::optional<solver::Sample> EvalContext::sampleAt(
     const model::Entity& entity, const model::SolverSegment& segment,
     double relativeFrame)
 {
-    const QVector<solver::Sample> samples = samplesFor(entity, segment);
-    if (samples.isEmpty())
+    const solver::Result* result = resultFor(entity, segment);
+    if (!result || result->samples.isEmpty())
         return std::nullopt;
+    const QVector<solver::Sample>& samples = result->samples;
 
     // Solver samples live on integer frames.  Fractional project frames
     // interpolate the two neighbouring samples (position and rotation only;
@@ -543,15 +573,15 @@ std::optional<solver::Sample> EvalContext::sampleAt(
     return mixed;
 }
 
-QVector<solver::Sample> EvalContext::samplesFor(
+const solver::Result* EvalContext::resultFor(
     const model::Entity& entity, const model::SolverSegment& segment)
 {
     const QString key = segmentKey(entity, segment);
-    const auto cached = m_cache.solverSamples.constFind(key);
-    if (cached != m_cache.solverSamples.constEnd())
-        return cached.value();
+    const auto cached = m_cache.solverResults.constFind(key);
+    if (cached != m_cache.solverResults.constEnd())
+        return &cached.value();
 
-    QVector<solver::Sample> samples;
+    solver::Result result;
     if (entity.duration() > 0 && hasRequiredTarget(m_project, segment))
     {
         solver::Segment request;
@@ -566,12 +596,12 @@ QVector<solver::Sample> EvalContext::samplesFor(
         request.params = segment.params;
 
         SolverWorldAdapter adapter(entity, m_world, *this);
-        samples = solver::evaluate(request, adapter, entity.duration(),
-                                   m_project.settings.fps);
+        result = solver::evaluateResult(request, adapter, entity.duration(),
+                                        m_project.settings.fps);
     }
 
-    m_cache.solverSamples.insert(key, samples);
-    return samples;
+    const auto inserted = m_cache.solverResults.insert(key, result);
+    return &inserted.value();
 }
 
 } // namespace
@@ -579,17 +609,17 @@ QVector<solver::Sample> EvalContext::samplesFor(
 void Cache::clear()
 {
     poses.clear();
-    solverSamples.clear();
+    solverResults.clear();
 }
 
 void Cache::clearEntity(const Uuid& uuid)
 {
     poses.remove(uuid);
     const QString prefix = uuid + kKeySeparator;
-    for (auto it = solverSamples.begin(); it != solverSamples.end();)
+    for (auto it = solverResults.begin(); it != solverResults.end();)
     {
         if (it.key().startsWith(prefix))
-            it = solverSamples.erase(it);
+            it = solverResults.erase(it);
         else
             ++it;
     }
@@ -607,7 +637,7 @@ const model::SolverSegment* solverAt(const model::Entity& entity,
         if (segment.startFrame < 0 || segment.startFrame >= entity.duration())
             continue;
 
-        const int end = effectiveEnd(entity, segment);
+        const int end = structuralEnd(entity, segment);
         if (end < segment.startFrame || entityRelativeFrame < segment.startFrame
             || entityRelativeFrame > end)
             continue;

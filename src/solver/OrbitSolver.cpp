@@ -5,11 +5,12 @@
 
 namespace pvf::solver::detail {
 
-QVector<Sample> evaluateOrbit(const Segment &segment, const World &world,
-                              const FrameRange &range, int fps)
+EvalOutcome evaluateOrbit(const Segment &segment, const World &world,
+                          const FrameRange &range, int fps)
 {
+    EvalOutcome outcome;
     if (segment.targetUuid.isEmpty())
-        return {};
+        return outcome;
 
     const double aspect = std::clamp(
             paramNumber(segment.params, "aspect", 1.0), 0.01, 1.0);
@@ -59,7 +60,7 @@ QVector<Sample> evaluateOrbit(const Segment &segment, const World &world,
     // atan2/axis round trip.
     positions[0] = segment.startPose.position;
 
-    QVector<Sample> samples;
+    QVector<Sample> &samples = outcome.samples;
     samples.reserve(range.count);
     for (int i = 0; i < range.count; ++i)
     {
@@ -69,7 +70,9 @@ QVector<Sample> evaluateOrbit(const Segment &segment, const World &world,
         sample.pose.position = positions.at(i);
         sample.pose.rotation = segment.startPose.rotation;
         sample.collided = false;
-        sample.stopped = last;
+        // Orbit has no stop threshold; running out of frames is not a
+        // physical stop.
+        sample.stopped = false;
         if (last)
             sample.velocity = QPointF(0.0, 0.0);
         else
@@ -77,7 +80,7 @@ QVector<Sample> evaluateOrbit(const Segment &segment, const World &world,
                     * double(fps);
         samples.append(sample);
     }
-    return samples;
+    return outcome;
 }
 
 } // namespace pvf::solver::detail

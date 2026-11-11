@@ -325,6 +325,9 @@ bool validateSolvers(const Entity& entity, QString* error)
             return false;
         }
 
+        // Structural end: an explicit endFrame, otherwise the clip end.  The
+        // physical stop of an automatic segment is a solver concern; model
+        // validation must stay World-free, so it reserves the whole tail.
         int effectiveEnd = duration - 1;
         if (segment.endFrame != -1)
         {

@@ -22,11 +22,12 @@ QPointF gravitationalAcceleration(const QPointF &position, const QPointF &center
 
 } // namespace
 
-QVector<Sample> evaluateBlackHole(const Segment &segment, const World &world,
-                                  const FrameRange &range, int fps)
+EvalOutcome evaluateBlackHole(const Segment &segment, const World &world,
+                              const FrameRange &range, int fps)
 {
+    EvalOutcome outcome;
     if (segment.targetUuid.isEmpty())
-        return {};
+        return outcome;
 
     const double simulationSpeed = std::max(
             0.0, paramNumber(segment.params, "simulationSpeed", 1.0));
@@ -42,9 +43,13 @@ QVector<Sample> evaluateBlackHole(const Segment &segment, const World &world,
             1e-6, paramNumber(segment.params, "softening", 60.0));
     const double maxSpeed = std::max(
             0.0, paramNumber(segment.params, "maxSpeed", 4000.0));
-    // The horizon is deliberately not a hard boundary: objects may cross it and
-    // either escape or keep falling.  It is accepted here for UI/preview parity.
-    (void)eventHorizonRadius;
+    const double stopThreshold = std::max(
+            0.0, paramNumber(segment.params, "stopThreshold", 0.0));
+    // Once the object's surface touches the event horizon it is captured: the
+    // motion stops instead of falling forever through the singularity.  The
+    // horizon stays a soft core for the force field (softening), but it is a
+    // capture boundary for the end-of-segment semantics.
+    const double captureRadius = eventHorizonRadius + objectRadius;
 
     // `mass` is a relative authoring unit; scale it to a usable gravitational
     // parameter at typical canvas distances.
@@ -67,13 +72,26 @@ QVector<Sample> evaluateBlackHole(const Segment &segment, const World &world,
             velocity *= maxSpeed / initialSpeed;
     }
     bool stopped = false;
+    int stopFrame = -1;
+    StopReason stopReason = StopReason::None;
 
-    QVector<Sample> samples;
+    QVector<Sample> &samples = outcome.samples;
     samples.reserve(range.count);
 
     for (int i = 0; i < range.count; ++i)
     {
         const int frame = range.startFrame + i;
+        bool captured = false;
+
+        if (i > 0 && !stopped && simulationSpeed <= 0.0
+            && stopThreshold > 0.0
+            && std::hypot(velocity.x(), velocity.y()) <= stopThreshold)
+        {
+            velocity = QPointF(0.0, 0.0);
+            stopped = true;
+            stopFrame = frame;
+            stopReason = StopReason::StopThreshold;
+        }
 
         if (i > 0 && !stopped && simulationSpeed > 0.0)
         {
@@ -108,27 +126,47 @@ QVector<Sample> evaluateBlackHole(const Segment &segment, const World &world,
                     newVelocity *= maxSpeed / speed;
             }
 
-            pose.position = newPosition;
-            velocity = newVelocity;
-        }
-
-        const bool last = (i == range.count - 1);
-        if (last)
-        {
-            velocity = QPointF(0.0, 0.0);
-            stopped = true;
+            const QPointF delta = newPosition - center;
+            const double distance = std::hypot(delta.x(), delta.y());
+            if (captureRadius > 0.0 && distance <= captureRadius)
+            {
+                const QPointF direction = distance > 1e-9
+                        ? delta / distance
+                        : QPointF(1.0, 0.0);
+                pose.position = center + direction * captureRadius;
+                velocity = QPointF(0.0, 0.0);
+                captured = true;
+                stopped = true;
+                stopFrame = frame;
+                stopReason = StopReason::Collision;
+            }
+            else
+            {
+                pose.position = newPosition;
+                velocity = newVelocity;
+                if (stopThreshold > 0.0
+                    && std::hypot(velocity.x(), velocity.y()) <= stopThreshold)
+                {
+                    velocity = QPointF(0.0, 0.0);
+                    stopped = true;
+                    stopFrame = frame;
+                    stopReason = StopReason::StopThreshold;
+                }
+            }
         }
 
         Sample sample;
         sample.frame = frame;
         sample.pose = pose;
         sample.velocity = velocity;
-        sample.collided = false;
+        sample.collided = captured;
         sample.stopped = stopped;
         samples.append(sample);
     }
 
-    return samples;
+    outcome.stopFrame = stopFrame;
+    outcome.reason = stopReason;
+    return outcome;
 }
 
 } // namespace pvf::solver::detail

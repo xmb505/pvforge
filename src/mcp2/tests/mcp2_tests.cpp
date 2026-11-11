@@ -1486,8 +1486,12 @@ void Mcp2Tests::solverCreateUpdateDelete()
                      + 400.0)
             < 1e-6);
     QCOMPARE(samples.at(59).toObject().value(QStringLiteral("frame")).toInt(), 59);
+    // endFrame 59 is an explicit range end, not a physical stop; the ground is
+    // not physics-interactive in this fixture.
     QCOMPARE(samples.at(59).toObject().value(QStringLiteral("stopped")).toBool(),
-             true);
+             false);
+    QVERIFY(evaluation.value(QStringLiteral("summary")).toObject()
+                .value(QStringLiteral("stoppedFrame")).isNull());
 
     result = fixture.call(
         QStringLiteral("solver.update"),

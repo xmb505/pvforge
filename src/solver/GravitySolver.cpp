@@ -271,8 +271,8 @@ QVector<QPainterPath> collidersAt(const World &world, const QVector<Uuid> &candi
 
 } // namespace
 
-QVector<Sample> evaluateGravity(const Segment &segment, const World &world,
-                                const FrameRange &range, int fps)
+EvalOutcome evaluateGravity(const Segment &segment, const World &world,
+                            const FrameRange &range, int fps)
 {
     const double strength = paramNumber(segment.params, "strength", 980.0);
     const double elasticity = std::clamp(
@@ -286,14 +286,29 @@ QVector<Sample> evaluateGravity(const Segment &segment, const World &world,
     Pose pose = segment.startPose;
     QPointF velocity = segment.initialVelocity; // solver space
     bool stopped = false;
+    int stopFrame = -1;
+    StopReason stopReason = StopReason::None;
 
-    QVector<Sample> samples;
+    EvalOutcome outcome;
+    QVector<Sample> &samples = outcome.samples;
     samples.reserve(range.count);
 
     for (int i = 0; i < range.count; ++i)
     {
         bool collided = false;
         const int frame = range.startFrame + i;
+
+        if (i > 0 && !stopped
+            && strength == 0.0 && stopThreshold > 0.0
+            && std::hypot(velocity.x(), velocity.y()) <= stopThreshold)
+        {
+            // No acceleration and negligible speed: the motion is already
+            // over even though no collider was touched.
+            velocity = QPointF(0.0, 0.0);
+            stopped = true;
+            stopFrame = frame;
+            stopReason = StopReason::StopThreshold;
+        }
 
         if (i > 0 && !stopped)
         {
@@ -341,13 +356,12 @@ QVector<Sample> evaluateGravity(const Segment &segment, const World &world,
                                       stopThreshold, stopped))
                     collided = true;
             }
-        }
 
-        const bool last = (i == range.count - 1);
-        if (last)
-        {
-            velocity = QPointF(0.0, 0.0);
-            stopped = true;
+            if (stopped && stopFrame < 0)
+            {
+                stopFrame = frame;
+                stopReason = StopReason::Collision;
+            }
         }
 
         Sample sample;
@@ -359,7 +373,9 @@ QVector<Sample> evaluateGravity(const Segment &segment, const World &world,
         samples.append(sample);
     }
 
-    return samples;
+    outcome.stopFrame = stopFrame;
+    outcome.reason = stopReason;
+    return outcome;
 }
 
 } // namespace pvf::solver::detail

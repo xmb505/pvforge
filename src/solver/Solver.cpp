@@ -7,8 +7,26 @@
 
 namespace pvf::solver {
 
-QVector<Sample> evaluate(const Segment &segment, const World &world,
-                         int clipDuration, int fps)
+QString stopReasonName(StopReason reason)
+{
+    switch (reason)
+    {
+    case StopReason::Collision:
+        return QStringLiteral("collision");
+    case StopReason::StopThreshold:
+        return QStringLiteral("stopThreshold");
+    case StopReason::ClipEnd:
+        return QStringLiteral("clipEnd");
+    case StopReason::ExplicitEnd:
+        return QStringLiteral("explicitEnd");
+    case StopReason::None:
+        break;
+    }
+    return QStringLiteral("none");
+}
+
+Result evaluateResult(const Segment &segment, const World &world,
+                      int clipDuration, int fps)
 {
     if (segment.entityUuid.isEmpty())
         return {};
@@ -19,29 +37,69 @@ QVector<Sample> evaluate(const Segment &segment, const World &world,
     if (segment.startFrame < 0 || segment.startFrame >= clipDuration)
         return {};
 
-    int endFrame = segment.endFrame < 0 ? clipDuration - 1 : segment.endFrame;
+    const bool explicitEnd = segment.endFrame >= 0;
+    int endFrame = explicitEnd ? segment.endFrame : clipDuration - 1;
     endFrame = std::min(endFrame, clipDuration - 1);
     if (endFrame < segment.startFrame)
         return {};
 
     const detail::FrameRange range{segment.startFrame, endFrame,
                                    endFrame - segment.startFrame + 1};
+    detail::EvalOutcome outcome;
     if (range.count == 1)
-        return detail::staticSamples(segment, range);
-
-    const int safeFps = std::max(1, fps);
-    switch (segment.effect)
     {
-    case SolverEffect::Gravity:
-        return detail::evaluateGravity(segment, world, range, safeFps);
-    case SolverEffect::Orbit:
-        return detail::evaluateOrbit(segment, world, range, safeFps);
-    case SolverEffect::Spin:
-        return detail::evaluateSpin(segment, range);
-    case SolverEffect::BlackHole:
-        return detail::evaluateBlackHole(segment, world, range, safeFps);
+        outcome = detail::staticSamples(segment, range);
     }
-    return detail::staticSamples(segment, range);
+    else
+    {
+        const int safeFps = std::max(1, fps);
+        switch (segment.effect)
+        {
+        case SolverEffect::Gravity:
+            outcome = detail::evaluateGravity(segment, world, range, safeFps);
+            break;
+        case SolverEffect::Orbit:
+            outcome = detail::evaluateOrbit(segment, world, range, safeFps);
+            break;
+        case SolverEffect::Spin:
+            outcome = detail::evaluateSpin(segment, range);
+            break;
+        case SolverEffect::BlackHole:
+            outcome = detail::evaluateBlackHole(segment, world, range, safeFps);
+            break;
+        }
+    }
+
+    if (outcome.samples.isEmpty())
+        return {};
+
+    Result result;
+    result.samples = std::move(outcome.samples);
+    if (explicitEnd)
+    {
+        // An explicit endFrame is an advanced override: it keeps the old
+        // clipping rule (and the frozen hold) even when the motion physically
+        // stopped earlier.  Sample::stopped still reports the real stop.
+        result.stopFrame = endFrame;
+        result.reason = StopReason::ExplicitEnd;
+    }
+    else if (outcome.stopFrame >= segment.startFrame)
+    {
+        result.stopFrame = outcome.stopFrame;
+        result.reason = outcome.reason;
+    }
+    else
+    {
+        result.stopFrame = endFrame;
+        result.reason = StopReason::ClipEnd;
+    }
+    return result;
+}
+
+QVector<Sample> evaluate(const Segment &segment, const World &world,
+                         int clipDuration, int fps)
+{
+    return evaluateResult(segment, world, clipDuration, fps).samples;
 }
 
 } // namespace pvf::solver
@@ -94,20 +152,22 @@ int paramDirection(const QVariantMap &params, int fallback)
     return value < 0.0 ? -1 : 1;
 }
 
-QVector<Sample> staticSamples(const Segment &segment, const FrameRange &range)
+EvalOutcome staticSamples(const Segment &segment, const FrameRange &range)
 {
-    QVector<Sample> samples;
-    samples.reserve(range.count);
+    EvalOutcome outcome;
+    outcome.samples.reserve(range.count);
     for (int i = 0; i < range.count; ++i)
     {
         Sample sample;
         sample.frame = range.startFrame + i;
         sample.pose = segment.startPose;
         sample.velocity = QPointF(0.0, 0.0);
-        sample.stopped = (i == range.count - 1);
-        samples.append(sample);
+        // A single solved frame is a static pose, not a physical stop; the
+        // caller reports ClipEnd/ExplicitEnd in Result::reason.
+        sample.stopped = false;
+        outcome.samples.append(sample);
     }
-    return samples;
+    return outcome;
 }
 
 } // namespace pvf::solver::detail

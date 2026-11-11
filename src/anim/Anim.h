@@ -46,17 +46,23 @@ struct Cache
     // doubles so fractional export sampling (2x/4x project fps) can be cached
     // next to integer project frames.
     QHash<Uuid, QHash<double, Pose>> poses; // entity uuid -> project frame -> pose
-    QHash<QString, QVector<solver::Sample>> solverSamples; // segment signature
+    QHash<QString, solver::Result> solverResults; // segment signature
 
     void clear();
     void clearEntity(const Uuid &uuid);
 };
 
-// Returns the solver segment covering entityRelativeFrame, or nullptr.  A
-// segment endFrame of -1 means the last frame of the entity clip.  Frames are
-// relative to entity.start.  When invalid data overlaps, the segment with the
-// latest start frame wins.  The pointer is owned by entity.solvers and is
-// invalidated when that vector detaches or changes.
+// Returns the solver segment structurally covering entityRelativeFrame, or
+// nullptr.  The covered range is [startFrame, endFrame] with endFrame == -1
+// treated as the last frame of the entity clip.  Frames are relative to
+// entity.start.  When invalid data overlaps, the segment with the latest start
+// frame wins.  The pointer is owned by entity.solvers and is invalidated when
+// that vector detaches or changes.
+//
+// This helper has no World, so it cannot know where a physics segment really
+// stops.  Use solver::evaluateResult()/Result::stopFrame (or evaluateEntity,
+// which already honours it) for the physical end; timeline code should draw
+// the band up to that stop frame.
 const model::SolverSegment *solverAt(const model::Entity &entity,
                                      int entityRelativeFrame);
 
@@ -65,9 +71,11 @@ bool physicsInteractAt(const model::Project &project, const Uuid &entityUuid,
                        int projectFrame);
 
 // Solver segments drive x/y (gravity, orbit, black hole) or rotation (spin).
-// Every other track stays on ordinary keyframes.  After a segment ends, its
-// solved end pose acts as an implicit left key so the next ordinary key does
-// not jump back to the pre-segment value.
+// Every other track stays on ordinary keyframes.  With endFrame == -1 the
+// evaluator uses the first physical stop/collision (or the clip end when the
+// motion never stops); endFrame >= 0 keeps the explicit range.  After a
+// segment ends, its solved stop pose acts as an implicit left key so the next
+// ordinary key does not jump back to the pre-segment value.
 //
 // The double overload samples at fractional project frames (export 2x/4x fps).
 // Ordinary tracks interpolate between keys; inside a solver segment the

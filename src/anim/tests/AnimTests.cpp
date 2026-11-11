@@ -339,6 +339,79 @@ void testSegmentEndContinuity()
     CHECK(anim::solverAt(entity, 31) == nullptr);
 }
 
+void testAutomaticStopAnchorsNextKey()
+{
+    Project project;
+    Entity entity = makeEntity(QStringLiteral("auto-stop"), 0, 100);
+    setTrack(entity, "x", {{0, 0.0}});
+    // The ordinary key after the physical stop starts from the solved stop
+    // pose, not from the clip end.
+    setTrack(entity, "y", {{0, 0.0}, {80, 200.0}});
+
+    SolverSegment segment = makeSegment(
+        QStringLiteral("seg-auto-stop"), SolverEffect::Gravity, 0, -1,
+        QStringLiteral("ground"));
+    segment.params.insert(QStringLiteral("strength"), 500.0);
+    segment.params.insert(QStringLiteral("elasticity"), 0.0);
+    segment.params.insert(QStringLiteral("friction"), 0.5);
+    segment.params.insert(QStringLiteral("stopThreshold"), 10.0);
+    entity.solvers.append(segment);
+    addEntity(project, entity);
+    addEntity(project, makeEntity(QStringLiteral("ground")));
+
+    MockWorld world;
+    QPainterPath ball;
+    ball.addRect(QRectF(-10.0, -10.0, 20.0, 20.0));
+    world.shapes.insert(QStringLiteral("auto-stop"), ball);
+    world.poses.insert(QStringLiteral("auto-stop"),
+                       solver::Pose{QPointF(0.0, 0.0), 0.0});
+    QPainterPath ground;
+    ground.addRect(QRectF(-500.0, -300.0, 1000.0, 200.0));
+    world.shapes.insert(QStringLiteral("ground"), ground);
+    world.poses.insert(QStringLiteral("ground"),
+                       solver::Pose{QPointF(0.0, 0.0), 0.0});
+    world.interactive.insert(QStringLiteral("ground"));
+
+    const auto yAt = [&](double frame)
+    {
+        return anim::evaluateEntity(project, entity.uuid, frame, world)
+            .world.map(QPointF(0.0, 0.0))
+            .y();
+    };
+
+    // Y decreases while the ball falls, then the anchored interpolation to
+    // the key at frame 80 makes it rise again.  The first significant rise
+    // marks the frame after the physical stop (collision resolution can move
+    // the resting pose by a hundredth of a pixel).
+    int stopFrame = -1;
+    double stopY = yAt(0);
+    for (int frame = 1; frame < 79; ++frame)
+    {
+        const double y = yAt(frame);
+        if (y > stopY + 1.0)
+        {
+            stopFrame = frame - 1;
+            stopY = yAt(stopFrame);
+            break;
+        }
+        stopY = y;
+    }
+    CHECK(stopFrame > 0);
+    CHECK(stopFrame < 70);
+    CHECK_NEAR(stopY, -90.0, 0.5);
+    if (stopFrame <= 0 || stopFrame >= 70)
+        return;
+
+    // The segment is over at the stop frame: the solved pose is the implicit
+    // left key for the next ordinary key at frame 80.  Anchoring at the clip
+    // end instead would keep y at the resting value until frame 80.
+    const double anchored = stopY + (200.0 - stopY)
+            * double(10) / double(80 - stopFrame);
+    CHECK_NEAR(yAt(stopFrame + 10), anchored, 1e-6);
+    CHECK(yAt(stopFrame + 10) > stopY + 20.0);
+    CHECK_NEAR(yAt(80), 200.0, 1e-6);
+}
+
 void testFractionalTracks()
 {
     Project project;
@@ -669,7 +742,7 @@ void testCache()
 
     cache.clear();
     CHECK(cache.poses.isEmpty());
-    CHECK(cache.solverSamples.isEmpty());
+    CHECK(cache.solverResults.isEmpty());
 }
 
 } // namespace
@@ -686,6 +759,7 @@ int main(int argc, char** argv)
     testFractionalSolverSegment();
     testOrbitSegmentMiddle();
     testSegmentEndContinuity();
+    testAutomaticStopAnchorsNextKey();
     testParentTransform();
     testVisibilityAndOpacity();
     testMissingParentAndCycles();

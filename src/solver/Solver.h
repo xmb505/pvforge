@@ -52,7 +52,10 @@ struct World
 };
 
 // Solver segments use frames relative to the driven entity's start, matching
-// the project model.  endFrame == -1 means "until the last clip frame".
+// the project model.  endFrame == -1 means "automatic": solve until the first
+// physical stop/collision, or until the last clip frame when nothing stops the
+// motion.  endFrame >= 0 is an explicit, advanced override and keeps the old
+// clipping behaviour: the solve is cut (and the value frozen) at that frame.
 struct Segment
 {
     SolverEffect effect = SolverEffect::Gravity;
@@ -73,15 +76,47 @@ struct Sample
     // samples carry it; spin samples report zero.
     QPointF velocity;
     bool collided = false;
+    // True only when the motion physically stopped (collision or low-speed
+    // threshold) at or before this frame.  Reaching the end of the solved
+    // range is *not* a physical stop and therefore leaves this false.
     bool stopped = false;
 };
 
-// Evaluate a segment on a fixed 1/fps grid from startFrame through endFrame
-// (inclusive).  entityUuid is required; targetUuid is required for gravity,
-// orbit and black-hole (spin ignores it).  Missing required UUIDs return an
-// empty vector.  The result is deterministic and contains one sample per frame;
-// an invalid/empty range also returns an empty vector.  The last sample always
-// has zero velocity and stopped == true ("value holds after the segment").
+enum class StopReason
+{
+    None,
+    Collision,     // hit a collider (gravity) or crossed the event horizon
+    StopThreshold, // speed fell below stopThreshold without a collision
+    ClipEnd,       // automatic mode ran to the last frame of the clip
+    ExplicitEnd,   // endFrame >= 0 cut the solved range
+};
+
+QString stopReasonName(StopReason reason);
+
+struct Result
+{
+    QVector<Sample> samples;
+    // Automatic segment: first frame at which the motion physically stopped,
+    // otherwise the last clip frame.  Explicit segment: the explicit endFrame
+    // (the real physical stop is still visible through Sample::stopped).
+    // -1 when evaluation failed.
+    int stopFrame = -1;
+    StopReason reason = StopReason::None;
+
+    bool isEmpty() const { return samples.isEmpty(); }
+};
+
+// Evaluate a segment on a fixed 1/fps grid from startFrame through the solved
+// end frame (inclusive).  entityUuid is required; targetUuid is required for
+// gravity, orbit and black-hole (spin ignores it).  Missing required UUIDs
+// return an empty result.  The result is deterministic and contains one sample
+// per frame; an invalid/empty range also returns an empty result.
+//
+// Result::stopFrame is the frame the animation should treat as the segment
+// end: the first physical stop in automatic mode, otherwise the clip end, or
+// the explicit endFrame.  Samples continue through the structural end with a
+// frozen pose, so the value still holds after a physical stop, but
+// Sample::stopped only marks the physical stop itself.
 //
 // Parameter keys:
 //   Gravity:   strength (px/s^2, default 980), elasticity (0..1, default 0.35),
@@ -100,12 +135,18 @@ struct Sample
 //              model convention: positive is counter-clockwise.
 //   BlackHole: simulationSpeed (time multiplier, default 1), mass (relative,
 //              default 1000), angularMomentum (frame-dragging, default 0),
-//              eventHorizonRadius (informational, not a hard boundary, default
-//              80), objectRadius (default 40), softening (px, default 60),
-//              maxSpeed (px/s, default 4000, 0 = unlimited).  Center is
-//              targetUuid.
+//              eventHorizonRadius (capture radius, default 80), objectRadius
+//              (default 40), softening (px, default 60), maxSpeed (px/s,
+//              default 4000, 0 = unlimited), stopThreshold (px/s, default 0 =
+//              disabled).  Center is targetUuid.  Crossing
+//              eventHorizonRadius + objectRadius stops the motion (capture).
 // initialVelocity and Sample::velocity are solver-space px/second; no local
 // axis conversion is applied.
+Result evaluateResult(const Segment &segment, const World &world,
+                      int clipDuration, int fps);
+
+// Compatibility wrapper for callers that only need the samples.  New code
+// that cares about the end of the segment should use evaluateResult().
 QVector<Sample> evaluate(const Segment &segment, const World &world,
                          int clipDuration, int fps);
 

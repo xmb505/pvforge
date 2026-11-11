@@ -20,7 +20,10 @@ struct SolverSegment
     Uuid id;
     SolverEffect effect = SolverEffect::Gravity;
     int startFrame = 0;
-    int endFrame = -1; // -1 = solve until the last frame of the clip
+    // -1 = automatic: stop at the first physical stop/collision, or at the
+    // last clip frame when nothing stops the motion.  >= 0 = explicit advanced
+    // override: solve (and freeze) through that frame.
+    int endFrame = -1;
     int version = 1;
     QPointF initialVelocity;
     QVariantMap params;
@@ -55,7 +58,10 @@ bool validateTrack(const Track& track, int duration, const QString& trackName,
 // Solver start/end frames must be inside the clip, segments must not overlap,
 // and driven properties (x/y or rotation) must not have normal keyframes
 // inside a segment. A keyframe at the segment start frame is the initial
-// state and is allowed.
+// state and is allowed.  endFrame == -1 is automatic: validation uses the
+// clip end as its structural end because the physical stop frame needs a
+// World and cannot be known here.  An explicit endFrame is validated and used
+// verbatim.
 bool validateSolvers(const Entity& entity, QString* error = nullptr);
 
 bool validateEntity(const Entity& entity, QString* error = nullptr);
