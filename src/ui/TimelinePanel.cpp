@@ -9,7 +9,6 @@
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
 #include "next/timeline/MarkerDialog.h"
-#include "ui/EasingChooser.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -135,28 +134,6 @@ bool hasAssetMime(const QMimeData* mime)
                    QStringLiteral("application/x-pvforge-asset-html"))
                || mime->hasFormat(
                    QStringLiteral("application/x-pvforge-asset")));
-}
-
-EasingSpec legacyEasing(const model::EasingSpec& spec)
-{
-    EasingSpec result;
-    result.easing = easingFromName(spec.type);
-    result.inX = spec.inX;
-    result.inY = spec.inY;
-    result.outX = spec.outX;
-    result.outY = spec.outY;
-    return result;
-}
-
-model::EasingSpec modelEasing(const EasingSpec& spec)
-{
-    model::EasingSpec result;
-    result.type = easingName(spec.easing);
-    result.inX = spec.inX;
-    result.inY = spec.inY;
-    result.outX = spec.outX;
-    result.outY = spec.outY;
-    return result;
 }
 
 QPixmap themedGlyph(const QStringList& names, int size, const QColor& color)
@@ -485,7 +462,9 @@ void TimelinePanel::initPanel()
     m_vScroll = new QScrollBar(Qt::Vertical, this);
     m_vScroll->setObjectName(QStringLiteral("timelineVScroll"));
     connect(m_vScroll, &QScrollBar::valueChanged, this, [this](int value) {
-        m_scrollY = value;
+        // The bar is top-anchored; m_scrollY counts upwards from row 0 at the
+        // body bottom.
+        m_scrollY = std::max(0, m_vScroll->maximum() - value);
         update();
         syncPopups();
     });
@@ -791,15 +770,51 @@ EntityId TimelinePanel::entityAtRow(int row) const
 
 int TimelinePanel::rowTop(int row) const
 {
-    return kRulerHeight + row * kRowHeight - m_scrollY;
+    // Bottom-up: row 0 sits on the body bottom, larger rows stack upwards.
+    return bodyBottom() - (row + 1) * kRowHeight + 1 + m_scrollY;
 }
 
 int TimelinePanel::rowAt(int y) const
 {
     if (y < kRulerHeight || y >= bodyBottom())
         return -1;
-    const int row = (y - kRulerHeight + m_scrollY) / kRowHeight;
+    const int row = (bodyBottom() - y + m_scrollY) / kRowHeight;
     return row >= 0 && row < rowIds().size() ? row : -1;
+}
+
+int TimelinePanel::dropRowForY(int y) const
+{
+    const int highest = highestRowForDrop();
+    if (y < kRulerHeight)
+        return highest + 1;
+    if (y >= bodyBottom())
+        return 0;
+    const int row = std::max(0, (bodyBottom() - y + m_scrollY) / kRowHeight);
+    // Empty space above the top clip is unbounded; land right above it.
+    return std::min(row, highest + 1);
+}
+
+int TimelinePanel::highestRowForDrop() const
+{
+    // Clamp against the rows at gesture start, otherwise the preview clip
+    // would raise its own ceiling every time it moves and run away.
+    const QVector<Entity>& entities =
+        sessionMode() && m_dragMode == DragMode::MoveClip
+            ? m_sessionBaseSnapshot.entities
+            : (!sessionMode() && m_dragging ? m_before : activeEntities());
+    int highest = -1;
+    for (const Entity& entity : entities)
+    {
+        const bool dangling = entity.parent != kInvalidEntity
+                              && entityById(entity.parent) == nullptr;
+        if (entity.parent != m_owner
+            && !(m_owner == kInvalidEntity && dangling))
+            continue;
+        const int row = rowOfEntity(entity);
+        if (row >= 0)
+            highest = std::max(highest, row);
+    }
+    return highest;
 }
 
 int TimelinePanel::contentStart() const
@@ -1019,7 +1034,8 @@ void TimelinePanel::clampScroll()
         m_vScroll->setRange(0, maxY);
         m_vScroll->setPageStep(std::max(1, bodyHeight));
         m_vScroll->setSingleStep(kRowHeight);
-        m_vScroll->setValue(m_scrollY);
+        // Top of the bar = topmost rows, bottom = row 0.
+        m_vScroll->setValue(maxY - m_scrollY);
         m_vScroll->setVisible(true);
     }
 }
@@ -1164,8 +1180,27 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         int delta = frameFromX(int(std::lround(pos.x()))) - m_dragStartFrame;
         const int lower = actions->minMoveDelta({uuid});
         delta = std::max(delta, lower);
-        if (!actions->planMove({uuid}, delta, {}, &plan, &error))
+        const int targetRow = dropRowForY(int(std::lround(pos.y())));
+        if (delta == 0 && targetRow == m_dragStartRow)
+        {
+            m_snapshot = m_sessionBaseSnapshot;
+            m_sessionPlanValid = false;
+            m_moved = false;
+            update();
+            syncPopups();
             return;
+        }
+        if (!actions->planMoveToRow(uuid, delta, targetRow, &plan, &error))
+        {
+            // A rejected plan (parent bounds, lock) restores the base preview;
+            // the release handler reports the error once.
+            m_snapshot = m_sessionBaseSnapshot;
+            m_sessionPlanValid = false;
+            m_moved = false;
+            update();
+            syncPopups();
+            return;
+        }
     }
     else
     {
@@ -1274,26 +1309,6 @@ bool TimelinePanel::isReparentCandidate(const Uuid& entity,
         parent = it.value().parentUuid;
     }
     return !next::isEntityLocked(project, target);
-}
-
-QVector<Uuid> TimelinePanel::siblingOrderForDrop(const Uuid& entity,
-                                                 const Uuid& target,
-                                                 bool after) const
-{
-    QVector<Uuid> order;
-    if (!m_session)
-        return order;
-    const model::Project& project = m_session->project();
-    const auto it = project.entities.constFind(entity);
-    if (it == project.entities.constEnd())
-        return order;
-    order = model::childrenOf(project, it.value().parentUuid);
-    order.removeAll(entity);
-    const int index = order.indexOf(target);
-    if (index < 0)
-        return {};
-    order.insert(index + (after ? 1 : 0), entity);
-    return order;
 }
 
 int TimelinePanel::promptReparentMode(const Uuid& target)
@@ -1605,56 +1620,6 @@ void TimelinePanel::pasteKeyframes()
     refreshFromSession();
 }
 
-void TimelinePanel::openEasingForSelection(const QPoint& globalPos)
-{
-    if (!sessionMode() || !m_session || !m_session->editActions())
-        return;
-    const QVector<KeyRef> refs = selectedKeyRefs();
-    if (refs.isEmpty())
-        return;
-
-    model::EasingSpec current;
-    const model::Project& project = m_session->project();
-    for (const KeyRef& ref : refs)
-    {
-        const auto entity = project.entities.constFind(ref.entity);
-        if (entity == project.entities.constEnd())
-            continue;
-        for (auto track = entity.value().tracks.constBegin();
-             track != entity.value().tracks.constEnd(); ++track)
-        {
-            if (!ref.track.isEmpty() && track.key() != ref.track)
-                continue;
-            for (const model::Keyframe& key : track.value().keys)
-            {
-                if (key.frame == ref.frame)
-                {
-                    current = key.easing;
-                    break;
-                }
-            }
-            break;
-        }
-        break;
-    }
-
-    EasingSpec chosen;
-    if (!EasingChooser::choose(this, legacyEasing(current), globalPos, &chosen,
-                               QStringLiteral("关键帧缓动")))
-        return;
-
-    QString error;
-    if (!m_session->editActions()->setKeyframeEasing(
-            refs, modelEasing(chosen), &error))
-    {
-        if (!error.isEmpty())
-            emit editFailed(error);
-        return;
-    }
-    emit editCommitted(QStringLiteral("修改关键帧缓动"));
-    refreshFromSession();
-}
-
 bool TimelinePanel::splitAtPlayhead()
 {
     if (!sessionMode() || m_selected == kInvalidEntity)
@@ -1840,6 +1805,9 @@ void TimelinePanel::finishSessionDrag()
     const DragMode mode = m_dragMode;
     const EntityId draggedId = m_dragEntity;
     const QPointF releasePos = m_lastDragPos;
+    // Resolve the drop row before clearing the drag mode: the clamp uses the
+    // rows captured when the gesture started.
+    const int releaseRow = dropRowForY(int(std::lround(releasePos.y())));
     const QVector<Entity> baseEntities = m_sessionBaseSnapshot.entities;
 
     m_dragging = false;
@@ -1866,13 +1834,9 @@ void TimelinePanel::finishSessionDrag()
     {
         int delta = frameFromX(int(std::lround(releasePos.x()))) - m_dragStartFrame;
         delta = std::max(delta, actions->minMoveDelta({uuid}));
-        const int baseRow =
-            (int(std::lround(releasePos.y())) - kRulerHeight + m_scrollY)
-            / kRowHeight;
-        const EntityId targetId = sessionBaseEntityAtRow(baseRow);
+        const EntityId targetId = sessionBaseEntityAtRow(releaseRow);
         const Entity* target = findEntity(baseEntities, targetId);
         const Uuid targetUuid = uuidForEntityId(targetId);
-        const Entity* source = findEntity(baseEntities, draggedId);
         const bool targetHit =
             target && sessionBaseClipRect(*target).contains(releasePos.toPoint());
         const bool targetCanParent =
@@ -1880,7 +1844,7 @@ void TimelinePanel::finishSessionDrag()
             && (target->data.value(QStringLiteral("contentKind")).toString()
                     == QStringLiteral("empty")
                 || !childIds(baseEntities, targetId).isEmpty());
-        if (targetHit && targetCanParent && baseRow != m_dragStartRow
+        if (targetHit && targetCanParent && releaseRow != m_dragStartRow
             && isReparentCandidate(uuid, targetUuid))
         {
             m_moved = false;
@@ -1900,18 +1864,13 @@ void TimelinePanel::finishSessionDrag()
             return;
         }
 
-        if (target && source && baseRow != m_dragStartRow
-            && target->parent == source->parent)
+        // Blank rows are first-class targets: the model row is written even
+        // when no clip sits there.  Dropping on a clip swaps the two slots.
+        if (releaseRow != m_dragStartRow || delta != 0)
         {
-            const QRect targetClip = sessionBaseClipRect(*target);
-            const bool after =
-                releasePos.y() > targetClip.top() + targetClip.height() / 2;
-            const QVector<Uuid> order =
-                siblingOrderForDrop(uuid, targetUuid, after);
             EditPlan plan;
             QString error;
-            if (!order.isEmpty()
-                && actions->planMove({uuid}, delta, order, &plan, &error))
+            if (actions->planMoveToRow(uuid, delta, releaseRow, &plan, &error))
             {
                 m_sessionPlan = plan;
                 m_sessionPlanValid = true;
@@ -2269,20 +2228,9 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
     {
         const int delta = frameFromX(int(std::lround(pos.x()))) - m_dragStartFrame;
         applyShift(m_preview, m_dragEntity, delta);
-        int targetRow = rowAt(int(pos.y()));
-        const int rowsCount = int(rowIds().size());
-        if (rowsCount > 0)
-        {
-            if (targetRow < 0)
-                targetRow = pos.y() < kRulerHeight ? 0 : rowsCount - 1;
-            targetRow = std::clamp(targetRow, 0, rowsCount - 1);
-            moveEntityToRow(m_preview, m_dragEntity, targetRow);
-            m_moved = delta != 0 || targetRow != m_dragStartRow;
-        }
-        else
-        {
-            m_moved = delta != 0;
-        }
+        const int targetRow = dropRowForY(int(std::lround(pos.y())));
+        moveEntityToRow(m_preview, m_dragEntity, targetRow);
+        m_moved = delta != 0 || targetRow != m_dragStartRow;
     }
     else if (m_dragMode == DragMode::TrimStart)
     {
@@ -2362,9 +2310,9 @@ void TimelinePanel::autoScrollTick()
     else if (m_lastDragPos.x() < 24)
         dx = -12;
     if (m_lastDragPos.y() > bodyBottom() - 20)
-        dy = 12;
+        dy = -12;   // reveal lower rows: the bottom-anchored offset shrinks
     else if (m_lastDragPos.y() < kRulerHeight + 20)
-        dy = -12;
+        dy = 12;    // reveal higher rows
     if (dx == 0 && dy == 0)
         return;
     m_scrollX = std::max(0, m_scrollX + dx);
@@ -2698,7 +2646,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     if (m_dragMode == DragMode::MoveClip && m_moved)
     {
-        Entity* dragged = findEntity(m_preview, m_dragEntity);
+        // activeEntities() is the live preview in both modes, so the marker
+        // tracks the row under the pointer while dragging.
+        const Entity* dragged = findEntity(activeEntities(), m_dragEntity);
         const QVector<EntityId> ids = rowIds();
         const int row = dragged ? ids.indexOf(dragged->id) : -1;
         if (row >= 0)
@@ -2833,7 +2783,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
         if (m_editMode == EditMode::Keyframes && !isEntityLocked(id))
         {
-            const int keyFrame = hitKeyframeRow(row, x);
+            const int keyFrame = hitKeyframeRow(row, x, int(std::lround(pos.y())));
             if (keyFrame >= 0)
             {
                 selectEntity(id, true);
@@ -2922,7 +2872,9 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     // Keyframes win over trim grips in keyframe mode: a key at the clip edge
     // must still be selectable. In clip mode the diamond is display-only.
     const int keyFrame =
-        m_editMode == EditMode::Keyframes ? hitKeyframeRow(row, x) : -1;
+        m_editMode == EditMode::Keyframes
+            ? hitKeyframeRow(row, x, int(std::lround(pos.y())))
+            : -1;
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
@@ -3087,7 +3039,9 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
             m_hoverRight = !entity->isAudio()
                            && std::abs(x - clip.right()) <= kTrimGrab;
             if (m_editMode == EditMode::Keyframes
-                && hitKeyframeRow(row, x) >= 0)
+                && hitKeyframeRow(row, x,
+                                  int(std::lround(event->position().y())))
+                       >= 0)
                 setCursor(Qt::PointingHandCursor);
             else if (m_editMode == EditMode::Clips
                      && (m_hoverLeft || m_hoverRight))
@@ -3153,8 +3107,12 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         const QVector<EntityId> rows = rowIds();
         if (m_editMode == EditMode::Keyframes)
         {
-            const int firstRow = rowAt(int(box.top()));
-            const int lastRow = rowAt(int(box.bottom()));
+            // Bottom-up rows: box.bottom() is the lowest row.  A box that
+            // starts or ends outside the body still covers every visible row.
+            const int topRow = rowAt(int(box.top()));
+            const int bottomRow = rowAt(int(box.bottom()));
+            const int firstRow = bottomRow >= 0 ? bottomRow : 0;
+            const int lastRow = topRow >= 0 ? topRow : int(rows.size()) - 1;
             const int firstFrame = std::max(0, frameFromX(int(box.left())));
             const int lastFrame = std::max(0, frameFromX(int(box.right())));
             const bool additive = event->modifiers() & Qt::ShiftModifier;
@@ -3177,9 +3135,10 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
                         m_selectedKeyframes.append(selection);
                 }
             }
-            if (lastRow >= 0 && lastRow < rows.size())
+            // The lowest selected row becomes the active entity.
+            if (firstRow >= 0 && firstRow < rows.size())
             {
-                const Entity* last = m_project->entity(rows[lastRow]);
+                const Entity* last = m_project->entity(rows[firstRow]);
                 if (last && !m_project->isEffectivelyLocked(last->id))
                     selectEntity(last->id, true);
             }
@@ -3244,7 +3203,8 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         return;
 
     const int x = int(std::lround(event->position().x()));
-    const int keyFrame = hitKeyframeRow(row, x);
+    const int keyFrame =
+        hitKeyframeRow(row, x, int(std::lround(event->position().y())));
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
@@ -3255,8 +3215,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
             m_selectedTrack = frameTracks.first();
         emit keyframeSelectionChanged(m_selectedKeyframes);
         update();
-        if (sessionMode())
-            openEasingForSelection(event->globalPosition().toPoint());
+        // Easing lives in the Properties keyframe section, not on the clip.
         return;
     }
 
@@ -3341,7 +3300,7 @@ void TimelinePanel::dropEvent(QDropEvent* event)
         frame = std::min(frame, contentEnd() - 1);
     int row = rowAt(int(std::lround(event->position().y())));
     if (row < 0)
-        row = std::max(0, int(rowIds().size()) - 1);
+        row = dropRowForY(int(std::lround(event->position().y())));
     const EntityId id = dropAsset(*event->mimeData(), frame, row);
     m_dropActive = false;
     update();
@@ -3536,7 +3495,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         return;
 
     const int hitX = event->pos().x();
-    const int keyFrame = hitKeyframeRow(row, hitX);
+    const int keyFrame = hitKeyframeRow(row, hitX, event->pos().y());
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
@@ -3548,14 +3507,13 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         emit keyframeSelectionChanged(m_selectedKeyframes);
         update();
 
+        // Easing is edited in the Properties keyframe section; the clip menu
+        // only manages keys.
         QMenu menu(this);
-        QAction* easing = menu.addAction(QStringLiteral("编辑缓动…"));
         QAction* copy = menu.addAction(QStringLiteral("复制关键帧"));
         QAction* remove = menu.addAction(QStringLiteral("删除关键帧"));
         QAction* chosen = menu.exec(event->globalPos());
-        if (chosen == easing && sessionMode())
-            openEasingForSelection(event->globalPos());
-        else if (chosen == copy && sessionMode())
+        if (chosen == copy && sessionMode())
             copySelectedKeyframes();
         else if (chosen == remove && sessionMode())
             deleteSelectedKeyframes();
@@ -3704,7 +3662,8 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
     }
     else
     {
-        m_scrollY -= int(std::lround(steps * kRowHeight));
+        // Bottom-up: wheel up reveals higher rows, so the upward offset grows.
+        m_scrollY += int(std::lround(steps * kRowHeight));
     }
     clampScroll();
     update();
@@ -4095,10 +4054,15 @@ bool TimelinePanel::verticalScrollVisibleForTest() const
     return m_vScroll && m_vScroll->isVisible();
 }
 
-int TimelinePanel::hitKeyframeRow(int row, int x) const
+int TimelinePanel::hitKeyframeRow(int row, int x, int y) const
 {
     const Entity* entity = entityById(entityAtRow(row));
     if (!entity)
+        return -1;
+    // A keyframe hit must land on the diamond band, not only near its X.
+    // This stops right-clicking a clip body from opening keyframe actions.
+    const QRect clip = clipRect(*entity);
+    if (clip.isEmpty() || std::abs(y - clip.center().y()) > 9)
         return -1;
     int best = -1;
     int bestDistance = 10;

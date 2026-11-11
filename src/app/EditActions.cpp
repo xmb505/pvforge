@@ -403,6 +403,68 @@ bool EditActions::planMove(const QVector<Uuid>& roots, int deltaFrames,
     return true;
 }
 
+bool EditActions::planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
+                                EditPlan* plan, QString* error) const
+{
+    if (row < 0)
+    {
+        setError(error, QStringLiteral("目标行不能小于 0"));
+        return false;
+    }
+    // Reuse planMove for the time shift, the subtree and every lock/parent
+    // check; only the row assignment differs.
+    EditPlan moved;
+    if (!planMove({uuid}, deltaFrames, {}, &moved, error))
+        return false;
+    const auto source = moved.project.entities.constFind(uuid);
+    if (source == moved.project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+
+    const Uuid parentUuid = source.value().parentUuid;
+    const int oldRow = source.value().row;
+    QString occupant;
+    if (oldRow != row)
+    {
+        for (auto it = moved.project.entities.constBegin();
+             it != moved.project.entities.constEnd(); ++it)
+        {
+            if (it.key() == uuid || it.value().parentUuid != parentUuid)
+                continue;
+            if (it.value().row == row)
+            {
+                occupant = it.key();
+                break;
+            }
+        }
+    }
+
+    QSet<Uuid> upsertSet(moved.upserts.begin(), moved.upserts.end());
+    auto upsert = [&moved, &upsertSet](const Uuid& value) {
+        if (!upsertSet.contains(value))
+        {
+            upsertSet.insert(value);
+            moved.upserts.append(value);
+        }
+    };
+    if (!occupant.isEmpty())
+    {
+        // Fixed slots: the occupant moves into the slot the drag vacated.
+        moved.project.entities[occupant].row = oldRow;
+        upsert(occupant);
+    }
+    if (oldRow != row)
+        upsert(uuid);
+    moved.project.entities[uuid].row = row;
+    moved.message = (deltaFrames == 0 && oldRow != row)
+                        ? QStringLiteral("调整片段行")
+                        : QStringLiteral("移动片段");
+    *plan = std::move(moved);
+    return true;
+}
+
 bool EditActions::planTrim(const Uuid& uuid, int newStart, int newEnd,
                            EditPlan* plan, QString* error) const
 {

@@ -2847,8 +2847,8 @@ int timelineEditTest(QApplication& app)
                   QStringLiteral("Esc did not restore the drag preview")))
         return 1;
 
-    // Vertical drag reorders siblings; the row change is part of the same
-    // single commit.
+    // Vertical drag between occupied rows; the row change is part of the same
+    // single commit and swaps the two row slots.
     const int videoRow = rowForName(QStringLiteral("视频"));
     const int parentRow = rowForName(QStringLiteral("父级"));
     if (!check(videoRow >= 0 && parentRow >= 0,
@@ -2874,6 +2874,8 @@ int timelineEditTest(QApplication& app)
     QApplication::sendEvent(timeline, &rowRelease);
     QApplication::processEvents();
     live->flush();
+    // Row slots are fixed: dropping on the video clip swaps the two slots, so
+    // the dragged clip lands exactly on the row under the pointer.
     if (!check(changedSignals == 1,
                QStringLiteral("row drag emitted %1 changed signals")
                    .arg(changedSignals))
@@ -2881,14 +2883,19 @@ int timelineEditTest(QApplication& app)
                   QStringLiteral("row drag did not create one undo step"))
         || !check(timeline->rowForEntityForTest(
                       timeline->entityIdForUuid(parent))
-                      == 1,
-                  QStringLiteral("row drag did not reorder the sibling (row %1, expected 1; model %2; rows %3/%4/%5)")
+                      == videoRow,
+                  QStringLiteral("row drag did not land on the dropped row (row %1, expected %2; model %3; rows %4/%5/%6)")
                       .arg(timeline->rowForEntityForTest(
                           timeline->entityIdForUuid(parent)))
+                      .arg(videoRow)
                       .arg(entity(parent).row)
                       .arg(timeline->rowNameForTest(0))
                       .arg(timeline->rowNameForTest(1))
-                      .arg(timeline->rowNameForTest(2))))
+                      .arg(timeline->rowNameForTest(2)))
+        || !check(timeline->rowForEntityForTest(
+                      timeline->entityIdForUuid(video))
+                      == parentRow,
+                  QStringLiteral("row drag did not move the occupant to the vacated row")))
         return 1;
     if (!check(live->document()->undo(&error),
                QStringLiteral("row drag undo failed: %1").arg(error)))
@@ -3052,6 +3059,496 @@ int timelineEditTest(QApplication& app)
                " solver pin, locks, row/trim/popup gestures, one gesture one"
                " undo, drag reparent world/local, cascade delete";
     return 0;
+}
+
+int timelineBottomUpTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p3-bottomup.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P3 时间轴自下而上");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-bottomup-test: create failed" << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1280, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!live || !document || !timeline)
+    {
+        qCritical() << "timeline-bottomup-test: session window/timeline missing";
+        return 1;
+    }
+
+    int failures = 0;
+    auto expect = [&failures](bool condition, const QString& message) {
+        if (!condition)
+        {
+            qCritical() << "timeline-bottomup-test:" << message;
+            ++failures;
+        }
+        return condition;
+    };
+    int changedSignals = 0;
+    QObject::connect(document, &pvf::next::Document::changed,
+                     [&changedSignals] { ++changedSignals; });
+    QObject::connect(timeline, &pvf::TimelinePanel::editFailed,
+                     [](const QString& message) {
+                         qCritical() << "timeline-bottomup-test: edit failed"
+                                     << message;
+                     });
+
+    const int rowHeight = 30;
+    // Empty project: row 0 is the bottom row and nothing occupies it.
+    expect(timeline->entityRowCountForTest() == 0,
+           QStringLiteral("empty project should have no entity rows"));
+    expect(timeline->rowTopForTest(0) + rowHeight
+               == timeline->bodyBottomForTest() + 1,
+           QStringLiteral("empty row 0 is not bottom-aligned"));
+    expect(timeline->rowTopForTest(1) + rowHeight == timeline->rowTopForTest(0),
+           QStringLiteral("row 1 is not stacked above row 0"));
+    expect(timeline->dropRowForTest(timeline->rowCenterYForTest(0)) == 0,
+           QStringLiteral("empty drop below did not resolve to row 0"));
+    expect(timeline->dropRowForTest(timeline->rowCenterYForTest(6)) == 0,
+           QStringLiteral("empty drop above did not clamp to row 0"));
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    window->grab().save(
+        QStringLiteral("/tmp/opencode/pvforge-timeline-bottomup-empty.png"));
+
+    auto makeEntity = [&live](const QString& name, int start, int end,
+                              int row) {
+        auto& project = live->mutableProject();
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        entity.content.kind = pvf::ContentKind::Empty;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+    const pvf::Uuid bottom = makeEntity(QStringLiteral("底"), 0, 60, 0);
+    const pvf::Uuid middle = makeEntity(QStringLiteral("中"), 10, 40, 1);
+    const pvf::Uuid top = makeEntity(QStringLiteral("顶"), 20, 50, 2);
+    // A non-empty, childless clip is a reorder target, not a parent target.
+    live->mutableProject().entities[top].content.kind = pvf::ContentKind::Text;
+    pvf::model::Track track;
+    track.keys = {{0, 0.0, {}, {}}, {10, 100.0, {}, {}}};
+    live->mutableProject().entities[middle].tracks.insert(QStringLiteral("x"),
+                                                          track);
+    if (!expect(document->commitEntities({bottom, middle, top},
+                                         QStringLiteral("bottom-up setup"),
+                                         &error),
+                QStringLiteral("setup commit failed: %1").arg(error)))
+        return 1;
+    QString flushError;
+    live->flush(&flushError);
+    QApplication::processEvents();
+
+    auto rowFor = [&](const pvf::Uuid& uuid) {
+        return timeline->rowForEntityForTest(timeline->entityIdForUuid(uuid));
+    };
+    auto idFor = [&](const pvf::Uuid& uuid) {
+        return timeline->entityIdForUuid(uuid);
+    };
+    auto sendDrag = [&](const QPoint& from, const QPoint& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                          QPointF(timeline->mapToGlobal(from)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to),
+                         QPointF(timeline->mapToGlobal(to)), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &move);
+        QApplication::processEvents();
+    };
+    auto sendRelease = [&](const QPoint& at) {
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(at),
+                            QPointF(timeline->mapToGlobal(at)), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+    };
+    auto undo = [&] {
+        live->flush(&flushError);
+        if (!document->undo(&error))
+        {
+            qCritical() << "timeline-bottomup-test: undo failed" << error;
+            return false;
+        }
+        QApplication::processEvents();
+        return true;
+    };
+    auto depthNow = [&] {
+        // Human commits are debounced; flush before reading the undo stack.
+        live->flush(&flushError);
+        return document->store()->undoDepth();
+    };
+
+    // Three rows from the bottom up: row 0 is drawn below row 1, row 2 on top.
+    expect(timeline->entityRowCountForTest() == 3,
+           QStringLiteral("expected three entity rows"));
+    expect(timeline->rowEntityForTest(0) == idFor(bottom)
+               && timeline->rowEntityForTest(1) == idFor(middle)
+               && timeline->rowEntityForTest(2) == idFor(top),
+           QStringLiteral("rows did not map model row 0/1/2 to the bottom"));
+    expect(timeline->rowCenterYForTest(0) > timeline->rowCenterYForTest(1)
+               && timeline->rowCenterYForTest(1)
+                      > timeline->rowCenterYForTest(2),
+           QStringLiteral("rows are not painted bottom-up"));
+    expect(timeline->clipRectFor(idFor(middle)).top()
+                   + timeline->clipRectFor(idFor(middle)).height() / 2
+               == timeline->rowCenterYForTest(1),
+           QStringLiteral("clip rect does not follow the bottom-up row"));
+    expect(timeline->dropRowForTest(timeline->rowCenterYForTest(3)) == 3,
+           QStringLiteral("drop above the top clip did not resolve to highest+1"));
+    expect(timeline->dropRowForTest(timeline->bodyBottomForTest() + 20) == 0,
+           QStringLiteral("drop below the body did not resolve to row 0"));
+
+    // 1. Middle clip -> topmost blank row.
+    QPoint dragFrom(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(1));
+    QPoint dragTo(timeline->frameXForTest(20),
+                  timeline->rowCenterYForTest(3));
+    int depthBefore = depthNow();
+    changedSignals = 0;
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(changedSignals == 1,
+           QStringLiteral("top blank drop emitted %1 changed signals")
+               .arg(changedSignals));
+    expect(depthNow() == depthBefore + 1,
+           QStringLiteral("top blank drop did not create one undo step"));
+    expect(rowFor(middle) == 3,
+           QStringLiteral("middle clip did not land on the top blank row (%1)")
+               .arg(rowFor(middle)));
+    expect(rowFor(bottom) == 0 && rowFor(top) == 2,
+           QStringLiteral("top blank drop moved an unrelated slot"));
+    expect(undo() && rowFor(middle) == 1,
+           QStringLiteral("undo did not restore the middle row"));
+
+    // 2. Bottom blank row: vacate row 0 by dragging the bottom clip up, then
+    // drop the middle clip onto the now-blank bottom row.
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(0));
+    dragTo = QPoint(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(3));
+    depthBefore = depthNow();
+    changedSignals = 0;
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(changedSignals == 1 && depthNow() == depthBefore + 1,
+           QStringLiteral("partial drag / reorder steps do not match"));
+    expect(rowFor(bottom) == 3 && rowFor(middle) == 1,
+           QStringLiteral("bottom clip did not move to the blank top row"));
+    depthBefore = depthNow();
+    changedSignals = 0;
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(0));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(changedSignals == 1 && depthNow() == depthBefore + 1,
+           QStringLiteral("bottom blank drop did not commit once"));
+    expect(rowFor(middle) == 0,
+           QStringLiteral("middle clip did not land on the blank bottom row (%1)")
+               .arg(rowFor(middle)));
+    expect(rowFor(top) == 2 && rowFor(bottom) == 3,
+           QStringLiteral("bottom blank drop compacted unrelated rows"));
+    expect(undo() && rowFor(middle) == 1 && undo() && rowFor(bottom) == 0,
+           QStringLiteral("undo did not restore the bottom blank drags"));
+
+    // 3. Drag preview follows the pointer Y and Esc cancels without a commit.
+    changedSignals = 0;
+    const int depthAtDragStart = document->store()->undoDepth();
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(1));
+    const QPoint previewBottom(timeline->frameXForTest(20),
+                               timeline->rowCenterYForTest(0));
+    sendDrag(dragFrom, previewBottom);
+    expect(rowFor(middle) == 0,
+           QStringLiteral("drag preview did not follow the pointer to row 0 (%1)")
+               .arg(rowFor(middle)));
+    dragTo = QPoint(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(3));
+    QMouseEvent previewMove(QEvent::MouseMove, QPointF(dragTo),
+                            QPointF(timeline->mapToGlobal(dragTo)), Qt::NoButton,
+                            Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &previewMove);
+    QApplication::processEvents();
+    expect(rowFor(middle) == 3,
+           QStringLiteral("drag preview did not follow the pointer to row 3 (%1)")
+               .arg(rowFor(middle)));
+    expect(changedSignals == 0
+               && document->store()->undoDepth() == depthAtDragStart,
+           QStringLiteral("preview wrote a commit before release"));
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    window->grab().save(
+        QStringLiteral("/tmp/opencode/pvforge-timeline-bottomup-drag.png"));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &escape);
+    QApplication::processEvents();
+    expect(rowFor(middle) == 1,
+           QStringLiteral("Esc did not restore the preview row (%1)")
+               .arg(rowFor(middle)));
+    expect(changedSignals == 0 && depthNow() == depthAtDragStart,
+           QStringLiteral("Esc created a commit"));
+
+    // 4. Dropping on an occupied clip lands on that row and swaps slots.
+    depthBefore = depthNow();
+    changedSignals = 0;
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(30),
+                    timeline->rowCenterYForTest(2));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(changedSignals == 1 && depthNow() == depthBefore + 1,
+           QStringLiteral("occupied-slot drop did not commit once"));
+    expect(rowFor(middle) == 2 && rowFor(top) == 1 && rowFor(bottom) == 0,
+           QStringLiteral("occupied-slot drop did not swap rows (%1/%2)")
+               .arg(rowFor(middle))
+               .arg(rowFor(top)));
+    expect(undo() && rowFor(middle) == 1 && rowFor(top) == 2,
+           QStringLiteral("undo did not restore swapped rows"));
+
+    // 4b. A blank gap row is a valid target and stays a gap for the others.
+    depthBefore = depthNow();
+    changedSignals = 0;
+    dragFrom = QPoint(timeline->frameXForTest(30),
+                      timeline->rowCenterYForTest(2));
+    dragTo = QPoint(timeline->frameXForTest(30),
+                    timeline->rowCenterYForTest(3));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(rowFor(top) == 3 && rowFor(bottom) == 0 && rowFor(middle) == 1,
+           QStringLiteral("top drop above did not keep the other slots"));
+    expect(depthNow() == depthBefore + 1,
+           QStringLiteral("top gap drop did not commit once"));
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(2));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(rowFor(middle) == 2 && rowFor(top) == 3 && rowFor(bottom) == 0,
+           QStringLiteral("gap drop into a middle blank row was compacted"));
+    expect(depthNow() == depthBefore + 2,
+           QStringLiteral("two gap drops did not create two undo steps"));
+    const bool gapUndo1 = undo();
+    const int gapMiddle1 = rowFor(middle);
+    const int gapTop1 = rowFor(top);
+    const bool gapUndo2 = undo();
+    expect(gapUndo1 && gapUndo2 && rowFor(middle) == 1 && rowFor(top) == 2,
+           QStringLiteral("undo did not restore the gap drops (%1/%2 -> %3/%4, %5/%6)")
+               .arg(gapUndo1)
+               .arg(gapUndo2)
+               .arg(gapMiddle1)
+               .arg(gapTop1)
+               .arg(rowFor(middle))
+               .arg(rowFor(top)));
+
+    // 5. Wheel zoom/scroll keeps the bottom anchor and moves rows as a block.
+    const int topBefore = timeline->rowTopForTest(0);
+    QWheelEvent wheel(QPointF(timeline->frameXForTest(20),
+                              timeline->rowCenterYForTest(1)),
+                      QPointF(timeline->mapToGlobal(
+                          QPoint(timeline->frameXForTest(20),
+                                 timeline->rowCenterYForTest(1)))),
+                      QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QApplication::sendEvent(timeline, &wheel);
+    QApplication::processEvents();
+    expect(timeline->verticalScrollForTest() > 0,
+           QStringLiteral("wheel up did not scroll towards higher rows"));
+    expect(timeline->rowTopForTest(0) > topBefore,
+           QStringLiteral("scrolled rows did not move as a block"));
+    QWheelEvent wheelBack(QPointF(timeline->frameXForTest(20),
+                                  timeline->rowCenterYForTest(1)),
+                          QPointF(timeline->mapToGlobal(
+                              QPoint(timeline->frameXForTest(20),
+                                     timeline->rowCenterYForTest(1)))),
+                          QPoint(), QPoint(0, -120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(timeline, &wheelBack);
+    QApplication::processEvents();
+    expect(timeline->verticalScrollForTest() == 0,
+           QStringLiteral("wheel down did not return to the bottom anchor"));
+
+    // 6. Keyframe hit needs the diamond band, not only the X position.
+    timeline->setEditMode(pvf::TimelinePanel::EditMode::Keyframes);
+    QApplication::processEvents();
+    const QPoint keyPoint(timeline->frameXForTest(20),
+                          timeline->rowCenterYForTest(1));
+    QMouseEvent keyPress(QEvent::MouseButtonPress, QPointF(keyPoint),
+                         QPointF(timeline->mapToGlobal(keyPoint)),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &keyPress);
+    QApplication::processEvents();
+    expect(timeline->selectedKeyframeCount() == 1,
+           QStringLiteral("keyframe diamond was not hit at its Y"));
+    QMouseEvent keyRelease(QEvent::MouseButtonRelease, QPointF(keyPoint),
+                           QPointF(timeline->mapToGlobal(keyPoint)),
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &keyRelease);
+    QApplication::processEvents();
+    const QRect middleClip = timeline->clipRectFor(idFor(middle));
+    expect(timeline->keyframeHitForTest(1, timeline->frameXForTest(20),
+                                        timeline->rowCenterYForTest(1))
+               == 20,
+           QStringLiteral("keyframe lookup missed the diamond centre"));
+    const QPoint offBand(keyPoint.x(), middleClip.top() + 1);
+    expect(timeline->keyframeHitForTest(1, offBand.x(), offBand.y()) == -1,
+           QStringLiteral("same X outside the diamond band still hit a keyframe"));
+    QMouseEvent offPress(QEvent::MouseButtonPress, QPointF(offBand),
+                         QPointF(timeline->mapToGlobal(offBand)),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &offPress);
+    QApplication::processEvents();
+    QMouseEvent offRelease(QEvent::MouseButtonRelease, QPointF(offBand),
+                           QPointF(timeline->mapToGlobal(offBand)),
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &offRelease);
+    QApplication::processEvents();
+    expect(timeline->selectedKeyframeCount() == 0,
+           QStringLiteral("clip body click selected a keyframe"));
+    timeline->setEditMode(pvf::TimelinePanel::EditMode::Clips);
+    QApplication::processEvents();
+
+    // 7. Cross-parent drop: a folder row asks for reparent and lands on the
+    // new parent's next free row.
+    const pvf::Uuid folder = makeEntity(QStringLiteral("文件夹"), 0, 60, 3);
+    if (!expect(document->commitEntities({folder},
+                                         QStringLiteral("folder setup"), &error),
+                QStringLiteral("folder commit failed: %1").arg(error)))
+        return 1;
+    live->flush(&flushError);
+    QApplication::processEvents();
+    expect(rowFor(folder) == 3, QStringLiteral("folder row missing"));
+    depthBefore = depthNow();
+    changedSignals = 0;
+    QTimer::singleShot(50, [] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box)
+            return;
+        for (QAbstractButton* button : box->buttons())
+        {
+            if (button->text().contains(QStringLiteral("保持世界位置")))
+            {
+                button->click();
+                return;
+            }
+        }
+        box->reject();
+    });
+    QTimer::singleShot(2000, [] {
+        if (auto* box =
+                qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            box->reject();
+    });
+    dragFrom = QPoint(timeline->frameXForTest(20),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(20),
+                    timeline->rowCenterYForTest(3));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
+    expect(changedSignals == 1 && depthNow() == depthBefore + 1,
+           QStringLiteral("cross-parent drop did not commit once"));
+    expect(live->project().entities.value(middle).parentUuid == folder,
+           QStringLiteral("cross-parent drop did not reparent"));
+    expect(rowFor(middle) == 0 && rowFor(folder) == 3,
+           QStringLiteral("cross-parent drop rows wrong (%1/%2)")
+               .arg(rowFor(middle))
+               .arg(rowFor(folder)));
+    {
+        auto* popup = timeline->openPopup(idFor(folder));
+        QApplication::processEvents();
+        expect(popup && popup->entityRowCountForTest() == 1,
+               QStringLiteral("private timeline did not open the new child"));
+        if (popup)
+        {
+            expect(popup->rowCenterYForTest(0) > popup->rowCenterYForTest(1),
+                   QStringLiteral("private timeline is not bottom-up"));
+            expect(popup->rowEntityForTest(0) == idFor(middle),
+                   QStringLiteral("private timeline row 0 is not the child"));
+            // Vertical drag inside the private timeline also lands on a blank
+            // row and commits once.
+            const int popupDepth = depthNow();
+            const QPoint popupFrom(popup->frameXForTest(20),
+                                   popup->rowCenterYForTest(0));
+            const QPoint popupTo(popup->frameXForTest(20),
+                                 popup->rowCenterYForTest(2));
+            QMouseEvent popupPress(QEvent::MouseButtonPress, QPointF(popupFrom),
+                                   QPointF(popup->mapToGlobal(popupFrom)),
+                                   Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent popupMove(QEvent::MouseMove, QPointF(popupTo),
+                                  QPointF(popup->mapToGlobal(popupTo)),
+                                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent popupRelease(
+                QEvent::MouseButtonRelease, QPointF(popupTo),
+                QPointF(popup->mapToGlobal(popupTo)), Qt::LeftButton,
+                Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(popup, &popupPress);
+            QApplication::sendEvent(popup, &popupMove);
+            QApplication::sendEvent(popup, &popupRelease);
+            QApplication::processEvents();
+            expect(rowFor(middle) == 1,
+                   QStringLiteral("private timeline blank-row drag did not land (%1)")
+                       .arg(rowFor(middle)));
+            expect(depthNow() == popupDepth + 1,
+                   QStringLiteral("private timeline drag did not commit once"));
+            expect(undo() && rowFor(middle) == 0,
+                   QStringLiteral("private timeline drag undo did not restore row 0"));
+        }
+        timeline->closeAllPopups();
+        QApplication::processEvents();
+    }
+    expect(undo() && rowFor(middle) == 1,
+           QStringLiteral("cross-parent undo did not restore the root row"));
+
+    // 8. Deleting a clip leaves the other row slots untouched.
+    const int rowsBefore = timeline->entityRowCountForTest();
+    if (!expect(live->editActions()->deleteEntities({top}, false, nullptr,
+                                                    &error),
+                QStringLiteral("delete failed: %1").arg(error)))
+        return 1;
+    live->flush(&flushError);
+    QApplication::processEvents();
+    expect(timeline->entityRowCountForTest() == rowsBefore - 1,
+           QStringLiteral("delete did not remove one row"));
+    expect(rowFor(bottom) == 0 && rowFor(middle) == 1,
+           QStringLiteral("delete compacted the remaining rows"));
+    expect(undo() && rowFor(top) == 2,
+           QStringLiteral("delete undo did not restore the top row"));
+
+    window->grab().save(
+        QStringLiteral("/tmp/opencode/pvforge-timeline-bottomup.png"));
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-bottomup-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int timelineKeysTest(QApplication& app)
@@ -12845,7 +13342,8 @@ int timelineZoomTest(QApplication& app)
             ++failures;
         }
         const int verticalBefore = timeline->verticalScrollForTest();
-        QWheelEvent plain(pos, timeline->mapToGlobal(pos), QPoint(), QPoint(0, -120),
+        // Bottom-up rows: wheel up grows the upward (bottom-anchored) offset.
+        QWheelEvent plain(pos, timeline->mapToGlobal(pos), QPoint(), QPoint(0, 120),
                           Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(timeline, &plain);
         if (timeline->verticalScrollForTest() <= verticalBefore)
@@ -13383,7 +13881,11 @@ int libraryTest(QApplication& app)
                     << "panel" << panel->width() << "panel min"
                     << panel->minimumSizeHint().width() << "info min"
                     << info->minimumSizeHint().width();
-            layoutOk = tabs->width() <= 440 && panel->width() <= tabs->width()
+            const bool inProjectTab = tabs->isAncestorOf(panel);
+            if (!inProjectTab)
+                qCritical() << "library-test: asset panel is not in the right dock";
+            layoutOk = inProjectTab && tabs->width() <= 440
+                       && panel->width() <= tabs->width()
                        && info->width() <= panel->width()
                        && info->text().contains(QChar(0x2026))
                        && info->toolTip() == assetPath;
@@ -13394,9 +13896,12 @@ int libraryTest(QApplication& app)
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_library.png"));
 
         auto* create = window.findChild<QPushButton*>(QStringLiteral("assetCreate"));
-        if (!create)
+        auto* remove = window.findChild<QPushButton*>(QStringLiteral("assetRemove"));
+        if (!create || !remove || !create->isVisible() || !remove->isVisible())
         {
-            qCritical() << "library-test: create button not found";
+            qCritical() << "library-test: create/remove button missing or hidden"
+                        << (create ? create->isVisible() : false)
+                        << (remove ? remove->isVisible() : false);
             app.exit(1);
             return;
         }
@@ -13757,12 +14262,116 @@ int layoutTest(QApplication& app)
 
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_layout_narrow.png"));
         qInfo() << "layout-test: size" << window.size() << "minimum" << window.minimumSize();
-        if (auto* timeline = window.findChild<pvf::TimelinePanel*>())
-            qInfo() << "timeline geometry" << timeline->geometry()
-                    << "min" << timeline->minimumSize();
-        if (auto* viewport = window.findChild<pvf::Viewport*>())
-            qInfo() << "viewport geometry" << viewport->geometry()
-                    << "min" << viewport->minimumSize();
+
+        // Restore the v0.2.0 vertical ratio and check the library/buttons.
+        window.resize(1440, 900);
+        QApplication::processEvents();
+
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* viewport = window.findChild<pvf::Viewport*>();
+        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
+        auto* panel = window.findChild<QWidget*>(QStringLiteral("assetPanel"));
+        auto* create = window.findChild<QPushButton*>(QStringLiteral("assetCreate"));
+        auto* remove = window.findChild<QPushButton*>(QStringLiteral("assetRemove"));
+        if (!timeline || !viewport || !tabs || !panel)
+        {
+            qCritical() << "layout-test: layout widgets missing";
+            ++failures;
+        }
+        else
+        {
+            qInfo() << "layout-test: 1440x900 timeline" << timeline->geometry()
+                    << "viewport" << viewport->geometry()
+                    << "rightTabs" << tabs->width();
+            if (timeline->height() < 190 || timeline->height() > 260)
+            {
+                qCritical() << "layout-test: timeline height is not about 220"
+                            << timeline->height();
+                ++failures;
+            }
+            if (timeline->width() < window.centralWidget()->width() - 2)
+            {
+                qCritical() << "layout-test: timeline is not full width"
+                            << timeline->width() << window.centralWidget()->width();
+                ++failures;
+            }
+            if (!tabs->isAncestorOf(panel))
+            {
+                qCritical() << "layout-test: asset panel is not in the right dock";
+                ++failures;
+            }
+            if (!create || !remove || !create->isVisible() || !remove->isVisible())
+            {
+                qCritical() << "layout-test: asset create/remove buttons hidden";
+                ++failures;
+            }
+        }
+
+        // The 640x560 workbench must stay above the timeline and keep its
+        // create button visible, even when the viewport shrinks.
+        auto* wbButton =
+            window.findChild<QToolButton*>(QStringLiteral("workbenchButton"));
+        auto* workbench = window.findChild<pvf::WorkbenchPanel*>();
+        const auto settle = [](int ms) {
+            QEventLoop loop;
+            QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+            loop.exec();
+        };
+        if (wbButton && workbench)
+        {
+            wbButton->click();
+            settle(300);
+            auto* wbCreate =
+                workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+            if (!workbench->isVisible() || !wbCreate || !wbCreate->isVisible())
+            {
+                qCritical() << "layout-test: workbench create button not visible";
+                ++failures;
+            }
+            else
+            {
+                QApplication::processEvents();
+                if (auto* scroll = window.findChild<QScrollArea*>(
+                        QStringLiteral("projectScroll")))
+                    scroll->verticalScrollBar()->setValue(
+                        scroll->verticalScrollBar()->maximum());
+                QApplication::processEvents();
+                window.grab().toImage().save(
+                    QStringLiteral("/tmp/opencode/pvforge-layout-assets.png"));
+                const int createBottom =
+                    wbCreate->mapTo(&window, QPoint(0, wbCreate->height())).y();
+                const int timelineTop =
+                    timeline->mapTo(&window, QPoint(0, 0)).y();
+                if (createBottom >= timelineTop)
+                {
+                    qCritical() << "layout-test: workbench create button is clipped"
+                                << createBottom << timelineTop;
+                    ++failures;
+                }
+            }
+
+            window.resize(1000, 620);
+            QApplication::processEvents();
+            workbench->showAt(QPoint(8, 8));
+            settle(250);
+            window.grab().toImage().save(
+                QStringLiteral("/tmp/opencode/pvforge-layout-small.png"));
+            auto* smallCreate =
+                workbench->findChild<QPushButton*>(QStringLiteral("createButton"));
+            if (!workbench->isVisible() || !smallCreate
+                || !smallCreate->isVisible())
+            {
+                qCritical() << "layout-test: small viewport hides the workbench";
+                ++failures;
+            }
+            else if (smallCreate->mapTo(&window, QPoint(0, smallCreate->height())).y()
+                     >= timeline->mapTo(&window, QPoint(0, 0)).y())
+            {
+                qCritical() << "layout-test: small viewport clips the create button";
+                ++failures;
+            }
+            workbench->hidePanel();
+        }
         app.exit(failures == 0 ? 0 : 1);
     });
     return app.exec();
@@ -18427,6 +19036,26 @@ int assetsTest(QApplication& app)
     };
     auto row = [&](const QString& hash) { return panelRowForHash(*panel, hash); };
 
+    // The old visible entry points: library inside the right tab and the
+    // create/remove buttons, not hidden test-only objects.
+    auto* rightTabs = window->findChild<QTabWidget*>(QStringLiteral("rightTabs"));
+    auto* createButton =
+        window->findChild<QPushButton*>(QStringLiteral("assetCreate"));
+    auto* removeButton =
+        window->findChild<QPushButton*>(QStringLiteral("assetRemove"));
+    check(rightTabs && rightTabs->isAncestorOf(panel),
+          QStringLiteral("asset panel is not in the right dock"));
+    check(createButton && createButton->isVisible(),
+          QStringLiteral("create button is not visible"));
+    check(removeButton && removeButton->isVisible(),
+          QStringLiteral("delete button is not visible"));
+
+    if (auto* scroll =
+            window->findChild<QScrollArea*>(QStringLiteral("projectScroll")))
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+    QApplication::processEvents();
+    window->grab().save(QStringLiteral("/tmp/opencode/pvforge-session-library.png"));
+
     check(panel->assetCount() >= 5,
           QStringLiteral("asset list does not contain the imported assets"));
     check(row(alpha->hash) >= 0 && row(video->video.hash) >= 0
@@ -18470,6 +19099,20 @@ int assetsTest(QApplication& app)
           QStringLiteral("rename failed: %1").arg(tagsError));
     check(panel->assetNameAt(row(alpha->hash)) == QStringLiteral("Alpha 重命名"),
           QStringLiteral("renamed asset name not shown"));
+
+    // 创建实体 creates at the playhead through EditActions, like the legacy
+    // button; dragging to the timeline stays the second entry point.
+    if (auto* list = window->findChild<QListWidget*>(QStringLiteral("assetList")))
+    {
+        list->setCurrentRow(row(alpha->hash));
+        QApplication::processEvents();
+    }
+    const qsizetype beforeCreate = live->project().entities.size();
+    if (createButton)
+        createButton->click();
+    QApplication::processEvents();
+    check(live->project().entities.size() == beforeCreate + 1,
+          QStringLiteral("create button did not add an entity"));
 
     // Deleting a store entry keeps the entity and shows the offline state.
     pvf::model::Entity reference;
@@ -20098,6 +20741,8 @@ int main(int argc, char* argv[])
         return workbenchAssetsTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-test")))
         return timelineTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-bottomup-test")))
+        return timelineBottomUpTest(app);
     const int viewportIndex = app.arguments().indexOf(
         QStringLiteral("--viewport-test"));
     if (viewportIndex >= 0)

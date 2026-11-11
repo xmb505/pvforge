@@ -65,6 +65,12 @@ public:
     bool planMove(const QVector<Uuid>& roots, int deltaFrames,
                   const QVector<Uuid>& siblingOrder, EditPlan* plan,
                   QString* error = nullptr) const;
+    // Moves one root in time and pins it to the model row under the pointer.
+    // Blank rows are valid and stay blank: other siblings keep their rows, so
+    // row slots never compact.  Dropping on an occupied slot swaps the two
+    // clips, which keeps the dragged clip exactly on the dropped row.
+    bool planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
+                       EditPlan* plan, QString* error = nullptr) const;
     bool planTrim(const Uuid& uuid, int newStart, int newEnd, EditPlan* plan,
                   QString* error = nullptr) const;
     bool planReparent(const Uuid& uuid, const Uuid& newParent, bool keepWorld,

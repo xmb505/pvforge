@@ -105,6 +105,14 @@ public:
         return xFromFrame(int(std::lround(frame)));
     }
     int rowCenterYForTest(int row) const { return rowTop(row) + rowHeight(row) / 2; }
+    int rowTopForTest(int row) const { return rowTop(row); }
+    int bodyBottomForTest() const { return bodyBottom(); }
+    // Bottom-up drop row under y, clamped to row 0..highest occupied + 1.
+    int dropRowForTest(int y) const { return dropRowForY(y); }
+    int keyframeHitForTest(int row, int x, int y) const
+    {
+        return hitKeyframeRow(row, x, y);
+    }
     int entitySelectionCountForTest() const { return int(m_entitySelection.size()); }
 
     bool displayFrames() const { return m_displayFrames; }
@@ -260,8 +268,6 @@ private:
     void finishSessionDrag();
     void cancelSessionDrag();
     bool isReparentCandidate(const Uuid& entity, const Uuid& target) const;
-    QVector<Uuid> siblingOrderForDrop(const Uuid& entity, const Uuid& target,
-                                      bool after) const;
     EntityId sessionBaseEntityAtRow(int row) const;
     QRect sessionBaseClipRect(const Entity& entity) const;
     int promptReparentMode(const Uuid& target);
@@ -277,7 +283,6 @@ private:
     void deleteSelectedKeyframes();
     void copySelectedKeyframes();
     void pasteKeyframes();
-    void openEasingForSelection(const QPoint& globalPos);
 
     // Split and marker edits, session mode only.
     bool splitAtPlayhead();
@@ -314,6 +319,10 @@ private:
     EntityId entityAtRow(int row) const;
     int rowAt(int y) const;
     int rowTop(int row) const;
+    // Drop row under y for a clip drag: bottom row 0, gaps allowed, rows
+    // above the highest clip collapse to highest + 1.
+    int dropRowForY(int y) const;
+    int highestRowForDrop() const;
     int rowHeight(int) const { return kRowHeight; }
     int depthOf(EntityId id) const;
     int rowOfEntity(const Entity& entity) const;
@@ -366,7 +375,7 @@ private:
 
     // Interaction.
     EntityId hitClipRow(int row, int x) const;
-    int hitKeyframeRow(int row, int x) const;
+    int hitKeyframeRow(int row, int x, int y) const;
     void selectEntity(EntityId id, bool emitSignal);
     void autoScrollTick();
     void syncPopupGeometry();
