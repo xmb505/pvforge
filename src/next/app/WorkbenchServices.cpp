@@ -47,7 +47,9 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
         m_options.expandPercent);
     m_options.diskBudgetBytes = settings.workbenchCacheDiskBytes;
     m_options.memoryBudgetBytes = settings.workbenchCacheMemoryBytes;
-    m_options.rendererVersion = QStringLiteral("1");
+    // Bump whenever the renderer's world mapping changes; the cache stores
+    // full frames and must not reuse images from the old top-left/Y-down era.
+    m_options.rendererVersion = QStringLiteral("yup-2");
 
     const QString root =
         QDir(m_document->root()).filePath(QStringLiteral(".cache/workbench"));
