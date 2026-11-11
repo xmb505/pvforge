@@ -15,6 +15,7 @@
 #include "next/core/Document.h"
 #include "render/SceneRenderer.h"
 #include "render2/Render.h"
+#include "workbench/MetaBuilder.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -470,9 +471,14 @@ QTransform Viewport::sessionWorldToScreen() const
 {
     const QRectF canvas = canvasRect();
     const double s = viewScale();
+    // Model space is Y-up with the origin at the canvas centre; widget space
+    // is Y-down.  This is the single model -> screen Y flip for the legacy
+    // shell: model +Y maps upwards on screen.  Everything that maps to or
+    // from widget coordinates must go through this transform (or its
+    // inverse); do not flip again in the gizmo or camera code.
     QTransform transform;
-    transform.translate(canvas.left(), canvas.top());
-    transform.scale(s, s);
+    transform.translate(canvas.center().x(), canvas.center().y());
+    transform.scale(s, -s);
     return transform;
 }
 
@@ -485,12 +491,12 @@ QPointF Viewport::sessionScreenToProject(const QPointF& pos) const
 
 QRectF Viewport::sessionSceneRect() const
 {
-    const QSize canvas = canvasSize();
-    const int expand = sessionExpandPercent();
-    const double factor = double(expand) / 100.0;
-    const QRectF world(-canvas.width() * factor, -canvas.height() * factor,
-                       canvas.width() * (1.0 + 2.0 * factor),
-                       canvas.height() * (1.0 + 2.0 * factor));
+    if (!m_session)
+        return QRectF();
+    // Same expanded world rectangle the workbench cache renders and stores:
+    // the centred canvas plus expandPercent of its width/height per side.
+    const QRectF world =
+        workbench::renderRect(m_session->project(), sessionExpandPercent());
     return sessionWorldToScreen().mapRect(world);
 }
 
@@ -508,12 +514,10 @@ QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
     options.outputSize = size;
     if (cameraUuid.isEmpty() && expandPercent > 0)
     {
-        const QSize canvas = canvasSize();
-        const double factor = double(expandPercent) / 100.0;
+        // Canvas-centred expanded world rect, identical to the workbench
+        // cache meta and to sessionSceneRect().
         options.worldRect =
-            QRectF(-canvas.width() * factor, -canvas.height() * factor,
-                   canvas.width() * (1.0 + 2.0 * factor),
-                   canvas.height() * (1.0 + 2.0 * factor));
+            workbench::renderRect(m_session->project(), expandPercent);
         options.transparentOutsideCanvas = true;
     }
     options.videoFrame = [this, &missing](const Uuid& uuid, double frame) {
@@ -839,8 +843,12 @@ gizmo::Bounds Viewport::sessionGizmoBounds(const model::Entity& entity) const
     gizmo::Bounds bounds;
     bounds.left = -size.width() / 2.0;
     bounds.right = size.width() / 2.0;
-    bounds.top = -size.height() / 2.0;
-    bounds.bottom = size.height() / 2.0;
+    // Model space is Y-up: `top` is the larger Y (the visual top edge) and
+    // `bottom` the smaller one.  Converting an existing Y-down QRectF starts
+    // with top = -(rect.top()) and bottom = -rect.bottom(); the swap above is
+    // the same rule for a symmetric local box.
+    bounds.top = size.height() / 2.0;
+    bounds.bottom = -size.height() / 2.0;
     return bounds;
 }
 
@@ -985,7 +993,6 @@ double Viewport::snapSessionAxis(double value, bool xAxis)
 
     if (m_sessionDragSnapRoot)
     {
-        const model::Project& project = m_session->project();
         const double startValue =
             xAxis ? m_sessionDragTransform.x : m_sessionDragTransform.y;
         const double delta = value - startValue;
@@ -999,9 +1006,8 @@ double Viewport::snapSessionAxis(double value, bool xAxis)
                                           bounds.bottom() + delta};
         const double threshold =
             double(std::max(1, settings.snapPixels)) / m_sessionDragViewScale;
-        const double canvasCenter =
-            xAxis ? std::max(1, project.settings.width) / 2.0
-                  : std::max(1, project.settings.height) / 2.0;
+        // The model origin is the canvas centre, so both centre guides are 0.
+        const double canvasCenter = 0.0;
 
         // Canvas centre lines beat other entities, which beat the pixel grid.
         if (settings.snapCanvasCenter)
@@ -1479,11 +1485,13 @@ QPolygonF Viewport::sessionCameraPolygon() const
 
     const double width = double(std::max(1, project.settings.width));
     const double height = double(std::max(1, project.settings.height));
+    // Camera-local corners are Y-up too, matching render2::cameraView():
+    // top-left is (-w/2, +h/2).  The widget transform performs the flip.
     QPolygonF source;
-    source << QPointF(-width / 2.0, -height / 2.0)
-           << QPointF(width / 2.0, -height / 2.0)
+    source << QPointF(-width / 2.0, height / 2.0)
            << QPointF(width / 2.0, height / 2.0)
-           << QPointF(-width / 2.0, height / 2.0);
+           << QPointF(width / 2.0, -height / 2.0)
+           << QPointF(-width / 2.0, -height / 2.0);
 
     render2::SceneWorld world(project, m_session->assets());
     anim::Cache cache;
@@ -1620,13 +1628,14 @@ bool Viewport::handleSessionCameraPress(QMouseEvent* event)
     m_sessionDragParentToWidget = sessionWorldToScreen();
     m_sessionDragViewScale = viewScale();
     m_sessionDragStartParent = sessionScreenToProject(event->position());
-    m_sessionDragPivotStart =
-        sessionWorldToScreen().map(gizmo::worldPivot(m_sessionDragTransform));
+    // Keep the drag maths in model space (Y-up, CCW-positive): the camera
+    // pivot is the pose origin, and the start angle is measured there.
+    m_sessionDragPivotStart = gizmo::worldPivot(m_sessionDragTransform);
     m_sessionCameraStartAngle =
-        std::atan2(event->position().y() - m_sessionDragPivotStart.y(),
-                   event->position().x() - m_sessionDragPivotStart.x())
-            * 180.0 / M_PI
-        + 90.0;
+        std::atan2(m_sessionDragStartParent.y() - m_sessionDragPivotStart.y(),
+                   m_sessionDragStartParent.x() - m_sessionDragPivotStart.x())
+        * 180.0 / M_PI;
+    collectSessionSnapTargets(uuid);
     m_sessionDragChanged = false;
     m_showGuideX = false;
     m_showGuideY = false;
@@ -1661,11 +1670,11 @@ void Viewport::applySessionCameraDrag(const QPointF& pos,
             const next::AppSettings& settings = m_session->appSettings();
             const double threshold =
                 double(std::max(1, settings.snapPixels)) / viewScale();
-            const model::Project& project = m_session->project();
             const QPointF center = QPointF(start.x + start.pivotX,
                                            start.y + start.pivotY);
-            const double canvasCenterX = project.settings.width / 2.0;
-            const double canvasCenterY = project.settings.height / 2.0;
+            // Model origin is the canvas centre.
+            const double canvasCenterX = 0.0;
+            const double canvasCenterY = 0.0;
             if (settings.snapCanvasCenter)
             {
                 if (std::abs(center.x() - canvasCenterX) <= threshold)
@@ -1711,10 +1720,13 @@ void Viewport::applySessionCameraDrag(const QPointF& pos,
     }
     else if (m_sessionDragKind == SessionDragKind::CameraRotate)
     {
-        const QPointF center = sessionCameraScreenCenter();
-        double angle =
-            std::atan2(pos.y() - center.y(), pos.x() - center.x()) * 180.0 / M_PI
-            + 90.0;
+        // Model space: +Y up, positive angles counter-clockwise.  The drag
+        // delta is measured about the model pivot, so a clockwise drag lowers
+        // the angle exactly like the entity gizmo.
+        const QPointF center = m_sessionDragPivotStart;
+        const double angle =
+            std::atan2(mouse.y() - center.y(), mouse.x() - center.x()) * 180.0
+            / M_PI;
         double rotationDelta = angle - m_sessionCameraStartAngle;
         while (rotationDelta > 180.0)
             rotationDelta -= 360.0;
@@ -3719,9 +3731,9 @@ void Viewport::wheelEvent(QWheelEvent* event)
         const QPointF before = sessionScreenToProject(event->position());
         m_zoom = std::clamp(m_zoom * std::pow(1.15, steps), 0.1, 8.0);
         const double s1 = viewScale();
-        const QSize canvas = canvasSize();
-        m_pan += (s0 - s1)
-                 * (before - QPointF(canvas.width() / 2.0, canvas.height() / 2.0));
+        // Keep the model point under the cursor fixed.  `before` is Y-up
+        // model space, while m_pan is a Y-down widget offset, hence the flip.
+        m_pan += (s0 - s1) * QPointF(before.x(), -before.y());
         invalidateSessionImage();
         emit viewChanged();
         update();
