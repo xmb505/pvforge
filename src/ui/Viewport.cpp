@@ -179,15 +179,16 @@ QPointF cornerInwardDirection(const QPolygonF& box, int corner)
     return unitVector(center - c);
 }
 
-// QPainter::rotate(angle) turns the widget coordinate system counter-clockwise
-// on screen, while a local widget-space vector at atan2(y, x) ends up at
-// atan2(y, x) - angle.  The glyph band points at its local up-right diagonal
-// (screen angle -45 degrees); solving -45 - angle == inwardAngle keeps the
-// band on the inside of the corner and the two arrow heads on the two edges.
+// Inkscape's carrow: glyph_angle = anchor * 45 + 225.  The anchor angle is
+// exactly the screen-space inward diagonal of the corner, so deriving it from
+// the current box (instead of the untransformed rectangle) makes the glyph
+// turn with the entity: a +90 degree Y-up rotation lowers this angle by 90,
+// which is one visual quarter turn counter-clockwise in Qt's y-down painter.
+// The band then points outward and the two arrow heads stay on the edges.
 double rotateGlyphAngle(const QPolygonF& box, int corner)
 {
     const QPointF inward = cornerInwardDirection(box, corner);
-    return -45.0 - qRadiansToDegrees(std::atan2(inward.y(), inward.x()));
+    return qRadiansToDegrees(std::atan2(inward.y(), inward.x())) + 225.0;
 }
 
 // Inkscape's draw_carrow(): one closed path with a 90-degree outer arc, a
@@ -1312,12 +1313,7 @@ Viewport::SessionGizmoGeometry Viewport::sessionGizmoGeometry(
         geometry.rotateCenter[visual] =
             geometry.box.at(local)
             + cornerInwardDirection(geometry.box, local) * gizmo::kRotateHandleInset;
-        double glyphAngle = rotateGlyphAngle(geometry.box, local);
-        // Inkscape's carrow uses glyph_angle = anchor * 45 + 225.  Our local
-        // path band starts 90 degrees later than Inkscape's, so subtract that
-        // constant after aligning the glyph with the corner's inward diagonal.
-        glyphAngle -= 90.0;
-        geometry.rotateAngle[visual] = glyphAngle;
+        geometry.rotateAngle[visual] = rotateGlyphAngle(geometry.box, local);
     }
     return geometry;
 }

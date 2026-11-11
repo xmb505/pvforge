@@ -20676,11 +20676,14 @@ int inkscapeHandlesTest(QApplication& app)
         {
             const double actual =
                 viewport->gizmoRotateGlyphAngleForTest(uuid, visual);
-            if (!nearAngle(actual, angles[visual] + rotation))
+            // A positive entity rotation is counter-clockwise in the Y-up
+            // model; QPainter::rotate() is clockwise on screen, so the glyph
+            // angle must decrease by the same amount.
+            if (!nearAngle(actual, angles[visual] - rotation))
             {
                 qCritical() << "inkscape-handles-test:" << label << "glyph"
                             << visual << "angle" << actual << "expected"
-                            << angles[visual] + rotation;
+                            << angles[visual] - rotation;
                 ++failures;
             }
         }
@@ -20688,7 +20691,7 @@ int inkscapeHandlesTest(QApplication& app)
 
     // 1) Unzoomed geometry: each corner glyph rides its visual corner at a
     //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
-    const std::array<double, 4> baseAngles{180.0, 270.0, 0.0, 90.0};
+    const std::array<double, 4> baseAngles{270.0, 0.0, 90.0, 180.0};
     if (std::abs(pvf::gizmo::kRotateHandleSize - 18.0) > 1e-9
         || std::abs(pvf::gizmo::kRotateHitSize - 18.0) > 1e-9)
     {
@@ -20780,7 +20783,8 @@ int inkscapeHandlesTest(QApplication& app)
     viewport->resetView();
     QApplication::processEvents();
 
-    // 3) Icon direction follows the entity rotation in 90 degree steps.
+    // 3) Icon direction turns with the entity in 90 degree steps (the glyph
+    //    angle decreases as the Y-up rotation grows counter-clockwise).
     const auto setRotation = [&](double rotation) {
         auto it = sessionPtr->mutableProject().entities.find(uuid);
         if (it == sessionPtr->mutableProject().entities.end())
