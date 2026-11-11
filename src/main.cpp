@@ -18453,8 +18453,10 @@ int sessionGizmoTest(QApplication& app)
     entity.content.vector.width = 200.0;
     entity.content.vector.height = 100.0;
     entity.content.vector.fillColor = QStringLiteral("#ffffff");
-    entity.transform.x = 320.0;
-    entity.transform.y = 180.0;
+    // Model space is centred on the canvas origin with +Y up, so (0,0) is the
+    // middle of the 640x360 canvas.
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     const pvf::Uuid uuid = entity.uuid;
     project.entities.insert(uuid, entity);
     if (!session->document()->commitEntity(uuid, QStringLiteral("pvf: init"),
@@ -18492,9 +18494,19 @@ int sessionGizmoTest(QApplication& app)
     MouseDriver mouse{viewport};
     const auto undoDepth = [document] { return document->store()->undoDepth(); };
 
-    // 1) The gizmo axes follow the entity: +X right, +Y down (gizmo:: math
-    // uses Qt's screen Y convention; rotation turns both with the entity).
+    // 1) The gizmo axes follow the entity: +X right, +Y up.  Model space is
+    //    Y-up (the viewport applies the single model -> screen Y flip) and a
+    //    positive rotation is counter-clockwise on screen.
     const QPointF pivot = viewport->sessionPivotForTest();
+    const QPointF modelOrigin =
+        viewport->projectToWidgetForTest(QPointF(0.0, 0.0));
+    if (std::hypot(pivot.x() - modelOrigin.x(),
+                   pivot.y() - modelOrigin.y()) > 0.5)
+    {
+        qCritical() << "gizmo-test: model origin is not the canvas centre"
+                    << modelOrigin << pivot;
+        ++failures;
+    }
     const QPointF xHandle =
         viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveX);
     const QPointF yHandle =
@@ -18505,20 +18517,22 @@ int sessionGizmoTest(QApplication& app)
         qCritical() << "gizmo-test: X axis not to the right" << pivot << xHandle;
         ++failures;
     }
-    if (!(yHandle.y() > pivot.y() + 10.0
+    if (!(yHandle.y() < pivot.y() - 10.0
           && std::abs(yHandle.x() - pivot.x()) < 1.0))
     {
-        qCritical() << "gizmo-test: Y axis not down" << pivot << yHandle;
+        qCritical() << "gizmo-test: Y axis not up" << pivot << yHandle;
         ++failures;
     }
 
-    // 2) Rotate 90 degrees with the corner handle.  One gesture = one commit.
+    // 2) Rotate 90 degrees counter-clockwise on screen with the corner handle.
+    //    Widget space is Y-down, so the screen-space target is -90 while the
+    //    model rotation must become +90.  One gesture = one commit.
     flushSession();
     const int depthBeforeRotate = undoDepth();
     const QPointF rotateStart =
         viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
     const QPointF rotateTarget =
-        pivot + rotatePointForTest(rotateStart - pivot, 90.0);
+        pivot + rotatePointForTest(rotateStart - pivot, -90.0);
     mouse.drag(rotateStart, rotateTarget);
     QApplication::processEvents();
     const QString rotateFlushError = flushSession();
@@ -18558,13 +18572,14 @@ int sessionGizmoTest(QApplication& app)
         }
     }
 
-    // After rotation the local X/Y handles must have turned with the entity.
+    // After rotating +90 (counter-clockwise) the local axes must have turned
+    // with the entity: +X points up on screen, +Y points left.
     const QPointF pivot90 = viewport->sessionPivotForTest();
     const QPointF xHandle90 =
         viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveX);
     const QPointF yHandle90 =
         viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveY);
-    if (!(xHandle90.y() > pivot90.y() + 10.0
+    if (!(xHandle90.y() < pivot90.y() - 10.0
           && std::abs(xHandle90.x() - pivot90.x()) < 1.0))
     {
         qCritical() << "gizmo-test: rotated X axis did not follow"
@@ -18593,6 +18608,25 @@ int sessionGizmoTest(QApplication& app)
     document->commitEntity(uuid, QStringLiteral("pvf: set rotation"), &error);
     flushSession();
     QApplication::processEvents();
+    // A +30 model rotation is counter-clockwise: the 48 px +X handle moves
+    // right and up on screen, and +Y moves left and up.
+    const QPointF pivot30 = viewport->sessionPivotForTest();
+    const QPointF x30 =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveX) - pivot30;
+    const QPointF y30 =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveY) - pivot30;
+    const double axisLength = 48.0;
+    const double cos30 = std::cos(qDegreesToRadians(30.0));
+    const double sin30 = std::sin(qDegreesToRadians(30.0));
+    if (std::abs(x30.x() - axisLength * cos30) > 0.5
+        || std::abs(x30.y() + axisLength * sin30) > 0.5
+        || std::abs(y30.x() + axisLength * sin30) > 0.5
+        || std::abs(y30.y() + axisLength * cos30) > 0.5)
+    {
+        qCritical() << "gizmo-test: rotation 30 axes are not Y-up/CCW" << x30
+                    << y30;
+        ++failures;
+    }
     const pvf::gizmo::Transform beforeProjection =
         viewport->gizmoTransformForTest(uuid);
     const QPointF axisStart =
@@ -18655,8 +18689,10 @@ int sessionGizmoTest(QApplication& app)
     const QPointF ctrlRotateStart =
         viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
     const QPointF ctrlPivot = viewport->sessionPivotForTest();
+    // 28.5 degrees counter-clockwise on screen: widget Y is down, so the
+    // screen-space rotation is negative while the model delta stays positive.
     const QPointF ctrlRotateTarget =
-        ctrlPivot + rotatePointForTest(ctrlRotateStart - ctrlPivot, 28.5);
+        ctrlPivot + rotatePointForTest(ctrlRotateStart - ctrlPivot, -28.5);
     mouse.drag(ctrlRotateStart, ctrlRotateTarget, Qt::ControlModifier);
     QApplication::processEvents();
     const double ctrlRotation = viewport->gizmoTransformForTest(uuid).rotation;
@@ -18671,11 +18707,11 @@ int sessionGizmoTest(QApplication& app)
     document->undo();
     QApplication::processEvents();
 
-    // 5) Move snapping: near the canvas centre line the drag snaps to it;
-    // Ctrl keeps the unsnapped position.
+    // 5) Move snapping: near the canvas centre (the model origin) the drag
+    // snaps to it; Ctrl keeps the unsnapped position.
     sessionPtr->mutableProject().entities[uuid].transform.rotation = 0.0;
-    sessionPtr->mutableProject().entities[uuid].transform.x = 323.0;
-    sessionPtr->mutableProject().entities[uuid].transform.y = 180.0;
+    sessionPtr->mutableProject().entities[uuid].transform.x = 3.0;
+    sessionPtr->mutableProject().entities[uuid].transform.y = 0.0;
     document->commitEntity(uuid, QStringLiteral("pvf: offset"), &error);
     flushSession();
     QApplication::processEvents();
@@ -18685,7 +18721,7 @@ int sessionGizmoTest(QApplication& app)
     QApplication::processEvents();
     flushSession();
     const double snappedX = viewport->gizmoTransformForTest(uuid).x;
-    if (std::abs(snappedX - 320.0) > 0.01)
+    if (std::abs(snappedX - 0.0) > 0.01)
     {
         qCritical() << "gizmo-test: centre-line snap failed" << snappedX;
         ++failures;
@@ -18698,7 +18734,7 @@ int sessionGizmoTest(QApplication& app)
     QApplication::processEvents();
     flushSession();
     const double ctrlX = viewport->gizmoTransformForTest(uuid).x;
-    const double expectedCtrlX = 323.0 + 1.0 / scale;
+    const double expectedCtrlX = 3.0 + 1.0 / scale;
     if (std::abs(ctrlX - expectedCtrlX) > 0.2)
     {
         qCritical() << "gizmo-test: Ctrl did not bypass move snap" << ctrlX
@@ -18728,7 +18764,7 @@ int sessionGizmoTest(QApplication& app)
                Qt::LeftButton, Qt::NoButton);
     QApplication::processEvents();
     if (undoDepth() != depthBeforeCancel
-        || std::abs(viewport->gizmoTransformForTest(uuid).x - 323.0) > 0.01)
+        || std::abs(viewport->gizmoTransformForTest(uuid).x - 3.0) > 0.01)
     {
         qCritical() << "gizmo-test: Esc did not cancel" << undoDepth()
                     << viewport->gizmoTransformForTest(uuid).x;
@@ -18876,8 +18912,8 @@ int cameraMonitorTest(QApplication& app)
         shape.content.vector.width = 260.0;
         shape.content.vector.height = 160.0;
         shape.content.vector.fillColor = QStringLiteral("#ff0000");
-        shape.transform.x = 320.0;
-        shape.transform.y = 180.0;
+        shape.transform.x = 0.0;
+        shape.transform.y = 0.0;
         project.entities.insert(shape.uuid, shape);
 
         pvf::Uuid cameraUuid;
@@ -18889,8 +18925,8 @@ int cameraMonitorTest(QApplication& app)
             camera.start = 0;
             camera.end = 60;
             camera.content.kind = pvf::ContentKind::Camera;
-            camera.transform.x = 320.0;
-            camera.transform.y = 180.0;
+            camera.transform.x = 0.0;
+            camera.transform.y = 0.0;
             cameraUuid = camera.uuid;
             project.entities.insert(cameraUuid, camera);
         }
@@ -19025,8 +19061,10 @@ int cameraMonitorTest(QApplication& app)
             QPointF up = topCenter - frameCenter;
             up /= std::max(1e-6, std::hypot(up.x(), up.y()));
             const QPointF handle = topCenter + up * 28.0;
+            // 90 degrees counter-clockwise on screen.  Widget space is Y-down,
+            // so the screen-space target is -90 and the model rotation +90.
             const QPointF target =
-                frameCenter + rotatePointForTest(handle - frameCenter, 90.0);
+                frameCenter + rotatePointForTest(handle - frameCenter, -90.0);
             mouse.drag(handle, target);
             QApplication::processEvents();
             flushSession();
