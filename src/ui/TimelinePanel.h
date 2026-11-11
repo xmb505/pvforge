@@ -185,6 +185,11 @@ public:
                || (m_frame >= contentStart() && m_frame < contentEnd());
     }
     QRect clipRectFor(EntityId id) const;
+    // Solver colour band inside the clip: start -> Result::stopFrame.
+    QRect solverBandRectForTest(const Uuid& entityUuid,
+                                const Uuid& solverId) const;
+    int solverBandStopFrameForTest(const Uuid& entityUuid,
+                                   const Uuid& solverId) const;
     // Opens (or raises) the private timeline for a clip and returns its panel.
     TimelinePanel* openPopup(EntityId ownerId);
     void closeAllPopups();

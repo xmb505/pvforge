@@ -938,6 +938,488 @@ int propertiesTest(QApplication& app)
     return 0;
 }
 
+int solverUiTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Solver UI");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("solver-ui.pvproj"));
+    auto session = pvf::EditorSession::createProject(projectDir, settings,
+                                                     &error);
+    if (!session)
+    {
+        qCritical() << "solver-ui-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 60;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid ground =
+        makeEntity(QStringLiteral("地面"), 0, pvf::ContentKind::Vector);
+    project.entities[ground].transform.y = -100.0;
+    project.entities[ground].content.vector.width = 600.0;
+    project.entities[ground].content.vector.height = 60.0;
+    project.entities[ground].content.vector.fillColor =
+        QStringLiteral("#6a707a");
+    project.entities[ground].physicsInteract = true;
+
+    const pvf::Uuid ball =
+        makeEntity(QStringLiteral("落球"), 1, pvf::ContentKind::Vector);
+    project.entities[ball].transform.y = 200.0;
+    project.entities[ball].content.vector.width = 40.0;
+    project.entities[ball].content.vector.height = 40.0;
+    project.entities[ball].content.vector.fillColor =
+        QStringLiteral("#ffd166");
+    pvf::model::Track ballX;
+    ballX.keys = {{0, 0.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
+    pvf::model::Track ballY;
+    ballY.keys = {{0, 200.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+
+    const pvf::Uuid spinner =
+        makeEntity(QStringLiteral("自转物体"), 2, pvf::ContentKind::Vector);
+    project.entities[spinner].transform.x = 150.0;
+    project.entities[spinner].content.vector.width = 60.0;
+    project.entities[spinner].content.vector.height = 60.0;
+    pvf::model::Track spinRotation;
+    spinRotation.keys = {{0, 0.0, {}, {}}};
+    project.entities[spinner].tracks.insert(QStringLiteral("rotation"),
+                                            spinRotation);
+
+    const pvf::Uuid orbiter =
+        makeEntity(QStringLiteral("公转物体"), 3, pvf::ContentKind::Vector);
+    project.entities[orbiter].transform.x = -150.0;
+    project.entities[orbiter].transform.y = 80.0;
+    project.entities[orbiter].content.vector.width = 40.0;
+    project.entities[orbiter].content.vector.height = 40.0;
+    pvf::model::Track orbitX;
+    orbitX.keys = {{0, -150.0, {}, {}}};
+    project.entities[orbiter].tracks.insert(QStringLiteral("x"), orbitX);
+    pvf::model::Track orbitY;
+    orbitY.keys = {{0, 80.0, {}, {}}};
+    project.entities[orbiter].tracks.insert(QStringLiteral("y"), orbitY);
+
+    const QVector<pvf::Uuid> setup = {ground, ball, spinner, orbiter};
+    if (!session->document()->commitEntities(setup,
+                                             QStringLiteral("solver-ui setup"),
+                                             &error))
+    {
+        qCritical() << "solver-ui-test: setup failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1280, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* viewport = window->viewportForTest();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!live || !document || !panel || !viewport || !timeline)
+    {
+        qCritical() << "solver-ui-test: window parts missing";
+        return 1;
+    }
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [](const QString& message) {
+                         qCritical() << "solver-ui-test: panel edit failed"
+                                     << message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "solver-ui-test:" << message;
+        return condition;
+    };
+    auto flush = [live] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "solver-ui-test: flush failed" << flushError;
+    };
+    const auto undoDepth = [document] {
+        return document->store()->undoDepth();
+    };
+
+    auto* solverSection =
+        panel->findChild<pvf::CollapsibleSection*>(QStringLiteral("solverSection"));
+    if (!check(solverSection != nullptr, QStringLiteral("solver section missing")))
+        return 1;
+    solverSection->setExpanded(true);
+    QApplication::processEvents();
+
+    auto* effectCombo =
+        panel->findChild<QComboBox*>(QStringLiteral("solverEffectCombo"));
+    auto* targetCombo =
+        panel->findChild<QComboBox*>(QStringLiteral("solverTargetCombo"));
+    auto* createEnd =
+        panel->findChild<QSpinBox*>(QStringLiteral("solverCreateEnd"));
+    auto* createManual =
+        panel->findChild<QCheckBox*>(QStringLiteral("solverCreateManualEnd"));
+    auto* createAuto =
+        panel->findChild<QLabel*>(QStringLiteral("solverCreateEndAuto"));
+    auto* createButton =
+        panel->findChild<QPushButton*>(QStringLiteral("solverCreateButton"));
+    if (!check(effectCombo && targetCombo && createEnd && createManual
+                   && createAuto && createButton,
+               QStringLiteral("solver create widgets missing")))
+        return 1;
+
+    // Default creation is automatic: no end-frame spin is shown, only the
+    // read-only automatic explanation.
+    if (!check(!createEnd->isVisible(),
+               QStringLiteral("create end spin is visible by default"))
+        || !check(!createManual->isChecked(),
+                  QStringLiteral("manual end is checked by default"))
+        || !check(createAuto->text().contains(QStringLiteral("自动")),
+                  QStringLiteral("automatic end label missing")))
+        return 1;
+
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    effectCombo->setCurrentIndex(
+        effectCombo->findData(int(pvf::SolverEffect::Gravity)));
+    targetCombo->setCurrentIndex(targetCombo->findData(ground));
+    const int beforeCreate = undoDepth();
+    createButton->click();
+    QApplication::processEvents();
+    flush();
+
+    const auto& ballEntity = live->project().entities.value(ball);
+    if (!check(ballEntity.solvers.size() == 1,
+               QStringLiteral("gravity solver was not created"))
+        || !check(ballEntity.solvers.first().endFrame == -1,
+                  QStringLiteral("new solver is not automatic"))
+        || !check(undoDepth() == beforeCreate + 1,
+                  QStringLiteral("solver creation was not one commit")))
+        return 1;
+    const pvf::Uuid gravityId = ballEntity.solvers.first().id;
+
+    // Tighten the collision parameters through the card widgets; every edit
+    // goes through EditActions and keeps the automatic end at -1.
+    auto* strength =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("solverParam0_strength"));
+    auto* elasticity =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("solverParam0_elasticity"));
+    auto* friction =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("solverParam0_friction"));
+    auto* threshold =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("solverParam0_stopThreshold"));
+    if (!check(strength && elasticity && friction && threshold,
+               QStringLiteral("gravity parameter widgets missing")))
+        return 1;
+    const auto setParam = [](QDoubleSpinBox* spin, double value) {
+        spin->setValue(value);
+        QMetaObject::invokeMethod(spin, "editingFinished",
+                                  Qt::DirectConnection);
+        QApplication::processEvents();
+    };
+    setParam(strength, 500.0);
+    setParam(elasticity, 0.0);
+    setParam(friction, 0.5);
+    setParam(threshold, 10.0);
+    flush();
+
+    const pvf::model::Entity tunedBall =
+        live->project().entities.value(ball);
+    const pvf::SolverPreviewEval expected = pvf::evaluateSolverPreview(
+        live->project(), live->assets(), tunedBall,
+        tunedBall.solvers.first());
+    if (!check(expected.isValid(), QStringLiteral("preview failed: %1")
+                                       .arg(expected.error))
+        || !check(expected.result.stopFrame > 0
+                      && expected.result.stopFrame < 59,
+                  QStringLiteral("gravity did not stop inside the clip: "
+                                 "stop=%1 reason=%2")
+                      .arg(expected.result.stopFrame)
+                      .arg(pvf::solver::stopReasonName(
+                          expected.result.reason)))
+        || !check(expected.result.reason
+                      == pvf::solver::StopReason::Collision,
+                  QStringLiteral("gravity stop reason is not collision")))
+        return 1;
+    const int stopFrame = expected.result.stopFrame;
+
+    auto* endInfo =
+        panel->findChild<QLabel*>(QStringLiteral("solverEndInfo0"));
+    auto* manualEnd =
+        panel->findChild<QCheckBox*>(QStringLiteral("solverManualEnd0"));
+    auto* solverEnd =
+        panel->findChild<QSpinBox*>(QStringLiteral("solverEnd0"));
+    if (!check(endInfo && manualEnd && solverEnd,
+               QStringLiteral("solver card end widgets missing"))
+        || !check(endInfo->text().contains(QString::number(stopFrame))
+                      && endInfo->text().contains(QStringLiteral("碰撞")),
+                  QStringLiteral("card does not show stop frame/reason: %1")
+                      .arg(endInfo ? endInfo->text() : QString()))
+        || !check(!solverEnd->isVisible(),
+                  QStringLiteral("card end spin is visible in automatic mode")))
+        return 1;
+
+    // Advanced override: toggling the checkbox compacts one explicit end,
+    // editing the spin updates it, and unticking returns to automatic.
+    manualEnd->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project().entities.value(ball).solvers.first().endFrame
+                   == stopFrame,
+               QStringLiteral("manual end toggle did not write stop frame"))
+        || !check(manualEnd->isChecked() && solverEnd->isVisible(),
+                  QStringLiteral("manual end spin did not appear")))
+        return 1;
+    solverEnd->setValue(12);
+    QMetaObject::invokeMethod(solverEnd, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project().entities.value(ball).solvers.first().endFrame
+                   == 12,
+               QStringLiteral("explicit end edit did not reach the model"))
+        || !check(endInfo->text().contains(QStringLiteral("显式覆盖")),
+                  QStringLiteral("explicit end label missing")))
+        return 1;
+    manualEnd->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project().entities.value(ball).solvers.first().endFrame
+                   == -1,
+               QStringLiteral("manual end toggle did not restore automatic")))
+        return 1;
+
+    // Viewport trajectory: start -> real stop frame, target line and handle.
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+    if (!check(viewport->sessionSolverPreviewVisibleForTest(),
+               QStringLiteral("solver preview is not visible"))
+        || !check(viewport->sessionSolverStopFrameForTest() == stopFrame,
+                  QStringLiteral("viewport stop frame wrong"))
+        || !check(viewport->sessionSolverStopReasonForTest()
+                      == int(pvf::solver::StopReason::Collision),
+                  QStringLiteral("viewport stop reason wrong"))
+        || !check(viewport->sessionSolverHandleVisibleForTest(),
+                  QStringLiteral("velocity handle missing for gravity")))
+        return 1;
+    const QVector<QPointF> trajectory =
+        viewport->sessionSolverTrajectoryForTest();
+    if (!check(trajectory.size() == stopFrame + 1,
+               QStringLiteral("trajectory point count wrong: %1")
+                   .arg(trajectory.size())))
+        return 1;
+    const pvf::solver::Sample& stopSample =
+        expected.result.samples.at(stopFrame);
+    const QPointF expectedStopWidget =
+        viewport->projectToWidgetForTest(stopSample.pose.position);
+    if (!check(QLineF(viewport->sessionSolverStopForTest(),
+                      expectedStopWidget)
+                       .length()
+                   < 0.6,
+               QStringLiteral("stop marker is not at the stop pose")))
+        return 1;
+    const QPointF expectedTargetWidget =
+        viewport->projectToWidgetForTest(QPointF(0.0, -100.0));
+    if (!check(QLineF(viewport->sessionSolverTargetForTest(),
+                      expectedTargetWidget)
+                       .length()
+                   < 0.6,
+               QStringLiteral("target line endpoint wrong")))
+        return 1;
+
+    // Playhead and parameter changes refresh the overlay without a commit.
+    live->setPlayhead(5);
+    QApplication::processEvents();
+    if (!check(!viewport->sessionSolverCurrentForTest().isNull(),
+               QStringLiteral("current-frame cursor missing")))
+        return 1;
+
+    // Initial-velocity handle drag: live preview, exactly one commit.
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    const int beforeVelocityDrag = undoDepth();
+    const QPointF handle = viewport->sessionSolverVelocityHandleForTest();
+    const QPointF dragTo = handle + QPointF(90.0, -55.0);
+    const auto sendMouse = [viewport](QEvent::Type type, const QPointF& pos,
+                                      Qt::MouseButton button,
+                                      Qt::MouseButtons buttons) {
+        QMouseEvent event(type, pos, viewport->mapToGlobal(pos.toPoint()),
+                          button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &event);
+    };
+    sendMouse(QEvent::MouseButtonPress, handle, Qt::LeftButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, (handle + dragTo) / 2.0, Qt::NoButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, dragTo, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, dragTo, Qt::LeftButton,
+              Qt::NoButton);
+    QApplication::processEvents();
+    flush();
+    const QPointF draggedVelocity =
+        live->project().entities.value(ball).solvers.first().initialVelocity;
+    if (!check(std::abs(draggedVelocity.x()) > 1.0
+                   && std::abs(draggedVelocity.y()) > 1.0,
+               QStringLiteral("velocity handle did not write initialVelocity"))
+        || !check(QLineF(viewport->sessionSolverVelocityHandleForTest(),
+                         dragTo)
+                       .length()
+                   < 1.0,
+                  QStringLiteral("velocity handle did not follow the drag"))
+        || !check(undoDepth() == beforeVelocityDrag + 1,
+                  QStringLiteral("velocity drag was not one commit")))
+        return 1;
+    if (!check(viewport->sessionSolverTrajectoryForTest().size()
+                   != trajectory.size(),
+               QStringLiteral("trajectory did not update after the drag")))
+        return 1;
+
+    // Esc cancels: no model change, no undo entry.
+    document->undo();
+    QApplication::processEvents();
+    flush();
+    const int beforeEsc = undoDepth();
+    const QPointF handle2 = viewport->sessionSolverVelocityHandleForTest();
+    sendMouse(QEvent::MouseButtonPress, handle2, Qt::LeftButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, handle2 + QPointF(70.0, 30.0),
+              Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    QApplication::processEvents();
+    if (!check(!viewport->sessionSolverDraggingForTest(),
+               QStringLiteral("Esc did not end the velocity drag"))
+        || !check(live->project().entities.value(ball)
+                          .solvers.first()
+                          .initialVelocity
+                          .isNull(),
+                  QStringLiteral("Esc did not restore initialVelocity"))
+        || !check(undoDepth() == beforeEsc,
+                  QStringLiteral("Esc created an undo entry")))
+        return 1;
+
+    // Orbit / spin segments have no velocity handle.
+    pvf::model::SolverSegment spinSolver;
+    spinSolver.id = pvf::model::newUuid();
+    spinSolver.effect = pvf::SolverEffect::Spin;
+    spinSolver.startFrame = 0;
+    spinSolver.endFrame = -1;
+    spinSolver.params.insert(QStringLiteral("angularVelocity"), 6.0);
+    spinSolver.params.insert(QStringLiteral("direction"), 1);
+    live->mutableProject().entities[spinner].solvers.append(spinSolver);
+    live->mutableProject().entities[spinner].tracks[
+        QStringLiteral("rotation")].keys = {{0, 0.0, {}, {}}};
+    if (!document->commitEntity(spinner, QStringLiteral("solver-ui spin"),
+                                &error))
+    {
+        qCritical() << "solver-ui-test: spin commit failed" << error;
+        return 1;
+    }
+
+    pvf::model::SolverSegment orbitSolver;
+    orbitSolver.id = pvf::model::newUuid();
+    orbitSolver.effect = pvf::SolverEffect::Orbit;
+    orbitSolver.startFrame = 0;
+    orbitSolver.endFrame = -1;
+    orbitSolver.params.insert(QStringLiteral("targetUuid"), ground);
+    orbitSolver.params.insert(QStringLiteral("aspect"), 1.0);
+    orbitSolver.params.insert(QStringLiteral("angle"), 0.0);
+    orbitSolver.params.insert(QStringLiteral("direction"), 1);
+    orbitSolver.params.insert(QStringLiteral("periodFrames"), 60.0);
+    live->mutableProject().entities[orbiter].solvers.append(orbitSolver);
+    if (!document->commitEntity(orbiter, QStringLiteral("solver-ui orbit"),
+                                &error))
+    {
+        qCritical() << "solver-ui-test: orbit commit failed" << error;
+        return 1;
+    }
+    flush();
+    for (const pvf::Uuid& uuid : {spinner, orbiter})
+    {
+        document->setSelection(uuid);
+        live->setPlayhead(0);
+        QApplication::processEvents();
+        if (!check(viewport->sessionSolverPreviewVisibleForTest(),
+                   QStringLiteral("orbit/spin preview is not visible"))
+            || !check(!viewport->sessionSolverHandleVisibleForTest(),
+                      QStringLiteral("orbit/spin shows a velocity handle")))
+            return 1;
+    }
+
+    // Timeline band ends at Result::stopFrame, not the clip end.
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    const QRect band =
+        timeline->solverBandRectForTest(ball, gravityId);
+    const int bandStop =
+        timeline->solverBandStopFrameForTest(ball, gravityId);
+    if (!check(!band.isEmpty(), QStringLiteral("timeline solver band missing"))
+        || !check(bandStop == stopFrame,
+                  QStringLiteral("timeline band stop frame wrong"))
+        || !check(std::abs(band.right()
+                           - (timeline->frameXForTest(stopFrame) - 1))
+                  <= 2,
+                  QStringLiteral("timeline band does not end at stopFrame")))
+        return 1;
+
+    // Screenshot with the solver card and viewport trajectory visible.
+    if (auto* objectTab =
+            window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
+        objectTab->verticalScrollBar()->setValue(
+            objectTab->verticalScrollBar()->maximum());
+    live->setPlayhead(5);
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-solver-preview.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "solver-ui-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "solver-ui-test OK: automatic end, stop reason/frame, explicit"
+               " override, trajectory, velocity handle commit/Esc, orbit/spin,"
+               " timeline band, screenshot"
+            << screenshot;
+    return 0;
+}
+
 int keyframeEasingGroupTest(QApplication& app)
 {
     Q_UNUSED(app);
@@ -21357,6 +21839,8 @@ int main(int argc, char* argv[])
         return keyframeEasingGroupTest(app);
     if (app.arguments().contains(QStringLiteral("--properties-special-test")))
         return propertiesSpecialTest(app);
+    if (app.arguments().contains(QStringLiteral("--solver-ui-test")))
+        return solverUiTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))
         return htmlVarsTest(app);
     if (app.arguments().contains(QStringLiteral("--text-layout-test")))

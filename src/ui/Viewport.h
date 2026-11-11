@@ -5,6 +5,8 @@
 #include "core/Project.h"
 #include "gizmo/Gizmo.h"
 #include "model/Entity.h"
+#include "model/Project.h"
+#include "solver/Solver.h"
 
 #include <QImage>
 #include <QPointF>
@@ -22,6 +24,31 @@ class QToolButton;
 namespace pvf {
 
 class EditorSession;
+namespace assets { class AssetStore; }
+
+// One solver segment evaluated for the viewport/properties/timeline preview.
+// The samples and target position are in the driven entity's parent space,
+// which is the solver's coordinate space.
+struct SolverPreviewEval
+{
+    solver::Result result;
+    solver::Pose startPose;
+    QPointF targetPosition;
+    bool hasTarget = false;
+    bool truncated = false;
+    QString error;
+
+    bool isValid() const { return !result.samples.isEmpty(); }
+};
+
+// Shared preview evaluation used by the viewport overlay, the solver cards and
+// the timeline band.  The returned Result::stopFrame is the real segment end
+// (collision/threshold/clip end/explicit override), never just the clip end.
+SolverPreviewEval evaluateSolverPreview(const model::Project& project,
+                                        const assets::AssetStore& assets,
+                                        const model::Entity& entity,
+                                        const model::SolverSegment& solver,
+                                        int maxFrames = 0);
 
 class Viewport : public QWidget
 {
@@ -41,10 +68,30 @@ public:
     // Drops the cached render2 frame and repaints (document/media changes).
     void refreshSession();
 
+    // Properties panel solver card focus: keeps the trajectory visible even
+    // when the playhead is outside the segment, until another card is picked.
+    void setSessionSolverFocus(const Uuid& entityUuid, const Uuid& solverId);
+
     // Renders the current frame at project resolution for tests/previews.
     QImage grabProjectFrame(const Uuid& cameraUuid = Uuid()) const;
     QPointF projectToWidgetForTest(const QPointF& pos) const;
     QImage sessionImageForTest() const { return m_sessionImage; }
+
+    // Solver overlay test hooks (widget-space points).
+    bool sessionSolverPreviewVisibleForTest() const;
+    QVector<QPointF> sessionSolverTrajectoryForTest() const;
+    QPointF sessionSolverStartForTest() const;
+    QPointF sessionSolverStopForTest() const;
+    QPointF sessionSolverTargetForTest() const;
+    QPointF sessionSolverCurrentForTest() const;
+    QPointF sessionSolverVelocityHandleForTest() const;
+    int sessionSolverStopFrameForTest() const;
+    int sessionSolverStopReasonForTest() const;
+    bool sessionSolverHandleVisibleForTest() const;
+    bool sessionSolverDraggingForTest() const
+    {
+        return m_sessionDragKind == SessionDragKind::SolverVelocity;
+    }
 
     QToolButton* workbenchButton() const { return m_workbenchButton; }
 
@@ -168,6 +215,33 @@ private:
     void drawSessionSelection(QPainter& painter);
     const model::Entity* hitTestSession(const QPointF& pos) const;
 
+    // ---- session solver trajectory + initial-velocity handle -------------
+    struct SolverOverlay
+    {
+        bool visible = false;
+        Uuid entityUuid;
+        Uuid solverId;
+        solver::Result result;
+        solver::Pose startPose;
+        QPointF targetPosition;
+        bool hasTarget = false;
+        bool truncated = false;
+        int stopFrame = -1;
+        solver::StopReason reason = solver::StopReason::None;
+        bool hasVelocityHandle = false;
+    };
+
+    bool ensureSessionSolverOverlay() const;
+    void invalidateSessionSolverOverlay();
+    void drawSessionSolverOverlay(QPainter& painter);
+    QTransform sessionSolverParentToWidgetAt(const model::Entity& entity,
+                                             int projectFrame) const;
+    bool hitSessionSolverVelocityHandle(const QPointF& pos) const;
+    void startSessionSolverDrag(const QPointF& pos);
+    void applySessionSolverDrag(const QPointF& pos);
+    void finishSessionSolverDrag();
+    QPointF sessionSolverVelocityTipParent() const;
+
     // ---- session gizmo (gizmo:: math) -----------------------------------
     enum class SessionDragKind
     {
@@ -181,7 +255,8 @@ private:
         Pivot,
         CameraMove,
         CameraRotate,
-        CameraScale
+        CameraScale,
+        SolverVelocity
     };
 
     gizmo::Transform sessionGizmoTransform(const model::Entity& entity) const;
@@ -324,6 +399,13 @@ private:
     QVector<double> m_sessionSnapTargetsX;
     QVector<double> m_sessionSnapTargetsY;
     double m_sessionCameraStartAngle = 0.0;
+
+    // ---- session solver overlay -----------------------------------------
+    Uuid m_solverFocusEntity;
+    Uuid m_solverFocusSolver;
+    mutable SolverOverlay m_solverOverlay;
+    mutable bool m_solverOverlayValid = false;
+    model::Entity m_solverDragStart;
 };
 
 } // namespace pvf

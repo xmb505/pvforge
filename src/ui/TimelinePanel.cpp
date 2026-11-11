@@ -1,5 +1,6 @@
 #include "TimelinePanel.h"
 
+#include "Viewport.h"
 #include "app/AppIcon.h"
 #include "app/EditorSession.h"
 #include "app/TimelineAdapter.h"
@@ -1558,6 +1559,78 @@ QRect TimelinePanel::sessionBaseClipRect(const Entity& entity) const
     return QRect(x0, rowTop(row) + 3, std::max(1, x1 - x0), kRowHeight - 6);
 }
 
+int TimelinePanel::solverBandStopFrameForTest(const Uuid& entityUuid,
+                                               const Uuid& solverId) const
+{
+    if (!m_session || entityUuid.isEmpty())
+        return -1;
+    const auto it = m_session->project().entities.constFind(entityUuid);
+    if (it == m_session->project().entities.constEnd())
+        return -1;
+    for (const model::SolverSegment& solver : it->solvers)
+    {
+        if (solver.id != solverId)
+            continue;
+        const SolverPreviewEval preview = evaluateSolverPreview(
+            m_session->project(), m_session->assets(), it.value(), solver);
+        return preview.result.stopFrame;
+    }
+    return -1;
+}
+
+QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
+                                           const Uuid& solverId) const
+{
+    if (!m_session || entityUuid.isEmpty())
+        return {};
+    const auto it = m_session->project().entities.constFind(entityUuid);
+    if (it == m_session->project().entities.constEnd())
+        return {};
+
+    const model::SolverSegment* chosen = nullptr;
+    for (const model::SolverSegment& solver : it->solvers)
+        if (solver.id == solverId)
+        {
+            chosen = &solver;
+            break;
+        }
+    if (!chosen)
+        return {};
+
+    const SolverPreviewEval preview = evaluateSolverPreview(
+        m_session->project(), m_session->assets(), it.value(), *chosen);
+    if (!preview.isValid() || preview.result.stopFrame < 0)
+        return {};
+
+    const EntityId id = entityIdForUuid(entityUuid);
+    const int row = rowIds().indexOf(id);
+    if (row < 0)
+        return {};
+    const Entity* legacy = findEntity(activeEntities(), id);
+    if (!legacy)
+        return {};
+
+    const int clipLeftFrame = std::max(clipStartOf(*legacy), contentStart());
+    const int clipRightFrame = std::min(clipEndOf(*legacy), contentEnd());
+    const int bandStart =
+        std::max(clipLeftFrame, it->start + chosen->startFrame);
+    const int bandEnd = std::min(clipRightFrame,
+                                 it->start + preview.result.stopFrame);
+    if (bandEnd <= bandStart)
+        return {};
+
+    const int x0 = std::max(nameWidth(), xFromFrame(bandStart));
+    const int x1 = std::max(x0 + 1, xFromFrame(bandEnd));
+    const QRect clip = clipRect(*legacy);
+    if (clip.isEmpty())
+        return {};
+    const int left = std::max(clip.left(), x0);
+    const int right = std::min(clip.right(), x1);
+    if (right <= left)
+        return {};
+    return QRect(left, clip.top() + 1, right - left, clip.height() - 2);
+}
+
 bool TimelinePanel::isReparentCandidate(const Uuid& entity,
                                         const Uuid& target) const
 {
@@ -2878,6 +2951,52 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(QColor(255, 255, 255, 150), 1, Qt::DashLine));
             p.drawRect(clip.adjusted(2, 2, -3, -3));
+        }
+
+        // Solver segments get a dedicated colour band clipped to the real
+        // Result::stopFrame, not the structural clip end.  The empty area
+        // after the band means "stopped / holding".
+        if (sessionMode())
+        {
+            const Uuid uuid = uuidForEntityId(entity->id);
+            const auto modelIt =
+                m_session->project().entities.constFind(uuid);
+            if (modelIt != m_session->project().entities.constEnd())
+            {
+                for (const model::SolverSegment& solver : modelIt->solvers)
+                {
+                    const QRect band =
+                        solverBandRectForTest(uuid, solver.id);
+                    if (band.isEmpty())
+                        continue;
+                    QColor color(116, 206, 255);
+                    if (solver.effect == SolverEffect::Orbit)
+                        color = QColor(178, 136, 255);
+                    else if (solver.effect == SolverEffect::Spin)
+                        color = QColor(255, 214, 102);
+                    else if (solver.effect == SolverEffect::BlackHole)
+                        color = QColor(255, 120, 200);
+                    p.fillRect(band, QColor(color.red(), color.green(),
+                                            color.blue(), 85));
+                    p.setPen(QPen(color, 1.0));
+                    p.setBrush(Qt::NoBrush);
+                    p.drawRect(band.adjusted(0, 0, -1, -1));
+                    p.setPen(QPen(QColor(20, 22, 26), 1.0));
+                    p.setBrush(color.darker(140));
+                    p.drawRect(QRect(band.left(), band.top(), 3,
+                                     band.height()));
+                    p.setBrush(color.lighter(125));
+                    p.drawRect(QRect(band.right() - 2, band.top(), 3,
+                                     band.height()));
+                    if (band.width() > 52 && band.height() >= 14)
+                    {
+                        p.setPen(QColor(255, 255, 255, 215));
+                        p.drawText(band.adjusted(6, 0, -4, 0),
+                                   Qt::AlignVCenter | Qt::AlignLeft,
+                                   QStringLiteral("求解"));
+                    }
+                }
+            }
         }
 
         if (entity->isAudio())

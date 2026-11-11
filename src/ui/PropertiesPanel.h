@@ -16,6 +16,7 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QEvent;
 class QFontComboBox;
 class QFormLayout;
 class QGroupBox;
@@ -63,6 +64,7 @@ public:
     bool sessionMode() const { return m_sessionMode; }
     void setAutoKey(bool on);
     bool autoKey() const { return m_autoKey; }
+    Uuid selectedSolverId() const { return m_selectedSolverId; }
 
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);
@@ -80,6 +82,11 @@ signals:
     void sessionEditFailed(const QString& message);
     void sessionReplaceSourceRequested(const Uuid& uuid);
     void autoKeyToggled(bool on);
+    // A solver card was activated; the viewport keeps that trajectory visible.
+    void solverSelected(const Uuid& entityUuid, const Uuid& solverId);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     struct Row
@@ -141,6 +148,9 @@ private:
         SolverEffect effect = SolverEffect::Gravity;
         QGroupBox* box = nullptr;
         QSpinBox* start = nullptr;
+        QLabel* endInfo = nullptr;
+        QCheckBox* manualEnd = nullptr;
+        QWidget* endRow = nullptr;
         QSpinBox* end = nullptr;
         QDoubleSpinBox* velocityX = nullptr;
         QDoubleSpinBox* velocityY = nullptr;
@@ -225,6 +235,8 @@ private:
                         const model::SolverSegment& solver);
     void reloadSolverCreate(const model::Entity& entity);
     void createSolverFromPlayhead();
+    void selectSolver(const Uuid& solverId);
+    void syncSolverFocus(const QVector<model::SolverSegment>& solvers);
     void updateSolver(const Uuid& solverId, const QString& message,
                       const std::function<bool(model::SolverSegment&)>& mutate);
     void deleteSolver(const Uuid& solverId);
@@ -380,6 +392,9 @@ private:
     QVBoxLayout* m_solverCardsLayout = nullptr;
     QComboBox* m_solverEffectCombo = nullptr;
     QComboBox* m_solverTargetCombo = nullptr;
+    QLabel* m_solverEndAuto = nullptr;
+    QCheckBox* m_solverManualEnd = nullptr;
+    QWidget* m_solverEndRow = nullptr;
     QSpinBox* m_solverEndSpin = nullptr;
     QPushButton* m_solverCreateButton = nullptr;
     QVector<SolverCard> m_solverCards;

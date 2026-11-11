@@ -18,6 +18,7 @@
 #include "ui/EasingChooser.h"
 #include "ui/BrandWallDialog.h"
 #include "ui/TextLayoutDialog.h"
+#include "ui/Viewport.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -27,6 +28,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
+#include <QEvent>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -731,8 +733,37 @@ int solverEffectiveEnd(const model::SolverSegment& solver, int duration)
 QString solverRangeText(const model::SolverSegment& solver)
 {
     if (solver.endFrame < 0)
-        return QStringLiteral("%1 帧 – 片段末帧").arg(solver.startFrame);
+        return QStringLiteral("%1 帧起 · 自动结束").arg(solver.startFrame);
     return QStringLiteral("%1 – %2 帧").arg(solver.startFrame).arg(solver.endFrame);
+}
+
+QString solverStopReasonText(solver::StopReason reason)
+{
+    switch (reason)
+    {
+    case solver::StopReason::Collision:
+        return QStringLiteral("碰撞/捕获停止");
+    case solver::StopReason::StopThreshold:
+        return QStringLiteral("速度低于停止阈值");
+    case solver::StopReason::ClipEnd:
+        return QStringLiteral("片段末尾");
+    case solver::StopReason::ExplicitEnd:
+        return QStringLiteral("显式覆盖");
+    case solver::StopReason::None:
+        break;
+    }
+    return QStringLiteral("无法解算");
+}
+
+QString solverStopInfoText(const SolverPreviewEval& preview)
+{
+    if (!preview.error.isEmpty())
+        return QStringLiteral("结束：无法解算（%1）").arg(preview.error);
+    if (!preview.isValid() || preview.result.stopFrame < 0)
+        return QStringLiteral("结束：无法解算");
+    return QStringLiteral("结束：第 %1 帧（%2）")
+        .arg(preview.result.stopFrame)
+        .arg(solverStopReasonText(preview.result.reason));
 }
 
 QString solverConflictText(const model::SolverSegment& solver, int duration)
@@ -1443,13 +1474,43 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     m_solverTargetCombo->setObjectName(QStringLiteral("solverTargetCombo"));
     createForm->addRow(QStringLiteral("目标实体"), m_solverTargetCombo);
 
-    m_solverEndSpin = new QSpinBox(createBox);
+    m_solverEndAuto = new QLabel(
+        QStringLiteral("结束：自动（碰撞/停止阈值/片段末尾）"), createBox);
+    m_solverEndAuto->setObjectName(QStringLiteral("solverCreateEndAuto"));
+    m_solverEndAuto->setWordWrap(true);
+    createForm->addRow(m_solverEndAuto);
+
+    m_solverManualEnd =
+        new QCheckBox(QStringLiteral("手动指定结束帧"), createBox);
+    m_solverManualEnd->setObjectName(QStringLiteral("solverCreateManualEnd"));
+    m_solverManualEnd->setToolTip(
+        QStringLiteral("高级覆盖：只解到指定帧，之后冻结。默认由物理停止决定。"));
+    createForm->addRow(m_solverManualEnd);
+
+    m_solverEndRow = new QWidget(createBox);
+    auto* endLayout = new QHBoxLayout(m_solverEndRow);
+    endLayout->setContentsMargins(0, 0, 0, 0);
+    endLayout->addWidget(new QLabel(QStringLiteral("结束帧"), m_solverEndRow));
+    m_solverEndSpin = new QSpinBox(m_solverEndRow);
     m_solverEndSpin->setObjectName(QStringLiteral("solverCreateEnd"));
     m_solverEndSpin->setRange(-1, 1000000);
-    m_solverEndSpin->setSpecialValueText(QStringLiteral("片段末帧"));
+    m_solverEndSpin->setSpecialValueText(QStringLiteral("自动"));
     m_solverEndSpin->setValue(-1);
     m_solverEndSpin->setKeyboardTracking(false);
-    createForm->addRow(QStringLiteral("结束帧"), m_solverEndSpin);
+    endLayout->addWidget(m_solverEndSpin, 1);
+    m_solverEndRow->hide();
+    createForm->addRow(m_solverEndRow);
+    connect(m_solverManualEnd, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_solverEndRow)
+            return;
+        m_solverEndRow->setVisible(on);
+        if (on && m_solverEndSpin->value() < 0)
+        {
+            const model::Entity* entity = sessionEntity();
+            if (entity)
+                m_solverEndSpin->setValue(std::max(0, entity->duration() - 1));
+        }
+    });
 
     m_solverCreateButton =
         new QPushButton(QStringLiteral("将当前关键帧转换为求解开始帧"), createBox);
@@ -1471,6 +1532,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
             &PropertiesPanel::createSolverFromPlayhead);
 
     m_solverSection = new CollapsibleSection(QStringLiteral("求解段"), content, this);
+    m_solverSection->setObjectName(QStringLiteral("solverSection"));
     m_solverSection->setExpanded(false);
     layout->insertWidget(layout->count() - 1, m_solverSection);
 }
@@ -3535,6 +3597,9 @@ void PropertiesPanel::reloadSolverCreate(const model::Entity& entity)
     m_solverEndSpin->setRange(-1, std::max(0, duration - 1));
     if (m_solverEndSpin->value() > duration - 1)
         m_solverEndSpin->setValue(duration - 1);
+    m_solverEndRow->setVisible(m_solverManualEnd->isChecked());
+    if (m_solverManualEnd->isChecked() && m_solverEndSpin->value() < 0)
+        m_solverEndSpin->setValue(std::max(0, duration - 1));
 }
 
 void PropertiesPanel::updateSolverCards(const model::Entity& entity)
@@ -3559,8 +3624,71 @@ void PropertiesPanel::updateSolverCards(const model::Entity& entity)
         for (int i = 0; i < solvers.size(); ++i)
             fillSolverCard(m_solverCards[i], entity.uuid, solvers.at(i));
 
+    syncSolverFocus(solvers);
     reloadSolverCreate(entity);
     m_solverEmpty->setVisible(solvers.isEmpty());
+}
+
+void PropertiesPanel::syncSolverFocus(
+    const QVector<model::SolverSegment>& solvers)
+{
+    bool found = false;
+    for (const model::SolverSegment& solver : solvers)
+        if (solver.id == m_selectedSolverId)
+        {
+            found = true;
+            break;
+        }
+    if (!found && !m_selectedSolverId.isEmpty())
+    {
+        m_selectedSolverId.clear();
+        emit solverSelected(m_sessionUuid, Uuid());
+        if (QWidget* shell = parentWidget())
+            for (Viewport* viewport : shell->findChildren<Viewport*>())
+                viewport->setSessionSolverFocus(m_sessionUuid, Uuid());
+    }
+}
+
+void PropertiesPanel::selectSolver(const Uuid& solverId)
+{
+    if (m_selectedSolverId == solverId)
+        return;
+    m_selectedSolverId = solverId;
+    emit solverSelected(m_sessionUuid, solverId);
+    if (QWidget* shell = parentWidget())
+        for (Viewport* viewport : shell->findChildren<Viewport*>())
+            viewport->setSessionSolverFocus(m_sessionUuid, solverId);
+    for (SolverCard& card : m_solverCards)
+    {
+        if (!card.box)
+            continue;
+        const QString title = card.box->title();
+        const QString bare = title.startsWith(QStringLiteral("▶ "))
+                                 ? title.mid(2)
+                                 : title;
+        card.box->setTitle(card.id == solverId
+                               ? QStringLiteral("▶ ") + bare
+                               : bare);
+    }
+}
+
+bool PropertiesPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::FocusIn)
+    {
+        QWidget* widget = qobject_cast<QWidget*>(watched);
+        for (const SolverCard& card : m_solverCards)
+        {
+            if (card.box == watched
+                || (widget && card.box && card.box->isAncestorOf(widget)))
+            {
+                selectSolver(card.id);
+                break;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void PropertiesPanel::rebuildSolverCards(
@@ -3587,6 +3715,7 @@ void PropertiesPanel::rebuildSolverCards(
         card.effect = solver.effect;
         card.box = new QGroupBox(m_solverHost);
         card.box->setObjectName(QStringLiteral("solverCard%1").arg(index));
+        card.box->installEventFilter(this);
         auto* form = new QFormLayout(card.box);
         form->setContentsMargins(8, 6, 8, 6);
         form->setVerticalSpacing(4);
@@ -3602,12 +3731,41 @@ void PropertiesPanel::rebuildSolverCards(
         card.start->setKeyboardTracking(false);
         form->addRow(QStringLiteral("开始帧"), card.start);
 
-        card.end = new QSpinBox(card.box);
+        card.endInfo = new QLabel(card.box);
+        card.endInfo->setObjectName(
+            QStringLiteral("solverEndInfo%1").arg(index));
+        card.endInfo->setWordWrap(true);
+        card.endInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        form->addRow(card.endInfo);
+
+        card.manualEnd =
+            new QCheckBox(QStringLiteral("手动指定结束帧"), card.box);
+        card.manualEnd->setObjectName(
+            QStringLiteral("solverManualEnd%1").arg(index));
+        card.manualEnd->setToolTip(
+            QStringLiteral("高级覆盖：只解到指定帧，之后冻结。默认由物理停止决定。"));
+        form->addRow(card.manualEnd);
+
+        card.endRow = new QWidget(card.box);
+        auto* endLayout = new QHBoxLayout(card.endRow);
+        endLayout->setContentsMargins(0, 0, 0, 0);
+        endLayout->addWidget(new QLabel(QStringLiteral("结束帧"), card.endRow));
+        card.end = new QSpinBox(card.endRow);
         card.end->setObjectName(QStringLiteral("solverEnd%1").arg(index));
         card.end->setRange(-1, 1000000);
-        card.end->setSpecialValueText(QStringLiteral("片段末帧"));
+        card.end->setSpecialValueText(QStringLiteral("自动"));
         card.end->setKeyboardTracking(false);
-        form->addRow(QStringLiteral("结束帧"), card.end);
+        endLayout->addWidget(card.end, 1);
+        card.endRow->hide();
+        form->addRow(card.endRow);
+
+        auto* velocityHint =
+            new QLabel(QStringLiteral("初速度（高级，主入口是视口手柄）"),
+                       card.box);
+        velocityHint->setObjectName(
+            QStringLiteral("solverVelocityHint%1").arg(index));
+        velocityHint->setWordWrap(true);
+        form->addRow(velocityHint);
 
         card.velocityX = new QDoubleSpinBox(card.box);
         card.velocityX->setObjectName(QStringLiteral("solverVelocityX%1").arg(index));
@@ -3655,6 +3813,21 @@ void PropertiesPanel::rebuildSolverCards(
                                      s.endFrame = value;
                                      return true;
                                  });
+                });
+        connect(card.manualEnd, &QCheckBox::toggled, this,
+                [this, solverId, card](bool on) {
+                    if (m_editing)
+                        return;
+                    const int value = std::max(0, card.end->value());
+                    updateSolver(
+                        solverId,
+                        QStringLiteral("pvf: edit solver end mode"),
+                        [solverId, on, value](model::SolverSegment& s) {
+                            if (s.id != solverId)
+                                return false;
+                            s.endFrame = on ? std::max(s.startFrame, value) : -1;
+                            return true;
+                        });
                 });
         connect(card.velocityX, &QDoubleSpinBox::editingFinished, this,
                 [this, solverId, card] {
@@ -3774,6 +3947,8 @@ void PropertiesPanel::rebuildSolverCards(
             card.params.insert(spec.key, editor);
         }
 
+        for (QWidget* child : card.box->findChildren<QWidget*>())
+            child->installEventFilter(this);
         m_solverCardsLayout->addWidget(card.box);
         fillSolverCard(card, entityUuid, solver);
         m_solverCards.append(card);
@@ -3783,12 +3958,58 @@ void PropertiesPanel::rebuildSolverCards(
 void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
                                      const model::SolverSegment& solver)
 {
-    Q_UNUSED(entityUuid);
-    card.box->setTitle(QStringLiteral("%1 · %2")
-                           .arg(solverEffectName(solver.effect),
-                                solverRangeText(solver)));
+    const QString title = QStringLiteral("%1 · %2")
+                              .arg(solverEffectName(solver.effect),
+                                   solverRangeText(solver));
+    card.box->setTitle(card.id == m_selectedSolverId
+                           ? QStringLiteral("▶ ") + title
+                           : title);
     setSpinIfIdle(card.start, solver.startFrame);
-    setSpinIfIdle(card.end, solver.endFrame);
+
+    SolverPreviewEval preview;
+    const model::Entity* entity = nullptr;
+    if (m_session)
+    {
+        const auto it = m_session->project().entities.constFind(entityUuid);
+        if (it != m_session->project().entities.constEnd())
+        {
+            entity = &it.value();
+            preview = evaluateSolverPreview(m_session->project(),
+                                            m_session->assets(), it.value(),
+                                            solver);
+        }
+    }
+    if (card.endInfo)
+    {
+        card.endInfo->setText(entity ? solverStopInfoText(preview)
+                                     : QStringLiteral("结束：无法解算"));
+        if (!preview.error.isEmpty())
+            card.endInfo->setToolTip(preview.error);
+        else
+            card.endInfo->setToolTip(
+                QStringLiteral("自动结束由碰撞/停止阈值/片段末尾决定；"
+                               "勾选下方高级选项可手动覆盖。"));
+    }
+
+    const int duration = entity ? entity->duration() : 1;
+    const int suggestedEnd = solver.endFrame >= 0
+                                 ? solver.endFrame
+                                 : (preview.result.stopFrame >= 0
+                                        ? preview.result.stopFrame
+                                        : std::max(0, duration - 1));
+    if (card.manualEnd)
+    {
+        const QSignalBlocker blocker(card.manualEnd);
+        card.manualEnd->setChecked(solver.endFrame >= 0);
+    }
+    if (card.endRow)
+        card.endRow->setVisible(solver.endFrame >= 0);
+    if (card.end)
+    {
+        card.end->setRange(std::max(0, solver.startFrame),
+                           std::max(0, duration - 1));
+        setSpinIfIdle(card.end, suggestedEnd);
+    }
     setSpinIfIdle(card.velocityX, solver.initialVelocity.x());
     setSpinIfIdle(card.velocityY, solver.initialVelocity.y());
 
@@ -3868,10 +4089,14 @@ void PropertiesPanel::createSolverFromPlayhead()
         }
     }
 
-    const int endFrame = m_solverEndSpin->value();
-    if (endFrame != -1 && (endFrame < relative || endFrame >= duration))
+    int endFrame = m_solverManualEnd && m_solverManualEnd->isChecked()
+                       ? m_solverEndSpin->value()
+                       : -1;
+    if (endFrame < 0)
+        endFrame = -1; // auto
+    if (endFrame >= 0 && (endFrame < relative || endFrame >= duration))
     {
-        reportSessionError(QStringLiteral("结束帧必须为 -1 或位于 %1..%2")
+        reportSessionError(QStringLiteral("结束帧必须位于 %1..%2（或使用自动结束）")
                                .arg(relative)
                                .arg(duration - 1));
         return;
@@ -3951,7 +4176,16 @@ void PropertiesPanel::createSolverFromPlayhead()
             return true;
         });
     if (ok)
-        m_selectedSolverId = solverId;
+    {
+        selectSolver(solverId);
+        if (m_solverManualEnd)
+        {
+            const QSignalBlocker blocker(m_solverManualEnd);
+            m_solverManualEnd->setChecked(false);
+        }
+        m_solverEndSpin->setValue(-1);
+        m_solverEndRow->hide();
+    }
     refresh();
 }
 
@@ -3994,7 +4228,7 @@ void PropertiesPanel::deleteSolver(const Uuid& solverId)
             return false;
         });
     if (ok && m_selectedSolverId == solverId)
-        m_selectedSolverId.clear();
+        selectSolver(Uuid());
 }
 
 void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
