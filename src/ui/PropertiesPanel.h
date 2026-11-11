@@ -39,6 +39,7 @@ struct SolverSegment;
 
 namespace next {
 class SpecialContentEditor;
+class SolverPreviewWidget;
 } // namespace next
 
 class CollapsibleSection;
@@ -152,6 +153,8 @@ private:
         QCheckBox* manualEnd = nullptr;
         QWidget* endRow = nullptr;
         QSpinBox* end = nullptr;
+        QToolButton* advanced = nullptr;
+        QWidget* velocityRow = nullptr;
         QDoubleSpinBox* velocityX = nullptr;
         QDoubleSpinBox* velocityY = nullptr;
         QPushButton* remove = nullptr;
@@ -229,6 +232,8 @@ private:
     void rebuildTrackRows(const model::Entity& entity);
     void reloadTrackRows(const model::Entity& entity);
     void updateSolverCards(const model::Entity& entity);
+    void updateSolverPreview(const model::Entity& entity,
+                             const QVector<model::SolverSegment>& solvers);
     void rebuildSolverCards(const Uuid& entityUuid,
                             const QVector<model::SolverSegment>& solvers);
     void fillSolverCard(SolverCard& card, const Uuid& entityUuid,
@@ -406,6 +411,8 @@ private:
     QLabel* m_convertSolverHint = nullptr;
     QVector<SolverCard> m_solverCards;
     Uuid m_selectedSolverId;
+    // Mini trajectory window: points + path + initial-velocity arrow only.
+    next::SolverPreviewWidget* m_solverPreview = nullptr;
 };
 
 } // namespace pvf

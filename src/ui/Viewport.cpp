@@ -725,7 +725,6 @@ Viewport::Viewport(EditorSession* session, QWidget* parent)
     {
         connect(document, &next::Document::changed, this, [this] {
             invalidateSessionImage();
-            invalidateSessionSolverOverlay();
             update();
         });
         connect(document, &next::Document::playheadChanged, this, [this] {
@@ -735,7 +734,6 @@ Viewport::Viewport(EditorSession* session, QWidget* parent)
         connect(document, &next::Document::selectionChanged, this, [this] {
             m_hoveredRotateHandle.reset();
             invalidateSessionImage();
-            invalidateSessionSolverOverlay();
             update();
         });
     }
@@ -756,7 +754,6 @@ Viewport::Viewport(EditorSession* session, QWidget* parent)
 void Viewport::refreshSession()
 {
     invalidateSessionImage();
-    invalidateSessionSolverOverlay();
     update();
 }
 
@@ -787,17 +784,6 @@ void Viewport::setSelectedEntity(EntityId id)
     if (m_selected == id)
         return;
     m_selected = id;
-    update();
-}
-
-void Viewport::setSessionSolverFocus(const Uuid& entityUuid,
-                                     const Uuid& solverId)
-{
-    if (m_solverFocusEntity == entityUuid && m_solverFocusSolver == solverId)
-        return;
-    m_solverFocusEntity = entityUuid;
-    m_solverFocusSolver = solverId;
-    invalidateSessionSolverOverlay();
     update();
 }
 
@@ -1058,433 +1044,6 @@ const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
             return entity;
     }
     return nullptr;
-}
-
-void Viewport::invalidateSessionSolverOverlay()
-{
-    // Keep the last evaluated samples around: an in-progress velocity drag
-    // still needs its start pose and solver id until the next preview rebuild.
-    m_solverOverlayValid = false;
-}
-
-bool Viewport::ensureSessionSolverOverlay() const
-{
-    if (!m_session || !m_session->document())
-        return false;
-
-    const Uuid selected = m_session->document()->selection();
-    const auto entityIt = m_session->project().entities.constFind(selected);
-    if (selected.isEmpty() || entityIt == m_session->project().entities.constEnd()
-        || entityIt->content.kind == ContentKind::Camera)
-    {
-        m_solverOverlay.visible = false;
-        return false;
-    }
-
-    const model::Entity& entity = entityIt.value();
-    const int relativeFrame = m_session->playhead() - entity.start;
-    const model::SolverSegment* chosen = nullptr;
-
-    if (m_solverFocusEntity == selected && !m_solverFocusSolver.isEmpty())
-    {
-        for (const model::SolverSegment& candidate : entity.solvers)
-        {
-            if (candidate.id == m_solverFocusSolver)
-            {
-                chosen = &candidate;
-                break;
-            }
-        }
-    }
-    if (!chosen)
-    {
-        for (const model::SolverSegment& candidate : entity.solvers)
-        {
-            const int end = model::solverStructuralEnd(entity, candidate);
-            if (relativeFrame >= candidate.startFrame && relativeFrame <= end)
-            {
-                chosen = &candidate;
-                break;
-            }
-        }
-    }
-
-    if (!chosen)
-    {
-        m_solverOverlay = SolverOverlay();
-        m_solverOverlayValid = false;
-        return false;
-    }
-
-    const bool focused = m_solverFocusEntity == selected
-                         && m_solverFocusSolver == chosen->id;
-    const int structuralEnd = model::solverStructuralEnd(entity, *chosen);
-    const bool inRange = relativeFrame >= chosen->startFrame
-                         && relativeFrame <= structuralEnd;
-
-    if (m_solverOverlayValid && m_solverOverlay.entityUuid == selected
-        && m_solverOverlay.solverId == chosen->id)
-    {
-        m_solverOverlay.visible = inRange || focused;
-        return m_solverOverlay.visible;
-    }
-
-    SolverOverlay overlay;
-    overlay.entityUuid = selected;
-    overlay.solverId = chosen->id;
-    const SolverPreviewEval preview = evaluateSolverPreview(
-        m_session->project(), m_session->assets(), entity, *chosen);
-    overlay.result = preview.result;
-    overlay.startPose = preview.startPose;
-    overlay.targetPosition = preview.targetPosition;
-    overlay.hasTarget = preview.hasTarget;
-    overlay.truncated = preview.truncated;
-    overlay.stopFrame = preview.result.stopFrame;
-    overlay.reason = preview.result.reason;
-    overlay.hasVelocityHandle =
-        (chosen->effect == SolverEffect::Gravity
-         || chosen->effect == SolverEffect::BlackHole)
-        && preview.isValid();
-    overlay.visible = inRange || focused;
-    m_solverOverlay = overlay;
-    m_solverOverlayValid = true;
-    return overlay.visible;
-}
-
-QTransform Viewport::sessionSolverParentToWidgetAt(
-    const model::Entity& entity, int projectFrame) const
-{
-    if (!m_session || entity.parentUuid.isEmpty())
-        return sessionWorldToScreen();
-
-    const model::Project& project = m_session->project();
-    if (!project.entities.contains(entity.parentUuid))
-        return sessionWorldToScreen();
-
-    render2::SceneWorld world(project, m_session->assets());
-    anim::Cache cache;
-    const anim::Pose pose = anim::evaluateEntity(
-        project, entity.parentUuid, projectFrame, world, cache);
-    return pose.world * sessionWorldToScreen();
-}
-
-QPointF Viewport::sessionSolverVelocityTipParent() const
-{
-    if (!m_solverOverlayValid || m_solverOverlay.result.samples.isEmpty())
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    for (const model::SolverSegment& segment : entityIt->solvers)
-    {
-        if (segment.id == m_solverOverlay.solverId)
-            return m_solverOverlay.startPose.position
-                   + segment.initialVelocity * 0.25;
-    }
-    return {};
-}
-
-bool Viewport::hitSessionSolverVelocityHandle(const QPointF& pos) const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.hasVelocityHandle)
-        return false;
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return false;
-
-    const int startFrame = m_solverOverlay.result.samples.first().frame;
-    const QTransform toWidget = sessionSolverParentToWidgetAt(
-        entityIt.value(), entityIt->start + startFrame);
-    const QPointF tip = toWidget.map(sessionSolverVelocityTipParent());
-    return QLineF(pos, tip).length() <= 13.0;
-}
-
-void Viewport::startSessionSolverDrag(const QPointF& pos)
-{
-    if (!m_session || !m_solverOverlayValid)
-        return;
-    const auto it =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (it == m_session->project().entities.constEnd())
-        return;
-
-    m_sessionDragKind = SessionDragKind::SolverVelocity;
-    m_sessionDragUuid = it->uuid;
-    m_sessionDragStart = it.value();
-    m_solverDragStart = it.value();
-    m_sessionDragParentToWidget = sessionSolverParentToWidgetAt(
-        it.value(), it->start + m_solverOverlay.result.samples.first().frame);
-    m_sessionDragViewScale = sessionViewScaleFor(m_sessionDragParentToWidget);
-    m_sessionDragChanged = false;
-    Q_UNUSED(pos);
-    setCursor(Qt::SizeAllCursor);
-}
-
-void Viewport::applySessionSolverDrag(const QPointF& pos)
-{
-    if (!m_session || m_solverOverlay.result.samples.isEmpty())
-        return;
-
-    bool invertible = false;
-    const QTransform inverse = m_sessionDragParentToWidget.inverted(&invertible);
-    if (!invertible)
-        return;
-    const QPointF parent = inverse.map(pos);
-    QPointF velocity =
-        (parent - m_solverOverlay.startPose.position) / 0.25;
-    velocity.setX(std::clamp(velocity.x(), -1e6, 1e6));
-    velocity.setY(std::clamp(velocity.y(), -1e6, 1e6));
-
-    auto it =
-        m_session->mutableProject().entities.find(m_solverOverlay.entityUuid);
-    if (it == m_session->mutableProject().entities.end())
-        return;
-    bool found = false;
-    for (model::SolverSegment& segment : it->solvers)
-    {
-        if (segment.id != m_solverOverlay.solverId)
-            continue;
-        segment.initialVelocity = velocity;
-        found = true;
-        break;
-    }
-    if (!found)
-        return;
-
-    m_sessionDragChanged = true;
-    invalidateSessionImage();
-    invalidateSessionSolverOverlay();
-    update();
-}
-
-void Viewport::finishSessionSolverDrag()
-{
-    if (!m_session || m_sessionDragUuid.isEmpty())
-        return;
-
-    const bool changed = m_sessionDragChanged;
-    QString error;
-    const bool ok = !changed
-                    || m_session->document()->commitEntity(
-                        m_sessionDragUuid,
-                        QStringLiteral("pvf: set solver initial velocity"),
-                        &error);
-    if (!ok)
-    {
-        auto it = m_session->mutableProject().entities.find(m_sessionDragUuid);
-        if (it != m_session->mutableProject().entities.end())
-            it.value() = m_solverDragStart;
-        if (!error.isEmpty())
-            emit sessionEditFailed(error);
-    }
-
-    m_sessionDragKind = SessionDragKind::None;
-    m_solverDragStart = model::Entity();
-    m_sessionDragChanged = false;
-    unsetCursor();
-    invalidateSessionImage();
-    invalidateSessionSolverOverlay();
-    update();
-}
-
-void Viewport::drawSessionSolverOverlay(QPainter& painter)
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible)
-        return;
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return;
-
-    const model::Entity& entity = entityIt.value();
-    render2::SceneWorld scene(m_session->project(), m_session->assets());
-    anim::Cache animCache;
-    QHash<int, QTransform> parentCache;
-    const auto parentToWidgetAt = [&](int projectFrame) {
-        if (entity.parentUuid.isEmpty()
-            || !m_session->project().entities.contains(entity.parentUuid))
-            return sessionWorldToScreen();
-        const auto cached = parentCache.constFind(projectFrame);
-        if (cached != parentCache.constEnd())
-            return cached.value();
-        const anim::Pose pose = anim::evaluateEntity(
-            m_session->project(), entity.parentUuid, projectFrame, scene,
-            animCache);
-        const QTransform transform = pose.world * sessionWorldToScreen();
-        parentCache.insert(projectFrame, transform);
-        return transform;
-    };
-    const auto mapAt = [&](const QPointF& point, int relativeFrame) {
-        return parentToWidgetAt(entity.start + relativeFrame).map(point);
-    };
-
-    const solver::Result& result = m_solverOverlay.result;
-    if (result.samples.isEmpty())
-        return;
-
-    const int startFrame = result.samples.first().frame;
-    const int stopFrame = m_solverOverlay.stopFrame;
-    const QPointF startParent = m_solverOverlay.startPose.position;
-    const QPointF startWidget = mapAt(startParent, startFrame);
-    const int lastFrame = stopFrame >= startFrame ? stopFrame : startFrame;
-    const solver::Sample* stopSample = nullptr;
-    for (const solver::Sample& sample : result.samples)
-    {
-        if (sample.frame == lastFrame)
-        {
-            stopSample = &sample;
-            break;
-        }
-    }
-    if (!stopSample)
-        stopSample = &result.samples.last();
-
-    QColor stopColor(116, 206, 255);
-    switch (m_solverOverlay.reason)
-    {
-    case solver::StopReason::Collision:
-        stopColor = QColor(255, 96, 96);
-        break;
-    case solver::StopReason::StopThreshold:
-        stopColor = QColor(255, 176, 64);
-        break;
-    case solver::StopReason::ClipEnd:
-        stopColor = QColor(116, 206, 255);
-        break;
-    case solver::StopReason::ExplicitEnd:
-        stopColor = QColor(180, 184, 196);
-        break;
-    case solver::StopReason::None:
-        break;
-    }
-
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setClipRect(sessionSceneRect().united(canvasRect())
-                            .adjusted(-2.0, -2.0, 2.0, 2.0));
-
-    if (m_solverOverlay.hasTarget)
-    {
-        const QPointF targetWidget =
-            mapAt(m_solverOverlay.targetPosition, startFrame);
-        painter.setPen(QPen(QColor(255, 159, 67, 150), 1.0, Qt::DashLine));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawLine(startWidget, targetWidget);
-        painter.setPen(QPen(QColor(255, 159, 67), 1.0));
-        painter.drawEllipse(targetWidget, 3.5, 3.5);
-    }
-
-    QPolygonF path;
-    for (const solver::Sample& sample : result.samples)
-    {
-        if (sample.frame > lastFrame)
-            break;
-        path.append(mapAt(sample.pose.position, sample.frame));
-    }
-    if (path.size() >= 2)
-    {
-        painter.setPen(QPen(QColor(20, 30, 40, 150), 4.5, Qt::SolidLine,
-                            Qt::RoundCap, Qt::RoundJoin));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPolyline(path);
-        painter.setPen(QPen(QColor(116, 206, 255), 2.0, Qt::SolidLine,
-                            Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(path);
-    }
-
-    // Current-frame cursor.
-    if (m_session->playhead() >= entity.start + startFrame
-        && m_session->playhead() <= entity.start + lastFrame)
-    {
-        const int relative = m_session->playhead() - entity.start;
-        for (const solver::Sample& sample : result.samples)
-        {
-            if (sample.frame != relative)
-                continue;
-            const QPointF cursor =
-                mapAt(sample.pose.position, sample.frame);
-            painter.setPen(QPen(QColor(255, 190, 60), 1.8));
-            painter.setBrush(QColor(255, 190, 60, 70));
-            painter.drawEllipse(cursor, 6.0, 6.0);
-            painter.setBrush(QColor(255, 236, 190));
-            painter.setPen(QPen(QColor(40, 32, 16), 1.0));
-            painter.drawEllipse(cursor, 2.2, 2.2);
-            break;
-        }
-    }
-
-    // Start marker.
-    painter.setPen(QPen(QColor(18, 21, 26), 1.2));
-    painter.setBrush(QColor(125, 255, 158));
-    painter.drawEllipse(startWidget, 5.0, 5.0);
-
-    // Stop / collision marker: shape + colour differ by reason.
-    const QPointF stopWidget =
-        mapAt(stopSample->pose.position, stopSample->frame);
-    painter.setPen(QPen(QColor(18, 21, 26), 1.2));
-    painter.setBrush(stopColor);
-    switch (m_solverOverlay.reason)
-    {
-    case solver::StopReason::Collision:
-    {
-        painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(stopColor, 2.4));
-        painter.drawLine(stopWidget + QPointF(-5.0, -5.0),
-                         stopWidget + QPointF(5.0, 5.0));
-        painter.drawLine(stopWidget + QPointF(-5.0, 5.0),
-                         stopWidget + QPointF(5.0, -5.0));
-        break;
-    }
-    case solver::StopReason::StopThreshold:
-    {
-        QPolygonF triangle;
-        triangle << stopWidget + QPointF(0.0, -6.0)
-                 << stopWidget + QPointF(5.5, 4.5)
-                 << stopWidget + QPointF(-5.5, 4.5);
-        painter.drawPolygon(triangle);
-        break;
-    }
-    case solver::StopReason::ExplicitEnd:
-    {
-        QPolygonF diamond;
-        diamond << stopWidget + QPointF(0.0, -6.0)
-                << stopWidget + QPointF(6.0, 0.0)
-                << stopWidget + QPointF(0.0, 6.0)
-                << stopWidget + QPointF(-6.0, 0.0);
-        painter.drawPolygon(diamond);
-        break;
-    }
-    case solver::StopReason::ClipEnd:
-    case solver::StopReason::None:
-        painter.drawRect(QRectF(stopWidget.x() - 4.5,
-                                stopWidget.y() - 4.5, 9.0, 9.0));
-        break;
-    }
-
-    // Initial-velocity handle (gravity / black hole only).
-    if (m_solverOverlay.hasVelocityHandle)
-    {
-        const QPointF tipParent = sessionSolverVelocityTipParent();
-        const QPointF tipWidget = mapAt(tipParent, startFrame);
-        drawArrowLine(painter, startWidget, tipWidget,
-                      QColor(255, 107, 107));
-        painter.setPen(QPen(QColor(18, 21, 26), 1.2));
-        painter.setBrush(QColor(255, 107, 107));
-        painter.drawEllipse(tipWidget, 6.0, 6.0);
-        painter.setPen(QPen(QColor(255, 228, 228), 1.2));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawEllipse(tipWidget, 6.0, 6.0);
-        if (QLineF(startWidget, tipWidget).length() > 24.0)
-        {
-            painter.setPen(QColor(255, 180, 180));
-            painter.drawText(tipWidget + QPointF(10.0, -8.0),
-                             QStringLiteral("初速度"));
-        }
-    }
-
-    painter.restore();
 }
 
 void Viewport::drawSessionSelection(QPainter& painter)
@@ -1754,11 +1313,10 @@ Viewport::SessionGizmoGeometry Viewport::sessionGizmoGeometry(
             geometry.box.at(local)
             + cornerInwardDirection(geometry.box, local) * gizmo::kRotateHandleInset;
         double glyphAngle = rotateGlyphAngle(geometry.box, local);
-        // The 90-degree carrow glyph has two arrows; on the opposite diagonal
-        // corners (visual TR/BL) it must be turned another 180 degrees or the
-        // arrows point away from the box.
-        if (visual == 1 || visual == 3)
-            glyphAngle += 180.0;
+        // Inkscape's carrow uses glyph_angle = anchor * 45 + 225.  Our local
+        // path band starts 90 degrees later than Inkscape's, so subtract that
+        // constant after aligning the glyph with the corner's inward diagonal.
+        glyphAngle -= 90.0;
         geometry.rotateAngle[visual] = glyphAngle;
     }
     return geometry;
@@ -2245,7 +1803,6 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
     case SessionDragKind::CameraMove:
     case SessionDragKind::CameraRotate:
     case SessionDragKind::CameraScale:
-    case SessionDragKind::SolverVelocity:
     case SessionDragKind::None:
         return;
     }
@@ -2334,7 +1891,6 @@ void Viewport::finishSessionGizmoDrag()
             emit sessionEditFailed(error);
     }
     invalidateSessionImage();
-    invalidateSessionSolverOverlay();
     update();
 }
 
@@ -2350,7 +1906,6 @@ void Viewport::cancelSessionDrag()
     m_sessionDragKind = SessionDragKind::None;
     m_sessionDragUuid.clear();
     m_sessionDragStart = model::Entity();
-    m_solverDragStart = model::Entity();
     m_sessionDragChanged = false;
     m_sessionDragGrabOffset = QPointF();
     m_sessionDragOppositeCorner = QPointF();
@@ -2362,7 +1917,6 @@ void Viewport::cancelSessionDrag()
     m_showGuideY = false;
     unsetCursor();
     invalidateSessionImage();
-    invalidateSessionSolverOverlay();
     update();
 }
 
@@ -2825,7 +2379,6 @@ void Viewport::paintSession(QPainter& p)
                QPointF(canvas.right(), canvas.center().y()));
 
     drawSessionCameraOverlay(p);
-    drawSessionSolverOverlay(p);
     drawSessionSelection(p);
 
     // CAD-style alignment guides while dragging.
@@ -4081,14 +3634,6 @@ void Viewport::mousePressEvent(QMouseEvent* event)
 
         if (m_editingEnabled)
         {
-            // The initial-velocity handle wins over the gizmo when the two
-            // overlap (zero velocity sits exactly on the start pivot).
-            if (hitSessionSolverVelocityHandle(event->position()))
-            {
-                startSessionSolverDrag(event->position());
-                update();
-                return;
-            }
             if (const auto handle = hitSessionGizmo(event->position()))
             {
                 const SessionDragKind kind =
@@ -4240,11 +3785,6 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             m_panLast = event->position();
             emit viewChanged();
             update();
-            return;
-        }
-        if (m_sessionDragKind == SessionDragKind::SolverVelocity)
-        {
-            applySessionSolverDrag(event->position());
             return;
         }
         if (m_sessionDragKind == SessionDragKind::CameraMove
@@ -4696,12 +4236,6 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event)
             unsetCursor();
         }
         if (event->button() == Qt::LeftButton
-            && m_sessionDragKind == SessionDragKind::SolverVelocity)
-        {
-            finishSessionSolverDrag();
-            return;
-        }
-        if (event->button() == Qt::LeftButton
             && m_sessionDragKind != SessionDragKind::None)
             finishSessionGizmoDrag();
         return;
@@ -4879,142 +4413,6 @@ QPointF Viewport::sessionPivotForTest() const
 double Viewport::snapAngleForTest(double degrees, bool force) const
 {
     return snapSessionAngle(degrees, force);
-}
-
-// ---- session solver overlay test hooks ----------------------------------
-
-bool Viewport::sessionSolverPreviewVisibleForTest() const
-{
-    return ensureSessionSolverOverlay() && m_solverOverlay.visible;
-}
-
-QVector<QPointF> Viewport::sessionSolverTrajectoryForTest() const
-{
-    QVector<QPointF> points;
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible)
-        return points;
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return points;
-
-    const model::Entity& entity = entityIt.value();
-    const int stopFrame = m_solverOverlay.stopFrame;
-    for (const solver::Sample& sample : m_solverOverlay.result.samples)
-    {
-        if (sample.frame > stopFrame)
-            break;
-        const QTransform toWidget = sessionSolverParentToWidgetAt(
-            entity, entity.start + sample.frame);
-        points.append(toWidget.map(sample.pose.position));
-    }
-    return points;
-}
-
-QPointF Viewport::sessionSolverStartForTest() const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible
-        || m_solverOverlay.result.samples.isEmpty())
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    const int frame = m_solverOverlay.result.samples.first().frame;
-    return sessionSolverParentToWidgetAt(entityIt.value(),
-                                         entityIt->start + frame)
-        .map(m_solverOverlay.startPose.position);
-}
-
-QPointF Viewport::sessionSolverStopForTest() const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible
-        || m_solverOverlay.result.samples.isEmpty())
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    const int stopFrame = m_solverOverlay.stopFrame;
-    for (const solver::Sample& sample : m_solverOverlay.result.samples)
-    {
-        if (sample.frame != stopFrame)
-            continue;
-        return sessionSolverParentToWidgetAt(entityIt.value(),
-                                             entityIt->start + sample.frame)
-            .map(sample.pose.position);
-    }
-    return {};
-}
-
-QPointF Viewport::sessionSolverTargetForTest() const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible
-        || !m_solverOverlay.hasTarget
-        || m_solverOverlay.result.samples.isEmpty())
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    const int frame = m_solverOverlay.result.samples.first().frame;
-    return sessionSolverParentToWidgetAt(entityIt.value(),
-                                         entityIt->start + frame)
-        .map(m_solverOverlay.targetPosition);
-}
-
-QPointF Viewport::sessionSolverCurrentForTest() const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible)
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    const int relative = m_session->playhead() - entityIt->start;
-    for (const solver::Sample& sample : m_solverOverlay.result.samples)
-    {
-        if (sample.frame != relative)
-            continue;
-        return sessionSolverParentToWidgetAt(entityIt.value(),
-                                             entityIt->start + sample.frame)
-            .map(sample.pose.position);
-    }
-    return {};
-}
-
-QPointF Viewport::sessionSolverVelocityHandleForTest() const
-{
-    if (!ensureSessionSolverOverlay() || !m_solverOverlay.visible
-        || !m_solverOverlay.hasVelocityHandle
-        || m_solverOverlay.result.samples.isEmpty())
-        return {};
-    const auto entityIt =
-        m_session->project().entities.constFind(m_solverOverlay.entityUuid);
-    if (entityIt == m_session->project().entities.constEnd())
-        return {};
-    const int frame = m_solverOverlay.result.samples.first().frame;
-    return sessionSolverParentToWidgetAt(entityIt.value(),
-                                         entityIt->start + frame)
-        .map(sessionSolverVelocityTipParent());
-}
-
-int Viewport::sessionSolverStopFrameForTest() const
-{
-    return ensureSessionSolverOverlay() ? m_solverOverlay.stopFrame : -1;
-}
-
-int Viewport::sessionSolverStopReasonForTest() const
-{
-    return ensureSessionSolverOverlay()
-               ? int(m_solverOverlay.reason)
-               : int(solver::StopReason::None);
-}
-
-bool Viewport::sessionSolverHandleVisibleForTest() const
-{
-    return ensureSessionSolverOverlay() && m_solverOverlay.visible
-           && m_solverOverlay.hasVelocityHandle;
 }
 
 } // namespace pvf

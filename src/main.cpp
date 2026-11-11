@@ -39,6 +39,7 @@
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
 #include "next/history/HistoryPanel.h"
+#include "next/properties/SolverPreviewWidget.h"
 #include "next/settings/SettingsStore.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
@@ -1218,117 +1219,37 @@ int solverUiTest(QApplication& app)
                QStringLiteral("manual end toggle did not restore automatic")))
         return 1;
 
-    // Viewport trajectory: start -> real stop frame, target line and handle.
+    // The trajectory now lives in the properties panel's mini window; the
+    // viewport no longer draws a solver overlay or a velocity handle.
     document->setSelection(ball);
     live->setPlayhead(0);
     QApplication::processEvents();
     viewport->repaint();
     QApplication::processEvents();
-    if (!check(viewport->sessionSolverPreviewVisibleForTest(),
-               QStringLiteral("solver preview is not visible"))
-        || !check(viewport->sessionSolverStopFrameForTest() == stopFrame,
-                  QStringLiteral("viewport stop frame wrong"))
-        || !check(viewport->sessionSolverStopReasonForTest()
-                      == int(pvf::solver::StopReason::Collision),
-                  QStringLiteral("viewport stop reason wrong"))
-        || !check(viewport->sessionSolverHandleVisibleForTest(),
-                  QStringLiteral("velocity handle missing for gravity")))
+    auto* mini = panel->findChild<pvf::next::SolverPreviewWidget*>(
+        QStringLiteral("solverPreviewMini"));
+    if (!check(!viewport->sessionSolverPreviewVisibleForTest(),
+               QStringLiteral("viewport still draws the solver overlay"))
+        || !check(mini != nullptr, QStringLiteral("mini solver preview missing")))
         return 1;
-    const QVector<QPointF> trajectory =
-        viewport->sessionSolverTrajectoryForTest();
-    if (!check(trajectory.size() == stopFrame + 1,
-               QStringLiteral("trajectory point count wrong: %1")
-                   .arg(trajectory.size())))
-        return 1;
-    const pvf::solver::Sample& stopSample =
-        expected.result.samples.at(stopFrame);
-    const QPointF expectedStopWidget =
-        viewport->projectToWidgetForTest(stopSample.pose.position);
-    if (!check(QLineF(viewport->sessionSolverStopForTest(),
-                      expectedStopWidget)
-                       .length()
-                   < 0.6,
-               QStringLiteral("stop marker is not at the stop pose")))
-        return 1;
-    const QPointF expectedTargetWidget =
-        viewport->projectToWidgetForTest(QPointF(0.0, -100.0));
-    if (!check(QLineF(viewport->sessionSolverTargetForTest(),
-                      expectedTargetWidget)
-                       .length()
-                   < 0.6,
-               QStringLiteral("target line endpoint wrong")))
+    if (!check(mini->entityUuid() == ball && mini->solverId() == gravityId,
+               QStringLiteral("mini preview is not bound to the gravity solver"))
+        || !check(mini->hasTarget() && mini->hasPath() && mini->hasArrow(),
+                  QStringLiteral("mini preview misses target/path/arrow: %1")
+                      .arg(mini->errorText()))
+        || !check(mini->sampleCount() >= 2 && !mini->isTruncated(),
+                  QStringLiteral("mini preview sample count wrong: %1")
+                      .arg(mini->sampleCount())))
         return 1;
 
-    // Playhead and parameter changes refresh the overlay without a commit.
+    // Playhead changes repaint the mini window without a commit.
     live->setPlayhead(5);
     QApplication::processEvents();
-    if (!check(!viewport->sessionSolverCurrentForTest().isNull(),
-               QStringLiteral("current-frame cursor missing")))
+    if (!check(!mini->currentPoint().isNull(),
+               QStringLiteral("mini preview current point missing")))
         return 1;
-
-    // Initial-velocity handle drag: live preview, exactly one commit.
     live->setPlayhead(0);
     QApplication::processEvents();
-    const int beforeVelocityDrag = undoDepth();
-    const QPointF handle = viewport->sessionSolverVelocityHandleForTest();
-    const QPointF dragTo = handle + QPointF(90.0, -55.0);
-    const auto sendMouse = [viewport](QEvent::Type type, const QPointF& pos,
-                                      Qt::MouseButton button,
-                                      Qt::MouseButtons buttons) {
-        QMouseEvent event(type, pos, viewport->mapToGlobal(pos.toPoint()),
-                          button, buttons, Qt::NoModifier);
-        QApplication::sendEvent(viewport, &event);
-    };
-    sendMouse(QEvent::MouseButtonPress, handle, Qt::LeftButton,
-              Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, (handle + dragTo) / 2.0, Qt::NoButton,
-              Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, dragTo, Qt::NoButton, Qt::LeftButton);
-    sendMouse(QEvent::MouseButtonRelease, dragTo, Qt::LeftButton,
-              Qt::NoButton);
-    QApplication::processEvents();
-    flush();
-    const QPointF draggedVelocity =
-        live->project().entities.value(ball).solvers.first().initialVelocity;
-    if (!check(std::abs(draggedVelocity.x()) > 1.0
-                   && std::abs(draggedVelocity.y()) > 1.0,
-               QStringLiteral("velocity handle did not write initialVelocity"))
-        || !check(QLineF(viewport->sessionSolverVelocityHandleForTest(),
-                         dragTo)
-                       .length()
-                   < 1.0,
-                  QStringLiteral("velocity handle did not follow the drag"))
-        || !check(undoDepth() == beforeVelocityDrag + 1,
-                  QStringLiteral("velocity drag was not one commit")))
-        return 1;
-    if (!check(viewport->sessionSolverTrajectoryForTest().size()
-                   != trajectory.size(),
-               QStringLiteral("trajectory did not update after the drag")))
-        return 1;
-
-    // Esc cancels: no model change, no undo entry.
-    document->undo();
-    QApplication::processEvents();
-    flush();
-    const int beforeEsc = undoDepth();
-    const QPointF handle2 = viewport->sessionSolverVelocityHandleForTest();
-    sendMouse(QEvent::MouseButtonPress, handle2, Qt::LeftButton,
-              Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, handle2 + QPointF(70.0, 30.0),
-              Qt::NoButton, Qt::LeftButton);
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QApplication::sendEvent(viewport, &escape);
-    QApplication::processEvents();
-    if (!check(!viewport->sessionSolverDraggingForTest(),
-               QStringLiteral("Esc did not end the velocity drag"))
-        || !check(live->project().entities.value(ball)
-                          .solvers.first()
-                          .initialVelocity
-                          .isNull(),
-                  QStringLiteral("Esc did not restore initialVelocity"))
-        || !check(undoDepth() == beforeEsc,
-                  QStringLiteral("Esc created an undo entry")))
-        return 1;
 
     // Orbit / spin segments have no velocity handle.
     pvf::model::SolverSegment spinSolver;
@@ -1371,10 +1292,12 @@ int solverUiTest(QApplication& app)
         document->setSelection(uuid);
         live->setPlayhead(0);
         QApplication::processEvents();
-        if (!check(viewport->sessionSolverPreviewVisibleForTest(),
-                   QStringLiteral("orbit/spin preview is not visible"))
-            || !check(!viewport->sessionSolverHandleVisibleForTest(),
-                      QStringLiteral("orbit/spin shows a velocity handle")))
+        if (!check(!viewport->sessionSolverPreviewVisibleForTest(),
+                   QStringLiteral("orbit/spin still draws a viewport overlay"))
+            || !check(mini->entityUuid() == uuid && mini->hasPath(),
+                      QStringLiteral("orbit/spin mini preview is not visible"))
+            || !check(!mini->hasArrow(),
+                      QStringLiteral("orbit/spin shows a velocity arrow")))
             return 1;
     }
 
@@ -1395,7 +1318,7 @@ int solverUiTest(QApplication& app)
                   QStringLiteral("timeline band does not end at stopFrame")))
         return 1;
 
-    // Screenshot with the solver card and viewport trajectory visible.
+    // Screenshot with the solver card and the mini trajectory window visible.
     if (auto* objectTab =
             window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
         objectTab->verticalScrollBar()->setValue(
@@ -1416,8 +1339,391 @@ int solverUiTest(QApplication& app)
     window->close();
     QApplication::processEvents();
     qInfo() << "solver-ui-test OK: automatic end, stop reason/frame, explicit"
-               " override, trajectory, velocity handle commit/Esc, orbit/spin,"
-               " timeline band, screenshot"
+               " override, mini trajectory window, orbit/spin, timeline band,"
+               " screenshot"
+            << screenshot;
+    return 0;
+}
+
+int solverMiniPreviewTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+    {
+        qCritical() << "solver-mini-preview-test: no temp dir";
+        return 1;
+    }
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Solver Mini");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("solver-mini.pvproj"));
+    auto session = pvf::EditorSession::createProject(projectDir, settings,
+                                                     &error);
+    if (!session)
+    {
+        qCritical() << "solver-mini-preview-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 60;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid ground =
+        makeEntity(QStringLiteral("黑洞"), 0, pvf::ContentKind::Vector);
+    project.entities[ground].transform.y = -100.0;
+    project.entities[ground].content.vector.width = 80.0;
+    project.entities[ground].content.vector.height = 80.0;
+
+    const pvf::Uuid ball =
+        makeEntity(QStringLiteral("落球"), 1, pvf::ContentKind::Vector);
+    project.entities[ball].transform.y = 200.0;
+    project.entities[ball].content.vector.width = 40.0;
+    project.entities[ball].content.vector.height = 40.0;
+    pvf::model::Track ballX;
+    ballX.keys = {{0, 0.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
+    pvf::model::Track ballY;
+    ballY.keys = {{0, 200.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+
+    const pvf::Uuid moon =
+        makeEntity(QStringLiteral("卫星"), 2, pvf::ContentKind::Vector);
+    project.entities[moon].transform.x = -150.0;
+    project.entities[moon].transform.y = 60.0;
+    project.entities[moon].content.vector.width = 40.0;
+    project.entities[moon].content.vector.height = 40.0;
+
+    pvf::model::SolverSegment gravity;
+    gravity.id = pvf::model::newUuid();
+    gravity.effect = pvf::SolverEffect::Gravity;
+    gravity.startFrame = 0;
+    gravity.endFrame = -1;
+    gravity.params.insert(QStringLiteral("targetUuid"), ground);
+    gravity.params.insert(QStringLiteral("strength"), 500.0);
+    gravity.params.insert(QStringLiteral("elasticity"), 0.0);
+    gravity.params.insert(QStringLiteral("friction"), 0.5);
+    gravity.params.insert(QStringLiteral("stopThreshold"), 10.0);
+    gravity.params.insert(QStringLiteral("softening"), 60.0);
+    gravity.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+    project.entities[ball].solvers.append(gravity);
+
+    pvf::model::SolverSegment orbit;
+    orbit.id = pvf::model::newUuid();
+    orbit.effect = pvf::SolverEffect::Orbit;
+    orbit.startFrame = 0;
+    orbit.endFrame = -1;
+    orbit.params.insert(QStringLiteral("targetUuid"), ground);
+    orbit.params.insert(QStringLiteral("aspect"), 1.0);
+    orbit.params.insert(QStringLiteral("angle"), 0.0);
+    orbit.params.insert(QStringLiteral("direction"), 1);
+    orbit.params.insert(QStringLiteral("periodFrames"), 60.0);
+    project.entities[moon].solvers.append(orbit);
+
+    if (!session->document()->commitEntities({ground, ball, moon},
+                                             QStringLiteral("solver-mini setup"),
+                                             &error))
+    {
+        qCritical() << "solver-mini-preview-test: setup failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* viewport = window->viewportForTest();
+    auto* solverSection = panel
+        ? panel->findChild<pvf::CollapsibleSection*>(
+              QStringLiteral("solverSection"))
+        : nullptr;
+    if (!live || !document || !panel || !viewport || !solverSection)
+    {
+        qCritical() << "solver-mini-preview-test: window parts missing";
+        return 1;
+    }
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [](const QString& message) {
+                         qCritical() << "solver-mini-preview-test: panel edit"
+                                        " failed" << message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "solver-mini-preview-test:" << message;
+        return condition;
+    };
+    auto flush = [live] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "solver-mini-preview-test: flush failed" << flushError;
+    };
+    const auto undoDepth = [document] {
+        return document->store()->undoDepth();
+    };
+
+    solverSection->setExpanded(true);
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+
+    auto* mini = panel->findChild<pvf::next::SolverPreviewWidget*>(
+        QStringLiteral("solverPreviewMini"));
+    if (!check(mini != nullptr, QStringLiteral("mini widget missing"))
+        || !check(solverSection->isAncestorOf(mini),
+                  QStringLiteral("mini widget is not inside the solver section"))
+        || !check(mini->isVisible(), QStringLiteral("mini widget hidden")))
+        return 1;
+
+    // Size window: about 260x160 .. 300x180 (width follows the panel).
+    if (!check(mini->width() >= 260 && mini->width() <= 440,
+               QStringLiteral("mini width out of range: %1").arg(mini->width()))
+        || !check(mini->height() >= 160 && mini->height() <= 180,
+                  QStringLiteral("mini height out of range: %1")
+                      .arg(mini->height())))
+        return 1;
+
+    if (!check(mini->entityUuid() == ball && mini->solverId() == gravity.id,
+               QStringLiteral("mini widget is not bound to the gravity solver"))
+        || !check(mini->errorText().isEmpty(),
+                  QStringLiteral("mini widget error: %1").arg(mini->errorText()))
+        || !check(mini->hasTarget() && mini->hasPath() && mini->hasArrow(),
+                  QStringLiteral("mini widget misses target/path/arrow"))
+        || !check(mini->sampleCount() >= 2,
+                  QStringLiteral("mini widget has no samples")))
+        return 1;
+
+    // Only points/lines: the four public anchors sit inside the window.
+    const QRect windowRect = mini->rect();
+    if (!check(windowRect.contains(mini->startPoint().toPoint())
+                   && windowRect.contains(mini->targetPoint().toPoint())
+                   && windowRect.contains(mini->arrowTip().toPoint()),
+               QStringLiteral("mini anchors fall outside the window: rect=%1,%2 "
+                              "%3x%4 start=%5,%6 target=%7,%8 arrow=%9,%10")
+                   .arg(windowRect.x())
+                   .arg(windowRect.y())
+                   .arg(windowRect.width())
+                   .arg(windowRect.height())
+                   .arg(mini->startPoint().x())
+                   .arg(mini->startPoint().y())
+                   .arg(mini->targetPoint().x())
+                   .arg(mini->targetPoint().y())
+                   .arg(mini->arrowTip().x())
+                   .arg(mini->arrowTip().y()))
+        || !check(mini->startPoint() != mini->targetPoint(),
+                  QStringLiteral("start and target collapse onto one point")))
+        return 1;
+
+    // Drag the arrow handle: live model write, exactly one commit.
+    const auto sendMouseTo = [](QWidget* target, QEvent::Type type,
+                                const QPointF& pos, Qt::MouseButton button,
+                                Qt::MouseButtons buttons) {
+        QMouseEvent event(type, pos, target->mapToGlobal(pos.toPoint()),
+                          button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(target, &event);
+    };
+    const int beforeDrag = undoDepth();
+    const QPointF tip = mini->arrowTip();
+    const QPoint dragTo = (tip + QPointF(55.0, -35.0)).toPoint();
+    sendMouseTo(mini, QEvent::MouseButtonPress, tip, Qt::LeftButton,
+                Qt::LeftButton);
+    sendMouseTo(mini, QEvent::MouseMove, dragTo, Qt::NoButton,
+                Qt::LeftButton);
+    // While the handle is held the tip tracks the pointer exactly (the fit is
+    // frozen during the drag).
+    const QPointF duringDragTip = mini->arrowTip();
+    sendMouseTo(mini, QEvent::MouseButtonRelease, dragTo, Qt::LeftButton,
+                Qt::NoButton);
+    QApplication::processEvents();
+    flush();
+
+    const QPointF dragged =
+        live->project().entities.value(ball).solvers.first().initialVelocity;
+    if (!check(std::abs(dragged.x()) > 1.0 && std::abs(dragged.y()) > 1.0,
+               QStringLiteral("arrow drag did not write initialVelocity"))
+        || !check(undoDepth() == beforeDrag + 1,
+                  QStringLiteral("arrow drag was not exactly one commit"))
+        || !check(!mini->isDragging(),
+                  QStringLiteral("arrow drag did not finish"))
+        || !check(QLineF(duringDragTip, QPointF(dragTo)).length() < 1.5,
+                  QStringLiteral("arrow tip did not follow the drag: %1,%2")
+                      .arg(duringDragTip.x())
+                      .arg(duringDragTip.y()))
+        || !check(QLineF(mini->arrowTip(), mini->startPoint()).length() > 1.0,
+                  QStringLiteral("arrow tip stayed on the start point")))
+        return 1;
+
+    // Switching the selection rebinds the window; entities without solvers
+    // clear it.
+    document->setSelection(moon);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    if (!check(mini->entityUuid() == moon && mini->solverId() == orbit.id,
+               QStringLiteral("mini widget did not follow the selection"))
+        || !check(mini->hasTarget() && !mini->hasArrow(),
+                  QStringLiteral("orbit segment shows wrong mini content")))
+        return 1;
+
+    document->setSelection(ground);
+    QApplication::processEvents();
+    if (!check(!mini->isVisible() && mini->entityUuid().isEmpty(),
+               QStringLiteral("mini widget did not clear on solverless entity")))
+        return 1;
+
+    // Esc cancels the drag: velocity and undo stack roll back.
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    const QPointF beforeEscVelocity =
+        live->project().entities.value(ball).solvers.first().initialVelocity;
+    const int beforeEsc = undoDepth();
+    const QPointF escTip = mini->arrowTip();
+    sendMouseTo(mini, QEvent::MouseButtonPress, escTip, Qt::LeftButton,
+                Qt::LeftButton);
+    sendMouseTo(mini, QEvent::MouseMove,
+                (escTip + QPointF(50.0, 40.0)).toPoint(), Qt::NoButton,
+                Qt::LeftButton);
+    if (!check(mini->isDragging(), QStringLiteral("drag did not start")))
+        return 1;
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(mini, &escape);
+    QApplication::processEvents();
+    const QPointF afterEscVelocity =
+        live->project().entities.value(ball).solvers.first().initialVelocity;
+    if (!check(!mini->isDragging(), QStringLiteral("Esc did not end the drag"))
+        || !check(QLineF(beforeEscVelocity, afterEscVelocity).length() < 1e-6,
+                  QStringLiteral("Esc did not restore initialVelocity"))
+        || !check(undoDepth() == beforeEsc,
+                  QStringLiteral("Esc created an undo entry")))
+        return 1;
+
+    // The viewport no longer draws an overlay or grabs the velocity handle:
+    // dragging the solver-driven ball writes nothing, and its velocity is
+    // untouched.
+    const QPointF pivot = viewport->projectToWidgetForTest(QPointF(0.0, 200.0));
+    const auto sendMouse = [viewport](QEvent::Type type, const QPointF& pos,
+                                      Qt::MouseButton button,
+                                      Qt::MouseButtons buttons) {
+        QMouseEvent event(type, pos, viewport->mapToGlobal(pos.toPoint()),
+                          button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &event);
+    };
+    const int beforeViewportDrag = undoDepth();
+    sendMouse(QEvent::MouseButtonPress, pivot, Qt::LeftButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, pivot + QPointF(60.0, -40.0), Qt::NoButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, pivot + QPointF(60.0, -40.0),
+              Qt::LeftButton, Qt::NoButton);
+    QApplication::processEvents();
+    flush();
+    const QPointF afterViewportDrag =
+        live->project().entities.value(ball).solvers.first().initialVelocity;
+    if (!check(!viewport->sessionSolverPreviewVisibleForTest(),
+               QStringLiteral("viewport still exposes a solver overlay"))
+        || !check(QLineF(afterEscVelocity, afterViewportDrag).length() < 1e-6,
+                  QStringLiteral("viewport drag wrote the solver velocity"))
+        || !check(undoDepth() == beforeViewportDrag,
+                  QStringLiteral("viewport wrote a solver-driven transform")))
+        return 1;
+
+    // The entity gizmo still works on an entity the solver does not drive.
+    document->setSelection(ground);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    const QPointF groundCenter =
+        viewport->projectToWidgetForTest(QPointF(0.0, -100.0));
+    sendMouse(QEvent::MouseButtonPress, groundCenter, Qt::LeftButton,
+              Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, groundCenter + QPointF(40.0, 25.0),
+              Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, groundCenter + QPointF(40.0, 25.0),
+              Qt::LeftButton, Qt::NoButton);
+    QApplication::processEvents();
+    flush();
+    if (!check(undoDepth() == beforeViewportDrag + 1,
+               QStringLiteral("viewport gizmo no longer commits moves")))
+        return 1;
+
+    // Screenshot: mini window inside the expanded solver section.
+    // Screenshot state: a readable arc so the target, the solver point, the
+    // path and the velocity arrow are all visible at once.
+    {
+        pvf::model::Project& shotProject = live->mutableProject();
+        auto shotEntity = shotProject.entities.find(ball);
+        if (shotEntity != shotProject.entities.end()
+            && !shotEntity->solvers.isEmpty())
+        {
+            shotEntity->solvers.first().initialVelocity = QPointF(150.0, -200.0);
+            shotEntity->solvers.first().params.insert(
+                QStringLiteral("strength"), 160.0);
+        }
+        document->commitEntity(ball, QStringLiteral("solver-mini screenshot"),
+                               &error);
+    }
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    if (auto* objectTab =
+            window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
+    {
+        // Find a scroll offset that shows the whole mini window.
+        if (auto* scroll = objectTab->verticalScrollBar())
+        {
+            const QWidget* view = objectTab->viewport();
+            for (int value = 0; value <= scroll->maximum(); value += 8)
+            {
+                scroll->setValue(value);
+                QApplication::processEvents();
+                const QRect box(mini->mapTo(view, QPoint(0, 0)), mini->size());
+                if (view->rect().contains(box))
+                    break;
+            }
+        }
+    }
+    QApplication::processEvents();
+    mini->repaint();
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-solver-mini.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "solver-mini-preview-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "solver-mini-preview-test OK: solver-section widget"
+            << mini->width() << "x" << mini->height()
+            << "target/path/arrow only, arrow drag one commit, Esc cancel,"
+               " selection rebind, no viewport overlay, screenshot"
             << screenshot;
     return 0;
 }
@@ -20382,7 +20688,7 @@ int inkscapeHandlesTest(QApplication& app)
 
     // 1) Unzoomed geometry: each corner glyph rides its visual corner at a
     //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
-    const std::array<double, 4> baseAngles{-90.0, 0.0, 90.0, 180.0};
+    const std::array<double, 4> baseAngles{180.0, 270.0, 0.0, 90.0};
     if (std::abs(pvf::gizmo::kRotateHandleSize - 18.0) > 1e-9
         || std::abs(pvf::gizmo::kRotateHitSize - 18.0) > 1e-9)
     {
@@ -22950,6 +23256,8 @@ int main(int argc, char* argv[])
         return propertiesSpecialTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-ui-test")))
         return solverUiTest(app);
+    if (app.arguments().contains(QStringLiteral("--solver-mini-preview-test")))
+        return solverMiniPreviewTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
         return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))

@@ -4,6 +4,7 @@
 #include "render2/Render.h"
 
 #include <QHash>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -19,9 +20,13 @@
 namespace pvf::next {
 namespace {
 
-// Arrow length: velocity is px/second, this turns it into a solver-space arrow
-// that stays readable for the usual 0..600 px/s range.
+// Arrow length: velocity is px/second.  0.25 s keeps the arrow proportional
+// for the usual 0..600 px/s range, but a long trajectory shrinks the fit until
+// the handle is a few pixels; the arrow time base is then stretched so the
+// hand-readable length stays inside [kMinArrowPixels, kMaxArrowPixels].
 constexpr double kVelocitySeconds = 0.25;
+constexpr double kMinArrowPixels = 26.0;
+constexpr double kMaxArrowPixels = 72.0;
 // A very long segment is truncated for the preview only; export/render still
 // evaluates the whole segment.
 constexpr int kMaxPreviewFrames = 2000;
@@ -37,6 +42,22 @@ const QColor kTargetColor(255, 159, 67);
 const QColor kCurrentColor(255, 190, 60);
 const QColor kVelocityColor(255, 107, 107);
 const QColor kErrorColor(255, 138, 138);
+
+QString effectLabel(SolverEffect effect)
+{
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+        return QStringLiteral("重力");
+    case SolverEffect::Orbit:
+        return QStringLiteral("公转");
+    case SolverEffect::Spin:
+        return QStringLiteral("自转");
+    case SolverEffect::BlackHole:
+        return QStringLiteral("黑洞");
+    }
+    return QStringLiteral("求解");
+}
 
 double trackValue(const model::Entity& entity, const QString& name, int frame,
                   double fallback)
@@ -242,9 +263,12 @@ SolverPreviewWidget::SolverPreviewWidget(Document* document, QWidget* parent)
     , m_document(document)
 {
     setObjectName(QStringLiteral("solverPreview"));
-    setMinimumHeight(180);
+    setMinimumHeight(160);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setMouseTracking(true);
+    // Needed for Esc-to-cancel: clicking the handle gives the widget keyboard
+    // focus so the key press arrives here instead of the shell.
+    setFocusPolicy(Qt::StrongFocus);
 
     if (m_document)
     {
@@ -267,7 +291,7 @@ SolverPreviewWidget::SolverPreviewWidget(Document* document,
 
 QSize SolverPreviewWidget::sizeHint() const
 {
-    return QSize(320, 180);
+    return QSize(300, 172);
 }
 
 void SolverPreviewWidget::setSolver(const Uuid& entityUuid, const Uuid& solverId)
@@ -278,14 +302,10 @@ void SolverPreviewWidget::setSolver(const Uuid& entityUuid, const Uuid& solverId
         return;
     }
 
-    if (m_dragging)
-    {
-        // The card was rebound while the handle was held; drop the drag rather
-        // than writing the old pointer position into the new segment.
-        m_dragging = false;
-        m_dragMoved = false;
-        setCursor(Qt::ArrowCursor);
-    }
+    // The card was rebound while the handle was held; drop the drag (and put
+    // the old velocity back) rather than writing the pointer position into the
+    // new segment.
+    cancelDrag();
 
     m_entityUuid = entityUuid;
     m_solverId = solverId;
@@ -294,12 +314,7 @@ void SolverPreviewWidget::setSolver(const Uuid& entityUuid, const Uuid& solverId
 
 void SolverPreviewWidget::clearSolver()
 {
-    if (m_dragging)
-    {
-        m_dragging = false;
-        m_dragMoved = false;
-        setCursor(Qt::ArrowCursor);
-    }
+    cancelDrag();
 
     m_entityUuid.clear();
     m_solverId.clear();
@@ -342,7 +357,10 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     m_samples.clear();
     m_hasPath = false;
     m_hasTarget = false;
-    m_fitValid = false;
+    // Freeze the fit while the handle is dragged: refitting mid-drag would
+    // rescale the view under the pointer and the arrow tip would lag behind it.
+    if (!duringDrag)
+        m_fitValid = false;
     m_truncated = false;
     m_error.clear();
 
@@ -478,10 +496,40 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     for (const solver::Sample& sample : m_samples)
         addPoint(sample.pose.position);
     if (hasPoint)
+    {
         bounds = QRectF(QPointF(minX, minY), QPointF(maxX, maxY));
+        // A purely vertical/horizontal trajectory has a zero-width (or
+        // zero-height) box; QRectF::isValid() would then reject it and the fit
+        // would collapse onto the start point.
+        if (bounds.width() < 1.0)
+            bounds.setWidth(1.0);
+        if (bounds.height() < 1.0)
+            bounds.setHeight(1.0);
+    }
     m_solverBounds = bounds;
-    computePositionFit();
+    if (!duringDrag)
+    {
+        computePositionFit();
+        // Re-time the arrow for the new scale; the fit above used the 0.25 s
+        // arrow, which is the conservative bound.
+        updateArrowLength();
+    }
     update();
+}
+
+void SolverPreviewWidget::updateArrowLength()
+{
+    m_arrowSeconds = kVelocitySeconds;
+    const double speed = std::hypot(m_initialVelocity.x(), m_initialVelocity.y());
+    if (m_fitValid && m_scale > 0.0 && speed > 1e-6)
+    {
+        const double pixels = speed * m_scale * kVelocitySeconds;
+        if (pixels < kMinArrowPixels)
+            m_arrowSeconds = kMinArrowPixels / (speed * m_scale);
+        else if (pixels > kMaxArrowPixels)
+            m_arrowSeconds = kMaxArrowPixels / (speed * m_scale);
+    }
+    m_arrowTipSolver = m_startPose + m_initialVelocity * m_arrowSeconds;
 }
 
 void SolverPreviewWidget::computePositionFit()
@@ -636,16 +684,9 @@ void SolverPreviewWidget::paintEvent(QPaintEvent* event)
     headerFont.setPointSizeF(std::max(7.0, headerFont.pointSizeF() - 1.0));
     painter.setFont(headerFont);
 
-    QString header = QStringLiteral("%1 · %2")
-                         .arg(solverEffectName(m_effect))
-                         .arg(m_segmentStart);
-    if (!m_samples.isEmpty())
-    {
-        header = QStringLiteral("%1 · %2–%3 帧")
-                     .arg(solverEffectName(m_effect))
-                     .arg(m_samples.first().frame)
-                     .arg(m_samples.last().frame);
-    }
+    // Effect name only: the mini preview shows the trajectory, not a stop
+    // time report, so the frame range stays out of the header.
+    QString header = effectLabel(m_effect);
     if (m_truncated)
         header += QStringLiteral(" · 预览截断");
     painter.setPen(kMutedText);
@@ -813,6 +854,7 @@ void SolverPreviewWidget::mousePressEvent(QMouseEvent* event)
     m_dragMoved = false;
     m_dragOriginalVelocity = solver->initialVelocity;
     setCursor(Qt::ClosedHandCursor);
+    setFocus(Qt::MouseFocusReason);
     event->accept();
 }
 
@@ -830,7 +872,7 @@ void SolverPreviewWidget::mouseMoveEvent(QMouseEvent* event)
         return;
 
     const QPointF solverPos = mapWidgetToSolver(event->position());
-    QPointF velocity = (solverPos - m_startPose) / kVelocitySeconds;
+    QPointF velocity = (solverPos - m_startPose) / m_arrowSeconds;
     if (!std::isfinite(velocity.x()) || !std::isfinite(velocity.y()))
         return;
 
@@ -932,11 +974,62 @@ void SolverPreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     event->accept();
 }
 
+bool SolverPreviewWidget::restoreOriginalVelocity()
+{
+    if (!m_document || !m_dragMoved)
+        return false;
+
+    model::Project& project = m_document->mutableProject();
+    auto entityIt = project.entities.find(m_entityUuid);
+    if (entityIt == project.entities.end())
+        return false;
+
+    for (model::SolverSegment& segment : entityIt.value().solvers)
+    {
+        if (segment.id != m_solverId)
+            continue;
+        segment.initialVelocity = m_dragOriginalVelocity;
+        return true;
+    }
+    return false;
+}
+
+bool SolverPreviewWidget::cancelDrag()
+{
+    if (!m_dragging)
+        return false;
+
+    const bool moved = m_dragMoved;
+    // restoreOriginalVelocity() keys off m_dragMoved, so restore before the
+    // flags are cleared.
+    restoreOriginalVelocity();
+    m_dragging = false;
+    m_dragMoved = false;
+    setCursor(Qt::ArrowCursor);
+    computePreview(false);
+    update();
+    return moved;
+}
+
+void SolverPreviewWidget::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Escape && m_dragging)
+    {
+        cancelDrag();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
 void SolverPreviewWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     if (m_effect != SolverEffect::Spin)
+    {
         computePositionFit();
+        updateArrowLength();
+    }
     update();
 }
 

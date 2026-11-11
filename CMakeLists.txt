@@ -89,6 +89,8 @@ add_executable(pvforge
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
+    src/next/properties/SolverPreviewWidget.cpp
+    src/next/properties/SolverPreviewWidget.h
     src/next/properties/SpecialContentEditor.cpp
     src/next/properties/SpecialContentEditor.h
     src/next/properties/TextLayoutDialog.cpp

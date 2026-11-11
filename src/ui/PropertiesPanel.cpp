@@ -12,6 +12,7 @@
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
+#include "next/properties/SolverPreviewWidget.h"
 #include "next/properties/SpecialContentEditor.h"
 #include "next/properties/TextLayoutDialog.h"
 #include "ui/BezierEditorDialog.h"
@@ -1561,6 +1562,19 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     m_solverEmpty = new QLabel(QStringLiteral("（没有求解段）"), content);
     m_solverEmpty->setObjectName(QStringLiteral("solverEmptyLabel"));
     box->addWidget(m_solverEmpty);
+
+    // Mini trajectory window: target point, solver point, path and the
+    // initial-velocity arrow.  It never draws the entity content, so it stays
+    // readable at this size.  Above the cards it is the primary handle.
+    m_solverPreview = new next::SolverPreviewWidget(
+        m_session ? m_session->document() : nullptr, content);
+    m_solverPreview->setObjectName(QStringLiteral("solverPreviewMini"));
+    m_solverPreview->setMinimumWidth(260);
+    m_solverPreview->setFixedHeight(172);
+    m_solverPreview->setToolTip(
+        QStringLiteral("拖动红色箭头手柄调整初速度（松手提交，Esc 取消）"));
+    m_solverPreview->hide();
+    box->addWidget(m_solverPreview);
 
     m_solverHost = new QWidget(content);
     m_solverCardsLayout = new QVBoxLayout(m_solverHost);
@@ -3723,7 +3737,55 @@ void PropertiesPanel::updateSolverCards(const model::Entity& entity)
 
     syncSolverFocus(solvers);
     reloadSolverCreate(entity);
+    updateSolverPreview(entity, solvers);
     m_solverEmpty->setVisible(solvers.isEmpty());
+}
+
+void PropertiesPanel::updateSolverPreview(
+    const model::Entity& entity, const QVector<model::SolverSegment>& solvers)
+{
+    if (!m_solverPreview)
+        return;
+
+    // Follow the card selection; without one fall back to the segment under
+    // the playhead, then to the first segment, so the window is never empty
+    // while the entity has solvers.
+    Uuid solverId;
+    for (const model::SolverSegment& solver : solvers)
+        if (solver.id == m_selectedSolverId)
+            solverId = solver.id;
+    const int relative = sessionRelativeFrame(entity);
+    if (solverId.isEmpty())
+    {
+        for (const model::SolverSegment& solver : solvers)
+        {
+            const int end = model::solverStructuralEnd(entity, solver);
+            if (relative >= solver.startFrame && relative <= end)
+            {
+                solverId = solver.id;
+                break;
+            }
+        }
+    }
+    if (solverId.isEmpty() && !solvers.isEmpty())
+        solverId = solvers.first().id;
+
+    if (solverId.isEmpty())
+    {
+        m_solverPreview->clearSolver();
+        m_solverPreview->hide();
+        return;
+    }
+
+    // setSolver() already evaluates on a rebind; refreshPreview() covers the
+    // parameter-change case with the same ids.
+    const bool sameBinding = m_solverPreview->entityUuid() == entity.uuid
+                             && m_solverPreview->solverId() == solverId;
+    m_solverPreview->setSolver(entity.uuid, solverId);
+    if (sameBinding)
+        m_solverPreview->refreshPreview();
+    m_solverPreview->setEnabled(sessionEditable());
+    m_solverPreview->show();
 }
 
 void PropertiesPanel::syncSolverFocus(
@@ -3740,9 +3802,6 @@ void PropertiesPanel::syncSolverFocus(
     {
         m_selectedSolverId.clear();
         emit solverSelected(m_sessionUuid, Uuid());
-        if (QWidget* shell = parentWidget())
-            for (Viewport* viewport : shell->findChildren<Viewport*>())
-                viewport->setSessionSolverFocus(m_sessionUuid, Uuid());
     }
 }
 
@@ -3752,9 +3811,6 @@ void PropertiesPanel::selectSolver(const Uuid& solverId)
         return;
     m_selectedSolverId = solverId;
     emit solverSelected(m_sessionUuid, solverId);
-    if (QWidget* shell = parentWidget())
-        for (Viewport* viewport : shell->findChildren<Viewport*>())
-            viewport->setSessionSolverFocus(m_sessionUuid, solverId);
     for (SolverCard& card : m_solverCards)
     {
         if (!card.box)
@@ -3767,6 +3823,8 @@ void PropertiesPanel::selectSolver(const Uuid& solverId)
                                ? QStringLiteral("▶ ") + bare
                                : bare);
     }
+    if (const model::Entity* entity = sessionEntity())
+        updateSolverPreview(*entity, entity->solvers);
 }
 
 bool PropertiesPanel::eventFilter(QObject* watched, QEvent* event)
@@ -3857,30 +3915,52 @@ void PropertiesPanel::rebuildSolverCards(
         form->addRow(card.endRow);
 
         auto* velocityHint =
-            new QLabel(QStringLiteral("初速度（高级，主入口是视口手柄）"),
+            new QLabel(QStringLiteral("初速度（主入口：上方预览窗口的红色箭头）"),
                        card.box);
         velocityHint->setObjectName(
             QStringLiteral("solverVelocityHint%1").arg(index));
         velocityHint->setWordWrap(true);
         form->addRow(velocityHint);
 
-        card.velocityX = new QDoubleSpinBox(card.box);
+        // X/Y stay as an advanced numeric fallback, collapsed by default so
+        // they do not compete with the arrow handle.
+        card.advanced = new QToolButton(card.box);
+        card.advanced->setObjectName(
+            QStringLiteral("solverAdvanced%1").arg(index));
+        card.advanced->setText(QStringLiteral("高级数值（X/Y）"));
+        card.advanced->setCheckable(true);
+        card.advanced->setAutoRaise(true);
+        form->addRow(card.advanced);
+
+        card.velocityRow = new QWidget(card.box);
+        card.velocityRow->setObjectName(
+            QStringLiteral("solverVelocityRow%1").arg(index));
+        auto* velocityForm = new QFormLayout(card.velocityRow);
+        velocityForm->setContentsMargins(0, 0, 0, 0);
+        velocityForm->setVerticalSpacing(4);
+        velocityForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+        card.velocityX = new QDoubleSpinBox(card.velocityRow);
         card.velocityX->setObjectName(QStringLiteral("solverVelocityX%1").arg(index));
         card.velocityX->setRange(-1000000.0, 1000000.0);
         card.velocityX->setDecimals(1);
         card.velocityX->setSingleStep(10.0);
         card.velocityX->setSuffix(QStringLiteral(" px/s"));
         card.velocityX->setKeyboardTracking(false);
-        form->addRow(QStringLiteral("初速度 X"), card.velocityX);
+        velocityForm->addRow(QStringLiteral("X"), card.velocityX);
 
-        card.velocityY = new QDoubleSpinBox(card.box);
+        card.velocityY = new QDoubleSpinBox(card.velocityRow);
         card.velocityY->setObjectName(QStringLiteral("solverVelocityY%1").arg(index));
         card.velocityY->setRange(-1000000.0, 1000000.0);
         card.velocityY->setDecimals(1);
         card.velocityY->setSingleStep(10.0);
         card.velocityY->setSuffix(QStringLiteral(" px/s"));
         card.velocityY->setKeyboardTracking(false);
-        form->addRow(QStringLiteral("初速度 Y"), card.velocityY);
+        velocityForm->addRow(QStringLiteral("Y"), card.velocityY);
+        card.velocityRow->hide();
+        form->addRow(card.velocityRow);
+        connect(card.advanced, &QToolButton::toggled, card.velocityRow,
+                &QWidget::setVisible);
 
         const Uuid solverId = solver.id;
         card.remove = new QPushButton(QStringLiteral("删除求解段"), card.box);
@@ -4360,6 +4440,11 @@ void PropertiesPanel::setSelectedUuid(const Uuid& uuid)
         refresh();
         return;
     }
+    // A different entity owns different solver ids: drop the focus and the
+    // mini preview binding before the rebind in refreshSession().
+    if (m_solverPreview)
+        m_solverPreview->clearSolver();
+    m_selectedSolverId.clear();
     m_sessionUuid = uuid;
     refresh();
 }
@@ -4396,6 +4481,11 @@ void PropertiesPanel::refreshSession()
                 section->hide();
         }
         m_specialUuid.clear();
+        if (m_solverPreview)
+        {
+            m_solverPreview->clearSolver();
+            m_solverPreview->hide();
+        }
         return;
     }
 

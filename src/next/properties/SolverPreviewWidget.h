@@ -22,7 +22,8 @@ namespace pvf::next {
 // gravity/blackhole segments also get a draggable initial-velocity handle:
 // the arrow tip is startPose.position + initialVelocity * kVelocitySeconds.
 // Dragging updates the in-memory model live and commits exactly once on
-// release with the message "pvf: set solver initial velocity".
+// release with the message "pvf: set solver initial velocity".  Esc (or
+// cancelDrag()) puts the pre-drag velocity back without a commit.
 class SolverPreviewWidget : public QWidget
 {
     Q_OBJECT
@@ -39,6 +40,11 @@ public:
 
     Uuid entityUuid() const { return m_entityUuid; }
     Uuid solverId() const { return m_solverId; }
+
+    // Drops an in-progress handle drag and restores the pre-drag velocity.
+    // Returns true when a drag was actually cancelled.
+    bool cancelDrag();
+    bool isDragging() const { return m_dragging; }
 
     QString errorText() const { return m_error; }
     int sampleCount() const { return m_samples.size(); }
@@ -70,6 +76,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
@@ -78,6 +85,8 @@ private:
     const model::SolverSegment* findSolver(const model::Entity& entity) const;
     void computePreview(bool duringDrag);
     void computePositionFit();
+    void updateArrowLength();
+    bool restoreOriginalVelocity();
     int currentRelativeFrame() const;
     int currentSampleIndex() const;
     bool nearArrowTip(const QPointF& widgetPos) const;
@@ -94,6 +103,9 @@ private:
     QPointF m_startPose;
     QPointF m_initialVelocity;
     QPointF m_arrowTipSolver;
+    // Solver-space time base of the arrow (0.25 s = kVelocitySeconds in the
+    // .cpp); stretched so the handle stays 26..72 px long after the fit.
+    double m_arrowSeconds = 0.25;
     QPointF m_targetSolver;
     bool m_hasTarget = false;
     bool m_hasPath = false;
