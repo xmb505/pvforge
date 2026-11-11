@@ -48,9 +48,27 @@ struct Cache
     QHash<Uuid, QHash<double, Pose>> poses; // entity uuid -> project frame -> pose
     QHash<QString, solver::Result> solverResults; // segment signature
 
+    // Optional long-lived store owned by EditorSession.  When set, a result is
+    // looked up here before the local map and every newly solved segment is
+    // written to both.  Poses stay local: only solver results are shared, so a
+    // playback cache does not grow with the number of painted frames.  The
+    // owner must clear it after any project edit; clear()/clearEntity() here
+    // never touch it.
+    QHash<QString, solver::Result> *sharedSolverResults = nullptr;
+
     void clear();
     void clearEntity(const Uuid &uuid);
 };
+
+// Stable key for one solved segment: entity id + segment id + start/end frame
+// + effect.  Shared caches and result lookups must build the same key.
+QString solverResultKey(const model::Entity &entity,
+                        const model::SolverSegment &segment);
+
+// Diagnostic counter: number of real solver::evaluateResult() calls in this
+// process.  A shared-cache hit does not increment it, so tests can assert that
+// playback only solves each segment once.
+int solverEvaluationCount();
 
 // Returns the solver segment structurally covering entityRelativeFrame, or
 // nullptr.  The covered range is [startFrame, endFrame] with endFrame == -1

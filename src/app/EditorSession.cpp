@@ -1,17 +1,20 @@
 #include "EditorSession.h"
 
 #include "EditActions.h"
+#include "anim/Anim.h"
 #include "mcp2/HttpServer.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
+#include "render2/Render.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
 #include <QSettings>
+#include <QTimer>
 
 #include <algorithm>
 #include <optional>
@@ -57,6 +60,23 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     m_playback = std::make_unique<next::PlaybackController>();
     m_playback->setWatchdogMs(m_appSettings.watchdogMs);
     m_playback->setDocument(m_document.get());
+
+    // Any saved edit invalidates the solver results.  The re-warm is queued so
+    // the paint/signal that caused the change never pays for a solve; a paused
+    // editor gets the result before the next paint, and playback starts from a
+    // warm map.
+    QObject::connect(m_document.get(), &next::Document::changed, m_document.get(),
+                     [this] {
+                         invalidateSolverResults();
+                         scheduleSolverPrecompute();
+                     });
+    QObject::connect(m_playback.get(),
+                     &next::PlaybackController::playbackStateChanged,
+                     m_playback.get(), [this](bool playing) {
+                         if (!playing && m_solverResultsDirty)
+                             scheduleSolverPrecompute();
+                     });
+    scheduleSolverPrecompute();
 
     m_editActions = std::make_unique<EditActions>(this);
 
@@ -171,6 +191,91 @@ void EditorSession::setHumanEditingEnabled(bool enabled)
 void EditorSession::invalidateWorkbench()
 {
     m_workbench.reset();
+}
+
+QHash<QString, solver::Result>& EditorSession::solverResults() const
+{
+    return m_solverResults;
+}
+
+void EditorSession::invalidateSolverResults()
+{
+    m_solverResults.clear();
+    m_solverResultsDirty = true;
+}
+
+int EditorSession::solverEvaluationCount() const
+{
+    return anim::solverEvaluationCount();
+}
+
+const solver::Result* EditorSession::solverResultFor(
+    const Uuid& entityUuid, const QString& solverId) const
+{
+    if (!m_document || solverId.isEmpty())
+        return nullptr;
+    const auto it = m_document->project().entities.constFind(entityUuid);
+    if (it == m_document->project().entities.constEnd())
+        return nullptr;
+    for (const model::SolverSegment& segment : it->solvers)
+    {
+        if (segment.id != solverId)
+            continue;
+        const auto cached =
+            m_solverResults.constFind(anim::solverResultKey(it.value(), segment));
+        return cached == m_solverResults.constEnd() ? nullptr : &cached.value();
+    }
+    return nullptr;
+}
+
+void EditorSession::scheduleSolverPrecompute()
+{
+    if (!m_document || m_solverPrecomputeScheduled || m_solverPrecomputeRunning)
+        return;
+    m_solverPrecomputeScheduled = true;
+    // The document is the context object: if the session dies, the queued call
+    // is discarded with it.
+    QTimer::singleShot(0, m_document.get(), [this] {
+        m_solverPrecomputeScheduled = false;
+        precomputeSolverResults();
+    });
+}
+
+void EditorSession::precomputeSolverResults()
+{
+    if (!m_document)
+        return;
+    if (m_playback && m_playback->isPlaying())
+        return; // stay dirty; the pause handler queues the retry
+
+    m_solverResultsDirty = false;
+    m_solverPrecomputeRunning = true;
+
+    const model::Project& project = m_document->project();
+    anim::Cache cache;
+    cache.sharedSolverResults = &m_solverResults;
+    render2::SceneWorld world(project, m_document->assets(), &cache);
+
+    // Evaluate at each segment's first frame: that is the one frame where the
+    // segment is guaranteed to be active, so exactly one solve per segment is
+    // requested.  Overlapping segments are covered by their own start frames.
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
+    {
+        const model::Entity& entity = it.value();
+        const int duration = entity.duration();
+        if (duration <= 0 || entity.solvers.isEmpty())
+            continue;
+        for (const model::SolverSegment& segment : entity.solvers)
+        {
+            if (segment.startFrame < 0 || segment.startFrame >= duration)
+                continue;
+            anim::evaluateEntity(project, entity.uuid,
+                                 entity.start + segment.startFrame, world, cache);
+        }
+    }
+
+    m_solverPrecomputeRunning = false;
 }
 
 bool EditorSession::applyAppSettings(const next::AppSettings& settings,

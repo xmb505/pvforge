@@ -4,6 +4,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <iterator>
 #include <optional>
@@ -13,6 +14,8 @@ namespace pvf::anim {
 namespace {
 
 constexpr QChar kKeySeparator(0x1f);
+
+std::atomic<int> g_solverEvaluations{0};
 
 // Range end without solving physics: the model's structural end (explicit
 // endFrame, or one frame before the next key/segment/clip end).  Used by
@@ -36,17 +39,6 @@ bool drivesRotation(SolverEffect effect)
 QString joinKey(const Uuid& uuid, double frame)
 {
     return uuid + kKeySeparator + QString::number(frame, 'g', 17);
-}
-
-QString segmentKey(const model::Entity& entity, const model::SolverSegment& segment)
-{
-    QString id = segment.id;
-    if (id.isEmpty())
-        id = QStringLiteral("anon-%1").arg(segment.startFrame);
-    return entity.uuid + kKeySeparator + id + kKeySeparator
-           + QString::number(segment.startFrame) + kKeySeparator
-           + QString::number(segment.endFrame) + kKeySeparator
-           + QString::number(static_cast<int>(segment.effect));
 }
 
 std::optional<double> trackValueIfPresent(const model::Entity& entity,
@@ -577,7 +569,14 @@ std::optional<solver::Sample> EvalContext::sampleAt(
 const solver::Result* EvalContext::resultFor(
     const model::Entity& entity, const model::SolverSegment& segment)
 {
-    const QString key = segmentKey(entity, segment);
+    const QString key = solverResultKey(entity, segment);
+    QHash<QString, solver::Result>* shared = m_cache.sharedSolverResults;
+    if (shared)
+    {
+        const auto hit = shared->constFind(key);
+        if (hit != shared->constEnd())
+            return &hit.value();
+    }
     const auto cached = m_cache.solverResults.constFind(key);
     if (cached != m_cache.solverResults.constEnd())
         return &cached.value();
@@ -596,19 +595,41 @@ const solver::Result* EvalContext::resultFor(
         request.initialVelocity = segment.initialVelocity;
         request.params = segment.params;
 
+        ++g_solverEvaluations;
         SolverWorldAdapter adapter(entity, m_world, *this);
         result = solver::evaluateResult(request, adapter, entity.duration(),
                                         m_project.settings.fps);
     }
 
     const auto inserted = m_cache.solverResults.insert(key, result);
+    if (shared && shared != &m_cache.solverResults)
+        shared->insert(key, result);
     return &inserted.value();
 }
 
 } // namespace
 
+QString solverResultKey(const model::Entity& entity,
+                        const model::SolverSegment& segment)
+{
+    QString id = segment.id;
+    if (id.isEmpty())
+        id = QStringLiteral("anon-%1").arg(segment.startFrame);
+    return entity.uuid + kKeySeparator + id + kKeySeparator
+           + QString::number(segment.startFrame) + kKeySeparator
+           + QString::number(segment.endFrame) + kKeySeparator
+           + QString::number(static_cast<int>(segment.effect));
+}
+
+int solverEvaluationCount()
+{
+    return g_solverEvaluations.load(std::memory_order_relaxed);
+}
+
 void Cache::clear()
 {
+    // The borrowed sharedSolverResults map belongs to its owner and is never
+    // cleared here.
     poses.clear();
     solverResults.clear();
 }

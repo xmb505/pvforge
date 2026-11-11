@@ -3,7 +3,9 @@
 #include "common/Types.h"
 #include "mcp2/Service.h"
 #include "next/settings/SettingsStore.h"
+#include "solver/Solver.h"
 
+#include <QHash>
 #include <QString>
 #include <QStringList>
 
@@ -95,6 +97,20 @@ public:
     // this after changing project bytes.
     void invalidateWorkbench();
 
+    // Shared solver cache.  Segment results are keyed by anim::solverResultKey()
+    // and borrowed by every viewport/render Cache in this session, so one
+    // segment is solved once per edit instead of once per painted frame.
+    // Document::changed clears it and queues a deferred re-warm; playback never
+    // solves on the paint path because the map is already warm.
+    QHash<QString, solver::Result> &solverResults() const;
+    void invalidateSolverResults();
+    // Diagnostic/test hook: real solver::evaluateResult() calls since process
+    // start (shared-cache hits do not count).
+    int solverEvaluationCount() const;
+    // Looks up one cached segment by entity and segment id, or nullptr.
+    const solver::Result *solverResultFor(const Uuid &entityUuid,
+                                          const QString &solverId) const;
+
     // MCP endpoint.  The service and HTTP listener belong to the session and
     // are started when the project opens, stopped on close/switch.  The port
     // comes from AppSettings; the Bearer token is persisted by HttpServer.
@@ -148,6 +164,12 @@ private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
     void startMcpServer();
+    // Coalesces re-warm requests into one queued call; a request that arrives
+    // while the precompute is queued or running is dropped.
+    void scheduleSolverPrecompute();
+    // Solves every segment of every solver entity once and stores the results
+    // in the shared map.  Never runs while playback is advancing.
+    void precomputeSolverResults();
 
     // Declared before the services so the services die first.
     std::unique_ptr<next::ProjectDocument> m_document;
@@ -165,6 +187,15 @@ private:
     Uuid m_monitorCamera;
     bool m_monitorCameraExplicit = false;
     bool m_monitorCameraFromSelection = false;
+
+    // Shared solver results; declared mutable because the const paint paths
+    // borrow it as a write-through cache.
+    mutable QHash<QString, solver::Result> m_solverResults;
+    // A project edit cleared the map but playback prevented the re-warm; the
+    // pause handler retries.
+    bool m_solverResultsDirty = true;
+    bool m_solverPrecomputeScheduled = false;
+    bool m_solverPrecomputeRunning = false;
 };
 
 // Recent project directories, newest first.  Entries that are no longer a

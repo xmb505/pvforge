@@ -745,6 +745,78 @@ void testCache()
     CHECK(cache.solverResults.isEmpty());
 }
 
+// A shared solver store answers every frame of a segment after one solve; the
+// owning layer (EditorSession) clears it after an edit, so exactly one new
+// solve per edit reaches the solver.
+void testSharedSolverCache()
+{
+    Project project;
+    Entity entity = makeEntity(QStringLiteral("shared-driven"), 0, 200);
+    entity.solvers.append(makeSegment(QStringLiteral("seg-shared"),
+                                      SolverEffect::Orbit, 0, 120,
+                                      QStringLiteral("shared-origin")));
+    entity.solvers.first().params.insert(QStringLiteral("periodFrames"), 60.0);
+    addEntity(project, entity);
+    addEntity(project, makeEntity(QStringLiteral("shared-origin")));
+
+    MockWorld world;
+    world.poses.insert(QStringLiteral("shared-origin"),
+                       solver::Pose{QPointF(0.0, 0.0), 0.0});
+
+    QHash<QString, solver::Result> shared;
+    const int before = anim::solverEvaluationCount();
+
+    anim::Cache first;
+    first.sharedSolverResults = &shared;
+    for (int frame = 0; frame < 100; ++frame)
+        anim::evaluateEntity(project, entity.uuid, frame, world, first);
+    CHECK(anim::solverEvaluationCount() == before + 1);
+    CHECK(first.solverResults.size() == 1);
+    CHECK(shared.size() == 1);
+
+    // Poses are per-call; a new paint reuses the solver samples but evaluates
+    // only the frame it asks for.
+    anim::Cache second;
+    second.sharedSolverResults = &shared;
+    const anim::Pose cachedPose =
+        anim::evaluateEntity(project, entity.uuid, 37, world, second);
+    CHECK(anim::solverEvaluationCount() == before + 1);
+    CHECK(second.poses.size() == 1);
+    CHECK(first.poses.value(entity.uuid).size() == 100);
+
+    // Cache::clear() only drops local entries; the shared store survives.
+    first.clear();
+    CHECK(first.solverResults.isEmpty());
+    CHECK(!shared.isEmpty());
+    CHECK(anim::solverEvaluationCount() == before + 1);
+
+    // A cache without the shared store has to solve again and agrees.
+    anim::Cache fresh;
+    const anim::Pose freshPose =
+        anim::evaluateEntity(project, entity.uuid, 37, world, fresh);
+    CHECK(anim::solverEvaluationCount() == before + 2);
+    CHECK_NEAR(cachedPose.world.map(QPointF(0.0, 0.0)).x(),
+               freshPose.world.map(QPointF(0.0, 0.0)).x(), 1e-12);
+    CHECK_NEAR(cachedPose.world.map(QPointF(0.0, 0.0)).y(),
+               freshPose.world.map(QPointF(0.0, 0.0)).y(), 1e-12);
+
+    // Editing the orbit target animation invalidates the owner's store; the
+    // next 100 frames solve exactly once against the new target pose.
+    world.poses.insert(QStringLiteral("shared-origin"),
+                       solver::Pose{QPointF(40.0, 10.0), 0.0});
+    shared.clear();
+    anim::Cache afterEdit;
+    afterEdit.sharedSolverResults = &shared;
+    const anim::Pose movedPose =
+        anim::evaluateEntity(project, entity.uuid, 37, world, afterEdit);
+    CHECK(anim::solverEvaluationCount() == before + 3);
+    for (int frame = 0; frame < 100; ++frame)
+        anim::evaluateEntity(project, entity.uuid, frame, world, afterEdit);
+    CHECK(anim::solverEvaluationCount() == before + 3);
+    CHECK(!nearly(movedPose.world.map(QPointF(0.0, 0.0)).x(),
+                  cachedPose.world.map(QPointF(0.0, 0.0)).x(), 1e-9));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -766,6 +838,7 @@ int main(int argc, char** argv)
     testMissingTargetFallsBack();
     testSolverAtOpenEnded();
     testCache();
+    testSharedSolverCache();
 
     QTextStream(stdout) << QStringLiteral("%1 checks, %2 failure(s)\n")
                                .arg(gChecks)

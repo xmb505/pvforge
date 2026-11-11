@@ -62,10 +62,16 @@ model::Content animatedContent(const model::Entity& entity, double projectFrame)
 // anim::World backed by a model project and an asset store.  Poses and shapes
 // are returned in project canvas pixels.  Renderer, previews and physics all
 // share this implementation so solver collisions and drawn artwork agree.
+//
+// `cache` is optional and borrowed (it must outlive the SceneWorld).  Passing
+// the caller's animation cache lets solver-target lookups reuse already
+// evaluated poses and shared solver results instead of starting from scratch;
+// nullptr keeps the old per-call behaviour.
 class SceneWorld final : public anim::World
 {
 public:
-    SceneWorld(const model::Project& project, const assets::AssetStore& assets);
+    SceneWorld(const model::Project& project, const assets::AssetStore& assets,
+               anim::Cache* cache = nullptr);
 
     solver::Pose poseOf(const Uuid& uuid, int projectFrame) const override;
     QPainterPath shapeOf(const Uuid& uuid, int projectFrame) const override;
@@ -75,6 +81,7 @@ public:
 private:
     const model::Project& m_project;
     const assets::AssetStore& m_assets;
+    anim::Cache* m_cache = nullptr;
 };
 
 // Draws the requested frame into a new ARGB32 premultiplied image.  `world`

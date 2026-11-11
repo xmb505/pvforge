@@ -1352,16 +1352,19 @@ model::Content animatedContent(const model::Entity& entity, double projectFrame)
 }
 
 SceneWorld::SceneWorld(const model::Project& project,
-                       const assets::AssetStore& assets)
+                       const assets::AssetStore& assets, anim::Cache* cache)
     : m_project(project)
     , m_assets(assets)
+    , m_cache(cache)
 {
 }
 
 solver::Pose SceneWorld::poseOf(const Uuid& uuid, int projectFrame) const
 {
+    anim::Cache local;
     const anim::Pose pose =
-        anim::evaluateEntity(m_project, uuid, projectFrame, *this);
+        anim::evaluateEntity(m_project, uuid, projectFrame, *this,
+                             m_cache ? *m_cache : local);
     solver::Pose result;
     result.position = pose.world.map(QPointF(0.0, 0.0));
     result.rotation =
@@ -1382,8 +1385,10 @@ QPainterPath SceneWorld::shapeOf(const Uuid& uuid, int projectFrame) const
     if (local.isEmpty())
         return {};
 
+    anim::Cache fresh;
     const anim::Pose pose =
-        anim::evaluateEntity(m_project, uuid, projectFrame, *this);
+        anim::evaluateEntity(m_project, uuid, projectFrame, *this,
+                             m_cache ? *m_cache : fresh);
     return pose.world.map(local);
 }
 
