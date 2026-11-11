@@ -2121,6 +2121,364 @@ int solverPreviewFreezeTest(QApplication& app)
     return 0;
 }
 
+// End-to-end playback acceptance for the shared solver cache.  Uses
+// setPlayhead instead of the real 30 fps clock: the timer adds scheduling
+// noise and cannot tell a cached frame from a re-solve.  The project is a
+// 640x360@30 black-hole capture whose clip is longer than the measured range,
+// so every frame in 0..119 is a real workbench cache fill on the first pass.
+int solverPlaybackPerfTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+    {
+        qCritical() << "solver-playback-perf-test: no temp dir";
+        return 1;
+    }
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Solver Playback Perf");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("solver-playback-perf.pvproj"));
+    auto session =
+        pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "solver-playback-perf-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 3000;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid ground =
+        makeEntity(QStringLiteral("地面"), 0, pvf::ContentKind::Vector);
+    project.entities[ground].transform.y = -100.0;
+    project.entities[ground].content.vector.width = 600.0;
+    project.entities[ground].content.vector.height = 60.0;
+
+    // A second, static target gives the render/meta path a normal entity that
+    // must never be solved.
+    const pvf::Uuid staticTarget =
+        makeEntity(QStringLiteral("静态目标"), 1, pvf::ContentKind::Vector);
+    project.entities[staticTarget].transform.x = 200.0;
+    project.entities[staticTarget].transform.y = 60.0;
+    project.entities[staticTarget].content.vector.width = 60.0;
+    project.entities[staticTarget].content.vector.height = 60.0;
+
+    const pvf::Uuid ball =
+        makeEntity(QStringLiteral("黑洞球"), 2, pvf::ContentKind::Vector);
+    project.entities[ball].transform.y = 200.0;
+    project.entities[ball].content.vector.width = 40.0;
+    project.entities[ball].content.vector.height = 40.0;
+    pvf::model::Track ballX;
+    ballX.keys = {{0, 0.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
+    pvf::model::Track ballY;
+    ballY.keys = {{0, 200.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+
+    pvf::model::SolverSegment hole;
+    hole.id = pvf::model::newUuid();
+    hole.effect = pvf::SolverEffect::BlackHole;
+    hole.startFrame = 0;
+    hole.endFrame = -1;
+    // Moving toward the ground target; the 35 px capture radius is reached in
+    // roughly 20-30 frames at 30 fps, well inside the measured 120 frames.
+    hole.initialVelocity = QPointF(24.0, -320.0);
+    hole.params.insert(QStringLiteral("targetUuid"), ground);
+    hole.params.insert(QStringLiteral("mass"), 5000.0);
+    hole.params.insert(QStringLiteral("eventHorizonRadius"), 30.0);
+    hole.params.insert(QStringLiteral("objectRadius"), 5.0);
+    hole.params.insert(QStringLiteral("softening"), 30.0);
+    hole.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+    project.entities[ball].solvers.append(hole);
+
+    if (!session->document()->commitEntities(
+            {ground, staticTarget, ball},
+            QStringLiteral("solver playback perf setup"), &error))
+    {
+        qCritical() << "solver-playback-perf-test: setup failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* timeline = window->timelineForTest();
+    auto* viewport = window->viewportForTest();
+    auto* solverSection =
+        panel ? panel->findChild<pvf::CollapsibleSection*>(
+                    QStringLiteral("solverSection"))
+              : nullptr;
+    // The user's screenshot keeps the floating monitor open; leave it visible
+    // so its render path participates in every measured frame.
+    auto* monitor = window->findChild<pvf::CameraMonitor*>();
+    if (!live || !document || !panel || !timeline || !viewport
+        || !solverSection)
+    {
+        qCritical() << "solver-playback-perf-test: window parts missing";
+        return 1;
+    }
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "solver-playback-perf-test:" << message;
+        return condition;
+    };
+
+    solverSection->setExpanded(true);
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* mini = panel->findChild<pvf::next::SolverPreviewWidget*>(
+        QStringLiteral("solverPreviewMini"));
+    if (!check(mini != nullptr, QStringLiteral("mini widget missing"))
+        || !check(mini->isVisible(), QStringLiteral("mini widget hidden"))
+        || !check(mini->entityUuid() == ball && mini->solverId() == hole.id,
+                  QStringLiteral("mini widget is not bound to the solver"))
+        || !check(mini->sampleCount() >= 2 && mini->errorText().isEmpty(),
+                  QStringLiteral("mini preview did not compute: %1")
+                      .arg(mini->errorText())))
+        return 1;
+    if (monitor && !monitor->isVisible())
+        monitor->setVisible(true);
+
+    // Let the deferred EditorSession precompute run before measuring.  The
+    // session queues it with a 0 ms timer after construction/setup.
+    {
+        QElapsedTimer warmWait;
+        warmWait.start();
+        while (!live->solverResultFor(ball, hole.id)
+               && warmWait.elapsed() < 3000)
+        {
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(2);
+        }
+    }
+    if (!check(live->solverResultFor(ball, hole.id) != nullptr,
+               QStringLiteral("queued solver precompute did not warm the "
+                              "black-hole segment")))
+        return 1;
+
+    // Full per-frame paint path: viewport (workbench lookup/store), timeline
+    // (band cache), mini preview, floating camera monitor and the shell.
+    auto renderFrame = [&](int frame) {
+        live->setPlayhead(frame);
+        viewport->repaint();
+        timeline->repaint();
+        mini->repaint();
+        if (monitor && monitor->isVisible())
+            monitor->repaint();
+        window->repaint();
+        QApplication::processEvents();
+    };
+
+    // Warm frame 0 and everything the deferred precompute touched.
+    renderFrame(0);
+    window->grab();
+    QApplication::processEvents();
+    const int warmCount = live->solverEvaluationCount();
+
+    auto runPass = [&](int frames, qint64* elapsedNs, int* growthFrames,
+                       int* maxFrameDelta) {
+        QElapsedTimer timer;
+        timer.start();
+        int previous = live->solverEvaluationCount();
+        int grown = 0;
+        int biggest = 0;
+        for (int frame = 0; frame < frames; ++frame)
+        {
+            renderFrame(frame);
+            const int now = live->solverEvaluationCount();
+            if (now != previous)
+            {
+                ++grown;
+                biggest = std::max(biggest, now - previous);
+                previous = now;
+            }
+        }
+        if (elapsedNs)
+            *elapsedNs = timer.nsecsElapsed();
+        if (growthFrames)
+            *growthFrames = grown;
+        if (maxFrameDelta)
+            *maxFrameDelta = biggest;
+    };
+
+    // First pass fills the workbench image cache for 0..119; its duration is
+    // reported but not asserted (cache misses encode WebP).
+    qint64 firstPassNs = 0;
+    runPass(120, &firstPassNs, nullptr, nullptr);
+
+    // Baseline strictly after the cache is full.  Returning to frame 0 must
+    // not solve anything either.
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    const int countBaseline = live->solverEvaluationCount();
+    const int miniBaseline = mini->computeCount();
+    const int bandBaseline = timeline->solverBandSolveCountForTest();
+
+    qint64 secondPassNs = 0;
+    int growthFrames = 0;
+    int maxFrameDelta = 0;
+    runPass(120, &secondPassNs, &growthFrames, &maxFrameDelta);
+
+    const int countDelta = live->solverEvaluationCount() - countBaseline;
+    const int miniDelta = mini->computeCount() - miniBaseline;
+    const int bandDelta = timeline->solverBandSolveCountForTest() - bandBaseline;
+    const double firstMsPerFrame =
+        static_cast<double>(firstPassNs) / 1.0e6 / 120.0;
+    const double secondMsPerFrame =
+        static_cast<double>(secondPassNs) / 1.0e6 / 120.0;
+    const double secondFps =
+        secondMsPerFrame > 0.0 ? 1000.0 / secondMsPerFrame : 0.0;
+
+    qInfo().nospace()
+        << "solver-playback-perf-test: frames=120 countDelta=" << countDelta
+        << " ms/frame=" << secondMsPerFrame << " fps=" << secondFps;
+    qInfo() << "solver-playback-perf-test: first pass"
+            << firstMsPerFrame << "ms/frame, warm count" << warmCount
+            << ", mini delta" << miniDelta << ", band delta" << bandDelta;
+
+    if (countDelta == 1)
+        qInfo() << "solver-playback-perf-test: countDelta=1 accepted as the "
+                   "single deferred precompute queued by document setup";
+    if (countDelta > 1)
+        qCritical() << "solver-playback-perf-test: solver re-ran during cached "
+                       "playback:"
+                    << countDelta << "solves over 120 frames across"
+                    << growthFrames << " frames, worst frame gained"
+                    << maxFrameDelta;
+    if (!check(countDelta <= 1,
+               QStringLiteral("solverEvaluationCount grew by %1 during the "
+                              "second pass (%2 frames grew, worst +%3); the "
+                              "solver is still on the paint path")
+                   .arg(countDelta)
+                   .arg(growthFrames)
+                   .arg(maxFrameDelta)))
+        return 1;
+
+    if (!check(miniDelta == 0,
+               QStringLiteral("mini preview recomputed during playback: %1")
+                   .arg(miniDelta)))
+        return 1;
+    if (!check(bandDelta == 0,
+               QStringLiteral("timeline band re-solved during playback: %1")
+                   .arg(bandDelta)))
+        return 1;
+    if (!check(secondMsPerFrame < 33.0,
+               QStringLiteral("second pass is %1 ms/frame (%2 fps), over the "
+                              "33 ms 60 FPS budget")
+                   .arg(secondMsPerFrame)
+                   .arg(secondFps)))
+        return 1;
+
+    // Workbench hit test: 50 consecutive cached frames must build the meta
+    // through the shared results and never call evaluateResult().
+    auto* workbench = live->workbench();
+    if (!check(workbench != nullptr, QStringLiteral("workbench missing")))
+        return 1;
+    const int workbenchBaseline = live->solverEvaluationCount();
+    int workbenchHits = 0;
+    for (int frame = 0; frame < 50; ++frame)
+    {
+        bool hit = false;
+        const QImage cached =
+            workbench->lookup(frame, workbench->cameraUuid(), &hit);
+        if (hit && !cached.isNull())
+            ++workbenchHits;
+    }
+    const int workbenchDelta =
+        live->solverEvaluationCount() - workbenchBaseline;
+    qInfo() << "solver-playback-perf-test: workbench lookup frames=50 hits="
+            << workbenchHits << "countDelta=" << workbenchDelta;
+    if (!check(workbenchHits == 50,
+               QStringLiteral("workbench lookup hit %1/50 frames after the "
+                              "first pass")
+                   .arg(workbenchHits)))
+        return 1;
+    if (!check(workbenchDelta == 0,
+               QStringLiteral("workbench meta lookup re-solved: +%1")
+                   .arg(workbenchDelta)))
+        return 1;
+
+    // Edit invalidation: changing the segment must invalidate exactly once.
+    const int beforeEdit = live->solverEvaluationCount();
+    auto& editable = live->mutableProject();
+    auto ballIt = editable.entities.find(ball);
+    if (!check(ballIt != editable.entities.end()
+                   && !ballIt->solvers.isEmpty(),
+               QStringLiteral("solved entity disappeared before the edit")))
+        return 1;
+    ballIt->solvers.first().initialVelocity = QPointF(60.0, -280.0);
+    if (!check(document->commitEntity(
+                   ball, QStringLiteral("solver playback perf edit"), &error),
+               QStringLiteral("edit commit failed: %1").arg(error)))
+        return 1;
+
+    // Document::changed clears the shared map and queues one precompute.
+    for (int i = 0; i < 10; ++i)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+    }
+    renderFrame(0);
+    const int editDelta = live->solverEvaluationCount() - beforeEdit;
+    const int afterEditRender = live->solverEvaluationCount();
+    for (int frame = 1; frame <= 10; ++frame)
+        renderFrame(frame);
+    const int postEditDelta =
+        live->solverEvaluationCount() - afterEditRender;
+    qInfo() << "solver-playback-perf-test: editDelta=" << editDelta
+            << "postEditDelta=" << postEditDelta;
+    if (!check(editDelta >= 1 && editDelta <= 2,
+               QStringLiteral("edit caused %1 solves, expected 1-2")
+                   .arg(editDelta)))
+        return 1;
+    if (!check(postEditDelta == 0,
+               QStringLiteral("edited segment kept re-solving: +%1 over 10 "
+                              "frames")
+                   .arg(postEditDelta)))
+        return 1;
+
+    const int finalCount = live->solverEvaluationCount();
+    window->close();
+    QApplication::processEvents();
+    qInfo().nospace()
+        << "solver-playback-perf-test OK: frames=120 countDelta=" << countDelta
+        << " ms/frame=" << secondMsPerFrame << " fps=" << secondFps
+        << " workbenchHits=" << workbenchHits << " editDelta=" << editDelta
+        << " finalCount=" << finalCount;
+    return 0;
+}
+
 int solverConvertTest(QApplication& app)
 {
     Q_UNUSED(app);
@@ -23657,6 +24015,8 @@ int main(int argc, char* argv[])
         return solverMiniPreviewTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-preview-freeze-test")))
         return solverPreviewFreezeTest(app);
+    if (app.arguments().contains(QStringLiteral("--solver-playback-perf-test")))
+        return solverPlaybackPerfTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
         return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))
