@@ -414,8 +414,9 @@ QRectF renderRect(const model::Project& project, int expandPercent)
     const double factor = double(std::clamp(expandPercent, 0, 200)) / 100.0;
     const double expandX = width * factor;
     const double expandY = height * factor;
-    return QRectF(-expandX, -expandY, width + 2.0 * expandX,
-                  height + 2.0 * expandY);
+    // Model space is centred on (0,0), including the unexpanded canvas.
+    return QRectF(-width / 2.0 - expandX, -height / 2.0 - expandY,
+                  width + 2.0 * expandX, height + 2.0 * expandY);
 }
 
 QSize cacheSizeFor(const model::Project& project, int scalePercent, int maxWidth,

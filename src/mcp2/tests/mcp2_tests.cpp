@@ -585,9 +585,10 @@ void Mcp2Tests::trimSolverCutPose()
         pvf::anim::evaluateEntity(before, spinner, 10, world).world;
     const double expectedRotation =
         qRadiansToDegrees(std::atan2(cutPose.m12(), cutPose.m11()));
-    // Spin defaults to 6 degrees per frame, so frame 10 of a segment starting
-    // at 5 holds 30 degrees; the naive segment-start pose would be 0.
-    QVERIFY(qAbs(expectedRotation - 30.0) < 1e-9);
+    // Spin defaults to 6 degrees per frame with direction +1 = clockwise, so
+    // frame 10 of a segment starting at 5 holds -30 degrees in Y-up model
+    // space; the naive segment-start pose would be 0.
+    QVERIFY(qAbs(expectedRotation + 30.0) < 1e-9);
 
     QJsonObject result =
         fixture.call(QStringLiteral("entity.trim"),
@@ -1731,9 +1732,24 @@ void Mcp2Tests::previewRenderFrameWritesPng()
     Fixture fixture;
     QVERIFY(fixture.init());
 
+    QJsonObject createArgs = entityArgs(QStringLiteral("图案"), 0, 60);
+    createArgs.insert(
+        QStringLiteral("content"),
+        QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("vector")},
+            {QStringLiteral("vector"),
+             QJsonObject{{QStringLiteral("shape"), 0},
+                         {QStringLiteral("width"), 240.0},
+                         {QStringLiteral("height"), 120.0},
+                         {QStringLiteral("fillColor"),
+                          QStringLiteral("#ff0000")},
+                         {QStringLiteral("strokeWidth"), 0.0}}}});
+    // +Y is up: at 320x180 the marker centre is 50 px above the canvas centre.
+    createArgs.insert(QStringLiteral("transform"),
+                      QJsonObject{{QStringLiteral("x"), 0.0},
+                                  {QStringLiteral("y"), 300.0}});
     const QString uuid =
-        uuidOf(fixture.call(QStringLiteral("entity.create"),
-                            entityArgs(QStringLiteral("图案"), 0, 60)));
+        uuidOf(fixture.call(QStringLiteral("entity.create"), createArgs));
     QVERIFY(!uuid.isEmpty());
 
     pvf::mcp2::ViewState state;
@@ -1765,6 +1781,10 @@ void Mcp2Tests::previewRenderFrameWritesPng()
     const QImage image(path);
     QCOMPARE(image.size(), QSize(320, 180));
     QCOMPARE(image.pixelColor(0, 0), QColor(QStringLiteral("#112233")));
+    // Preview uses the same Y-up canvas view as the viewport/export.
+    const QColor top = image.pixelColor(160, 40);
+    QVERIFY(top.red() > 200 && top.green() < 50 && top.blue() < 50);
+    QCOMPARE(image.pixelColor(160, 150), QColor(QStringLiteral("#112233")));
     QCOMPARE(fixture.historySize(), before);
 
     result = fixture.call(QStringLiteral("preview.render_frame"),

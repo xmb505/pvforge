@@ -203,12 +203,12 @@ QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& 
     return pivot;
 }
 
-std::optional<Handle> hitTest(QPointF screenPos, const Transform& transform, const Bounds& bounds,
+std::optional<Handle> hitTest(QPointF modelPos, const Transform& transform, const Bounds& bounds,
                               double viewScale)
 {
     const double scale = viewScale > 0.0 ? viewScale : 1.0;
     const auto hits = [&](Handle handle) {
-        return distance(screenPos, handlePosition(handle, transform, bounds, scale))
+        return distance(modelPos, handlePosition(handle, transform, bounds, scale))
                <= kHitRadius;
     };
 
@@ -238,7 +238,7 @@ std::optional<Handle> hitTest(QPointF screenPos, const Transform& transform, con
     const QPointF pivot = worldPivot(transform);
     const auto hitsAxis = [&](QPointF direction) {
         const QPointF tip = pivot + direction * (kMoveAxisLength / scale);
-        return pointSegmentDistance(screenPos, pivot, tip) <= kHitRadius;
+        return pointSegmentDistance(modelPos, pivot, tip) <= kHitRadius;
     };
     if (hitsAxis(rotateVector(QPointF(1.0, 0.0), transform.rotation)))
         return Handle::MoveX;

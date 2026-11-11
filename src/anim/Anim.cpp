@@ -105,6 +105,12 @@ LocalValues plainValues(const model::Entity& entity, double relativeFrame)
     return values;
 }
 
+// Model space is Y-up with the origin at the canvas centre.  Qt's rotate()
+// uses the standard mathematical matrix, so a positive angle turns +X towards
+// +Y, i.e. counter-clockwise on screen.  Poses stay entirely in model space;
+// the renderer performs the one and only world -> screen Y flip when it maps
+// to the output image (content-local Y-down is flipped separately at paint
+// time).  Never bake a screen flip into this matrix.
 Pose composePose(const LocalValues& values, bool inheritVisibility,
                  const Pose* parent)
 {

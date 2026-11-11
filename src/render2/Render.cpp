@@ -1202,8 +1202,15 @@ QPainterPath localCollisionPath(const model::Entity& entity,
         const model::VectorContent vector =
             animatedVector(entity, projectFrame - entity.start);
         const QRectF rect = centeredRect(QSizeF(vector.width, vector.height));
-        return VectorShape::path(vector.shape, rect, vector.cornerRadius,
-                                 vector.sides, vector.innerRatio);
+        // Vector paths are authored in content-local Y-down space, matching
+        // paintContent().  Collision space is model Y-up, so apply the same
+        // single content flip here; otherwise an asymmetric shape (arrow,
+        // heart, triangle) would collide with its mirrored outline.
+        QTransform contentToModel;
+        contentToModel.scale(1.0, -1.0);
+        return contentToModel.map(VectorShape::path(
+            vector.shape, rect, vector.cornerRadius, vector.sides,
+            vector.innerRatio));
     }
 
     if (entity.content.kind == ContentKind::Asset
@@ -1226,19 +1233,23 @@ QTransform canvasView(const QSize& output, const QRectF& worldRect)
     const double scaleX = double(output.width()) / width;
     const double scaleY = double(output.height()) / height;
 
+    // Model space is Y-up, the output image is Y-down.  This is the single
+    // world -> screen Y flip; nothing below the renderer may flip again.
+    // y' = (worldRect.bottom() - y) * scaleY, so the model top edge
+    // (worldRect.bottom(), the larger Y) lands on image row 0.
     QTransform transform;
     transform.setMatrix(scaleX, 0.0, 0.0,
-                        0.0, scaleY, 0.0,
+                        0.0, -scaleY, 0.0,
                         -worldRect.left() * scaleX,
-                        -worldRect.top() * scaleY, 1.0);
+                        worldRect.bottom() * scaleY, 1.0);
     return transform;
 }
 
 QTransform canvasView(const QSize& output, const model::ProjectSettings& settings)
 {
-    return canvasView(output, QRectF(0.0, 0.0,
-                                     double(std::max(1, settings.width)),
-                                     double(std::max(1, settings.height))));
+    const double width = double(std::max(1, settings.width));
+    const double height = double(std::max(1, settings.height));
+    return canvasView(output, QRectF(-width / 2.0, -height / 2.0, width, height));
 }
 
 QTransform cameraView(const model::Project& project, const Options& options,
@@ -1254,11 +1265,12 @@ QTransform cameraView(const model::Project& project, const Options& options,
     const double width = std::max(1, project.settings.width);
     const double height = std::max(1, project.settings.height);
 
+    // Camera-local corners are also Y-up: top-left is (-w/2, +h/2).
     QPolygonF source;
-    source << QPointF(-width / 2.0, -height / 2.0)
-           << QPointF(width / 2.0, -height / 2.0)
+    source << QPointF(-width / 2.0, height / 2.0)
            << QPointF(width / 2.0, height / 2.0)
-           << QPointF(-width / 2.0, height / 2.0);
+           << QPointF(width / 2.0, -height / 2.0)
+           << QPointF(-width / 2.0, -height / 2.0);
     const QPolygonF quad = pose.world.map(source);
 
     QPolygonF target;
@@ -1267,18 +1279,15 @@ QTransform cameraView(const model::Project& project, const Options& options,
            << QPointF(output.width(), output.height())
            << QPointF(0.0, output.height());
 
+    // quadToQuad carries the world -> screen Y flip from the camera-local
+    // Y-up polygon to the Y-down output polygon.
     QTransform transform;
     if (QTransform::quadToQuad(quad, target, transform))
         return transform;
 
-    // Degenerate camera transform: fall back to the frame's bounding box.
-    const QRectF bounds = quad.boundingRect();
-    const QRectF viewport(0.0, 0.0, output.width(), output.height());
-    transform.translate(viewport.left(), viewport.top());
-    transform.scale(viewport.width() / std::max(1.0, bounds.width()),
-                    viewport.height() / std::max(1.0, bounds.height()));
-    transform.translate(-bounds.left(), -bounds.top());
-    return transform;
+    // Degenerate camera transform: fall back to the frame's bounding box with
+    // the same canvas mapping (including the Y flip).
+    return canvasView(output, quad.boundingRect());
 }
 
 void drawChildren(QPainter& painter, const model::Project& project,
@@ -1307,6 +1316,11 @@ void drawChildren(QPainter& painter, const model::Project& project,
                 painter.save();
                 painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
                 painter.setTransform(pose.world, true);
+                // Content (Qt text, images, vector paths) is authored in
+                // local Y-down space; model space is Y-up.  Flip once here,
+                // around the content origin, so content is upright in model
+                // space.  The view transform already did world -> screen.
+                painter.scale(1.0, -1.0);
                 paintContent(painter, entity, store, options, projectFrame);
                 painter.restore();
             }
@@ -1409,9 +1423,11 @@ QImage renderFrame(const model::Project& project,
         background = Qt::black;
 
     const bool canvasMode = options.cameraUuid.isEmpty();
-    const QRectF projectCanvas(0.0, 0.0,
-                               double(std::max(1, project.settings.width)),
-                               double(std::max(1, project.settings.height)));
+    const double canvasWidth = double(std::max(1, project.settings.width));
+    const double canvasHeight = double(std::max(1, project.settings.height));
+    // World origin is the canvas centre; +Y is up.
+    const QRectF projectCanvas(-canvasWidth / 2.0, -canvasHeight / 2.0,
+                               canvasWidth, canvasHeight);
     const bool customWorld =
         canvasMode && options.worldRect.isValid()
         && options.worldRect.width() > 0.0 && options.worldRect.height() > 0.0;

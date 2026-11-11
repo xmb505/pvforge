@@ -25,6 +25,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
+#include <libswscale/swscale.h>
 }
 
 using namespace pvf;
@@ -71,15 +72,15 @@ Project makeProject(int frames = 10)
 
     Entity camera = makeEntity(QStringLiteral("camera"), 0, frames);
     camera.content.kind = ContentKind::Camera;
-    camera.transform.x = 80.0;
-    camera.transform.y = 45.0;
+    camera.transform.x = 0.0; // canvas centre
+    camera.transform.y = 0.0;
     camera.transform.scaleX = 1.0;
     camera.transform.scaleY = 1.0;
     project.entities.insert(camera.uuid, camera);
 
     Entity rect = makeEntity(QStringLiteral("rect"), 0, frames);
-    rect.transform.x = 80.0;
-    rect.transform.y = 45.0;
+    rect.transform.x = 0.0;
+    rect.transform.y = 0.0;
     rect.content.kind = ContentKind::Vector;
     rect.content.vector.shape = 0;
     rect.content.vector.width = 100.0;
@@ -140,8 +141,8 @@ Entity makeAssetEntity(const Uuid& uuid, AssetType type, const AssetHash& hash,
                        int start, int end)
 {
     Entity entity = makeEntity(uuid, start, end);
-    entity.transform.x = 80.0;
-    entity.transform.y = 45.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Asset;
     entity.content.asset.type = type;
     entity.content.asset.hash = hash;
@@ -312,6 +313,97 @@ QVector<float> decodeMono(const QString& path)
     avcodec_send_packet(context, nullptr);
     receive();
     return samples;
+}
+
+// Decodes the first video frame to RGB so tests can assert screen orientation.
+QImage decodeFirstVideoFrame(const QString& path)
+{
+    AVFormatContext* input = nullptr;
+    if (avformat_open_input(&input, path.toUtf8().constData(), nullptr,
+                            nullptr)
+        < 0)
+        return {};
+    const auto inputGuard = qScopeGuard([&] { avformat_close_input(&input); });
+    if (avformat_find_stream_info(input, nullptr) < 0)
+        return {};
+
+    const int index =
+        av_find_best_stream(input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (index < 0)
+        return {};
+
+    const AVCodec* codec =
+        avcodec_find_decoder(input->streams[index]->codecpar->codec_id);
+    if (!codec)
+        return {};
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    if (!context)
+        return {};
+    const auto contextGuard =
+        qScopeGuard([&] { avcodec_free_context(&context); });
+    if (avcodec_parameters_to_context(context, input->streams[index]->codecpar)
+            < 0
+        || avcodec_open2(context, codec, nullptr) < 0)
+        return {};
+
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    if (!packet || !frame)
+    {
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        return {};
+    }
+    const auto packetGuard = qScopeGuard([&] { av_packet_free(&packet); });
+    const auto frameGuard = qScopeGuard([&] { av_frame_free(&frame); });
+
+    QImage result;
+    bool inputDone = false;
+    while (result.isNull())
+    {
+        if (!inputDone)
+        {
+            if (av_read_frame(input, packet) < 0)
+            {
+                inputDone = true;
+                avcodec_send_packet(context, nullptr);
+            }
+            else
+            {
+                if (packet->stream_index == index)
+                    avcodec_send_packet(context, packet);
+                av_packet_unref(packet);
+            }
+        }
+
+        const int status = avcodec_receive_frame(context, frame);
+        if (status == AVERROR(EAGAIN))
+        {
+            if (inputDone)
+                break;
+            continue;
+        }
+        if (status < 0)
+            break;
+
+        SwsContext* sws = sws_getContext(
+            frame->width, frame->height,
+            static_cast<AVPixelFormat>(frame->format), frame->width,
+            frame->height, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr,
+            nullptr);
+        if (sws)
+        {
+            QImage image(frame->width, frame->height, QImage::Format_RGB888);
+            uint8_t* destination[4] = {image.bits(), nullptr, nullptr, nullptr};
+            int strides[4] = {int(image.bytesPerLine()), 0, 0, 0};
+            sws_scale(sws, frame->data, frame->linesize, 0, frame->height,
+                      destination, strides);
+            sws_freeContext(sws);
+            result = image.copy();
+        }
+        av_frame_unref(frame);
+    }
+    return result;
 }
 
 double rmsBetween(const QVector<float>& samples, int sampleRate,
@@ -1317,6 +1409,52 @@ void testVaapiExport()
     }
 }
 
+void testExportCameraUsesYUpModelSpace()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    Project project;
+    project.settings.width = 160;
+    project.settings.height = 90;
+    project.settings.fps = 30;
+    project.settings.background = QStringLiteral("#000000");
+
+    Entity camera = makeEntity(QStringLiteral("camera"), 0, 10);
+    camera.content.kind = ContentKind::Camera;
+    camera.transform.scaleX = 1.0;
+    camera.transform.scaleY = 1.0;
+    project.entities.insert(camera.uuid, camera);
+
+    Entity marker = makeEntity(QStringLiteral("marker"), 0, 10);
+    marker.transform.y = 30.0; // +Y is up: screen y = 45 - 30 = 15
+    marker.content.kind = ContentKind::Vector;
+    marker.content.vector.shape = 0;
+    marker.content.vector.width = 40.0;
+    marker.content.vector.height = 20.0;
+    marker.content.vector.fillColor = QStringLiteral("#ff0000");
+    marker.content.vector.strokeWidth = 0.0;
+    project.entities.insert(marker.uuid, marker);
+
+    const QString path = directory.path() + QStringLiteral("/orientation.mp4");
+    export2::Options options = makeOptions(path);
+    options.outputSize = QSize(160, 90);
+    const export2::Result result = export2::exportVideo(project, store, options);
+    CHECK(result.ok);
+    CHECK(result.framesWritten == 10);
+
+    const QImage frame = decodeFirstVideoFrame(path);
+    CHECK(frame.size() == QSize(160, 90));
+    if (frame.size() != QSize(160, 90))
+        return;
+
+    const QColor top = frame.pixelColor(80, 15);
+    const QColor bottom = frame.pixelColor(80, 75);
+    CHECK(top.red() > 150 && top.green() < 110 && top.blue() < 110);
+    CHECK(bottom.red() < 60 && bottom.green() < 60 && bottom.blue() < 60);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1356,6 +1494,8 @@ int main(int argc, char** argv)
         {QStringLiteral("etaProgress"), testEtaProgress},
         {QStringLiteral("etaCancel"), testEtaCancel},
         {QStringLiteral("vaapiExport"), testVaapiExport},
+        {QStringLiteral("exportCameraUsesYUpModelSpace"),
+         testExportCameraUsesYUpModelSpace},
     };
 
     QString requested;

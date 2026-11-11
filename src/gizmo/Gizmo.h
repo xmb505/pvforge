@@ -26,16 +26,19 @@
 //     uses this to keep the opposite corner fixed by changing scale and
 //     compensating x/y.
 //
-// Rotation is in degrees with Qt's convention: a positive angle maps local +X
-// towards local +Y. Qt's Y axis grows downwards, so on screen that looks
-// clockwise.
+// All coordinates in this module are model/canvas space: the origin is the
+// canvas centre, +X points right, +Y points up, and positive rotation maps
+// local +X towards local +Y, i.e. counter-clockwise on screen.  The viewport
+// applies the single model -> screen Y flip; the gizmo must never flip again.
 //
-// The axis-aligned Bounds are the entity's local content box. Corner handles
-// are derived from it; the move axes and the center scale handle are anchored
-// at the pivot. The entity's own scale stretches the box, but gizmo handles
-// keep a fixed pixel size. centerScale() is the one exception to the "local"
-// rule above: it receives pixel-scaled local axes coordinates (see
-// worldToLocalAxesPixels()) because the center handle has a fixed pixel offset.
+// The axis-aligned Bounds are the entity's local content box in the same
+// Y-up space, so `top` is the larger Y and `bottom` the smaller Y. Corner
+// handles are derived from it; the move axes and the center scale handle are
+// anchored at the pivot. The entity's own scale stretches the box, but gizmo
+// handles keep a fixed pixel size. centerScale() is the one exception to the
+// "local" rule above: it receives pixel-scaled local axes coordinates (see
+// worldToLocalAxesPixels()) because the center handle has a fixed pixel
+// offset.
 
 #include <QPointF>
 #include <QTransform>
@@ -59,8 +62,8 @@ struct Bounds
 {
     double left = -50.0;
     double right = 50.0;
-    double top = -50.0;
-    double bottom = 50.0;
+    double top = 50.0;    // maximum Y in model space (usually the visual top)
+    double bottom = -50.0; // minimum Y in model space
 };
 
 enum class Handle
@@ -114,8 +117,8 @@ QPointF boundsCenter(const Bounds& bounds);
 QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& bounds,
                        double viewScale);
 
-// screenPos is in the same canvas space as handlePosition().
-std::optional<Handle> hitTest(QPointF screenPos, const Transform& transform, const Bounds& bounds,
+// modelPos is in the same Y-up canvas space as handlePosition().
+std::optional<Handle> hitTest(QPointF modelPos, const Transform& transform, const Bounds& bounds,
                               double viewScale);
 
 struct DragResult

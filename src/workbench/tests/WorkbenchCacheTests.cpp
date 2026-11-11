@@ -738,12 +738,15 @@ void WorkbenchCacheTests::renderRectAndExpandedSize()
     project.settings.width = 1920;
     project.settings.height = 1080;
 
-    QCOMPARE(workbench::renderRect(project, 0), QRectF(0, 0, 1920, 1080));
+    // Model space is centred on (0,0), including no expansion.
+    QCOMPARE(workbench::renderRect(project, 0),
+             QRectF(-960, -540, 1920, 1080));
     QCOMPARE(workbench::renderRect(project, 50),
-             QRectF(-960, -540, 3840, 2160));
+             QRectF(-1920, -1080, 3840, 2160));
     QCOMPARE(workbench::renderRect(project, 200),
-             QRectF(-3840, -2160, 9600, 5400));
-    QCOMPARE(workbench::renderRect(project, -10), QRectF(0, 0, 1920, 1080));
+             QRectF(-4800, -2700, 9600, 5400));
+    QCOMPARE(workbench::renderRect(project, -10),
+             QRectF(-960, -540, 1920, 1080));
     QCOMPARE(workbench::renderRect(project, 500),
              workbench::renderRect(project, 200));
 

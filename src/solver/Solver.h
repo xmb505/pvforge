@@ -10,8 +10,10 @@
 
 namespace pvf::solver {
 
-// A pose in the solver's coordinate space.  The solver only drives position and
-// rotation; scale/opacity/pivot stay outside of this module.
+// A pose in the solver's coordinate space.  That space is the model space:
+// origin at the canvas centre, +X right, +Y up, positive rotation
+// counter-clockwise.  The solver only drives position and rotation;
+// scale/opacity/pivot stay outside of this module.
 struct Pose
 {
     QPointF position;
@@ -85,13 +87,17 @@ struct Sample
 //   Gravity:   strength (px/s^2, default 980), elasticity (0..1, default 0.35),
 //              friction (0..1, default 0.2), stopThreshold (px/s, default 2),
 //              collisionUuids (QStringList fallback when World::physicsEntities
-//              is not implemented).
+//              is not implemented).  Acceleration points along the target's
+//              local -Y (screen down) and rotates with the target.
 //   Orbit:     aspect (minor/major, 0.01..1, default 1), angle (degrees,
-//              relative to targetUuid's local rotation), direction (+1 clockwise
-//              / -1 counter-clockwise), periodFrames (frames per revolution,
-//              default 60).  The ellipse passes through startPose.position;
-//              semi-axes are derived from that and centered on targetUuid.
-//   Spin:      angularVelocity (degrees/frame, default 6), direction (+1/-1).
+//              counter-clockwise, relative to targetUuid's local rotation),
+//              direction (+1 clockwise / -1 counter-clockwise),
+//              periodFrames (frames per revolution, default 60).  The ellipse
+//              passes through startPose.position; semi-axes are derived from
+//              that and centered on targetUuid.
+//   Spin:      angularVelocity (degrees/frame, default 6), direction (+1
+//              clockwise / -1 counter-clockwise).  Output rotation follows the
+//              model convention: positive is counter-clockwise.
 //   BlackHole: simulationSpeed (time multiplier, default 1), mass (relative,
 //              default 1000), angularMomentum (frame-dragging, default 0),
 //              eventHorizonRadius (informational, not a hard boundary, default

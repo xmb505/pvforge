@@ -34,9 +34,12 @@ QVector<Sample> evaluateOrbit(const Segment &segment, const World &world,
     if (semiMajor > 1e-9 && semiMinor > 1e-9)
         startPhase = std::atan2(v / semiMinor, u / semiMajor);
 
+    // Model space is Y-up, so a positive mathematical angle runs
+    // counter-clockwise.  The public direction parameter keeps its old
+    // meaning: +1 is clockwise on screen, hence the negated phase.
     const double twoPi = 2.0 * std::acos(-1.0);
     const double phasePerFrame = periodFrames > 0.0
-            ? double(direction) * twoPi / periodFrames
+            ? -double(direction) * twoPi / periodFrames
             : 0.0;
 
     QVector<QPointF> positions;

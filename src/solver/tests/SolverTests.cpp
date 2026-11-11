@@ -117,7 +117,7 @@ void testGravityParabola()
     if (last)
     {
         CHECK_NEAR(last->pose.position.x(), 60.0, 1e-6);
-        CHECK_NEAR(last->pose.position.y(), 150.0, 1e-6);
+        CHECK_NEAR(last->pose.position.y(), -150.0, 1e-6);
         CHECK_NEAR(last->velocity.x(), 0.0, 1e-12);
         CHECK_NEAR(last->velocity.y(), 0.0, 1e-12);
         CHECK(last->stopped);
@@ -128,9 +128,9 @@ void testGravityParabola()
     if (mid)
     {
         CHECK_NEAR(mid->pose.position.x(), 30.0, 1e-6);
-        CHECK_NEAR(mid->pose.position.y(), 37.5, 1e-6);
+        CHECK_NEAR(mid->pose.position.y(), -37.5, 1e-6);
         CHECK_NEAR(mid->velocity.x(), 60.0, 1e-9);
-        CHECK_NEAR(mid->velocity.y(), 150.0, 1e-9);
+        CHECK_NEAR(mid->velocity.y(), -150.0, 1e-9);
     }
 }
 
@@ -138,8 +138,8 @@ void testGravityDirectionUsesTarget()
 {
     MockWorld world;
 
-    // The target/ground entity controls the direction.  Rotating it 180 degrees
-    // makes local +Y point up in solver space.
+    // Solver space is Y-up, so gravity points along the target's local -Y.
+    // Rotating the ground 180 degrees therefore pulls the ball up (+Y).
     world.poses.insert(QStringLiteral("ground"), Pose{QPointF(0.0, 0.0), 180.0});
     Segment upward = gravitySegment(QPointF(0.0, 0.0), QPointF(0.0, 0.0));
     const QVector<Sample> upSamples = evaluate(upward, world, 31, 30);
@@ -148,7 +148,7 @@ void testGravityDirectionUsesTarget()
     if (upLast)
     {
         CHECK_NEAR(upLast->pose.position.x(), 0.0, 1e-6);
-        CHECK_NEAR(upLast->pose.position.y(), -150.0, 1e-6);
+        CHECK_NEAR(upLast->pose.position.y(), 150.0, 1e-6);
     }
 
     // Rotating the driven ball must not influence gravity direction.
@@ -161,7 +161,7 @@ void testGravityDirectionUsesTarget()
     if (downLast)
     {
         CHECK_NEAR(downLast->pose.position.x(), 0.0, 1e-6);
-        CHECK_NEAR(downLast->pose.position.y(), 150.0, 1e-6);
+        CHECK_NEAR(downLast->pose.position.y(), -150.0, 1e-6);
     }
 
     // initialVelocity and Sample::velocity are solver-space values; rotating
@@ -196,7 +196,8 @@ void testGravityBounce()
     world.shapes.insert(QStringLiteral("ball"), ball);
 
     QPainterPath ground;
-    ground.addRect(QRectF(-500.0, 100.0, 1000.0, 200.0));
+    // Y-up: the floor is below the ball, occupying y in [-300, -100].
+    ground.addRect(QRectF(-500.0, -300.0, 1000.0, 200.0));
     world.shapes.insert(QStringLiteral("ground"), ground);
     world.poses.insert(QStringLiteral("ground"), Pose{QPointF(0.0, 0.0), 0.0});
 
@@ -224,17 +225,17 @@ void testGravityBounce()
 
     bool collided = false;
     bool bounced = false;
-    double deepestBottom = -1.0e9;
+    double deepestBottom = 1.0e9;
     for (const Sample &sample : samples)
     {
         collided = collided || sample.collided;
-        bounced = bounced || sample.velocity.y() < -1.0;
-        deepestBottom = std::max(deepestBottom, sample.pose.position.y() + 10.0);
+        bounced = bounced || sample.velocity.y() > 1.0;
+        deepestBottom = std::min(deepestBottom, sample.pose.position.y() - 10.0);
     }
 
     CHECK(collided);
     CHECK(bounced);
-    CHECK_NEAR(deepestBottom, 100.0, 0.05);
+    CHECK_NEAR(deepestBottom, -100.0, 0.05);
     CHECK(samples.last().stopped);
     CHECK_NEAR(samples.last().velocity.y(), 0.0, 1e-12);
 
@@ -255,7 +256,8 @@ void testGravityStopsOnImpact()
     world.poses.insert(QStringLiteral("ball"), Pose{QPointF(0.0, 0.0), 0.0});
 
     QPainterPath ground;
-    ground.addRect(QRectF(-500.0, 100.0, 1000.0, 200.0));
+    // Y-up: the floor is below the ball, occupying y in [-300, -100].
+    ground.addRect(QRectF(-500.0, -300.0, 1000.0, 200.0));
     world.shapes.insert(QStringLiteral("ground"), ground);
     world.poses.insert(QStringLiteral("ground"), Pose{QPointF(0.0, 0.0), 0.0});
     world.interactive.insert(QStringLiteral("ground"));
@@ -289,7 +291,8 @@ void testGravityStopsOnImpact()
     if (firstStopped >= 0)
     {
         const QPointF resting = samples.at(firstStopped).pose.position;
-        CHECK_NEAR(resting.y(), 90.0, 0.1);
+        // Floor top is y = -100; the 20 px ball rests with centre at -90.
+        CHECK_NEAR(resting.y(), -90.0, 0.1);
         for (int i = firstStopped; i < samples.size(); ++i)
         {
             CHECK_NEAR(samples.at(i).pose.position.x(), resting.x(), 1e-9);
@@ -332,8 +335,10 @@ void testOrbitPeriod()
     {
         CHECK_NEAR(start->pose.position.x(), 300.0, 1e-9);
         CHECK_NEAR(start->pose.position.y(), 100.0, 1e-9);
+        // direction +1 is clockwise: a quarter turn from the +X side of the
+        // sun lands below it, at the same Y.
         CHECK_NEAR(quarter->pose.position.x(), 100.0, 1e-6);
-        CHECK_NEAR(quarter->pose.position.y(), 200.0, 1e-6);
+        CHECK_NEAR(quarter->pose.position.y(), 0.0, 1e-6);
         CHECK_NEAR(half->pose.position.x(), -100.0, 1e-6);
         CHECK_NEAR(half->pose.position.y(), 100.0, 1e-6);
         CHECK_NEAR(period->pose.position.x(), 300.0, 1e-6);
@@ -342,7 +347,7 @@ void testOrbitPeriod()
 
         // Solver-space velocity, not rotated into the planet's local axes.
         CHECK_NEAR(quarter->velocity.x(), -627.2, 5.0);
-        CHECK_NEAR(quarter->velocity.y(), -16.4, 5.0);
+        CHECK_NEAR(quarter->velocity.y(), 16.4, 5.0);
     }
     CHECK(samples.last().stopped);
     CHECK_NEAR(samples.last().velocity.x(), 0.0, 1e-12);
@@ -369,14 +374,14 @@ void testOrbitDirections()
     const Sample *cwQuarter = atFrame(clockwise, 15);
     CHECK(cwQuarter != nullptr);
     if (cwQuarter)
-        CHECK_NEAR(cwQuarter->pose.position.y(), 200.0, 1e-6);
+        CHECK_NEAR(cwQuarter->pose.position.y(), 0.0, 1e-6);
 
     segment.params[QStringLiteral("direction")] = -1;
     const QVector<Sample> counterClockwise = evaluate(segment, world, 61, 30);
     const Sample *ccwQuarter = atFrame(counterClockwise, 15);
     CHECK(ccwQuarter != nullptr);
     if (ccwQuarter)
-        CHECK_NEAR(ccwQuarter->pose.position.y(), 0.0, 1e-6);
+        CHECK_NEAR(ccwQuarter->pose.position.y(), 200.0, 1e-6);
 }
 
 void testSpin()
@@ -402,8 +407,9 @@ void testSpin()
     if (start && ten && last)
     {
         CHECK_NEAR(start->pose.rotation, 10.0, 1e-12);
-        CHECK_NEAR(ten->pose.rotation, 110.0, 1e-12);
-        CHECK_NEAR(last->pose.rotation, 310.0, 1e-12);
+        // direction +1 is clockwise, i.e. negative in Y-up model space.
+        CHECK_NEAR(ten->pose.rotation, -90.0, 1e-12);
+        CHECK_NEAR(last->pose.rotation, -290.0, 1e-12);
         CHECK_NEAR(last->pose.position.x(), 10.0, 1e-12);
         CHECK_NEAR(last->pose.position.y(), 20.0, 1e-12);
         CHECK_NEAR(last->velocity.x(), 0.0, 1e-12);
@@ -416,7 +422,7 @@ void testSpin()
     const Sample *reverseLast = atFrame(reverse, 30);
     CHECK(reverseLast != nullptr);
     if (reverseLast)
-        CHECK_NEAR(reverseLast->pose.rotation, -290.0, 1e-12);
+        CHECK_NEAR(reverseLast->pose.rotation, 310.0, 1e-12);
 }
 
 void testBlackHole()

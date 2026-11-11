@@ -205,18 +205,20 @@ void testGravitySegment()
     SolverSegment segment = makeSegment(
         QStringLiteral("seg-gravity"), SolverEffect::Gravity, 0, 10,
         QStringLiteral("ground"));
-    segment.initialVelocity = QPointF(0.0, 30.0);
+    // Model space is Y-up: down is -Y, both for the initial velocity and for
+    // the 980 px/s^2 gravity acceleration.
+    segment.initialVelocity = QPointF(0.0, -30.0);
     entity.solvers.append(segment);
     addEntity(project, entity);
     addEntity(project, makeEntity(QStringLiteral("ground")));
 
     MockWorld world;
     world.poses.insert(QStringLiteral("ground"),
-                       solver::Pose{QPointF(0.0, 500.0), 0.0});
+                       solver::Pose{QPointF(0.0, -500.0), 0.0});
 
     const QPointF frame1 = anim::evaluateEntity(project, entity.uuid, 1, world)
                                .world.map(QPointF(0.0, 0.0));
-    const double expected = 30.0 / 30.0 + 0.5 * 980.0 / (30.0 * 30.0);
+    const double expected = -30.0 / 30.0 - 0.5 * 980.0 / (30.0 * 30.0);
     CHECK_NEAR(frame1.x(), 0.0, 1e-9);
     CHECK_NEAR(frame1.y(), expected, 1e-9);
 }
@@ -240,8 +242,9 @@ void testSpinSegment()
         return qRadiansToDegrees(std::atan2(pose.world.m12(), pose.world.m11()));
     };
 
-    CHECK_NEAR(rotationAt(5), 40.0, 1e-6);
-    CHECK_NEAR(rotationAt(15), 85.0, 1e-6);
+    // direction +1 is clockwise, i.e. decreasing rotation in Y-up space.
+    CHECK_NEAR(rotationAt(5), -20.0, 1e-6);
+    CHECK_NEAR(rotationAt(15), 25.0, 1e-6);
     CHECK_NEAR(rotationAt(20), 100.0, 1e-6);
 }
 
@@ -288,8 +291,10 @@ void testOrbitSegmentMiddle()
     const anim::Pose pose = anim::evaluateEntity(
         project, QStringLiteral("orbit"), 25, world);
     const QPointF origin = pose.world.map(QPointF(0.0, 0.0));
-    const double expectedX = 500.0 + 100.0 * std::cos(M_PI / 6.0);
-    const double expectedY = 500.0 + 100.0 * std::sin(M_PI / 6.0);
+    // direction +1 is clockwise: five frames of a 60-frame period move the
+    // planet 30 degrees below its +X start point in Y-up space.
+    const double expectedX = 500.0 + 100.0 * std::cos(-M_PI / 6.0);
+    const double expectedY = 500.0 + 100.0 * std::sin(-M_PI / 6.0);
     CHECK_NEAR(origin.x(), expectedX, 1e-6);
     CHECK_NEAR(origin.y(), expectedY, 1e-6);
     CHECK(world.queriedFrames.contains(25));
@@ -381,11 +386,12 @@ void testFractionalSolverSegment()
     };
 
     // Samples sit on integer frames; 5.5 interpolates spin samples 5 and 6.
-    CHECK_NEAR(rotationAt(5.0), 40.0, 1e-6);
-    CHECK_NEAR(rotationAt(6.0), 46.0, 1e-6);
-    CHECK_NEAR(rotationAt(5.5), 43.0, 1e-6);
+    // direction +1 spins clockwise, so the angle decreases.
+    CHECK_NEAR(rotationAt(5.0), -20.0, 1e-6);
+    CHECK_NEAR(rotationAt(6.0), -26.0, 1e-6);
+    CHECK_NEAR(rotationAt(5.5), -23.0, 1e-6);
     // After the segment the solved end sample is the implicit left value.
-    CHECK_NEAR(rotationAt(10.5), 71.5, 1e-6);
+    CHECK_NEAR(rotationAt(10.5), -42.5, 1e-6);
 
     // Gravity drives x/y; a fractional frame lands between its two samples.
     Project fallProject;
@@ -395,14 +401,14 @@ void testFractionalSolverSegment()
     SolverSegment gravity = makeSegment(
         QStringLiteral("seg-fractional-gravity"), SolverEffect::Gravity, 0, 10,
         QStringLiteral("ground"));
-    gravity.initialVelocity = QPointF(0.0, 30.0);
+    gravity.initialVelocity = QPointF(0.0, -30.0);
     falling.solvers.append(gravity);
     addEntity(fallProject, falling);
     addEntity(fallProject, makeEntity(QStringLiteral("ground")));
 
     MockWorld fallWorld;
     fallWorld.poses.insert(QStringLiteral("ground"),
-                           solver::Pose{QPointF(0.0, 500.0), 0.0});
+                           solver::Pose{QPointF(0.0, -500.0), 0.0});
     const auto yAt = [&](double frame)
     {
         return anim::evaluateEntity(fallProject, falling.uuid, frame, fallWorld)
@@ -413,8 +419,9 @@ void testFractionalSolverSegment()
     const double y1 = yAt(1.0);
     const double y2 = yAt(2.0);
     const double y15 = yAt(1.5);
-    CHECK(y15 > y1);
-    CHECK(y15 < y2);
+    // Falling means Y decreases: y1 > y15 > y2 in Y-up model space.
+    CHECK(y15 < y1);
+    CHECK(y15 > y2);
     CHECK_NEAR(y15, (y1 + y2) / 2.0, 1e-9);
 }
 

@@ -153,7 +153,7 @@ void testLocalMatrix()
 
 void testHandleRotation()
 {
-    const Bounds bounds{-120, 70, -50, 85};
+    const Bounds bounds{-120, 70, 85, -50}; // left, right, top, bottom (Y-up)
     Transform flat = sampleTransform();
     flat.rotation = 0.0;
     const double viewScale = 1.5;
@@ -213,10 +213,46 @@ void testHandleRotation()
                       expectedCenter));
 }
 
+void testAxisDirectionsFollowRotation()
+{
+    const Bounds bounds;
+    const double viewScale = 1.0;
+    const double length = kMoveAxisLength;
+
+    // Model space is Y-up, so +Y is up on screen after the viewport's single
+    // Y flip.  Positive rotation is counter-clockwise.
+    const struct
+    {
+        double rotation;
+        QPointF xAxis;
+        QPointF yAxis;
+    } cases[] = {
+        {0.0, QPointF(length, 0.0), QPointF(0.0, length)},
+        {90.0, QPointF(0.0, length), QPointF(-length, 0.0)},
+        {180.0, QPointF(-length, 0.0), QPointF(0.0, -length)},
+        {-90.0, QPointF(0.0, -length), QPointF(length, 0.0)},
+    };
+
+    for (const auto& entry : cases)
+    {
+        Transform transform;
+        transform.rotation = entry.rotation;
+        const QPointF pivot = worldPivot(transform);
+        CHECK_DETAIL(nearlyPoint(handlePosition(Handle::MoveX, transform, bounds,
+                                                viewScale),
+                                 pivot + entry.xAxis),
+                     QStringLiteral("MoveX rotation %1").arg(entry.rotation));
+        CHECK_DETAIL(nearlyPoint(handlePosition(Handle::MoveY, transform, bounds,
+                                                viewScale),
+                                 pivot + entry.yAxis),
+                     QStringLiteral("MoveY rotation %1").arg(entry.rotation));
+    }
+}
+
 void testCornerScaleKeepsOppositeCorner()
 {
     const Transform transform = sampleTransform();
-    const Bounds bounds{-90, 70, -50, 60};
+    const Bounds bounds{-90, 70, 60, -50};
 
     static constexpr Handle kHandles[] = {Handle::ScaleTopLeft, Handle::ScaleTopRight,
                                           Handle::ScaleBottomRight,
@@ -245,22 +281,25 @@ void testCornerScaleKeepsOppositeCorner()
 
 void testCornerScaleFlip()
 {
-    const Bounds bounds{-50, 50, -50, 50};
+    const Bounds bounds{-50, 50, 50, -50}; // Y-up: top +50, bottom -50
     const Transform transform;
 
-    // Drag the top-left corner past the bottom-right one: both axes flip.
+    // Drag the visual top-left corner (local (-50, +50)) past the
+    // bottom-right one: both axes flip.
     const DragResult flipped =
-        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, 70), false, true);
+        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, -70), false, true);
     CHECK(nearly(flipped.transform.scaleX, -0.2));
     CHECK(nearly(flipped.transform.scaleY, -0.2));
     CHECK(flipped.flippedX);
     CHECK(flipped.flippedY);
-    CHECK(nearlyPoint(localToWorld(flipped.transform, QPointF(50, 50)), QPointF(50, 50)));
-    CHECK(nearlyPoint(localToWorld(flipped.transform, QPointF(-50, -50)), QPointF(70, 70)));
+    CHECK(nearlyPoint(localToWorld(flipped.transform, QPointF(50, -50)),
+                      QPointF(50, -50)));
+    CHECK(nearlyPoint(localToWorld(flipped.transform, QPointF(-50, 50)),
+                      QPointF(70, -70)));
 
     // Crossing only horizontally flips X.
     const DragResult horizontal =
-        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, -50), false, true);
+        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, 50), false, true);
     CHECK(nearly(horizontal.transform.scaleX, -0.2));
     CHECK(nearly(horizontal.transform.scaleY, 1.0));
     CHECK(horizontal.flippedX);
@@ -268,7 +307,7 @@ void testCornerScaleFlip()
 
     // allowFlip=false clamps instead of flipping.
     const DragResult clamped =
-        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, 70), false, false);
+        cornerScale(transform, bounds, Handle::ScaleTopLeft, QPointF(70, -70), false, false);
     CHECK(nearly(clamped.transform.scaleX, kMinScale));
     CHECK(nearly(clamped.transform.scaleY, kMinScale));
     CHECK(!clamped.flippedX);
@@ -278,7 +317,7 @@ void testCornerScaleFlip()
 void testCornerScaleUniform()
 {
     const Transform transform = sampleTransform();
-    const Bounds bounds{-80, 60, -40, 50};
+    const Bounds bounds{-80, 60, 50, -40};
     const QPointF dragged = localCorner(bounds, Handle::ScaleTopLeft);
     const QPointF fixed = localOppositeCorner(bounds, Handle::ScaleTopLeft);
     const QPointF span = dragged - fixed;
@@ -426,7 +465,7 @@ void testRotateAroundBoundsCenter()
 
     // The explicit-bounds overload handles boxes that are not centered on the
     // local origin.
-    const Bounds asymmetric{-100, 50, -20, 80};
+    const Bounds asymmetric{-100, 50, 80, -20};
     const QPointF asymmetricCenter = boundsCenter(asymmetric);
     const QPointF asymmetricBefore = localToWorld(transform, asymmetricCenter);
     const DragResult asymmetricResult = rotate(transform, asymmetric, 70.0, true);
@@ -453,7 +492,7 @@ void testRotateAroundBoundsCenter()
 
 void testHitTest()
 {
-    const Bounds bounds{-100, 100, -60, 60};
+    const Bounds bounds{-100, 100, 60, -60}; // Y-up: top is +60
     Transform transform;
     const double viewScale = 1.0;
 
@@ -508,7 +547,7 @@ void testHitTest()
 
 void testCenterScaleHandlePosition()
 {
-    const Bounds bounds{-100, 100, -60, 60};
+    const Bounds bounds{-100, 100, 60, -60};
     Transform transform;
     transform.x = 12.0;
     transform.y = -8.0;
@@ -550,6 +589,7 @@ int main(int argc, char** argv)
 
     testLocalMatrix();
     testHandleRotation();
+    testAxisDirectionsFollowRotation();
     testCornerScaleKeepsOppositeCorner();
     testCornerScaleFlip();
     testCornerScaleUniform();

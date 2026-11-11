@@ -21,12 +21,19 @@ namespace pvf::render2 {
 using FrameProvider = std::function<QImage(const Uuid& entityUuid,
                                            double projectFrame)>;
 
+// Model space: origin at the canvas centre, +X right, +Y up, positive
+// rotation counter-clockwise.  The renderer flips Y once when mapping to the
+// Y-down output image; every other module uses the model convention.
+//
 // One rendered frame request.  An empty outputSize means the project canvas
 // size; an invalid background means project.settings.background.  An empty
-// cameraUuid renders the whole project canvas (0,0,width,height).
+// cameraUuid renders the whole project canvas centred on (0,0):
+// (-width/2,-height/2,width,height).
 // `worldRect` overrides that canvas rectangle for the canvas view; it may
 // contain negative coordinates so editor-only previews can show entities
-// outside the canvas.  Camera views ignore it.
+// outside the canvas.  It is a model-space rectangle in QRectF form (x/y is
+// the minimum corner); because model Y grows up, its bottom() edge is the
+// upper visual edge.  Camera views ignore it.
 // `transparentOutsideCanvas` only applies when cameraUuid is empty and
 // worldRect is valid: the image starts fully transparent, the project canvas
 // is filled with the background and only entities are drawn outside it.

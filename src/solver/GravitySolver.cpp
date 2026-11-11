@@ -297,10 +297,11 @@ QVector<Sample> evaluateGravity(const Segment &segment, const World &world,
 
         if (i > 0 && !stopped)
         {
-            // Gravity follows targetUuid's current rotation.  The driven
+            // Gravity follows targetUuid's current rotation.  Model space is
+            // Y-up, so "local down" is the target's local -Y.  The driven
             // entity's own rotation must not influence the direction.
             const Pose directionPose = world.poseOf(segment.targetUuid, frame);
-            const QPointF acceleration = rotatePoint(QPointF(0.0, 1.0),
+            const QPointF acceleration = rotatePoint(QPointF(0.0, -1.0),
                                                      directionPose.rotation)
                     * strength;
 

@@ -6,7 +6,9 @@ QVector<Sample> evaluateSpin(const Segment &segment, const FrameRange &range)
 {
     const double angularVelocity = paramNumber(segment.params, "angularVelocity", 6.0);
     const int direction = paramDirection(segment.params, 1);
-    const double degreesPerFrame = angularVelocity * double(direction);
+    // Model space is Y-up: positive rotation is counter-clockwise.  The
+    // direction parameter keeps +1 = clockwise on screen, so the sign flips.
+    const double degreesPerFrame = -angularVelocity * double(direction);
 
     QVector<Sample> samples;
     samples.reserve(range.count);

@@ -208,8 +208,8 @@ Track keyedTrack(std::initializer_list<std::pair<int, double>> keys)
 Entity makeSpecialEntity(ContentKind kind, const Uuid& uuid)
 {
     Entity entity = makeEntity(uuid);
-    entity.transform.x = 320.0;
-    entity.transform.y = 180.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
 
     switch (kind)
     {
@@ -346,8 +346,8 @@ void testRedVectorCenterPixel()
 {
     Project project = makeProject(100, 100);
     Entity rect = makeVector(QStringLiteral("rect"), 60, 60, Qt::red);
-    rect.transform.x = 50.0;
-    rect.transform.y = 50.0;
+    rect.transform.x = 0.0; // canvas centre
+    rect.transform.y = 0.0;
     add(project, rect);
 
     QTemporaryDir directory;
@@ -374,8 +374,8 @@ void testImageAssetOnCanvas()
 
     Project project = makeProject(100, 100);
     Entity entity = makeEntity(QStringLiteral("image"));
-    entity.transform.x = 50.0;
-    entity.transform.y = 50.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Asset;
     entity.content.asset.type = AssetType::Image;
     entity.content.asset.hash = stored ? stored->hash : AssetHash();
@@ -390,8 +390,8 @@ void testTextIsNotBlank()
 {
     Project project = makeProject(200, 100);
     Entity entity = makeEntity(QStringLiteral("text"));
-    entity.transform.x = 100.0;
-    entity.transform.y = 50.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Text;
     entity.content.text.text = QStringLiteral("PV");
     entity.content.text.pixelSize = 48;
@@ -419,8 +419,8 @@ void testChildFollowsParent()
 {
     Project project = makeProject(100, 100);
     Entity parent = makeEntity(QStringLiteral("parent"));
-    parent.transform.x = 70.0;
-    parent.transform.y = 30.0;
+    parent.transform.x = 20.0;  // screen (70, 30)
+    parent.transform.y = 20.0;
     add(project, parent);
     add(project, makeVector(QStringLiteral("child"), 10, 10, Qt::red, 0, 10,
                             QStringLiteral("parent")));
@@ -441,8 +441,8 @@ void testHiddenAndInvisible()
     {
         Project project = makeProject(100, 100);
         Entity entity = makeVector(QStringLiteral("hidden"), 100, 100, Qt::red);
-        entity.transform.x = 50.0;
-        entity.transform.y = 50.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         entity.hidden = true;
         add(project, entity);
 
@@ -454,8 +454,8 @@ void testHiddenAndInvisible()
     {
         Project project = makeProject(100, 100);
         Entity entity = makeVector(QStringLiteral("invisible"), 100, 100, Qt::red);
-        entity.transform.x = 50.0;
-        entity.transform.y = 50.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         entity.visible = false;
         add(project, entity);
 
@@ -469,8 +469,8 @@ void testOpacityHalfBlend()
 {
     Project project = makeProject(100, 100);
     Entity entity = makeVector(QStringLiteral("half"), 100, 100, Qt::red);
-    entity.transform.x = 50.0;
-    entity.transform.y = 50.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.transform.opacity = 0.5;
     add(project, entity);
 
@@ -489,8 +489,8 @@ void testMissingAssetCheckerboard()
 {
     Project project = makeProject(320, 180);
     Entity entity = makeEntity(QStringLiteral("missing"));
-    entity.transform.x = 160.0;
-    entity.transform.y = 90.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Asset;
     entity.content.asset.type = AssetType::Image;
     add(project, entity);
@@ -513,8 +513,8 @@ void testMissingImageCard()
     Project project = makeProject(320, 180);
     Entity entity = makeAssetEntity(QStringLiteral("offline-image"),
                                     AssetType::Image, hash);
-    entity.transform.x = 160.0;
-    entity.transform.y = 90.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     add(project, entity);
 
     QTemporaryDir directory;
@@ -536,8 +536,8 @@ void testMissingVideoAndHtmlCards()
     {
         Project project = makeProject(320, 180);
         Entity entity = makeAssetEntity(QStringLiteral("offline"), type, hash);
-        entity.transform.x = 160.0;
-        entity.transform.y = 90.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         add(project, entity);
 
         QTemporaryDir directory;
@@ -580,8 +580,8 @@ void testPresentAssetKeepsPendingPlaceholder()
         Project project = makeProject(320, 180);
         Entity entity = makeAssetEntity(QStringLiteral("pending-video"),
                                         AssetType::Video, stored->hash);
-        entity.transform.x = 160.0;
-        entity.transform.y = 90.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         add(project, entity);
 
         render2::Options options;
@@ -601,8 +601,8 @@ void testPresentAssetKeepsPendingPlaceholder()
         Project project = makeProject(320, 180);
         Entity entity = makeAssetEntity(QStringLiteral("pending-html"),
                                         AssetType::Html, stored->hash);
-        entity.transform.x = 160.0;
-        entity.transform.y = 90.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         add(project, entity);
 
         render2::Options options;
@@ -629,8 +629,8 @@ void testCorruptImageShowsMissingCard()
     Project project = makeProject(320, 180);
     Entity entity = makeAssetEntity(QStringLiteral("corrupt"),
                                     AssetType::Image, hash);
-    entity.transform.x = 160.0;
-    entity.transform.y = 90.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     add(project, entity);
 
     assets::AssetStore store(directory.path());
@@ -653,8 +653,8 @@ void testSmallMissingRectDoesNotOverflow()
     Project project = makeProject(200, 200);
     Entity entity = makeAssetEntity(QStringLiteral("tiny"),
                                     AssetType::Image, hash);
-    entity.transform.x = 100.0;
-    entity.transform.y = 100.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     add(project, entity);
 
     assets::AssetStore store(directory.path());
@@ -688,8 +688,8 @@ void testReimportSameHashRestoresImage()
     Project project = makeProject(400, 300);
     Entity entity = makeAssetEntity(QStringLiteral("image"),
                                     AssetType::Image, stored->hash);
-    entity.transform.x = 200.0;
-    entity.transform.y = 150.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     add(project, entity);
 
     const QImage imported = render(project, store);
@@ -715,17 +715,17 @@ void testCameraCrop()
 {
     Project project = makeProject(200, 200);
     add(project, makeVector(QStringLiteral("red"), 40, 40, Qt::red));
-    project.entities[QStringLiteral("red")].transform.x = 100.0;
-    project.entities[QStringLiteral("red")].transform.y = 100.0;
+    project.entities[QStringLiteral("red")].transform.x = 0.0;
+    project.entities[QStringLiteral("red")].transform.y = 0.0;
 
     add(project, makeVector(QStringLiteral("blue"), 20, 20, Qt::blue));
-    project.entities[QStringLiteral("blue")].transform.x = 20.0;
-    project.entities[QStringLiteral("blue")].transform.y = 20.0;
+    project.entities[QStringLiteral("blue")].transform.x = -80.0;
+    project.entities[QStringLiteral("blue")].transform.y = -80.0;
 
     Entity camera = makeEntity(QStringLiteral("camera"));
     camera.content.kind = ContentKind::Camera;
-    camera.transform.x = 100.0;
-    camera.transform.y = 100.0;
+    camera.transform.x = 0.0;
+    camera.transform.y = 0.0;
     camera.transform.scaleX = 0.5;
     camera.transform.scaleY = 0.5;
     add(project, camera);
@@ -756,13 +756,13 @@ void testCameraKeepsCanvasCoordinates()
 {
     Project project = makeProject(200, 200);
     add(project, makeVector(QStringLiteral("marker"), 20, 20, Qt::red));
-    project.entities[QStringLiteral("marker")].transform.x = 120.0;
-    project.entities[QStringLiteral("marker")].transform.y = 120.0;
+    project.entities[QStringLiteral("marker")].transform.x = 20.0;   // screen (120,120)
+    project.entities[QStringLiteral("marker")].transform.y = -20.0;
 
     Entity camera = makeEntity(QStringLiteral("camera"));
     camera.content.kind = ContentKind::Camera;
-    camera.transform.x = 100.0;
-    camera.transform.y = 100.0;
+    camera.transform.x = 0.0;
+    camera.transform.y = 0.0;
     camera.transform.scaleX = 0.5;
     camera.transform.scaleY = 0.5;
     add(project, camera);
@@ -783,13 +783,13 @@ void testCameraNegativeScaleFlips()
 {
     Project project = makeProject(100, 100);
     add(project, makeVector(QStringLiteral("marker"), 20, 20, Qt::red));
-    project.entities[QStringLiteral("marker")].transform.x = 30.0;
-    project.entities[QStringLiteral("marker")].transform.y = 50.0;
+    project.entities[QStringLiteral("marker")].transform.x = -20.0; // screen (30,50)
+    project.entities[QStringLiteral("marker")].transform.y = 0.0;
 
     Entity camera = makeEntity(QStringLiteral("camera"));
     camera.content.kind = ContentKind::Camera;
-    camera.transform.x = 50.0;
-    camera.transform.y = 50.0;
+    camera.transform.x = 0.0;
+    camera.transform.y = 0.0;
     camera.transform.scaleX = -1.0;
     camera.transform.scaleY = 1.0;
     add(project, camera);
@@ -808,20 +808,20 @@ void testWorldRectRendersOutsideCanvas()
 {
     Project project = makeProject(100, 100);
     Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::red);
-    outside.transform.x = -50.0;
-    outside.transform.y = -50.0;
+    outside.transform.x = -70.0; // above-left of the 100x100 canvas
+    outside.transform.y = 70.0;
     add(project, outside);
 
     QTemporaryDir directory;
     assets::AssetStore store(directory.path());
-    const QRectF world(-100, -100, 300, 300);
+    const QRectF world(-100, -100, 200, 200);
     const QImage image =
-        renderWorld(project, store, world, false, Uuid(), QSize(300, 300));
+        renderWorld(project, store, world, false, Uuid(), QSize(200, 200));
 
-    // World (-50,-50) maps to output (50,50); the canvas centre stays the
-    // project background.
-    CHECK(nearColor(image.pixelColor(50, 50), Qt::red));
-    CHECK(nearColor(image.pixelColor(150, 150),
+    // Model (-70,+70) maps to output (30,30) after the single Y flip; the
+    // canvas centre (0,0) maps to (100,100) and stays the background.
+    CHECK(nearColor(image.pixelColor(30, 30), Qt::red));
+    CHECK(nearColor(image.pixelColor(100, 100),
                     QColor(QStringLiteral("#101014"))));
     CHECK(nearColor(image.pixelColor(0, 0),
                     QColor(QStringLiteral("#101014"))));
@@ -831,13 +831,13 @@ void testCameraIgnoresWorldRect()
 {
     Project project = makeProject(200, 200);
     add(project, makeVector(QStringLiteral("red"), 40, 40, Qt::red));
-    project.entities[QStringLiteral("red")].transform.x = 100.0;
-    project.entities[QStringLiteral("red")].transform.y = 100.0;
+    project.entities[QStringLiteral("red")].transform.x = 0.0;
+    project.entities[QStringLiteral("red")].transform.y = 0.0;
 
     Entity camera = makeEntity(QStringLiteral("camera"));
     camera.content.kind = ContentKind::Camera;
-    camera.transform.x = 100.0;
-    camera.transform.y = 100.0;
+    camera.transform.x = 0.0;
+    camera.transform.y = 0.0;
     camera.transform.scaleX = 0.5;
     camera.transform.scaleY = 0.5;
     add(project, camera);
@@ -859,26 +859,26 @@ void testTransparentOutsideCanvas()
 {
     Project project = makeProject(100, 100);
     Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::red);
-    outside.transform.x = -50.0;
-    outside.transform.y = -50.0;
+    outside.transform.x = -70.0;
+    outside.transform.y = 70.0;
     add(project, outside);
 
     QTemporaryDir directory;
     assets::AssetStore store(directory.path());
-    const QRectF world(-100, -100, 300, 300);
+    const QRectF world(-100, -100, 200, 200);
     const QImage image =
-        renderWorld(project, store, world, true, Uuid(), QSize(300, 300));
+        renderWorld(project, store, world, true, Uuid(), QSize(200, 200));
 
     CHECK(image.pixelColor(0, 0).alpha() == 0);
-    CHECK(image.pixelColor(299, 299).alpha() == 0);
-    CHECK(nearColor(image.pixelColor(150, 150),
+    CHECK(image.pixelColor(199, 199).alpha() == 0);
+    CHECK(nearColor(image.pixelColor(100, 100),
                     QColor(QStringLiteral("#101014"))));
-    CHECK(image.pixelColor(150, 150).alpha() == 255);
-    CHECK(nearColor(image.pixelColor(50, 50), Qt::red));
-    CHECK(image.pixelColor(50, 50).alpha() == 255);
+    CHECK(image.pixelColor(100, 100).alpha() == 255);
+    CHECK(nearColor(image.pixelColor(30, 30), Qt::red));
+    CHECK(image.pixelColor(30, 30).alpha() == 255);
 
     const QImage opaque =
-        renderWorld(project, store, world, false, Uuid(), QSize(300, 300));
+        renderWorld(project, store, world, false, Uuid(), QSize(200, 200));
     CHECK(opaque.pixelColor(0, 0).alpha() == 255);
 }
 
@@ -886,12 +886,12 @@ void testTransparentWebpOverheadIsSmall()
 {
     Project project = makeProject(100, 100);
     Entity centre = makeVector(QStringLiteral("centre"), 60, 60, Qt::red);
-    centre.transform.x = 50.0;
-    centre.transform.y = 50.0;
+    centre.transform.x = 0.0;
+    centre.transform.y = 0.0;
     add(project, centre);
     Entity outside = makeVector(QStringLiteral("outside"), 20, 20, Qt::blue);
-    outside.transform.x = -50.0;
-    outside.transform.y = -50.0;
+    outside.transform.x = -150.0;
+    outside.transform.y = 150.0;
     add(project, outside);
 
     QTemporaryDir directory;
@@ -920,8 +920,8 @@ void testWorldPoseAndShape()
 {
     Project project = makeProject(100, 100);
     Entity entity = makeVector(QStringLiteral("shape"), 20, 10, Qt::red);
-    entity.transform.x = 50.0;
-    entity.transform.y = 50.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     add(project, entity);
 
     QTemporaryDir directory;
@@ -929,13 +929,13 @@ void testWorldPoseAndShape()
     render2::SceneWorld world(project, store);
 
     const solver::Pose pose = world.poseOf(QStringLiteral("shape"), 0);
-    CHECK(std::abs(pose.position.x() - 50.0) < 1e-6);
-    CHECK(std::abs(pose.position.y() - 50.0) < 1e-6);
+    CHECK(std::abs(pose.position.x()) < 1e-6);
+    CHECK(std::abs(pose.position.y()) < 1e-6);
     CHECK(std::abs(pose.rotation) < 1e-6);
 
     const QPainterPath shape = world.shapeOf(QStringLiteral("shape"), 0);
-    CHECK(shape.contains(QPointF(50.0, 50.0)));
-    CHECK(!shape.contains(QPointF(0.0, 0.0)));
+    CHECK(shape.contains(QPointF(0.0, 0.0)));
+    CHECK(!shape.contains(QPointF(50.0, 0.0)));
 }
 
 void testSolverSelfShapeTerminates()
@@ -944,13 +944,13 @@ void testSolverSelfShapeTerminates()
     Entity ball = makeVector(QStringLiteral("ball"), 10, 10, Qt::red);
     ball.start = 0;
     ball.end = 60;
-    ball.transform.x = 50.0;
-    ball.transform.y = 10.0;
+    ball.transform.x = 0.0;
+    ball.transform.y = -40.0;
     Track xTrack;
-    xTrack.keys = {{0, 50.0, {}, {}}};
+    xTrack.keys = {{0, 0.0, {}, {}}};
     ball.tracks.insert(QStringLiteral("x"), xTrack);
     Track yTrack;
-    yTrack.keys = {{0, 10.0, {}, {}}};
+    yTrack.keys = {{0, -40.0, {}, {}}};
     ball.tracks.insert(QStringLiteral("y"), yTrack);
 
     SolverSegment gravity;
@@ -986,14 +986,14 @@ void testFractionalProjectFrame()
 {
     Project project = makeProject(100, 100);
     Entity rect = makeVector(QStringLiteral("moving"), 4, 4, Qt::red);
-    rect.transform.y = 50.0;
+    rect.transform.y = 0.0;
     Track xTrack;
     Keyframe startKey;
     startKey.frame = 0;
-    startKey.value = 0.0;
+    startKey.value = -50.0;
     Keyframe endKey;
     endKey.frame = 10;
-    endKey.value = 100.0;
+    endKey.value = 50.0;
     xTrack.keys = {startKey, endKey};
     rect.tracks.insert(QStringLiteral("x"), xTrack);
     add(project, rect);
@@ -1005,7 +1005,8 @@ void testFractionalProjectFrame()
     const QImage at55 = render(project, store, 5.5);
     const QImage at6 = render(project, store, 6.0);
 
-    // 4x4 rect: x=50 at frame 5, x=55 at 5.5, x=60 at 6.
+    // 4x4 rect: model x=0 at frame 5, +5 at 5.5, +10 at 6; screen x is
+    // 50 + model x because the canvas centre is the origin.
     CHECK(nearColor(at5.pixelColor(50, 50), Qt::red));
     CHECK(nearColor(at6.pixelColor(60, 50), Qt::red));
     CHECK(nearColor(at55.pixelColor(55, 50), Qt::red));
@@ -1122,8 +1123,8 @@ void testSpecialContentFollowsParent()
     Project project = makeProject(400, 300);
 
     Entity parent = makeEntity(QStringLiteral("parent"));
-    parent.transform.x = 200.0;
-    parent.transform.y = 150.0;
+    parent.transform.x = 0.0;
+    parent.transform.y = 0.0;
     add(project, parent);
 
     Entity child =
@@ -1162,8 +1163,8 @@ void testBrandWallLayout()
                              const QStringList& logos) {
         Project project = makeProject(400, 300);
         Entity entity = makeEntity(QStringLiteral("wall"));
-        entity.transform.x = 200.0;
-        entity.transform.y = 150.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         entity.content.kind = ContentKind::BrandWall;
         BrandWallContent& wall = entity.content.brandWall;
         wall.logos = logos;
@@ -1326,8 +1327,8 @@ void testTextFontSizeTrackRenders()
 {
     Project project = makeProject(300, 300);
     Entity entity = makeEntity(QStringLiteral("text"), 0, 200);
-    entity.transform.x = 150.0;
-    entity.transform.y = 150.0;
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Text;
     entity.content.text.text = QStringLiteral("PV");
     entity.content.text.pixelSize = 100; // ignored while the track has keys
@@ -1372,14 +1373,149 @@ void testTextFontSizeTrackRenders()
     CHECK(shape100.height() > shape50.height());
 }
 
+void testWorldConventionOriginAndRotation()
+{
+    // Model space: centre (0,0), +X right, +Y up, positive rotation CCW.
+    // Screen pixels: x = 100 + modelX, y = 100 - modelY for a 200x200 canvas.
+    struct Case
+    {
+        double rotation;
+        QPoint redPixel;  // child at local (+40, 0)
+        QPoint bluePixel; // child at local (0, +40)
+    };
+    const Case cases[] = {
+        {0.0, QPoint(140, 100), QPoint(100, 60)},
+        {90.0, QPoint(100, 60), QPoint(60, 100)},
+        {180.0, QPoint(60, 100), QPoint(100, 140)},
+        {-90.0, QPoint(100, 140), QPoint(140, 100)},
+    };
+
+    for (const Case& entry : cases)
+    {
+        Project project = makeProject(200, 200);
+        Entity parent = makeEntity(QStringLiteral("parent"));
+        parent.transform.rotation = entry.rotation;
+        add(project, parent);
+
+        Entity red = makeVector(QStringLiteral("red"), 10, 10, Qt::red, 0, 10,
+                               QStringLiteral("parent"));
+        red.transform.x = 40.0;
+        add(project, red);
+        Entity blue = makeVector(QStringLiteral("blue"), 10, 10, Qt::blue, 0, 10,
+                                 QStringLiteral("parent"));
+        blue.transform.y = 40.0;
+        add(project, blue);
+
+        QTemporaryDir directory;
+        assets::AssetStore store(directory.path());
+        const QImage image = render(project, store, 0, Uuid(), QSize(),
+                                    QColor(Qt::black));
+
+        CHECK_DETAIL(nearColor(image.pixelColor(entry.redPixel), Qt::red),
+                     QStringLiteral("red at rotation %1").arg(entry.rotation));
+        CHECK_DETAIL(nearColor(image.pixelColor(entry.bluePixel), Qt::blue),
+                     QStringLiteral("blue at rotation %1").arg(entry.rotation));
+        CHECK_DETAIL(nearColor(image.pixelColor(100, 100), Qt::black),
+                     QStringLiteral("origin empty at rotation %1")
+                         .arg(entry.rotation));
+    }
+}
+
+void testImageOrientationIsUpright()
+{
+    QTemporaryDir directory;
+    QImage source(20, 20, QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::blue);
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 20; ++x)
+            source.setPixelColor(x, y, Qt::red);
+    const QString path = directory.path() + QStringLiteral("/upright.png");
+    CHECK(source.save(path));
+
+    assets::AssetStore store(directory.path());
+    QString error;
+    const auto stored = store.importFile(path, &error);
+    CHECK(stored.has_value());
+    if (!stored)
+        return;
+
+    Project project = makeProject(100, 100);
+    Entity entity = makeEntity(QStringLiteral("image"));
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Image;
+    entity.content.asset.hash = stored->hash;
+    add(project, entity);
+
+    const QImage image = render(project, store, 0, Uuid(), QSize(),
+                                QColor(Qt::black));
+    // The content-local flip cancels the world -> screen flip: image row 0
+    // still lands at the top of the screen.
+    CHECK(nearColor(image.pixelColor(50, 45), Qt::red));
+    CHECK(nearColor(image.pixelColor(50, 55), Qt::blue));
+}
+
+void testCameraOrientationMatchesCanvas()
+{
+    Project project = makeProject(200, 200);
+    Entity marker = makeVector(QStringLiteral("marker"), 20, 20, Qt::red);
+    marker.transform.y = 40.0; // above the canvas centre
+    add(project, marker);
+
+    Entity camera = makeEntity(QStringLiteral("camera"));
+    camera.content.kind = ContentKind::Camera;
+    camera.transform.scaleX = 0.5;
+    camera.transform.scaleY = 0.5;
+    add(project, camera);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+
+    const QImage canvas = render(project, store, 0, Uuid(), QSize(200, 200));
+    CHECK(nearColor(canvas.pixelColor(100, 60), Qt::red));
+
+    const QImage throughCamera =
+        render(project, store, 0, QStringLiteral("camera"), QSize(100, 100));
+    CHECK(nearColor(throughCamera.pixelColor(50, 10), Qt::red));
+    CHECK(!nearColor(throughCamera.pixelColor(50, 90), Qt::red));
+
+    // A +90 degree camera is counter-clockwise, so the world appears rotated
+    // clockwise: a marker to the right of the camera lands below its centre.
+    Project rotated = project;
+    rotated.entities[QStringLiteral("camera")].transform.rotation = 90.0;
+    rotated.entities[QStringLiteral("marker")].transform.x = 40.0;
+    rotated.entities[QStringLiteral("marker")].transform.y = 0.0;
+    const QImage rotatedCamera =
+        render(rotated, store, 0, QStringLiteral("camera"), QSize(100, 100));
+    CHECK(nearColor(rotatedCamera.pixelColor(50, 90), Qt::red));
+    CHECK(!nearColor(rotatedCamera.pixelColor(50, 10), Qt::red));
+}
+
+void testCollisionShapeUsesModelYUp()
+{
+    Project project = makeProject(100, 100);
+    Entity triangle = makeVector(QStringLiteral("triangle"), 40, 20, Qt::red);
+    triangle.content.vector.shape = 4; // triangle pointing up in content space
+    add(project, triangle);
+
+    QTemporaryDir directory;
+    assets::AssetStore store(directory.path());
+    render2::SceneWorld world(project, store);
+    const QPainterPath shape = world.shapeOf(QStringLiteral("triangle"), 0);
+
+    // After the content-local flip the tip is at +Y in model space.
+    CHECK(shape.contains(QPointF(0.0, 8.0)));
+    CHECK(!shape.contains(QPointF(15.0, 8.0)));
+    CHECK(shape.contains(QPointF(0.0, -9.0)));
+}
+
 void testVectorContentTracksRender()
 {
     Project project = makeProject(300, 300);
     const QColor background(QStringLiteral("#101014"));
 
     Entity bar = makeEntity(QStringLiteral("bar"), 0, 200);
-    bar.transform.x = 150.0;
-    bar.transform.y = 100.0;
+    bar.transform.x = 0.0;   // screen x = 150
+    bar.transform.y = 50.0;  // screen y = 100
     bar.content.kind = ContentKind::Vector;
     bar.content.vector.shape = 0;
     bar.content.vector.width = 100.0; // ignored while the track has keys
@@ -1392,8 +1528,8 @@ void testVectorContentTracksRender()
     add(project, bar);
 
     Entity corner = makeEntity(QStringLiteral("corner"), 0, 200);
-    corner.transform.x = 150.0;
-    corner.transform.y = 220.0;
+    corner.transform.x = 0.0;    // screen x = 150
+    corner.transform.y = -70.0;  // screen y = 220
     corner.content.kind = ContentKind::Vector;
     corner.content.vector.shape = 3; // rounded rect: uses cornerRadius
     corner.content.vector.width = 80.0;
@@ -1487,6 +1623,14 @@ int main(int argc, char** argv)
         {QStringLiteral("contentTrackFallback"), testContentTrackFallback},
         {QStringLiteral("textFontSizeTrackRenders"),
          testTextFontSizeTrackRenders},
+        {QStringLiteral("worldConventionOriginAndRotation"),
+         testWorldConventionOriginAndRotation},
+        {QStringLiteral("imageOrientationIsUpright"),
+         testImageOrientationIsUpright},
+        {QStringLiteral("cameraOrientationMatchesCanvas"),
+         testCameraOrientationMatchesCanvas},
+        {QStringLiteral("collisionShapeUsesModelYUp"),
+         testCollisionShapeUsesModelYUp},
         {QStringLiteral("vectorContentTracksRender"),
          testVectorContentTracksRender},
     };
