@@ -129,6 +129,18 @@ public:
     gizmo::Transform gizmoTransformForTest(const Uuid& uuid) const;
     gizmo::Bounds gizmoBoundsForTest(const Uuid& uuid) const;
     QPointF gizmoHandleForTest(const Uuid& uuid, gizmo::Handle handle) const;
+    // Widget-space corner geometry, as drawn.
+    QPointF gizmoCornerForTest(const Uuid& uuid, int visualCorner) const;
+    QRectF gizmoRotateHitRectForTest(const Uuid& uuid, gizmo::Handle handle) const;
+    double gizmoRotateGlyphAngleForTest(const Uuid& uuid, int visualCorner) const;
+    QPointF gizmoOppositeCornerForTest(const Uuid& uuid, gizmo::Handle handle) const;
+    std::optional<gizmo::Handle> gizmoHandleAtForTest(const QPointF& pos) const;
+    bool gizmoCornerHandlesVisibleForTest() const
+    {
+        return m_sessionDragKind != SessionDragKind::Rotate;
+    }
+    QPointF gizmoDragOriginForTest() const { return m_sessionDragRotateOrigin; }
+    bool gizmoDraggingAroundCornerForTest() const { return m_sessionDragAroundCorner; }
     QPointF sessionPivotForTest() const;
     double snapAngleForTest(double degrees, bool force) const;
     bool sessionDraggingForTest() const
@@ -263,6 +275,31 @@ private:
     gizmo::Bounds sessionGizmoBounds(const model::Entity& entity) const;
     QTransform sessionParentToWidget(const model::Entity& entity) const;
     double sessionViewScaleFor(const QTransform& parentToWidget) const;
+
+    // All session gizmo handles are laid out in widget space so their size and
+    // inset stay constant under zoom and non-uniform parent transforms.  The
+    // box is in local corner order (TL, TR, BR, BL); rotate handles are in
+    // visual corner order and already account for negative scale.
+    struct SessionGizmoGeometry
+    {
+        QTransform parentToWidget;
+        gizmo::Transform transform;
+        gizmo::Bounds bounds;
+        QPolygonF box;
+        QPointF pivot;
+        QPointF moveX;
+        QPointF moveY;
+        QPointF centerScale;
+        QPointF scaleCenter[4];
+        QPointF rotateCenter[4];
+        double rotateAngle[4] = {};
+        bool flippedX = false;
+        bool flippedY = false;
+
+        QPointF handleCenter(gizmo::Handle handle) const;
+    };
+
+    SessionGizmoGeometry sessionGizmoGeometry(const model::Entity& entity) const;
     std::optional<gizmo::Handle> hitSessionGizmo(const QPointF& pos) const;
     void startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
                                gizmo::Handle handle, const QPointF& pos);
@@ -390,8 +427,10 @@ private:
     QPointF m_sessionDragStartParent;
     QPointF m_sessionDragPivotStart;
     QPointF m_sessionDragCenterStart;
-    double m_sessionDragAnglePivot = 0.0;
-    double m_sessionDragAngleCenter = 0.0;
+    QPointF m_sessionDragOppositeCorner;   // rotate: opposite visual corner
+    QPointF m_sessionDragRotateOrigin;     // rotate: active origin (parent space)
+    QPointF m_sessionDragLastWidget;       // rotate: cursor marker for paint
+    bool m_sessionDragAroundCorner = false;
     QPointF m_sessionDragGrabOffset;
     bool m_sessionDragChanged = false;
     bool m_sessionDragSnapRoot = false;
@@ -399,6 +438,7 @@ private:
     QVector<double> m_sessionSnapTargetsX;
     QVector<double> m_sessionSnapTargetsY;
     double m_sessionCameraStartAngle = 0.0;
+    std::optional<gizmo::Handle> m_hoveredRotateHandle;
 
     // ---- session solver overlay -----------------------------------------
     Uuid m_solverFocusEntity;

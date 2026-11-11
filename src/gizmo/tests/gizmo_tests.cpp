@@ -201,7 +201,7 @@ void testHandleRotation()
                                 - corner.x(),
                             handlePosition(Handle::RotateTopLeft, turned, bounds, viewScale).y()
                                 - corner.y()),
-                 kRotateHandleOffset / viewScale, 1e-9));
+                 kRotateHandleInset / viewScale, 1e-9));
 
     // The center handle is in the local +X/+Y quadrant (rotated with the
     // entity), at a fixed screen-pixel distance from the pivot.
@@ -581,6 +581,108 @@ void testCenterScaleHandlePosition()
     }
 }
 
+void testRotateHandleRidesCorner()
+{
+    const Bounds bounds{-100, 100, 60, -60};
+    Transform transform;
+    transform.rotation = 23.0;
+
+    // The icon centre sits kRotateHandleInset px inside the corner along the
+    // inward diagonal, for every zoom.  The glyph box itself straddles the
+    // corner, hence the "riding" look instead of the old outside offset.
+    for (double viewScale : {0.5, 1.0, 3.0})
+    {
+        const QPointF pivot = worldPivot(transform);
+        const auto centre = [&](Handle handle) {
+            const QPointF corner = localToWorld(transform, localCorner(bounds, handle));
+            QPointF inward = pivot - corner;
+            const double length = std::hypot(inward.x(), inward.y());
+            inward /= length;
+            return corner + inward * (kRotateHandleInset / viewScale);
+        };
+
+        static constexpr Handle kRotateHandles[] = {
+            Handle::RotateTopLeft, Handle::RotateTopRight,
+            Handle::RotateBottomRight, Handle::RotateBottomLeft};
+        for (Handle handle : kRotateHandles)
+        {
+            CHECK_DETAIL(nearlyPoint(handlePosition(handle, transform, bounds, viewScale),
+                                     centre(handle)),
+                         QStringLiteral("handle %1 scale %2")
+                             .arg(int(handle))
+                             .arg(viewScale));
+        }
+    }
+}
+
+void testRotateHandleSquareHit()
+{
+    const Bounds bounds{-100, 100, 60, -60};
+    Transform transform;
+    transform.x = 30.0;
+    transform.y = -20.0;
+    const double viewScale = 2.0;
+
+    const QPointF centre =
+        handlePosition(Handle::RotateTopRight, transform, bounds, viewScale);
+    const double half = kRotateHitSize / 2.0 / viewScale;
+
+    // Axis-aligned square in model units: the diagonal just inside the
+    // half-size hits, one pixel outside misses.
+    CHECK(hitTest(centre + QPointF(half * 0.98, half * 0.98), transform, bounds,
+                  viewScale)
+          == Handle::RotateTopRight);
+    CHECK(!hitTest(centre + QPointF(half * 1.1, 0.0), transform, bounds, viewScale)
+               .has_value());
+
+    // The square does not care about the icon's own rotation.
+    transform.rotation = 90.0;
+    const QPointF turned =
+        handlePosition(Handle::RotateTopRight, transform, bounds, viewScale);
+    CHECK(hitTest(turned + QPointF(-half * 0.9, half * 0.9), transform, bounds,
+                  viewScale)
+          == Handle::RotateTopRight);
+}
+
+void testRotateAroundWorldPoint()
+{
+    Transform transform = sampleTransform();
+    const QPointF origin = localToWorld(transform, QPointF(boundsCenter(Bounds{})));
+    const QPointF before = localToWorld(transform, QPointF(60, -35));
+
+    const DragResult result = rotateAround(transform, origin, 37.0);
+    CHECK(nearly(result.transform.rotation, transform.rotation + 37.0, 1e-9));
+    CHECK(nearlyPoint(localToWorld(result.transform, QPointF(60, -35)),
+                      origin + rotated(before - origin, 37.0)));
+    CHECK(nearlyPoint(localToWorld(result.transform, worldToLocal(transform, origin)),
+                      origin));
+    CHECK(result.flippedX == (transform.scaleX < 0.0));
+    CHECK(result.flippedY == (transform.scaleY < 0.0));
+}
+
+void testVisualCornerFlipMapping()
+{
+    // Without flips the visual corners map 1:1 to local corners.
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        CHECK(localCornerForVisualCorner(corner, false, false) == corner);
+        CHECK(visualCornerForRotateHandle(rotateHandleForVisualCorner(corner))
+              == corner);
+    }
+
+    // A negative X scale swaps left/right, a negative Y scale swaps
+    // top/bottom; both mirror the box by 180 degrees.  RotateTopLeft stays the
+    // visual top-left handle.
+    CHECK(localCornerForVisualCorner(0, true, false) == 1);
+    CHECK(localCornerForVisualCorner(1, true, false) == 0);
+    CHECK(localCornerForVisualCorner(0, false, true) == 3);
+    CHECK(localCornerForVisualCorner(3, false, true) == 0);
+    CHECK(localCornerForVisualCorner(0, true, true) == 2);
+    CHECK(localCornerForVisualCorner(2, true, true) == 0);
+    CHECK(rotateHandleForVisualCorner(0) == Handle::RotateTopLeft);
+    CHECK(rotateHandleForVisualCorner(3) == Handle::RotateBottomLeft);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -596,7 +698,11 @@ int main(int argc, char** argv)
     testCenterScaleQuadrants();
     testRotateAroundPivot();
     testRotateAroundBoundsCenter();
+    testRotateAroundWorldPoint();
     testHitTest();
+    testRotateHandleRidesCorner();
+    testRotateHandleSquareHit();
+    testVisualCornerFlipMapping();
     testCenterScaleHandlePosition();
 
     qInfo().noquote() << QStringLiteral("%1 checks, %2 failures").arg(gChecks).arg(gFailures);

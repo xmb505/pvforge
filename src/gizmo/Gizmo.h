@@ -81,13 +81,34 @@ enum class Handle
     CenterScale
 };
 
+bool isRotateHandle(Handle handle);
+bool isScaleHandle(Handle handle);
+
 // Handle geometry in pixels (converted with viewScale).
 inline constexpr double kHitRadius = 7.0;
-inline constexpr double kScaleHandleInset = 10.0;
-inline constexpr double kRotateHandleOffset = 16.0;
+inline constexpr double kScaleHandleInset = 13.0;
+// Inkscape-style corner rotate glyph: a closed 90-degree double-headed curved
+// arrow.  The glyph's centre sits kRotateHandleInset px inside the visual
+// corner, so the icon straddles ("rides") the corner instead of floating
+// outside the box.  kRotateHitSize is the axis-aligned square hit box.
+inline constexpr double kRotateHandleSize = 18.0;
+inline constexpr double kRotateHandleInset = 3.0;
+inline constexpr double kRotateHitSize = 18.0;
 inline constexpr double kMoveAxisLength = 48.0;
 inline constexpr double kCenterScaleOffset = 28.0;
 inline constexpr double kMinScale = 1e-4;
+
+// Visual corner indices describe the screen-space quad: 0 = top-left,
+// 1 = top-right, 2 = bottom-right, 3 = bottom-left.  Rotate handle enums are
+// visual too: after a negative scale RotateTopLeft is still the handle at the
+// visual top-left corner, while the local content corner underneath it is
+// swapped by flippedX/flippedY.  The glyph itself is never mirrored; its
+// orientation comes from the widget-space box edges.
+Handle rotateHandleForVisualCorner(int visualCorner);
+int visualCornerForRotateHandle(Handle handle);
+// Local corner index (0 = TL, 1 = TR, 2 = BR, 3 = BL in content space) that
+// is drawn at a visual corner after the entity's negative scale mirrors it.
+int localCornerForVisualCorner(int visualCorner, bool flippedX, bool flippedY);
 
 QTransform localMatrix(const Transform& transform);
 QPointF localToWorld(const Transform& transform, QPointF local);
@@ -109,11 +130,13 @@ QPointF worldToLocalAxesPixels(const Transform& transform, QPointF world, double
 
 QPointF boundsCenter(const Bounds& bounds);
 
-// All positions are canvas coordinates. Corner handles sit 10 px inside the
-// transformed corner; rotate handles sit 16 px outside it; move axis tips are
-// 48 px from the pivot. The center scale handle sits kCenterScaleOffset px
-// along the rotated +X/+Y diagonal. Pixel distances are divided by viewScale
-// to convert them to canvas units.
+// All positions are canvas coordinates. Corner handles sit 13 px inside the
+// transformed corner; rotate handles ride the corner with their centre
+// kRotateHandleInset px inside it; move axis tips are 48 px from the pivot.
+// The center scale handle sits kCenterScaleOffset px along the rotated
+// +X/+Y diagonal. Pixel distances are divided by viewScale to convert them to
+// canvas units.  Viewport draw/hit code works in widget space instead so
+// non-uniform parent transforms cannot stretch these offsets.
 QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& bounds,
                        double viewScale);
 
@@ -170,5 +193,12 @@ DragResult rotate(const Transform& transform, double angleDelta,
                   bool aroundBoundingBoxCenter);
 DragResult rotate(const Transform& transform, const Bounds& bounds, double angleDelta,
                   bool aroundBoundingBoxCenter);
+
+// rotation += angleDelta, with x/y compensated so worldPoint stays fixed.
+// This is the Inkscape "rotate around the opposite corner" gesture and also
+// the implementation of the bounds-centre overload above.  worldPoint is in
+// the same canvas space as localToWorld().
+DragResult rotateAround(const Transform& transform, QPointF worldPoint,
+                        double angleDelta);
 
 } // namespace pvf::gizmo

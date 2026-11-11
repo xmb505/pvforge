@@ -19,6 +19,7 @@
 #include "workbench/MetaBuilder.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QFontMetricsF>
@@ -116,6 +117,195 @@ QPointF localCorner(const gizmo::Bounds& bounds, gizmo::Handle handle)
     default:
         return gizmo::boundsCenter(bounds);
     }
+}
+
+QPointF unitVector(QPointF vector)
+{
+    const double length = std::hypot(vector.x(), vector.y());
+    return length > 1e-9 ? vector / length : QPointF();
+}
+
+// Index order matches the gizmo box: 0 = local top-left, 1 = top-right,
+// 2 = bottom-right, 3 = bottom-left (model space is Y-up; on screen the
+// viewport's single Y flip makes 0 the visual top-left for an upright box).
+QPointF localCornerPoint(const gizmo::Bounds& bounds, int corner)
+{
+    switch (corner)
+    {
+    case 0:
+        return QPointF(bounds.left, bounds.top);
+    case 1:
+        return QPointF(bounds.right, bounds.top);
+    case 2:
+        return QPointF(bounds.right, bounds.bottom);
+    default:
+        return QPointF(bounds.left, bounds.bottom);
+    }
+}
+
+// The four transformed local corners in widget space, in the same order as
+// localCornerPoint().  Drawing, hit testing and tests all use this quad.
+QPolygonF gizmoBoxWidget(const gizmo::Transform& transform, const gizmo::Bounds& bounds,
+                         const QTransform& parentToWidget)
+{
+    QPolygonF box;
+    box << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.top)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.top)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.bottom)))
+        << parentToWidget.map(
+               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.bottom)));
+    return box;
+}
+
+// Unit direction from a quad corner towards the inside of the box.  Using the
+// two adjacent widget-space edges keeps it correct for rotated boxes and
+// non-uniform parent transforms; degenerate boxes fall back to the centroid.
+QPointF cornerInwardDirection(const QPolygonF& box, int corner)
+{
+    if (box.size() < 4)
+        return QPointF();
+
+    const QPointF c = box.at(corner);
+    const QPointF next = box.at((corner + 1) % 4);
+    const QPointF prev = box.at((corner + 3) % 4);
+    QPointF inward = unitVector(next - c) + unitVector(prev - c);
+    if (std::hypot(inward.x(), inward.y()) > 1e-9)
+        return unitVector(inward);
+
+    const QPointF center = (box.at(0) + box.at(1) + box.at(2) + box.at(3)) / 4.0;
+    return unitVector(center - c);
+}
+
+// QPainter::rotate(angle) turns the widget coordinate system counter-clockwise
+// on screen, while a local widget-space vector at atan2(y, x) ends up at
+// atan2(y, x) - angle.  The glyph band points at its local up-right diagonal
+// (screen angle -45 degrees); solving -45 - angle == inwardAngle keeps the
+// band on the inside of the corner and the two arrow heads on the two edges.
+double rotateGlyphAngle(const QPolygonF& box, int corner)
+{
+    const QPointF inward = cornerInwardDirection(box, corner);
+    return -45.0 - qRadiansToDegrees(std::atan2(inward.y(), inward.x()));
+}
+
+// Inkscape's draw_carrow(): one closed path with a 90-degree outer arc, a
+// 90-degree inner arc and two triangular arrow heads.  The control points are
+// the same as src/display/control/ctrl-handle-rendering.cpp, translated so the
+// glyph is centred on the origin of its own S x S box.
+QPainterPath carrowGlyphPath()
+{
+    const double size = gizmo::kRotateHandleSize;
+    const double delta = std::round(1.5 + (size - 3.0) / 4.0) - 1.5;
+    const double arcCenterX = 1.5 + delta;
+    const double arcCenterY = size - 1.5 - delta;
+    const double outerRadius = size - 3.0 - 1.5 * delta;
+    const double innerRadius = size - 3.0 - 2.5 * delta;
+
+    QPainterPath path;
+    // First arrow head: tip, outer side, inner notch (= outer arc start).
+    path.moveTo(1.5, 1.5 + delta);
+    path.lineTo(arcCenterX, 1.5);
+    path.lineTo(arcCenterX, arcCenterY - outerRadius);
+    // 90-degree outer arc from 12 o'clock to 3 o'clock (Qt angles: 90 -> 0).
+    path.arcTo(QRectF(arcCenterX - outerRadius, arcCenterY - outerRadius,
+                      2.0 * outerRadius, 2.0 * outerRadius),
+               90.0, -90.0);
+    // Second arrow head: tip, outer side, inner notch (= inner arc start).
+    path.lineTo(arcCenterX + outerRadius - delta / 2.0, arcCenterY + delta);
+    path.lineTo(arcCenterX + outerRadius + delta, arcCenterY);
+    path.lineTo(arcCenterX + innerRadius, arcCenterY);
+    // 90-degree inner arc back from 3 o'clock to 12 o'clock.
+    path.arcTo(QRectF(arcCenterX - innerRadius, arcCenterY - innerRadius,
+                      2.0 * innerRadius, 2.0 * innerRadius),
+               0.0, 90.0);
+    path.lineTo(1.5, 1.5 + delta);
+    path.closeSubpath();
+    return path.translated(-size / 2.0, -size / 2.0);
+}
+
+void drawRotateGlyph(QPainter& painter, QPointF center, double angleDegrees,
+                     bool highlighted)
+{
+    static const QPainterPath path = carrowGlyphPath();
+    painter.save();
+    painter.translate(center);
+    painter.rotate(angleDegrees);
+    // Dark halo under a light fill: the old UI's light-icon/dark-stroke style
+    // stays readable on white entities while the light core shows on dark
+    // backgrounds (same trick as Inkscape's outline).
+    painter.setPen(QPen(QColor(18, 21, 26), 2.2, Qt::SolidLine, Qt::RoundCap,
+                        Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(path);
+    painter.setPen(QPen(QColor(18, 21, 26), 1.0, Qt::SolidLine, Qt::RoundCap,
+                        Qt::RoundJoin));
+    painter.setBrush(highlighted ? QColor(116, 206, 255) : QColor(246, 249, 255));
+    painter.drawPath(path);
+    painter.restore();
+}
+
+// Rotation cursor drawn at runtime: no new SVG/resource is added to the UI.
+QCursor rotateCursor()
+{
+    static const QCursor cursor = [] {
+        QPixmap pixmap(24, 24);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QPointF center(12.0, 12.0);
+        const double radius = 7.0;
+        const double startDegrees = 55.0;
+        const QRectF circle(center.x() - radius, center.y() - radius,
+                            2.0 * radius, 2.0 * radius);
+        const auto paintArrow = [&](const QColor& color, double width) {
+            painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawArc(circle, int(startDegrees * 16.0), int(270.0 * 16.0));
+
+            const double radians = qDegreesToRadians(startDegrees);
+            const QPointF tangent(-std::sin(radians), -std::cos(radians));
+            const QPointF normal(-tangent.y(), tangent.x());
+            const QPointF end = center
+                                + QPointF(std::cos(radians) * radius,
+                                          -std::sin(radians) * radius);
+            QPolygonF head;
+            head << end + tangent * 4.5 << end + normal * 2.8 - tangent * 1.2
+                 << end - normal * 2.8 - tangent * 1.2;
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(color);
+            painter.drawPolygon(head);
+        };
+        paintArrow(QColor(18, 21, 26), 3.6);
+        paintArrow(QColor(255, 255, 255), 1.6);
+        painter.end();
+        return QCursor(pixmap, 12, 12);
+    }();
+    return cursor;
+}
+
+void drawRotationOriginMarker(QPainter& painter, QPointF center)
+{
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(18, 21, 26), 2.4, Qt::SolidLine, Qt::RoundCap));
+    painter.drawEllipse(center, 5.0, 5.0);
+    painter.drawLine(center + QPointF(-9.0, 0.0), center + QPointF(9.0, 0.0));
+    painter.drawLine(center + QPointF(0.0, -9.0), center + QPointF(0.0, 9.0));
+    painter.setPen(QPen(QColor(255, 255, 255), 1.2, Qt::SolidLine, Qt::RoundCap));
+    painter.drawEllipse(center, 5.0, 5.0);
+    painter.drawLine(center + QPointF(-9.0, 0.0), center + QPointF(9.0, 0.0));
+    painter.drawLine(center + QPointF(0.0, -9.0), center + QPointF(0.0, 9.0));
+}
+
+void drawRotationGripMarker(QPainter& painter, QPointF center)
+{
+    painter.setPen(QPen(QColor(18, 21, 26), 2.4));
+    painter.setBrush(QColor(255, 255, 255));
+    painter.drawEllipse(center, 3.2, 3.2);
+    painter.setPen(QPen(QColor(18, 21, 26), 1.0));
+    painter.drawEllipse(center, 3.2, 3.2);
 }
 
 bool transformsEqual(const gizmo::Transform& a, const gizmo::Transform& b)
@@ -249,36 +439,6 @@ std::optional<double> nearestFeatureSnap(const std::array<double, 3>& features,
     return best;
 }
 
-gizmo::Handle scaleHandleForCorner(int corner)
-{
-    switch (corner)
-    {
-    case 0:
-        return gizmo::Handle::ScaleTopLeft;
-    case 1:
-        return gizmo::Handle::ScaleTopRight;
-    case 2:
-        return gizmo::Handle::ScaleBottomRight;
-    default:
-        return gizmo::Handle::ScaleBottomLeft;
-    }
-}
-
-gizmo::Handle rotateHandleForCorner(int corner)
-{
-    switch (corner)
-    {
-    case 0:
-        return gizmo::Handle::RotateTopLeft;
-    case 1:
-        return gizmo::Handle::RotateTopRight;
-    case 2:
-        return gizmo::Handle::RotateBottomRight;
-    default:
-        return gizmo::Handle::RotateBottomLeft;
-    }
-}
-
 void drawArrowLine(QPainter& painter, QPointF from, QPointF to,
                    const QColor& color)
 {
@@ -297,19 +457,6 @@ void drawArrowLine(QPainter& painter, QPointF from, QPointF to,
     painter.setPen(Qt::NoPen);
     painter.setBrush(color);
     painter.drawPolygon(head);
-}
-
-void drawRotateGlyph(QPainter& painter, QPointF center)
-{
-    painter.save();
-    painter.translate(center);
-    const QColor color(246, 249, 255);
-    painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::FlatCap));
-    painter.setBrush(Qt::NoBrush);
-    const QRectF arcRect(-7.0, -7.0, 14.0, 14.0);
-    painter.drawArc(arcRect, 30 * 16, 120 * 16);
-    painter.drawArc(arcRect, 210 * 16, 120 * 16);
-    painter.restore();
 }
 
 double solverTrackValue(const model::Entity& entity, const QString& name,
@@ -584,6 +731,7 @@ Viewport::Viewport(EditorSession* session, QWidget* parent)
             update();
         });
         connect(document, &next::Document::selectionChanged, this, [this] {
+            m_hoveredRotateHandle.reset();
             invalidateSessionImage();
             invalidateSessionSolverOverlay();
             update();
@@ -1548,6 +1696,72 @@ double Viewport::sessionViewScaleFor(const QTransform& parentToWidget) const
     return std::max(1e-6, std::sqrt(std::abs(parentToWidget.determinant())));
 }
 
+QPointF Viewport::SessionGizmoGeometry::handleCenter(gizmo::Handle handle) const
+{
+    switch (handle)
+    {
+    case gizmo::Handle::MoveX:
+        return moveX;
+    case gizmo::Handle::MoveY:
+        return moveY;
+    case gizmo::Handle::CenterScale:
+        return centerScale;
+    case gizmo::Handle::ScaleTopLeft:
+        return scaleCenter[0];
+    case gizmo::Handle::ScaleTopRight:
+        return scaleCenter[1];
+    case gizmo::Handle::ScaleBottomRight:
+        return scaleCenter[2];
+    case gizmo::Handle::ScaleBottomLeft:
+        return scaleCenter[3];
+    default:
+        return rotateCenter[gizmo::visualCornerForRotateHandle(handle)];
+    }
+}
+
+Viewport::SessionGizmoGeometry Viewport::sessionGizmoGeometry(
+    const model::Entity& entity) const
+{
+    SessionGizmoGeometry geometry;
+    geometry.parentToWidget = sessionParentToWidget(entity);
+    geometry.transform = sessionGizmoTransform(entity);
+    geometry.bounds = sessionGizmoBounds(entity);
+    geometry.flippedX = geometry.transform.scaleX < 0.0;
+    geometry.flippedY = geometry.transform.scaleY < 0.0;
+    geometry.box = gizmoBoxWidget(geometry.transform, geometry.bounds,
+                                  geometry.parentToWidget);
+    geometry.pivot = geometry.parentToWidget.map(gizmo::worldPivot(geometry.transform));
+
+    const double viewScale = sessionViewScaleFor(geometry.parentToWidget);
+    const auto screenPosition = [&](gizmo::Handle handle) {
+        return geometry.parentToWidget.map(
+            gizmo::handlePosition(handle, geometry.transform, geometry.bounds, viewScale));
+    };
+    geometry.moveX = screenPosition(gizmo::Handle::MoveX);
+    geometry.moveY = screenPosition(gizmo::Handle::MoveY);
+    geometry.centerScale = screenPosition(gizmo::Handle::CenterScale);
+
+    // Screen-pixel inset: the scale squares stay 13 px inside the corner and
+    // the rotate glyphs ride the corner at 3 px inside, whatever the zoom or
+    // the parent's scale is.
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        geometry.scaleCenter[corner] =
+            geometry.box.at(corner)
+            + cornerInwardDirection(geometry.box, corner) * gizmo::kScaleHandleInset;
+    }
+    for (int visual = 0; visual < 4; ++visual)
+    {
+        const int local = gizmo::localCornerForVisualCorner(
+            visual, geometry.flippedX, geometry.flippedY);
+        geometry.rotateCenter[visual] =
+            geometry.box.at(local)
+            + cornerInwardDirection(geometry.box, local) * gizmo::kRotateHandleInset;
+        geometry.rotateAngle[visual] = rotateGlyphAngle(geometry.box, local);
+    }
+    return geometry;
+}
+
 std::optional<gizmo::Handle> Viewport::hitSessionGizmo(const QPointF& pos) const
 {
     if (!m_session || !m_session->document())
@@ -1558,16 +1772,54 @@ std::optional<gizmo::Handle> Viewport::hitSessionGizmo(const QPointF& pos) const
         || it->content.kind == ContentKind::Camera)
         return std::nullopt;
 
-    const QTransform parentToWidget = sessionParentToWidget(it.value());
-    bool invertible = false;
-    const QTransform inverse = parentToWidget.inverted(&invertible);
-    if (!invertible)
-        return std::nullopt;
+    // Hit testing happens in widget space: the rotate handles use 18 px
+    // axis-aligned squares and the offsets never pass through the parent
+    // matrix, so a rotated/non-uniform parent cannot deform the targets.
+    const SessionGizmoGeometry geometry = sessionGizmoGeometry(it.value());
 
-    const QPointF parentPos = inverse.map(pos);
-    return gizmo::hitTest(parentPos, sessionGizmoTransform(it.value()),
-                          sessionGizmoBounds(it.value()),
-                          sessionViewScaleFor(parentToWidget));
+    std::optional<gizmo::Handle> best;
+    double bestDistance = 0.0;
+    const auto consider = [&](gizmo::Handle handle, bool square, double extent) {
+        const QPointF center = geometry.handleCenter(handle);
+        const double dx = pos.x() - center.x();
+        const double dy = pos.y() - center.y();
+        if (square ? (std::abs(dx) > extent || std::abs(dy) > extent)
+                   : std::hypot(dx, dy) > extent)
+            return;
+        const double distance = std::hypot(dx, dy);
+        if (!best || distance < bestDistance)
+        {
+            best = handle;
+            bestDistance = distance;
+        }
+    };
+
+    for (int visual = 0; visual < 4; ++visual)
+        consider(gizmo::rotateHandleForVisualCorner(visual), true,
+                 gizmo::kRotateHitSize / 2.0);
+
+    static constexpr gizmo::Handle kScaleHandles[] = {
+        gizmo::Handle::ScaleTopLeft, gizmo::Handle::ScaleTopRight,
+        gizmo::Handle::ScaleBottomRight, gizmo::Handle::ScaleBottomLeft};
+    for (gizmo::Handle handle : kScaleHandles)
+        consider(handle, false, gizmo::kHitRadius);
+
+    consider(gizmo::Handle::CenterScale, false, gizmo::kHitRadius);
+
+    if (best)
+        return best;
+
+    const auto hitsAxis = [&](gizmo::Handle tipHandle) {
+        return distanceToSegment(pos, geometry.pivot,
+                                 geometry.handleCenter(tipHandle))
+               <= gizmo::kHitRadius;
+    };
+    if (hitsAxis(gizmo::Handle::MoveX))
+        return gizmo::Handle::MoveX;
+    if (hitsAxis(gizmo::Handle::MoveY))
+        return gizmo::Handle::MoveY;
+
+    return std::nullopt;
 }
 
 void Viewport::collectSessionSnapTargets(const Uuid& uuid)
@@ -1788,12 +2040,23 @@ void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
     m_sessionDragCenterStart = gizmo::localToWorld(
         m_sessionDragTransform, gizmo::boundsCenter(m_sessionDragBounds));
 
-    const auto angleAround = [this](QPointF center) {
-        return std::atan2(m_sessionDragStartParent.y() - center.y(),
-                          m_sessionDragStartParent.x() - center.x());
-    };
-    m_sessionDragAnglePivot = angleAround(m_sessionDragPivotStart);
-    m_sessionDragAngleCenter = angleAround(m_sessionDragCenterStart);
+    // Inkscape rotation gesture: Shift rotates around the opposite visual
+    // corner.  Visual corners swap their local identity under negative scale,
+    // so compute the local corner through the same mapping the handles use.
+    m_sessionDragOppositeCorner = m_sessionDragPivotStart;
+    if (kind == SessionDragKind::Rotate)
+    {
+        const int visual = gizmo::visualCornerForRotateHandle(handle);
+        const int local = gizmo::localCornerForVisualCorner(
+            (visual + 2) % 4, m_sessionDragTransform.scaleX < 0.0,
+            m_sessionDragTransform.scaleY < 0.0);
+        m_sessionDragOppositeCorner = gizmo::localToWorld(
+            m_sessionDragTransform, localCornerPoint(m_sessionDragBounds, local));
+    }
+    m_sessionDragRotateOrigin = m_sessionDragPivotStart;
+    m_sessionDragAroundCorner = false;
+    m_sessionDragLastWidget = pos;
+    m_hoveredRotateHandle.reset();
 
     if (kind == SessionDragKind::Scale)
     {
@@ -1805,7 +2068,7 @@ void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
     m_sessionDragChanged = false;
     m_showGuideX = false;
     m_showGuideY = false;
-    setCursor(kind == SessionDragKind::Rotate ? Qt::CrossCursor
+    setCursor(kind == SessionDragKind::Rotate ? rotateCursor()
                : kind == SessionDragKind::Scale ? Qt::SizeFDiagCursor
                                                 : Qt::SizeAllCursor);
 }
@@ -1888,31 +2151,48 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
 
     case SessionDragKind::Rotate:
     {
-        const bool aroundCenter = modifiers.testFlag(Qt::AltModifier);
-        const QPointF center = aroundCenter ? m_sessionDragCenterStart
-                                            : m_sessionDragPivotStart;
+        // Inkscape semantics: pivot by default, opposite corner while Shift
+        // is held.  Alt keeps the legacy "around the box centre" shortcut.
+        const bool aroundOpposite = modifiers.testFlag(Qt::ShiftModifier);
+        const bool aroundCenter =
+            !aroundOpposite && modifiers.testFlag(Qt::AltModifier);
+        const QPointF origin = aroundOpposite ? m_sessionDragOppositeCorner
+                              : aroundCenter  ? m_sessionDragCenterStart
+                                              : m_sessionDragPivotStart;
         const double startAngle =
-            aroundCenter ? m_sessionDragAngleCenter : m_sessionDragAnglePivot;
-        double delta = std::atan2(mouseParent.y() - center.y(),
-                                  mouseParent.x() - center.x())
+            std::atan2(m_sessionDragStartParent.y() - origin.y(),
+                       m_sessionDragStartParent.x() - origin.x());
+        double delta = std::atan2(mouseParent.y() - origin.y(),
+                                  mouseParent.x() - origin.x())
                        - startAngle;
         delta = std::remainder(delta, 2.0 * M_PI);
         double degrees = qRadiansToDegrees(delta);
 
+        // PVForge snapAngles (default 0/90/180/270) with a 3 degree catch;
+        // Ctrl temporarily disables snapping.  Shift selects the origin, it
+        // does not change the snap strength.
         if (snapActive)
         {
-            const double targetRotation = snapSessionAngle(
-                m_sessionDragTransform.rotation + degrees,
-                modifiers.testFlag(Qt::ShiftModifier));
+            const double targetRotation =
+                snapSessionAngle(m_sessionDragTransform.rotation + degrees, false);
             degrees = targetRotation - m_sessionDragTransform.rotation;
         }
 
-        const gizmo::DragResult result = gizmo::rotate(
-            m_sessionDragTransform, m_sessionDragBounds, degrees, aroundCenter);
-        writeSessionGizmoValue(entity, QStringLiteral("x"), result.transform.x);
-        writeSessionGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        const gizmo::DragResult result =
+            (aroundOpposite || aroundCenter)
+                ? gizmo::rotateAround(m_sessionDragTransform, origin, degrees)
+                : gizmo::rotate(m_sessionDragTransform, degrees, false);
+        if (aroundOpposite || aroundCenter)
+        {
+            writeSessionGizmoValue(entity, QStringLiteral("x"), result.transform.x);
+            writeSessionGizmoValue(entity, QStringLiteral("y"), result.transform.y);
+        }
         writeSessionGizmoValue(entity, QStringLiteral("rotation"),
                                result.transform.rotation);
+
+        m_sessionDragRotateOrigin = origin;
+        m_sessionDragAroundCorner = aroundOpposite;
+        m_sessionDragLastWidget = pos;
         break;
     }
 
@@ -1990,6 +2270,11 @@ void Viewport::finishSessionGizmoDrag()
     m_sessionDragStart = model::Entity();
     m_sessionDragChanged = false;
     m_sessionDragGrabOffset = QPointF();
+    m_sessionDragOppositeCorner = QPointF();
+    m_sessionDragRotateOrigin = QPointF();
+    m_sessionDragLastWidget = QPointF();
+    m_sessionDragAroundCorner = false;
+    m_hoveredRotateHandle.reset();
     m_showGuideX = false;
     m_showGuideY = false;
     unsetCursor();
@@ -2066,6 +2351,11 @@ void Viewport::cancelSessionDrag()
     m_solverDragStart = model::Entity();
     m_sessionDragChanged = false;
     m_sessionDragGrabOffset = QPointF();
+    m_sessionDragOppositeCorner = QPointF();
+    m_sessionDragRotateOrigin = QPointF();
+    m_sessionDragLastWidget = QPointF();
+    m_sessionDragAroundCorner = false;
+    m_hoveredRotateHandle.reset();
     m_showGuideX = false;
     m_showGuideY = false;
     unsetCursor();
@@ -2085,63 +2375,58 @@ void Viewport::drawSessionGizmo(QPainter& painter)
         return;
 
     const model::Entity& entity = it.value();
-    const QTransform parentToWidget = sessionParentToWidget(entity);
-    const double viewScale = sessionViewScaleFor(parentToWidget);
-    const gizmo::Transform transform = sessionGizmoTransform(entity);
-    const gizmo::Bounds bounds = sessionGizmoBounds(entity);
+    const SessionGizmoGeometry geometry = sessionGizmoGeometry(entity);
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     if (entity.hidden)
         painter.setOpacity(0.45);
 
-    const auto screenPosition = [&](gizmo::Handle handle) {
-        return parentToWidget.map(
-            gizmo::handlePosition(handle, transform, bounds, viewScale));
-    };
+    // Inkscape hides the selection box and every handle during a rotation
+    // drag; only the rotation origin and a cursor marker remain.
+    if (m_sessionDragKind == SessionDragKind::Rotate)
+    {
+        drawRotationOriginMarker(
+            painter, geometry.parentToWidget.map(m_sessionDragRotateOrigin));
+        drawRotationGripMarker(painter, m_sessionDragLastWidget);
+        painter.restore();
+        return;
+    }
 
-    QPolygonF box;
-    box << parentToWidget.map(
-               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.top)))
-        << parentToWidget.map(
-               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.top)))
-        << parentToWidget.map(
-               gizmo::localToWorld(transform, QPointF(bounds.right, bounds.bottom)))
-        << parentToWidget.map(
-               gizmo::localToWorld(transform, QPointF(bounds.left, bounds.bottom)));
     painter.setPen(QPen(QColor(116, 206, 255, 175), 1.0, Qt::DashLine));
     painter.setBrush(Qt::NoBrush);
-    painter.drawPolygon(box);
+    painter.drawPolygon(geometry.box);
 
-    const QPointF pivotWidget =
-        parentToWidget.map(gizmo::worldPivot(transform));
-    drawArrowLine(painter, pivotWidget, screenPosition(gizmo::Handle::MoveX),
-                  QColor(255, 122, 122));
-    drawArrowLine(painter, pivotWidget, screenPosition(gizmo::Handle::MoveY),
-                  QColor(125, 255, 158));
+    drawArrowLine(painter, geometry.pivot, geometry.moveX, QColor(255, 122, 122));
+    drawArrowLine(painter, geometry.pivot, geometry.moveY, QColor(125, 255, 158));
 
     painter.setPen(QPen(QColor(18, 21, 26), 1.0));
     painter.setBrush(QColor(246, 249, 255));
     for (int corner = 0; corner < 4; ++corner)
     {
-        const QPointF position = screenPosition(scaleHandleForCorner(corner));
+        const QPointF position = geometry.scaleCenter[corner];
         painter.drawRect(QRectF(position.x() - 3.5, position.y() - 3.5, 7.0, 7.0));
     }
 
-    const QPointF centerScale = screenPosition(gizmo::Handle::CenterScale);
     painter.setPen(QPen(QColor(116, 206, 255), 1.2));
     painter.setBrush(QColor(34, 46, 58));
-    painter.drawRect(QRectF(centerScale.x() - 4.5, centerScale.y() - 4.5, 9.0,
-                            9.0));
+    painter.drawRect(QRectF(geometry.centerScale.x() - 4.5,
+                            geometry.centerScale.y() - 4.5, 9.0, 9.0));
     painter.setPen(QPen(QColor(116, 206, 255, 90), 1.0, Qt::DotLine));
-    painter.drawLine(pivotWidget, centerScale);
+    painter.drawLine(geometry.pivot, geometry.centerScale);
 
-    for (int corner = 0; corner < 4; ++corner)
-        drawRotateGlyph(painter, screenPosition(rotateHandleForCorner(corner)));
+    for (int visual = 0; visual < 4; ++visual)
+    {
+        const gizmo::Handle handle = gizmo::rotateHandleForVisualCorner(visual);
+        const bool highlighted = m_hoveredRotateHandle
+                                 && *m_hoveredRotateHandle == handle;
+        drawRotateGlyph(painter, geometry.rotateCenter[visual],
+                        geometry.rotateAngle[visual], highlighted);
+    }
 
     painter.setPen(QPen(QColor(18, 21, 26), 1.5));
     painter.setBrush(QColor(255, 255, 255));
-    painter.drawEllipse(pivotWidget, 4.0, 4.0);
+    painter.drawEllipse(geometry.pivot, 4.0, 4.0);
 
     painter.restore();
 }
@@ -3968,7 +4253,29 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
             return;
         }
         if (m_sessionDragKind != SessionDragKind::None)
+        {
             applySessionGizmoDrag(event->position(), event->modifiers());
+            return;
+        }
+
+        // Hover feedback: the corner rotate handles switch to a rotation
+        // cursor and highlight.  Other handles keep the legacy arrow cursor.
+        if (m_editingEnabled && m_session->document())
+        {
+            const std::optional<gizmo::Handle> hit =
+                hitSessionGizmo(event->position());
+            const std::optional<gizmo::Handle> rotate =
+                hit && gizmo::isRotateHandle(*hit) ? hit : std::nullopt;
+            if (rotate != m_hoveredRotateHandle)
+            {
+                m_hoveredRotateHandle = rotate;
+                if (rotate)
+                    setCursor(rotateCursor());
+                else
+                    unsetCursor();
+                update();
+            }
+        }
         return;
     }
 
@@ -4494,10 +4801,65 @@ QPointF Viewport::gizmoHandleForTest(const Uuid& uuid, gizmo::Handle handle) con
     const auto it = m_session->project().entities.constFind(uuid);
     if (it == m_session->project().entities.constEnd())
         return {};
-    const QTransform parentToWidget = sessionParentToWidget(it.value());
-    return parentToWidget.map(gizmo::handlePosition(
-        handle, sessionGizmoTransform(it.value()), sessionGizmoBounds(it.value()),
-        sessionViewScaleFor(parentToWidget)));
+    return sessionGizmoGeometry(it.value()).handleCenter(handle);
+}
+
+QPointF Viewport::gizmoCornerForTest(const Uuid& uuid, int visualCorner) const
+{
+    if (!m_session)
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return {};
+    const SessionGizmoGeometry geometry = sessionGizmoGeometry(it.value());
+    const int local = gizmo::localCornerForVisualCorner(
+        visualCorner, geometry.flippedX, geometry.flippedY);
+    return geometry.box.at(local);
+}
+
+QRectF Viewport::gizmoRotateHitRectForTest(const Uuid& uuid,
+                                           gizmo::Handle handle) const
+{
+    if (!m_session)
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return {};
+    const QPointF center = sessionGizmoGeometry(it.value()).handleCenter(handle);
+    const double half = gizmo::kRotateHitSize / 2.0;
+    return QRectF(center.x() - half, center.y() - half, gizmo::kRotateHitSize,
+                  gizmo::kRotateHitSize);
+}
+
+double Viewport::gizmoRotateGlyphAngleForTest(const Uuid& uuid,
+                                              int visualCorner) const
+{
+    if (!m_session)
+        return 0.0;
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return 0.0;
+    return sessionGizmoGeometry(it.value()).rotateAngle[((visualCorner % 4) + 4) % 4];
+}
+
+QPointF Viewport::gizmoOppositeCornerForTest(const Uuid& uuid,
+                                             gizmo::Handle handle) const
+{
+    if (!m_session || !gizmo::isRotateHandle(handle))
+        return {};
+    const auto it = m_session->project().entities.constFind(uuid);
+    if (it == m_session->project().entities.constEnd())
+        return {};
+    const SessionGizmoGeometry geometry = sessionGizmoGeometry(it.value());
+    const int visual = (gizmo::visualCornerForRotateHandle(handle) + 2) % 4;
+    const int local = gizmo::localCornerForVisualCorner(
+        visual, geometry.flippedX, geometry.flippedY);
+    return geometry.box.at(local);
+}
+
+std::optional<gizmo::Handle> Viewport::gizmoHandleAtForTest(const QPointF& pos) const
+{
+    return hitSessionGizmo(pos);
 }
 
 QPointF Viewport::sessionPivotForTest() const

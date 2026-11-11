@@ -36,34 +36,6 @@ double pointSegmentDistance(QPointF point, QPointF start, QPointF end)
     return distance(point, start + segment * t);
 }
 
-bool isScaleHandle(Handle handle)
-{
-    switch (handle)
-    {
-    case Handle::ScaleTopLeft:
-    case Handle::ScaleTopRight:
-    case Handle::ScaleBottomRight:
-    case Handle::ScaleBottomLeft:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool isRotateHandle(Handle handle)
-{
-    switch (handle)
-    {
-    case Handle::RotateTopLeft:
-    case Handle::RotateTopRight:
-    case Handle::RotateBottomRight:
-    case Handle::RotateBottomLeft:
-        return true;
-    default:
-        return false;
-    }
-}
-
 QPointF localCorner(const Bounds& bounds, Handle handle)
 {
     switch (handle)
@@ -129,6 +101,77 @@ QPointF cornerHandlePosition(const Transform& transform, const Bounds& bounds, H
 }
 
 } // namespace
+
+bool isScaleHandle(Handle handle)
+{
+    switch (handle)
+    {
+    case Handle::ScaleTopLeft:
+    case Handle::ScaleTopRight:
+    case Handle::ScaleBottomRight:
+    case Handle::ScaleBottomLeft:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isRotateHandle(Handle handle)
+{
+    switch (handle)
+    {
+    case Handle::RotateTopLeft:
+    case Handle::RotateTopRight:
+    case Handle::RotateBottomRight:
+    case Handle::RotateBottomLeft:
+        return true;
+    default:
+        return false;
+    }
+}
+
+Handle rotateHandleForVisualCorner(int visualCorner)
+{
+    switch (((visualCorner % 4) + 4) % 4)
+    {
+    case 0:
+        return Handle::RotateTopLeft;
+    case 1:
+        return Handle::RotateTopRight;
+    case 2:
+        return Handle::RotateBottomRight;
+    default:
+        return Handle::RotateBottomLeft;
+    }
+}
+
+int visualCornerForRotateHandle(Handle handle)
+{
+    switch (handle)
+    {
+    case Handle::RotateTopRight:
+        return 1;
+    case Handle::RotateBottomRight:
+        return 2;
+    case Handle::RotateBottomLeft:
+        return 3;
+    default:
+        return 0;
+    }
+}
+
+int localCornerForVisualCorner(int visualCorner, bool flippedX, bool flippedY)
+{
+    // Corner order is TL, TR, BR, BL.  A negative X scale swaps left/right
+    // (XOR 1); a negative Y scale swaps top/bottom, which in this order swaps
+    // both index bits (XOR 3).
+    int local = ((visualCorner % 4) + 4) % 4;
+    if (flippedX)
+        local ^= 1;
+    if (flippedY)
+        local ^= 3;
+    return local;
+}
 
 QTransform localMatrix(const Transform& transform)
 {
@@ -199,7 +242,7 @@ QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& 
     if (isScaleHandle(handle))
         return cornerHandlePosition(transform, bounds, handle, kScaleHandleInset, false, scale);
     if (isRotateHandle(handle))
-        return cornerHandlePosition(transform, bounds, handle, kRotateHandleOffset, true, scale);
+        return cornerHandlePosition(transform, bounds, handle, kRotateHandleInset, false, scale);
     return pivot;
 }
 
@@ -207,38 +250,50 @@ std::optional<Handle> hitTest(QPointF modelPos, const Transform& transform, cons
                               double viewScale)
 {
     const double scale = viewScale > 0.0 ? viewScale : 1.0;
-    const auto hits = [&](Handle handle) {
-        return distance(modelPos, handlePosition(handle, transform, bounds, scale))
-               <= kHitRadius;
+
+    // Corner handles can overlap on small boxes now that the rotate glyphs
+    // ride the corners; the nearest centre wins instead of a fixed priority.
+    std::optional<Handle> best;
+    double bestDistance = 0.0;
+    const auto consider = [&](Handle handle, bool square, double extent) {
+        const QPointF position = handlePosition(handle, transform, bounds, scale);
+        const double dx = modelPos.x() - position.x();
+        const double dy = modelPos.y() - position.y();
+        const bool inside = square ? (std::abs(dx) <= extent && std::abs(dy) <= extent)
+                                   : std::hypot(dx, dy) <= extent;
+        if (!inside)
+            return;
+        const double distance = std::hypot(dx, dy);
+        if (!best || distance < bestDistance)
+        {
+            best = handle;
+            bestDistance = distance;
+        }
     };
-
-    // Scale handles sit inside the corners and win over the rotate handles
-    // when a very small box makes them overlap.
-    static constexpr Handle kScaleHandles[] = {Handle::ScaleTopLeft, Handle::ScaleTopRight,
-                                               Handle::ScaleBottomRight,
-                                               Handle::ScaleBottomLeft};
-    for (Handle handle : kScaleHandles)
-    {
-        if (hits(handle))
-            return handle;
-    }
-
-    if (hits(Handle::CenterScale))
-        return Handle::CenterScale;
 
     static constexpr Handle kRotateHandles[] = {Handle::RotateTopLeft, Handle::RotateTopRight,
                                                 Handle::RotateBottomRight,
                                                 Handle::RotateBottomLeft};
+    // The square hit box is the Inkscape default; in model space the extent is
+    // only scalar-correct because callers pass the view scale.
     for (Handle handle : kRotateHandles)
-    {
-        if (hits(handle))
-            return handle;
-    }
+        consider(handle, true, kRotateHitSize / 2.0 / scale);
+
+    static constexpr Handle kScaleHandles[] = {Handle::ScaleTopLeft, Handle::ScaleTopRight,
+                                               Handle::ScaleBottomRight,
+                                               Handle::ScaleBottomLeft};
+    for (Handle handle : kScaleHandles)
+        consider(handle, false, kHitRadius / scale);
+
+    consider(Handle::CenterScale, false, kHitRadius / scale);
+
+    if (best)
+        return best;
 
     const QPointF pivot = worldPivot(transform);
     const auto hitsAxis = [&](QPointF direction) {
         const QPointF tip = pivot + direction * (kMoveAxisLength / scale);
-        return pointSegmentDistance(modelPos, pivot, tip) <= kHitRadius;
+        return pointSegmentDistance(modelPos, pivot, tip) <= kHitRadius / scale;
     };
     if (hitsAxis(rotateVector(QPointF(1.0, 0.0), transform.rotation)))
         return Handle::MoveX;
@@ -355,19 +410,32 @@ DragResult rotate(const Transform& transform, double angleDelta,
 DragResult rotate(const Transform& transform, const Bounds& bounds, double angleDelta,
                   bool aroundBoundingBoxCenter)
 {
+    if (!aroundBoundingBoxCenter)
+    {
+        DragResult result;
+        result.transform = transform;
+        result.transform.rotation = transform.rotation + angleDelta;
+        result.flippedX = transform.scaleX < 0.0;
+        result.flippedY = transform.scaleY < 0.0;
+        return result;
+    }
+
+    return rotateAround(transform, localToWorld(transform, boundsCenter(bounds)), angleDelta);
+}
+
+DragResult rotateAround(const Transform& transform, QPointF worldPoint, double angleDelta)
+{
     DragResult result;
     result.transform = transform;
     result.transform.rotation = transform.rotation + angleDelta;
     result.flippedX = transform.scaleX < 0.0;
     result.flippedY = transform.scaleY < 0.0;
 
-    if (!aroundBoundingBoxCenter)
-        return result;
-
-    // Keep F(boundsCenter) fixed while R changes:
-    //   x' = x + R_old * S * (center - pivot) - R_new * S * (center - pivot)
+    // Keep F(worldPoint) fixed while R changes:
+    //   x' = x + R_old * S * (local - pivot) - R_new * S * (local - pivot)
+    const QPointF local = worldToLocal(transform, worldPoint);
     const QPointF pivot(transform.pivotX, transform.pivotY);
-    const QPointF offset = boundsCenter(bounds) - pivot;
+    const QPointF offset = local - pivot;
     const QPointF scaled(offset.x() * transform.scaleX, offset.y() * transform.scaleY);
     const QPointF before = rotateVector(scaled, transform.rotation);
     const QPointF after = rotateVector(scaled, transform.rotation + angleDelta);

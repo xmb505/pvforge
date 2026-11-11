@@ -19543,6 +19543,7 @@ int sessionGizmoTest(QApplication& app)
         ++failures;
     }
     document->undo();
+    document->setSelection(uuid);
     QApplication::processEvents();
 
     // 6) Esc cancels the live gesture without a commit.
@@ -19659,6 +19660,496 @@ int sessionGizmoTest(QApplication& app)
 
     if (failures == 0)
         qInfo() << "gizmo-test: ok";
+    return failures == 0 ? 0 : 1;
+}
+
+// Inkscape-style corner rotate handles: drawing geometry, square hit boxes,
+// constant screen size, Shift-opposite rotation, Ctrl snap bypass, one commit
+// per gesture, Esc cancel and negative-scale corner identity.
+int inkscapeHandlesTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    {
+        QSettings settings(QStringLiteral("PVForge"), QStringLiteral("PVForge"));
+        settings.setValue(QStringLiteral("snap/pixels"), 6);
+        settings.setValue(QStringLiteral("snap/angles"), QStringLiteral("0,30,45,90"));
+        settings.sync();
+    }
+
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("inkscape-handles.pvproj"));
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Inkscape Handles");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "inkscape-handles-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    pvf::model::Entity entity;
+    entity.uuid = pvf::model::newUuid();
+    entity.name = QStringLiteral("弯箭头");
+    entity.start = 0;
+    entity.end = 60;
+    entity.row = 0;
+    entity.content.kind = pvf::ContentKind::Vector;
+    entity.content.vector.width = 200.0;
+    entity.content.vector.height = 100.0;
+    entity.content.vector.fillColor = QStringLiteral("#ffffff");
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
+    const pvf::Uuid uuid = entity.uuid;
+    project.entities.insert(uuid, entity);
+    if (!session->document()->commitEntity(uuid, QStringLiteral("pvf: init"), &error))
+    {
+        qCritical() << "inkscape-handles-test: init commit failed" << error;
+        return 1;
+    }
+
+    pvf::MainWindow window(session.release());
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* sessionPtr = window.editorSessionForTest();
+    auto* viewport = window.viewportForTest();
+    if (!sessionPtr || !viewport)
+    {
+        qCritical() << "inkscape-handles-test: no session viewport";
+        return 1;
+    }
+    auto* document = sessionPtr->document();
+    const auto flushSession = [sessionPtr] {
+        QString flushError;
+        sessionPtr->flush(&flushError);
+        return flushError;
+    };
+    document->setSelection(uuid);
+    sessionPtr->setPlayhead(0);
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+
+    MouseDriver mouse{viewport};
+    const auto undoDepth = [document] { return document->store()->undoDepth(); };
+    const auto nearAngle = [](double value, double expected) {
+        return std::abs(std::remainder(value - expected, 360.0)) < 0.01;
+    };
+    const auto rotateHandle = [&](int visualCorner) {
+        return pvf::gizmo::rotateHandleForVisualCorner(visualCorner);
+    };
+    const auto expectedAngles = [&](const std::array<double, 4>& angles,
+                                    double rotation, const char* label) {
+        for (int visual = 0; visual < 4; ++visual)
+        {
+            const double actual =
+                viewport->gizmoRotateGlyphAngleForTest(uuid, visual);
+            if (!nearAngle(actual, angles[visual] + rotation))
+            {
+                qCritical() << "inkscape-handles-test:" << label << "glyph"
+                            << visual << "angle" << actual << "expected"
+                            << angles[visual] + rotation;
+                ++failures;
+            }
+        }
+    };
+
+    // 1) Unzoomed geometry: each corner glyph rides its visual corner at a
+    //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
+    const std::array<double, 4> baseAngles{-90.0, 180.0, 90.0, 0.0};
+    if (std::abs(pvf::gizmo::kRotateHandleSize - 18.0) > 1e-9
+        || std::abs(pvf::gizmo::kRotateHitSize - 18.0) > 1e-9)
+    {
+        qCritical() << "inkscape-handles-test: unexpected handle size";
+        ++failures;
+    }
+    for (int visual = 0; visual < 4; ++visual)
+    {
+        const QPointF corner = viewport->gizmoCornerForTest(uuid, visual);
+        const pvf::gizmo::Handle handle = rotateHandle(visual);
+        const QPointF centre = viewport->gizmoHandleForTest(uuid, handle);
+        const double inset = std::hypot(centre.x() - corner.x(),
+                                        centre.y() - corner.y());
+        if (std::abs(inset - pvf::gizmo::kRotateHandleInset) > 0.01)
+        {
+            qCritical() << "inkscape-handles-test: inset" << visual << inset;
+            ++failures;
+        }
+        const QRectF hit = viewport->gizmoRotateHitRectForTest(uuid, handle);
+        if (std::abs(hit.width() - pvf::gizmo::kRotateHitSize) > 0.01
+            || std::abs(hit.height() - pvf::gizmo::kRotateHitSize) > 0.01
+            || std::abs(hit.center().x() - centre.x()) > 0.01
+            || std::abs(hit.center().y() - centre.y()) > 0.01)
+        {
+            qCritical() << "inkscape-handles-test: hit rect" << visual << hit;
+            ++failures;
+        }
+        if (viewport->gizmoHandleAtForTest(centre) != handle)
+        {
+            qCritical() << "inkscape-handles-test: centre hit" << visual;
+            ++failures;
+        }
+        // Square, not circle: a diagonal offset closer than the half-size is
+        // inside, a point past the side is outside.  Probe the outward
+        // diagonal so the nearby scale square cannot win the nearest-centre
+        // test.
+        const QPointF outward = corner - centre;
+        const QPointF inside = centre
+                               + QPointF(outward.x() < 0.0 ? -8.9 : 8.9,
+                                         outward.y() < 0.0 ? -8.9 : 8.9);
+        const pvf::gizmo::Handle hitInside = viewport->gizmoHandleAtForTest(inside)
+                                                 .value_or(pvf::gizmo::Handle::MoveX);
+        if (!pvf::gizmo::isRotateHandle(hitInside))
+        {
+            qCritical() << "inkscape-handles-test: square corner miss" << visual;
+            ++failures;
+        }
+        const QPointF outside = centre + QPointF(9.2, 0.0);
+        const auto outsideHit = viewport->gizmoHandleAtForTest(outside);
+        if (outsideHit && pvf::gizmo::isRotateHandle(*outsideHit))
+        {
+            qCritical() << "inkscape-handles-test: square side hit" << visual;
+            ++failures;
+        }
+    }
+    expectedAngles(baseAngles, 0.0, "rotation 0");
+
+    // 2) Zoom must not change the screen-pixel inset, hit size or icon angle.
+    const QPointF zoomCentre = viewport->rect().center();
+    for (int step = 0; step < 4; ++step)
+    {
+        QWheelEvent zoomEvent(zoomCentre,
+                              viewport->mapToGlobal(zoomCentre.toPoint()),
+                              QPoint(), QPoint(0, 120), Qt::NoButton,
+                              Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(viewport, &zoomEvent);
+    }
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+    for (int visual = 0; visual < 4; ++visual)
+    {
+        const QPointF corner = viewport->gizmoCornerForTest(uuid, visual);
+        const pvf::gizmo::Handle handle = rotateHandle(visual);
+        const QPointF centre = viewport->gizmoHandleForTest(uuid, handle);
+        const double inset = std::hypot(centre.x() - corner.x(),
+                                        centre.y() - corner.y());
+        const QRectF hit = viewport->gizmoRotateHitRectForTest(uuid, handle);
+        if (std::abs(inset - pvf::gizmo::kRotateHandleInset) > 0.01
+            || std::abs(hit.width() - pvf::gizmo::kRotateHitSize) > 0.01
+            || std::abs(hit.height() - pvf::gizmo::kRotateHitSize) > 0.01)
+        {
+            qCritical() << "inkscape-handles-test: zoom changed geometry"
+                        << visual << inset << hit.size();
+            ++failures;
+        }
+    }
+    expectedAngles(baseAngles, 0.0, "zoomed");
+    viewport->resetView();
+    QApplication::processEvents();
+
+    // 3) Icon direction follows the entity rotation in 90 degree steps.
+    const auto setRotation = [&](double rotation) {
+        auto it = sessionPtr->mutableProject().entities.find(uuid);
+        if (it == sessionPtr->mutableProject().entities.end())
+            return;
+        it->transform.rotation = rotation;
+        document->commitEntity(uuid, QStringLiteral("pvf: set rotation"), &error);
+        flushSession();
+        QApplication::processEvents();
+        viewport->repaint();
+        QApplication::processEvents();
+    };
+    const auto setScale = [&](double scaleX, double scaleY) {
+        auto it = sessionPtr->mutableProject().entities.find(uuid);
+        if (it == sessionPtr->mutableProject().entities.end())
+            return;
+        it->transform.scaleX = scaleX;
+        it->transform.scaleY = scaleY;
+        document->commitEntity(uuid, QStringLiteral("pvf: set scale"), &error);
+        flushSession();
+        QApplication::processEvents();
+        viewport->repaint();
+        QApplication::processEvents();
+    };
+
+    setRotation(90.0);
+    expectedAngles(baseAngles, 90.0, "rotation 90");
+    setRotation(180.0);
+    expectedAngles(baseAngles, 180.0, "rotation 180");
+    setRotation(0.0);
+    document->setSelection(uuid);
+    QApplication::processEvents();
+
+    // 4) Shift: rotate around the opposite visual corner.  A screen-space -90
+    //    degree drag is +90 in the Y-up model.
+    flushSession();
+    const int depthBeforeShift = undoDepth();
+    const QPointF shiftCorner = viewport->gizmoCornerForTest(uuid, 3);
+    const QPointF shiftStart =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
+    const QPointF shiftTarget =
+        shiftCorner + rotatePointForTest(shiftStart - shiftCorner, -90.0);
+    mouse.send(QEvent::MouseButtonPress, shiftStart, Qt::LeftButton,
+               Qt::LeftButton, Qt::ShiftModifier);
+    mouse.send(QEvent::MouseMove, shiftTarget, Qt::NoButton, Qt::LeftButton,
+               Qt::ShiftModifier);
+    if (!viewport->sessionDraggingForTest()
+        || !viewport->gizmoDraggingAroundCornerForTest()
+        || viewport->gizmoCornerHandlesVisibleForTest())
+    {
+        qCritical() << "inkscape-handles-test: Shift drag state"
+                    << viewport->sessionDraggingForTest()
+                    << viewport->gizmoDraggingAroundCornerForTest()
+                    << viewport->gizmoCornerHandlesVisibleForTest();
+        ++failures;
+    }
+    if (std::hypot(viewport->projectToWidgetForTest(
+                       viewport->gizmoDragOriginForTest()).x()
+                       - shiftCorner.x(),
+                   viewport->projectToWidgetForTest(
+                       viewport->gizmoDragOriginForTest()).y()
+                       - shiftCorner.y())
+        > 0.6)
+    {
+        qCritical() << "inkscape-handles-test: Shift origin"
+                    << viewport->projectToWidgetForTest(
+                           viewport->gizmoDragOriginForTest())
+                    << shiftCorner;
+        ++failures;
+    }
+    mouse.send(QEvent::MouseButtonRelease, shiftTarget, Qt::LeftButton,
+               Qt::NoButton, Qt::ShiftModifier);
+    QApplication::processEvents();
+    flushSession();
+    const pvf::gizmo::Transform shiftResult = viewport->gizmoTransformForTest(uuid);
+    const QPointF shiftCornerAfter = viewport->gizmoCornerForTest(uuid, 3);
+    if (!nearAngle(shiftResult.rotation, 90.0))
+    {
+        qCritical() << "inkscape-handles-test: Shift rotation"
+                    << shiftResult.rotation;
+        ++failures;
+    }
+    if (std::hypot(shiftCornerAfter.x() - shiftCorner.x(),
+                   shiftCornerAfter.y() - shiftCorner.y()) > 0.6)
+    {
+        qCritical() << "inkscape-handles-test: opposite corner moved"
+                    << shiftCorner << shiftCornerAfter;
+        ++failures;
+    }
+    if (undoDepth() != depthBeforeShift + 1)
+    {
+        qCritical() << "inkscape-handles-test: Shift commits"
+                    << depthBeforeShift << undoDepth();
+        ++failures;
+    }
+    document->undo();
+    document->setSelection(uuid);
+    QApplication::processEvents();
+
+    // 5) Snap settings 0/30/45/90 with a 3 degree threshold; Ctrl bypasses it.
+    flushSession();
+    const int depthBeforeSnap = undoDepth();
+    const QPointF snapPivot = viewport->sessionPivotForTest();
+    const QPointF snapStart =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
+    const QPointF snapTarget =
+        snapPivot + rotatePointForTest(snapStart - snapPivot, -28.5);
+    mouse.drag(snapStart, snapTarget);
+    QApplication::processEvents();
+    flushSession();
+    const pvf::gizmo::Transform snapped = viewport->gizmoTransformForTest(uuid);
+    if (!nearAngle(snapped.rotation, 30.0))
+    {
+        qCritical() << "inkscape-handles-test: snap 30" << snapped.rotation;
+        ++failures;
+    }
+    if (undoDepth() != depthBeforeSnap + 1)
+    {
+        qCritical() << "inkscape-handles-test: snap commits" << depthBeforeSnap
+                    << undoDepth();
+        ++failures;
+    }
+    document->undo();
+    document->setSelection(uuid);
+    QApplication::processEvents();
+
+    const pvf::gizmo::Transform beforeCtrl = viewport->gizmoTransformForTest(uuid);
+    mouse.drag(snapStart, snapTarget, Qt::ControlModifier);
+    QApplication::processEvents();
+    flushSession();
+    const double ctrlDelta =
+        std::remainder(viewport->gizmoTransformForTest(uuid).rotation
+                           - beforeCtrl.rotation,
+                       360.0);
+    if (std::abs(ctrlDelta - 28.5) > 0.6)
+    {
+        qCritical() << "inkscape-handles-test: Ctrl delta" << ctrlDelta;
+        ++failures;
+    }
+    document->undo();
+    document->setSelection(uuid);
+    QApplication::processEvents();
+
+    // 6) Esc cancels without a commit, and the drag hides the corner handles.
+    flushSession();
+    const int depthBeforeCancel = undoDepth();
+    const QPointF cancelStart =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
+    mouse.send(QEvent::MouseButtonPress, cancelStart, Qt::LeftButton,
+               Qt::LeftButton);
+    mouse.send(QEvent::MouseMove, cancelStart + QPointF(40.0, 10.0),
+               Qt::NoButton, Qt::LeftButton);
+    if (viewport->gizmoCornerHandlesVisibleForTest())
+    {
+        qCritical() << "inkscape-handles-test: corners visible while dragging";
+        ++failures;
+    }
+    const QPointF pivotDuringDrag = viewport->sessionPivotForTest();
+    if (std::hypot(viewport->projectToWidgetForTest(
+                       viewport->gizmoDragOriginForTest()).x()
+                       - pivotDuringDrag.x(),
+                   viewport->projectToWidgetForTest(
+                       viewport->gizmoDragOriginForTest()).y()
+                       - pivotDuringDrag.y())
+        > 0.6
+        || viewport->gizmoDraggingAroundCornerForTest())
+    {
+        qCritical() << "inkscape-handles-test: default origin is not the pivot";
+        ++failures;
+    }
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    mouse.send(QEvent::MouseButtonRelease, cancelStart + QPointF(40.0, 10.0),
+               Qt::LeftButton, Qt::NoButton);
+    QApplication::processEvents();
+    if (undoDepth() != depthBeforeCancel
+        || !nearAngle(viewport->gizmoTransformForTest(uuid).rotation, 0.0))
+    {
+        qCritical() << "inkscape-handles-test: Esc cancel" << undoDepth()
+                    << viewport->gizmoTransformForTest(uuid).rotation;
+        ++failures;
+    }
+
+    // 7) Negative scale: RotateTopLeft stays the visual top-left handle (the
+    //    local corner under it swaps) and the icon is not mirrored.
+    const QPointF baseTopLeft =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopLeft);
+    const QPointF baseTopRight =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
+    const QPointF baseBottomRight =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateBottomRight);
+    const double baseAngleTopLeft = viewport->gizmoRotateGlyphAngleForTest(uuid, 0);
+    if (std::hypot(viewport->gizmoOppositeCornerForTest(
+                       uuid, pvf::gizmo::Handle::RotateTopLeft).x()
+                       - viewport->gizmoCornerForTest(uuid, 2).x(),
+                   viewport->gizmoOppositeCornerForTest(
+                       uuid, pvf::gizmo::Handle::RotateTopLeft).y()
+                       - viewport->gizmoCornerForTest(uuid, 2).y())
+        > 0.01)
+    {
+        qCritical() << "inkscape-handles-test: opposite corner (base)";
+        ++failures;
+    }
+
+    setScale(-1.0, 1.0);
+    const QPointF flippedTopLeft =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopLeft);
+    const QPointF flippedTopRight =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopRight);
+    const double flippedAngleTopLeft =
+        viewport->gizmoRotateGlyphAngleForTest(uuid, 0);
+    // The mirrored box occupies the same screen rectangle, so the visual
+    // top-left handle must not move.  Moving to baseTopRight is exactly the
+    // old local-corner bug.
+    if (std::hypot(flippedTopLeft.x() - baseTopLeft.x(),
+                   flippedTopLeft.y() - baseTopLeft.y()) > 0.01
+        || std::hypot(flippedTopRight.x() - baseTopRight.x(),
+                      flippedTopRight.y() - baseTopRight.y()) > 0.01
+        || std::hypot(flippedTopLeft.x() - baseTopRight.x(),
+                      flippedTopLeft.y() - baseTopRight.y()) < 1.0)
+    {
+        qCritical() << "inkscape-handles-test: flip X corner identity"
+                    << flippedTopLeft << baseTopLeft << flippedTopRight
+                    << baseTopRight;
+        ++failures;
+    }
+    if (std::hypot(viewport->gizmoOppositeCornerForTest(
+                       uuid, pvf::gizmo::Handle::RotateTopLeft).x()
+                       - viewport->gizmoCornerForTest(uuid, 2).x(),
+                   viewport->gizmoOppositeCornerForTest(
+                       uuid, pvf::gizmo::Handle::RotateTopLeft).y()
+                       - viewport->gizmoCornerForTest(uuid, 2).y())
+        > 0.01)
+    {
+        qCritical() << "inkscape-handles-test: opposite corner (flip X)";
+        ++failures;
+    }
+    if (!nearAngle(flippedAngleTopLeft, baseAngleTopLeft))
+    {
+        qCritical() << "inkscape-handles-test: icon mirrored on flip"
+                    << flippedAngleTopLeft << baseAngleTopLeft;
+        ++failures;
+    }
+    if (viewport->gizmoHandleAtForTest(flippedTopLeft)
+        != pvf::gizmo::Handle::RotateTopLeft)
+    {
+        qCritical() << "inkscape-handles-test: visual top-left hit";
+        ++failures;
+    }
+    setScale(-1.0, -1.0);
+    const QPointF bothTopLeft =
+        viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::RotateTopLeft);
+    if (std::hypot(bothTopLeft.x() - baseTopLeft.x(),
+                   bothTopLeft.y() - baseTopLeft.y()) > 0.01
+        || std::hypot(bothTopLeft.x() - baseBottomRight.x(),
+                      bothTopLeft.y() - baseBottomRight.y()) < 1.0)
+    {
+        qCritical() << "inkscape-handles-test: flip XY corner identity"
+                    << bothTopLeft << baseTopLeft << baseBottomRight;
+        ++failures;
+    }
+    setScale(1.0, 1.0);
+    document->setSelection(uuid);
+    QApplication::processEvents();
+
+    // 8) Screenshot with a selected entity and all four carrow handles.
+    if (auto* monitor = window.findChild<pvf::CameraMonitor*>())
+        monitor->hide();
+    sessionPtr->mutableProject().entities[uuid].transform.rotation = 30.0;
+    document->commitEntity(uuid, QStringLiteral("pvf: shot rotation"), &error);
+    flushSession();
+    QApplication::processEvents();
+    viewport->repaint();
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-inkscape-handles.png");
+    if (!window.grab().save(screenshot))
+    {
+        qCritical() << "inkscape-handles-test: screenshot failed" << screenshot;
+        ++failures;
+    }
+    else
+    {
+        qInfo() << "inkscape-handles-test: screenshot" << screenshot;
+    }
+
+    if (failures == 0)
+        qInfo() << "inkscape-handles-test: ok";
     return failures == 0 ? 0 : 1;
 }
 
@@ -21978,6 +22469,8 @@ int main(int argc, char* argv[])
             return sessionResult;
         return gizmoTest(app);
     }
+    if (app.arguments().contains(QStringLiteral("--inkscape-handles-test")))
+        return inkscapeHandlesTest(app);
     if (app.arguments().contains(QStringLiteral("--camera-monitor-test")))
         return cameraMonitorTest(app);
     if (app.arguments().contains(QStringLiteral("--pivot-test")))
