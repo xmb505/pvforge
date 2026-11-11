@@ -133,7 +133,6 @@ private:
         QLabel* name = nullptr;
         QToolButton* diamond = nullptr;
         QDoubleSpinBox* value = nullptr;
-        QComboBox* easing = nullptr;
     };
 
     struct SolverCard
@@ -212,8 +211,8 @@ private:
     void sessionSetKeyValue(const QString& track, double value);
     void sessionToggleKey(const QString& track);
     void sessionAddTransformKeys();
-    void sessionSetEasing(const QString& track, const model::EasingSpec& easing);
-    void sessionPromptBezier(const QString& track);
+    void sessionSetGroupEasing(const model::EasingSpec& easing);
+    void sessionPromptGroupBezier();
     void applySessionData(const QString& key, const QVariant& value);
     void applySessionParent(const Uuid& parent);
     void applySessionAsset(const QString& field, const QVariant& value);
@@ -360,8 +359,10 @@ private:
     QCheckBox* m_basicInherit = nullptr;
     QCheckBox* m_basicPhysics = nullptr;
 
-    // Keyframe track rows (session only).
+    // Keyframe track rows (session only).  Easing is one control for the
+    // merged keyframe group at the current frame, matching the legacy UI.
     QCheckBox* m_autoKeyCheck = nullptr;
+    QComboBox* m_groupEasing = nullptr;
     QWidget* m_trackHost = nullptr;
     QFormLayout* m_trackForm = nullptr;
     QVector<TrackRow> m_trackRows;

@@ -727,14 +727,14 @@ int propertiesTest(QApplication& app)
                QStringLiteral("asset volume range not enforced")))
         return 1;
 
-    // Keyframes: per-track diamond, 33 easing entries, one commit each way.
+    // Keyframes: per-track diamond plus one group easing control (33 entries).
     document->setSelection(text);
-    live->setPlayhead(10);
+    live->setPlayhead(0);
     QApplication::processEvents();
     auto* diamond =
         panel->findChild<QToolButton*>(QStringLiteral("trackDiamond_fontSize"));
     auto* easing =
-        panel->findChild<QComboBox*>(QStringLiteral("trackEasing_fontSize"));
+        panel->findChild<QComboBox*>(QStringLiteral("keyframeEasingGroup"));
     if (!check(diamond && easing, QStringLiteral("keyframe track row missing")))
         return 1;
     if (!check(easing->count() == 33, QStringLiteral("easing combo has %1 items")
@@ -743,7 +743,19 @@ int propertiesTest(QApplication& app)
     if (!check(easing->findData(QStringLiteral("bezier")) >= 0,
                QStringLiteral("bezier easing entry missing")))
         return 1;
+    if (!check(!panel->findChild<QComboBox*>(QStringLiteral("trackEasing_fontSize")),
+               QStringLiteral("per-track easing combo still present")))
+        return 1;
+    before = depth();
+    diamond->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(depth() == before + 1,
+               QStringLiteral("add first key was not one commit")))
+        return 1;
 
+    live->setPlayhead(10);
+    QApplication::processEvents();
     before = depth();
     diamond->click();
     QApplication::processEvents();
@@ -760,6 +772,7 @@ int propertiesTest(QApplication& app)
                       QStringLiteral("add key was not one commit")))
             return 1;
     }
+    before = depth();
     easing->setCurrentIndex(easing->findData(QStringLiteral("easeinoutcubic")));
     QApplication::processEvents();
     flush();
@@ -769,7 +782,9 @@ int propertiesTest(QApplication& app)
         for (const pvf::model::Keyframe& key : track.keys)
             if (key.frame == 10)
                 found = key.easing.type == QStringLiteral("easeinoutcubic");
-        if (!check(found, QStringLiteral("easing preset not written")))
+        if (!check(found, QStringLiteral("easing preset not written"))
+            || !check(depth() == before + 1,
+                      QStringLiteral("group easing was not one commit")))
             return 1;
     }
     before = depth();
@@ -919,6 +934,310 @@ int propertiesTest(QApplication& app)
     QApplication::processEvents();
     qInfo() << "properties-test OK: basic/transform/content/keyframes/33 easing/"
                "solvers, screenshot"
+            << screenshot;
+    return 0;
+}
+
+int keyframeEasingGroupTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir = QDir(temp.path()).filePath(
+        QStringLiteral("keyframe-easing-group.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("整体缓动");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "keyframe-easing-group-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 60;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid text =
+        makeEntity(QStringLiteral("整体缓动"), 0, pvf::ContentKind::Text);
+    project.entities[text].content.text.text = QStringLiteral("PVForge");
+    project.entities[text].content.text.pixelSize = 96;
+    for (const QString& track : {QStringLiteral("x"), QStringLiteral("y"),
+                                 QStringLiteral("rotation")})
+    {
+        pvf::model::Track data;
+        data.keys = {{0, 0.0, {}, {}}, {10, 20.0, {}, {}}};
+        project.entities[text].tracks.insert(track, data);
+    }
+
+    const pvf::Uuid vector =
+        makeEntity(QStringLiteral("矢量"), 1, pvf::ContentKind::Vector);
+    project.entities[vector].content.vector.width = 400.0;
+    project.entities[vector].content.vector.height = 300.0;
+
+    const pvf::Uuid camera =
+        makeEntity(QStringLiteral("摄像机"), 2, pvf::ContentKind::Camera);
+    project.entities[camera].transform.scaleX = 0.5;
+    project.entities[camera].transform.scaleY = 0.5;
+
+    if (!session->document()->commitEntities({text, vector, camera},
+                                             QStringLiteral("easing group setup"),
+                                             &error))
+    {
+        qCritical() << "keyframe-easing-group-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* objectTab = window->findChild<QScrollArea*>(QStringLiteral("objectTab"));
+    if (!live || !document || !panel || !objectTab)
+    {
+        qCritical() << "keyframe-easing-group-test: session window/panel missing";
+        return 1;
+    }
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [](const QString& message) {
+                         qCritical() << "keyframe-easing-group-test: panel edit failed"
+                                     << message;
+                     });
+
+    bool failed = false;
+    auto check = [&failed](bool condition, const QString& message) {
+        if (!condition)
+        {
+            qCritical() << "keyframe-easing-group-test:" << message;
+            failed = true;
+        }
+        return condition;
+    };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "keyframe-easing-group-test: flush failed" << flushError;
+    };
+    auto depth = [document] { return document->store()->undoDepth(); };
+    auto trackEasing = [&](const QString& track) {
+        const pvf::model::Entity entity =
+            live->project().entities.value(text);
+        const pvf::model::Track data = entity.tracks.value(track);
+        for (const pvf::model::Keyframe& key : data.keys)
+            if (key.frame == 10)
+                return key;
+        return pvf::model::Keyframe();
+    };
+    auto onFirstScreen = [objectTab](QWidget* widget) {
+        if (!objectTab || !widget || !widget->isVisible())
+            return false;
+        const QPoint pos = widget->mapTo(objectTab->viewport(), QPoint(0, 0));
+        return objectTab->viewport()->rect().contains(
+            QRect(pos, widget->size()));
+    };
+    auto setKeySection = [panel](bool expanded) {
+        for (auto* section : panel->findChildren<pvf::CollapsibleSection*>())
+            if (section->title() == QStringLiteral("关键帧"))
+                section->setExpanded(expanded);
+        QApplication::processEvents();
+    };
+
+    document->setSelection(text);
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    objectTab->verticalScrollBar()->setValue(0);
+    QApplication::processEvents();
+
+    // #50: the text content page must be reachable without scrolling in an
+    // 800px window; the entity/keyframe sections start collapsed.
+    auto* textContent =
+        panel->findChild<QLineEdit*>(QStringLiteral("textContent"));
+    auto* textSize = panel->findChild<QSpinBox*>(QStringLiteral("textSize"));
+    check(textContent && textSize && onFirstScreen(textContent)
+              && onFirstScreen(textSize),
+          QStringLiteral("text content/font/size are not on the first screen"));
+
+    setKeySection(true);
+    auto* easing =
+        panel->findChild<QComboBox*>(QStringLiteral("keyframeEasingGroup"));
+    if (!check(easing, QStringLiteral("group easing combo missing")))
+        return 1;
+    if (!check(easing->count() == 33,
+               QStringLiteral("group easing combo has %1 items")
+                   .arg(easing->count())))
+        return 1;
+    if (!check(easing->findData(QStringLiteral("bezier")) >= 0,
+               QStringLiteral("custom bezier entry missing")))
+        return 1;
+    if (!check(easing->isVisible(),
+               QStringLiteral("group easing combo is not visible")))
+        return 1;
+    bool perTrackEasing = false;
+    for (auto* combo : panel->findChildren<QComboBox*>())
+        if (combo->objectName().startsWith(QStringLiteral("trackEasing_")))
+            perTrackEasing = true;
+    if (!check(!perTrackEasing,
+               QStringLiteral("per-track easing combo still exists")))
+        return 1;
+
+    // One change applies to x, y and rotation at the same frame.
+    const int before = depth();
+    easing->setCurrentIndex(
+        easing->findData(QStringLiteral("easeinoutcubic")));
+    QApplication::processEvents();
+    flush();
+    if (!check(trackEasing(QStringLiteral("x")).easing.type
+                       == QStringLiteral("easeinoutcubic")
+                   && trackEasing(QStringLiteral("y")).easing.type
+                          == QStringLiteral("easeinoutcubic")
+                   && trackEasing(QStringLiteral("rotation")).easing.type
+                          == QStringLiteral("easeinoutcubic"),
+               QStringLiteral("group easing did not reach every track")))
+        return 1;
+    if (!check(depth() == before + 1,
+               QStringLiteral("group easing was not one commit")))
+        return 1;
+    if (!check(trackEasing(QStringLiteral("x")).easing.type
+                   == QStringLiteral("easeinoutcubic"),
+               QStringLiteral("group easing was not written at frame 10")))
+        return 1;
+    {
+        const pvf::model::Entity entity =
+            live->project().entities.value(text);
+        for (const pvf::model::Keyframe& key :
+             entity.tracks.value(QStringLiteral("x")).keys)
+            if (key.frame == 0)
+                check(key.easing.type == QStringLiteral("linear"),
+                      QStringLiteral("group easing touched frame 0"));
+    }
+
+    // Custom bezier still goes through the same merged group.
+    const int bezierBefore = depth();
+    QTimer dialogTimer;
+    dialogTimer.setInterval(10);
+    QObject::connect(&dialogTimer, &QTimer::timeout, [&dialogTimer] {
+        for (QWidget* widget : QApplication::topLevelWidgets())
+        {
+            auto* dialog = qobject_cast<QDialog*>(widget);
+            if (dialog && dialog->isVisible())
+            {
+                dialog->accept();
+                dialogTimer.stop();
+                return;
+            }
+        }
+    });
+    QTimer::singleShot(5000, &dialogTimer, [&dialogTimer] {
+        dialogTimer.stop();
+        for (QWidget* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<QDialog*>(widget);
+                dialog && dialog->isVisible())
+                dialog->reject();
+    });
+    dialogTimer.start();
+    easing->setCurrentIndex(easing->findData(QStringLiteral("bezier")));
+    dialogTimer.stop();
+    QApplication::processEvents();
+    flush();
+    if (!check(trackEasing(QStringLiteral("x")).easing.type
+                       == QStringLiteral("bezier")
+                   && trackEasing(QStringLiteral("y")).easing.type
+                          == QStringLiteral("bezier")
+                   && trackEasing(QStringLiteral("rotation")).easing.type
+                          == QStringLiteral("bezier"),
+               QStringLiteral("custom bezier did not reach every track")))
+        return 1;
+    if (!check(depth() == bezierBefore + 1,
+               QStringLiteral("custom bezier was not one commit")))
+        return 1;
+
+    // The first keyframe owns no entering segment, matching the old button.
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    if (!check(!easing->isEnabled() && easing->currentIndex() == -1,
+               QStringLiteral("first frame should not own an entering segment")))
+        return 1;
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    if (!check(easing->isEnabled(),
+               QStringLiteral("group easing stayed disabled at frame 10")))
+        return 1;
+
+    // #50: vector content and the camera page have no dangling row diamonds.
+    setKeySection(false);
+    document->setSelection(vector);
+    QApplication::processEvents();
+    objectTab->verticalScrollBar()->setValue(0);
+    QApplication::processEvents();
+    auto* vectorShape =
+        panel->findChild<QComboBox*>(QStringLiteral("vectorShape"));
+    auto* vectorCorner =
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("vectorCorner"));
+    check(vectorShape && vectorCorner && onFirstScreen(vectorShape)
+              && onFirstScreen(vectorCorner),
+          QStringLiteral("vector content is not on the first screen"));
+
+    document->setSelection(camera);
+    QApplication::processEvents();
+    auto* keyScaleY =
+        panel->findChild<QToolButton*>(QStringLiteral("key_scaleY"));
+    auto* keyOpacity =
+        panel->findChild<QToolButton*>(QStringLiteral("key_opacity"));
+    check(keyScaleY && keyOpacity && !keyScaleY->isVisible()
+              && !keyOpacity->isVisible(),
+          QStringLiteral("camera still has dangling key diamonds"));
+
+    // Screenshot: text selected, group easing visible in the keyframe section.
+    document->setSelection(text);
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    setKeySection(true);
+    easing->setCurrentIndex(
+        easing->findData(QStringLiteral("easeinoutcubic")));
+    QApplication::processEvents();
+    objectTab->ensureWidgetVisible(easing, 20, 80);
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-easing-group.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "keyframe-easing-group-test: screenshot failed"
+                    << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    if (failed)
+        return 1;
+    qInfo() << "keyframe-easing-group-test OK: one group easing, 33 entries, "
+               "bezier, one commit, screenshot"
             << screenshot;
     return 0;
 }
@@ -21034,6 +21353,8 @@ int main(int argc, char* argv[])
         return sessionTest();
     if (app.arguments().contains(QStringLiteral("--properties-test")))
         return propertiesTest(app);
+    if (app.arguments().contains(QStringLiteral("--keyframe-easing-group-test")))
+        return keyframeEasingGroupTest(app);
     if (app.arguments().contains(QStringLiteral("--properties-special-test")))
         return propertiesSpecialTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))

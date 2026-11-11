@@ -607,6 +607,58 @@ bool hasKeyAt(const model::Entity& entity, const QString& trackName, int frame)
     return false;
 }
 
+bool hasAnyKeyAt(const model::Entity& entity, int frame)
+{
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+        for (const model::Keyframe& keyframe : it.value().keys)
+            if (keyframe.frame == frame)
+                return true;
+    return false;
+}
+
+// The legacy easing button read the first key it found at the frame and
+// applied the choice to every track; keep the same "merged keyframe group"
+// rule for the group combo.
+bool frameEasing(const model::Entity& entity, int frame,
+                 model::EasingSpec* easing, bool* mixed)
+{
+    bool found = false;
+    bool differs = false;
+    model::EasingSpec first;
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+    {
+        for (const model::Keyframe& keyframe : it.value().keys)
+        {
+            if (keyframe.frame != frame)
+                continue;
+            if (!found)
+            {
+                first = keyframe.easing;
+                found = true;
+            }
+            else if (keyframe.easing != first)
+            {
+                differs = true;
+            }
+        }
+    }
+    if (easing)
+        *easing = first;
+    if (mixed)
+        *mixed = differs;
+    return found;
+}
+
+int previousGroupKeyframeFrame(const model::Entity& entity, int frame)
+{
+    int previous = -1;
+    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+        for (const model::Keyframe& keyframe : it.value().keys)
+            if (keyframe.frame < frame && keyframe.frame > previous)
+                previous = keyframe.frame;
+    return previous;
+}
+
 void setKeyframeValue(model::Entity& entity, const QString& track, int frame,
                       double value)
 {
@@ -1151,6 +1203,42 @@ void PropertiesPanel::buildSessionUi()
     buildCameraSection(m_rootLayout);
     buildSolverSection(m_rootLayout);
 
+    // One easing control for the merged keyframe group at the current frame.
+    // The legacy UI applied the choice to every track, not one track at a time.
+    auto* easingRow = new QWidget(this);
+    auto* easingLayout = new QHBoxLayout(easingRow);
+    easingLayout->setContentsMargins(0, 0, 0, 0);
+    easingLayout->setSpacing(6);
+    auto* easingLabel = new QLabel(QStringLiteral("缓动"), easingRow);
+    easingLayout->addWidget(easingLabel);
+    m_groupEasing = new QComboBox(easingRow);
+    m_groupEasing->setObjectName(QStringLiteral("keyframeEasingGroup"));
+    m_groupEasing->setToolTip(
+        QStringLiteral("修改当前帧所有轨道关键帧的进入段曲线；"
+                       "自定义贝塞尔仍可选"));
+    m_groupEasing->addItem(QStringLiteral("linear"), QStringLiteral("linear"));
+    m_groupEasing->addItem(QStringLiteral("instant"), QStringLiteral("instant"));
+    for (const QString& preset : model::easingPresetNames())
+        m_groupEasing->addItem(preset, preset);
+    m_groupEasing->addItem(QStringLiteral("bezier"), QStringLiteral("bezier"));
+    easingLayout->addWidget(m_groupEasing, 1);
+    m_keyLayout->addWidget(easingRow);
+    connect(m_groupEasing, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (m_editing || !m_groupEasing)
+            return;
+        const QString type = m_groupEasing->currentData().toString();
+        if (type.isEmpty())
+            return;
+        if (type == QLatin1String("bezier"))
+        {
+            sessionPromptGroupBezier();
+            return;
+        }
+        model::EasingSpec spec;
+        spec.type = model::canonicalEasingName(type);
+        sessionSetGroupEasing(spec);
+    });
+
     m_autoKeyCheck = new QCheckBox(QStringLiteral("自动关键帧"), this);
     m_autoKeyCheck->setObjectName(QStringLiteral("autoKeyCheck"));
     m_autoKeyCheck->setChecked(m_autoKey);
@@ -1165,14 +1253,31 @@ void PropertiesPanel::buildSessionUi()
     m_trackHost = new QWidget(this);
     m_trackHost->setObjectName(QStringLiteral("trackHost"));
     m_trackForm = new QFormLayout(m_trackHost);
-    m_trackForm->setContentsMargins(0, 4, 0, 0);
-    m_trackForm->setVerticalSpacing(4);
+    m_trackForm->setContentsMargins(0, 2, 0, 0);
+    m_trackForm->setVerticalSpacing(2);
     m_trackForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_trackForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     m_keyLayout->addWidget(m_trackHost);
 
-    // The legacy single easing button is replaced by the per-track combo.
+    // The legacy button is kept for the legacy Project shell; session mode
+    // uses the group combo above.
     m_easeButton->hide();
+
+    // #50: keep the content pages on the first screen of an 800px window.
+    // The entity and keyframe sections are the two tall blocks in front of
+    // them; both stay one click away.  Compact controls match the denser
+    // legacy property rows and keep their height stable across pages.
+    m_basicSection->setExpanded(false);
+    m_keySection->setExpanded(false);
+    for (QWidget* widget : findChildren<QWidget*>())
+        if (qobject_cast<QDoubleSpinBox*>(widget) || qobject_cast<QSpinBox*>(widget)
+            || qobject_cast<QComboBox*>(widget)
+            || qobject_cast<QLineEdit*>(widget))
+            widget->setFixedHeight(24);
+    for (CollapsibleSection* section :
+         {m_transformSection, m_textSection, m_vectorSection})
+        if (auto* form = section ? section->findChild<QFormLayout*>() : nullptr)
+            form->setVerticalSpacing(2);
 }
 
 void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
@@ -1473,6 +1578,11 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
 
     m_textFont = new QFontComboBox(content);
     m_textFont->setObjectName(QStringLiteral("textFont"));
+    // Keep the property column inside the legacy 300px panel: the font model
+    // otherwise asks for the width of the longest installed family.
+    m_textFont->setSizeAdjustPolicy(
+        QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_textFont->setMinimumContentsLength(10);
     connect(m_textFont, &QFontComboBox::currentFontChanged, this, [this](const QFont& font) {
         applyData(QStringLiteral("font"), font.family());
     });
@@ -3004,50 +3114,38 @@ void PropertiesPanel::sessionAddTransformKeys()
                    });
 }
 
-void PropertiesPanel::sessionSetEasing(const QString& track,
-                                       const model::EasingSpec& easing)
+void PropertiesPanel::sessionSetGroupEasing(const model::EasingSpec& easing)
 {
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
         return;
     const int relative = sessionRelativeFrame(*entity);
     if (relative < 0 || relative >= entity->duration()
-        || !hasKeyAt(*entity, track, relative))
+        || !hasAnyKeyAt(*entity, relative))
         return;
 
+    // An empty track asks EditActions for the merged keyframe group: every
+    // track key at this frame gets the same easing in one commit.
     m_editing = true;
     QString error;
     const bool ok = m_session->editActions()->setKeyframeEasing(
-        {KeyRef{m_sessionUuid, track, relative}}, easing, &error);
+        {KeyRef{m_sessionUuid, QString(), relative}}, easing, &error);
     m_editing = false;
     if (!ok)
         reportSessionError(error);
     refresh();
 }
 
-void PropertiesPanel::sessionPromptBezier(const QString& track)
+void PropertiesPanel::sessionPromptGroupBezier()
 {
     const model::Entity* entity = sessionEntity();
     if (!entity)
         return;
     const int relative = sessionRelativeFrame(*entity);
     model::EasingSpec current;
-    bool found = false;
-    const auto trackIt = entity->tracks.constFind(track);
-    if (trackIt != entity->tracks.constEnd())
-    {
-        for (const model::Keyframe& keyframe : trackIt.value().keys)
-        {
-            if (keyframe.frame == relative)
-            {
-                current = keyframe.easing;
-                found = true;
-                break;
-            }
-        }
-    }
-    if (!found)
-        return;
+    bool mixed = false;
+    if (!frameEasing(*entity, relative, &current, &mixed) || mixed)
+        current = model::EasingSpec();
 
     EasingSpec legacy;
     legacy.easing = easingFromName(model::canonicalEasingName(current.type));
@@ -3077,7 +3175,7 @@ void PropertiesPanel::sessionPromptBezier(const QString& track)
     spec.inY = edited.inY;
     spec.outX = edited.outX;
     spec.outY = edited.outY;
-    sessionSetEasing(track, spec);
+    sessionSetGroupEasing(spec);
 }
 
 void PropertiesPanel::applySessionData(const QString& key, const QVariant& value)
@@ -3271,7 +3369,7 @@ void PropertiesPanel::rebuildTrackRows(const model::Entity& entity)
         auto* rowWidget = new QWidget(m_trackHost);
         auto* rowLayout = new QVBoxLayout(rowWidget);
         rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(2);
+        rowLayout->setSpacing(0);
 
         auto* topLine = new QHBoxLayout();
         topLine->setContentsMargins(0, 0, 0, 0);
@@ -3300,15 +3398,6 @@ void PropertiesPanel::rebuildTrackRows(const model::Entity& entity)
         topLine->addWidget(value, 1);
         rowLayout->addLayout(topLine);
 
-        auto* easing = new QComboBox(rowWidget);
-        easing->setObjectName(QStringLiteral("trackEasing_") + spec.name);
-        easing->addItem(QStringLiteral("linear"), QStringLiteral("linear"));
-        easing->addItem(QStringLiteral("instant"), QStringLiteral("instant"));
-        for (const QString& preset : model::easingPresetNames())
-            easing->addItem(preset, preset);
-        easing->addItem(QStringLiteral("bezier"), QStringLiteral("bezier"));
-        rowLayout->addWidget(easing);
-
         m_trackForm->addRow(rowWidget);
 
         const QString track = spec.name;
@@ -3319,25 +3408,10 @@ void PropertiesPanel::rebuildTrackRows(const model::Entity& entity)
                     if (!m_editing)
                         sessionSetKeyValue(track, value->value());
                 });
-        connect(easing, &QComboBox::currentIndexChanged, this,
-                [this, track, easing](int) {
-                    if (m_editing)
-                        return;
-                    const QString type = easing->currentData().toString();
-                    if (type == QLatin1String("bezier"))
-                    {
-                        sessionPromptBezier(track);
-                        return;
-                    }
-                    model::EasingSpec spec;
-                    spec.type = model::canonicalEasingName(type);
-                    sessionSetEasing(track, spec);
-                });
 
         row.name = labelWidget;
         row.diamond = diamond;
         row.value = value;
-        row.easing = easing;
         m_trackRows.append(row);
     }
 }
@@ -3390,40 +3464,47 @@ void PropertiesPanel::reloadTrackRows(const model::Entity& entity)
         setSpinIfIdle(row.value, currentTrackValue(entity, row.track, relative,
                                                    spec.step));
         row.value->setEnabled(editable && inRange && !blocked);
+    }
 
+    if (m_groupEasing)
+    {
+        const bool hasGroup = inRange && hasAnyKeyAt(entity, relative);
+        const int previous =
+            inRange ? previousGroupKeyframeFrame(entity, relative) : -1;
+        model::EasingSpec current;
+        bool mixed = false;
+        if (hasGroup)
+            frameEasing(entity, relative, &current, &mixed);
+        const QSignalBlocker blocker(m_groupEasing);
+        if (hasGroup && previous >= 0 && !mixed)
         {
-            const QSignalBlocker blocker(row.easing);
-            if (hasKey && !spec.step && inRange)
+            const QString type = model::canonicalEasingName(current.type);
+            int index = m_groupEasing->findData(type);
+            if (index < 0)
             {
-                QString type = QStringLiteral("linear");
-                const auto track = entity.tracks.constFind(row.track);
-                if (track != entity.tracks.constEnd())
-                {
-                    for (const model::Keyframe& keyframe : track.value().keys)
-                    {
-                        if (keyframe.frame == relative)
-                        {
-                            type = model::canonicalEasingName(
-                                keyframe.easing.type);
-                            break;
-                        }
-                    }
-                }
-                int index = row.easing->findData(type);
-                if (index < 0)
-                {
-                    row.easing->addItem(type, type);
-                    index = row.easing->count() - 1;
-                }
-                row.easing->setCurrentIndex(index);
+                m_groupEasing->addItem(type, type);
+                index = m_groupEasing->count() - 1;
             }
-            else
-            {
-                row.easing->setCurrentIndex(-1);
-            }
+            m_groupEasing->setCurrentIndex(index);
         }
-        row.easing->setEnabled(editable && inRange && hasKey && !spec.step
-                               && !blocked);
+        else
+        {
+            m_groupEasing->setCurrentIndex(-1);
+        }
+        m_groupEasing->setPlaceholderText(
+            !hasGroup
+                ? QStringLiteral("当前帧无关键帧")
+                : previous < 0 ? QStringLiteral("首帧无进入段")
+                               : mixed     ? QStringLiteral("混合")
+                                           : QStringLiteral("选择缓动"));
+        m_groupEasing->setEnabled(editable && hasGroup && previous >= 0);
+        m_groupEasing->setToolTip(
+            !hasGroup
+                ? QStringLiteral("当前帧没有可编辑的关键帧")
+                : previous < 0
+                    ? QStringLiteral("首帧没有进入段；请先在前一帧打关键帧")
+                    : QStringLiteral("修改当前帧所有轨道关键帧的进入段曲线；"
+                                     "自定义贝塞尔仍可选"));
     }
 }
 
@@ -4118,8 +4199,14 @@ void PropertiesPanel::refreshSession()
         const bool hiddenRow =
             camera && (row.prop == QLatin1String("scaleY")
                        || row.prop == QLatin1String("opacity"));
+        // Hide the whole form row: a hidden spin box used to leave its key
+        // diamond dangling below the camera framing row.
+        if (row.key && row.key->parentWidget())
+            row.key->parentWidget()->setVisible(!hiddenRow);
         row.spin->setVisible(!hiddenRow);
         row.label->setVisible(!hiddenRow);
+        if (row.key)
+            row.key->setVisible(!hiddenRow);
         {
             const QSignalBlocker blocker(row.spin);
             if (camera && row.prop == QLatin1String("scaleX"))
