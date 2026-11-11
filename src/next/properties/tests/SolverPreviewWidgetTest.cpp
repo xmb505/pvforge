@@ -216,7 +216,12 @@ void SolverPreviewWidgetTest::gravityPreviewShowsPathTargetStartAndArrow()
 
     const QImage image = preview.grab().toImage();
     QVERIFY(!image.isNull());
-    QCOMPARE(image.size(), preview.size());
+    // grab() returns physical pixels; compare in logical widget coordinates so
+    // the check also holds on a 2x device pixel ratio (offscreen/HiDPI).
+    const qreal dpr = image.devicePixelRatio();
+    QVERIFY(dpr > 0.0);
+    QCOMPARE(QSize(qRound(image.width() / dpr), qRound(image.height() / dpr)),
+             preview.size());
 }
 
 void SolverPreviewWidgetTest::zeroVelocityHandleIsDraggable()
