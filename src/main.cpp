@@ -1427,6 +1427,7 @@ int solverMiniPreviewTest(QApplication& app)
     gravity.effect = pvf::SolverEffect::Gravity;
     gravity.startFrame = 0;
     gravity.endFrame = -1;
+    gravity.initialVelocity = QPointF(60.0, 120.0);
     gravity.params.insert(QStringLiteral("targetUuid"), ground);
     gravity.params.insert(QStringLiteral("strength"), 500.0);
     gravity.params.insert(QStringLiteral("elasticity"), 0.0);
@@ -1586,6 +1587,14 @@ int solverMiniPreviewTest(QApplication& app)
     // double-click returns to the automatic fit.
     const QPointF fittedStart = mini->startPoint();
     const QPointF fittedTarget = mini->targetPoint();
+    const auto arrowPixels = [mini] {
+        const QPointF delta = mini->arrowTip() - mini->startPoint();
+        return std::hypot(delta.x(), delta.y());
+    };
+    if (!check(std::abs(arrowPixels() - 48.0) < 1.5,
+               QStringLiteral("velocity arrow is not a fixed 48 px: %1")
+                   .arg(arrowPixels())))
+        return 1;
     const QPointF panFrom(10.0, mini->height() - 10.0);
     const QPointF panTo = panFrom + QPointF(24.0, 12.0);
     QMouseEvent panPress(QEvent::MouseButtonPress, panFrom,
@@ -1627,6 +1636,10 @@ int solverMiniPreviewTest(QApplication& app)
                QStringLiteral("wheel zoom factor: %1 -> %2")
                    .arg(fittedSpan)
                    .arg(zoomedSpan)))
+        return 1;
+    if (!check(std::abs(arrowPixels() - 48.0) < 1.5,
+               QStringLiteral("zooming changed the velocity arrow length: %1")
+                   .arg(arrowPixels())))
         return 1;
 
     QMouseEvent resetEvent(QEvent::MouseButtonDblClick, panFrom,

@@ -22,13 +22,12 @@
 namespace pvf::next {
 namespace {
 
-// Arrow length: velocity is px/second.  0.25 s keeps the arrow proportional
-// for the usual 0..600 px/s range, but a long trajectory shrinks the fit until
-// the handle is a few pixels; the arrow time base is then stretched so the
-// hand-readable length stays inside [kMinArrowPixels, kMaxArrowPixels].
+// The velocity arrow is a screen-space gizmo: its length is fixed in widget
+// pixels so zooming the preview never turns it into a huge world-space vector.
+// Its direction still maps to the initial velocity; the precise magnitude is in
+// the X/Y fields.
 constexpr double kVelocitySeconds = 0.25;
-constexpr double kMinArrowPixels = 26.0;
-constexpr double kMaxArrowPixels = 72.0;
+constexpr double kArrowPixels = 48.0;
 // A very long segment is truncated for the preview only; export/render still
 // evaluates the whole segment.
 constexpr int kMaxPreviewFrames = 2000;
@@ -364,6 +363,11 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     m_hasTarget = false;
     m_entityName.clear();
     m_targetName.clear();
+    // A fresh preview starts from the conservative 0.25 s arrow for the fit;
+    // a live handle drag keeps the current time base so the tip follows the
+    // pointer exactly.
+    if (!duringDrag)
+        m_arrowSeconds = kVelocitySeconds;
     // Freeze the fit while the handle is dragged: refitting mid-drag would
     // rescale the view under the pointer and the arrow tip would lag behind it.
     if (!duringDrag)
@@ -494,7 +498,7 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     m_hasTarget = true;
     m_hasPath = m_samples.size() >= 2;
     m_arrowTipSolver =
-        m_startPose + m_initialVelocity * kVelocitySeconds;
+        m_startPose + m_initialVelocity * m_arrowSeconds;
 
     QRectF bounds;
     bool hasPoint = false;
@@ -550,13 +554,33 @@ void SolverPreviewWidget::updateArrowLength()
     const double speed = std::hypot(m_initialVelocity.x(), m_initialVelocity.y());
     if (m_fitValid && m_scale > 0.0 && speed > 1e-6)
     {
-        const double pixels = speed * m_scale * kVelocitySeconds;
-        if (pixels < kMinArrowPixels)
-            m_arrowSeconds = kMinArrowPixels / (speed * m_scale);
-        else if (pixels > kMaxArrowPixels)
-            m_arrowSeconds = kMaxArrowPixels / (speed * m_scale);
+        // Keep the handle exactly kArrowPixels long at every zoom level.
+        m_arrowSeconds = kArrowPixels / (speed * m_scale);
     }
     m_arrowTipSolver = m_startPose + m_initialVelocity * m_arrowSeconds;
+
+    // The fixed 48 px handle can point past the fitted plot edge (the auto-fit
+    // only knows the trajectory bounds).  Nudge the view just enough to keep
+    // the whole arrow inside, otherwise it cannot be grabbed.
+    if (!m_fitValid || !usesVelocity() || m_initialVelocity.isNull())
+        return;
+    const QPointF tip = mapSolverToWidget(m_arrowTipSolver);
+    const QRectF safe = m_plotRect.adjusted(2.0, 2.0, -2.0, -2.0);
+    double shiftX = 0.0;
+    double shiftY = 0.0;
+    if (tip.x() < safe.left())
+        shiftX = safe.left() - tip.x();
+    else if (tip.x() > safe.right())
+        shiftX = safe.right() - tip.x();
+    if (tip.y() < safe.top())
+        shiftY = safe.top() - tip.y();
+    else if (tip.y() > safe.bottom())
+        shiftY = safe.bottom() - tip.y();
+    if (std::abs(shiftX) > 0.01 || std::abs(shiftY) > 0.01)
+    {
+        m_solverCenter = QPointF(m_solverCenter.x() - shiftX / m_scale,
+                                 m_solverCenter.y() + shiftY / m_scale);
+    }
 }
 
 void SolverPreviewWidget::computePositionFit()
@@ -1122,6 +1146,8 @@ void SolverPreviewWidget::wheelEvent(QWheelEvent* event)
     m_solverCenter = QPointF(
         anchorSolver.x() - (cursor.x() - center.x()) / m_scale,
         anchorSolver.y() + (cursor.y() - center.y()) / m_scale);
+    // Recompute the time base so the handle keeps its fixed 48 px length.
+    updateArrowLength();
     update();
     event->accept();
 }

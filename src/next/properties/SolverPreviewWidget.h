@@ -19,11 +19,13 @@ namespace pvf::next {
 // project-space target shapes/poses back into the driven entity's parent space,
 // which is the solver's coordinate space.
 //
-// gravity/blackhole segments also get a draggable initial-velocity handle:
-// the arrow tip is startPose.position + initialVelocity * kVelocitySeconds.
-// Dragging updates the in-memory model live and commits exactly once on
-// release with the message "pvf: set solver initial velocity".  Esc (or
-// cancelDrag()) puts the pre-drag velocity back without a commit.
+// gravity/blackhole segments also get a draggable initial-velocity handle.
+// The arrow is a screen-space gizmo with a fixed 48 px length (direction maps
+// to the velocity, magnitude is in the X/Y fields), so panning/zooming cannot
+// turn it into a huge world vector.  Dragging updates the in-memory model live
+// and commits exactly once on release with the message "pvf: set solver
+// initial velocity".  Esc (or cancelDrag()) puts the pre-drag velocity back
+// without a commit.
 class SolverPreviewWidget : public QWidget
 {
     Q_OBJECT
