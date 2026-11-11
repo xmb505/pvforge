@@ -278,8 +278,12 @@ SolverPreviewWidget::SolverPreviewWidget(Document* document, QWidget* parent)
             if (!m_dragging)
                 refreshPreview();
         });
-        connect(m_document, &Document::playheadChanged, this,
-                qOverload<>(&QWidget::update));
+        connect(m_document, &Document::playheadChanged, this, [this] {
+            // Freeze during playback: the trajectory is already complete and
+            // the current dot must not chase the playhead frame by frame.
+            if (!m_playbackActive)
+                update();
+        });
     }
 }
 
@@ -332,8 +336,30 @@ void SolverPreviewWidget::clearSolver()
 
 void SolverPreviewWidget::refreshPreview()
 {
+    // Playhead-driven refreshes during playback are ignored: the frozen
+    // trajectory stays valid and must not re-solve.
+    if (m_playbackActive)
+        return;
     if (!m_dragging)
         computePreview(false);
+}
+
+void SolverPreviewWidget::setPlaybackActive(bool active)
+{
+    if (m_playbackActive == active)
+        return;
+    m_playbackActive = active;
+    if (active)
+    {
+        m_frozenRelativeFrame =
+            m_document ? m_document->playhead() - m_entityStart : -1;
+        // No update(): the last painted frame stays on screen.
+        return;
+    }
+    // Paused / manual seek: bring the preview up to the current frame once.
+    m_frozenRelativeFrame = -1;
+    computePreview(false);
+    update();
 }
 
 const model::SolverSegment* SolverPreviewWidget::findSolver(
@@ -357,6 +383,8 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
 {
     if (m_dragging && !duringDrag)
         return;
+
+    ++m_computeCount;
 
     m_samples.clear();
     m_hasPath = false;
@@ -635,10 +663,14 @@ int SolverPreviewWidget::currentSampleIndex() const
 {
     if (m_samples.isEmpty())
         return -1;
-    const int index = currentRelativeFrame() - m_samples.first().frame;
+    // Playback freezes the dot at the frame that was current when playback
+    // started; pausing clears the freeze and the preview refreshes once.
+    const int frame =
+        m_playbackActive ? m_frozenRelativeFrame : currentRelativeFrame();
+    const int index = frame - m_samples.first().frame;
     if (index < 0 || index >= m_samples.size())
         return -1;
-    if (m_samples.at(index).frame != currentRelativeFrame())
+    if (m_samples.at(index).frame != frame)
         return -1;
     return index;
 }

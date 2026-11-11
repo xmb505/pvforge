@@ -26,6 +26,9 @@ namespace pvf::next {
 // and commits exactly once on release with the message "pvf: set solver
 // initial velocity".  Esc (or cancelDrag()) puts the pre-drag velocity back
 // without a commit.
+//
+// During playback the preview freezes: playhead ticks do not repaint the
+// current dot and never re-evaluate the trajectory.  Pausing refreshes once.
 class SolverPreviewWidget : public QWidget
 {
     Q_OBJECT
@@ -42,6 +45,15 @@ public:
 
     Uuid entityUuid() const { return m_entityUuid; }
     Uuid solverId() const { return m_solverId; }
+
+    // Playback freeze: while the project is playing the mini preview keeps
+    // its last evaluated trajectory/current point and stops repainting per
+    // playhead tick.  Pausing refreshes it once, on the current frame.
+    void setPlaybackActive(bool active);
+    bool isPlaybackActive() const { return m_playbackActive; }
+    // Test hook: number of real computePreview() evaluations.  Playhead ticks
+    // during playback must not grow it.
+    int computeCount() const { return m_computeCount; }
 
     // Drops an in-progress handle drag and restores the pre-drag velocity.
     // Returns true when a drag was actually cancelled.
@@ -132,6 +144,13 @@ private:
     bool m_dragging = false;
     bool m_dragMoved = false;
     QPointF m_dragOriginalVelocity;
+
+    // Playback freeze.  m_frozenRelativeFrame is the entity-relative frame of
+    // the dot that was current when playback started; paintEvent keeps using
+    // it until pause refreshes the preview.
+    bool m_playbackActive = false;
+    int m_frozenRelativeFrame = -1;
+    int m_computeCount = 0;
 
     // Background pan: keeps the auto-fit until the user drags, then the view
     // stays where it was put.  Double-click refits.

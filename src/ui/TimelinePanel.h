@@ -192,6 +192,10 @@ public:
                                 const Uuid& solverId) const;
     int solverBandStopFrameForTest(const Uuid& entityUuid,
                                    const Uuid& solverId) const;
+    // Number of cold solver evaluations done to fill the band cache (a hit in
+    // EditorSession's shared solver cache does not count).  Paint and playhead
+    // ticks must not grow it.
+    int solverBandSolveCountForTest() const { return m_solverBandSolveCount; }
     // Opens (or raises) the private timeline for a clip and returns its panel.
     TimelinePanel* openPopup(EntityId ownerId);
     void closeAllPopups();
@@ -313,6 +317,10 @@ private:
     int currentFps() const;
     bool isEntityLocked(EntityId id) const;
     QRect markerRect(int index) const;
+
+    // Solver band stop frames are expensive to evaluate, so they are computed
+    // once per model change and only read by paintEvent()/the test hooks.
+    void rebuildSolverStopCache();
 
     enum class DragMode
     {
@@ -455,6 +463,10 @@ private:
     EditPlan m_sessionPlan;
     bool m_sessionPlanValid = false;
     TimelineSnapshot m_sessionBaseSnapshot;
+
+    // entityUuid + '/' + solverId -> clipped physical stop frame.
+    QHash<QString, int> m_solverStopFrames;
+    int m_solverBandSolveCount = 0;
 
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;

@@ -67,6 +67,11 @@ public:
     bool autoKey() const { return m_autoKey; }
     Uuid selectedSolverId() const { return m_selectedSolverId; }
 
+    // Playback freeze for the mini solver preview.  The panel connects this
+    // to EditorSession::playback(); MainWindow may also forward it.
+    void setPlaybackActive(bool active);
+    bool playbackActiveForTest() const { return m_playbackActive; }
+
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);
     void pivotEdited(EntityId id, double ax, double ay);
@@ -207,6 +212,11 @@ private:
 
     // ---- Session mode ----------------------------------------------------
     void refreshSession();
+    // Playhead-only update: frame-dependent spins/labels/keys plus the mini
+    // preview's current dot.  Never rebuilds solver cards or re-evaluates the
+    // solver preview.
+    void refreshPlayheadOnly();
+    void reloadSessionHtmlValues(const model::Entity& entity);
     const model::Entity* sessionEntity() const;
     bool sessionEditable() const;
     int sessionRelativeFrame(const model::Entity& entity) const;
@@ -258,6 +268,7 @@ private:
     Uuid m_sessionUuid;
     bool m_autoKey = true;
     bool m_editing = false;
+    bool m_playbackActive = false;
     EntityId m_entity = kInvalidEntity;
     int m_frame = 0;
     QLabel* m_title = nullptr;

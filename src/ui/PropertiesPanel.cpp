@@ -9,6 +9,7 @@
 #include "model/Entity.h"
 #include "model/Query.h"
 #include "model/Uuid.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
@@ -1001,12 +1002,23 @@ PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
         });
         connect(document, &next::Document::playheadChanged, this, [this] {
             m_frame = m_session->playhead();
-            refresh();
+            // Scrubbing/playback only touches frame-dependent widgets; a full
+            // refresh() here rebuilt every solver card and re-ran the solver.
+            refreshPlayheadOnly();
         });
         connect(document, &next::Document::changed, this, [this] {
             if (!m_editing)
                 refresh();
         });
+        if (auto* playback = m_session->playback())
+        {
+            connect(playback,
+                    &next::PlaybackController::playbackStateChanged, this,
+                    [this](bool playing) { setPlaybackActive(playing); });
+            m_playbackActive = playback->isPlaying();
+            if (m_solverPreview)
+                m_solverPreview->setPlaybackActive(m_playbackActive);
+        }
     }
     refresh();
 }
@@ -2468,6 +2480,11 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
     m_sessionHtmlWarning->setText(warnings.join(QStringLiteral("\n")));
     m_sessionHtmlWarning->setVisible(!warnings.isEmpty());
 
+    reloadSessionHtmlValues(entity);
+}
+
+void PropertiesPanel::reloadSessionHtmlValues(const model::Entity& entity)
+{
     const int relative = sessionRelativeFrame(entity);
     const bool inRange = relative >= 0 && relative < entity.duration();
     const int sampleFrame = std::clamp(relative, 0, std::max(0, entity.duration() - 1));
@@ -4151,9 +4168,17 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
         if (it != m_session->project().entities.constEnd())
         {
             entity = &it.value();
-            preview = evaluateSolverPreview(m_session->project(),
-                                            m_session->assets(), it.value(),
-                                            solver);
+            // Use the session's shared solver cache when it already holds a
+            // successful result; only a cold/failed cache falls back to a
+            // local evaluation.
+            const solver::Result* cached =
+                m_session->solverResultFor(entityUuid, solver.id);
+            if (cached && cached->stopFrame >= 0)
+                preview.result = *cached;
+            else
+                preview = evaluateSolverPreview(m_session->project(),
+                                                m_session->assets(),
+                                                it.value(), solver);
         }
     }
     if (card.endInfo)
@@ -4459,6 +4484,78 @@ void PropertiesPanel::setAutoKey(bool on)
         const QSignalBlocker blocker(m_autoKeyCheck);
         m_autoKeyCheck->setChecked(on);
     }
+}
+
+void PropertiesPanel::setPlaybackActive(bool active)
+{
+    if (m_playbackActive == active)
+        return;
+    m_playbackActive = active;
+    if (m_solverPreview)
+        m_solverPreview->setPlaybackActive(active);
+}
+
+void PropertiesPanel::refreshPlayheadOnly()
+{
+    if (!m_sessionMode || m_editing || !m_session)
+        return;
+    const model::Entity* entity = sessionEntity();
+    if (!entity)
+        return;
+
+    const bool camera = entity->content.kind == ContentKind::Camera;
+    const int relative = sessionRelativeFrame(*entity);
+    const bool inRange = relative >= 0 && relative < entity->duration();
+    const bool editable = sessionEditable();
+
+    m_keyButton->setEnabled(editable && inRange);
+
+    for (Row& row : m_rows)
+    {
+        {
+            const QSignalBlocker blocker(row.spin);
+            double value = currentTrackValue(*entity, row.prop, relative,
+                                             isStepTrack(row.prop))
+                / row.factor;
+            if (camera && row.prop == QLatin1String("scaleX"))
+                value = std::abs(value);
+            if (!row.spin->hasFocus())
+                row.spin->setValue(value);
+        }
+        if (!row.key)
+            continue;
+
+        const bool hasKey = inRange && hasKeyAt(*entity, row.prop, relative);
+        const bool blocked =
+            inRange && trackBlockedAt(*entity, row.prop, relative);
+        row.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
+        row.key->setToolTip(
+            blocked
+                ? QStringLiteral("该帧由求解段驱动，不能写入普通关键帧")
+                : hasKey
+                    ? QStringLiteral("删除当前帧的关键帧")
+                    : QStringLiteral("在当前帧打关键帧"));
+        row.key->setEnabled(editable && inRange && !blocked);
+    }
+
+    setSpinIfIdle(m_pivotX, currentTrackValue(*entity, QStringLiteral("pivotX"),
+                                              relative, false));
+    setSpinIfIdle(m_pivotY, currentTrackValue(*entity, QStringLiteral("pivotY"),
+                                              relative, false));
+
+    // Track rows and the group easing control are frame-dependent.  The
+    // structure check inside reloadTrackRows() is cheap and never rebuilds on
+    // a playhead tick.
+    reloadTrackRows(*entity);
+    reloadSessionHtmlValues(*entity);
+    // Create/convert depend on whether the playhead sits on the last key.
+    reloadSolverConvert(*entity);
+
+    // The mini preview only needs a repaint for its current dot; the
+    // trajectory samples are already cached.  During playback it stays
+    // frozen, so don't even repaint it.
+    if (!m_playbackActive && m_solverPreview)
+        m_solverPreview->update();
 }
 
 void PropertiesPanel::refreshSession()

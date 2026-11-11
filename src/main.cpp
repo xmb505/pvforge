@@ -1873,13 +1873,251 @@ int solverMiniPreviewTest(QApplication& app)
         return 1;
     }
 
+    // WA_DeleteOnClose deletes the window and every child; keep the numbers
+    // the success line reports before closing so nothing dereferences `mini`
+    // after it is gone.
+    const int miniWidth = mini->width();
+    const int miniHeight = mini->height();
+
     window->close();
     QApplication::processEvents();
     qInfo() << "solver-mini-preview-test OK: solver-section widget"
-            << mini->width() << "x" << mini->height()
+            << miniWidth << "x" << miniHeight
             << "target/path/arrow only, arrow drag one commit, Esc cancel,"
                " selection rebind, no viewport overlay, screenshot"
             << screenshot;
+    return 0;
+}
+
+int solverPreviewFreezeTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+    {
+        qCritical() << "solver-preview-freeze-test: no temp dir";
+        return 1;
+    }
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Solver Freeze");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("solver-freeze.pvproj"));
+    auto session = pvf::EditorSession::createProject(projectDir, settings,
+                                                     &error);
+    if (!session)
+    {
+        qCritical() << "solver-preview-freeze-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 60;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid ground =
+        makeEntity(QStringLiteral("地面"), 0, pvf::ContentKind::Vector);
+    project.entities[ground].transform.y = -100.0;
+    project.entities[ground].content.vector.width = 600.0;
+    project.entities[ground].content.vector.height = 60.0;
+
+    const pvf::Uuid ball =
+        makeEntity(QStringLiteral("落球"), 1, pvf::ContentKind::Vector);
+    project.entities[ball].transform.y = 200.0;
+    project.entities[ball].content.vector.width = 40.0;
+    project.entities[ball].content.vector.height = 40.0;
+    pvf::model::Track ballX;
+    ballX.keys = {{0, 0.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
+    pvf::model::Track ballY;
+    ballY.keys = {{0, 200.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+
+    pvf::model::SolverSegment gravity;
+    gravity.id = pvf::model::newUuid();
+    gravity.effect = pvf::SolverEffect::Gravity;
+    gravity.startFrame = 0;
+    gravity.endFrame = -1;
+    gravity.params.insert(QStringLiteral("targetUuid"), ground);
+    gravity.params.insert(QStringLiteral("strength"), 500.0);
+    gravity.params.insert(QStringLiteral("elasticity"), 0.0);
+    gravity.params.insert(QStringLiteral("friction"), 0.5);
+    gravity.params.insert(QStringLiteral("stopThreshold"), 10.0);
+    gravity.params.insert(QStringLiteral("softening"), 60.0);
+    gravity.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+    project.entities[ball].solvers.append(gravity);
+
+    if (!session->document()->commitEntities({ground, ball},
+                                             QStringLiteral("solver-freeze setup"),
+                                             &error))
+    {
+        qCritical() << "solver-preview-freeze-test: setup failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* timeline = window->timelineForTest();
+    auto* solverSection = panel
+        ? panel->findChild<pvf::CollapsibleSection*>(
+              QStringLiteral("solverSection"))
+        : nullptr;
+    if (!live || !document || !panel || !timeline || !solverSection)
+    {
+        qCritical() << "solver-preview-freeze-test: window parts missing";
+        return 1;
+    }
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "solver-preview-freeze-test:" << message;
+        return condition;
+    };
+
+    solverSection->setExpanded(true);
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* mini = panel->findChild<pvf::next::SolverPreviewWidget*>(
+        QStringLiteral("solverPreviewMini"));
+    if (!check(mini != nullptr, QStringLiteral("mini widget missing"))
+        || !check(mini->isVisible(), QStringLiteral("mini widget hidden"))
+        || !check(mini->entityUuid() == ball && mini->solverId() == gravity.id,
+                  QStringLiteral("mini widget is not bound to the solver"))
+        || !check(mini->sampleCount() >= 2 && mini->errorText().isEmpty(),
+                  QStringLiteral("mini preview did not compute: %1")
+                      .arg(mini->errorText())))
+        return 1;
+
+    const QRect band = timeline->solverBandRectForTest(ball, gravity.id);
+    if (!check(!band.isEmpty(),
+               QStringLiteral("timeline solver band is missing from the cache")))
+        return 1;
+
+    // Painting the timeline reads the cached band; it must never re-solve.
+    const int bandSolves = timeline->solverBandSolveCountForTest();
+    if (!check(timeline->solverBandStopFrameForTest(ball, gravity.id) >= 0,
+               QStringLiteral("solver band stop frame is missing")))
+        return 1;
+    timeline->grab();
+    mini->grab();
+    QApplication::processEvents();
+    if (!check(timeline->solverBandSolveCountForTest() == bandSolves,
+               QStringLiteral("timeline paint re-solved the band: %1 -> %2")
+                   .arg(bandSolves)
+                   .arg(timeline->solverBandSolveCountForTest())))
+        return 1;
+
+    // The real playback signal must freeze the panel and the mini widget.
+    if (auto* playback = live->playback())
+    {
+        playback->play();
+        if (!check(panel->playbackActiveForTest(),
+                   QStringLiteral("playbackStateChanged(true) did not reach "
+                                  "the properties panel"))
+            || !check(mini->isPlaybackActive(),
+                      QStringLiteral("playbackStateChanged(true) did not "
+                                     "freeze the mini preview")))
+            return 1;
+        playback->pause();
+        QApplication::processEvents();
+        if (!check(!panel->playbackActiveForTest()
+                       && !mini->isPlaybackActive(),
+                   QStringLiteral("playbackStateChanged(false) did not "
+                                  "unfreeze the previews")))
+            return 1;
+    }
+
+    // Baseline after the setup and the play/pause round trip.
+    const int miniBaseline = mini->computeCount();
+    const int bandBaseline = timeline->solverBandSolveCountForTest();
+    const QPointF frozenDot = mini->currentPoint();
+    if (!check(miniBaseline > 0, QStringLiteral("mini compute hook never ran")))
+        return 1;
+
+    // Simulated playback: 30 playhead ticks, full repaints of both panels.
+    panel->setPlaybackActive(true);
+    if (!check(mini->isPlaybackActive(),
+               QStringLiteral("setPlaybackActive(true) did not freeze the mini")))
+        return 1;
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        live->setPlayhead(frame);
+        QApplication::processEvents();
+        timeline->grab();
+        mini->grab();
+        QApplication::processEvents();
+    }
+    if (!check(mini->computeCount() == miniBaseline,
+               QStringLiteral("mini preview re-solved during playback: %1 "
+                              "-> %2")
+                   .arg(miniBaseline)
+                   .arg(mini->computeCount())))
+        return 1;
+    if (!check(timeline->solverBandSolveCountForTest() == bandBaseline,
+               QStringLiteral("timeline re-solved during playback: %1 -> %2")
+                   .arg(bandBaseline)
+                   .arg(timeline->solverBandSolveCountForTest())))
+        return 1;
+    if (!check(mini->currentPoint() == frozenDot,
+               QStringLiteral("mini current dot moved while frozen")))
+        return 1;
+
+    // Pause refreshes at most once, and later seeks do not re-solve.
+    panel->setPlaybackActive(false);
+    QApplication::processEvents();
+    const int afterPause = mini->computeCount();
+    if (!check(afterPause - miniBaseline <= 1,
+               QStringLiteral("pause refreshed more than once: +%1")
+                   .arg(afterPause - miniBaseline)))
+        return 1;
+    live->setPlayhead(30);
+    QApplication::processEvents();
+    timeline->grab();
+    mini->grab();
+    QApplication::processEvents();
+    if (!check(mini->computeCount() == afterPause,
+               QStringLiteral("seek after pause re-solved the mini: %1 -> %2")
+                   .arg(afterPause)
+                   .arg(mini->computeCount())))
+        return 1;
+    if (!check(timeline->solverBandSolveCountForTest() == bandBaseline,
+               QStringLiteral("seek after pause re-solved the band: %1 -> %2")
+                   .arg(bandBaseline)
+                   .arg(timeline->solverBandSolveCountForTest())))
+        return 1;
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "solver-preview-freeze-test OK: mini frozen during playback,"
+               " no re-solve on playhead/paint, timeline band cached,"
+               " one refresh on pause";
     return 0;
 }
 
@@ -23417,6 +23655,8 @@ int main(int argc, char* argv[])
         return solverUiTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-mini-preview-test")))
         return solverMiniPreviewTest(app);
+    if (app.arguments().contains(QStringLiteral("--solver-preview-freeze-test")))
+        return solverPreviewFreezeTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
         return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))

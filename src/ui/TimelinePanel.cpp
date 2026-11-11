@@ -45,6 +45,11 @@ namespace pvf {
 
 namespace {
 
+QString solverCacheKey(const Uuid& entityUuid, const Uuid& solverId)
+{
+    return entityUuid + QLatin1Char('/') + solverId;
+}
+
 QString displayName(const model::Entity& entity)
 {
     return entity.name.isEmpty() ? entity.uuid : entity.name;
@@ -510,7 +515,10 @@ TimelinePanel::TimelinePanel(TimelineAdapter* adapter, QWidget* parent)
 {
     initPanel();
     if (m_adapter)
+    {
         setReadOnlySnapshot(m_adapter->snapshot());
+        rebuildSolverStopCache();
+    }
 }
 
 void TimelinePanel::initPanel()
@@ -637,6 +645,7 @@ void TimelinePanel::refreshFromSession()
     if (!m_adapter)
         return;
     m_adapter->refresh();
+    rebuildSolverStopCache();
     setReadOnlySnapshot(m_adapter->snapshot());
     if (m_session)
     {
@@ -652,7 +661,10 @@ void TimelinePanel::refreshFromSession()
     }
     for (ClipPopup* popup : m_popups)
         if (popup && popup->panel())
+        {
             popup->panel()->setReadOnlySnapshot(m_snapshot);
+            popup->panel()->rebuildSolverStopCache();
+        }
     syncPopups();
 }
 
@@ -1548,28 +1560,57 @@ QRect TimelinePanel::sessionBaseClipRect(const Entity& entity) const
     return QRect(x0, rowTop(row) + 3, std::max(1, x1 - x0), kRowHeight - 6);
 }
 
+void TimelinePanel::rebuildSolverStopCache()
+{
+    m_solverStopFrames.clear();
+    if (!m_session)
+        return;
+
+    const model::Project& project = m_session->project();
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
+    {
+        for (const model::SolverSegment& solver : it->solvers)
+        {
+            // Prefer the session's shared solver cache (one solve per segment
+            // per edit); fall back to a local evaluation only when it is cold
+            // or holds a failed result.
+            solver::Result result;
+            const solver::Result* cached =
+                m_session->solverResultFor(it.key(), solver.id);
+            if (cached && cached->stopFrame >= 0)
+                result = *cached;
+            else
+            {
+                ++m_solverBandSolveCount;
+                const SolverPreviewEval preview = evaluateSolverPreview(
+                    project, m_session->assets(), it.value(), solver);
+                if (!preview.isValid() || preview.result.stopFrame < 0)
+                    continue;
+                result = preview.result;
+            }
+            if (result.stopFrame < 0)
+                continue;
+            // The band tail is the real physical stop, clipped by the
+            // structural end (a key created after the solver start ends it at
+            // N-1).
+            m_solverStopFrames.insert(
+                solverCacheKey(it.key(), solver.id),
+                std::min(result.stopFrame,
+                         model::solverStructuralEnd(it.value(), solver)));
+        }
+    }
+}
+
 int TimelinePanel::solverBandStopFrameForTest(const Uuid& entityUuid,
                                                const Uuid& solverId) const
 {
     if (!m_session || entityUuid.isEmpty())
         return -1;
-    const auto it = m_session->project().entities.constFind(entityUuid);
-    if (it == m_session->project().entities.constEnd())
+    if (!m_session->project().entities.contains(entityUuid))
         return -1;
-    for (const model::SolverSegment& solver : it->solvers)
-    {
-        if (solver.id != solverId)
-            continue;
-        const SolverPreviewEval preview = evaluateSolverPreview(
-            m_session->project(), m_session->assets(), it.value(), solver);
-        if (!preview.isValid() || preview.result.stopFrame < 0)
-            return -1;
-        // The band tail is the real physical stop, clipped by the structural
-        // end (a key created after the solver start ends it at N-1).
-        return std::min(preview.result.stopFrame,
-                        model::solverStructuralEnd(it.value(), solver));
-    }
-    return -1;
+    // Read-only: an empty cache means "unknown", never "solve now".
+    return m_solverStopFrames.value(solverCacheKey(entityUuid, solverId), -1);
 }
 
 QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
@@ -1591,14 +1632,10 @@ QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
     if (!chosen)
         return {};
 
-    const SolverPreviewEval preview = evaluateSolverPreview(
-        m_session->project(), m_session->assets(), it.value(), *chosen);
-    if (!preview.isValid() || preview.result.stopFrame < 0)
+    const int stopFrame =
+        m_solverStopFrames.value(solverCacheKey(entityUuid, solverId), -1);
+    if (stopFrame < 0)
         return {};
-
-    const int stopFrame = std::min(
-        preview.result.stopFrame,
-        model::solverStructuralEnd(it.value(), *chosen));
 
     const EntityId id = entityIdForUuid(entityUuid);
     const int row = rowIds().indexOf(id);
