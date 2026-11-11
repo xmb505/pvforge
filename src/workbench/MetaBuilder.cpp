@@ -312,17 +312,20 @@ bool FrameMeta::equals(const FrameMeta& other) const
 }
 
 MetaBuilder::MetaBuilder(const model::Project& project,
-                         const assets::AssetStore& assets)
+                         const assets::AssetStore& assets,
+                         QHash<QString, solver::Result>* sharedSolverResults)
     : m_project(project)
     , m_assets(assets)
+    , m_sharedSolverResults(sharedSolverResults)
 {
 }
 
 FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
                              const Options& options) const
 {
-    render2::SceneWorld world(m_project, m_assets);
     anim::Cache cache;
+    cache.sharedSolverResults = m_sharedSolverResults;
+    render2::SceneWorld world(m_project, m_assets, &cache);
 
     const anim::Pose cameraPose =
         cameraUuid.isEmpty()

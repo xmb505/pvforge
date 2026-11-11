@@ -54,6 +54,9 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     m_appSettings = m_settingsStore->load();
 
     m_media = std::make_unique<next::MediaServices>(m_document.get(), m_appSettings);
+    // The camera monitor renders through this service on every paint; sharing
+    // the session's solved segments keeps a repaint from re-running physics.
+    m_media->setSolverResults(&m_solverResults);
     QString ignored;
     m_media->start(&ignored);
 
@@ -447,6 +450,9 @@ next::WorkbenchServices* EditorSession::workbench()
 
     m_workbench = std::make_unique<next::WorkbenchServices>(
         m_document.get(), m_appSettings, camera, providers);
+    // The workbench builds a frame meta on every lookup; sharing the solved
+    // segments keeps an image-cache hit from re-running physics.
+    m_workbench->setSolverResults(&m_solverResults);
     if (m_playback)
         m_workbench->setPlaybackActive(m_playback->isPlaying());
     return m_workbench.get();

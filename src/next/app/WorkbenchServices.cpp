@@ -214,6 +214,12 @@ void WorkbenchServices::clearCache()
         m_cache->clear();
 }
 
+void WorkbenchServices::setSolverResults(
+    QHash<QString, solver::Result>* results)
+{
+    m_sharedSolverResults = results;
+}
+
 workbench::CacheStats WorkbenchServices::stats() const
 {
     if (m_cache)
@@ -234,6 +240,11 @@ QImage WorkbenchServices::lookupForTest(int frame, const Uuid& cameraUuid)
     bool hit = false;
     const QImage image = lookup(frame, cameraUuid, &hit);
     return hit ? image : QImage();
+}
+
+workbench::FrameMeta WorkbenchServices::buildMetaForTest(int frame)
+{
+    return buildMeta(frame);
 }
 
 void WorkbenchServices::tick()
@@ -345,7 +356,10 @@ workbench::FrameMeta WorkbenchServices::buildMeta(int frame)
     if (m_lastMetaValid && m_lastMetaFrame == frame)
         return m_lastMeta;
 
-    workbench::MetaBuilder builder(m_document->project(), m_document->assets());
+    // Poses serialised into the meta reuse the session's solved segments; an
+    // image-cache hit still builds the meta but never re-runs physics.
+    workbench::MetaBuilder builder(m_document->project(), m_document->assets(),
+                                   m_sharedSolverResults);
     m_lastMeta = builder.build(frame, m_cameraUuid, m_options);
     m_lastMetaFrame = frame;
     m_lastMetaValid = true;
@@ -386,8 +400,9 @@ QImage WorkbenchServices::renderForCache(int frame, bool* htmlMissing,
     };
 
     const model::Project& project = m_document->project();
-    render2::SceneWorld world(project, m_document->assets());
     anim::Cache cache;
+    cache.sharedSolverResults = m_sharedSolverResults;
+    render2::SceneWorld world(project, m_document->assets(), &cache);
     const QImage image = render2::renderFrame(project, m_document->assets(),
                                               options, world, cache);
 

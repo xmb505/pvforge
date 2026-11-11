@@ -173,6 +173,15 @@ private:
 
     // Declared before the services so the services die first.
     std::unique_ptr<next::ProjectDocument> m_document;
+    // Shared solver results; declared early so every borrowing service
+    // (workbench, viewport caches) is destroyed before this map.  Mutable
+    // because the const paint paths write through it.
+    mutable QHash<QString, solver::Result> m_solverResults;
+    // A project edit cleared the map but playback prevented the re-warm; the
+    // pause handler retries.
+    bool m_solverResultsDirty = true;
+    bool m_solverPrecomputeScheduled = false;
+    bool m_solverPrecomputeRunning = false;
     std::unique_ptr<next::SettingsStore> m_settingsStore;
     next::AppSettings m_appSettings;
     std::unique_ptr<next::MediaServices> m_media;
@@ -187,15 +196,6 @@ private:
     Uuid m_monitorCamera;
     bool m_monitorCameraExplicit = false;
     bool m_monitorCameraFromSelection = false;
-
-    // Shared solver results; declared mutable because the const paint paths
-    // borrow it as a write-through cache.
-    mutable QHash<QString, solver::Result> m_solverResults;
-    // A project edit cleared the map but playback prevented the re-warm; the
-    // pause handler retries.
-    bool m_solverResultsDirty = true;
-    bool m_solverPrecomputeScheduled = false;
-    bool m_solverPrecomputeRunning = false;
 };
 
 // Recent project directories, newest first.  Entries that are no longer a

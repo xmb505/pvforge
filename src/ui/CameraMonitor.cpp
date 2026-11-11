@@ -469,13 +469,13 @@ QImage CameraMonitor::renderSessionImage(const QSize& size) const
     if (!m_session || size.isEmpty())
         return {};
 
+    next::MediaServices* media = m_session->media();
     render2::Options options;
     options.projectFrame = m_session->playhead();
     options.cameraUuid = m_session->activeCameraUuid();
     options.outputSize = size;
-    if (m_session->media())
+    if (media)
     {
-        auto* media = m_session->media();
         options.videoFrame = [media](const Uuid& uuid, double frame) {
             return media->videoFrame(uuid, frame);
         };
@@ -484,8 +484,12 @@ QImage CameraMonitor::renderSessionImage(const QSize& size) const
         };
     }
 
-    render2::SceneWorld world(m_session->project(), m_session->assets());
+    // Borrow the session's solved segments when MediaServices has one; a
+    // monitor repaint then only evaluates poses at the requested frame.
     anim::Cache cache;
+    if (media)
+        cache.sharedSolverResults = media->solverResults();
+    render2::SceneWorld world(m_session->project(), m_session->assets(), &cache);
     return render2::renderFrame(m_session->project(), m_session->assets(), options,
                                 world, cache);
 }

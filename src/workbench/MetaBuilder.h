@@ -2,8 +2,10 @@
 
 #include "assets/AssetStore.h"
 #include "model/Model.h"
+#include "solver/Solver.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QRectF>
 #include <QSize>
 #include <QString>
@@ -43,16 +45,23 @@ struct FrameMeta
 
 // Builds FrameMeta without modifying the project.  Only entities active at the
 // requested frame and their parent chain are serialised, sorted by UUID.
+//
+// `sharedSolverResults` is optional and borrowed (it must outlive the builder):
+// the WorkbenchServices path passes the session store so the poses serialised
+// into the meta reuse solved segments instead of re-running physics for every
+// frame.  nullptr keeps the historical per-build cache.
 class MetaBuilder
 {
 public:
-    MetaBuilder(const model::Project& project, const assets::AssetStore& assets);
+    MetaBuilder(const model::Project& project, const assets::AssetStore& assets,
+                QHash<QString, solver::Result>* sharedSolverResults = nullptr);
 
     FrameMeta build(int frame, const Uuid& cameraUuid, const Options& options) const;
 
 private:
     const model::Project& m_project;
     const assets::AssetStore& m_assets;
+    QHash<QString, solver::Result>* m_sharedSolverResults = nullptr;
 };
 
 // Project-wide cache directory key: renderer version, scale, expand percent,

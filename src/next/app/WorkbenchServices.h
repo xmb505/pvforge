@@ -3,9 +3,11 @@
 #include "common/Types.h"
 #include "next/settings/SettingsStore.h"
 #include "render2/Render.h"
+#include "solver/Solver.h"
 #include "workbench/Cache.h"
 #include "workbench/MetaBuilder.h"
 
+#include <QHash>
 #include <QImage>
 #include <QObject>
 #include <QString>
@@ -121,6 +123,14 @@ public:
     // frames come back on demand.
     void clearCache();
 
+    // Borrowed solver-result map owned by EditorSession.  Frame-meta builds
+    // and cache renders consult it before solving a segment, so an image-cache
+    // hit only re-serialises poses instead of re-running physics for every
+    // active entity.  The owner clears the map after edits; nullptr detaches.
+    // Must be cleared before the owner's map dies (EditorSession keeps the map
+    // alive past this service).
+    void setSolverResults(QHash<QString, solver::Result>* results);
+
     workbench::CacheStats stats() const;
     WorkbenchPrewarmProgress progress() const { return m_progress; }
     const workbench::Options& options() const { return m_options; }
@@ -130,6 +140,9 @@ public:
     QString workbenchCacheDirForTest() const { return cacheDirectory(); }
     WorkbenchPrewarmProgress prewarmProgressForTest() const { return progress(); }
     QImage lookupForTest(int frame, const Uuid& cameraUuid = Uuid());
+    // Builds the meta exactly as lookup()/store() do, without requiring an
+    // existing cache directory.
+    workbench::FrameMeta buildMetaForTest(int frame);
 
 private:
     void tick();
@@ -150,6 +163,7 @@ private:
     QString m_cacheRoot;
     workbench::Options m_options;
     std::unique_ptr<workbench::Cache> m_cache;
+    QHash<QString, solver::Result>* m_sharedSolverResults = nullptr;
     bool m_enabled = false;
 
     QTimer m_tick;

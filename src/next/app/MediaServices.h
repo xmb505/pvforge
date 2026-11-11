@@ -3,7 +3,9 @@
 #include "common/Types.h"
 #include "html2/PvhtmlRenderer.h"
 #include "next/settings/SettingsStore.h"
+#include "solver/Solver.h"
 
+#include <QHash>
 #include <QImage>
 #include <QObject>
 #include <QSize>
@@ -68,6 +70,19 @@ public:
     // HTML scale/maxWidth are read from the current settings per request; a
     // video proxy/memory change drops the decoders and sequence services.
     void applySettings(const AppSettings& settings);
+
+    // Borrowed solver-result map owned by EditorSession.  CameraMonitor's
+    // render2 path consults it so a monitor repaint reuses solved segments
+    // instead of re-running physics.  Only the pointer is stored; the owner
+    // clears and destroys the map.
+    void setSolverResults(QHash<QString, solver::Result>* results)
+    {
+        m_solverResults = results;
+    }
+    QHash<QString, solver::Result>* solverResults() const
+    {
+        return m_solverResults;
+    }
 
     // render2::FrameProvider implementations.  Both return a null image when
     // the entity, its asset or the decode result is missing.
@@ -155,6 +170,8 @@ private:
     std::unique_ptr<video2::VideoFrames> makeVideoFrames() const;
 
     ProjectDocument* m_document = nullptr;
+    // Borrowed from EditorSession; never cleared or destroyed here.
+    QHash<QString, solver::Result>* m_solverResults = nullptr;
     AppSettings m_settings;
     QString m_cacheRoot;
     QString m_htmlError;

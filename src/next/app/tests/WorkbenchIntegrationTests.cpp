@@ -1,10 +1,12 @@
 #include "next/app/NextWindow.h"
 
+#include "anim/Anim.h"
 #include "assets/AssetStore.h"
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchPanel.h"
 #include "next/app/WorkbenchServices.h"
 #include "next/viewport/ViewportWidget.h"
+#include "workbench/MetaBuilder.h"
 
 #include <QAction>
 #include <QComboBox>
@@ -85,6 +87,39 @@ Uuid addRectAt(ProjectDocument* document, double x, double y, double width,
     document->mutableProject().entities.insert(uuid, entity);
     QString ignored;
     document->commitEntity(uuid, QStringLiteral("pvf: create rect"), &ignored);
+    document->flush(&ignored);
+    return uuid;
+}
+
+// A black clip driven by a spin solver: the workbench meta has to evaluate the
+// segment, but the picture itself is irrelevant to the solve count.
+Uuid addBlackSolverRect(ProjectDocument* document, int endFrame)
+{
+    Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("Black");
+    entity.start = 0;
+    entity.end = endFrame;
+    entity.content.kind = ContentKind::Vector;
+    entity.content.vector.shape = 0;
+    entity.content.vector.width = 320.0;
+    entity.content.vector.height = 180.0;
+    entity.content.vector.fillColor = QStringLiteral("#000000");
+
+    SolverSegment spin;
+    spin.id = QStringLiteral("spin");
+    spin.effect = SolverEffect::Spin;
+    spin.startFrame = 0;
+    spin.endFrame = -1; // automatic end: covers the whole clip
+    spin.params.insert(QStringLiteral("angularVelocity"), 6.0);
+    spin.params.insert(QStringLiteral("direction"), 1);
+    entity.solvers.append(spin);
+
+    const Uuid uuid = entity.uuid;
+    document->mutableProject().entities.insert(uuid, entity);
+    QString ignored;
+    document->commitEntity(uuid, QStringLiteral("pvf: create black solver"),
+                           &ignored);
     document->flush(&ignored);
     return uuid;
 }
@@ -201,6 +236,7 @@ private slots:
     void expandSettingChangesCacheKey();
     void expandedCanvasCachesOutsideEntity();
     void cameraCacheDoesNotExpand();
+    void sharedSolverResultsSkipMetaSolves();
 };
 
 void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
@@ -700,6 +736,55 @@ void WorkbenchIntegrationTest::cameraCacheDoesNotExpand()
     QCOMPARE(cached.size(), QSize(160, 90));
     QVERIFY(isRed(cached.pixelColor(80, 45)));
     QCOMPARE(cached.pixelColor(0, 0).alpha(), 255);
+}
+
+// The workbench builds a frame meta even when the image cache hits.  With the
+// session's shared solver map attached, 50 different frames must solve the one
+// spin segment exactly once, and the meta bytes must not depend on the cache.
+void WorkbenchIntegrationTest::sharedSolverResultsSkipMetaSolves()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/solver.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addBlackSolverRect(document.get(), 200);
+
+    WorkbenchServices::Providers providers;
+    WorkbenchServices sharedService(document.get(), AppSettings{}, Uuid(),
+                                    providers);
+    QHash<QString, solver::Result> shared;
+    sharedService.setSolverResults(&shared);
+
+    const int sharedBefore = anim::solverEvaluationCount();
+    workbench::FrameMeta injected;
+    for (int frame = 0; frame < 50; ++frame)
+    {
+        const workbench::FrameMeta meta =
+            sharedService.buildMetaForTest(frame);
+        if (frame == 25)
+            injected = meta;
+    }
+    QCOMPARE(anim::solverEvaluationCount(), sharedBefore + 1);
+    QCOMPARE(shared.size(), 1);
+
+    // Without the shared table the same 5 frames solve every time, so the
+    // counter assertion above cannot pass vacuously.
+    WorkbenchServices plainService(document.get(), AppSettings{}, Uuid(),
+                                   providers);
+    const int plainBefore = anim::solverEvaluationCount();
+    for (int frame = 0; frame < 5; ++frame)
+        plainService.buildMetaForTest(frame);
+    QCOMPARE(anim::solverEvaluationCount(), plainBefore + 5);
+
+    // The cache only changes where the pose comes from, not the serialised
+    // bytes: frame 25 must have the same sha1 with and without the shared map.
+    const workbench::FrameMeta plain = plainService.buildMetaForTest(25);
+    QCOMPARE(plain.sha1, injected.sha1);
+    QCOMPARE(plain.bytes, injected.bytes);
+    QCOMPARE(anim::solverEvaluationCount(), plainBefore + 6);
 }
 
 QTEST_MAIN(WorkbenchIntegrationTest)
