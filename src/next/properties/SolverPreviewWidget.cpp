@@ -3,6 +3,7 @@
 #include "anim/Anim.h"
 #include "render2/Render.h"
 
+#include <QFontMetricsF>
 #include <QHash>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -321,6 +322,8 @@ void SolverPreviewWidget::clearSolver()
     m_samples.clear();
     m_hasPath = false;
     m_hasTarget = false;
+    m_entityName.clear();
+    m_targetName.clear();
     m_fitValid = false;
     m_error.clear();
     update();
@@ -357,6 +360,8 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     m_samples.clear();
     m_hasPath = false;
     m_hasTarget = false;
+    m_entityName.clear();
+    m_targetName.clear();
     // Freeze the fit while the handle is dragged: refitting mid-drag would
     // rescale the view under the pointer and the arrow tip would lag behind it.
     if (!duringDrag)
@@ -389,6 +394,7 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
         return;
     }
 
+    m_entityName = entity.name;
     m_entityStart = entity.start;
     m_segmentStart = solver->startFrame;
     m_effect = solver->effect;
@@ -419,12 +425,16 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     if (solver->effect != SolverEffect::Spin)
     {
         targetUuid = solver->params.value(QStringLiteral("targetUuid")).toString();
-        if (targetUuid.isEmpty() || !project.entities.contains(targetUuid))
+        const auto targetIt = project.entities.constFind(targetUuid);
+        if (targetUuid.isEmpty() || targetIt == project.entities.constEnd())
         {
             m_error = QStringLiteral("目标缺失");
             update();
             return;
         }
+        m_targetName = targetIt.value().name;
+        if (m_targetName.isEmpty())
+            m_targetName = QStringLiteral("目标");
     }
 
     int evaluationEnd = effectiveEnd;
@@ -454,6 +464,21 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
         m_error = QStringLiteral("无法解算");
         update();
         return;
+    }
+
+    // The frame cap only hides part of the trajectory when the motion is
+    // still running at the cap.  If physics stopped earlier (black hole
+    // capture, stop threshold), the whole path to the stop is already here,
+    // even when the clip itself is much longer than the cap.
+    if (m_truncated)
+    {
+        const bool physicallyStopped =
+            std::any_of(m_samples.cbegin(), m_samples.cend(),
+                        [](const solver::Sample& sample) {
+                            return sample.stopped;
+                        });
+        if (physicallyStopped)
+            m_truncated = false;
     }
 
     if (solver->effect == SolverEffect::Spin)
@@ -773,18 +798,6 @@ void SolverPreviewWidget::paintEvent(QPaintEvent* event)
         painter.drawPolyline(polyline);
     }
 
-    if (m_hasTarget)
-    {
-        const QPointF target = mapSolverToWidget(m_targetSolver);
-        painter.setPen(QPen(kTargetColor, 1.4));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawEllipse(target, 7.0, 7.0);
-        painter.drawLine(target + QPointF(-4.0, 0.0),
-                         target + QPointF(4.0, 0.0));
-        painter.drawLine(target + QPointF(0.0, -4.0),
-                         target + QPointF(0.0, 4.0));
-    }
-
     const QPointF start = mapSolverToWidget(m_startPose);
     const QPointF tip = mapSolverToWidget(m_arrowTipSolver);
     const double arrowLength =
@@ -815,6 +828,57 @@ void SolverPreviewWidget::paintEvent(QPaintEvent* event)
         painter.setBrush(kCurrentColor);
         painter.drawEllipse(current, 5.0, 5.0);
     }
+
+    // The black-hole target is drawn last so it stays visible when it sits
+    // exactly on the solved entity's start (a common setup: launch from the
+    // hole).  Its ring is deliberately wider than the start/current dots.
+    if (m_hasTarget)
+    {
+        const QPointF target = mapSolverToWidget(m_targetSolver);
+        painter.setPen(QPen(kTargetColor, 1.6));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(target, 8.5, 8.5);
+        painter.drawLine(target + QPointF(-6.0, 0.0),
+                         target + QPointF(6.0, 0.0));
+        painter.drawLine(target + QPointF(0.0, -6.0),
+                         target + QPointF(0.0, 6.0));
+    }
+
+    // Name the two dots.  Without labels an overlapping target and start look
+    // like a single anonymous point ("which one is the black hole?").
+    QFont labelFont = painter.font();
+    labelFont.setPointSizeF(std::max(7.0, labelFont.pointSizeF() - 1.0));
+    painter.setFont(labelFont);
+    const QFontMetricsF metrics(labelFont, this);
+    const auto drawDotLabel = [&](const QString& text, const QPointF& anchor,
+                                  const QColor& color, bool above) {
+        if (text.isEmpty())
+            return;
+        const QString shown = metrics.elidedText(text, Qt::ElideRight, 104.0);
+        const double w = metrics.horizontalAdvance(shown) + 8.0;
+        const double h = metrics.height() + 2.0;
+        QRectF box(anchor.x() + 9.0,
+                   above ? anchor.y() - h - 7.0 : anchor.y() + 7.0, w, h);
+        if (box.right() > width() - 4.0)
+            box.moveLeft(anchor.x() - 9.0 - w);
+        if (box.left() < 4.0)
+            box.moveLeft(4.0);
+        if (box.top() < 25.0)
+            box.moveTop(25.0);
+        if (box.bottom() > height() - 4.0)
+            box.moveTop(height() - 4.0 - h);
+        painter.fillRect(box, QColor(18, 21, 26, 215));
+        painter.setPen(color);
+        painter.drawText(box, Qt::AlignCenter, shown);
+    };
+    if (m_hasTarget)
+    {
+        drawDotLabel(
+            m_targetName.isEmpty() ? QStringLiteral("目标") : m_targetName,
+            mapSolverToWidget(m_targetSolver), kTargetColor, true);
+    }
+    drawDotLabel(m_entityName.isEmpty() ? QStringLiteral("求解点") : m_entityName,
+                 start, kStartColor, false);
 }
 
 bool SolverPreviewWidget::nearArrowTip(const QPointF& widgetPos) const

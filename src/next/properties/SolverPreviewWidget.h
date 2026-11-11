@@ -47,6 +47,10 @@ public:
     bool isDragging() const { return m_dragging; }
 
     QString errorText() const { return m_error; }
+    // Names shown next to the two dots, so the black hole target is never
+    // confused with the solved entity (they can overlap exactly).
+    QString entityName() const { return m_entityName; }
+    QString targetName() const { return m_targetName; }
     int sampleCount() const { return m_samples.size(); }
     bool hasPath() const { return m_hasPath; }
     bool hasTarget() const { return m_hasTarget; }
@@ -107,6 +111,8 @@ private:
     // .cpp); stretched so the handle stays 26..72 px long after the fit.
     double m_arrowSeconds = 0.25;
     QPointF m_targetSolver;
+    QString m_entityName;
+    QString m_targetName;
     bool m_hasTarget = false;
     bool m_hasPath = false;
     bool m_truncated = false;

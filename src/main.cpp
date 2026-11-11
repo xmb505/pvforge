@@ -1411,6 +1411,17 @@ int solverMiniPreviewTest(QApplication& app)
     project.entities[moon].content.vector.width = 40.0;
     project.entities[moon].content.vector.height = 40.0;
 
+    // Long clip whose black hole target sits exactly on the launch point.
+    // The capture happens long before the 2000-frame preview cap, so the
+    // preview must not claim truncation and must still name the hole.
+    const pvf::Uuid holeBall =
+        makeEntity(QStringLiteral("黑洞球"), 3, pvf::ContentKind::Vector);
+    project.entities[holeBall].end = 3000;
+    project.entities[holeBall].transform.x = 0.0;
+    project.entities[holeBall].transform.y = -100.0;
+    project.entities[holeBall].content.vector.width = 20.0;
+    project.entities[holeBall].content.vector.height = 20.0;
+
     pvf::model::SolverSegment gravity;
     gravity.id = pvf::model::newUuid();
     gravity.effect = pvf::SolverEffect::Gravity;
@@ -1437,7 +1448,21 @@ int solverMiniPreviewTest(QApplication& app)
     orbit.params.insert(QStringLiteral("periodFrames"), 60.0);
     project.entities[moon].solvers.append(orbit);
 
-    if (!session->document()->commitEntities({ground, ball, moon},
+    pvf::model::SolverSegment hole;
+    hole.id = pvf::model::newUuid();
+    hole.effect = pvf::SolverEffect::BlackHole;
+    hole.startFrame = 0;
+    hole.endFrame = -1;
+    hole.initialVelocity = QPointF(80.0, 220.0);
+    hole.params.insert(QStringLiteral("targetUuid"), ground);
+    hole.params.insert(QStringLiteral("mass"), 5000.0);
+    hole.params.insert(QStringLiteral("eventHorizonRadius"), 30.0);
+    hole.params.insert(QStringLiteral("objectRadius"), 5.0);
+    hole.params.insert(QStringLiteral("softening"), 30.0);
+    hole.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+    project.entities[holeBall].solvers.append(hole);
+
+    if (!session->document()->commitEntities({ground, ball, moon, holeBall},
                                              QStringLiteral("solver-mini setup"),
                                              &error))
     {
@@ -1515,7 +1540,15 @@ int solverMiniPreviewTest(QApplication& app)
         || !check(mini->hasTarget() && mini->hasPath() && mini->hasArrow(),
                   QStringLiteral("mini widget misses target/path/arrow"))
         || !check(mini->sampleCount() >= 2,
-                  QStringLiteral("mini widget has no samples")))
+                  QStringLiteral("mini widget has no samples"))
+        || !check(mini->targetName() == QStringLiteral("黑洞"),
+                  QStringLiteral("target is not labelled with its entity name: %1")
+                      .arg(mini->targetName()))
+        || !check(mini->entityName() == QStringLiteral("落球"),
+                  QStringLiteral("start is not labelled with its entity name: %1")
+                      .arg(mini->entityName()))
+        || !check(!mini->isTruncated(),
+                  QStringLiteral("short segment reported as truncated")))
         return 1;
 
     // Only points/lines: the four public anchors sit inside the window.
@@ -1538,6 +1571,48 @@ int solverMiniPreviewTest(QApplication& app)
         || !check(mini->startPoint() != mini->targetPoint(),
                   QStringLiteral("start and target collapse onto one point")))
         return 1;
+
+    // Black hole target sitting exactly on the launch point, on a clip much
+    // longer than the preview cap.  The physical capture happens early, so the
+    // preview must still name both dots and must not report truncation.
+    mini->setSolver(holeBall, hole.id);
+    document->setSelection(holeBall);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    mini->refreshPreview();
+    QApplication::processEvents();
+    if (!check(mini->errorText().isEmpty(),
+               QStringLiteral("black hole preview error: %1")
+                   .arg(mini->errorText()))
+        || !check(mini->hasTarget() && mini->hasPath(),
+                  QStringLiteral("black hole preview misses target/path"))
+        || !check(mini->targetName() == QStringLiteral("黑洞"),
+                  QStringLiteral("black hole target label: %1")
+                      .arg(mini->targetName()))
+        || !check(mini->entityName() == QStringLiteral("黑洞球"),
+                  QStringLiteral("black hole entity label: %1")
+                      .arg(mini->entityName()))
+        || !check(mini->startPoint() == mini->targetPoint(),
+                  QStringLiteral("black hole target should overlap the start"))
+        || !check(!mini->isTruncated(),
+                  QStringLiteral("early capture reported as truncated")))
+        return 1;
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    mini->repaint();
+    QApplication::processEvents();
+    if (!mini->grab().save(
+            QStringLiteral("/tmp/opencode/pvforge-solver-mini-overlap.png")))
+    {
+        qCritical() << "solver-mini-preview-test: overlap screenshot failed";
+        return 1;
+    }
+
+    // Back to the gravity segment for the drag/undo assertions below.
+    document->setSelection(ball);
+    mini->setSolver(ball, gravity.id);
+    live->setPlayhead(0);
+    mini->refreshPreview();
+    QApplication::processEvents();
 
     // Drag the arrow handle: live model write, exactly one commit.
     const auto sendMouseTo = [](QWidget* target, QEvent::Type type,
