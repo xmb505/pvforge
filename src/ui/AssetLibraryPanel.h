@@ -50,6 +50,12 @@ public:
     bool sessionMode() const { return m_sessionMode; }
     void refresh();
 
+    // Compact mode for the timeline-left asset bin: keeps the search field,
+    // import buttons, tag filter, list and create/remove actions, but hides
+    // the folder header and the long info line so the panel fits ~220 px.
+    void setCompactMode(bool compact);
+    bool compactMode() const { return m_compact; }
+
     // Library entries that can replace an entity of this media type.
     static QVector<int> mediaTemplateIndices(const Project& project, EntityType type);
 
@@ -186,6 +192,9 @@ private:
     Project* m_project = nullptr;
     EditorSession* m_session = nullptr;
     bool m_sessionMode = false;
+    bool m_compact = false;
+    QVBoxLayout* m_layout = nullptr;
+    QWidget* m_header = nullptr;
     QLineEdit* m_search = nullptr;
     QComboBox* m_tagFilter = nullptr;
     QListWidget* m_list = nullptr;

@@ -24,7 +24,6 @@
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
-#include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -546,17 +545,6 @@ void TimelinePanel::initPanel()
 
     m_displayFrames = Settings::timelineDisplayFrames();
 
-    m_search = new QLineEdit(this);
-    m_search->setObjectName(QStringLiteral("timelineSearchEdit"));
-    m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
-    m_search->setClearButtonEnabled(true);
-    m_search->setToolTip(QStringLiteral("按名称筛选时间轴对象"));
-    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
-        clampScroll();
-        update();
-        syncPopups();
-    });
-
     m_unitButton = new QToolButton(this);
     m_unitButton->setObjectName(QStringLiteral("timelineUnitButton"));
     m_unitButton->setText(m_displayFrames ? QStringLiteral("帧")
@@ -879,20 +867,21 @@ int TimelinePanel::rowTop(int row) const
 
 int TimelinePanel::nameWidth() const
 {
-    // The main timeline keeps the old 130 px name column; private timeline
-    // popups are narrower so they still have room for content.
-    return m_popup ? 96 : kNameWidth;
+    // Clip-first: the entity name is drawn inside each clip, so the timeline
+    // content starts at x=0 for both the main panel and private timelines.
+    return 0;
 }
 
 QString TimelinePanel::searchFilter() const
 {
-    return m_search ? m_search->text().trimmed() : QString();
+    // Entity search lives in the asset bin on the left; the timeline itself
+    // never filters clips by name.
+    return QString();
 }
 
-bool TimelinePanel::rowMatchesFilter(const Entity& entity) const
+bool TimelinePanel::rowMatchesFilter(const Entity&) const
 {
-    const QString filter = searchFilter();
-    return filter.isEmpty() || entity.name.contains(filter, Qt::CaseInsensitive);
+    return true;
 }
 
 void TimelinePanel::toggleSessionFlag(EntityId id, bool hidden)
@@ -2765,11 +2754,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
     QPainter p(this);
     p.fillRect(rect(), base);
-    p.fillRect(QRect(0, 0, nameWidth(), height()), base);
     p.fillRect(QRect(0, 0, width(), kRulerHeight), alt);
 
     p.setPen(mid);
-    p.drawLine(nameWidth(), 0, nameWidth(), bottom);
     p.drawLine(0, kRulerHeight, width(), kRulerHeight);
 
     const int fps = currentFps();
@@ -2906,39 +2893,25 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         if (!entity)
             continue;
 
-        // Name column: entity name plus the old eye / lock / select-keys
-        // buttons.  Names never live inside the clip any more.
-        const int depth = depthOf(entity->id);
-        const int nameX = 8 + std::min(depth, 4) * 12;
-        const int buttonLeft =
-            nameWidth() - 6 - 3 * (kButtonSize + kButtonGap);
+        // Clip-first: the entity name is the clip name. Eye / lock / select
+        // keys stay available as small inline buttons when the clip is wide
+        // enough; short clips fall back to the clip context menu.
         const bool hidden = sessionMode()
                                 ? entity->hidden
                                 : m_project->isEffectivelyHidden(entity->id);
         const bool locked = sessionMode()
                                 ? entity->locked
                                 : m_project->isEffectivelyLocked(entity->id);
-        const QColor nameColor =
-            (hidden || locked) ? dim : text;
-        p.setPen(nameColor);
-        const QFontMetrics nameMetrics(p.font());
-        const QString shownName =
-            nameMetrics.elidedText(entity->name, Qt::ElideRight,
-                                   std::max(8, buttonLeft - 4 - nameX));
-        p.drawText(QRect(nameX, top, std::max(8, buttonLeft - 4 - nameX),
-                         kRowHeight),
-                   Qt::AlignVCenter | Qt::AlignLeft, shownName);
-
-        makeEyeIcon(hidden).paint(&p, rowButtonRect(row, 0));
-        makeLockIcon(locked).paint(&p, rowButtonRect(row, 1));
-        makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
-
-        p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 90));
-        p.drawLine(nameWidth() - 1, top, nameWidth() - 1, top + kRowHeight);
-
         const QRect clip = clipRect(*entity);
         if (clip.isEmpty())
             continue;
+        const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
+        if (showButtons)
+        {
+            makeEyeIcon(hidden).paint(&p, rowButtonRect(row, 0));
+            makeLockIcon(locked).paint(&p, rowButtonRect(row, 1));
+            makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
+        }
         QColor color = clipColor(entity->type);
         const bool selected = rowSelected;
         const int alpha = hidden ? 80 : (selected ? 230 : 200);
@@ -3032,10 +3005,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             }
         }
 
-        // Clip body carries time/duration only; the entity name is in the
-        // name column.  This keeps short clips readable.
-        const int infoRight = plus.isEmpty() ? clip.right() - 6 : plus.left() - 6;
-        const QFontMetrics metrics(p.font());
+        // Entity name = clip name, drawn inside the clip. Time/duration and
+        // solver count are secondary text on the right when the clip is wide
+        // enough; the tooltip carries the full details for short clips.
+        const int textLeft = clip.left() + 5
+                             + (showButtons ? kButtonStrip + 2 : 0);
+        const int textRight =
+            plus.isEmpty() ? clip.right() - 5 : plus.left() - 4;
         const int startFrame = clipStartOf(*entity);
         const int endFrame = clipEndOf(*entity);
         QString rangeInfo =
@@ -3051,31 +3027,39 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             if (seconds > 0.0)
                 rangeInfo += QStringLiteral(" · %1s").arg(seconds, 0, 'f', 2);
         }
-        if (infoRight > clip.left() + 10)
-        {
-            const QString shown =
-                metrics.elidedText(rangeInfo, Qt::ElideRight,
-                                   infoRight - clip.left() - 8);
-            p.setPen(QColor(255, 255, 255, 210));
-            p.drawText(QRect(clip.left() + 5, clip.top(),
-                             std::max(1, infoRight - clip.left() - 6),
-                             clip.height()),
-                       Qt::AlignVCenter | Qt::AlignLeft, shown);
-        }
-
-        QString badges;
         if (sessionMode())
         {
-            if (isEntityLocked(entity->id))
-                badges += QStringLiteral("锁");
-            if (hidden)
-                badges += QStringLiteral("隐");
+            const Uuid uuid = uuidForEntityId(entity->id);
+            const int solvers =
+                m_session->project().entities.value(uuid).solvers.size();
+            if (solvers > 0)
+                rangeInfo += QStringLiteral(" · 求解%1").arg(solvers);
         }
-        if (!badges.isEmpty() && clip.height() >= 20)
+
+        const bool showInfo = clip.width() >= 170;
+        const int infoWidth =
+            showInfo ? std::min(150, std::max(0, textRight - textLeft) / 2) : 0;
+        const int nameWidthPx =
+            std::max(0, textRight - textLeft - infoWidth - (showInfo ? 8 : 0));
+        const QFontMetrics nameMetrics(font());
+        const QString shownName =
+            nameMetrics.elidedText(entity->name, Qt::ElideRight, nameWidthPx);
+
+        QFont nameFont = font();
+        p.setFont(nameFont);
+        p.setPen((hidden || locked) ? dim : QColor(255, 255, 255, 235));
+        p.drawText(QRect(textLeft, clip.top(), nameWidthPx, clip.height()),
+                   Qt::AlignVCenter | Qt::AlignLeft, shownName);
+        p.setFont(small);
+        if (showInfo && infoWidth > 20)
         {
-            p.setPen(QColor(255, 255, 255, 200));
-            p.drawText(QRect(clip.left() + 5, clip.bottom() - 13, 40, 11),
-                       Qt::AlignLeft | Qt::AlignVCenter, badges);
+            const QFontMetrics infoMetrics(p.font());
+            const QString shownInfo =
+                infoMetrics.elidedText(rangeInfo, Qt::ElideRight, infoWidth);
+            p.setPen(QColor(255, 255, 255, 190));
+            p.drawText(QRect(textRight - infoWidth, clip.top(), infoWidth,
+                             clip.height()),
+                       Qt::AlignVCenter | Qt::AlignRight, shownInfo);
         }
 
         const int centerY = clip.center().y();
@@ -3221,8 +3205,11 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     const int row = rowAt(int(pos.y()));
     const EntityId id = entityAtRow(row);
+    const Entity* entity = entityById(id);
 
-    if (pos.x() < nameWidth())
+    // Inline clip buttons win over trim/keyframe gestures, but only where
+    // they are actually painted (short clips use the context menu).
+    if (entity && clipRect(*entity).width() >= kInlineButtonsMinWidth)
     {
         for (int index = 0; index < 3; ++index)
         {
@@ -3232,34 +3219,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
                 return;
             }
         }
-        const Entity* rowEntity = entityById(id);
-        if (rowEntity && !isEntityLocked(id))
-        {
-            m_selectedKeyframes.clear();
-            emit keyframeSelectionChanged(m_selectedKeyframes);
-            const bool additive =
-                event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
-            if (additive)
-            {
-                if (m_entitySelection.contains(id))
-                    m_entitySelection.remove(id);
-                else
-                    m_entitySelection.insert(id);
-                m_selected = id;
-                emit entitySelected(id);
-                update();
-            }
-            else if (!m_entitySelection.contains(id)
-                     || m_entitySelection.size() <= 1)
-            {
-                selectEntity(id, true);
-            }
-        }
-        update();
-        return;
     }
-
-    const Entity* entity = entityById(id);
     const int pressX = int(std::lround(pos.x()));
     if (!entity)
     {
@@ -3524,15 +3484,16 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         {
             const QRect clip = clipRect(*entity);
             const int x = int(std::lround(event->position().x()));
+            const int startFrame = clipStartOf(*entity);
+            const int endFrame = clipEndOf(*entity);
+            setToolTip(QStringLiteral("%1\n%2–%3 帧 · 时长 %4 帧")
+                           .arg(entity->name)
+                           .arg(startFrame)
+                           .arg(endFrame)
+                           .arg(endFrame - startFrame));
             if (sessionMode())
             {
-                const int startFrame = clipStartOf(*entity);
-                const int endFrame = clipEndOf(*entity);
-                QString tip = QStringLiteral("%1\n%2–%3 帧 · 时长 %4 帧")
-                                  .arg(entity->name)
-                                  .arg(startFrame)
-                                  .arg(endFrame)
-                                  .arg(endFrame - startFrame);
+                QString tip = toolTip();
                 if (entity->locked)
                     tip += QStringLiteral("\n已锁定（不能拖动或裁剪）");
                 if (entity->hidden)
@@ -3582,8 +3543,7 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         else
         {
             unsetCursor();
-            if (sessionMode())
-                setToolTip(QString());
+            setToolTip(QString());
         }
         update();
         return;
@@ -4027,6 +3987,19 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 
     selectEntity(id, true);
     QMenu menu(this);
+    const bool hiddenNow = sessionMode()
+                               ? entity->hidden
+                               : m_project->isEffectivelyHidden(entity->id);
+    const bool lockedNow = sessionMode()
+                               ? entity->locked
+                               : m_project->isEffectivelyLocked(entity->id);
+    QAction* toggleHidden = menu.addAction(hiddenNow
+                                               ? QStringLiteral("显示片段")
+                                               : QStringLiteral("隐藏片段"));
+    QAction* toggleLocked = menu.addAction(lockedNow
+                                               ? QStringLiteral("解锁片段")
+                                               : QStringLiteral("锁定片段"));
+    menu.addSeparator();
     QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
     QAction* remove = nullptr;
     QAction* split = nullptr;
@@ -4103,7 +4076,21 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         remove->setEnabled(!m_project->isEffectivelyLocked(id));
     }
     QAction* chosen = menu.exec(event->globalPos());
-    if (chosen == open)
+    if (chosen == toggleHidden)
+    {
+        if (sessionMode())
+            toggleSessionFlag(id, true);
+        else
+            emit entityFlagChanged(id, EntityFlag::Hidden, !hiddenNow);
+    }
+    else if (chosen == toggleLocked)
+    {
+        if (sessionMode())
+            toggleSessionFlag(id, false);
+        else
+            emit entityFlagChanged(id, EntityFlag::Locked, !lockedNow);
+    }
+    else if (chosen == open)
     {
         openPopup(id);
     }
@@ -4292,26 +4279,20 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
                                kScrollBarSize,
                                std::max(0, height() - kRulerHeight
                                                - kScrollBarSize));
-    if (m_search)
+    // The name column is gone; unit and edit-mode toggles sit at the ruler's
+    // right edge where the old mode button already lived.
+    const int rulerRight = width() - kScrollBarSize;
+    if (m_modeButton)
     {
-        const int unitSpace = 36 + 6;
-        const int searchWidth =
-            std::max(24, nameWidth() - 8 - unitSpace - 6);
-        m_search->setGeometry(8, 3, searchWidth, kRulerHeight - 7);
-        m_search->setVisible(nameWidth() >= 110 && width() > 220);
+        m_modeButton->setGeometry(std::max(4, rulerRight - 58), 3, 54,
+                                  kRulerHeight - 7);
+        m_modeButton->setVisible(m_owner < 0 && width() > 280);
     }
     if (m_unitButton)
     {
-        m_unitButton->setGeometry(nameWidth() - 8 - 36, 3, 36,
+        m_unitButton->setGeometry(std::max(4, rulerRight - 58 - 42), 3, 36,
                                   kRulerHeight - 7);
         m_unitButton->setVisible(m_owner < 0 && width() > 200);
-    }
-    if (m_modeButton)
-    {
-        m_modeButton->setGeometry(std::max(nameWidth() + 4,
-                                           width() - kScrollBarSize - 58),
-                                  3, 54, kRulerHeight - 7);
-        m_modeButton->setVisible(m_owner < 0 && width() > 280);
     }
     clampScroll();
     update();
@@ -4494,6 +4475,37 @@ QString TimelinePanel::rowNameForTest(int row) const
     return entity ? entity->name : QString();
 }
 
+QString TimelinePanel::clipNameTextForTest(EntityId id) const
+{
+    const Entity* entity = entityById(id);
+    if (!entity)
+        return QString();
+    const QRect clip = clipRect(*entity);
+    if (clip.isEmpty())
+        return QString();
+    const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
+    const int textLeft = clip.left() + 5
+                         + (showButtons ? kButtonStrip + 2 : 0);
+    const QRect plus = plusButtonRect(clip, width() - kScrollBarSize);
+    const int textRight = plus.isEmpty() ? clip.right() - 5 : plus.left() - 4;
+    const bool showInfo = clip.width() >= 170;
+    const int infoWidth =
+        showInfo ? std::min(150, std::max(0, textRight - textLeft) / 2) : 0;
+    const int available =
+        std::max(0, textRight - textLeft - infoWidth - (showInfo ? 8 : 0));
+    return QFontMetrics(font()).elidedText(entity->name, Qt::ElideRight,
+                                           available);
+}
+
+bool TimelinePanel::clipNameElidedForTest(EntityId id) const
+{
+    const Entity* entity = entityById(id);
+    if (!entity)
+        return false;
+    const QString shown = clipNameTextForTest(id);
+    return !shown.isEmpty() && shown != entity->name;
+}
+
 int TimelinePanel::rowStartForTest(int row) const
 {
     const Entity* entity = entityById(entityAtRow(row));
@@ -4569,10 +4581,16 @@ QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
     if (index < 0 || index > 2)
         return QRect();
-    const int top = rowTop(row);
-    const int x = nameWidth() - 6 - (index + 1) * (kButtonSize + kButtonGap);
-    return QRect(x, top + (kRowHeight - kButtonSize) / 2, kButtonSize,
-                 kButtonSize);
+    const Entity* entity = entityById(entityAtRow(row));
+    if (!entity)
+        return QRect();
+    const QRect clip = clipRect(*entity);
+    if (clip.isEmpty())
+        return QRect();
+    // The old row buttons now live inside the clip's left edge.
+    const int x = clip.left() + 2 + index * (kButtonSize + kButtonGap);
+    const int y = clip.top() + (clip.height() - kButtonSize) / 2;
+    return QRect(x, y, kButtonSize, kButtonSize);
 }
 
 bool TimelinePanel::verticalScrollVisibleForTest() const

@@ -106,6 +106,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QScrollArea>
@@ -4828,31 +4829,20 @@ int timelineUiTest(QApplication& app)
         QApplication::processEvents();
     };
 
-    // 1. Name column: fixed 130 px plus search.
-    expect(timeline->nameColumnWidthForTest() == 130,
-           QStringLiteral("name column is not 130 px"));
-    auto* search =
-        timeline->findChild<QLineEdit*>(QStringLiteral("timelineSearchEdit"));
-    expect(search != nullptr, QStringLiteral("entity search field missing"));
-    if (search)
-    {
-        expect(search->placeholderText().contains(QStringLiteral("搜索对象")),
-               QStringLiteral("search placeholder is not 搜索对象…"));
-        expect(timeline->entityRowCountForTest() == 3,
-               QStringLiteral("unfiltered row count is wrong"));
-        search->setText(QStringLiteral("背景"));
-        QApplication::processEvents();
-        expect(timeline->entityRowCountForTest() == 1,
-               QStringLiteral("search did not filter the rows (%1)")
-                   .arg(timeline->entityRowCountForTest()));
-        expect(timeline->rowNameForTest(rowFor(background))
-                   == QStringLiteral("背景B"),
-               QStringLiteral("filtered row is not the background entity"));
-        search->clear();
-        QApplication::processEvents();
-        expect(timeline->entityRowCountForTest() == 3,
-               QStringLiteral("clearing search did not restore the rows"));
-    }
+    // 1. Clip-first: no left name column and no timeline-side entity search.
+    expect(timeline->nameColumnWidthForTest() == 0,
+           QStringLiteral("timeline still reserves a name column"));
+    expect(timeline->findChild<QLineEdit*>(
+               QStringLiteral("timelineSearchEdit"))
+               == nullptr,
+           QStringLiteral("timeline-side entity search still exists"));
+    expect(timeline->entityRowCountForTest() == 3,
+           QStringLiteral("entity row count is wrong"));
+    expect(timeline->rowNameForTest(rowFor(background))
+               == QStringLiteral("背景B"),
+           QStringLiteral("clip name is not the entity name"));
+    expect(!timeline->clipNameTextForTest(idFor(background)).isEmpty(),
+           QStringLiteral("clip does not draw the entity name"));
 
     // 2. Ruler density table and minor ticks.
     auto checkSteps = [&](double pixels, int tick, int label) {
@@ -4975,6 +4965,241 @@ int timelineUiTest(QApplication& app)
     window->close();
     QApplication::processEvents();
     qInfo() << "timeline-ui-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
+int timelineAssetsTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("timeline-assets.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("时间轴素材栏");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-assets-test: create failed" << error;
+        return 1;
+    }
+
+    const QString imagePath =
+        QDir(temp.path()).filePath(QStringLiteral("短素材.png"));
+    QImage image(96, 64, QImage::Format_ARGB32);
+    image.fill(QColor(60, 150, 220));
+    {
+        QPainter painter(&image);
+        painter.setPen(Qt::white);
+        painter.drawText(image.rect(), Qt::AlignCenter, QStringLiteral("ASSET"));
+    }
+    if (!image.save(imagePath))
+    {
+        qCritical() << "timeline-assets-test: cannot write test image";
+        return 1;
+    }
+    const auto asset = session->assets().importFile(imagePath, &error);
+    if (!asset)
+    {
+        qCritical() << "timeline-assets-test: import failed" << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* panel = window->assetLibraryForTest();
+    auto* timeline = window->timelineForTest();
+    auto* split =
+        window->findChild<QSplitter*>(QStringLiteral("timelineAssetSplit"));
+    if (!live || !panel || !timeline || !split)
+    {
+        qCritical() << "timeline-assets-test: session window widgets missing";
+        return 1;
+    }
+
+    int failures = 0;
+    auto expect = [&failures](bool condition, const QString& message) {
+        if (!condition)
+        {
+            qCritical() << "timeline-assets-test:" << message;
+            ++failures;
+        }
+        return condition;
+    };
+
+    // 1. Clip-first geometry: no left name column and no timeline search.
+    expect(timeline->nameColumnWidthForTest() == 0,
+           QStringLiteral("timeline still has a name column"));
+    expect(timeline->findChild<QLineEdit*>(
+               QStringLiteral("timelineSearchEdit"))
+               == nullptr,
+           QStringLiteral("timeline-side entity search still exists"));
+
+    // 2. Asset bin sits left of the timeline, is compact, and shows data.
+    auto* panelWidget =
+        window->findChild<QWidget*>(QStringLiteral("timelineAssetPanel"));
+    auto* assetList =
+        window->findChild<QListWidget*>(QStringLiteral("assetList"));
+    auto* importButton =
+        window->findChild<QToolButton*>(QStringLiteral("assetImport"));
+    auto* tagFilter =
+        window->findChild<QComboBox*>(QStringLiteral("assetTagFilter"));
+    expect(panelWidget && split->isAncestorOf(panelWidget),
+           QStringLiteral("timeline asset bar is missing"));
+    expect(assetList && importButton && tagFilter,
+           QStringLiteral("asset bar list/import/tag widgets missing"));
+    if (panelWidget && assetList)
+    {
+        const QPoint panelPos = panelWidget->mapTo(window, QPoint(0, 0));
+        const QPoint timelinePos = timeline->mapTo(window, QPoint(0, 0));
+        expect(panelWidget->width() >= 140 && panelWidget->width() <= 260,
+               QStringLiteral("asset bar width is not 160-200 px (%1)")
+                   .arg(panelWidget->width()));
+        expect(panelPos.x() < timelinePos.x(),
+               QStringLiteral("asset bar is not left of the timeline"));
+        expect(assetList->count() >= 1,
+               QStringLiteral("asset bar list is empty"));
+        expect(importButton->isVisible(),
+               QStringLiteral("asset import button is hidden"));
+        expect(tagFilter->isVisible(),
+               QStringLiteral("asset tag filter is hidden"));
+    }
+    expect(panel->assetCount() >= 1, QStringLiteral("asset entry missing"));
+    QString tagError;
+    expect(panel->renameAsset(asset->hash, QStringLiteral("短素材"), &tagError),
+           QStringLiteral("renameAsset failed: %1").arg(tagError));
+    panel->refresh();
+    expect(panel->assetNameAt(0) == QStringLiteral("短素材"),
+           QStringLiteral("asset name is wrong: %1").arg(panel->assetNameAt(0)));
+    expect(!panel->assetThumbnailAt(0).isNull(),
+           QStringLiteral("asset thumbnail is null"));
+    expect(!panel->assetMissingAt(0),
+           QStringLiteral("freshly imported asset is marked missing"));
+
+    // Search belongs to the asset bin, not the timeline.
+    panel->setSearchText(QStringLiteral("短素材"));
+    expect(panel->assetCount() == 1,
+           QStringLiteral("asset search did not filter: %1").arg(panel->assetCount()));
+    panel->setSearchText(QString());
+    expect(panel->assetCount() >= 1,
+           QStringLiteral("clearing asset search did not restore"));
+
+    // Tags stay available in the compact bar.
+    expect(panel->setAssetTags(asset->hash, {QStringLiteral("intro")}, &tagError),
+           QStringLiteral("setAssetTags failed: %1").arg(tagError));
+    expect(panel->tagFilters().contains(QStringLiteral("intro")),
+           QStringLiteral("tag filter missing after tagging"));
+
+    // 3. Drag an asset onto the timeline through the real MIME payload.
+    const qsizetype beforeDrop = live->project().entities.size();
+    QMimeData* mime = panel->assetMimeData(asset->hash);
+    const pvf::EntityId dropped =
+        timeline->dropAssetForTest(*mime, 20, 0);
+    delete mime;
+    QApplication::processEvents();
+    expect(dropped != pvf::kInvalidEntity
+               && live->project().entities.size() == beforeDrop + 1,
+           QStringLiteral("asset drag did not create an entity"));
+    const int row = timeline->rowForEntityForTest(dropped);
+    expect(row >= 0, QStringLiteral("dropped clip has no row"));
+    expect(timeline->rowNameForTest(row) == QStringLiteral("短素材"),
+           QStringLiteral("clip name is not the entity name: %1")
+               .arg(timeline->rowNameForTest(row)));
+    expect(timeline->clipNameTextForTest(dropped) == QStringLiteral("短素材"),
+           QStringLiteral("wide clip does not draw the full entity name: %1")
+               .arg(timeline->clipNameTextForTest(dropped)));
+
+    // 4. Bottom-up rows and free vertical drop rows still work.
+    const int bottom = timeline->bodyBottomForTest();
+    expect(timeline->rowTopForTest(0) >= bottom - 31
+               && timeline->rowTopForTest(0) <= bottom,
+           QStringLiteral("row 0 is not at the bottom"));
+    expect(timeline->dropRowForTest(bottom - 5) == 0,
+           QStringLiteral("drop row at the bottom is not row 0"));
+
+    // 5. Eye / lock stay reachable inside the clip and commit through edits.
+    auto click = [timeline](const QPoint& pos) {
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos),
+                          QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos),
+                            QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+    };
+    const pvf::Uuid droppedUuid = timeline->uuidForEntityId(dropped);
+    click(timeline->rowButtonRect(row, 0).center());
+    expect(live->project().entities.value(droppedUuid).hidden,
+           QStringLiteral("eye button did not hide the clip"));
+    click(timeline->rowButtonRect(row, 0).center());
+    expect(!live->project().entities.value(droppedUuid).hidden,
+           QStringLiteral("eye button did not show the clip again"));
+    click(timeline->rowButtonRect(row, 1).center());
+    expect(live->project().entities.value(droppedUuid).locked,
+           QStringLiteral("lock button did not lock the clip"));
+    click(timeline->rowButtonRect(row, 1).center());
+    expect(!live->project().entities.value(droppedUuid).locked,
+           QStringLiteral("lock button did not unlock the clip"));
+
+    // 6. Short clip: name elides and the tooltip carries the full identity.
+    auto& entity = live->mutableProject().entities[droppedUuid];
+    entity.end = entity.start + 5;
+    expect(live->document()->commitEntities({droppedUuid},
+                                            QStringLiteral("short clip"), &error),
+           QStringLiteral("short clip commit failed: %1").arg(error));
+    QApplication::processEvents();
+    expect(timeline->clipNameElidedForTest(dropped),
+           QStringLiteral("short clip name is not elided: %1")
+               .arg(timeline->clipNameTextForTest(dropped)));
+    const QPoint shortPoint = timeline->clipRectFor(dropped).center();
+    QMouseEvent move(QEvent::MouseMove, QPointF(shortPoint),
+                     QPointF(timeline->mapToGlobal(shortPoint)), Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &move);
+    QApplication::processEvents();
+    const QString tip = timeline->toolTip();
+    expect(tip.contains(QStringLiteral("短素材")),
+           QStringLiteral("short clip tooltip lost the entity name: %1").arg(tip));
+    expect(tip.contains(QStringLiteral("时长")),
+           QStringLiteral("short clip tooltip lost the duration: %1").arg(tip));
+
+    // 7. Missing asset state remains visible in the same compact bar.
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    expect(window->grab().save(
+               QStringLiteral("/tmp/opencode/pvforge-timeline-assets.png")),
+           QStringLiteral("screenshot failed"));
+
+    expect(panel->deleteAsset(asset->hash, &tagError),
+           QStringLiteral("deleteAsset failed: %1").arg(tagError));
+    panel->refresh();
+    int missingRow = -1;
+    for (int i = 0; i < panel->assetCount(); ++i)
+        if (panel->assetHashAt(i) == asset->hash)
+            missingRow = i;
+    expect(missingRow >= 0 && panel->assetMissingAt(missingRow),
+           QStringLiteral("missing asset is not marked in the bar"));
+    expect(!panel->assetMissingReasonAt(missingRow).isEmpty(),
+           QStringLiteral("missing asset has no reason"));
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-assets-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
 
@@ -15084,7 +15309,7 @@ int clipTimelineTest(QApplication& app)
             };
             const int beforeScroll = timeline->horizontalScrollForTest();
             const int beforeFrame = window.currentFrame();
-            const QPoint scrubStart(timeline->nameColumnWidthForTest() + 20, 10);
+            const QPoint scrubStart(20, 10);
             const QPoint scrubEnd(timeline->width() + 80, 10);
             sendMain(QEvent::MouseButtonPress, scrubStart, Qt::LeftButton);
             sendMain(QEvent::MouseMove, scrubEnd, Qt::LeftButton);
@@ -15305,30 +15530,32 @@ int libraryTest(QApplication& app)
         if (auto* scroll = window.findChild<QScrollArea*>(QStringLiteral("projectScroll")))
             scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
         auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
-        auto* panel = window.findChild<QWidget*>(QStringLiteral("assetPanel"));
-        auto* info = window.findChild<QLabel*>(QStringLiteral("assetInfo"));
-        if (!tabs || !panel || !info)
+        auto* panel = window.findChild<QWidget*>(QStringLiteral("timelineAssetPanel"));
+        auto* list = window.findChild<QListWidget*>(QStringLiteral("assetList"));
+        auto* timeline = window.findChild<pvf::TimelinePanel*>();
+        auto* moved = window.findChild<QLabel*>(QStringLiteral("assetMovedLabel"));
+        if (!tabs || !panel || !list || !timeline || !moved)
         {
             qCritical() << "library-test: asset widgets missing";
             layoutOk = false;
         }
         else
         {
+            const QPoint panelPos = panel->mapTo(&window, QPoint(0, 0));
+            const QPoint timelinePos = timeline->mapTo(&window, QPoint(0, 0));
             qInfo() << "library-test: widths tabs" << tabs->width()
                     << "panel" << panel->width() << "panel min"
-                    << panel->minimumSizeHint().width() << "info min"
-                    << info->minimumSizeHint().width();
-            const bool inProjectTab = tabs->isAncestorOf(panel);
-            if (!inProjectTab)
-                qCritical() << "library-test: asset panel is not in the right dock";
-            layoutOk = inProjectTab && tabs->width() <= 440
-                       && panel->width() <= tabs->width()
-                       && info->width() <= panel->width()
-                       && info->text().contains(QChar(0x2026))
-                       && info->toolTip() == assetPath;
+                    << panel->minimumSizeHint().width();
+            layoutOk = !tabs->isAncestorOf(panel)
+                       && panel->width() >= 140 && panel->width() <= 260
+                       && panelPos.x() < timelinePos.x()
+                       && list->count() > 0
+                       && !list->item(0)->icon().isNull();
             if (!layoutOk)
-                qCritical() << "library-test: long path broke the sidebar"
-                            << info->text() << info->toolTip();
+                qCritical() << "library-test: asset bin is not left of timeline"
+                            << panel->width() << panelPos << timelinePos;
+            if (!moved->isVisible())
+                qCritical() << "library-test: project tab signpost missing";
         }
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_library.png"));
 
@@ -15707,10 +15934,13 @@ int layoutTest(QApplication& app)
         auto* timeline = window.findChild<pvf::TimelinePanel*>();
         auto* viewport = window.findChild<pvf::Viewport*>();
         auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("rightTabs"));
-        auto* panel = window.findChild<QWidget*>(QStringLiteral("assetPanel"));
+        auto* panel =
+            window.findChild<QWidget*>(QStringLiteral("timelineAssetPanel"));
+        auto* split =
+            window.findChild<QSplitter*>(QStringLiteral("timelineAssetSplit"));
         auto* create = window.findChild<QPushButton*>(QStringLiteral("assetCreate"));
         auto* remove = window.findChild<QPushButton*>(QStringLiteral("assetRemove"));
-        if (!timeline || !viewport || !tabs || !panel)
+        if (!timeline || !viewport || !tabs || !panel || !split)
         {
             qCritical() << "layout-test: layout widgets missing";
             ++failures;
@@ -15718,6 +15948,7 @@ int layoutTest(QApplication& app)
         else
         {
             qInfo() << "layout-test: 1440x900 timeline" << timeline->geometry()
+                    << "asset" << panel->geometry()
                     << "viewport" << viewport->geometry()
                     << "rightTabs" << tabs->width();
             if (timeline->height() < 190 || timeline->height() > 260)
@@ -15726,15 +15957,24 @@ int layoutTest(QApplication& app)
                             << timeline->height();
                 ++failures;
             }
-            if (timeline->width() < window.centralWidget()->width() - 2)
+            const QPoint panelPos = panel->mapTo(&window, QPoint(0, 0));
+            const QPoint timelinePos = timeline->mapTo(&window, QPoint(0, 0));
+            if (panelPos.x() >= timelinePos.x()
+                || panel->width() < 140 || panel->width() > 260)
             {
-                qCritical() << "layout-test: timeline is not full width"
+                qCritical() << "layout-test: asset bin is not left of timeline"
+                            << panel->width() << panelPos << timelinePos;
+                ++failures;
+            }
+            if (timeline->width() < window.centralWidget()->width() * 0.7)
+            {
+                qCritical() << "layout-test: timeline lost too much width"
                             << timeline->width() << window.centralWidget()->width();
                 ++failures;
             }
-            if (!tabs->isAncestorOf(panel))
+            if (tabs->isAncestorOf(panel))
             {
-                qCritical() << "layout-test: asset panel is not in the right dock";
+                qCritical() << "layout-test: asset panel is still in the right dock";
                 ++failures;
             }
             if (!create || !remove || !create->isVisible() || !remove->isVisible())
@@ -21002,15 +21242,19 @@ int assetsTest(QApplication& app)
     };
     auto row = [&](const QString& hash) { return panelRowForHash(*panel, hash); };
 
-    // The old visible entry points: library inside the right tab and the
-    // create/remove buttons, not hidden test-only objects.
+    // Visible entry points: the asset bin now sits left of the timeline and
+    // keeps the create/remove buttons, not hidden test-only objects.
     auto* rightTabs = window->findChild<QTabWidget*>(QStringLiteral("rightTabs"));
+    auto* timelineAssets =
+        window->findChild<QSplitter*>(QStringLiteral("timelineAssetSplit"));
     auto* createButton =
         window->findChild<QPushButton*>(QStringLiteral("assetCreate"));
     auto* removeButton =
         window->findChild<QPushButton*>(QStringLiteral("assetRemove"));
-    check(rightTabs && rightTabs->isAncestorOf(panel),
-          QStringLiteral("asset panel is not in the right dock"));
+    check(rightTabs && !rightTabs->isAncestorOf(panel),
+          QStringLiteral("asset panel is still in the right dock"));
+    check(timelineAssets && timelineAssets->isAncestorOf(panel),
+          QStringLiteral("asset panel is not in the timeline asset split"));
     check(createButton && createButton->isVisible(),
           QStringLiteral("create button is not visible"));
     check(removeButton && removeButton->isVisible(),
@@ -21022,8 +21266,9 @@ int assetsTest(QApplication& app)
               && sessionTimeline->height() <= 260,
           QStringLiteral("timeline height is not about 220"));
     check(sessionTimeline
-              && sessionTimeline->width() >= window->centralWidget()->width() - 2,
-          QStringLiteral("timeline is not full width"));
+              && sessionTimeline->width()
+                     > window->centralWidget()->width() * 0.7,
+          QStringLiteral("timeline lost most of its width"));
     check(sessionViewport && sessionViewport->width() > 1000
               && sessionViewport->height() > 520,
           QStringLiteral("viewport did not regain its v0.2.0 height"));
@@ -22729,6 +22974,8 @@ int main(int argc, char* argv[])
         return timelineBottomUpTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-ui-test")))
         return timelineUiTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-assets-test")))
+        return timelineAssetsTest(app);
     const int viewportIndex = app.arguments().indexOf(
         QStringLiteral("--viewport-test"));
     if (viewportIndex >= 0)

@@ -19,7 +19,6 @@ class QDragMoveEvent;
 class QDragLeaveEvent;
 class QDropEvent;
 class QFocusEvent;
-class QLineEdit;
 class QMimeData;
 class QMouseEvent;
 class QPainter;
@@ -109,7 +108,10 @@ public:
     int rowCenterYForTest(int row) const { return rowTop(row) + rowHeight(row) / 2; }
     int rowTopForTest(int row) const { return rowTop(row); }
     int bodyBottomForTest() const { return bodyBottom(); }
+    // Clip-first timeline: no name column, no timeline-side entity search.
     int nameColumnWidthForTest() const { return nameWidth(); }
+    bool clipNameElidedForTest(EntityId id) const;
+    QString clipNameTextForTest(EntityId id) const;
     int clipCornerRadiusForTest() const { return 0; }
     // Bottom-up drop row under y, clamped to row 0..highest occupied + 1.
     int dropRowForTest(int y) const { return dropRowForY(y); }
@@ -456,7 +458,6 @@ private:
 
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
-    QLineEdit* m_search = nullptr;
     QToolButton* m_unitButton = nullptr;
     QToolButton* m_modeButton = nullptr;
     QTimer* m_autoScroll = nullptr;
@@ -472,7 +473,9 @@ private:
 
     QHash<EntityId, ClipPopup*> m_popups;
 
-    static constexpr int kNameWidth = 130;
+    // No left name column: clips carry their entity names. The constant stays
+    // at zero so the existing coordinate helpers keep one shared origin.
+    static constexpr int kNameWidth = 0;
     static constexpr int kRowHeight = 30;
     static constexpr int kRulerHeight = 28;
     static constexpr int kScrollBarSize = 14;
@@ -480,6 +483,10 @@ private:
     static constexpr int kTrimGrab = 6;
     static constexpr int kButtonSize = 14;
     static constexpr int kButtonGap = 2;
+    static constexpr int kButtonStrip = 3 * (kButtonSize + kButtonGap);
+    // Clips narrower than this hide the inline eye/lock/key buttons; the
+    // right-click menu keeps those actions reachable for short clips.
+    static constexpr int kInlineButtonsMinWidth = kButtonStrip + 44;
 };
 
 } // namespace pvf

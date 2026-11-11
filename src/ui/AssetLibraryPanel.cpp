@@ -665,33 +665,60 @@ AssetLibraryPanel::~AssetLibraryPanel()
         m_extractionQueue->cancelAll();
 }
 
+void AssetLibraryPanel::setCompactMode(bool compact)
+{
+    m_compact = compact;
+    if (!m_layout)
+        return;
+
+    m_layout->setContentsMargins(compact ? 4 : 10, compact ? 4 : 10,
+                                 compact ? 4 : 10, compact ? 4 : 10);
+    m_layout->setSpacing(compact ? 4 : 8);
+    if (m_header)
+        m_header->setVisible(!compact);
+    // The preview was already hidden; the info line is the long path/hash
+    // text that would eat the timeline height.
+    if (m_info)
+        m_info->setVisible(!compact);
+    if (m_list)
+    {
+        m_list->setMinimumHeight(compact ? 48 : 140);
+        m_list->setIconSize(compact ? QSize(30, 30) : QSize(40, 40));
+    }
+    setMinimumWidth(compact ? 0 : minimumWidth());
+}
+
 void AssetLibraryPanel::buildUi()
 {
     setObjectName(QStringLiteral("assetPanel"));
-    auto* layout = new QVBoxLayout(this);
+    m_layout = new QVBoxLayout(this);
+    auto* layout = m_layout;
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
-    // Folder-like header: current location plus list/icon switch.
-    auto* pathRow = new QHBoxLayout();
+    // Folder-like header: current location plus list/icon switch. Compact
+    // mode hides this whole row to keep the timeline asset bin shallow.
+    m_header = new QWidget(this);
+    auto* pathRow = new QHBoxLayout(m_header);
+    pathRow->setContentsMargins(0, 0, 0, 0);
     pathRow->setSpacing(6);
-    auto* folderIcon = new QLabel(this);
+    auto* folderIcon = new QLabel(m_header);
     folderIcon->setPixmap(style()->standardIcon(QStyle::SP_DirIcon).pixmap(16, 16));
     pathRow->addWidget(folderIcon);
-    auto* pathLabel = new QLabel(QStringLiteral("全部素材"), this);
+    auto* pathLabel = new QLabel(QStringLiteral("全部素材"), m_header);
     QFont pathFont = pathLabel->font();
     pathFont.setBold(true);
     pathLabel->setFont(pathFont);
     pathRow->addWidget(pathLabel);
     pathRow->addStretch(1);
-    m_viewButton = new QToolButton(this);
+    m_viewButton = new QToolButton(m_header);
     m_viewButton->setObjectName(QStringLiteral("assetViewToggle"));
     m_viewButton->setCheckable(true);
     m_viewButton->setText(QStringLiteral("▦"));
     m_viewButton->setToolTip(QStringLiteral("切换到图标视图"));
     m_viewButton->setFixedSize(26, 26);
     pathRow->addWidget(m_viewButton);
-    layout->addLayout(pathRow);
+    layout->addWidget(m_header);
     connect(m_viewButton, &QToolButton::toggled, this,
             [this](bool iconView) { setIconView(iconView); });
 

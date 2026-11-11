@@ -417,15 +417,20 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
         new CollapsibleSection(Lang::t(QStringLiteral("section.projectSettings"), QStringLiteral("项目设置")), m_projectProps, projectContent);
     auto* environmentSection =
         new CollapsibleSection(Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")), m_environment, projectContent);
-    auto* librarySection =
-        new CollapsibleSection(Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")), m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
-    librarySection->setExpanded(true);
+
+    // The asset bin moved next to the timeline. Keep a short signpost here so
+    // the old project-properties location does not look like a missing panel.
+    auto* libraryMoved =
+        new QLabel(QStringLiteral("素材库已移至时间轴左侧"), projectContent);
+    libraryMoved->setObjectName(QStringLiteral("assetMovedLabel"));
+    libraryMoved->setContentsMargins(10, 8, 10, 8);
+    libraryMoved->setWordWrap(true);
 
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
-    projectLayout->addWidget(librarySection);
+    projectLayout->addWidget(libraryMoved);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -462,7 +467,18 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
 
     auto* mainSplit = new QSplitter(Qt::Vertical, this);
     mainSplit->addWidget(top);
-    mainSplit->addWidget(m_timeline);
+    auto* timelineAssets = new QSplitter(Qt::Horizontal, mainSplit);
+    timelineAssets->setObjectName(QStringLiteral("timelineAssetSplit"));
+    timelineAssets->setChildrenCollapsible(false);
+    m_library->setObjectName(QStringLiteral("timelineAssetPanel"));
+    m_library->setCompactMode(true);
+    m_library->setMinimumWidth(0);
+    timelineAssets->addWidget(m_library);
+    timelineAssets->addWidget(m_timeline);
+    timelineAssets->setStretchFactor(0, 0);
+    timelineAssets->setStretchFactor(1, 1);
+    timelineAssets->setSizes({180, 1000});
+    mainSplit->addWidget(timelineAssets);
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
@@ -858,15 +874,16 @@ void MainWindow::buildSessionShell()
     auto* environmentSection = new CollapsibleSection(
         Lang::t(QStringLiteral("section.environment"), QStringLiteral("环境设置")),
         m_sessionEnvironment, projectContent);
-    auto* librarySection = new CollapsibleSection(
-        Lang::t(QStringLiteral("panel.library"), QStringLiteral("素材库")),
-        m_library, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
-    librarySection->setExpanded(true);
+    auto* libraryMoved =
+        new QLabel(QStringLiteral("素材库已移至时间轴左侧"), projectContent);
+    libraryMoved->setObjectName(QStringLiteral("assetMovedLabel"));
+    libraryMoved->setContentsMargins(10, 8, 10, 8);
+    libraryMoved->setWordWrap(true);
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
-    projectLayout->addWidget(librarySection);
+    projectLayout->addWidget(libraryMoved);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -894,8 +911,8 @@ void MainWindow::buildSessionShell()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Legacy arrangement: the timeline spans the full width below the editing
-    // surface. The asset library lives in the right "项目属性" tab again.
+    // Legacy arrangement: the timeline sits below the editing surface, with
+    // the asset bin immediately to its left so assets can be dragged in.
     auto* mainSplit = new QSplitter(Qt::Vertical, central);
     mainSplit->setObjectName(QStringLiteral("sessionMainSplit"));
     mainSplit->setChildrenCollapsible(false);
@@ -904,7 +921,20 @@ void MainWindow::buildSessionShell()
     m_timeline = new TimelinePanel(
         static_cast<EditorSession*>(m_session), mainSplit);
     m_timeline->setObjectName(QStringLiteral("timelinePanel"));
-    mainSplit->addWidget(m_timeline);
+
+    auto* timelineAssets = new QSplitter(Qt::Horizontal, mainSplit);
+    timelineAssets->setObjectName(QStringLiteral("timelineAssetSplit"));
+    timelineAssets->setChildrenCollapsible(false);
+    m_library->setObjectName(QStringLiteral("timelineAssetPanel"));
+    m_library->setCompactMode(true);
+    m_library->setMinimumWidth(0);
+    timelineAssets->addWidget(m_library);
+    timelineAssets->addWidget(m_timeline);
+    timelineAssets->setStretchFactor(0, 0);
+    timelineAssets->setStretchFactor(1, 1);
+    timelineAssets->setSizes({180, 1000});
+
+    mainSplit->addWidget(timelineAssets);
     mainSplit->setStretchFactor(0, 1);
     mainSplit->setStretchFactor(1, 0);
     mainSplit->setSizes({640, 220});
