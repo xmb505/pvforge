@@ -1,5 +1,6 @@
 #include "TimelinePanel.h"
 
+#include "app/AppIcon.h"
 #include "app/EditorSession.h"
 #include "app/TimelineAdapter.h"
 #include "core/Settings.h"
@@ -16,11 +17,13 @@
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QFocusEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -116,13 +119,78 @@ QColor clipColor(EntityType type)
     return QColor(150, 150, 158);
 }
 
+// Mine-imator's frame tick density table.  The tick interval is measured in
+// frames and gets coarser as the timeline zooms out.
+void rulerSteps(double pixelsPerFrame, int* tickStep, int* labelStep)
+{
+    *tickStep = 1;
+    *labelStep = 5;
+    if (pixelsPerFrame < 5.0)
+    {
+        *tickStep = 5;
+        *labelStep = 10;
+    }
+    if (pixelsPerFrame < 3.0)
+    {
+        *tickStep = 10;
+        *labelStep = 50;
+    }
+    if (pixelsPerFrame < 1.0)
+    {
+        *tickStep = 20;
+        *labelStep = 100;
+    }
+    if (pixelsPerFrame < 0.5)
+    {
+        *tickStep = 50;
+        *labelStep = 200;
+    }
+}
+
+// Seconds-mode ruler grid.  Both intervals are measured in frames and always
+// divide whole seconds evenly for the project frame rate.
+struct SecondsGrid
+{
+    int labelFrames = 1;
+    int cellFrames = 1;
+};
+
+SecondsGrid secondsGrid(int fps, double pixelsPerFrame)
+{
+    const int safeFps = std::max(1, fps);
+    SecondsGrid grid;
+
+    int labelFrames = safeFps;
+    while (labelFrames * pixelsPerFrame < 48.0)
+        labelFrames *= 2;
+    while (labelFrames > 1 && labelFrames % 2 == 0
+           && labelFrames * pixelsPerFrame > 240.0)
+        labelFrames /= 2;
+    grid.labelFrames = labelFrames;
+
+    grid.cellFrames = labelFrames;
+    for (int step = 1; step <= labelFrames; ++step)
+    {
+        if (labelFrames % step != 0)
+            continue;
+        if (safeFps % step != 0 && step % safeFps != 0)
+            continue;
+        if (step * pixelsPerFrame >= 5.0)
+        {
+            grid.cellFrames = step;
+            break;
+        }
+    }
+    return grid;
+}
+
 QRect plusButtonRect(const QRect& clip, int visibleRight)
 {
     const int left = std::max(0, clip.left());
     const int right = std::min(clip.right(), visibleRight);
-    if (right - left < 56)
+    if (right - left < 84)
         return QRect();
-    return QRect(right - 24, clip.top() + (clip.height() - 16) / 2, 16, 16);
+    return QRect(right - 22, clip.top() + (clip.height() - 16) / 2, 16, 16);
 }
 
 bool hasAssetMime(const QMimeData* mime)
@@ -359,7 +427,9 @@ public:
         // the global frame under that edge so rulers, clips and playhead line
         // up with the main timeline instead of restarting at the clip start.
         const int sourceX =
-            m_source->mapFrom(host, QPoint(left, clip.top())).x();
+            m_source->mapFrom(host,
+                              QPoint(left + m_panel->nameWidth(), clip.top()))
+                .x();
         const int sourceFrame = m_source->frameFromX(sourceX);
         const int contentStart = m_panel->contentStart();
         m_panel->m_scrollX = std::max(
@@ -474,16 +544,28 @@ void TimelinePanel::initPanel()
     connect(m_autoScroll, &QTimer::timeout, this, [this] { autoScrollTick(); });
 
     m_displayFrames = Settings::timelineDisplayFrames();
+
+    m_search = new QLineEdit(this);
+    m_search->setObjectName(QStringLiteral("timelineSearchEdit"));
+    m_search->setPlaceholderText(QStringLiteral("搜索对象…"));
+    m_search->setClearButtonEnabled(true);
+    m_search->setToolTip(QStringLiteral("按名称筛选时间轴对象"));
+    connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
+        clampScroll();
+        update();
+        syncPopups();
+    });
+
     m_unitButton = new QToolButton(this);
     m_unitButton->setObjectName(QStringLiteral("timelineUnitButton"));
     m_unitButton->setText(m_displayFrames ? QStringLiteral("帧")
                                           : QStringLiteral("秒"));
     m_unitButton->setToolTip(QStringLiteral("切换时间轴刻度（秒 / 帧）"));
-    m_unitButton->setFixedSize(42, 20);
+    m_unitButton->setFixedSize(36, 20);
     m_unitButton->setFocusPolicy(Qt::NoFocus);
     m_unitButton->setStyleSheet(QStringLiteral(
         "QToolButton { background: #2a2c33; color: #d8dce4;"
-        " border: 1px solid #4a4d55; border-radius: 3px; padding: 0 4px; }"
+        " border: 1px solid #4a4d55; border-radius: 0px; padding: 0 2px; }"
         "QToolButton:hover { background: #3c404a; }"));
     connect(m_unitButton, &QToolButton::clicked, this,
             [this] { setDisplayFrames(!m_displayFrames); });
@@ -496,11 +578,29 @@ void TimelinePanel::initPanel()
     m_modeButton->setFocusPolicy(Qt::NoFocus);
     m_modeButton->setStyleSheet(QStringLiteral(
         "QToolButton { background: #2a2c33; color: #d8dce4;"
-        " border: 1px solid #4a4d55; border-radius: 3px; padding: 0 4px; }"
+        " border: 1px solid #4a4d55; border-radius: 0px; padding: 0 4px; }"
         "QToolButton:hover { background: #3c404a; }"));
     connect(m_modeButton, &QToolButton::clicked, this, [this] {
         setEditMode(m_editMode == EditMode::Clips ? EditMode::Keyframes
                                                   : EditMode::Clips);
+    });
+
+    // Arrow-key stepping mirrors the old timeline: a tap moves one frame and
+    // a hold repeats at the project frame rate after a short delay.
+    m_holdTimer = new QTimer(this);
+    m_holdTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_holdTimer, &QTimer::timeout, this, [this] {
+        if (m_holdDirection != 0)
+            stepFrame(m_holdDirection);
+    });
+    m_holdDelay = new QTimer(this);
+    m_holdDelay->setSingleShot(true);
+    m_holdDelay->setInterval(400);
+    connect(m_holdDelay, &QTimer::timeout, this, [this] {
+        if (m_holdDirection == 0)
+            return;
+        m_holdTimer->setInterval(std::max(1, 1000 / currentFps()));
+        m_holdTimer->start();
     });
 }
 
@@ -744,6 +844,8 @@ QVector<EntityId> TimelinePanel::rowIds() const
         if (entity.parent != m_owner
             && !(m_owner == kInvalidEntity && dangling))
             continue;
+        if (!rowMatchesFilter(entity))
+            continue;
         const int row = rowOfEntity(entity);
         if (row < 0)
             continue;
@@ -772,6 +874,116 @@ int TimelinePanel::rowTop(int row) const
 {
     // Bottom-up: row 0 sits on the body bottom, larger rows stack upwards.
     return bodyBottom() - (row + 1) * kRowHeight + 1 + m_scrollY;
+}
+
+int TimelinePanel::nameWidth() const
+{
+    // The main timeline keeps the old 130 px name column; private timeline
+    // popups are narrower so they still have room for content.
+    return m_popup ? 96 : kNameWidth;
+}
+
+QString TimelinePanel::searchFilter() const
+{
+    return m_search ? m_search->text().trimmed() : QString();
+}
+
+bool TimelinePanel::rowMatchesFilter(const Entity& entity) const
+{
+    const QString filter = searchFilter();
+    return filter.isEmpty() || entity.name.contains(filter, Qt::CaseInsensitive);
+}
+
+void TimelinePanel::toggleSessionFlag(EntityId id, bool hidden)
+{
+    if (!m_session || !m_session->editActions())
+        return;
+    const Uuid uuid = uuidForEntityId(id);
+    const model::Entity* source = sessionEntity(uuid);
+    if (source == nullptr)
+        return;
+    const bool target = hidden ? !source->hidden : !source->locked;
+    const QString text = hidden
+                             ? (target ? QStringLiteral("隐藏片段")
+                                       : QStringLiteral("显示片段"))
+                             : (target ? QStringLiteral("锁定片段")
+                                       : QStringLiteral("解锁片段"));
+    QString error;
+    if (!m_session->editActions()->updateEntity(
+            uuid, text,
+            [hidden, target](model::Entity& entity) {
+                if (hidden)
+                    entity.hidden = target;
+                else
+                    entity.locked = target;
+                return true;
+            },
+            &error, true))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    if (!hidden && target)
+    {
+        m_selectedKeyframes.erase(
+            std::remove_if(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                           [id](const KeyframeSelection& selection) {
+                               return selection.entity == id;
+                           }),
+            m_selectedKeyframes.end());
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+    }
+    emit editCommitted(text);
+    refreshFromSession();
+}
+
+void TimelinePanel::handleRowButton(int row, int index)
+{
+    const EntityId id = entityAtRow(row);
+    const Entity* entity = entityById(id);
+    if (!entity || id == kInvalidEntity)
+        return;
+
+    if (index == 2)
+    {
+        // Select every keyframe of this row, like the old timeline button.
+        m_selectedKeyframes.clear();
+        if (!isEntityLocked(id))
+        {
+            for (int frame : keyframeFrames(*entity))
+                m_selectedKeyframes.append(KeyframeSelection{id, double(frame), QString()});
+        }
+        selectEntity(id, true);
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+        update();
+        return;
+    }
+
+    if (sessionMode())
+    {
+        if (m_editMode == EditMode::Keyframes)
+            m_dragKeyTrack.clear();
+        toggleSessionFlag(id, index == 0);
+        return;
+    }
+
+    if (!m_project)
+        return;
+    const EntityFlag flag =
+        index == 0 ? EntityFlag::Hidden : EntityFlag::Locked;
+    const bool oldValue = index == 0 ? entity->hidden : entity->locked;
+    if (index == 1 && !oldValue)
+    {
+        m_selectedKeyframes.erase(
+            std::remove_if(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
+                           [id](const KeyframeSelection& selection) {
+                               return selection.entity == id;
+                           }),
+            m_selectedKeyframes.end());
+    }
+    emit entityFlagChanged(id, flag, !oldValue);
+    update();
 }
 
 int TimelinePanel::rowAt(int y) const
@@ -923,8 +1135,12 @@ QRect TimelinePanel::clipRect(const Entity& entity) const
     const int end = std::min(clipEndOf(entity), contentEnd());
     if (end <= start)
         return QRect();
-    const int x0 = xFromFrame(start);
-    const int x1 = xFromFrame(end);
+    const int raw0 = xFromFrame(start);
+    const int raw1 = xFromFrame(end);
+    if (raw1 <= nameWidth())
+        return QRect();
+    const int x0 = std::max(nameWidth(), raw0);
+    const int x1 = std::max(x0 + 1, raw1);
     return QRect(x0, rowTop(row) + 3, std::max(1, x1 - x0), kRowHeight - 6);
 }
 
@@ -984,7 +1200,7 @@ bool TimelinePanel::keyframeHasNote(EntityId id, double frame) const
 
 int TimelinePanel::visibleWidth() const
 {
-    return std::max(1, width() - kScrollBarSize);
+    return std::max(1, width() - nameWidth() - kScrollBarSize);
 }
 
 int TimelinePanel::bodyBottom() const
@@ -992,16 +1208,25 @@ int TimelinePanel::bodyBottom() const
     return std::max(kRulerHeight, height() - kScrollBarSize);
 }
 
+int TimelinePanel::timelineLength() const
+{
+    if (m_project)
+        return std::max(1, m_project->timelineLength());
+    return std::max(1, contentEnd());
+}
+
 int TimelinePanel::xFromFrame(int frame) const
 {
-    return int(std::lround((frame - contentStart()) * m_pixelsPerFrame
-                           - m_scrollX));
+    return nameWidth()
+           + int(std::lround((frame - contentStart()) * m_pixelsPerFrame
+                             - m_scrollX));
 }
 
 int TimelinePanel::frameFromX(int x) const
 {
-    return int(std::lround(contentStart()
-                           + (x + m_scrollX) / m_pixelsPerFrame));
+    return std::max(0, int(std::lround(
+                           contentStart()
+                           + (x - nameWidth() + m_scrollX) / m_pixelsPerFrame)));
 }
 
 void TimelinePanel::clampScroll()
@@ -1048,15 +1273,17 @@ void TimelinePanel::updateScrollBars()
 void TimelinePanel::ensureFrameVisible(int frame)
 {
     const int x = xFromFrame(frame);
+    const int left = nameWidth() + 24;
+    const int right = width() - kScrollBarSize - 24;
     const int margin = 24;
-    if (x < margin)
+    if (x < left)
         m_scrollX = std::max(0, int(std::lround(
                                    (frame - contentStart()) * m_pixelsPerFrame
                                    - margin)));
-    else if (x > visibleWidth() - margin)
+    else if (x > right)
         m_scrollX = std::max(0, int(std::lround(
                                    (frame - contentStart()) * m_pixelsPerFrame
-                                   - (visibleWidth() - margin))));
+                                   - (right - left))));
     clampScroll();
     update();
     syncPopups();
@@ -1066,10 +1293,49 @@ void TimelinePanel::setScrubFrame(double rawX)
 {
     // The pointer can leave the widget while scrubbing. Clamp it to the
     // visible track so the playhead line can never disappear outside it.
-    const int x = std::clamp(int(std::lround(rawX)), 0, visibleWidth() - 1);
+    const int x = std::clamp(int(std::lround(rawX)), nameWidth() + 1,
+                             width() - kScrollBarSize - 1);
     m_frame = std::max(0, frameFromX(x));
     emit frameRequested(m_frame);
     update();
+}
+
+void TimelinePanel::stepFrame(int delta)
+{
+    int next = m_frame + delta;
+    if (next < 0)
+    {
+        next = 0;
+        stopHold();
+    }
+
+    const int length = timelineLength();
+    const bool loop = m_project ? m_project->loop : true;
+    if (delta > 0 && length > 0 && next >= length)
+    {
+        if (loop)
+        {
+            next = 0;
+        }
+        else
+        {
+            next = length - 1;
+            stopHold();
+        }
+    }
+
+    m_frame = std::max(0, next);
+    emit frameRequested(m_frame);
+    update();
+}
+
+void TimelinePanel::stopHold()
+{
+    m_holdDirection = 0;
+    if (m_holdTimer)
+        m_holdTimer->stop();
+    if (m_holdDelay)
+        m_holdDelay->stop();
 }
 
 // ---------------------------------------------------------------- editing
@@ -1144,6 +1410,12 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
     if (m_dragMode == DragMode::MoveKeyframe)
     {
         const int delta = frameFromX(int(std::lround(pos.x()))) - m_keyDragStart;
+        const int movedFrame = std::max(0, m_keyDragStart + delta);
+        if (movedFrame != m_frame)
+        {
+            m_frame = movedFrame;
+            emit frameRequested(m_frame);
+        }
         if (delta != 0)
         {
             if (!actions->planMoveKeyframes(selectedKeyRefs(), delta, &plan,
@@ -1277,8 +1549,12 @@ QRect TimelinePanel::sessionBaseClipRect(const Entity& entity) const
     const int end = std::min(clipEndOf(entity), contentEnd());
     if (end <= start)
         return QRect();
-    const int x0 = xFromFrame(start);
-    const int x1 = xFromFrame(end);
+    const int raw0 = xFromFrame(start);
+    const int raw1 = xFromFrame(end);
+    if (raw1 <= nameWidth())
+        return QRect();
+    const int x0 = std::max(nameWidth(), raw0);
+    const int x1 = std::max(x0 + 1, raw1);
     return QRect(x0, rowTop(row) + 3, std::max(1, x1 - x0), kRowHeight - 6);
 }
 
@@ -2153,12 +2429,14 @@ void TimelinePanel::moveKeys(QVector<Entity>& entities,
         return;
     int minDelta = -(1 << 30);
     int maxDelta = 1 << 30;
+    QHash<EntityId, QSet<int>> framesByEntity;
     for (const KeyframeSelection& selection : keys)
     {
         const Entity* entity = findEntity(entities, selection.entity);
         if (!entity)
             continue;
         const int frame = int(std::lround(selection.frame));
+        framesByEntity[selection.entity].insert(frame);
         const int start = clipStartOf(*entity);
         const int end = clipEndOf(*entity);
         bool found = false;
@@ -2171,39 +2449,53 @@ void TimelinePanel::moveKeys(QVector<Entity>& entities,
                     continue;
                 found = true;
                 minDelta = std::max(minDelta, start - frame);
-                maxDelta = std::min(maxDelta, end - 1 - frame);
+                maxDelta = std::min(maxDelta, end - frame);
             }
         }
         if (!found)
-            continue;
+            framesByEntity[selection.entity].remove(frame);
     }
     delta = std::clamp(delta, minDelta, maxDelta);
     if (delta == 0)
         return;
 
-    for (const KeyframeSelection& selection : keys)
+    // Move every selected frame simultaneously: remove the original keys
+    // first, then insert copies.  Otherwise adjacent selected frames would
+    // pick up keys that were just moved into their range.
+    for (auto selection = framesByEntity.constBegin();
+         selection != framesByEntity.constEnd(); ++selection)
     {
-        Entity* entity = findEntity(entities, selection.entity);
+        Entity* entity = findEntity(entities, selection.key());
         if (!entity)
             continue;
-        const int from = int(std::lround(selection.frame));
         for (auto track = entity->tracks.begin(); track != entity->tracks.end();
              ++track)
         {
-            bool changed = false;
-            for (Keyframe& key : track->keys)
+            QVector<Keyframe> moved;
+            for (const Keyframe& key : track->keys)
             {
-                if (int(std::lround(key.frame)) == from)
-                {
-                    key.frame += delta;
-                    changed = true;
-                }
+                if (selection.value().contains(int(std::lround(key.frame))))
+                    moved.append(key);
             }
-            if (changed)
-                std::sort(track->keys.begin(), track->keys.end(),
-                          [](const Keyframe& a, const Keyframe& b) {
-                              return a.frame < b.frame;
-                          });
+            if (moved.isEmpty())
+                continue;
+            auto& trackKeys = track->keys;
+            trackKeys.erase(
+                std::remove_if(trackKeys.begin(), trackKeys.end(),
+                               [&selection](const Keyframe& key) {
+                                   return selection.value().contains(
+                                       int(std::lround(key.frame)));
+                               }),
+                trackKeys.end());
+            for (Keyframe key : moved)
+            {
+                key.frame += delta;
+                trackKeys.append(key);
+            }
+            std::sort(trackKeys.begin(), trackKeys.end(),
+                      [](const Keyframe& a, const Keyframe& b) {
+                          return a.frame < b.frame;
+                      });
         }
     }
 }
@@ -2259,6 +2551,8 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
     {
         const int delta =
             frameFromX(int(std::lround(pos.x()))) - m_keyDragStart;
+        m_frame = std::max(0, m_keyDragStart + delta);
+        emit frameRequested(m_frame);
         moveKeys(m_preview, m_selectedKeyframes, delta);
         m_moved = std::any_of(
             m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
@@ -2287,10 +2581,11 @@ void TimelinePanel::autoScrollTick()
     if (m_dragMode == DragMode::Scrub)
     {
         const double rawX = m_lastDragPos.x();
+        const int contentRight = width() - kScrollBarSize;
         int dx = 0;
-        if (rawX > visibleWidth() - 12)
+        if (rawX > contentRight - 12)
             dx = 12;
-        else if (rawX < 12)
+        else if (rawX < nameWidth() + 12)
             dx = -12;
         else
             return;
@@ -2303,11 +2598,12 @@ void TimelinePanel::autoScrollTick()
     }
     if (!m_moved)
         return;
+    const int contentRight = width() - kScrollBarSize;
     int dx = 0;
     int dy = 0;
-    if (m_lastDragPos.x() > visibleWidth() - 24)
+    if (m_lastDragPos.x() > contentRight - 24)
         dx = 12;
-    else if (m_lastDragPos.x() < 24)
+    else if (m_lastDragPos.x() < nameWidth() + 24)
         dx = -12;
     if (m_lastDragPos.y() > bodyBottom() - 20)
         dy = -12;   // reveal lower rows: the bottom-anchored offset shrinks
@@ -2387,54 +2683,103 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     const int bottom = bodyBottom();
 
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), base);
+    p.fillRect(QRect(0, 0, nameWidth(), height()), base);
     p.fillRect(QRect(0, 0, width(), kRulerHeight), alt);
+
+    p.setPen(mid);
+    p.drawLine(nameWidth(), 0, nameWidth(), bottom);
+    p.drawLine(0, kRulerHeight, width(), kRulerHeight);
 
     const int fps = currentFps();
     QFont small = p.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
     p.setFont(small);
 
-    int labelFrames = fps;
-    while (labelFrames * m_pixelsPerFrame < 64.0)
-        labelFrames *= 2;
+    auto drawTick = [&](int frame, int tickHeight, const QColor& color) {
+        const int x = xFromFrame(frame);
+        if (x < nameWidth() || x > right)
+            return;
+        p.setPen(QPen(color, 1));
+        p.drawLine(x, kRulerHeight - tickHeight, x, kRulerHeight);
+    };
+    auto drawLabel = [&](int frame, const QString& label, const QColor& color) {
+        const int x = xFromFrame(frame);
+        if (x < nameWidth() - 24 || x > right + 24)
+            return;
+        // Keep the header mode button from covering a ruler label.
+        if (m_modeButton && m_modeButton->isVisible() && x > right - 62)
+            return;
+        p.setPen(color);
+        // Labels sit centred on their tick, not offset to the right.
+        p.drawText(QRect(x - 48, 1, 96, kRulerHeight - 5),
+                   Qt::AlignHCenter | Qt::AlignVCenter, label);
+    };
+
+    const int leftFrame = frameFromX(nameWidth());
     if (m_displayFrames)
     {
-        int step = 1;
-        while (step * m_pixelsPerFrame < 64.0)
-            step *= 2;
-        labelFrames = step;
-    }
+        int tickStep = 0;
+        int labelStep = 0;
+        rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+        const int lastFrame = frameFromX(right) + tickStep;
+        const int firstTick =
+            ((leftFrame + tickStep - 1) / tickStep) * tickStep;
 
-    const int firstFrame = frameFromX(0);
-    const int lastFrame = frameFromX(right) + 1;
-    const int firstLabel = (firstFrame / labelFrames) * labelFrames;
-    for (int frame = firstLabel; frame <= lastFrame; frame += labelFrames)
-    {
-        const int x = xFromFrame(frame);
-        if (x < -2 || x > right)
-            continue;
-        p.setPen(QPen(mid, 1.0));
-        p.drawLine(x, 0, x, bottom);
-        p.setPen(text);
-        const int shown = frame - (m_relativeTime ? contentStart() : 0);
-        const QString label = m_displayFrames
-                                  ? QString::number(shown)
-                                  : QString::number(shown / double(fps), 'g', 4)
-                                        + QStringLiteral("s");
-        p.drawText(QRect(x + 4, 0, 80, kRulerHeight - 3),
-                   Qt::AlignLeft | Qt::AlignVCenter, label);
+        for (int frame = firstTick; frame <= lastFrame; frame += tickStep)
+        {
+            const bool major = frame % labelStep == 0;
+            drawTick(frame, major ? 9 : 4, major ? text : mid);
+        }
+        const int firstLabel =
+            ((leftFrame + labelStep - 1) / labelStep) * labelStep;
+        for (int frame = firstLabel; frame <= lastFrame; frame += labelStep)
+            drawLabel(frame, QString::number(frame), text);
     }
-    p.setPen(mid);
-    p.drawLine(0, kRulerHeight, width(), kRulerHeight);
+    else
+    {
+        const SecondsGrid grid = secondsGrid(fps, m_pixelsPerFrame);
+        const int lastFrame = frameFromX(right) + grid.cellFrames;
+        const int firstCell =
+            ((leftFrame + grid.cellFrames - 1) / grid.cellFrames)
+            * grid.cellFrames;
+
+        for (int frame = firstCell; frame <= lastFrame; frame += grid.cellFrames)
+            drawTick(frame, 4, mid);
+
+        if (fps * m_pixelsPerFrame >= 8.0)
+        {
+            const int firstSecond = ((leftFrame + fps - 1) / fps) * fps;
+            for (int frame = firstSecond; frame <= lastFrame; frame += fps)
+            {
+                if (frame % grid.labelFrames != 0)
+                    drawTick(frame, 7, mid);
+            }
+        }
+
+        const int firstLabel =
+            ((leftFrame + grid.labelFrames - 1) / grid.labelFrames)
+            * grid.labelFrames;
+        for (int frame = firstLabel; frame <= lastFrame;
+             frame += grid.labelFrames)
+        {
+            drawTick(frame, 10, text);
+            const double seconds = frame / double(fps);
+            const bool whole = std::abs(seconds - std::round(seconds)) < 1e-9;
+            const QString label =
+                (whole ? QString::number(int(std::round(seconds)))
+                       : QString::number(seconds, 'g', 3))
+                + QStringLiteral("s");
+            drawLabel(frame, label, text);
+        }
+    }
 
     if (sessionMode())
     {
         for (int i = 0; i < m_snapshot.markers.size(); ++i)
         {
             const QRect marker = markerRect(i);
-            if (marker.isEmpty())
+            if (marker.isEmpty() || marker.left() < nameWidth())
                 continue;
             const TimelineMarkerView& view = m_snapshot.markers.at(i);
             QColor color = view.color.isValid() ? view.color
@@ -2446,8 +2791,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                        bottom);
             p.setPen(Qt::NoPen);
             p.setBrush(color);
-            p.drawRoundedRect(QRectF(marker).adjusted(0.5, 0.5, -0.5, -0.5),
-                              3.0, 3.0);
+            p.drawRect(QRectF(marker).adjusted(0.5, 0.5, -0.5, -0.5));
             if (!view.title.isEmpty())
             {
                 p.setPen(QColor(24, 26, 30));
@@ -2467,11 +2811,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             continue;
         const Entity* entity = findEntity(activeEntities(), rows[row]);
         const QRect rowRect(0, top, right, kRowHeight);
-        if (entity
+        const bool rowSelected =
+            entity
             && (entity->id == m_selected
-                || m_entitySelection.contains(entity->id)))
+                || m_entitySelection.contains(entity->id));
+        if (rowSelected)
             p.fillRect(rowRect, QColor(accent.red(), accent.green(),
-                                       accent.blue(), 45));
+                                       accent.blue(), 60));
         else if (row % 2)
             p.fillRect(rowRect, QColor(alt.red(), alt.green(), alt.blue(), 90));
         p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 70));
@@ -2479,42 +2825,59 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         if (!entity)
             continue;
 
+        // Name column: entity name plus the old eye / lock / select-keys
+        // buttons.  Names never live inside the clip any more.
+        const int depth = depthOf(entity->id);
+        const int nameX = 8 + std::min(depth, 4) * 12;
+        const int buttonLeft =
+            nameWidth() - 6 - 3 * (kButtonSize + kButtonGap);
+        const bool hidden = sessionMode()
+                                ? entity->hidden
+                                : m_project->isEffectivelyHidden(entity->id);
+        const bool locked = sessionMode()
+                                ? entity->locked
+                                : m_project->isEffectivelyLocked(entity->id);
+        const QColor nameColor =
+            (hidden || locked) ? dim : text;
+        p.setPen(nameColor);
+        const QFontMetrics nameMetrics(p.font());
+        const QString shownName =
+            nameMetrics.elidedText(entity->name, Qt::ElideRight,
+                                   std::max(8, buttonLeft - 4 - nameX));
+        p.drawText(QRect(nameX, top, std::max(8, buttonLeft - 4 - nameX),
+                         kRowHeight),
+                   Qt::AlignVCenter | Qt::AlignLeft, shownName);
+
+        makeEyeIcon(hidden).paint(&p, rowButtonRect(row, 0));
+        makeLockIcon(locked).paint(&p, rowButtonRect(row, 1));
+        makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
+
+        p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 90));
+        p.drawLine(nameWidth() - 1, top, nameWidth() - 1, top + kRowHeight);
+
         const QRect clip = clipRect(*entity);
         if (clip.isEmpty())
             continue;
         QColor color = clipColor(entity->type);
-        const bool selected =
-            entity->id == m_selected
-            || m_entitySelection.contains(entity->id);
-        const bool hidden = sessionMode() ? entity->hidden
-                                          : m_project->isEffectivelyHidden(entity->id);
-        const int alpha = hidden ? 80 : (selected ? 245 : 215);
-        QColor topColor = color.lighter(112);
-        QColor bottomColor = color.darker(108);
-        topColor.setAlpha(alpha);
-        bottomColor.setAlpha(alpha);
-        QLinearGradient fill(clip.topLeft(), clip.bottomLeft());
-        fill.setColorAt(0.0, topColor);
-        fill.setColorAt(1.0, bottomColor);
-        p.setPen(QPen(color.darker(160), 1));
+        const bool selected = rowSelected;
+        const int alpha = hidden ? 80 : (selected ? 230 : 200);
+        QColor fill = color;
+        fill.setAlpha(alpha);
+        p.setPen(QPen(color.darker(170), 1));
         p.setBrush(fill);
-        p.drawRoundedRect(QRectF(clip).adjusted(0.5, 0.5, -0.5, -0.5), 5.0, 5.0);
-        p.setPen(QPen(QColor(255, 255, 255, 38), 1));
-        p.drawLine(clip.left() + 6, clip.top() + 1, clip.right() - 6,
-                   clip.top() + 1);
+        // Flat, square corners: no gradient, rounding or white highlight.
+        p.drawRect(clip.adjusted(0, 0, -1, -1));
         if (selected)
         {
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(accent, 2));
-            p.drawRoundedRect(QRectF(clip).adjusted(1.5, 1.5, -1.5, -1.5), 4.0,
-                              4.0);
+            p.drawRect(clip.adjusted(1, 1, -2, -2));
         }
         if (sessionMode() && isEntityLocked(entity->id))
         {
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(QColor(255, 255, 255, 150), 1, Qt::DashLine));
-            p.drawRoundedRect(QRectF(clip).adjusted(2.5, 2.5, -2.5, -2.5), 4.0,
-                              4.0);
+            p.drawRect(clip.adjusted(2, 2, -3, -3));
         }
 
         if (entity->isAudio())
@@ -2525,8 +2888,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         {
             p.setPen(QPen(QColor(255, 255, 255, 125), 1));
             p.setBrush(QColor(0, 0, 0, 85));
-            p.drawRoundedRect(QRectF(plus).adjusted(0.5, 0.5, -0.5, -0.5), 3.0,
-                              3.0);
+            p.drawRect(plus);
             p.setPen(QPen(Qt::white, 1.5));
             const QPixmap& glyph = plusGlyphPixmap();
             if (!glyph.isNull())
@@ -2543,59 +2905,37 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             }
         }
 
-        const int nameRight = plus.isEmpty() ? clip.right() - 8 : plus.left() - 6;
+        // Clip body carries time/duration only; the entity name is in the
+        // name column.  This keeps short clips readable.
+        const int infoRight = plus.isEmpty() ? clip.right() - 6 : plus.left() - 6;
         const QFontMetrics metrics(p.font());
-        QString rangeInfo;
-        if (sessionMode())
+        const int startFrame = clipStartOf(*entity);
+        const int endFrame = clipEndOf(*entity);
+        QString rangeInfo =
+            QStringLiteral("%1–%2 · %3f")
+                .arg(startFrame)
+                .arg(endFrame)
+                .arg(endFrame - startFrame);
+        if (entity->isAudio())
         {
-            const int startFrame = clipStartOf(*entity);
-            const int endFrame = clipEndOf(*entity);
-            rangeInfo = QStringLiteral("%1–%2 · %3f")
-                            .arg(startFrame)
-                            .arg(endFrame)
-                            .arg(endFrame - startFrame);
-            if (entity->isAudio())
-            {
-                const double seconds = entity->data
-                                           .value(QStringLiteral(
-                                               "assetDurationSeconds"))
-                                           .toDouble();
-                if (seconds > 0.0)
-                    rangeInfo += QStringLiteral(" · %1s").arg(seconds, 0, 'f', 2);
-            }
+            const double seconds =
+                entity->data.value(QStringLiteral("assetDurationSeconds"))
+                    .toDouble();
+            if (seconds > 0.0)
+                rangeInfo += QStringLiteral(" · %1s").arg(seconds, 0, 'f', 2);
         }
-        const int infoWidth =
-            rangeInfo.isEmpty() ? 0 : metrics.horizontalAdvance(rangeInfo) + 10;
-        const int nameWidth =
-            std::max(0, nameRight - clip.left() - 8 - infoWidth);
-        if (nameRight > clip.left() + 12)
+        if (infoRight > clip.left() + 10)
         {
-            const QColor nameColor =
-                color.lightness() > 150 ? QColor(24, 26, 30) : QColor(255, 255, 255);
-            const QString name = metrics.elidedText(entity->name, Qt::ElideRight,
-                                                    nameWidth);
-            const QRect nameRect(clip.left() + 8, clip.top(), nameWidth,
-                                 clip.height());
-            if (entity->isAudio())
-            {
-                p.setPen(QColor(0, 0, 0, 160));
-                p.drawText(nameRect.translated(1, 1),
-                           Qt::AlignVCenter | Qt::AlignLeft, name);
-                p.setPen(QColor(255, 255, 255));
-            }
-            else
-            {
-                p.setPen(nameColor);
-            }
-            p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, name);
+            const QString shown =
+                metrics.elidedText(rangeInfo, Qt::ElideRight,
+                                   infoRight - clip.left() - 8);
+            p.setPen(QColor(255, 255, 255, 210));
+            p.drawText(QRect(clip.left() + 5, clip.top(),
+                             std::max(1, infoRight - clip.left() - 6),
+                             clip.height()),
+                       Qt::AlignVCenter | Qt::AlignLeft, shown);
         }
-        if (!rangeInfo.isEmpty() && nameRight > clip.left() + 12)
-        {
-            const QRect infoRect(nameRight - infoWidth, clip.top(), infoWidth,
-                                 clip.height());
-            p.setPen(QColor(255, 255, 255, 205));
-            p.drawText(infoRect, Qt::AlignVCenter | Qt::AlignRight, rangeInfo);
-        }
+
         QString badges;
         if (sessionMode())
         {
@@ -2607,7 +2947,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         if (!badges.isEmpty() && clip.height() >= 20)
         {
             p.setPen(QColor(255, 255, 255, 200));
-            p.drawText(QRect(clip.left() + 6, clip.bottom() - 14, 40, 12),
+            p.drawText(QRect(clip.left() + 5, clip.bottom() - 13, 40, 11),
                        Qt::AlignLeft | Qt::AlignVCenter, badges);
         }
 
@@ -2655,7 +2995,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         {
             const int y = rowTop(row);
             p.setPen(QPen(accent.lighter(130), 2));
-            p.drawLine(0, y, right, y);
+            p.drawLine(nameWidth(), y, right, y);
         }
     }
 
@@ -2665,18 +3005,23 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     if (noEntities)
     {
         p.setPen(dim);
-        p.drawText(QRect(0, kRulerHeight, right, bottom - kRulerHeight),
-                   Qt::AlignCenter,
-                   m_owner < 0
+        const QString emptyText =
+            !searchFilter().isEmpty()
+                ? QStringLiteral("没有匹配的对象")
+                : (m_owner < 0
                        ? QStringLiteral("把素材拖到这里创建 clip")
                        : QStringLiteral("把素材拖到这里创建子 clip"));
+        p.drawText(QRect(nameWidth(), kRulerHeight, right - nameWidth(),
+                         bottom - kRulerHeight),
+                   Qt::AlignCenter, emptyText);
     }
 
     if (m_dragMode == DragMode::BoxSelect)
     {
         const QRectF box = QRectF(m_boxStart, m_boxEnd)
                                .normalized()
-                               .intersected(QRectF(0, kRulerHeight, right,
+                               .intersected(QRectF(nameWidth(), kRulerHeight,
+                                                   right - nameWidth(),
                                                    bottom - kRulerHeight));
         p.setPen(QPen(accent, 1, Qt::DashLine));
         p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 50));
@@ -2686,7 +3031,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     if (m_dropActive)
     {
         const int dropX = xFromFrame(m_dropFrame);
-        if (dropX >= 0 && dropX <= right)
+        if (dropX >= nameWidth() && dropX <= right)
         {
             p.setPen(QPen(accent.lighter(120), 2));
             p.drawLine(dropX, kRulerHeight, dropX, bottom);
@@ -2700,13 +3045,13 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     const bool playheadInOwner =
         m_owner < 0 || (m_frame >= contentStart() && m_frame < contentEnd());
     const int playhead = xFromFrame(m_frame);
-    if (playheadInOwner && playhead >= 0 && playhead <= right)
+    if (playheadInOwner && playhead >= nameWidth() && playhead <= right)
     {
         p.setPen(QPen(accent, 1.5));
         p.drawLine(playhead, 0, playhead, bottom);
         QPolygonF marker;
-        marker << QPointF(playhead - 4, 0) << QPointF(playhead + 4, 0)
-               << QPointF(playhead, 6);
+        marker << QPointF(playhead - 5, 0) << QPointF(playhead + 5, 0)
+               << QPointF(playhead, 8);
         p.setBrush(accent);
         p.setPen(Qt::NoPen);
         p.drawPolygon(marker);
@@ -2728,6 +3073,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     const QPointF pos = event->position();
     if (pos.y() < kRulerHeight)
     {
+        if (pos.x() < nameWidth())
+            return;
         if (sessionMode())
         {
             const QString markerId = markerAt(pos.toPoint());
@@ -2747,6 +3094,44 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     const int row = rowAt(int(pos.y()));
     const EntityId id = entityAtRow(row);
+
+    if (pos.x() < nameWidth())
+    {
+        for (int index = 0; index < 3; ++index)
+        {
+            if (rowButtonRect(row, index).contains(pos.toPoint()))
+            {
+                handleRowButton(row, index);
+                return;
+            }
+        }
+        const Entity* rowEntity = entityById(id);
+        if (rowEntity && !isEntityLocked(id))
+        {
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+            const bool additive =
+                event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
+            if (additive)
+            {
+                if (m_entitySelection.contains(id))
+                    m_entitySelection.remove(id);
+                else
+                    m_entitySelection.insert(id);
+                m_selected = id;
+                emit entitySelected(id);
+                update();
+            }
+            else if (!m_entitySelection.contains(id)
+                     || m_entitySelection.size() <= 1)
+            {
+                selectEntity(id, true);
+            }
+        }
+        update();
+        return;
+    }
+
     const Entity* entity = entityById(id);
     const int pressX = int(std::lround(pos.x()));
     if (!entity)
@@ -2781,7 +3166,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         m_lastDragPos = pos;
         m_moved = false;
 
-        if (m_editMode == EditMode::Keyframes && !isEntityLocked(id))
+        if (!isEntityLocked(id))
         {
             const int keyFrame = hitKeyframeRow(row, x, int(std::lround(pos.y())));
             if (keyFrame >= 0)
@@ -2801,14 +3186,20 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
                 KeyframeSelection selection{id, double(keyFrame), track};
                 const bool toggle =
                     event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
-                if (!toggle)
-                    m_selectedKeyframes.clear();
                 auto it = std::find(m_selectedKeyframes.begin(),
                                     m_selectedKeyframes.end(), selection);
-                if (toggle && it != m_selectedKeyframes.end())
-                    m_selectedKeyframes.erase(it);
+                if (toggle)
+                {
+                    if (it != m_selectedKeyframes.end())
+                        m_selectedKeyframes.erase(it);
+                    else
+                        m_selectedKeyframes.append(selection);
+                }
                 else if (it == m_selectedKeyframes.end())
+                {
+                    m_selectedKeyframes.clear();
                     m_selectedKeyframes.append(selection);
+                }
                 if (!track.isEmpty())
                     m_selectedTrack = track;
                 else if (!frameTracks.isEmpty())
@@ -2869,26 +3260,33 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     m_lastDragPos = pos;
     m_moved = false;
 
-    // Keyframes win over trim grips in keyframe mode: a key at the clip edge
-    // must still be selectable. In clip mode the diamond is display-only.
-    const int keyFrame =
-        m_editMode == EditMode::Keyframes
-            ? hitKeyframeRow(row, x, int(std::lround(pos.y())))
-            : -1;
+    // Keyframes win over trim grips in both edit modes: a key at the clip
+    // edge must still be selectable, and clicking a diamond alone selects it
+    // without requiring the keyframe mode.
+    const int keyFrame = isEntityLocked(id)
+                             ? -1
+                             : hitKeyframeRow(row, x,
+                                              int(std::lround(pos.y())));
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
         KeyframeSelection selection{id, double(keyFrame)};
         const bool toggle = event->modifiers() & (Qt::ControlModifier
                                                   | Qt::ShiftModifier);
-        if (!toggle)
-            m_selectedKeyframes.clear();
         auto it = std::find(m_selectedKeyframes.begin(),
                             m_selectedKeyframes.end(), selection);
-        if (toggle && it != m_selectedKeyframes.end())
-            m_selectedKeyframes.erase(it);
+        if (toggle)
+        {
+            if (it != m_selectedKeyframes.end())
+                m_selectedKeyframes.erase(it);
+            else
+                m_selectedKeyframes.append(selection);
+        }
         else if (it == m_selectedKeyframes.end())
+        {
+            m_selectedKeyframes.clear();
             m_selectedKeyframes.append(selection);
+        }
         m_dragMode = DragMode::MoveKeyframe;
         m_keyDragStart = keyFrame;
         m_dragStartFrame = keyFrame;
@@ -2968,8 +3366,6 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 
     if (m_dragMode == DragMode::PendingSelect)
     {
-        if (sessionMode())
-            return;
         const QPointF delta = event->position() - m_pressPos;
         if (std::abs(delta.x()) + std::abs(delta.y()) <= 5.0)
             return;
@@ -3026,6 +3422,11 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
                     && (std::abs(x - clip.left()) <= kTrimGrab
                         || std::abs(x - clip.right()) <= kTrimGrab))
                     setCursor(Qt::SizeHorCursor);
+                else if (!entity->locked
+                         && hitKeyframeRow(row, x,
+                                           int(std::lround(event->position().y())))
+                                >= 0)
+                    setCursor(Qt::PointingHandCursor);
                 else if (clip.contains(event->position().toPoint()))
                     setCursor(entity->locked ? Qt::ArrowCursor
                                              : Qt::OpenHandCursor);
@@ -3038,10 +3439,9 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
                           && std::abs(x - clip.left()) <= kTrimGrab;
             m_hoverRight = !entity->isAudio()
                            && std::abs(x - clip.right()) <= kTrimGrab;
-            if (m_editMode == EditMode::Keyframes
-                && hitKeyframeRow(row, x,
-                                  int(std::lround(event->position().y())))
-                       >= 0)
+            if (hitKeyframeRow(row, x,
+                               int(std::lround(event->position().y())))
+                >= 0)
                 setCursor(Qt::PointingHandCursor);
             else if (m_editMode == EditMode::Clips
                      && (m_hoverLeft || m_hoverRight))
@@ -3098,74 +3498,45 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
     }
     if (m_dragMode == DragMode::BoxSelect)
     {
-        if (sessionMode())
-        {
-            m_dragMode = DragMode::None;
-            return;
-        }
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
         const QVector<EntityId> rows = rowIds();
-        if (m_editMode == EditMode::Keyframes)
-        {
-            // Bottom-up rows: box.bottom() is the lowest row.  A box that
-            // starts or ends outside the body still covers every visible row.
-            const int topRow = rowAt(int(box.top()));
-            const int bottomRow = rowAt(int(box.bottom()));
-            const int firstRow = bottomRow >= 0 ? bottomRow : 0;
-            const int lastRow = topRow >= 0 ? topRow : int(rows.size()) - 1;
-            const int firstFrame = std::max(0, frameFromX(int(box.left())));
-            const int lastFrame = std::max(0, frameFromX(int(box.right())));
-            const bool additive = event->modifiers() & Qt::ShiftModifier;
-            if (!additive)
-                m_selectedKeyframes.clear();
-            for (int row = std::max(0, firstRow);
-                 row <= std::min(lastRow, int(rows.size()) - 1); ++row)
-            {
-                const Entity* entity = m_project->entity(rows[row]);
-                if (!entity || m_project->isEffectivelyLocked(entity->id))
-                    continue;
-                for (int frame : keyframeFrames(*entity))
-                {
-                    if (frame < firstFrame || frame > lastFrame)
-                        continue;
-                    const KeyframeSelection selection{entity->id, double(frame)};
-                    if (std::find(m_selectedKeyframes.begin(),
-                                  m_selectedKeyframes.end(), selection)
-                        == m_selectedKeyframes.end())
-                        m_selectedKeyframes.append(selection);
-                }
-            }
-            // The lowest selected row becomes the active entity.
-            if (firstRow >= 0 && firstRow < rows.size())
-            {
-                const Entity* last = m_project->entity(rows[firstRow]);
-                if (last && !m_project->isEffectivelyLocked(last->id))
-                    selectEntity(last->id, true);
-            }
-            emit keyframeSelectionChanged(m_selectedKeyframes);
-        }
-        else
-        {
+        // The old timeline's rubber band always picked keyframes, in every
+        // edit mode.  Keep that muscle memory instead of making clip mode
+        // change what a drag means.
+        const int topRow = rowAt(int(box.top()));
+        const int bottomRow = rowAt(int(box.bottom()));
+        const int firstRow = bottomRow >= 0 ? bottomRow : 0;
+        const int lastRow = topRow >= 0 ? topRow : int(rows.size()) - 1;
+        const int firstFrame = std::max(0, frameFromX(int(box.left())));
+        const int lastFrame = std::max(0, frameFromX(int(box.right())));
+        const bool additive = event->modifiers() & Qt::ShiftModifier;
+        if (!additive)
             m_selectedKeyframes.clear();
-            emit keyframeSelectionChanged(m_selectedKeyframes);
-            m_entitySelection.clear();
-            EntityId lastId = kInvalidEntity;
-            for (EntityId rowId : rows)
+        for (int row = std::max(0, firstRow);
+             row <= std::min(lastRow, int(rows.size()) - 1); ++row)
+        {
+            const Entity* entity = entityById(rows[row]);
+            if (!entity || isEntityLocked(entity->id))
+                continue;
+            for (int frame : keyframeFrames(*entity))
             {
-                const Entity* entity = m_project->entity(rowId);
-                if (!entity || m_project->isEffectivelyLocked(entity->id))
+                if (frame < firstFrame || frame > lastFrame)
                     continue;
-                const QRect clip = clipRect(*entity);
-                if (clip.isEmpty() || !clip.intersects(box.toRect()))
-                    continue;
-                m_entitySelection.insert(entity->id);
-                lastId = entity->id;
+                const KeyframeSelection selection{entity->id, double(frame)};
+                if (std::find(m_selectedKeyframes.begin(),
+                              m_selectedKeyframes.end(), selection)
+                    == m_selectedKeyframes.end())
+                    m_selectedKeyframes.append(selection);
             }
-            m_selected = lastId;
-            if (lastId != kInvalidEntity && m_entitySelection.size() == 1)
-                emit entitySelected(lastId);
-            update();
         }
+        // The lowest selected row becomes the active entity.
+        if (firstRow >= 0 && firstRow < rows.size())
+        {
+            const Entity* last = entityById(rows[firstRow]);
+            if (last && !isEntityLocked(last->id))
+                selectEntity(last->id, true);
+        }
+        emit keyframeSelectionChanged(m_selectedKeyframes);
         m_dragMode = DragMode::None;
         return;
     }
@@ -3195,6 +3566,8 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     if ((!m_project && !sessionMode()) || event->button() != Qt::LeftButton)
         return;
     if (event->position().y() < kRulerHeight)
+        return;
+    if (event->position().x() < nameWidth())
         return;
     const int row = rowAt(int(event->position().y()));
     const EntityId id = entityAtRow(row);
@@ -3645,16 +4018,17 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
     if (event->modifiers() & Qt::ControlModifier)
     {
         const double old = m_pixelsPerFrame;
-        double next = std::clamp(old * std::pow(2.0, steps), 2.0, 32.0);
-        if (next > 4.0)
+        double next = std::clamp(old * std::pow(2.0, steps), 0.25, 32.0);
+        if (next > 1.0)
             next = std::round(next);
         if (std::abs(next - old) < 1e-6)
             return;
         const int anchor = frameFromX(int(std::lround(event->position().x())));
         m_pixelsPerFrame = next;
-        m_scrollX = std::max(0, int(std::lround(
-                                   (anchor - contentStart()) * next
-                                   - event->position().x())));
+        m_scrollX = std::max(
+            0, int(std::lround(nameWidth()
+                               + (anchor - contentStart()) * next
+                               - event->position().x())));
     }
     else if (event->modifiers() & Qt::ShiftModifier)
     {
@@ -3675,6 +4049,21 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
     const Qt::KeyboardModifiers plain =
         event->modifiers() & ~Qt::KeypadModifier;
+    if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
+        && plain == Qt::NoModifier)
+    {
+        const int direction = event->key() == Qt::Key_Right ? 1 : -1;
+        if (!event->isAutoRepeat())
+        {
+            emit scrubStarted();
+            m_holdDirection = direction;
+            stepFrame(direction);
+            if (m_holdDirection != 0)
+                m_holdDelay->start();
+        }
+        event->accept();
+        return;
+    }
     if (sessionMode())
     {
         if (event->key() == Qt::Key_Escape && m_dragMode != DragMode::None)
@@ -3746,29 +4135,56 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
+void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
+{
+    if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
+        && !event->isAutoRepeat())
+    {
+        stopHold();
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void TimelinePanel::focusOutEvent(QFocusEvent* event)
+{
+    // A key release can be lost when the focus moves mid-hold.
+    stopHold();
+    QWidget::focusOutEvent(event);
+}
+
 void TimelinePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     if (m_hScroll)
-        m_hScroll->setGeometry(0, height() - kScrollBarSize,
-                               std::max(0, width() - kScrollBarSize),
-                               kScrollBarSize);
+        m_hScroll->setGeometry(nameWidth(), height() - kScrollBarSize,
+                               visibleWidth(), kScrollBarSize);
     if (m_vScroll)
         m_vScroll->setGeometry(width() - kScrollBarSize, kRulerHeight,
                                kScrollBarSize,
                                std::max(0, height() - kRulerHeight
                                                - kScrollBarSize));
+    if (m_search)
+    {
+        const int unitSpace = 36 + 6;
+        const int searchWidth =
+            std::max(24, nameWidth() - 8 - unitSpace - 6);
+        m_search->setGeometry(8, 3, searchWidth, kRulerHeight - 7);
+        m_search->setVisible(nameWidth() >= 110 && width() > 220);
+    }
     if (m_unitButton)
     {
-        m_unitButton->setGeometry(std::max(4, width() - kScrollBarSize - 46), 3,
-                                  42, 20);
-        m_unitButton->setVisible(m_owner < 0 && width() > 120);
+        m_unitButton->setGeometry(nameWidth() - 8 - 36, 3, 36,
+                                  kRulerHeight - 7);
+        m_unitButton->setVisible(m_owner < 0 && width() > 200);
     }
     if (m_modeButton)
     {
-        m_modeButton->setGeometry(std::max(4, width() - kScrollBarSize - 104),
-                                  3, 54, 20);
-        m_modeButton->setVisible(m_owner < 0 && width() > 220);
+        m_modeButton->setGeometry(std::max(nameWidth() + 4,
+                                           width() - kScrollBarSize - 58),
+                                  3, 54, kRulerHeight - 7);
+        m_modeButton->setVisible(m_owner < 0 && width() > 280);
     }
     clampScroll();
     update();
@@ -3875,7 +4291,7 @@ void TimelinePanel::setDisplayFrames(bool frames)
 
 void TimelinePanel::setPixelsPerFrameForTest(double pixels)
 {
-    m_pixelsPerFrame = std::clamp(pixels, 2.0, 32.0);
+    m_pixelsPerFrame = std::clamp(pixels, 0.25, 32.0);
     clampScroll();
     update();
     syncPopups();
@@ -3907,48 +4323,28 @@ void TimelinePanel::setEditMode(EditMode mode)
 
 int TimelinePanel::rulerTickStepForTest() const
 {
-    if (m_pixelsPerFrame < 0.5)
-        return 50;
-    if (m_pixelsPerFrame < 1.0)
-        return 20;
-    if (m_pixelsPerFrame < 3.0)
-        return 10;
-    if (m_pixelsPerFrame < 5.0)
-        return 5;
-    return 1;
+    int tickStep = 0;
+    int labelStep = 0;
+    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+    return tickStep;
 }
 
 int TimelinePanel::rulerLabelStepForTest() const
 {
-    if (m_pixelsPerFrame < 0.5)
-        return 200;
-    if (m_pixelsPerFrame < 1.0)
-        return 100;
-    if (m_pixelsPerFrame < 3.0)
-        return 50;
-    if (m_pixelsPerFrame < 5.0)
-        return 10;
-    return 5;
+    int tickStep = 0;
+    int labelStep = 0;
+    rulerSteps(m_pixelsPerFrame, &tickStep, &labelStep);
+    return labelStep;
 }
 
 int TimelinePanel::secondsCellStepForTest() const
 {
-    const int fps = currentFps();
-    int cell = fps;
-    while (cell * m_pixelsPerFrame < 5.0)
-        cell *= 2;
-    return cell;
+    return secondsGrid(currentFps(), m_pixelsPerFrame).cellFrames;
 }
 
 int TimelinePanel::secondsLabelStepForTest() const
 {
-    const int fps = currentFps();
-    int label = fps;
-    while (label * m_pixelsPerFrame < 48.0)
-        label *= 2;
-    while (label > 1 && label % 2 == 0 && label * m_pixelsPerFrame > 240.0)
-        label /= 2;
-    return label;
+    return secondsGrid(currentFps(), m_pixelsPerFrame).labelFrames;
 }
 
 EntityId TimelinePanel::rowEntityForTest(int row) const
@@ -4028,7 +4424,7 @@ QRect TimelinePanel::markerRect(int index) const
         return QRect();
     const int x = xFromFrame(marker.frame);
     const int right = width() - kScrollBarSize;
-    if (x < 0 || x > right)
+    if (x < nameWidth() || x > right)
         return QRect();
     const QFontMetrics metrics(font());
     const int markerWidth = std::max(
@@ -4044,9 +4440,12 @@ int TimelinePanel::rowForEntityForTest(EntityId id) const
 
 QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
-    Q_UNUSED(row);
-    Q_UNUSED(index);
-    return QRect();
+    if (index < 0 || index > 2)
+        return QRect();
+    const int top = rowTop(row);
+    const int x = nameWidth() - 6 - (index + 1) * (kButtonSize + kButtonGap);
+    return QRect(x, top + (kRowHeight - kButtonSize) / 2, kButtonSize,
+                 kButtonSize);
 }
 
 bool TimelinePanel::verticalScrollVisibleForTest() const

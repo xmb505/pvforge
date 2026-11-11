@@ -18,6 +18,8 @@ class QDragEnterEvent;
 class QDragMoveEvent;
 class QDragLeaveEvent;
 class QDropEvent;
+class QFocusEvent;
+class QLineEdit;
 class QMimeData;
 class QMouseEvent;
 class QPainter;
@@ -107,6 +109,8 @@ public:
     int rowCenterYForTest(int row) const { return rowTop(row) + rowHeight(row) / 2; }
     int rowTopForTest(int row) const { return rowTop(row); }
     int bodyBottomForTest() const { return bodyBottom(); }
+    int nameColumnWidthForTest() const { return nameWidth(); }
+    int clipCornerRadiusForTest() const { return 0; }
     // Bottom-up drop row under y, clamped to row 0..highest occupied + 1.
     int dropRowForTest(int y) const { return dropRowForY(y); }
     int keyframeHitForTest(int row, int x, int y) const
@@ -250,6 +254,8 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -319,6 +325,11 @@ private:
     EntityId entityAtRow(int row) const;
     int rowAt(int y) const;
     int rowTop(int row) const;
+    QString searchFilter() const;
+    bool rowMatchesFilter(const Entity& entity) const;
+    int nameWidth() const;
+    void handleRowButton(int row, int index);
+    void toggleSessionFlag(EntityId id, bool hidden);
     // Drop row under y for a clip drag: bottom row 0, gaps allowed, rows
     // above the highest clip collapse to highest + 1.
     int dropRowForY(int y) const;
@@ -341,12 +352,15 @@ private:
     // Scroll and coordinates.
     int visibleWidth() const;
     int bodyBottom() const;
+    int timelineLength() const;
     int xFromFrame(int frame) const;
     int frameFromX(int x) const;
     void clampScroll();
     void updateScrollBars();
     void ensureFrameVisible(int frame);
     void setScrubFrame(double rawX);
+    void stepFrame(int delta);
+    void stopHold();
 
     // Live preview during a drag.
     const QVector<Entity>& activeEntities() const;
@@ -437,9 +451,13 @@ private:
 
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
+    QLineEdit* m_search = nullptr;
     QToolButton* m_unitButton = nullptr;
     QToolButton* m_modeButton = nullptr;
     QTimer* m_autoScroll = nullptr;
+    QTimer* m_holdTimer = nullptr;
+    QTimer* m_holdDelay = nullptr;
+    int m_holdDirection = 0;
     int m_scrollX = 0;
     int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
@@ -449,11 +467,14 @@ private:
 
     QHash<EntityId, ClipPopup*> m_popups;
 
+    static constexpr int kNameWidth = 130;
     static constexpr int kRowHeight = 30;
-    static constexpr int kRulerHeight = 26;
+    static constexpr int kRulerHeight = 28;
     static constexpr int kScrollBarSize = 14;
     static constexpr int kPlusWidth = 30;
     static constexpr int kTrimGrab = 6;
+    static constexpr int kButtonSize = 14;
+    static constexpr int kButtonGap = 2;
 };
 
 } // namespace pvf

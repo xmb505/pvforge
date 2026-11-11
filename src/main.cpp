@@ -2070,7 +2070,7 @@ int timelineTest(QApplication& app)
     // Playhead follows ProjectDocument and is drawn in the panel.
     // The window owns the session; drive the playhead through the panel signal
     // path by simulating a ruler click, then verify via the exposed frame.
-    const QPoint rulerPoint(120, 10);
+    const QPoint rulerPoint(timeline->frameXForTest(20), 10);
     QMouseEvent rulerPress(QEvent::MouseButtonPress, QPointF(rulerPoint),
                            QPointF(timeline->mapToGlobal(rulerPoint)),
                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -3227,9 +3227,9 @@ int timelineBottomUpTest(QApplication& app)
            QStringLiteral("drop below the body did not resolve to row 0"));
 
     // 1. Middle clip -> topmost blank row.
-    QPoint dragFrom(timeline->frameXForTest(20),
+    QPoint dragFrom(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(1));
-    QPoint dragTo(timeline->frameXForTest(20),
+    QPoint dragTo(timeline->frameXForTest(30),
                   timeline->rowCenterYForTest(3));
     int depthBefore = depthNow();
     changedSignals = 0;
@@ -3250,9 +3250,9 @@ int timelineBottomUpTest(QApplication& app)
 
     // 2. Bottom blank row: vacate row 0 by dragging the bottom clip up, then
     // drop the middle clip onto the now-blank bottom row.
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(0));
-    dragTo = QPoint(timeline->frameXForTest(20),
+    dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(3));
     depthBefore = depthNow();
     changedSignals = 0;
@@ -3264,9 +3264,9 @@ int timelineBottomUpTest(QApplication& app)
            QStringLiteral("bottom clip did not move to the blank top row"));
     depthBefore = depthNow();
     changedSignals = 0;
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
-    dragTo = QPoint(timeline->frameXForTest(20),
+    dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(0));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
@@ -3283,15 +3283,15 @@ int timelineBottomUpTest(QApplication& app)
     // 3. Drag preview follows the pointer Y and Esc cancels without a commit.
     changedSignals = 0;
     const int depthAtDragStart = document->store()->undoDepth();
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
-    const QPoint previewBottom(timeline->frameXForTest(20),
+    const QPoint previewBottom(timeline->frameXForTest(30),
                                timeline->rowCenterYForTest(0));
     sendDrag(dragFrom, previewBottom);
     expect(rowFor(middle) == 0,
            QStringLiteral("drag preview did not follow the pointer to row 0 (%1)")
                .arg(rowFor(middle)));
-    dragTo = QPoint(timeline->frameXForTest(20),
+    dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(3));
     QMouseEvent previewMove(QEvent::MouseMove, QPointF(dragTo),
                             QPointF(timeline->mapToGlobal(dragTo)), Qt::NoButton,
@@ -3319,7 +3319,7 @@ int timelineBottomUpTest(QApplication& app)
     // 4. Dropping on an occupied clip lands on that row and swaps slots.
     depthBefore = depthNow();
     changedSignals = 0;
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
     dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(2));
@@ -3347,9 +3347,9 @@ int timelineBottomUpTest(QApplication& app)
            QStringLiteral("top drop above did not keep the other slots"));
     expect(depthNow() == depthBefore + 1,
            QStringLiteral("top gap drop did not commit once"));
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
-    dragTo = QPoint(timeline->frameXForTest(20),
+    dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(2));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
@@ -3468,9 +3468,9 @@ int timelineBottomUpTest(QApplication& app)
                 qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
             box->reject();
     });
-    dragFrom = QPoint(timeline->frameXForTest(20),
+    dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
-    dragTo = QPoint(timeline->frameXForTest(20),
+    dragTo = QPoint(timeline->frameXForTest(30),
                     timeline->rowCenterYForTest(3));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
@@ -3496,9 +3496,9 @@ int timelineBottomUpTest(QApplication& app)
             // Vertical drag inside the private timeline also lands on a blank
             // row and commits once.
             const int popupDepth = depthNow();
-            const QPoint popupFrom(popup->frameXForTest(20),
+            const QPoint popupFrom(popup->frameXForTest(30),
                                    popup->rowCenterYForTest(0));
-            const QPoint popupTo(popup->frameXForTest(20),
+            const QPoint popupTo(popup->frameXForTest(30),
                                  popup->rowCenterYForTest(2));
             QMouseEvent popupPress(QEvent::MouseButtonPress, QPointF(popupFrom),
                                    QPointF(popup->mapToGlobal(popupFrom)),
@@ -3548,6 +3548,259 @@ int timelineBottomUpTest(QApplication& app)
     window->close();
     QApplication::processEvents();
     qInfo() << "timeline-bottomup-test failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
+int timelineUiTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p3-timeline-ui.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P3 时间轴回归");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-ui-test: create failed" << error;
+        return 1;
+    }
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1280, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!live || !document || !timeline)
+    {
+        qCritical() << "timeline-ui-test: session window/timeline missing";
+        return 1;
+    }
+
+    int failures = 0;
+    auto expect = [&failures](bool condition, const QString& message) {
+        if (!condition)
+        {
+            qCritical() << "timeline-ui-test:" << message;
+            ++failures;
+        }
+        return condition;
+    };
+    auto flush = [&] {
+        QString flushError;
+        live->flush(&flushError);
+        QApplication::processEvents();
+        return document->store()->undoDepth();
+    };
+
+    auto makeEntity = [&live](const QString& name, int start, int end, int row) {
+        auto& project = live->mutableProject();
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = start;
+        entity.end = end;
+        entity.row = row;
+        entity.content.kind = pvf::ContentKind::Text;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+    const pvf::Uuid hero = makeEntity(QStringLiteral("角色A"), 0, 120, 0);
+    const pvf::Uuid background = makeEntity(QStringLiteral("背景B"), 20, 90, 1);
+    const pvf::Uuid prop = makeEntity(QStringLiteral("道具C"), 40, 80, 2);
+    pvf::model::Track xTrack;
+    xTrack.keys = {{0, 0.0, {}, {}}, {30, 100.0, {}, {}},
+                   {60, 200.0, {}, {}}};
+    live->mutableProject().entities[hero].tracks.insert(QStringLiteral("x"),
+                                                        xTrack);
+    if (!document->commitEntities({hero, background, prop},
+                                  QStringLiteral("timeline ui setup"), &error))
+    {
+        qCritical() << "timeline-ui-test: setup commit failed" << error;
+        return 1;
+    }
+    flush();
+
+    auto rowFor = [&](const pvf::Uuid& uuid) {
+        return timeline->rowForEntityForTest(timeline->entityIdForUuid(uuid));
+    };
+    auto idFor = [&](const pvf::Uuid& uuid) {
+        return timeline->entityIdForUuid(uuid);
+    };
+    auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
+                                Qt::MouseButtons buttons,
+                                Qt::KeyboardModifiers modifiers) {
+        QMouseEvent event(type, QPointF(pos),
+                          QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                          buttons, modifiers);
+        QApplication::sendEvent(timeline, &event);
+    };
+    auto click = [&](const QPoint& pos) {
+        sendMouse(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, pos, Qt::NoButton, Qt::NoModifier);
+        QApplication::processEvents();
+    };
+
+    // 1. Name column: fixed 130 px plus search.
+    expect(timeline->nameColumnWidthForTest() == 130,
+           QStringLiteral("name column is not 130 px"));
+    auto* search =
+        timeline->findChild<QLineEdit*>(QStringLiteral("timelineSearchEdit"));
+    expect(search != nullptr, QStringLiteral("entity search field missing"));
+    if (search)
+    {
+        expect(search->placeholderText().contains(QStringLiteral("搜索对象")),
+               QStringLiteral("search placeholder is not 搜索对象…"));
+        expect(timeline->entityRowCountForTest() == 3,
+               QStringLiteral("unfiltered row count is wrong"));
+        search->setText(QStringLiteral("背景"));
+        QApplication::processEvents();
+        expect(timeline->entityRowCountForTest() == 1,
+               QStringLiteral("search did not filter the rows (%1)")
+                   .arg(timeline->entityRowCountForTest()));
+        expect(timeline->rowNameForTest(rowFor(background))
+                   == QStringLiteral("背景B"),
+               QStringLiteral("filtered row is not the background entity"));
+        search->clear();
+        QApplication::processEvents();
+        expect(timeline->entityRowCountForTest() == 3,
+               QStringLiteral("clearing search did not restore the rows"));
+    }
+
+    // 2. Ruler density table and minor ticks.
+    auto checkSteps = [&](double pixels, int tick, int label) {
+        timeline->setPixelsPerFrameForTest(pixels);
+        expect(timeline->rulerTickStepForTest() == tick
+                   && timeline->rulerLabelStepForTest() == label,
+               QStringLiteral("ruler steps at %1 px are %2/%3, expected %4/%5")
+                   .arg(pixels)
+                   .arg(timeline->rulerTickStepForTest())
+                   .arg(timeline->rulerLabelStepForTest())
+                   .arg(tick)
+                   .arg(label));
+    };
+    checkSteps(8.0, 1, 5);
+    checkSteps(4.0, 5, 10);
+    checkSteps(2.0, 10, 50);
+    checkSteps(0.8, 20, 100);
+    checkSteps(0.4, 50, 200);
+    timeline->setPixelsPerFrameForTest(6.0);
+    QApplication::processEvents();
+
+    // 3. Clip appearance is square and flat, not rounded/gradient.
+    expect(timeline->clipCornerRadiusForTest() == 0,
+           QStringLiteral("clip corner radius is not zero"));
+    const QRect propClip = timeline->clipRectFor(idFor(prop));
+    expect(!propClip.isEmpty(), QStringLiteral("clip rect is missing"));
+    if (!propClip.isEmpty())
+    {
+        const QImage shot = timeline->grab().toImage();
+        const QColor corner =
+            shot.pixelColor(propClip.left() + 2, propClip.top() + 2);
+        const QColor center = shot.pixelColor(propClip.center());
+        const int distance = std::abs(corner.red() - center.red())
+                             + std::abs(corner.green() - center.green())
+                             + std::abs(corner.blue() - center.blue());
+        expect(distance < 24,
+               QStringLiteral("clip corner is not flat (corner %1, center %2)")
+                   .arg(corner.name(), center.name()));
+    }
+
+    // 4. Default clip mode: clicking a diamond selects it, seeks, and drags.
+    expect(timeline->editMode() == pvf::TimelinePanel::EditMode::Clips,
+           QStringLiteral("timeline does not start in clip mode"));
+    const int heroRow = rowFor(hero);
+    const QPoint key30(timeline->frameXForTest(30),
+                       timeline->rowCenterYForTest(heroRow));
+    click(key30);
+    expect(timeline->selectedKeyframeCount() == 1,
+           QStringLiteral("clicking a diamond in clip mode did not select it"));
+    expect(window->currentFrameForTest() == 30,
+           QStringLiteral("clicking a diamond did not seek (%1)")
+               .arg(window->currentFrameForTest()));
+
+    const int depthBeforeKeyDrag = flush();
+    const QPoint key45(timeline->frameXForTest(45),
+                       timeline->rowCenterYForTest(heroRow));
+    sendMouse(QEvent::MouseButtonPress, key30, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(QEvent::MouseMove, key45, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(QEvent::MouseButtonRelease, key45, Qt::NoButton, Qt::NoModifier);
+    QApplication::processEvents();
+    flush();
+    const pvf::model::Entity& heroAfter = live->project().entities.value(hero);
+    bool has30 = false;
+    bool has45 = false;
+    for (const pvf::model::Keyframe& key : heroAfter.tracks.value(QStringLiteral("x")).keys)
+    {
+        if (key.frame == 30)
+            has30 = true;
+        if (key.frame == 45)
+            has45 = true;
+    }
+    expect(has45 && !has30,
+           QStringLiteral("dragging the diamond did not move the key"));
+    expect(window->currentFrameForTest() == 45,
+           QStringLiteral("playhead did not follow the dragged key (%1)")
+               .arg(window->currentFrameForTest()));
+    expect(flush() == depthBeforeKeyDrag + 1,
+           QStringLiteral("key drag did not create exactly one commit"));
+
+    // 5. Eye / lock buttons commit through EditActions exactly once.
+    auto entityFlag = [&](const pvf::Uuid& uuid, bool hidden) {
+        const auto it = live->project().entities.constFind(uuid);
+        if (it == live->project().entities.constEnd())
+            return false;
+        return hidden ? it->hidden : it->locked;
+    };
+    auto clickRowButton = [&](const pvf::Uuid& uuid, int index) {
+        const int row = rowFor(uuid);
+        click(timeline->rowButtonRect(row, index).center());
+        QApplication::processEvents();
+        flush();
+    };
+    int depthBeforeFlag = flush();
+    clickRowButton(background, 0);
+    expect(entityFlag(background, true),
+           QStringLiteral("eye button did not hide the entity"));
+    expect(flush() == depthBeforeFlag + 1,
+           QStringLiteral("eye button did not commit once"));
+    depthBeforeFlag = flush();
+    clickRowButton(hero, 1);
+    expect(entityFlag(hero, false),
+           QStringLiteral("lock button did not lock the entity"));
+    expect(flush() == depthBeforeFlag + 1,
+           QStringLiteral("lock button did not commit once"));
+    // Unlock so the screenshot shows an editable clip again.
+    clickRowButton(hero, 1);
+    expect(!entityFlag(hero, false), QStringLiteral("lock button did not unlock"));
+
+    // 6. Screenshot in frame mode so the 1/5/10 tick density is visible.
+    timeline->setPixelsPerFrameForTest(6.0);
+    timeline->setEditMode(pvf::TimelinePanel::EditMode::Clips);
+    timeline->setDisplayFrames(true);
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    expect(window->grab().save(
+               QStringLiteral("/tmp/opencode/pvforge-timeline-ui.png")),
+           QStringLiteral("screenshot failed"));
+    timeline->setDisplayFrames(false);
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "timeline-ui-test failures" << failures;
     return failures == 0 ? 0 : 1;
 }
 
@@ -7985,9 +8238,12 @@ int timelineRowButtonsTest(QApplication& app)
              Qt::NoButton, Qt::NoButton);
         window.grab().toImage().save(QStringLiteral("/tmp/pvforge_row_buttons.png"));
 
-        // Rubber-band across both rows to pick up every keyframe in range.
-        const QPoint boxStart(200, timeline->rowCenterYForTest(0));
-        const QPoint boxEnd(560, timeline->rowCenterYForTest(1));
+        // Rubber-band from the empty row above down across both entity rows,
+        // picking up every keyframe in range.
+        const QPoint boxStart(timeline->frameXForTest(5),
+                              timeline->rowCenterYForTest(3));
+        const QPoint boxEnd(timeline->frameXForTest(65),
+                            timeline->rowCenterYForTest(0));
         send(QEvent::MouseButtonPress, boxStart, Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseMove, boxEnd, Qt::NoButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, boxEnd, Qt::LeftButton, Qt::NoButton);
@@ -8061,8 +8317,9 @@ int timelineInteractionTest(QApplication& app)
         int failures = 0;
 
         // Ruler press moves the playhead.
-        send(QEvent::MouseButtonPress, QPoint(500, 10), Qt::LeftButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, QPoint(500, 10), Qt::LeftButton, Qt::NoButton);
+        const QPoint rulerPoint(timeline->frameXForTest(53), 10);
+        send(QEvent::MouseButtonPress, rulerPoint, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, rulerPoint, Qt::LeftButton, Qt::NoButton);
         const int rulerFrame = window.currentFrame();
         if (std::abs(rulerFrame - 53) > 2)
         {
@@ -8070,8 +8327,10 @@ int timelineInteractionTest(QApplication& app)
             ++failures;
         }
 
-        // Empty track click jumps on release.
-        const QPoint emptyRow(300, timeline->rowCenterYForTest(0));
+        // Empty row click jumps on release without scrolling the keyframes
+        // out of view.  Row 3 is the padded blank row above the clips.
+        const QPoint emptyRow(timeline->frameXForTest(20),
+                              timeline->rowCenterYForTest(3));
         send(QEvent::MouseButtonPress, emptyRow, Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, emptyRow, Qt::LeftButton, Qt::NoButton);
         const int emptyFrame = window.currentFrame();
@@ -8084,7 +8343,8 @@ int timelineInteractionTest(QApplication& app)
         // Keyframe click selects it and moves the playhead to the keyframe,
         // so the property panel shows the values stored in that keyframe.
         const int beforeKey = window.currentFrame();
-        const QPoint keyPoint(540, timeline->rowCenterYForTest(0));
+        const QPoint keyPoint(timeline->frameXForTest(60),
+                              timeline->rowCenterYForTest(0));
         send(QEvent::MouseButtonPress, keyPoint, Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, keyPoint, Qt::LeftButton, Qt::NoButton);
         const int afterKey = window.currentFrame();
@@ -8110,8 +8370,10 @@ int timelineInteractionTest(QApplication& app)
         }
 
         // Dragging rubber-bands instead of scrubbing.
-        const QPoint dragStart(250, timeline->rowCenterYForTest(0));
-        const QPoint dragEnd(320, timeline->rowCenterYForTest(1));
+        const QPoint dragStart(timeline->frameXForTest(300),
+                               timeline->rowCenterYForTest(3));
+        const QPoint dragEnd(timeline->frameXForTest(200),
+                             timeline->rowCenterYForTest(0));
         send(QEvent::MouseButtonPress, dragStart, Qt::LeftButton, Qt::LeftButton);
         send(QEvent::MouseMove, dragEnd, Qt::NoButton, Qt::LeftButton);
         send(QEvent::MouseButtonRelease, dragEnd, Qt::LeftButton, Qt::NoButton);
@@ -13470,6 +13732,7 @@ int clipTimelineTest(QApplication& app)
             }
             project->addKeyframe(rectId, QStringLiteral("x"), 110, 0.0);
             const QRect before = popup->clipRectFor(rectId);
+            const int initialEnd = project->clipEndFrame(rectId);
             const int row = 0;
             auto send = [popup](QEvent::Type type, const QPoint& pos,
                                 Qt::MouseButtons buttons) {
@@ -13517,7 +13780,7 @@ int clipTimelineTest(QApplication& app)
             }
             if (clippedEnd >= 110 || !keyGone || expandedEnd <= clippedEnd
                 || !keyStayedGone || undoEnd1 != clippedEnd
-                || undoEnd2 != before.width() / 8 || !keyRestored)
+                || undoEnd2 != initialEnd || !keyRestored)
             {
                 qCritical() << "clip-timeline-test: trim" << before << clippedEnd
                             << expandedEnd << keyGone << keyStayedGone << "undo"
@@ -13647,7 +13910,7 @@ int clipTimelineTest(QApplication& app)
             };
             const int beforeScroll = timeline->horizontalScrollForTest();
             const int beforeFrame = window.currentFrame();
-            const QPoint scrubStart(100, 10);
+            const QPoint scrubStart(timeline->nameColumnWidthForTest() + 20, 10);
             const QPoint scrubEnd(timeline->width() + 80, 10);
             sendMain(QEvent::MouseButtonPress, scrubStart, Qt::LeftButton);
             sendMain(QEvent::MouseMove, scrubEnd, Qt::LeftButton);
@@ -20755,6 +21018,8 @@ int main(int argc, char* argv[])
         return timelineTest(app);
     if (app.arguments().contains(QStringLiteral("--timeline-bottomup-test")))
         return timelineBottomUpTest(app);
+    if (app.arguments().contains(QStringLiteral("--timeline-ui-test")))
+        return timelineUiTest(app);
     const int viewportIndex = app.arguments().indexOf(
         QStringLiteral("--viewport-test"));
     if (viewportIndex >= 0)
