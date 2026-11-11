@@ -20382,7 +20382,7 @@ int inkscapeHandlesTest(QApplication& app)
 
     // 1) Unzoomed geometry: each corner glyph rides its visual corner at a
     //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
-    const std::array<double, 4> baseAngles{-90.0, 180.0, 90.0, 0.0};
+    const std::array<double, 4> baseAngles{-90.0, 0.0, 90.0, 180.0};
     if (std::abs(pvf::gizmo::kRotateHandleSize - 18.0) > 1e-9
         || std::abs(pvf::gizmo::kRotateHitSize - 18.0) > 1e-9)
     {

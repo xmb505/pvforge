@@ -1753,7 +1753,13 @@ Viewport::SessionGizmoGeometry Viewport::sessionGizmoGeometry(
         geometry.rotateCenter[visual] =
             geometry.box.at(local)
             + cornerInwardDirection(geometry.box, local) * gizmo::kRotateHandleInset;
-        geometry.rotateAngle[visual] = rotateGlyphAngle(geometry.box, local);
+        double glyphAngle = rotateGlyphAngle(geometry.box, local);
+        // The 90-degree carrow glyph has two arrows; on the opposite diagonal
+        // corners (visual TR/BL) it must be turned another 180 degrees or the
+        // arrows point away from the box.
+        if (visual == 1 || visual == 3)
+            glyphAngle += 180.0;
+        geometry.rotateAngle[visual] = glyphAngle;
     }
     return geometry;
 }
