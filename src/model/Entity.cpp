@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 
 namespace pvf::model {
@@ -282,6 +283,57 @@ bool validateTrack(const Track& track, int duration, const QString& trackName,
     return true;
 }
 
+bool isLastKeyframeInClip(const Entity& entity, int relativeFrame)
+{
+    bool found = false;
+    for (auto track = entity.tracks.constBegin();
+         track != entity.tracks.constEnd(); ++track)
+    {
+        for (const Keyframe& keyframe : track.value().keys)
+        {
+            if (keyframe.frame == relativeFrame)
+                found = true;
+            else if (keyframe.frame > relativeFrame)
+                return false;
+        }
+    }
+    return found;
+}
+
+int solverStructuralEnd(const Entity& entity, const SolverSegment& segment)
+{
+    const int lastFrame = entity.duration() - 1;
+    if (lastFrame < 0)
+        return -1;
+    if (segment.endFrame >= 0)
+        return std::min(segment.endFrame, lastFrame);
+
+    int end = lastFrame;
+
+    // The first ordinary key created after the solver start is the end
+    // marker: the solver stops at N-1 and the key at N belongs to the normal
+    // animation that follows.
+    for (auto track = entity.tracks.constBegin();
+         track != entity.tracks.constEnd(); ++track)
+    {
+        for (const Keyframe& keyframe : track.value().keys)
+            if (keyframe.frame > segment.startFrame)
+                end = std::min(end, keyframe.frame - 1);
+    }
+
+    // A later segment owns the following frames; automatic segments cannot
+    // overlap it even when no key separates them.
+    for (const SolverSegment& other : entity.solvers)
+    {
+        if (other.id == segment.id)
+            continue;
+        if (other.startFrame > segment.startFrame)
+            end = std::min(end, other.startFrame - 1);
+    }
+
+    return end;
+}
+
 bool validateSolvers(const Entity& entity, QString* error)
 {
     const int duration = entity.duration();
@@ -325,25 +377,29 @@ bool validateSolvers(const Entity& entity, QString* error)
             return false;
         }
 
-        // Structural end: an explicit endFrame, otherwise the clip end.  The
-        // physical stop of an automatic segment is a solver concern; model
-        // validation must stay World-free, so it reserves the whole tail.
-        int effectiveEnd = duration - 1;
-        if (segment.endFrame != -1)
+        if (segment.endFrame != -1
+            && (segment.endFrame < segment.startFrame
+                || segment.endFrame >= duration))
         {
-            if (segment.endFrame < segment.startFrame
-                || segment.endFrame >= duration)
-            {
-                detail::setError(
-                    error,
-                    label
-                        + QStringLiteral("结束帧 %1 非法（必须为 -1 或位于 %2..%3）")
-                              .arg(segment.endFrame)
-                              .arg(segment.startFrame)
-                              .arg(duration - 1));
-                return false;
-            }
-            effectiveEnd = segment.endFrame;
+            detail::setError(
+                error,
+                label
+                    + QStringLiteral("结束帧 %1 非法（必须为 -1 或位于 %2..%3）")
+                          .arg(segment.endFrame)
+                          .arg(segment.startFrame)
+                          .arg(duration - 1));
+            return false;
+        }
+
+        // Automatic segments end one frame before the next key/segment;
+        // explicit endFrame is an advanced override and is used verbatim.
+        const int effectiveEnd = solverStructuralEnd(entity, segment);
+        if (effectiveEnd < segment.startFrame)
+        {
+            detail::setError(
+                error,
+                label + QStringLiteral("的结构结束帧早于起始帧"));
+            return false;
         }
         effectiveEnds.append(effectiveEnd);
 

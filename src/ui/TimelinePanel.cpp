@@ -1573,7 +1573,12 @@ int TimelinePanel::solverBandStopFrameForTest(const Uuid& entityUuid,
             continue;
         const SolverPreviewEval preview = evaluateSolverPreview(
             m_session->project(), m_session->assets(), it.value(), solver);
-        return preview.result.stopFrame;
+        if (!preview.isValid() || preview.result.stopFrame < 0)
+            return -1;
+        // The band tail is the real physical stop, clipped by the structural
+        // end (a key created after the solver start ends it at N-1).
+        return std::min(preview.result.stopFrame,
+                        model::solverStructuralEnd(it.value(), solver));
     }
     return -1;
 }
@@ -1602,6 +1607,10 @@ QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
     if (!preview.isValid() || preview.result.stopFrame < 0)
         return {};
 
+    const int stopFrame = std::min(
+        preview.result.stopFrame,
+        model::solverStructuralEnd(it.value(), *chosen));
+
     const EntityId id = entityIdForUuid(entityUuid);
     const int row = rowIds().indexOf(id);
     if (row < 0)
@@ -1614,8 +1623,7 @@ QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
     const int clipRightFrame = std::min(clipEndOf(*legacy), contentEnd());
     const int bandStart =
         std::max(clipLeftFrame, it->start + chosen->startFrame);
-    const int bandEnd = std::min(clipRightFrame,
-                                 it->start + preview.result.stopFrame);
+    const int bandEnd = std::min(clipRightFrame, it->start + stopFrame);
     if (bandEnd <= bandStart)
         return {};
 

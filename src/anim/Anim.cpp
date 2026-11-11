@@ -14,15 +14,13 @@ namespace {
 
 constexpr QChar kKeySeparator(0x1f);
 
-// Range end without solving physics: explicit endFrame, or the clip end.
-// Used by solverAt() (no World available) and as the fallback when a segment
-// cannot be evaluated.
+// Range end without solving physics: the model's structural end (explicit
+// endFrame, or one frame before the next key/segment/clip end).  Used by
+// solverAt() (no World available) and as the fallback when a segment cannot
+// be evaluated.
 int structuralEnd(const model::Entity& entity, const model::SolverSegment& segment)
 {
-    const int lastFrame = entity.duration() - 1;
-    if (lastFrame < 0)
-        return -1;
-    return segment.endFrame < 0 ? lastFrame : std::min(segment.endFrame, lastFrame);
+    return model::solverStructuralEnd(entity, segment);
 }
 
 bool drivesPosition(SolverEffect effect)
@@ -491,10 +489,13 @@ int EvalContext::endFrameFor(const model::Entity& entity,
     if (segment.endFrame >= 0)
         return std::min(segment.endFrame, lastFrame);
 
+    // The structural end follows the first key created after the solver
+    // start; the physical stop can only make the segment shorter.
+    int end = model::solverStructuralEnd(entity, segment);
     const solver::Result* result = resultFor(entity, segment);
     if (result && result->stopFrame >= segment.startFrame)
-        return std::min(result->stopFrame, lastFrame);
-    return lastFrame;
+        end = std::min(end, result->stopFrame);
+    return end;
 }
 
 std::optional<double> EvalContext::anchoredValue(

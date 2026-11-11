@@ -36,6 +36,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSet>
 #include <QSignalBlocker>
@@ -725,11 +726,6 @@ QStringList solverDrivenTracks(SolverEffect effect)
     return {QStringLiteral("x"), QStringLiteral("y")};
 }
 
-int solverEffectiveEnd(const model::SolverSegment& solver, int duration)
-{
-    return solver.endFrame < 0 ? duration - 1 : solver.endFrame;
-}
-
 QString solverRangeText(const model::SolverSegment& solver)
 {
     if (solver.endFrame < 0)
@@ -755,23 +751,45 @@ QString solverStopReasonText(solver::StopReason reason)
     return QStringLiteral("无法解算");
 }
 
-QString solverStopInfoText(const SolverPreviewEval& preview)
+QString solverStopInfoText(const model::Entity& entity,
+                           const model::SolverSegment& solver,
+                           const SolverPreviewEval& preview)
 {
     if (!preview.error.isEmpty())
         return QStringLiteral("结束：无法解算（%1）").arg(preview.error);
     if (!preview.isValid() || preview.result.stopFrame < 0)
         return QStringLiteral("结束：无法解算");
-    return QStringLiteral("结束：第 %1 帧（%2）")
-        .arg(preview.result.stopFrame)
-        .arg(solverStopReasonText(preview.result.reason));
-}
 
-QString solverConflictText(const model::SolverSegment& solver, int duration)
-{
-    return QStringLiteral("%1–%2（%3）")
-        .arg(solver.startFrame)
-        .arg(solverEffectiveEnd(solver, duration))
-        .arg(solverEffectName(solver.effect));
+    if (solver.endFrame >= 0)
+        return QStringLiteral("结束：第 %1 帧（%2）")
+            .arg(preview.result.stopFrame)
+            .arg(solverStopReasonText(preview.result.reason));
+
+    const int structural = model::solverStructuralEnd(entity, solver);
+    int end = std::min(preview.result.stopFrame, structural);
+    QString reason = solverStopReasonText(preview.result.reason);
+    if (structural < preview.result.stopFrame)
+    {
+        end = structural;
+        if (structural >= entity.duration() - 1)
+            reason = QStringLiteral("片段末尾");
+        else
+        {
+            bool nextSegment = false;
+            for (const model::SolverSegment& other : entity.solvers)
+            {
+                if (other.id != solver.id
+                    && other.startFrame == structural + 1)
+                {
+                    nextSegment = true;
+                    break;
+                }
+            }
+            reason = nextSegment ? QStringLiteral("下一段开始")
+                                 : QStringLiteral("后续关键帧");
+        }
+    }
+    return QStringLiteral("结束：自动（第 %1 帧 %2）").arg(end).arg(reason);
 }
 
 bool trackBlockedAt(const model::Entity& entity, const QString& track, int frame)
@@ -780,8 +798,12 @@ bool trackBlockedAt(const model::Entity& entity, const QString& track, int frame
     {
         if (!solverDrivenTracks(solver.effect).contains(track))
             continue;
-        if (frame > solver.startFrame
-            && frame <= solverEffectiveEnd(solver, entity.duration()))
+        // Automatic segments end before the first new key, so a new key is
+        // the end marker and must stay writable.  Only an explicit advanced
+        // end reserves its frames.
+        if (solver.endFrame < 0)
+            continue;
+        if (frame > solver.startFrame && frame <= solver.endFrame)
             return true;
     }
     return false;
@@ -1060,6 +1082,7 @@ void PropertiesPanel::buildUi()
     keyLayout->addWidget(m_easeButton);
 
     m_keySection = new CollapsibleSection(QStringLiteral("关键帧"), keyContent, this);
+    m_keySection->setObjectName(QStringLiteral("keySection"));
     m_keySection->setExpanded(true);
     layout->addWidget(m_keySection);
 
@@ -1141,6 +1164,22 @@ void PropertiesPanel::buildUi()
 
 void PropertiesPanel::buildSessionUi()
 {
+    // Conversion lives in the keyframe section: a normal key that is the last
+    // key in the clip can become the solver start.  The effect is chosen from
+    // the button's menu; the target stays in the solver section.
+    m_convertSolverButton =
+        new QPushButton(QStringLiteral("转换为求解关键帧…"), this);
+    m_convertSolverButton->setObjectName(QStringLiteral("solverConvertButton"));
+    m_convertSolverButton->setEnabled(false);
+    m_keyLayout->addWidget(m_convertSolverButton);
+    m_convertSolverHint = new QLabel(this);
+    m_convertSolverHint->setObjectName(QStringLiteral("solverConvertHint"));
+    m_convertSolverHint->setWordWrap(true);
+    m_convertSolverHint->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_keyLayout->addWidget(m_convertSolverHint);
+    connect(m_convertSolverButton, &QPushButton::clicked, this,
+            &PropertiesPanel::showSolverConvertMenu);
+
     buildBasicSection(m_rootLayout);
 
     // Text layout fields that only the new model exposes.
@@ -1455,7 +1494,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     box->setContentsMargins(10, 8, 10, 8);
     box->setSpacing(6);
 
-    auto* createBox = new QGroupBox(QStringLiteral("新建求解段"), content);
+    auto* createBox = new QGroupBox(QStringLiteral("转换为求解段（快捷）"), content);
     createBox->setObjectName(QStringLiteral("solverCreateBox"));
     auto* createForm = new QFormLayout(createBox);
     createForm->setContentsMargins(8, 6, 8, 6);
@@ -1475,7 +1514,8 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     createForm->addRow(QStringLiteral("目标实体"), m_solverTargetCombo);
 
     m_solverEndAuto = new QLabel(
-        QStringLiteral("结束：自动（碰撞/停止阈值/片段末尾）"), createBox);
+        QStringLiteral("结束：自动（后续第一个关键帧 / 物理停止 / 片段末尾）"),
+        createBox);
     m_solverEndAuto->setObjectName(QStringLiteral("solverCreateEndAuto"));
     m_solverEndAuto->setWordWrap(true);
     createForm->addRow(m_solverEndAuto);
@@ -3600,6 +3640,63 @@ void PropertiesPanel::reloadSolverCreate(const model::Entity& entity)
     m_solverEndRow->setVisible(m_solverManualEnd->isChecked());
     if (m_solverManualEnd->isChecked() && m_solverEndSpin->value() < 0)
         m_solverEndSpin->setValue(std::max(0, duration - 1));
+    reloadSolverConvert(entity);
+}
+
+bool PropertiesPanel::canConvertCurrentKey(const model::Entity& entity,
+                                           QString* reason) const
+{
+    const int relative = sessionRelativeFrame(entity);
+    if (relative < 0 || relative >= entity.duration())
+    {
+        if (reason)
+            *reason = QStringLiteral("播放头不在片段范围内：相对帧 %1，允许 0..%2")
+                          .arg(relative)
+                          .arg(entity.duration() - 1);
+        return false;
+    }
+    if (!hasAnyKeyAt(entity, relative))
+    {
+        if (reason)
+            *reason = QStringLiteral("当前帧没有关键帧；先在播放头处打一个普通关键帧");
+        return false;
+    }
+    if (!model::isLastKeyframeInClip(entity, relative))
+    {
+        if (reason)
+            *reason = QStringLiteral("后面还有关键帧，不能转换");
+        return false;
+    }
+    for (const model::SolverSegment& solver : entity.solvers)
+    {
+        const int end = model::solverStructuralEnd(entity, solver);
+        if (relative >= solver.startFrame && relative <= end)
+        {
+            if (reason)
+                *reason = QStringLiteral("该关键帧已在求解段内，不能再次转换");
+            return false;
+        }
+    }
+    if (reason)
+        *reason = QStringLiteral(
+            "将当前关键帧作为求解开始；求解在后续第一个关键帧前一帧、"
+            "物理停止或片段末尾结束");
+    return true;
+}
+
+void PropertiesPanel::reloadSolverConvert(const model::Entity& entity)
+{
+    if (!m_convertSolverButton || !m_solverCreateButton)
+        return;
+    QString reason;
+    const bool convert = sessionEditable()
+                         && canConvertCurrentKey(entity, &reason);
+    m_convertSolverButton->setEnabled(convert);
+    m_solverCreateButton->setEnabled(convert);
+    m_convertSolverButton->setToolTip(reason);
+    m_solverCreateButton->setToolTip(reason);
+    if (m_convertSolverHint)
+        m_convertSolverHint->setText(reason);
 }
 
 void PropertiesPanel::updateSolverCards(const model::Entity& entity)
@@ -3981,22 +4078,28 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
     }
     if (card.endInfo)
     {
-        card.endInfo->setText(entity ? solverStopInfoText(preview)
-                                     : QStringLiteral("结束：无法解算"));
+        card.endInfo->setText(
+            entity ? solverStopInfoText(*entity, solver, preview)
+                   : QStringLiteral("结束：无法解算"));
         if (!preview.error.isEmpty())
             card.endInfo->setToolTip(preview.error);
         else
             card.endInfo->setToolTip(
-                QStringLiteral("自动结束由碰撞/停止阈值/片段末尾决定；"
-                               "勾选下方高级选项可手动覆盖。"));
+                QStringLiteral("自动结束由后续第一个关键帧、物理停止或片段"
+                               "末尾决定；勾选下方高级选项可手动覆盖。"));
     }
 
     const int duration = entity ? entity->duration() : 1;
-    const int suggestedEnd = solver.endFrame >= 0
-                                 ? solver.endFrame
-                                 : (preview.result.stopFrame >= 0
-                                        ? preview.result.stopFrame
-                                        : std::max(0, duration - 1));
+    int effectiveEnd = solver.endFrame >= 0
+                           ? solver.endFrame
+                           : std::max(0, duration - 1);
+    if (entity && solver.endFrame < 0)
+    {
+        effectiveEnd = model::solverStructuralEnd(*entity, solver);
+        if (preview.result.stopFrame >= 0)
+            effectiveEnd = std::min(effectiveEnd, preview.result.stopFrame);
+    }
+    const int suggestedEnd = std::max(solver.startFrame, effectiveEnd);
     if (card.manualEnd)
     {
         const QSignalBlocker blocker(card.manualEnd);
@@ -4049,42 +4152,64 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
     }
 }
 
+void PropertiesPanel::showSolverConvertMenu()
+{
+    if (!m_convertSolverButton || !m_convertSolverButton->isEnabled())
+        return;
+
+    QMenu menu(this);
+    menu.setObjectName(QStringLiteral("solverConvertMenu"));
+    const QVector<QPair<SolverEffect, QString>> effects = {
+        {SolverEffect::Gravity, QStringLiteral("重力")},
+        {SolverEffect::Orbit, QStringLiteral("公转")},
+        {SolverEffect::Spin, QStringLiteral("自转")},
+        {SolverEffect::BlackHole, QStringLiteral("黑洞")},
+    };
+    for (const auto& item : effects)
+    {
+        QAction* action = menu.addAction(item.second);
+        action->setData(int(item.first));
+    }
+    QAction* chosen = menu.exec(m_convertSolverButton->mapToGlobal(
+        QPoint(0, m_convertSolverButton->height())));
+    if (chosen)
+        convertSolverFromKey(SolverEffect(chosen->data().toInt()));
+}
+
 void PropertiesPanel::createSolverFromPlayhead()
+{
+    if (!m_solverEffectCombo)
+        return;
+    convertSolverFromKey(
+        SolverEffect(m_solverEffectCombo->currentData().toInt()));
+}
+
+void PropertiesPanel::convertSolverFromKey(SolverEffect effect)
 {
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
         return;
-    const int relative = sessionRelativeFrame(*entity);
-    const int duration = entity->duration();
-    if (relative < 0 || relative >= duration)
+
+    QString reason;
+    if (!canConvertCurrentKey(*entity, &reason))
     {
-        reportSessionError(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
-                               .arg(relative)
-                               .arg(duration - 1));
+        reportSessionError(reason);
         return;
     }
 
-    const SolverEffect effect =
-        SolverEffect(m_solverEffectCombo->currentData().toInt());
-    const QStringList driven = solverDrivenTracks(effect);
-    for (const QString& track : driven)
-    {
-        if (!hasKeyAt(*entity, track, relative))
-        {
-            reportSessionError(
-                QStringLiteral("请先在播放头处给 X/Y（或旋转）打普通关键帧"));
-            return;
-        }
-    }
+    const int relative = sessionRelativeFrame(*entity);
+    const int duration = entity->duration();
+    const Uuid entityUuid = entity->uuid;
 
     Uuid target;
     if (solverNeedsTarget(effect))
     {
         target = m_solverTargetCombo->currentData().toString();
-        if (target.isEmpty() || target == entity->uuid
+        if (target.isEmpty() || target == entityUuid
             || !m_session->project().entities.contains(target))
         {
-            reportSessionError(QStringLiteral("请选择有效的目标实体（不能是自己）"));
+            reportSessionError(
+                QStringLiteral("请先在下方“求解段”区选择有效的目标实体（不能是自己）"));
             return;
         }
     }
@@ -4093,44 +4218,13 @@ void PropertiesPanel::createSolverFromPlayhead()
                        ? m_solverEndSpin->value()
                        : -1;
     if (endFrame < 0)
-        endFrame = -1; // auto
+        endFrame = -1; // automatic: next key / physical stop / clip end
     if (endFrame >= 0 && (endFrame < relative || endFrame >= duration))
     {
         reportSessionError(QStringLiteral("结束帧必须位于 %1..%2（或使用自动结束）")
                                .arg(relative)
                                .arg(duration - 1));
         return;
-    }
-    const int effectiveEnd = endFrame < 0 ? duration - 1 : endFrame;
-
-    for (const model::SolverSegment& existing : entity->solvers)
-    {
-        if (relative <= solverEffectiveEnd(existing, duration)
-            && existing.startFrame <= effectiveEnd)
-        {
-            reportSessionError(
-                QStringLiteral("新求解段与已有求解段重叠：%1")
-                    .arg(solverConflictText(existing, duration)));
-            return;
-        }
-    }
-
-    for (const QString& track : driven)
-    {
-        const auto trackIt = entity->tracks.constFind(track);
-        if (trackIt == entity->tracks.constEnd())
-            continue;
-        for (const model::Keyframe& keyframe : trackIt.value().keys)
-        {
-            if (keyframe.frame > relative && keyframe.frame <= effectiveEnd)
-            {
-                reportSessionError(
-                    QStringLiteral("求解段内不能有普通关键帧：%1@%2")
-                        .arg(track)
-                        .arg(keyframe.frame));
-                return;
-            }
-        }
     }
 
     model::SolverSegment segment;
@@ -4622,7 +4716,7 @@ void PropertiesPanel::refreshSession()
     updateSolverCards(*entity);
     for (SolverCard& card : m_solverCards)
         card.box->setEnabled(editable);
-    m_solverCreateButton->setEnabled(editable);
+    reloadSolverConvert(*entity);
     m_solverEffectCombo->setEnabled(editable);
     m_solverTargetCombo->setEnabled(editable);
     m_solverEndSpin->setEnabled(editable);

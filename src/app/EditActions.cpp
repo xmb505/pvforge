@@ -159,8 +159,10 @@ bool solverStartKey(const model::Entity& entity, const QString& track,
     return false;
 }
 
-// A normal key inside a solver segment is invalid; the start key is the
-// segment's initial state and stays editable.
+// A normal key inside an explicitly ended solver segment is invalid; the
+// start key is the segment's initial state and stays editable.  Automatic
+// segments end one frame before the first key created after the start, so a
+// new key is the end marker rather than an illegal key inside the segment.
 bool trackBlockedAt(const model::Entity& entity, const QString& track,
                     int frame)
 {
@@ -168,9 +170,9 @@ bool trackBlockedAt(const model::Entity& entity, const QString& track,
     {
         if (!solverDrivenTracks(solver.effect).contains(track))
             continue;
-        const int end = solver.endFrame < 0 ? entity.duration() - 1
-                                            : solver.endFrame;
-        if (frame > solver.startFrame && frame <= end)
+        if (solver.endFrame < 0)
+            continue;
+        if (frame > solver.startFrame && frame <= solver.endFrame)
             return true;
     }
     return false;

@@ -1273,7 +1273,16 @@ void testSolverValidation()
     Entity openDriven = makeEntity(0, 100);
     openDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, -1)};
     openDriven.tracks.insert(QStringLiteral("y"), Track{{keyAt(99, 1.0)}});
-    CHECK(!validateEntity(openDriven, &error));
+    // Automatic segments derive their end from the next key: the key at 99
+    // is the end marker (solver structurally ends at 98), not an illegal key
+    // inside the segment.
+    CHECK(validateEntity(openDriven));
+    CHECK(solverStructuralEnd(openDriven, openDriven.solvers.first()) == 98);
+
+    Entity explicitDriven = makeEntity(0, 100);
+    explicitDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, 50)};
+    explicitDriven.tracks.insert(QStringLiteral("y"), Track{{keyAt(40, 1.0)}});
+    CHECK(!validateEntity(explicitDriven, &error));
 }
 
 void testSolverTargets()

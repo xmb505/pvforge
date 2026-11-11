@@ -22,6 +22,7 @@
 #include "app/SettingsDialog.h"
 #include "app/SystemInfo.h"
 #include "app/WelcomeWindow.h"
+#include "anim/Anim.h"
 #include "assets/AssetStore.h"
 #include "assets/AssetTypeDetect.h"
 #include "gizmo/Gizmo.h"
@@ -1416,6 +1417,378 @@ int solverUiTest(QApplication& app)
     qInfo() << "solver-ui-test OK: automatic end, stop reason/frame, explicit"
                " override, trajectory, velocity handle commit/Esc, orbit/spin,"
                " timeline band, screenshot"
+            << screenshot;
+    return 0;
+}
+
+int solverConvertTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Solver Convert");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("solver-convert.pvproj"));
+    auto session = pvf::EditorSession::createProject(projectDir, settings,
+                                                     &error);
+    if (!session)
+    {
+        qCritical() << "solver-convert-test: create failed" << error;
+        return 1;
+    }
+
+    auto& project = session->mutableProject();
+    auto makeEntity = [&project](const QString& name, int row,
+                                 pvf::ContentKind kind) {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = name;
+        entity.start = 0;
+        entity.end = 60;
+        entity.row = row;
+        entity.content.kind = kind;
+        project.entities.insert(entity.uuid, entity);
+        return entity.uuid;
+    };
+
+    const pvf::Uuid ground =
+        makeEntity(QStringLiteral("地面"), 0, pvf::ContentKind::Vector);
+    project.entities[ground].transform.y = -100.0;
+    project.entities[ground].content.vector.width = 600.0;
+    project.entities[ground].content.vector.height = 60.0;
+    project.entities[ground].physicsInteract = true;
+
+    const pvf::Uuid ball =
+        makeEntity(QStringLiteral("落球"), 1, pvf::ContentKind::Vector);
+    project.entities[ball].transform.y = 200.0;
+    project.entities[ball].content.vector.width = 40.0;
+    project.entities[ball].content.vector.height = 40.0;
+    pvf::model::Track ballX;
+    ballX.keys = {{0, 0.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
+    pvf::model::Track ballY;
+    ballY.keys = {{0, 200.0, {}, {}}};
+    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+
+    // A last key on a non-driven track (opacity) exercises conversion without
+    // requiring an x/y key at the solver start frame.
+    const pvf::Uuid marker =
+        makeEntity(QStringLiteral("淡出块"), 2, pvf::ContentKind::Vector);
+    pvf::model::Track markerOpacity;
+    markerOpacity.keys = {{10, 0.5, {}, {}}, {20, 1.0, {}, {}}};
+    project.entities[marker].tracks.insert(QStringLiteral("opacity"),
+                                           markerOpacity);
+
+    const QVector<pvf::Uuid> setup = {ground, ball, marker};
+    if (!session->document()->commitEntities(setup,
+                                             QStringLiteral("solver-convert setup"),
+                                             &error))
+    {
+        qCritical() << "solver-convert-test: setup failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1280, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!live || !document || !panel || !timeline)
+    {
+        qCritical() << "solver-convert-test: window parts missing";
+        return 1;
+    }
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [](const QString& message) {
+                         qCritical() << "solver-convert-test: panel edit failed"
+                                     << message;
+                     });
+
+    auto check = [](bool condition, const QString& message) {
+        if (!condition)
+            qCritical() << "solver-convert-test:" << message;
+        return condition;
+    };
+    auto flush = [live] {
+        QString flushError;
+        live->flush(&flushError);
+        if (!flushError.isEmpty())
+            qCritical() << "solver-convert-test: flush failed" << flushError;
+    };
+    const auto undoDepth = [document] {
+        return document->store()->undoDepth();
+    };
+
+    auto* solverSection =
+        panel->findChild<pvf::CollapsibleSection*>(QStringLiteral("solverSection"));
+    if (solverSection)
+        solverSection->setExpanded(true);
+    auto* keySection =
+        panel->findChild<pvf::CollapsibleSection*>(QStringLiteral("keySection"));
+    if (keySection)
+        keySection->setExpanded(true);
+    QApplication::processEvents();
+
+    auto* convertButton =
+        panel->findChild<QPushButton*>(QStringLiteral("solverConvertButton"));
+    auto* convertHint =
+        panel->findChild<QLabel*>(QStringLiteral("solverConvertHint"));
+    auto* effectCombo =
+        panel->findChild<QComboBox*>(QStringLiteral("solverEffectCombo"));
+    auto* targetCombo =
+        panel->findChild<QComboBox*>(QStringLiteral("solverTargetCombo"));
+    auto* createEnd =
+        panel->findChild<QSpinBox*>(QStringLiteral("solverCreateEnd"));
+    auto* createManual =
+        panel->findChild<QCheckBox*>(QStringLiteral("solverCreateManualEnd"));
+    auto* createAuto =
+        panel->findChild<QLabel*>(QStringLiteral("solverCreateEndAuto"));
+    auto* createButton =
+        panel->findChild<QPushButton*>(QStringLiteral("solverCreateButton"));
+    if (!check(convertButton && convertHint && effectCombo && targetCombo
+                   && createEnd && createManual && createAuto && createButton,
+               QStringLiteral("convert/create widgets missing")))
+        return 1;
+
+    // Property no longer requires an end frame.
+    if (!check(!createEnd->isVisible(),
+               QStringLiteral("create end spin is visible by default"))
+        || !check(!createManual->isChecked(),
+                  QStringLiteral("manual end is checked by default"))
+        || !check(createAuto->text().contains(QStringLiteral("自动")),
+                  QStringLiteral("automatic end explanation missing")))
+        return 1;
+
+    // Non-last key: conversion is disabled with the expected hint.
+    document->setSelection(marker);
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    if (!check(!convertButton->isEnabled(),
+               QStringLiteral("non-last key conversion is enabled"))
+        || !check(convertHint->text().contains(QStringLiteral("后面还有关键帧")),
+                  QStringLiteral("non-last hint missing: %1")
+                      .arg(convertHint->text()))
+        || !check(!createButton->isEnabled(),
+                  QStringLiteral("solver create button ignores non-last key")))
+        return 1;
+
+    // The same entity's last key (opacity only) can be converted.
+    live->setPlayhead(20);
+    QApplication::processEvents();
+    if (!check(convertButton->isEnabled(),
+               QStringLiteral("last key conversion is disabled")))
+        return 1;
+
+    // Gravity conversion at frame 0: one commit, automatic end.
+    document->setSelection(ball);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    effectCombo->setCurrentIndex(
+        effectCombo->findData(int(pvf::SolverEffect::Gravity)));
+    targetCombo->setCurrentIndex(targetCombo->findData(ground));
+    const int beforeCreate = undoDepth();
+    createButton->click();
+    QApplication::processEvents();
+    flush();
+
+    const auto& ballAfterCreate = live->project().entities.value(ball);
+    if (!check(ballAfterCreate.solvers.size() == 1,
+               QStringLiteral("gravity solver was not created"))
+        || !check(ballAfterCreate.solvers.first().effect
+                      == pvf::SolverEffect::Gravity
+                  && ballAfterCreate.solvers.first().startFrame == 0
+                  && ballAfterCreate.solvers.first().endFrame == -1,
+                  QStringLiteral("converted solver defaults wrong"))
+        || !check(ballAfterCreate.solvers.first()
+                          .params.value(QStringLiteral("targetUuid"))
+                          .toString()
+                      == ground,
+                  QStringLiteral("converted solver target wrong"))
+        || !check(undoDepth() == beforeCreate + 1,
+                  QStringLiteral("conversion was not one commit")))
+        return 1;
+    const pvf::Uuid gravityId = ballAfterCreate.solvers.first().id;
+    if (!check(pvf::model::solverStructuralEnd(
+                   ballAfterCreate, ballAfterCreate.solvers.first())
+                   == 59,
+               QStringLiteral("automatic structural end is not the clip end")))
+        return 1;
+
+    auto* endInfo =
+        panel->findChild<QLabel*>(QStringLiteral("solverEndInfo0"));
+    if (!check(endInfo && endInfo->text().contains(QStringLiteral("自动")),
+               QStringLiteral("solver card does not show automatic end: %1")
+                   .arg(endInfo ? endInfo->text() : QString())))
+        return 1;
+
+    // One commit is also one undo step.
+    if (!document->undo(&error))
+    {
+        qCritical() << "solver-convert-test: undo failed" << error;
+        return 1;
+    }
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project().entities.value(ball).solvers.isEmpty(),
+               QStringLiteral("undo did not remove the solver")))
+        return 1;
+    if (!document->redo(&error))
+    {
+        qCritical() << "solver-convert-test: redo failed" << error;
+        return 1;
+    }
+    QApplication::processEvents();
+    flush();
+    if (!check(live->project().entities.value(ball).solvers.size() == 1,
+               QStringLiteral("redo did not restore the solver")))
+        return 1;
+
+    // The first key created after the solver start is the end marker: the
+    // structural end becomes N-1 and the key at N is ordinary animation.
+    if (!check(live->editActions()->addKeyframe(ball, QStringLiteral("x"), 30,
+                                                &error),
+               QStringLiteral("could not add the end-marker key: %1").arg(error)))
+        return 1;
+    flush();
+    {
+        const auto& entity = live->project().entities.value(ball);
+        if (!check(pvf::model::solverStructuralEnd(entity,
+                                                   entity.solvers.first())
+                       == 29,
+                   QStringLiteral("end-marker key did not derive end N-1"))
+            || !check(pvf::anim::solverAt(entity, 29) != nullptr,
+                      QStringLiteral("solver is not active at N-1"))
+            || !check(pvf::anim::solverAt(entity, 30) == nullptr,
+                      QStringLiteral("solver still active at the end key"))
+            || !check(pvf::model::validateEntity(entity, &error),
+                      QStringLiteral("entity invalid after end key: %1")
+                          .arg(error)))
+            return 1;
+    }
+
+    // Deleting the end marker restores the automatic end.
+    if (!check(live->editActions()->deleteKeyframes(
+                   {pvf::KeyRef{ball, QStringLiteral("x"), 30}}, &error),
+               QStringLiteral("could not delete the end-marker key: %1")
+                   .arg(error)))
+        return 1;
+    flush();
+    {
+        const auto& entity = live->project().entities.value(ball);
+        if (!check(pvf::model::solverStructuralEnd(entity,
+                                                   entity.solvers.first())
+                       == 59,
+                   QStringLiteral("deleting the end key did not restore auto"))
+            || !check(pvf::anim::solverAt(entity, 59) != nullptr,
+                      QStringLiteral("restored auto solver does not reach clip end")))
+            return 1;
+    }
+
+    // A later last key can become a second segment in the same clip.
+    if (!check(live->editActions()->addKeyframe(ball, QStringLiteral("x"), 40,
+                                                &error),
+               QStringLiteral("could not add the second start key: %1")
+                   .arg(error)))
+        return 1;
+    live->setPlayhead(40);
+    QApplication::processEvents();
+    if (!check(convertButton->isEnabled(),
+               QStringLiteral("second segment conversion is disabled")))
+        return 1;
+    const int beforeSecond = undoDepth();
+    createButton->click();
+    QApplication::processEvents();
+    flush();
+    {
+        const auto& entity = live->project().entities.value(ball);
+        if (!check(entity.solvers.size() == 2,
+                   QStringLiteral("second solver was not created"))
+            || !check(entity.solvers.at(1).startFrame == 40
+                      && entity.solvers.at(1).endFrame == -1,
+                      QStringLiteral("second solver range wrong"))
+            || !check(pvf::model::solverStructuralEnd(entity,
+                                                       entity.solvers.at(0))
+                          == 39,
+                      QStringLiteral("first segment did not end before second"))
+            || !check(pvf::model::solverStructuralEnd(entity,
+                                                       entity.solvers.at(1))
+                          == 59,
+                      QStringLiteral("second segment structural end wrong"))
+            || !check(undoDepth() == beforeSecond + 1,
+                      QStringLiteral("second conversion was not one commit")))
+            return 1;
+    }
+
+    // Any track's last key works: opacity-only key converted to spin.
+    document->setSelection(marker);
+    live->setPlayhead(20);
+    QApplication::processEvents();
+    effectCombo->setCurrentIndex(
+        effectCombo->findData(int(pvf::SolverEffect::Spin)));
+    const int beforeMarker = undoDepth();
+    createButton->click();
+    QApplication::processEvents();
+    flush();
+    {
+        const auto& entity = live->project().entities.value(marker);
+        if (!check(entity.solvers.size() == 1,
+                   QStringLiteral("non-driven-track conversion failed"))
+            || !check(entity.solvers.first().effect == pvf::SolverEffect::Spin
+                      && entity.solvers.first().startFrame == 20
+                      && entity.solvers.first().endFrame == -1,
+                      QStringLiteral("non-driven-track solver range wrong"))
+            || !check(undoDepth() == beforeMarker + 1,
+                      QStringLiteral("non-driven-track conversion was not one commit"))
+            || !check(!createEnd->isVisible(),
+                      QStringLiteral("conversion still exposes an end-frame spin")))
+            return 1;
+    }
+
+    // Timeline band uses the physical stop clipped by the derived end.
+    const int bandStop = timeline->solverBandStopFrameForTest(ball, gravityId);
+    if (!check(bandStop >= 0 && bandStop <= 39,
+               QStringLiteral("timeline band stop is not clipped: %1")
+                   .arg(bandStop)))
+        return 1;
+
+    if (auto* objectTab =
+            window->findChild<QScrollArea*>(QStringLiteral("objectTab")))
+        objectTab->verticalScrollBar()->setValue(
+            objectTab->verticalScrollBar()->maximum());
+    document->setSelection(ball);
+    live->setPlayhead(40);
+    QApplication::processEvents();
+    window->viewportForTest()->repaint();
+    QApplication::processEvents();
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const QString screenshot =
+        QStringLiteral("/tmp/opencode/pvforge-solver-convert.png");
+    if (!window->grab().save(screenshot))
+    {
+        qCritical() << "solver-convert-test: screenshot failed" << screenshot;
+        return 1;
+    }
+
+    window->close();
+    QApplication::processEvents();
+    qInfo() << "solver-convert-test OK: last/non-last key, any track,"
+               "N-1 end marker, delete restores auto, multi-segment,"
+               "one commit/undo, automatic end UI, screenshot"
             << screenshot;
     return 0;
 }
@@ -22332,6 +22705,8 @@ int main(int argc, char* argv[])
         return propertiesSpecialTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-ui-test")))
         return solverUiTest(app);
+    if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
+        return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))
         return htmlVarsTest(app);
     if (app.arguments().contains(QStringLiteral("--text-layout-test")))

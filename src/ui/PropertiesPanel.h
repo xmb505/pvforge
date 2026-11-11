@@ -234,6 +234,11 @@ private:
     void fillSolverCard(SolverCard& card, const Uuid& entityUuid,
                         const model::SolverSegment& solver);
     void reloadSolverCreate(const model::Entity& entity);
+    void reloadSolverConvert(const model::Entity& entity);
+    bool canConvertCurrentKey(const model::Entity& entity,
+                              QString* reason = nullptr) const;
+    void showSolverConvertMenu();
+    void convertSolverFromKey(SolverEffect effect);
     void createSolverFromPlayhead();
     void selectSolver(const Uuid& solverId);
     void syncSolverFocus(const QVector<model::SolverSegment>& solvers);
@@ -397,6 +402,8 @@ private:
     QWidget* m_solverEndRow = nullptr;
     QSpinBox* m_solverEndSpin = nullptr;
     QPushButton* m_solverCreateButton = nullptr;
+    QPushButton* m_convertSolverButton = nullptr;
+    QLabel* m_convertSolverHint = nullptr;
     QVector<SolverCard> m_solverCards;
     Uuid m_selectedSolverId;
 };
