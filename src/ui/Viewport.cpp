@@ -612,9 +612,8 @@ SolverPreviewEval evaluateSolverPreview(const model::Project& project,
 {
     SolverPreviewEval preview;
     const int duration = entity.duration();
-    int effectiveEnd = solver.endFrame < 0
-                           ? duration - 1
-                           : std::min(solver.endFrame, duration - 1);
+    const int structuralEnd = model::solverStructuralEnd(entity, solver);
+    int effectiveEnd = structuralEnd;
     if (duration <= 0 || solver.startFrame < 0
         || solver.startFrame >= duration || effectiveEnd < solver.startFrame)
     {
@@ -658,9 +657,12 @@ SolverPreviewEval evaluateSolverPreview(const model::Project& project,
     request.startFrame = startFrame;
     // Automatic mode must stay -1 so evaluateResult() can report the real
     // physical stop; only truncation turns it into a preview-only explicit end.
-    request.endFrame = solver.endFrame < 0
-                           ? (preview.truncated ? evaluationEnd : -1)
-                           : evaluationEnd;
+    // A later keyframe ends an automatic solver (N-1). Keep -1 only when the
+    // solver is truly open to the clip end so evaluateResult() can report the
+    // physical stop reason.
+    request.endFrame = (preview.truncated || structuralEnd < duration - 1)
+                           ? evaluationEnd
+                           : -1;
     request.startPose = preview.startPose;
     request.initialVelocity = solver.initialVelocity;
     request.params = solver.params;
@@ -1098,10 +1100,7 @@ bool Viewport::ensureSessionSolverOverlay() const
     {
         for (const model::SolverSegment& candidate : entity.solvers)
         {
-            const int end = candidate.endFrame < 0
-                                ? entity.duration() - 1
-                                : std::min(candidate.endFrame,
-                                           entity.duration() - 1);
+            const int end = model::solverStructuralEnd(entity, candidate);
             if (relativeFrame >= candidate.startFrame && relativeFrame <= end)
             {
                 chosen = &candidate;
@@ -1119,10 +1118,7 @@ bool Viewport::ensureSessionSolverOverlay() const
 
     const bool focused = m_solverFocusEntity == selected
                          && m_solverFocusSolver == chosen->id;
-    const int structuralEnd = chosen->endFrame < 0
-                                  ? entity.duration() - 1
-                                  : std::min(chosen->endFrame,
-                                             entity.duration() - 1);
+    const int structuralEnd = model::solverStructuralEnd(entity, *chosen);
     const bool inRange = relativeFrame >= chosen->startFrame
                          && relativeFrame <= structuralEnd;
 
