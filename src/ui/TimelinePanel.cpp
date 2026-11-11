@@ -1572,32 +1572,14 @@ void TimelinePanel::rebuildSolverStopCache()
     {
         for (const model::SolverSegment& solver : it->solvers)
         {
-            // Prefer the session's shared solver cache (one solve per segment
-            // per edit); fall back to a local evaluation only when it is cold
-            // or holds a failed result.
-            solver::Result result;
-            const solver::Result* cached =
-                m_session->solverResultFor(it.key(), solver.id);
-            if (cached && cached->stopFrame >= 0)
-                result = *cached;
-            else
-            {
-                ++m_solverBandSolveCount;
-                const SolverPreviewEval preview = evaluateSolverPreview(
-                    project, m_session->assets(), it.value(), solver);
-                if (!preview.isValid() || preview.result.stopFrame < 0)
-                    continue;
-                result = preview.result;
-            }
-            if (result.stopFrame < 0)
+            // The session cache is the only source of the band tail.  A cold
+            // cache is solved once by solverStopFrame() while paused; during
+            // playback it stays read-only.
+            const int stop = m_session->solverStopFrame(it.key(), solver.id);
+            if (stop < 0)
                 continue;
-            // The band tail is the real physical stop, clipped by the
-            // structural end (a key created after the solver start ends it at
-            // N-1).
-            m_solverStopFrames.insert(
-                solverCacheKey(it.key(), solver.id),
-                std::min(result.stopFrame,
-                         model::solverStructuralEnd(it.value(), solver)));
+            ++m_solverBandSolveCount;
+            m_solverStopFrames.insert(solverCacheKey(it.key(), solver.id), stop);
         }
     }
 }

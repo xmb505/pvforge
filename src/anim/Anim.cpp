@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <utility>
@@ -186,14 +187,17 @@ private:
     QString m_key;
 };
 
-class EvalContext;
+using ParentWorldResolver =
+    std::function<QTransform(const model::Entity&, int)>;
 
 class SolverWorldAdapter final : public solver::World
 {
 public:
     SolverWorldAdapter(const model::Entity& driven, const anim::World& world,
-                       EvalContext& context)
-        : m_driven(driven), m_world(world), m_context(context)
+                       ParentWorldResolver parentWorld)
+        : m_driven(driven)
+        , m_world(world)
+        , m_parentWorld(std::move(parentWorld))
     {
     }
 
@@ -208,8 +212,70 @@ private:
 
     const model::Entity& m_driven;
     const anim::World& m_world;
-    EvalContext& m_context;
+    ParentWorldResolver m_parentWorld;
 };
+
+// Shared implementation behind anim::solverResultFor() and
+// EvalContext::resultFor().  `parentWorld` resolves the driven entity's parent
+// world at a project frame; the evaluator passes its visiting-set-aware
+// resolver, while top-level callers get the public evaluateEntity() path.
+const solver::Result* solverResultForImpl(
+    const model::Project& project, const model::Entity& entity,
+    const model::SolverSegment& segment, const World& world, Cache& cache,
+    const ParentWorldResolver& parentWorld)
+{
+    const QString key = solverResultKey(entity, segment);
+    QHash<QString, solver::Result>* shared = cache.sharedSolverResults;
+    if (shared)
+    {
+        const auto hit = shared->constFind(key);
+        if (hit != shared->constEnd())
+            return &hit.value();
+    }
+    const auto cached = cache.solverResults.constFind(key);
+    if (cached != cache.solverResults.constEnd())
+        return &cached.value();
+
+    // A locked cache is exactly the playback contract: lookup only, never
+    // solve.  Callers fall back to ordinary tracks for missing segments.
+    if (cache.solverResultsLocked)
+        return nullptr;
+
+    solver::Result result;
+    if (entity.duration() > 0 && hasRequiredTarget(project, segment))
+    {
+        solver::Segment request;
+        request.effect = segment.effect;
+        request.entityUuid = entity.uuid;
+        request.targetUuid = segment.params.value(QStringLiteral("targetUuid"))
+                                 .toString();
+        request.startFrame = segment.startFrame;
+        request.endFrame = segment.endFrame;
+        request.startPose = startPoseAt(entity, segment.startFrame);
+        request.initialVelocity = segment.initialVelocity;
+        request.params = segment.params;
+
+        // A top-level call is not inside evaluateEntity(), so it does not get
+        // the self-recursion guard from the outer evaluation.  Install the
+        // same guard here; a nested call already owns it and must not remove
+        // the outer key on return.
+        const QString guardKey = evaluationKey(project, entity.uuid);
+        const bool ownsGuard = !gActiveEvaluations.contains(guardKey);
+        std::optional<ActiveEvaluationGuard> guard;
+        if (ownsGuard)
+            guard.emplace(guardKey);
+
+        ++g_solverEvaluations;
+        SolverWorldAdapter adapter(entity, world, parentWorld);
+        result = solver::evaluateResult(request, adapter, entity.duration(),
+                                        project.settings.fps);
+    }
+
+    const auto inserted = cache.solverResults.insert(key, result);
+    if (shared && shared != &cache.solverResults)
+        shared->insert(key, result);
+    return &inserted.value();
+}
 
 class EvalContext
 {
@@ -298,7 +364,7 @@ QVector<Uuid> SolverWorldAdapter::physicsEntities(int frame) const
 
 QTransform SolverWorldAdapter::parentWorldOf(int projectFrame) const
 {
-    return m_context.parentWorldOf(m_driven, projectFrame);
+    return m_parentWorld(m_driven, projectFrame);
 }
 
 QTransform EvalContext::parentWorldOf(const model::Entity& entity,
@@ -569,45 +635,45 @@ std::optional<solver::Sample> EvalContext::sampleAt(
 const solver::Result* EvalContext::resultFor(
     const model::Entity& entity, const model::SolverSegment& segment)
 {
-    const QString key = solverResultKey(entity, segment);
-    QHash<QString, solver::Result>* shared = m_cache.sharedSolverResults;
-    if (shared)
-    {
-        const auto hit = shared->constFind(key);
-        if (hit != shared->constEnd())
-            return &hit.value();
-    }
-    const auto cached = m_cache.solverResults.constFind(key);
-    if (cached != m_cache.solverResults.constEnd())
-        return &cached.value();
-
-    solver::Result result;
-    if (entity.duration() > 0 && hasRequiredTarget(m_project, segment))
-    {
-        solver::Segment request;
-        request.effect = segment.effect;
-        request.entityUuid = entity.uuid;
-        request.targetUuid = segment.params.value(QStringLiteral("targetUuid"))
-                                 .toString();
-        request.startFrame = segment.startFrame;
-        request.endFrame = segment.endFrame;
-        request.startPose = startPoseAt(entity, segment.startFrame);
-        request.initialVelocity = segment.initialVelocity;
-        request.params = segment.params;
-
-        ++g_solverEvaluations;
-        SolverWorldAdapter adapter(entity, m_world, *this);
-        result = solver::evaluateResult(request, adapter, entity.duration(),
-                                        m_project.settings.fps);
-    }
-
-    const auto inserted = m_cache.solverResults.insert(key, result);
-    if (shared && shared != &m_cache.solverResults)
-        shared->insert(key, result);
-    return &inserted.value();
+    return solverResultForImpl(
+        m_project, entity, segment, m_world, m_cache,
+        [this](const model::Entity& driven, int projectFrame) {
+            return parentWorldOf(driven, projectFrame);
+        });
 }
 
 } // namespace
+
+const solver::Result* solverResultFor(const model::Project& project,
+                                      const model::Entity& entity,
+                                      const model::SolverSegment& segment,
+                                      const World& world, Cache& cache)
+{
+    return solverResultForImpl(
+        project, entity, segment, world, cache,
+        [&project, &world, &cache](const model::Entity& driven, int frame) {
+            if (driven.parentUuid.isEmpty()
+                || !project.entities.contains(driven.parentUuid))
+                return QTransform();
+            return evaluateEntity(project, driven.parentUuid, frame, world, cache)
+                .world;
+        });
+}
+
+const solver::Result* cachedSolverResultFor(const model::Entity& entity,
+                                            const model::SolverSegment& segment,
+                                            const Cache& cache)
+{
+    const QString key = solverResultKey(entity, segment);
+    if (cache.sharedSolverResults)
+    {
+        const auto hit = cache.sharedSolverResults->constFind(key);
+        if (hit != cache.sharedSolverResults->constEnd())
+            return &hit.value();
+    }
+    const auto cached = cache.solverResults.constFind(key);
+    return cached == cache.solverResults.constEnd() ? nullptr : &cached.value();
+}
 
 QString solverResultKey(const model::Entity& entity,
                         const model::SolverSegment& segment)

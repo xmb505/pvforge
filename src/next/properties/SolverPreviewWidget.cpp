@@ -356,9 +356,11 @@ void SolverPreviewWidget::setPlaybackActive(bool active)
         // No update(): the last painted frame stays on screen.
         return;
     }
-    // Paused / manual seek: bring the preview up to the current frame once.
+    // Paused / manual seek: unfreeze immediately so the current dot follows
+    // the playhead.  The one trajectory refresh is scheduled by the owner
+    // (PropertiesPanel) after EditorSession's queued re-warm, so it reads the
+    // shared cache instead of solving the segment again.
     m_frozenRelativeFrame = -1;
-    computePreview(false);
     update();
 }
 
@@ -471,27 +473,51 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
             m_targetName = QStringLiteral("目标");
     }
 
-    int evaluationEnd = effectiveEnd;
-    if (effectiveEnd - startFrame + 1 > kMaxPreviewFrames)
-    {
-        evaluationEnd = startFrame + kMaxPreviewFrames - 1;
-        m_truncated = true;
-    }
-
-    solver::Segment request;
-    request.effect = solver->effect;
-    request.entityUuid = entity.uuid;
-    request.targetUuid = targetUuid;
-    request.startFrame = startFrame;
-    request.endFrame = evaluationEnd;
-    request.startPose = solver::Pose{m_startPose, startRotation};
-    request.initialVelocity = solver->initialVelocity;
-    request.params = solver->params;
-
     render2::SceneWorld scene(project, m_document->assets());
     PreviewWorld world(project, entity, scene);
-    m_samples = solver::evaluate(request, world, duration,
-                                 std::max(1, project.settings.fps));
+
+    // The session cache is authoritative when it already holds this segment:
+    // the trajectory shown here is the one the canvas and the timeline use.
+    // Standalone widgets (tests) have no cache and keep the local evaluation.
+    if (const solver::Result* cached =
+            m_animCache ? anim::cachedSolverResultFor(entity, *solver, *m_animCache)
+                        : nullptr)
+    {
+        if (cached->samples.isEmpty())
+        {
+            m_error = QStringLiteral("无法解算");
+            update();
+            return;
+        }
+        m_samples = cached->samples;
+        if (m_samples.size() > kMaxPreviewFrames)
+        {
+            m_samples.resize(kMaxPreviewFrames);
+            m_truncated = true;
+        }
+    }
+    else
+    {
+        int evaluationEnd = effectiveEnd;
+        if (effectiveEnd - startFrame + 1 > kMaxPreviewFrames)
+        {
+            evaluationEnd = startFrame + kMaxPreviewFrames - 1;
+            m_truncated = true;
+        }
+
+        solver::Segment request;
+        request.effect = solver->effect;
+        request.entityUuid = entity.uuid;
+        request.targetUuid = targetUuid;
+        request.startFrame = startFrame;
+        request.endFrame = evaluationEnd;
+        request.startPose = solver::Pose{m_startPose, startRotation};
+        request.initialVelocity = solver->initialVelocity;
+        request.params = solver->params;
+
+        m_samples = solver::evaluate(request, world, duration,
+                                     std::max(1, project.settings.fps));
+    }
 
     if (m_samples.isEmpty())
     {

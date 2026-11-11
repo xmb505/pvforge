@@ -9,6 +9,10 @@
 #include <QVector>
 #include <QWidget>
 
+namespace pvf::anim {
+struct Cache;
+}
+
 namespace pvf::next {
 
 // Read-only 2D preview of one solver segment for the properties panel.
@@ -54,6 +58,11 @@ public:
     // Test hook: number of real computePreview() evaluations.  Playhead ticks
     // during playback must not grow it.
     int computeCount() const { return m_computeCount; }
+
+    // Borrowed session cache.  When it already holds the bound segment, the
+    // preview draws those samples instead of solving the segment again.
+    void setAnimCache(anim::Cache* cache) { m_animCache = cache; }
+    anim::Cache* animCache() const { return m_animCache; }
 
     // Drops an in-progress handle drag and restores the pre-drag velocity.
     // Returns true when a drag was actually cancelled.
@@ -151,6 +160,7 @@ private:
     bool m_playbackActive = false;
     int m_frozenRelativeFrame = -1;
     int m_computeCount = 0;
+    anim::Cache* m_animCache = nullptr;
 
     // Background pan: keeps the auto-fit until the user drags, then the view
     // stays where it was put.  Double-click refits.

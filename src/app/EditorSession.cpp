@@ -53,6 +53,8 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
 {
     m_appSettings = m_settingsStore->load();
 
+    m_animCache.sharedSolverResults = &m_solverResults;
+
     m_media = std::make_unique<next::MediaServices>(m_document.get(), m_appSettings);
     // The camera monitor renders through this service on every paint; sharing
     // the session's solved segments keeps a repaint from re-running physics.
@@ -64,22 +66,25 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     m_playback->setWatchdogMs(m_appSettings.watchdogMs);
     m_playback->setDocument(m_document.get());
 
-    // Any saved edit invalidates the solver results.  The re-warm is queued so
-    // the paint/signal that caused the change never pays for a solve; a paused
+    // Any saved edit invalidates the cache.  The re-warm is queued so the
+    // paint/signal that caused the change never pays for a solve; a paused
     // editor gets the result before the next paint, and playback starts from a
-    // warm map.
+    // warm cache.
     QObject::connect(m_document.get(), &next::Document::changed, m_document.get(),
-                     [this] {
-                         invalidateSolverResults();
-                         scheduleSolverPrecompute();
-                     });
+                     [this] { invalidateAnimCache(); });
     QObject::connect(m_playback.get(),
                      &next::PlaybackController::playbackStateChanged,
                      m_playback.get(), [this](bool playing) {
-                         if (!playing && m_solverResultsDirty)
-                             scheduleSolverPrecompute();
+                         // Playback paints may only read the cache.  A dirty
+                         // cache stays untouched until the clock stops, then
+                         // it is cleared and re-warmed once.
+                         m_animCache.solverResultsLocked = playing;
+                         if (playing)
+                             return;
+                         if (m_solverResultsDirty)
+                             invalidateAnimCache();
                      });
-    scheduleSolverPrecompute();
+    invalidateAnimCache();
 
     m_editActions = std::make_unique<EditActions>(this);
 
@@ -196,15 +201,38 @@ void EditorSession::invalidateWorkbench()
     m_workbench.reset();
 }
 
+anim::Cache& EditorSession::animCache() const
+{
+    return m_animCache;
+}
+
 QHash<QString, solver::Result>& EditorSession::solverResults() const
 {
     return m_solverResults;
 }
 
-void EditorSession::invalidateSolverResults()
+void EditorSession::invalidateAnimCache()
 {
+    if (!m_document)
+        return;
+
+    // Playback must never pay a solve on a paint tick.  Keep the last warm
+    // results visible and clear/re-warm once the clock stops.
+    if (m_playback && m_playback->isPlaying())
+    {
+        m_solverResultsDirty = true;
+        return;
+    }
+
+    m_animCache.clear();
     m_solverResults.clear();
     m_solverResultsDirty = true;
+    scheduleSolverPrecompute();
+}
+
+void EditorSession::invalidateSolverResults()
+{
+    invalidateAnimCache();
 }
 
 int EditorSession::solverEvaluationCount() const
@@ -213,22 +241,55 @@ int EditorSession::solverEvaluationCount() const
 }
 
 const solver::Result* EditorSession::solverResultFor(
-    const Uuid& entityUuid, const QString& solverId) const
+    const Uuid& entityUuid, const Uuid& solverId) const
 {
-    if (!m_document || solverId.isEmpty())
+    if (!m_document || entityUuid.isEmpty() || solverId.isEmpty())
         return nullptr;
-    const auto it = m_document->project().entities.constFind(entityUuid);
-    if (it == m_document->project().entities.constEnd())
+
+    const model::Project& project = m_document->project();
+    const auto it = project.entities.constFind(entityUuid);
+    if (it == project.entities.constEnd())
         return nullptr;
+
     for (const model::SolverSegment& segment : it->solvers)
     {
         if (segment.id != solverId)
             continue;
-        const auto cached =
-            m_solverResults.constFind(anim::solverResultKey(it.value(), segment));
-        return cached == m_solverResults.constEnd() ? nullptr : &cached.value();
+        if (const solver::Result* cached =
+                anim::cachedSolverResultFor(it.value(), segment, m_animCache))
+            return cached;
+        if (m_playback && m_playback->isPlaying())
+            return nullptr;
+        render2::SceneWorld world(project, m_document->assets(), &m_animCache);
+        return anim::solverResultFor(project, it.value(), segment, world,
+                                     m_animCache);
     }
     return nullptr;
+}
+
+int EditorSession::solverStopFrame(const Uuid& entityUuid,
+                                   const Uuid& solverId) const
+{
+    if (!m_document)
+        return -1;
+    const model::Project& project = m_document->project();
+    const auto it = project.entities.constFind(entityUuid);
+    if (it == project.entities.constEnd())
+        return -1;
+
+    for (const model::SolverSegment& segment : it->solvers)
+    {
+        if (segment.id != solverId)
+            continue;
+        const solver::Result* result = solverResultFor(entityUuid, solverId);
+        if (!result || result->stopFrame < 0)
+            return -1;
+        // A key created after the solver start ends the segment earlier than
+        // the physical stop; the band must never overrun it.
+        return std::min(result->stopFrame,
+                        model::solverStructuralEnd(it.value(), segment));
+    }
+    return -1;
 }
 
 void EditorSession::scheduleSolverPrecompute()
@@ -255,27 +316,17 @@ void EditorSession::precomputeSolverResults()
     m_solverPrecomputeRunning = true;
 
     const model::Project& project = m_document->project();
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_solverResults;
-    render2::SceneWorld world(project, m_document->assets(), &cache);
+    render2::SceneWorld world(project, m_document->assets(), &m_animCache);
 
-    // Evaluate at each segment's first frame: that is the one frame where the
-    // segment is guaranteed to be active, so exactly one solve per segment is
-    // requested.  Overlapping segments are covered by their own start frames.
+    // One whole-segment solve per solver.  Results land in the shared map and
+    // in m_animCache, so viewport, timeline, properties cards and the mini
+    // preview all read the same samples.
     for (auto it = project.entities.constBegin();
          it != project.entities.constEnd(); ++it)
     {
         const model::Entity& entity = it.value();
-        const int duration = entity.duration();
-        if (duration <= 0 || entity.solvers.isEmpty())
-            continue;
         for (const model::SolverSegment& segment : entity.solvers)
-        {
-            if (segment.startFrame < 0 || segment.startFrame >= duration)
-                continue;
-            anim::evaluateEntity(project, entity.uuid,
-                                 entity.start + segment.startFrame, world, cache);
-        }
+            anim::solverResultFor(project, entity, segment, world, m_animCache);
     }
 
     m_solverPrecomputeRunning = false;

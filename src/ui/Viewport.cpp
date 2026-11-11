@@ -915,8 +915,7 @@ QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
         return image;
     };
 
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(m_session->project(), m_session->assets(), &cache);
     const QImage image = render2::renderFrame(
         m_session->project(), m_session->assets(), options, world, cache);
@@ -1037,8 +1036,7 @@ const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
                   return a->row > b->row;
               });
 
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     for (const model::Entity* entity : candidates)
     {
@@ -1104,8 +1102,7 @@ gizmo::Transform Viewport::sessionGizmoTransform(const model::Entity& entity) co
 
     // Solver-driven x/y/rotation only exist inside anim::evaluateEntity().
     const model::Project& project = m_session->project();
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     const anim::Pose pose =
         anim::evaluateEntity(project, entity.uuid, playhead, world, cache);
@@ -1243,8 +1240,7 @@ QTransform Viewport::sessionParentToWidget(const model::Entity& entity) const
     if (parentIt == project.entities.constEnd())
         return sessionWorldToScreen();
 
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     const anim::Pose pose = anim::evaluateEntity(
         project, entity.parentUuid, m_session->playhead(), world, cache);
@@ -1401,8 +1397,7 @@ void Viewport::collectSessionSnapTargets(const Uuid& uuid)
     m_sessionDragSnapRoot = dragged.parentUuid.isEmpty()
                             || !project.entities.contains(dragged.parentUuid);
 
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     const anim::Pose draggedPose = anim::evaluateEntity(
         project, uuid, m_session->playhead(), world, cache);
@@ -2013,8 +2008,7 @@ QPolygonF Viewport::sessionCameraPolygon() const
            << QPointF(width / 2.0, -height / 2.0)
            << QPointF(-width / 2.0, -height / 2.0);
 
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     const anim::Pose pose =
         anim::evaluateEntity(project, uuid, m_session->playhead(), world, cache);
@@ -2029,8 +2023,7 @@ QPointF Viewport::sessionCameraScreenCenter() const
     if (uuid.isEmpty())
         return QPointF();
     const model::Project& project = m_session->project();
-    anim::Cache cache;
-    cache.sharedSolverResults = &m_session->solverResults();
+    anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
     const anim::Pose pose = anim::evaluateEntity(
         project, uuid, m_session->playhead(), world, cache);

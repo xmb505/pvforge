@@ -44,6 +44,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -1580,6 +1581,8 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     // readable at this size.  Above the cards it is the primary handle.
     m_solverPreview = new next::SolverPreviewWidget(
         m_session ? m_session->document() : nullptr, content);
+    if (m_session)
+        m_solverPreview->setAnimCache(&m_session->animCache());
     m_solverPreview->setObjectName(QStringLiteral("solverPreviewMini"));
     m_solverPreview->setMinimumWidth(260);
     m_solverPreview->setFixedHeight(172);
@@ -4168,17 +4171,14 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
         if (it != m_session->project().entities.constEnd())
         {
             entity = &it.value();
-            // Use the session's shared solver cache when it already holds a
-            // successful result; only a cold/failed cache falls back to a
-            // local evaluation.
-            const solver::Result* cached =
-                m_session->solverResultFor(entityUuid, solver.id);
-            if (cached && cached->stopFrame >= 0)
+            // The card's end frame reads the same session cache as the
+            // timeline and the mini preview.  A cold cache is solved once
+            // here while paused; playback never reaches this path.
+            if (const solver::Result* cached =
+                    m_session->solverResultFor(entityUuid, solver.id))
                 preview.result = *cached;
             else
-                preview = evaluateSolverPreview(m_session->project(),
-                                                m_session->assets(),
-                                                it.value(), solver);
+                preview.error = QStringLiteral("求解缓存未就绪");
         }
     }
     if (card.endInfo)
@@ -4491,8 +4491,17 @@ void PropertiesPanel::setPlaybackActive(bool active)
     if (m_playbackActive == active)
         return;
     m_playbackActive = active;
-    if (m_solverPreview)
-        m_solverPreview->setPlaybackActive(active);
+    if (!m_solverPreview)
+        return;
+    m_solverPreview->setPlaybackActive(active);
+    if (active)
+        return;
+    // Pause: refresh the trajectory exactly once, after the session's queued
+    // re-warm has run.  The zero-delay timer registered here fires behind the
+    // precompute timer registered by EditorSession on the same signal.
+    QTimer::singleShot(0, m_solverPreview, [preview = m_solverPreview] {
+        preview->refreshPreview();
+    });
 }
 
 void PropertiesPanel::refreshPlayheadOnly()

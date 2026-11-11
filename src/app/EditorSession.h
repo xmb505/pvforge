@@ -1,5 +1,6 @@
 #pragma once
 
+#include "anim/Anim.h"
 #include "common/Types.h"
 #include "mcp2/Service.h"
 #include "next/settings/SettingsStore.h"
@@ -97,19 +98,30 @@ public:
     // this after changing project bytes.
     void invalidateWorkbench();
 
-    // Shared solver cache.  Segment results are keyed by anim::solverResultKey()
-    // and borrowed by every viewport/render Cache in this session, so one
-    // segment is solved once per edit instead of once per painted frame.
-    // Document::changed clears it and queues a deferred re-warm; playback never
-    // solves on the paint path because the map is already warm.
+    // Persistent animation/solver cache.  Poses and segment results live for
+    // the whole project lifetime; a document edit clears them and queues one
+    // whole-project precompute.  Every viewport path, the timeline and the
+    // properties panel read this same instance, so one segment is solved once
+    // per edit instead of once per painted frame.
+    anim::Cache &animCache() const;
+    // Clears the cache and arranges exactly one re-warm.  During playback the
+    // clear is deferred so painting only ever reads a warm cache.
+    void invalidateAnimCache();
+
+    // Shared solver-result map borrowed by the media/workbench services.
+    // Prefer animCache()/solverResultFor() for new call sites.
     QHash<QString, solver::Result> &solverResults() const;
     void invalidateSolverResults();
     // Diagnostic/test hook: real solver::evaluateResult() calls since process
-    // start (shared-cache hits do not count).
+    // start (cache hits do not count).
     int solverEvaluationCount() const;
-    // Looks up one cached segment by entity and segment id, or nullptr.
+    // Cached segment result, evaluated once on a cold cache while paused.
+    // nullptr while playing with a cold cache.
     const solver::Result *solverResultFor(const Uuid &entityUuid,
-                                          const QString &solverId) const;
+                                          const Uuid &solverId) const;
+    // Effective band end: Result::stopFrame clipped by the structural end, or
+    // -1 when the segment cannot be solved.
+    int solverStopFrame(const Uuid &entityUuid, const Uuid &solverId) const;
 
     // MCP endpoint.  The service and HTTP listener belong to the session and
     // are started when the project opens, stopped on close/switch.  The port
@@ -177,6 +189,10 @@ private:
     // (workbench, viewport caches) is destroyed before this map.  Mutable
     // because the const paint paths write through it.
     mutable QHash<QString, solver::Result> m_solverResults;
+    // Persistent cache handed to every session render path.  Its shared map
+    // points at m_solverResults so the media/workbench services see the same
+    // solved segments.
+    mutable anim::Cache m_animCache;
     // A project edit cleared the map but playback prevented the re-warm; the
     // pause handler retries.
     bool m_solverResultsDirty = true;

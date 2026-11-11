@@ -56,9 +56,29 @@ struct Cache
     // never touch it.
     QHash<QString, solver::Result> *sharedSolverResults = nullptr;
 
+    // While set, a missing segment is never solved on the calling path: the
+    // evaluator falls back to ordinary tracks and solverResultFor() returns
+    // nullptr.  Playback sets this so a cold cache can never stall a frame.
+    bool solverResultsLocked = false;
+
     void clear();
     void clearEntity(const Uuid &uuid);
 };
+
+// Returns the cached result for one solver segment, solving the whole segment
+// exactly once on a miss.  A hit checks the shared store first, then this
+// cache.  Returns nullptr when the cache is locked and the segment is missing.
+// The pointer stays valid until the cache is cleared or a result is inserted.
+const solver::Result *solverResultFor(const model::Project &project,
+                                      const model::Entity &entity,
+                                      const model::SolverSegment &segment,
+                                      const World &world, Cache &cache);
+
+// Lookup only: never solves and never inserts.  Read-only previews use this so
+// they can share solved samples without seeding the cache from another World.
+const solver::Result *cachedSolverResultFor(const model::Entity &entity,
+                                            const model::SolverSegment &segment,
+                                            const Cache &cache);
 
 // Stable key for one solved segment: entity id + segment id + start/end frame
 // + effect.  Shared caches and result lookups must build the same key.
