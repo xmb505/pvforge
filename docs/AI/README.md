@@ -5,5 +5,6 @@
 - 用户文档：[README](../../README.md)、[操作手册](../USAGE.md)、[功能详情](../FEATURES.md)
 - 人类规范（最高优先级）：[docs/human](../human/README.md)
 - 本目录文档可能滞后于代码；与 `docs/human/` 冲突时，**以人类规范为准**；与代码冲突时，以代码为事实并记录漂移。
+- **开工前必须读 `docs/human/` 全部规范**，包括 `AI看过来，办事规范.txt`：代码浏览/编辑优先用 harness 的 read/grep/edit/write，shell 只做构建/测试/git；优化类想法必须先做小实现并与现有实现 benchmark，提交成绩单。
 - 新产生的设计、状态、交接、审计、issue 分析类文档默认放在这里，不再散落在 `docs/` 根目录。
 - 每篇文档顶部都有「AI 文档（非用户文档）」标记。
