@@ -9,11 +9,13 @@
 
 #include <QHash>
 #include <QImage>
+#include <QMutex>
 #include <QObject>
 #include <QQueue>
 #include <QSet>
 #include <QString>
 #include <QTimer>
+#include <QWaitCondition>
 
 #include <functional>
 #include <memory>
@@ -127,8 +129,12 @@ public:
     // the next dispatch, removed slots finish their current encode.
     void setWriterThreads(int threads);
     int writerThreads() const { return m_writerThreads; }
-    // Pumps the UI event loop until the writer queue is empty or the timeout
-    // expires (tests and the cache-miss profile only).
+    // Blocks until the writer queue is empty or the timeout expires (tests and
+    // the cache-miss profile only).  No nested event loop: it dispatches only
+    // the completion callbacks this object posted itself and sleeps on a wait
+    // condition while an encode is in flight, so timers, paint and input do
+    // not re-enter the caller.  Must be called from the thread owning this
+    // object.  Returns false on timeout.
     bool waitForPendingStores(int timeoutMs);
 
     // Explicit cache pass.  Nothing calls these automatically: they back the
@@ -250,6 +256,14 @@ private:
     quint64 m_asyncStoresWritten = 0;
     quint64 m_workerEncodes = 0;
     double m_workerEncodeMs = 0.0;
+
+    // waitForPendingStores(): the queue itself stays UI-thread only, the
+    // counter tells a waiter whether an encode is still running and the
+    // condition wakes it when the pool finishes one.  m_storePool is drained
+    // by the destructor, so no worker touches these after the members die.
+    QMutex m_storeWaitMutex;
+    QWaitCondition m_storeIdle;
+    int m_storeEncodesActive = 0;
 };
 
 } // namespace pvf::next

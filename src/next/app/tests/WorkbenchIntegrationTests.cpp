@@ -23,9 +23,11 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <memory>
+#include <thread>
 
 using namespace pvf;
 using namespace pvf::next;
@@ -312,6 +314,7 @@ private slots:
     void shutdownDiscardsQueuedRasterStores();
     void writerThreadsRetuneWithoutDropping();
     void writerThreadsSpeedUpTheDrain();
+    void waitForPendingStoresDoesNotReenterEventLoop();
 };
 
 void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
@@ -1247,6 +1250,111 @@ void WorkbenchIntegrationTest::writerThreadsSpeedUpTheDrain()
                             .arg(oneThread, 0, 'f', 1)
                             .arg(fourThreads, 0, 'f', 1)));
     QCOMPARE(services.droppedStores(), quint64(0));
+    services.setPlaybackActive(false);
+}
+
+// waitForPendingStores() must drain the writer queue without running a nested
+// event loop: only the service's own completion callbacks are delivered, so a
+// due zero-interval timer stays unfired, and no frame is dispatched to the pool
+// twice while several writers run concurrently.
+void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/wait.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    AppSettings settings;
+    settings.workbenchCacheWriterThreads = 3;
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), settings, Uuid(), providers);
+    QVERIFY(services.cacheValid());
+
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(0, 90, 200));
+    services.setPlaybackActive(true);
+
+    constexpr int kFrames = 24;
+    for (int frame = 0; frame < kFrames; ++frame)
+        services.store(frame, Uuid(), rendered);
+    QCOMPARE(services.pendingStores(), kFrames);
+
+    // A timer that is due the moment the loop runs: a nested event loop in the
+    // wait would fire it, sendPostedEvents(this, QEvent::MetaCall) must not.
+    QTimer timer;
+    timer.setInterval(0);
+    int timerHits = 0;
+    connect(&timer, &QTimer::timeout, &timer, [&timerHits] { ++timerHits; });
+    timer.start();
+    QCOMPARE(timerHits, 0);
+
+    QVERIFY(services.waitForPendingStores(30000));
+    // The old processEvents(AllEvents, 10) loop fired this timer; the new wait
+    // delivers only this object's meta-calls.
+    QCOMPARE(timerHits, 0);
+    QCOMPARE(services.pendingStores(), 0);
+    // Every queued frame was encoded exactly once: no duplicate dispatch even
+    // though a stale scheduleStoreDispatch() call may still be posted.
+    QCOMPARE(services.workerEncodes(), quint64(kFrames));
+    QCOMPARE(services.asyncStoresWritten(), quint64(kFrames));
+    QCOMPARE(services.stats().entries, kFrames);
+    QCOMPARE(services.droppedStores(), quint64(0));
+
+    // The wait still ran the completions: the cached frames are real hits.
+    QVERIFY(!services.lookupForTest(kFrames - 1, Uuid()).isNull());
+
+    // An empty queue returns immediately instead of waiting for the timeout.
+    QElapsedTimer empty;
+    empty.start();
+    QVERIFY(services.waitForPendingStores(30000));
+    QVERIFY(empty.elapsed() < 1000);
+
+    // A zero timeout with encodes still queued reports failure instead of
+    // spinning or blocking.
+    for (int frame = 0; frame < 4; ++frame)
+        services.store(100 + frame, Uuid(), rendered);
+    QCOMPARE(services.pendingStores(), 4);
+    QVERIFY(!services.waitForPendingStores(0));
+    QVERIFY(services.waitForPendingStores(30000));
+    QCOMPARE(services.pendingStores(), 0);
+    QCOMPARE(services.workerEncodes(), quint64(kFrames + 4));
+    QCOMPARE(services.asyncStoresWritten(), quint64(kFrames + 4));
+
+    // Concurrent enqueue while waiting: a second thread posts store() calls to
+    // this object's event queue.  waitForPendingStores() has to deliver them,
+    // dispatch them to the free writers and still encode every frame exactly
+    // once.
+    constexpr int kPostedFrames = 8;
+    std::thread producer([&services, rendered] {
+        for (int frame = 0; frame < kPostedFrames; ++frame)
+        {
+            QMetaObject::invokeMethod(
+                &services,
+                [&services, frame, rendered] {
+                    services.store(200 + frame, Uuid(), rendered);
+                },
+                Qt::QueuedConnection);
+        }
+    });
+    producer.join();
+
+    QVERIFY(services.waitForPendingStores(30000));
+    QCOMPARE(services.pendingStores(), 0);
+    QCOMPARE(services.workerEncodes(), quint64(kFrames + 4 + kPostedFrames));
+    QCOMPARE(services.asyncStoresWritten(),
+             quint64(kFrames + 4 + kPostedFrames));
+    QCOMPARE(services.stats().entries, kFrames + 4 + kPostedFrames);
+    QVERIFY(!services.lookupForTest(200, Uuid()).isNull());
+
+    // The timer was only held back by the wait, not disabled.
+    QTRY_VERIFY(timerHits > 0);
     services.setPlaybackActive(false);
 }
 

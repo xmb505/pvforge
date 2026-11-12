@@ -6,8 +6,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QMutexLocker>
 #include <QRunnable>
-#include <QThread>
 #include <QThreadPool>
 
 #include <algorithm>
@@ -316,6 +316,11 @@ void WorkbenchServices::startStoreTask(const PendingStore& task)
     const QSize targetSize = m_options.targetSize;
     const bool hasRaster = task.meta.hasRaster;
 
+    {
+        QMutexLocker locker(&m_storeWaitMutex);
+        ++m_storeEncodesActive;
+    }
+
     m_storePool->start(QRunnable::create(
         [self, id, image, targetSize, hasRaster] {
             QElapsedTimer timer;
@@ -324,6 +329,13 @@ void WorkbenchServices::startStoreTask(const PendingStore& task)
                 workbench::Cache::encode(image, targetSize, hasRaster);
             const double encodeMs =
                 static_cast<double>(timer.nsecsElapsed()) / 1.0e6;
+            // The encode ended; the result itself still has to be delivered to
+            // the UI thread, which onStoreEncoded() reports through the queue.
+            {
+                QMutexLocker locker(&self->m_storeWaitMutex);
+                --self->m_storeEncodesActive;
+                self->m_storeIdle.wakeAll();
+            }
             QMetaObject::invokeMethod(
                 self,
                 [self, id, encoded = std::move(encoded), encodeMs]() mutable {
@@ -391,14 +403,48 @@ void WorkbenchServices::setWriterThreads(int threads)
 
 bool WorkbenchServices::waitForPendingStores(int timeoutMs)
 {
+    // Completions arrive as queued meta-calls addressed to this object; they
+    // are the only work the waiter must run.  Delivering them with
+    // sendPostedEvents() never starts a nested event loop, so timers, paint and
+    // input handlers cannot re-enter while the caller waits.
+    const auto deliverCompletions = [this] {
+        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+    };
+
     QElapsedTimer timer;
     timer.start();
-    while (!m_pendingStores.isEmpty() && timer.elapsed() < timeoutMs)
+
+    for (;;)
     {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        QThread::msleep(1);
+        deliverCompletions();
+        // Nothing else runs the queued dispatch while we block, and the flag
+        // only guards against posting a second dispatch.
+        m_storeDispatchPosted = false;
+        dispatchStoreTask();
+
+        {
+            QMutexLocker locker(&m_storeWaitMutex);
+            if (m_pendingStores.isEmpty() && m_storeEncodesActive == 0)
+                return true;
+            if (m_storeEncodesActive > 0)
+            {
+                const qint64 remaining = qint64(timeoutMs) - timer.elapsed();
+                if (remaining <= 0)
+                    return false;
+                m_storeIdle.wait(&m_storeWaitMutex,
+                                 static_cast<unsigned long>(remaining));
+                continue; // a writer finished: deliver its result
+            }
+        }
+
+        // No encode is in flight and the queue still has frames: the only
+        // remaining work is a completion callback that arrived after the drain
+        // above.  Deliver it once more before giving up.
+        deliverCompletions();
+        if (m_pendingStores.isEmpty() && m_storeEncodesActive == 0)
+            return true;
+        return false; // the pool cannot advance the queue
     }
-    return m_pendingStores.isEmpty();
 }
 
 void WorkbenchServices::discardPendingStores()
@@ -408,6 +454,12 @@ void WorkbenchServices::discardPendingStores()
         const PendingStore dropped = m_pendingStores.dequeue();
         m_pendingStoreBytes -= dropped.bytes;
         perf::FrameProfiler::instance().endStore();
+    }
+    // A waiter blocked in waitForPendingStores() must notice the emptied queue
+    // even though no writer will finish for these frames any more.
+    {
+        QMutexLocker locker(&m_storeWaitMutex);
+        m_storeIdle.wakeAll();
     }
 }
 

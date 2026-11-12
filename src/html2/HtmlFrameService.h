@@ -190,14 +190,20 @@ private:
     QString m_chromeVersion;
     bool m_running = false;
 
-    FrontendWorker* m_frontendWorker = nullptr;
+    // Worker threads, one owner each.  Declaration order is destruction
+    // order (reverse): the cache/disk proxies below are declared after the
+    // disk worker, so they die first and never touch a destroyed worker.  All
+    // three hold a raw back-pointer to this service and are started by start()
+    // and joined by stop(); the destructor calls stop() before any member dies,
+    // so a worker can never signal a half-destroyed service.
+    std::unique_ptr<FrontendWorker> m_frontendWorker;
     PvhtmlRenderer* m_final = nullptr;
     Qt::HANDLE m_finalThreadId = nullptr; // thread that created m_final
-    FrameCacheWorker* m_cacheWorker = nullptr;
+    std::unique_ptr<FrameCacheWorker> m_cacheWorker;
 
     QMutex m_cacheMutex;
     std::unique_ptr<htmlcache::MemoryCache> m_memory;
-    FrameDiskWorker* m_diskWorker = nullptr;
+    std::unique_ptr<FrameDiskWorker> m_diskWorker;
     std::unique_ptr<LockedFrameCache> m_memoryProxy;
     std::unique_ptr<DiskCacheProxy> m_diskProxy;
     std::unique_ptr<htmlcache::TieredCache> m_tiered;

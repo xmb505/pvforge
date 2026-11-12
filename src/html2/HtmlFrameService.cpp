@@ -631,7 +631,7 @@ bool HtmlFrameService::start(QString* error)
     {
         m_memory = std::make_unique<htmlcache::MemoryCache>(m_memoryBytes);
 
-        m_diskWorker = new FrameDiskWorker(m_cacheRoot, m_diskBytes);
+        m_diskWorker = std::make_unique<FrameDiskWorker>(m_cacheRoot, m_diskBytes);
         m_diskWorker->start();
         QString diskError;
         if (!m_diskWorker->waitForStart(&diskError))
@@ -641,12 +641,12 @@ bool HtmlFrameService::start(QString* error)
         }
 
         m_memoryProxy = std::make_unique<LockedFrameCache>(m_memory.get(), &m_cacheMutex);
-        m_diskProxy = std::make_unique<DiskCacheProxy>(m_diskWorker);
+        m_diskProxy = std::make_unique<DiskCacheProxy>(m_diskWorker.get());
         m_tiered = std::make_unique<htmlcache::TieredCache>(m_memoryProxy.get(),
                                                             m_diskProxy.get());
     }
 
-    m_frontendWorker = new FrontendWorker(this, m_chromeExecutable);
+    m_frontendWorker = std::make_unique<FrontendWorker>(this, m_chromeExecutable);
     m_frontendWorker->start();
 
     QString frontendError;
@@ -664,15 +664,14 @@ bool HtmlFrameService::start(QString* error)
     // The frontend browser is the version authority for every cache key.
     m_chromeVersion = m_frontendWorker->chromeVersion().trimmed();
 
-    m_cacheWorker = new FrameCacheWorker(this, m_chromeExecutable);
+    m_cacheWorker = std::make_unique<FrameCacheWorker>(this, m_chromeExecutable);
     m_cacheWorker->start();
 
     QString cacheError;
     if (!m_cacheWorker->waitForStart(&cacheError))
     {
         m_cacheWorker->wait();
-        delete m_cacheWorker;
-        m_cacheWorker = nullptr;
+        m_cacheWorker.reset();
         stop();
         if (error)
         {
@@ -695,15 +694,13 @@ void HtmlFrameService::stop()
     {
         m_frontendWorker->requestStop();
         m_frontendWorker->wait();
-        delete m_frontendWorker;
-        m_frontendWorker = nullptr;
+        m_frontendWorker.reset();
     }
     if (m_cacheWorker)
     {
         m_cacheWorker->requestStop();
         m_cacheWorker->wait();
-        delete m_cacheWorker;
-        m_cacheWorker = nullptr;
+        m_cacheWorker.reset();
     }
     if (m_final)
     {
@@ -734,8 +731,7 @@ void HtmlFrameService::stop()
     {
         m_diskWorker->requestStop();
         m_diskWorker->wait();
-        delete m_diskWorker;
-        m_diskWorker = nullptr;
+        m_diskWorker.reset();
     }
     m_memory.reset();
 

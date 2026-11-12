@@ -332,19 +332,20 @@ private:
 
 VideoExtractionQueue::VideoExtractionQueue(QObject* parent)
     : QObject(parent)
-    , m_worker(new Worker(this))
+    , m_worker(std::make_unique<Worker>(this))
 {
     m_worker->start();
 }
 
 VideoExtractionQueue::~VideoExtractionQueue()
 {
+    // Join before the members die: the worker calls back into this object
+    // (signals and pending-request cleanup) and must not outlive it.
     if (!m_worker)
         return;
     m_worker->requestStop();
     m_worker->wait();
-    delete m_worker;
-    m_worker = nullptr;
+    m_worker.reset();
 }
 
 void VideoExtractionQueue::enqueue(const Job& job)

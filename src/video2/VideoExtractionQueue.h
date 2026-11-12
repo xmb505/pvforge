@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QString>
 
+#include <memory>
+
 namespace pvf::video2 {
 
 // One background video-to-WebP-sequence extraction request. `cacheRoot` is the
@@ -70,7 +72,11 @@ signals:
 
 private:
     class Worker;
-    Worker* m_worker = nullptr;
+    // The queue owns its worker thread: the constructor starts it and the
+    // destructor stops and joins it before any member dies.  unique_ptr makes
+    // that ownership explicit (and a future early return cannot leak the join).
+    // Worker holds a raw back-pointer to this object and must never outlive it.
+    std::unique_ptr<Worker> m_worker;
 };
 
 } // namespace pvf::video2
