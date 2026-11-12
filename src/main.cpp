@@ -19002,8 +19002,30 @@ int layoutTest(QApplication& app)
 int workbenchTest(QApplication& app)
 {
     QString error;
+    // The test used to rely on /tmp/pvf_test.mp4 left behind by another run.
+    // Generate the fixture when it is missing so the test is self-contained.
+    const QString videoPath = QStringLiteral("/tmp/pvf_test.mp4");
+    if (!QFile::exists(videoPath))
+    {
+        QProcess ffmpeg;
+        ffmpeg.start(QStringLiteral("ffmpeg"),
+                     {QStringLiteral("-y"), QStringLiteral("-v"),
+                      QStringLiteral("error"), QStringLiteral("-f"),
+                      QStringLiteral("lavfi"), QStringLiteral("-i"),
+                      QStringLiteral("color=c=red:s=320x240:d=1:r=30"),
+                      QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                      QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                      QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+                      videoPath});
+        if (!ffmpeg.waitForFinished(30000) || ffmpeg.exitCode() != 0)
+        {
+            qCritical() << "workbench-test: cannot generate video fixture"
+                        << ffmpeg.readAllStandardError();
+            return 1;
+        }
+    }
     const QImage videoFrame =
-        pvf::decodeVideoFirstFrame(QStringLiteral("/tmp/pvf_test.mp4"), &error);
+        pvf::decodeVideoFirstFrame(videoPath, &error);
     if (videoFrame.isNull())
     {
         qCritical() << "workbench-test: video decode failed:" << error;
@@ -19023,7 +19045,7 @@ int workbenchTest(QApplication& app)
     project->setValue(circle->id, QStringLiteral("x"), 0, 300, false);
     project->setValue(circle->id, QStringLiteral("y"), 0, -200, false);
 
-    pvf::Entity* video = project->addVideo(QStringLiteral("/tmp/pvf_test.mp4"), videoFrame);
+    pvf::Entity* video = project->addVideo(videoPath, videoFrame);
     project->setValue(video->id, QStringLiteral("x"), 0, -350, false);
     project->setValue(video->id, QStringLiteral("y"), 0, -200, false);
     project->setValue(video->id, QStringLiteral("scaleX"), 0, 0.6, false);
