@@ -90,6 +90,7 @@
 #include <QFont>
 #include <QHostAddress>
 #include <QImage>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QJsonDocument>
@@ -3197,6 +3198,582 @@ int cacheMissProfileTest(QApplication& app)
         qCritical() << "cache-miss-profile: user-project failed:" << error;
         return 1;
     }
+    return 0;
+}
+
+// ---- Cache encoder benchmark (issues #58 / #60) --------------------------
+//
+// Measurement-only mode.  It grabs one frame from the user's project and
+// builds one synthetic 200-entity frame, expands both into the workbench's
+// 50%-expanded cache geometry (transparent outside the canvas) and compares
+// the encoders that could replace the current Qt WebP q80 store path.  No
+// production cache code is touched.
+
+struct EncoderBenchRow
+{
+    QString imageName;
+    QString encoder;
+    QSize size;
+    ProfileSamples encodeSamples;
+    ProfileSamples decodeSamples;
+    qint64 bytes = 0;
+    bool hasAlpha = false;
+    double psnr = -1.0;
+    bool ok = false;
+    QString error;
+};
+
+double encoderBenchPsnr(const QImage& decoded, const QImage& reference)
+{
+    if (decoded.isNull() || reference.isNull()
+        || decoded.size() != reference.size())
+        return -1.0;
+
+    const QImage actual = decoded.convertToFormat(QImage::Format_RGBA8888);
+    const QImage expected = reference.convertToFormat(QImage::Format_RGBA8888);
+    // Expanded cache frames are mostly transparent.  Compare only the opaque
+    // canvas pixels so the transparent margin does not dominate the score.
+    const bool masked = expected.hasAlphaChannel();
+    double sum = 0.0;
+    qint64 count = 0;
+    for (int y = 0; y < expected.height(); ++y)
+    {
+        const uchar* actualLine = actual.constScanLine(y);
+        const uchar* expectedLine = expected.constScanLine(y);
+        for (int x = 0; x < expected.width(); ++x)
+        {
+            const int offset = x * 4;
+            if (masked && expectedLine[offset + 3] != 255)
+                continue;
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                const double delta = double(actualLine[offset + channel])
+                                     - double(expectedLine[offset + channel]);
+                sum += delta * delta;
+                ++count;
+            }
+        }
+    }
+    if (count == 0)
+        return -1.0;
+    const double mse = sum / double(count);
+    return mse <= 0.0 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+void reportEncoderBenchRow(const EncoderBenchRow& row)
+{
+    if (!row.ok)
+    {
+        qWarning().noquote()
+            << QStringLiteral("cache-encoder-bench | image=%1 size=%2x%3 "
+                              "encoder=%4 | FAILED %5")
+                   .arg(row.imageName)
+                   .arg(row.size.width())
+                   .arg(row.size.height())
+                   .arg(row.encoder, row.error);
+        return;
+    }
+
+    const double encodeP50 = row.encodeSamples.percentile(0.5);
+    const double encodeP95 = row.encodeSamples.percentile(0.95);
+    const double decodeP50 = row.decodeSamples.percentile(0.5);
+    const double decodeP95 = row.decodeSamples.percentile(0.95);
+    const QString psnr = row.psnr < 0.0
+                             ? QStringLiteral("n/a")
+                             : (row.psnr >= 99.0
+                                    ? QStringLiteral("inf")
+                                    : QString::number(row.psnr, 'f', 2));
+    qInfo().noquote()
+        << QStringLiteral(
+               "cache-encoder-bench | image=%1 size=%2x%3 encoder=%4 | "
+               "encode mean=%5 p50=%6 p95=%7 ms | decode mean=%8 p50=%9 "
+               "p95=%10 ms | bytes=%11 (%12 KB) | alpha=%13 psnr=%14 | "
+               "enc-p95<=16.7ms=%15 <=33ms=%16")
+               .arg(row.imageName)
+               .arg(row.size.width())
+               .arg(row.size.height())
+               .arg(row.encoder)
+               .arg(row.encodeSamples.mean(), 0, 'f', 2)
+               .arg(encodeP50, 0, 'f', 2)
+               .arg(encodeP95, 0, 'f', 2)
+               .arg(row.decodeSamples.mean(), 0, 'f', 2)
+               .arg(decodeP50, 0, 'f', 2)
+               .arg(decodeP95, 0, 'f', 2)
+               .arg(row.bytes)
+               .arg(double(row.bytes) / 1024.0, 0, 'f', 1)
+               .arg(row.hasAlpha ? QStringLiteral("yes")
+                                 : QStringLiteral("no"))
+               .arg(psnr)
+               .arg(encodeP95 <= 16.7 ? QStringLiteral("yes")
+                                      : QStringLiteral("no"))
+               .arg(encodeP95 <= 33.0 ? QStringLiteral("yes")
+                                      : QStringLiteral("no"));
+}
+
+EncoderBenchRow runEncoderBench(
+    const QString& imageName, const QString& encoder, const QSize& size,
+    const QImage& image, const QImage& reference,
+    const std::function<QByteArray(const QImage&)>& encode,
+    const std::function<QImage(const QByteArray&)>& decode, int iterations)
+{
+    EncoderBenchRow row;
+    row.imageName = imageName;
+    row.encoder = encoder;
+    row.size = size;
+
+    QByteArray data;
+    for (int i = 0; i < 2; ++i)
+    {
+        data = encode(image);
+        if (data.isEmpty())
+        {
+            row.error = QStringLiteral("warmup encode failed");
+            return row;
+        }
+        if (decode(data).isNull())
+        {
+            row.error = QStringLiteral("warmup decode failed");
+            return row;
+        }
+    }
+
+    for (int i = 0; i < iterations; ++i)
+    {
+        QElapsedTimer timer;
+        timer.start();
+        const QByteArray encoded = encode(image);
+        row.encodeSamples.addNs(timer.nsecsElapsed());
+        if (encoded.isEmpty())
+        {
+            row.error = QStringLiteral("encode failed");
+            return row;
+        }
+        data = encoded;
+        row.bytes = data.size();
+    }
+
+    QImage decoded;
+    for (int i = 0; i < 2; ++i)
+        decoded = decode(data);
+    for (int i = 0; i < iterations; ++i)
+    {
+        QElapsedTimer timer;
+        timer.start();
+        decoded = decode(data);
+        row.decodeSamples.addNs(timer.nsecsElapsed());
+    }
+
+    if (decoded.isNull())
+    {
+        row.error = QStringLiteral("decode failed");
+        return row;
+    }
+    row.hasAlpha = decoded.hasAlphaChannel();
+    row.psnr = encoderBenchPsnr(decoded, reference);
+    row.ok = true;
+    return row;
+}
+
+QImage makeEncoderBenchSynthetic()
+{
+    QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(QStringLiteral("#101014")));
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    for (int i = 0; i < 196; ++i)
+    {
+        const int column = i % 14;
+        const int row = i / 14;
+        const double x = 60.0 + column * 130.0 + (i % 3) * 7.0;
+        const double y = 45.0 + row * 72.0 + (i % 5) * 4.0;
+        const double width = 70.0 + (i % 7) * 11.0;
+        const double height = 34.0 + (i % 5) * 9.0;
+        painter.setBrush(
+            QColor::fromHsv((i * 37) % 360, 170 + (i % 3) * 30, 210));
+        painter.setPen(i % 4 == 0
+                           ? QPen(QColor(QStringLiteral("#e8e8f0")), 3.0)
+                           : QPen(Qt::NoPen));
+        if (i % 3 == 0)
+            painter.drawEllipse(QRectF(x, y, width, height));
+        else if (i % 3 == 1)
+            painter.drawRoundedRect(QRectF(x, y, width, height), 10.0, 10.0);
+        else
+            painter.drawRect(QRectF(x, y, width, height));
+    }
+
+    QFont font;
+    font.setPixelSize(72);
+    font.setBold(true);
+    painter.setFont(font);
+    painter.setPen(QColor(QStringLiteral("#ffffff")));
+    for (int i = 0; i < 4; ++i)
+        painter.drawText(QPointF(100.0 + i * 430.0, 980.0 - i * 120.0),
+                         QStringLiteral("PVForge 缓存编码基准 %1").arg(i + 1));
+    painter.end();
+    return image;
+}
+
+QImage makeEncoderBenchExpandedFrame(const QImage& content, const QSize& size)
+{
+    // expandPercent=50 makes the canvas half of the cached world in each
+    // axis: 1280x720 stores a 640x360 canvas with transparent margins.
+    QImage frame(size, QImage::Format_ARGB32_Premultiplied);
+    frame.fill(Qt::transparent);
+    const int canvasWidth = std::max(1, size.width() / 2);
+    const int canvasHeight = std::max(1, size.height() / 2);
+    const QRect canvas((size.width() - canvasWidth) / 2,
+                       (size.height() - canvasHeight) / 2, canvasWidth,
+                       canvasHeight);
+    QPainter painter(&frame);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(canvas, content);
+    painter.end();
+    return frame;
+}
+
+QImage makeEncoderBenchOpaque(const QImage& frame)
+{
+    QImage opaque(frame.size(), QImage::Format_RGB32);
+    opaque.fill(QColor(QStringLiteral("#101014")));
+    QPainter painter(&opaque);
+    painter.drawImage(0, 0, frame);
+    painter.end();
+    return opaque;
+}
+
+QImage loadEncoderBenchPhoto()
+{
+    // QOI is lossless, so a photographic frame is its worst case for disk
+    // size.  The desktop wallpapers make that bound measurable; the benchmark
+    // simply skips the row when none of them is installed.
+    for (const QString& path :
+         {QStringLiteral("/usr/share/backgrounds/Clouds_by_Tibor_Mokanszki.jpg"),
+          QStringLiteral(
+              "/usr/share/backgrounds/Monument_valley_by_orbitelambda.jpg")})
+    {
+        QImageReader reader(path);
+        reader.setAutoTransform(true);
+        const QImage image = reader.read();
+        if (!image.isNull())
+            return image.scaled(1920, 1080, Qt::IgnoreAspectRatio,
+                                Qt::SmoothTransformation)
+                .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
+    return {};
+}
+
+QImage grabEncoderBenchUserFrame(QTemporaryDir& temp, QString* error)
+{
+    const QString source =
+        QStringLiteral("/home/xmb505/视频/PVForge/未命名项目1.pvproj");
+    if (!QFileInfo::exists(source))
+    {
+        *error = QStringLiteral("user project not found: %1").arg(source);
+        return {};
+    }
+
+    const QString copy =
+        QDir(temp.path()).filePath(QStringLiteral("encoder-user.pvproj"));
+    if (!copyProfileProject(source, copy, error))
+        return {};
+
+    auto session = pvf::EditorSession::openProject(copy, error, false);
+    if (!session)
+        return {};
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    QImage frame;
+    if (auto* viewport = window->viewportForTest())
+        frame = viewport->grabProjectFrame();
+    else
+        *error = QStringLiteral("viewport missing");
+
+    window->close();
+    QApplication::processEvents();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (frame.isNull() && error->isEmpty())
+        *error = QStringLiteral("grabProjectFrame returned null");
+    return frame;
+}
+
+int cacheEncoderBenchTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+    {
+        qCritical() << "cache-encoder-bench: no temp dir";
+        return 1;
+    }
+
+    const QList<QByteArray> formats = QImageWriter::supportedImageFormats();
+    const bool hasWebp = formats.contains(QByteArrayLiteral("webp"));
+    const bool hasJpeg = formats.contains(QByteArrayLiteral("jpeg"));
+    const bool hasPng = formats.contains(QByteArrayLiteral("png"));
+    const bool hasQoi = formats.contains(QByteArrayLiteral("qoi"));
+
+    QByteArray probeData;
+    QBuffer probeBuffer(&probeData);
+    probeBuffer.open(QIODevice::WriteOnly);
+    QImageWriter webpProbe(&probeBuffer, QByteArrayLiteral("webp"));
+    const bool hasWebpCompression =
+        hasWebp
+        && webpProbe.supportsOption(QImageIOHandler::CompressionRatio);
+    qInfo().noquote()
+        << QStringLiteral("cache-encoder-bench | qt=%1 formats webp=%2 "
+                          "jpeg=%3 png=%4 qoi=%5 | webp-method-option=%6 | "
+                          "libwebp=%7")
+               .arg(QString::fromLatin1(qVersion()))
+               .arg(hasWebp ? QStringLiteral("yes") : QStringLiteral("no"))
+               .arg(hasJpeg ? QStringLiteral("yes") : QStringLiteral("no"))
+               .arg(hasPng ? QStringLiteral("yes") : QStringLiteral("no"))
+               .arg(hasQoi ? QStringLiteral("yes") : QStringLiteral("no"))
+               .arg(hasWebpCompression ? QStringLiteral("yes")
+                                       : QStringLiteral("no"))
+               .arg(QStringLiteral(
+                   "skipped (pkg-config --exists libwebp failed)"));
+
+    QString error;
+    const QImage userContent = grabEncoderBenchUserFrame(temp, &error);
+    if (userContent.isNull())
+        qWarning() << "cache-encoder-bench: user frame unavailable:" << error;
+
+    QVector<QPair<QString, QImage>> sources;
+    if (!userContent.isNull())
+        sources.append(qMakePair(QStringLiteral("user"), userContent));
+    sources.append(
+        qMakePair(QStringLiteral("synthetic"), makeEncoderBenchSynthetic()));
+
+    const QVector<QSize> sizes = {QSize(1280, 720), QSize(1116, 590),
+                                  QSize(960, 540), QSize(640, 360)};
+    constexpr int kIterations = 15;
+    QVector<EncoderBenchRow> rows;
+
+    auto qtEncode = [](const QByteArray& format, int quality, int compression) {
+        return [format, quality, compression](const QImage& image) {
+            QByteArray data;
+            QBuffer buffer(&data);
+            if (!buffer.open(QIODevice::WriteOnly))
+                return QByteArray();
+            QImageWriter writer(&buffer, format);
+            if (quality >= 0)
+                writer.setQuality(quality);
+            if (compression >= 0)
+                writer.setCompression(compression);
+            if (!writer.write(image))
+                return QByteArray();
+            buffer.close();
+            return data;
+        };
+    };
+    auto qtDecode = [](const QByteArray& format) {
+        return [format](const QByteArray& data) {
+            QBuffer buffer;
+            buffer.setData(data);
+            if (!buffer.open(QIODevice::ReadOnly))
+                return QImage();
+            QImageReader reader(&buffer, format);
+            reader.setAutoTransform(false);
+            return reader.read();
+        };
+    };
+
+    auto addRow = [&](const QString& imageName, const QString& encoder,
+                      const QSize& size, const QImage& image,
+                      const QImage& reference,
+                      const std::function<QByteArray(const QImage&)>& encode,
+                      const std::function<QImage(const QByteArray&)>& decode) {
+        EncoderBenchRow row = runEncoderBench(imageName, encoder, size, image,
+                                              reference, encode, decode,
+                                              kIterations);
+        reportEncoderBenchRow(row);
+        if (row.ok)
+            rows.append(row);
+    };
+
+    for (const QSize& size : sizes)
+    {
+        for (const auto& source : sources)
+        {
+            const QImage frame =
+                makeEncoderBenchExpandedFrame(source.second, size);
+            const QImage opaque = makeEncoderBenchOpaque(frame);
+
+            if (hasWebp)
+            {
+                addRow(source.first, QStringLiteral("webp-q80"), size, frame,
+                       frame, qtEncode(QByteArrayLiteral("webp"), 80, -1),
+                       qtDecode(QByteArrayLiteral("webp")));
+                addRow(source.first, QStringLiteral("webp-q60"), size, frame,
+                       frame, qtEncode(QByteArrayLiteral("webp"), 60, -1),
+                       qtDecode(QByteArrayLiteral("webp")));
+                addRow(source.first, QStringLiteral("webp-q50"), size, frame,
+                       frame, qtEncode(QByteArrayLiteral("webp"), 50, -1),
+                       qtDecode(QByteArrayLiteral("webp")));
+                addRow(source.first, QStringLiteral("webp-q80-opaque"), size,
+                       opaque, opaque,
+                       qtEncode(QByteArrayLiteral("webp"), 80, -1),
+                       qtDecode(QByteArrayLiteral("webp")));
+            }
+            if (hasJpeg)
+            {
+                addRow(source.first, QStringLiteral("jpeg-q85"), size, opaque,
+                       opaque, qtEncode(QByteArrayLiteral("jpeg"), 85, -1),
+                       qtDecode(QByteArrayLiteral("jpeg")));
+                addRow(source.first, QStringLiteral("jpeg-q90"), size, opaque,
+                       opaque, qtEncode(QByteArrayLiteral("jpeg"), 90, -1),
+                       qtDecode(QByteArrayLiteral("jpeg")));
+            }
+            if (hasPng)
+            {
+                // QImageWriter::setCompression() is 0-100 for PNG (it maps
+                // to zlib 0-9).  Passing 1/6 literally gives zlib level 0,
+                // so use 0/11/67 for zlib 0/1/6 and -1 for Qt's default.
+                const QVector<QPair<QString, int>> pngLevels = {
+                    {QStringLiteral("png-zlib0"), 0},
+                    {QStringLiteral("png-zlib1"), 11},
+                    {QStringLiteral("png-zlib6"), 67},
+                    {QStringLiteral("png-default"), -1}};
+                for (const auto& level : pngLevels)
+                    addRow(source.first, level.first, size, frame, frame,
+                           qtEncode(QByteArrayLiteral("png"), -1,
+                                    level.second),
+                           qtDecode(QByteArrayLiteral("png")));
+            }
+            if (hasQoi)
+                addRow(source.first, QStringLiteral("qoi"), size, frame, frame,
+                       qtEncode(QByteArrayLiteral("qoi"), -1, -1),
+                       qtDecode(QByteArrayLiteral("qoi")));
+        }
+    }
+
+    // One photographic frame at the default cache size: the disk-size bound
+    // when a cached frame contains an image or video asset.
+    const QImage photoContent = loadEncoderBenchPhoto();
+    if (!photoContent.isNull())
+    {
+        const QSize size(1280, 720);
+        const QImage frame =
+            makeEncoderBenchExpandedFrame(photoContent, size);
+        const QImage opaque = makeEncoderBenchOpaque(frame);
+        if (hasWebp)
+            addRow(QStringLiteral("photo"), QStringLiteral("webp-q80"), size,
+                   frame, frame, qtEncode(QByteArrayLiteral("webp"), 80, -1),
+                   qtDecode(QByteArrayLiteral("webp")));
+        if (hasJpeg)
+            addRow(QStringLiteral("photo"), QStringLiteral("jpeg-q90"), size,
+                   opaque, opaque, qtEncode(QByteArrayLiteral("jpeg"), 90, -1),
+                   qtDecode(QByteArrayLiteral("jpeg")));
+        if (hasPng)
+            addRow(QStringLiteral("photo"), QStringLiteral("png-zlib6"), size,
+                   frame, frame,
+                   qtEncode(QByteArrayLiteral("png"), -1, 67),
+                   qtDecode(QByteArrayLiteral("png")));
+        if (hasQoi)
+            addRow(QStringLiteral("photo"), QStringLiteral("qoi"), size, frame,
+                   frame, qtEncode(QByteArrayLiteral("qoi"), -1, -1),
+                   qtDecode(QByteArrayLiteral("qoi")));
+
+        // expandPercent=0 / camera cache: the raster fills the whole frame.
+        // QOI is lossless and therefore near-raw on this content.
+        const QImage full = photoContent
+                                .scaled(size, Qt::IgnoreAspectRatio,
+                                        Qt::SmoothTransformation)
+                                .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        if (hasWebp)
+            addRow(QStringLiteral("photo-full"), QStringLiteral("webp-q80"),
+                   size, full, full,
+                   qtEncode(QByteArrayLiteral("webp"), 80, -1),
+                   qtDecode(QByteArrayLiteral("webp")));
+        if (hasJpeg)
+            addRow(QStringLiteral("photo-full"), QStringLiteral("jpeg-q90"),
+                   size, full, full,
+                   qtEncode(QByteArrayLiteral("jpeg"), 90, -1),
+                   qtDecode(QByteArrayLiteral("jpeg")));
+        if (hasQoi)
+            addRow(QStringLiteral("photo-full"), QStringLiteral("qoi"), size,
+                   full, full, qtEncode(QByteArrayLiteral("qoi"), -1, -1),
+                   qtDecode(QByteArrayLiteral("qoi")));
+    }
+
+    auto findRow = [&rows](const QString& imageName, const QString& encoder,
+                           const QSize& size) -> const EncoderBenchRow* {
+        for (const EncoderBenchRow& row : rows)
+            if (row.imageName == imageName && row.encoder == encoder
+                && row.size == size)
+                return &row;
+        return nullptr;
+    };
+
+    for (const auto& source : sources)
+    {
+        const EncoderBenchRow* base = findRow(
+            source.first, QStringLiteral("webp-q80"), QSize(1280, 720));
+        if (!base)
+            continue;
+        QString capLine;
+        for (const QSize& size : sizes)
+        {
+            const EncoderBenchRow* row = findRow(
+                source.first, QStringLiteral("webp-q80"), size);
+            if (!row)
+                continue;
+            const double p50 = row->encodeSamples.percentile(0.5);
+            const double saved =
+                base->encodeSamples.percentile(0.5) > 0.0
+                    ? 100.0
+                          * (1.0 - p50 / base->encodeSamples.percentile(0.5))
+                    : 0.0;
+            capLine += QStringLiteral(" %1x%2=%3ms(-%4%)")
+                           .arg(size.width())
+                           .arg(size.height())
+                           .arg(p50, 0, 'f', 2)
+                           .arg(saved, 0, 'f', 0);
+        }
+        qInfo().noquote()
+            << QStringLiteral("cache-encoder-bench | cap | image=%1 "
+                              "webp-q80 encode-p50:%2")
+                   .arg(source.first, capLine);
+    }
+
+    for (const QString& encoder :
+         {QStringLiteral("webp-q80"), QStringLiteral("webp-q60"),
+          QStringLiteral("webp-q50"), QStringLiteral("qoi"),
+          QStringLiteral("jpeg-q90")})
+    {
+        const EncoderBenchRow* row =
+            findRow(QStringLiteral("user"), encoder, QSize(1280, 720));
+        if (!row)
+            row = findRow(QStringLiteral("synthetic"), encoder,
+                          QSize(1280, 720));
+        if (!row)
+            continue;
+        const double p50 = row->encodeSamples.percentile(0.5);
+        const double p95 = row->encodeSamples.percentile(0.95);
+        const auto writers = [](double ms, double budget) {
+            return std::max(1, int(std::ceil(ms / budget)));
+        };
+        qInfo().noquote()
+            << QStringLiteral("cache-encoder-bench | writers | %1 "
+                              "1280x720 encode p50=%2 p95=%3 ms -> "
+                              "30fps p50=%4 p95=%5 threads, 60fps p50=%6 "
+                              "p95=%7 threads")
+                   .arg(encoder)
+                   .arg(p50, 0, 'f', 2)
+                   .arg(p95, 0, 'f', 2)
+                   .arg(writers(p50, 33.0))
+                   .arg(writers(p95, 33.0))
+                   .arg(writers(p50, 16.7))
+                   .arg(writers(p95, 16.7));
+    }
+
     return 0;
 }
 
@@ -24694,7 +25271,8 @@ int main(int argc, char* argv[])
     bool testMode = false;
     for (const QString& argument : app.arguments())
         if (argument.endsWith(QStringLiteral("-test"))
-            || argument == QStringLiteral("--cache-miss-profile"))
+            || argument == QStringLiteral("--cache-miss-profile")
+            || argument == QStringLiteral("--cache-encoder-bench"))
             testMode = true;
     if (testMode)
     {
@@ -24741,6 +25319,8 @@ int main(int argc, char* argv[])
         return solverPlaybackPerfTest(app);
     if (app.arguments().contains(QStringLiteral("--cache-miss-profile")))
         return cacheMissProfileTest(app);
+    if (app.arguments().contains(QStringLiteral("--cache-encoder-bench")))
+        return cacheEncoderBenchTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
         return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))
