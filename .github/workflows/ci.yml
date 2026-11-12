@@ -85,6 +85,15 @@ jobs:
         # html2 的低分辨率异步用例对并行负载敏感，失败重试一次；真回归仍会判红。
         run: ctest --preset debug -j 4 --repeat until-pass:2 --exclude-regex "$KNOWN_FLAKY"
 
+      - name: 上传失败测试清单
+        if: failure() && matrix.preset == 'debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-failures-qt${{ matrix.qt.version }}
+          path: build/debug/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: ctest（已知参考壳 flaky，只做可见性）
         if: matrix.preset == 'debug'
         continue-on-error: true

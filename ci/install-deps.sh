@@ -49,6 +49,7 @@ APT_PACKAGES=(
     ccache
     pkg-config
     git
+    ffmpeg
     libavformat-dev
     libavcodec-dev
     libavutil-dev
