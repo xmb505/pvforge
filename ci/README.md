@@ -71,6 +71,25 @@ QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --settings-test
 `release` 全部关闭。不用 preset 时默认是 Release 语义的裁剪构建，只有显式传
 `-DPVFORGE_BUILD_REFERENCE=ON` 才会编参考壳。
 
+## 文档指标
+
+`docs/AI/STATUS.md` 顶部的指标区块不再手抄，由脚本从仓库现场计算：
+
+```bash
+bash tools/doc-metrics.sh           # 打印 Markdown 片段
+bash tools/doc-metrics.sh --write   # 替换 STATUS.md 里的标记区块
+bash tools/doc-metrics.sh --check   # 与文档比对，不一致退出 1
+```
+
+CI 的 `doc-metrics` job 只跑 `--check`，不需要 Qt/构建产物。规则：
+
+- 源码行数、`--*-test` 自检开关数是纯仓库指标，始终参与校验。
+- 日期 / HEAD 每次都变，`--check` 跳过。
+- CTest 用例数、`dist/pvforge` 大小、`ldd` 依赖数依赖本地构建；算不出来时
+  标成“未构建”/“缺失”，`--check` 跳过这些行，`--write` 保留文档旧值。所以
+  干净 checkout 也能运行，不会把已有数字覆盖成占位符。
+- 换了源码结构或加了自检后，本地跑一次 `--write` 并提交，CI 才会绿。
+
 ## 已知限制
 
 - CI 只跑 Linux x86_64 + offscreen；没有 GPU，像素/视频相关断言依赖软件光栅。

@@ -65,6 +65,14 @@ ctest --test-dir build --output-on-failure
 
 `src/tests/` 里是按功能分组的离屏自检；自检只编进 `pvforge-tests`，Release 的 `pvforge` 不包含测试入口。完整清单以源码为准。
 
+文档里的指标（HEAD、源码行数、自检开关数、CTest 用例数、二进制大小）不手抄：
+
+```bash
+bash tools/doc-metrics.sh           # 打印 Markdown 片段
+bash tools/doc-metrics.sh --write   # 更新 docs/AI/STATUS.md 顶部指标区块
+bash tools/doc-metrics.sh --check   # CI 校验，数字漂移则退出 1
+```
+
 ### CI 与本地验证
 
 依赖一次装好，之后用 preset（Qt 6.6.x/6.7.x 参见 [ci/README.md](ci/README.md)）：

@@ -2,11 +2,25 @@
 
 # PVForge 新模型状态与交接
 
-> 日期：2026-11-11  
-> 分支：`new-entity-model`（已合并 `ui-backend-integration`）  
-> 最新已提交：`491c270 chore: retire the legacy export path and reference shell target`  
+<!-- metrics:begin -->
+<!-- 本区块由 `bash tools/doc-metrics.sh --write` 生成，请勿手改；CI 用 `--check` 校验。 -->
+| 指标 | 值 |
+| --- | --- |
+| 生成日期 | 2026-11-13 |
+| HEAD | `56a03c1` |
+| `src/main.cpp` 行数 | 126 |
+| `src/tests` 行数 | 25196 |
+| 测试源码行数（含模块 tests） | 62096 |
+| 非测试源码行数 | 122947 |
+| `--*-test` 自检开关数 | 95 |
+| CTest 用例数 | 330 |
+| `dist/pvforge` 大小 | 8.1 MiB（8451648 字节） |
+| Release 动态库依赖数 | 175（ldd 动态库依赖） |
+<!-- metrics:end -->
+
+> 本文件的指标（HEAD、源码行数、测试数、二进制大小）见上方指标区块，由 `tools/doc-metrics.sh` 生成；正文不再手抄这些数字。  
 > **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端模块逐步接入旧壳；`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。本文以下历史描述以本段为准。  
-> **2026-11-11 旧 UI 接入完成**：P1–P7 已合并；最终二进制 `dist/pvforge`（9.5MB）与 `dist/pvforge-mcp`。旧 UI 的时间轴/属性/视口/Gizmo/相机监视器/素材箱/MCP/设置/导出均已接新后端。  
+> **2026-11-11 旧 UI 接入完成**：P1–P7 已合并；最终二进制 `dist/pvforge` 与 `dist/pvforge-mcp`（大小见顶部指标区块）。旧 UI 的时间轴/属性/视口/Gizmo/相机监视器/素材箱/MCP/设置/导出均已接新后端。  
 > 设计主文档：`docs/AI/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/AI/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/AI/INTEGRATION_PLAN.md`  
@@ -202,7 +216,7 @@
 - P7a 旧导出 UI 接 export2（fps/分辨率/CRF/编码器/ETA/取消/覆盖）；`b1dc1f7`
 - P7b 移除 `pvforge-next` 交付目标与旧导出管线；`491c270`
 
-最终二进制：`dist/pvforge`（Release，9.5MB）、`dist/pvforge-mcp`；启动说明 `dist/RUN.txt`。
+最终二进制：`dist/pvforge`（Release）、`dist/pvforge-mcp`；大小见顶部指标区块，启动说明 `dist/RUN.txt`。
 
 验收：`--self-test`、`--session-test`、`--viewport-test`、`--timeline-test`、`--properties-test`、`--assets-test`、`--mcp-test`、`--git-test`、`--export-test` 全部通过；`--open /tmp/pvfe2e/proj` 启动不崩；`ldd` 无缺失。
 
@@ -226,7 +240,7 @@
 - 相机监视器 + 临摹视频（无串流）；MCP 日志在监视器旁（顶栏 dock）。
 - 渲染：素材丢失卡片、内容轨道动画、品牌墙、扩展缓存透明底。
 - 导出：可见音频、覆盖确认、4x 大尺寸确认；HTML 预取 + 真实上屏看门狗。
-- 根 CTest 注册（268 项）。
+- 根 CTest 注册（数量见顶部指标区块）。
 
 仍未完成：
 
