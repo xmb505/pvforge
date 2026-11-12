@@ -84,6 +84,11 @@ if(NOT TARGET pvf_workbench)
                      ${CMAKE_CURRENT_BINARY_DIR}/workbench_dep)
 endif()
 
+if(NOT TARGET pvf_perf)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../perf
+                     ${CMAKE_CURRENT_BINARY_DIR}/perf_dep)
+endif()
+
 # Small document slice shared by the legacy delivery shell (P1) and the
 # reference-only NextWindow library.  Keeping it separate means the old
 # `pvforge` target can link the document/core/store without pulling in
@@ -129,6 +134,7 @@ target_link_libraries(pvf_next_services PUBLIC
     pvf_video2
     pvf_audio2
     pvf_workbench
+    pvf_perf
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets

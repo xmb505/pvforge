@@ -46,6 +46,8 @@
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
+#include "perf/FrameProfiler.h"
+#include "perf/SystemStats.h"
 #include "core/LineDeco.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
@@ -64,6 +66,7 @@
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CurveEditor.h"
 #include "ui/McpLogPanel.h"
+#include "ui/PerfMonitorWindow.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WaveformView.h"
@@ -115,6 +118,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QTableWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QScrollArea>
@@ -25347,6 +25351,289 @@ int mcpLockTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+int perfMonitorTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    const auto check = [&failures](bool condition, const QString& message) {
+        if (condition)
+            return;
+        qCritical() << "perf-monitor-test:" << message;
+        ++failures;
+    };
+    const auto busyWait = [](int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < milliseconds)
+        {
+        }
+    };
+
+    pvf::perf::FrameProfiler& profiler =
+        pvf::perf::FrameProfiler::instance();
+    profiler.clear();
+    profiler.setCaptureEnabled(true);
+
+    // Ring buffer + stage aggregation + percentiles.  More than 300 frames
+    // forces the oldest samples out.
+    for (int i = 0; i < 420; ++i)
+    {
+        pvf::perf::FrameScope frame;
+        {
+            pvf::perf::Scope render(QStringLiteral("test-render"),
+                                   pvf::perf::Category::Render2);
+            busyWait(1);
+        }
+        if (i % 4 == 0)
+        {
+            pvf::perf::Scope encode(QStringLiteral("test-encode"),
+                                    pvf::perf::Category::Encode);
+            busyWait(1);
+        }
+        profiler.noteCacheLookup(i % 3 != 0);
+        if (i % 10 == 0)
+            profiler.noteSolverCall();
+    }
+
+    pvf::perf::Snapshot snapshot = profiler.snapshot();
+    check(snapshot.frames.size() == pvf::perf::kRingCapacity,
+          QStringLiteral("ring buffer did not cap at 300 (%1)")
+              .arg(snapshot.frames.size()));
+    check(snapshot.summary.count == pvf::perf::kRingCapacity,
+          QStringLiteral("summary count is not the ring size"));
+    check(!snapshot.frames.isEmpty()
+              && snapshot.frames.first().index + pvf::perf::kRingCapacity - 1
+                     == snapshot.frames.last().index,
+          QStringLiteral("ring buffer dropped the wrong frames"));
+    check(snapshot.summary.p50Ms <= snapshot.summary.p95Ms
+              && snapshot.summary.p95Ms <= snapshot.summary.p99Ms,
+          QStringLiteral("percentiles are not ordered"));
+    check(snapshot.summary.p95Ms > 0.0 && snapshot.summary.meanMs > 0.0,
+          QStringLiteral("frame timings are empty"));
+    check(snapshot.summary.categoryTotalMs[size_t(
+              int(pvf::perf::Category::Render2))] > 0.0,
+          QStringLiteral("render2 stage was not recorded"));
+    check(snapshot.summary.categoryTotalMs[size_t(
+              int(pvf::perf::Category::Encode))] > 0.0,
+          QStringLiteral("encode stage was not recorded"));
+    check(snapshot.cache.hits > 0 && snapshot.cache.misses > 0,
+          QStringLiteral("cache hit/miss counters are empty"));
+    check(snapshot.solverCalls > 0,
+          QStringLiteral("solver counter is empty"));
+
+    // 5/10/30 second recording report.
+    check(profiler.startRecording(60), QStringLiteral("recording did not start"));
+    for (int i = 0; i < 90; ++i)
+    {
+        pvf::perf::FrameScope frame;
+        {
+            pvf::perf::Scope render(QStringLiteral("test-render"),
+                                    pvf::perf::Category::Render2);
+            busyWait(1);
+        }
+        profiler.noteCacheLookup(i % 2 == 0);
+    }
+    profiler.stopRecording();
+    const pvf::perf::RecordingReport report = profiler.recordedReport();
+    check(report.valid, QStringLiteral("recording report is invalid"));
+    check(report.frameCount >= 90,
+          QStringLiteral("recording lost frames (%1)").arg(report.frameCount));
+    check(report.text.contains(QStringLiteral("PVForge 性能报告")),
+          QStringLiteral("recording text has no header"));
+    check(!report.conclusion.isEmpty(),
+          QStringLiteral("recording conclusion is empty"));
+    check(report.summary.p95Ms > 0.0,
+          QStringLiteral("recording percentiles are empty"));
+
+    // A duration-only recording ends even when no new frame arrives; the
+    // monitor refresh calls snapshot() and that finalises it.
+    check(profiler.startRecording(1),
+          QStringLiteral("timed recording did not start"));
+    QElapsedTimer deadline;
+    deadline.start();
+    while (deadline.elapsed() < 1150)
+    {
+        QApplication::processEvents();
+        QThread::msleep(10);
+    }
+    profiler.snapshot();
+    check(!profiler.isRecording(),
+          QStringLiteral("timed recording did not stop on its own"));
+    check(profiler.recordedReport().valid,
+          QStringLiteral("timed recording produced no report"));
+
+    // Encode-only frames must produce the cache-encoding conclusion.
+    check(profiler.startRecording(60),
+          QStringLiteral("second recording did not start"));
+    for (int i = 0; i < 30; ++i)
+    {
+        pvf::perf::FrameScope frame;
+        pvf::perf::Scope encode(QStringLiteral("test-encode"),
+                                pvf::perf::Category::Encode);
+        busyWait(1);
+        profiler.noteCacheLookup(false);
+    }
+    profiler.stopRecording();
+    const pvf::perf::RecordingReport encodeReport = profiler.recordedReport();
+    check(encodeReport.conclusion.contains(QStringLiteral("缓存编码")),
+          QStringLiteral("encode hotspot conclusion missing: %1")
+              .arg(encodeReport.conclusion));
+
+    const QJsonObject diagnostics = profiler.diagnosticsJson();
+    check(diagnostics.contains(QStringLiteral("frames"))
+              && diagnostics.value(QStringLiteral("frames")).toArray().size()
+                     == pvf::perf::kRingCapacity,
+          QStringLiteral("diagnostics frames are missing"));
+    check(diagnostics.contains(QStringLiteral("summary")),
+          QStringLiteral("diagnostics summary is missing"));
+    check(diagnostics.contains(QStringLiteral("cache")),
+          QStringLiteral("diagnostics cache is missing"));
+    check(diagnostics.contains(QStringLiteral("report")),
+          QStringLiteral("diagnostics report is missing"));
+
+    // The window opens offscreen, has every section, and survives a recording
+    // and a close without touching the profiler ring.
+    QTemporaryDir temp;
+    check(temp.isValid(), QStringLiteral("no temp dir for the window test"));
+    pvf::PerfMonitorWindow window;
+    window.setCacheRoot(temp.path());
+    window.show();
+    QApplication::processEvents();
+
+    check(window.windowTitle() == QStringLiteral("性能监视"),
+          QStringLiteral("window title changed"));
+    check(window.findChild<QLabel*>(QStringLiteral("perfSummaryLabel")),
+          QStringLiteral("summary label missing"));
+    check(window.findChild<QWidget*>(QStringLiteral("perfSparkline")),
+          QStringLiteral("sparkline missing"));
+    check(window.findChild<QTableWidget*>(QStringLiteral("perfStageTable")),
+          QStringLiteral("stage table missing"));
+    check(window.findChild<QLabel*>(QStringLiteral("perfCacheLabel")),
+          QStringLiteral("cache label missing"));
+    check(window.findChild<QLabel*>(QStringLiteral("perfSystemLabel")),
+          QStringLiteral("system label missing"));
+    check(window.findChild<QWidget*>(QStringLiteral("perfWaterfall")),
+          QStringLiteral("waterfall missing"));
+
+    auto* duration = window.findChild<QComboBox*>(
+        QStringLiteral("perfRecordDuration"));
+    auto* recordButton = window.findChild<QPushButton*>(
+        QStringLiteral("perfRecordButton"));
+    auto* reportEdit = window.findChild<QPlainTextEdit*>(
+        QStringLiteral("perfReport"));
+    check(duration && recordButton && reportEdit,
+          QStringLiteral("recording controls missing"));
+    if (duration && recordButton && reportEdit)
+    {
+        check(duration->count() == 3
+                  && duration->itemData(0).toInt() == 5
+                  && duration->itemData(1).toInt() == 10
+                  && duration->itemData(2).toInt() == 30,
+              QStringLiteral("recording durations are not 5/10/30"));
+        duration->setCurrentIndex(0);
+        recordButton->click();
+        QApplication::processEvents();
+        check(recordButton->text().contains(QStringLiteral("停止")),
+              QStringLiteral("start did not flip the record button"));
+        check(!duration->isEnabled(),
+              QStringLiteral("duration combo stayed enabled while recording"));
+
+        for (int i = 0; i < 6; ++i)
+        {
+            pvf::perf::FrameScope frame;
+            pvf::perf::Scope render(QStringLiteral("test-render"),
+                                    pvf::perf::Category::Render2);
+            busyWait(1);
+        }
+        recordButton->click();
+        QApplication::processEvents();
+        check(!window.isRecording(),
+              QStringLiteral("stop did not end the recording"));
+        check(recordButton->text().contains(QStringLiteral("开始")),
+              QStringLiteral("stop did not restore the record button"));
+        check(duration->isEnabled(),
+              QStringLiteral("duration combo stayed disabled after stop"));
+        check(window.currentReportText().contains(
+                  QStringLiteral("PVForge 性能报告")),
+              QStringLiteral("window report is empty"));
+    }
+
+    const QString exportPath =
+        QDir(temp.path()).filePath(QStringLiteral("perf-diagnostics.json"));
+    QString exportError;
+    check(window.exportDiagnostics(exportPath, &exportError),
+          QStringLiteral("diagnostics export failed: %1").arg(exportError));
+    QFile exported(exportPath);
+    if (exported.open(QIODevice::ReadOnly))
+    {
+        const QJsonObject root =
+            QJsonDocument::fromJson(exported.readAll()).object();
+        check(root.contains(QStringLiteral("frames")),
+              QStringLiteral("export has no frames"));
+        check(root.contains(QStringLiteral("system")),
+              QStringLiteral("export has no system section"));
+        check(root.value(QStringLiteral("system")).toObject().contains(
+                  QStringLiteral("supported")),
+              QStringLiteral("system section has no support flag"));
+        check(root.contains(QStringLiteral("report")),
+              QStringLiteral("export has no report"));
+    }
+    else
+    {
+        check(false, QStringLiteral("exported JSON cannot be read"));
+    }
+
+    const int framesBeforeClose = window.findChild<QWidget*>(
+                                      QStringLiteral("perfSparkline"))
+                                      ? profiler.snapshot().frames.size()
+                                      : 0;
+    window.grab().toImage().save(
+        QStringLiteral("/tmp/pvforge_perf_monitor.png"));
+    window.close();
+    QApplication::processEvents();
+    check(profiler.snapshot().frames.size() == framesBeforeClose,
+          QStringLiteral("closing the window cleared the profiler ring"));
+
+    // The View menu action opens and closes the same window without touching
+    // the profiler.
+    auto* project = new pvf::Project;
+    pvf::MainWindow mainWindow(project);
+    mainWindow.show();
+    QApplication::processEvents();
+    auto* perfAction = mainWindow.findChild<QAction*>(
+        QStringLiteral("perfMonitorWindowAction"));
+    check(perfAction != nullptr,
+          QStringLiteral("View menu performance monitor action missing"));
+    if (perfAction)
+    {
+        perfAction->setChecked(true);
+        QApplication::processEvents();
+        auto* opened = mainWindow.perfMonitorWindowForTest();
+        check(opened != nullptr && opened->isVisible(),
+              QStringLiteral("menu action did not open the performance window"));
+        if (opened)
+        {
+            check(opened->findChild<QLabel*>(
+                      QStringLiteral("perfSummaryLabel"))
+                      != nullptr,
+                  QStringLiteral("menu-opened window has no summary"));
+            perfAction->setChecked(false);
+            QApplication::processEvents();
+            check(!opened->isVisible(),
+                  QStringLiteral("menu action did not hide the window"));
+        }
+    }
+    mainWindow.close();
+    QApplication::processEvents();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    profiler.setCaptureEnabled(false);
+    qInfo() << "perf-monitor-test OK: ring" << snapshot.frames.size()
+            << "frames, p50" << snapshot.summary.p50Ms << "ms, p95"
+            << snapshot.summary.p95Ms << "ms, failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char* argv[])
 {
     // The current media pipeline decodes video first frames and audio with
@@ -25395,6 +25682,8 @@ int main(int argc, char* argv[])
         return gitSessionTest(app);
     if (app.arguments().contains(QStringLiteral("--mcp-lock-test")))
         return mcpLockTest(app);
+    if (app.arguments().contains(QStringLiteral("--perf-monitor-test")))
+        return perfMonitorTest(app);
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();
     if (app.arguments().contains(QStringLiteral("--session-test")))

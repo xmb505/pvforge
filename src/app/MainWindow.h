@@ -56,6 +56,7 @@ class ExportProgressDialog;
 class McpCommandService;
 class McpLogPanel;
 class McpServer;
+class PerfMonitorWindow;
 class ProjectPropertiesPanel;
 class PropertiesPanel;
 class SettingsDialog;
@@ -131,6 +132,7 @@ public:
     int autosaveIntervalForTest() const;
     McpServer* mcpServerForTest() const { return m_mcpServer; }
     McpLogPanel* mcpLogPanelForTest() const { return m_mcpLog; }
+    PerfMonitorWindow* perfMonitorWindowForTest() const { return m_perfWindow; }
     McpCommandService* mcpCommandsForTest() const { return m_mcpCommands.get(); }
     bool armMcpWritesForTest(QString* error = nullptr) { return armMcpWrites(error); }
     void stopMcpWritesForTest() { stopMcpWrites(); }
@@ -274,6 +276,8 @@ private:
     void onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
     void updateWindowTitle();
     void updatePerfLabel();
+    QAction* createPerfMonitorWindowAction();
+    void showPerfMonitorWindow(bool show);
     void showImportBusy(int count);
     void hideImportBusy();
     bool saveProject();
@@ -391,6 +395,7 @@ private:
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
+    PerfMonitorWindow* m_perfWindow = nullptr;
     // Session-shell MCP endpoint wiring.  The listener belongs to EditorSession;
     // this only tracks the server the signals are connected to so a restart
     // does not double-connect.

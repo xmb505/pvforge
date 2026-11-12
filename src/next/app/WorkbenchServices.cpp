@@ -1,6 +1,7 @@
 #include "next/app/WorkbenchServices.h"
 
 #include "next/app/ProjectDocument.h"
+#include "perf/FrameProfiler.h"
 
 #include <QDir>
 
@@ -15,6 +16,23 @@ constexpr int kTickIntervalMs = 20;
 // A held frame waits at most this long for the asynchronous HTML renderer.
 constexpr int kHtmlWaitMs = 3000;
 constexpr int kMaxCacheWidth = 1280;
+
+class StoreGuard
+{
+public:
+    StoreGuard()
+        : m_profiler(perf::FrameProfiler::instance())
+    {
+        m_profiler.beginStore();
+    }
+    ~StoreGuard() { m_profiler.endStore(); }
+
+    StoreGuard(const StoreGuard&) = delete;
+    StoreGuard& operator=(const StoreGuard&) = delete;
+
+private:
+    perf::FrameProfiler& m_profiler;
+};
 
 } // namespace
 
@@ -101,17 +119,35 @@ QImage WorkbenchServices::lookup(int frame, const Uuid& cameraUuid, bool* hit)
     if (!m_enabled || cameraUuid != m_cameraUuid)
         return {};
 
+    perf::FrameProfiler& profiler = perf::FrameProfiler::instance();
+
     // Do not create the cache tree for a lookup.  If no previous session left
     // a cache behind this is a plain miss; store() creates it after rendering.
     if (!m_cache) {
         if (!QDir(m_cacheRoot).exists())
+        {
+            profiler.noteCacheLookup(false);
             return {};
+        }
         ensureCache();
     }
     if (!m_cache || !m_cache->isValid())
+    {
+        profiler.noteCacheLookup(false);
         return {};
+    }
 
-    return m_cache->lookup(frame, buildMeta(frame), hit);
+    workbench::FrameMeta meta;
+    {
+        perf::Scope metaScope("元数据构建", perf::Category::Meta);
+        meta = buildMeta(frame);
+    }
+    bool found = false;
+    const QImage image = m_cache->lookup(frame, meta, &found);
+    if (hit)
+        *hit = found;
+    profiler.noteCacheLookup(found);
+    return image;
 }
 
 void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
@@ -119,6 +155,8 @@ void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
 {
     if (!m_enabled || image.isNull() || cameraUuid != m_cameraUuid)
         return;
+
+    const StoreGuard storeGuard;
 
     // First miss creates the directory, index and the frame file (QOI for
     // pure vector frames, WebP when the meta flags image/video/HTML content).
@@ -385,6 +423,7 @@ QImage WorkbenchServices::renderForCache(int frame, bool* htmlMissing,
             m_options.transparentOutsideCanvas;
     }
     options.videoFrame = [this, &missingVideo](const Uuid& uuid, double at) {
+        perf::Scope videoScope("视频帧", perf::Category::Video);
         const QImage image = m_providers.videoFrame
                                  ? m_providers.videoFrame(uuid, at)
                                  : QImage();
@@ -393,6 +432,7 @@ QImage WorkbenchServices::renderForCache(int frame, bool* htmlMissing,
         return image;
     };
     options.htmlFrame = [this, &missingHtml](const Uuid& uuid, double at) {
+        perf::Scope htmlScope("HTML 帧", perf::Category::Html);
         const QImage image = m_providers.htmlFrame
                                  ? m_providers.htmlFrame(uuid, at)
                                  : QImage();

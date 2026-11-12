@@ -1,5 +1,6 @@
 #include "workbench/Cache.h"
 
+#include "perf/FrameProfiler.h"
 #include "workbench/Qoi.h"
 
 #include <QBuffer>
@@ -100,11 +101,17 @@ QByteArray encodeWebp(const QImage& image)
 
 QByteArray encodeFrame(const QImage& image, const QString& codec)
 {
+    perf::Scope encodeScope(codec == kQoiCodec ? "缓存编码/QOI"
+                                               : "缓存编码/WebP",
+                            perf::Category::Encode);
     return codec == kQoiCodec ? encodeQoi(image) : encodeWebp(image);
 }
 
 QImage decodeFrame(const QString& path, const QString& codec)
 {
+    perf::Scope decodeScope(codec == kQoiCodec ? "缓存解码/QOI"
+                                               : "缓存解码/WebP",
+                            perf::Category::Decode);
     if (codec == kQoiCodec)
     {
         QFile file(path);
@@ -334,6 +341,7 @@ struct Cache::Impl
 
     bool upsertRow(const Entry& entry, int frame)
     {
+        perf::Scope sqliteScope("缓存索引写入", perf::Category::Sqlite);
         QSqlDatabase db = database();
         QSqlQuery query(db);
         query.prepare(QStringLiteral(
@@ -589,8 +597,11 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     QImage scaled = image;
     const QSize target = d->options.targetSize;
     if (target.isValid() && scaled.size() != target)
+    {
+        perf::Scope scaleScope("缓存缩放", perf::Category::Other);
         scaled = scaled.scaled(target, Qt::IgnoreAspectRatio,
                                Qt::SmoothTransformation);
+    }
     if (scaled.isNull())
         return fail(QStringLiteral("image scaling failed"));
 
@@ -602,10 +613,13 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
 
     const QString path = d->framePath(frame, codec);
     QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly))
-        return fail(file.errorString());
-    if (file.write(data) != data.size() || !file.commit())
-        return fail(file.errorString());
+    {
+        perf::Scope diskScope("缓存写盘", perf::Category::Disk);
+        if (!file.open(QIODevice::WriteOnly))
+            return fail(file.errorString());
+        if (file.write(data) != data.size() || !file.commit())
+            return fail(file.errorString());
+    }
 
     Impl::Entry entry;
     entry.meta = meta.bytes;
@@ -642,6 +656,7 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     d->diskBytes += entry.bytes;
     d->rememberImage(frame, scaled);
     ++d->counters.stores;
+    perf::FrameProfiler::instance().noteCacheStore(codec == kWebpCodec);
 
     d->enforceDisk();
     return true;

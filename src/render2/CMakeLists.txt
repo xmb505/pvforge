@@ -30,6 +30,11 @@ if(NOT TARGET pvf_anim)
                      ${CMAKE_CURRENT_BINARY_DIR}/anim_dep)
 endif()
 
+if(NOT TARGET pvf_perf)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../perf
+                     ${CMAKE_CURRENT_BINARY_DIR}/perf_dep)
+endif()
+
 # Text and vector drawing comes from the standalone core content helpers.  They
 # do not depend on core/Project.h.
 add_library(pvf_render2 STATIC
@@ -45,6 +50,7 @@ target_link_libraries(pvf_render2 PUBLIC
     pvf_model
     pvf_assets
     pvf_anim
+    pvf_perf
     Qt6::Core
     Qt6::Gui
 )

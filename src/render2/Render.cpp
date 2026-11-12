@@ -3,6 +3,7 @@
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
 #include "core/VectorShape.h"
+#include "perf/FrameProfiler.h"
 
 #include <QBrush>
 #include <QDir>
@@ -1416,6 +1417,7 @@ QImage renderFrame(const model::Project& project,
                    const assets::AssetStore& assets, const Options& options,
                    anim::World& world, anim::Cache& cache)
 {
+    perf::Scope renderScope("场景渲染", perf::Category::Render2);
     QSize output = options.outputSize;
     if (output.isEmpty())
         output = QSize(project.settings.width, project.settings.height);

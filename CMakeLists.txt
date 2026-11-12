@@ -101,6 +101,7 @@ add_executable(pvforge
     src/ui/EasingChooser.cpp
     src/ui/EasingPicker.cpp
     src/ui/McpLogPanel.cpp
+    src/ui/PerfMonitorWindow.cpp
     src/ui/TextLayoutDialog.cpp
     src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp
@@ -136,6 +137,7 @@ target_link_libraries(pvforge PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Multimedia Qt6::Network
     PkgConfig::FFMPEG
     pvf_gizmo
+    pvf_perf
 )
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
@@ -144,6 +146,7 @@ install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
 # document/core/store slice (pvf_next_document) plus the services and panels
 # it uses; the reference shell is not a delivery target.
 add_subdirectory(src/model)
+add_subdirectory(src/perf)
 add_subdirectory(src/assets)
 add_subdirectory(src/solver)
 add_subdirectory(src/gizmo)

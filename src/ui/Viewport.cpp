@@ -14,6 +14,7 @@
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
 #include "next/core/Document.h"
+#include "perf/FrameProfiler.h"
 #include "render/SceneRenderer.h"
 #include "render2/Render.h"
 #include "workbench/MetaBuilder.h"
@@ -899,6 +900,7 @@ QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
         options.transparentOutsideCanvas = true;
     }
     options.videoFrame = [this, &missing](const Uuid& uuid, double frame) {
+        perf::Scope videoScope("视频帧", perf::Category::Video);
         const QImage image =
             m_session->media() ? m_session->media()->videoFrame(uuid, frame)
                                : QImage();
@@ -907,6 +909,7 @@ QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
         return image;
     };
     options.htmlFrame = [this, &missing](const Uuid& uuid, double frame) {
+        perf::Scope htmlScope("HTML 帧", perf::Category::Html);
         const QImage image =
             m_session->media() ? m_session->media()->htmlFrame(uuid, frame)
                                : QImage();
@@ -954,6 +957,7 @@ QImage Viewport::ensureSessionImage()
     next::WorkbenchServices* workbench = m_session->workbench();
     if (workbench && !liveEdit)
     {
+        perf::Scope lookupScope("帧缓存查找", perf::Category::Lookup);
         bool hit = false;
         const QImage cached = workbench->lookup(frame, camera, &hit);
         if (hit && !cached.isNull())
@@ -2347,6 +2351,7 @@ void Viewport::drawSessionCameraOverlay(QPainter& painter)
 
 void Viewport::paintSession(QPainter& p)
 {
+    perf::FrameScope frameScope;
     QElapsedTimer profile;
     profile.start();
 
@@ -2358,6 +2363,8 @@ void Viewport::paintSession(QPainter& p)
     p.fillRect(canvas.translated(6, 6), QColor(0, 0, 0, 90));
 
     const QImage image = ensureSessionImage();
+
+    perf::Scope paintScope("视口绘制", perf::Category::Paint);
     QRectF target = rect();
     if (expand > 0)
         target = sessionSceneRect();

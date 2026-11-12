@@ -1,6 +1,8 @@
 #include "Solver.h"
 #include "SolverInternal.h"
 
+#include "perf/FrameProfiler.h"
+
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -42,6 +44,9 @@ Result evaluateResult(const Segment &segment, const World &world,
     endFrame = std::min(endFrame, clipDuration - 1);
     if (endFrame < segment.startFrame)
         return {};
+
+    perf::Scope solverScope("物理求解", perf::Category::Solver);
+    perf::FrameProfiler::instance().noteSolverCall();
 
     const detail::FrameRange range{segment.startFrame, endFrame,
                                    endFrame - segment.startFrame + 1};

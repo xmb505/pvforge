@@ -38,6 +38,7 @@
 #include "ui/CurveEditor.h"
 #include "ui/EnvironmentPanel.h"
 #include "ui/McpLogPanel.h"
+#include "ui/PerfMonitorWindow.h"
 #include "ui/ProjectPropertiesPanel.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
@@ -550,7 +551,7 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
     m_perfLabel = new QLabel(this);
     m_perfLabel->setObjectName(QStringLiteral("perfInfo"));
     m_perfLabel->setToolTip(QStringLiteral(
-        "播放 FPS、每帧耗时、场景/视口/时间轴/视频解码耗时；视图 → 性能监视"));
+        "播放 FPS、每帧耗时、场景/视口/时间轴/视频解码耗时；视图 → 状态栏性能指标"));
     m_perfLabel->hide();
     statusBar()->addPermanentWidget(m_perfLabel);
 
@@ -1516,6 +1517,8 @@ void MainWindow::createSessionMenus()
         }
     });
     viewMenu->addAction(m_historyAction);
+
+    viewMenu->addAction(createPerfMonitorWindowAction());
 
     viewMenu->addAction(m_fitAction);
 
@@ -2932,7 +2935,7 @@ void MainWindow::createMenus()
             [setDisplayFrames] { setDisplayFrames(true); });
 
     viewMenu->addSeparator();
-    m_perfAction = new QAction(QStringLiteral("性能监视"), this);
+    m_perfAction = new QAction(QStringLiteral("状态栏性能指标"), this);
     m_perfAction->setObjectName(QStringLiteral("perfMonitorAction"));
     m_perfAction->setCheckable(true);
     m_perfAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
@@ -2952,6 +2955,7 @@ void MainWindow::createMenus()
         }
     });
     viewMenu->addAction(m_perfAction);
+    viewMenu->addAction(createPerfMonitorWindowAction());
 
     menuBar()->setFixedHeight(menuBar()->sizeHint().height());
 
@@ -5336,6 +5340,48 @@ void MainWindow::updatePerfLabel()
             .arg(perf.timelineMs, 0, 'f', 1)
             .arg(perf.videoMs, 0, 'f', 1)
             .arg(perf.entities));
+}
+
+QAction* MainWindow::createPerfMonitorWindowAction()
+{
+    auto* action = new QAction(QStringLiteral("性能监视"), this);
+    action->setObjectName(QStringLiteral("perfMonitorWindowAction"));
+    action->setCheckable(true);
+    connect(action, &QAction::toggled, this,
+            &MainWindow::showPerfMonitorWindow);
+    return action;
+}
+
+void MainWindow::showPerfMonitorWindow(bool show)
+{
+    if (!show)
+    {
+        if (m_perfWindow)
+            m_perfWindow->hide();
+        return;
+    }
+
+    if (!m_perfWindow)
+    {
+        m_perfWindow = new PerfMonitorWindow(this);
+        connect(m_perfWindow, &PerfMonitorWindow::closed, this, [this] {
+            if (auto* action = findChild<QAction*>(
+                    QStringLiteral("perfMonitorWindowAction")))
+            {
+                const QSignalBlocker blocker(action);
+                action->setChecked(false);
+            }
+        });
+    }
+
+    if (m_session)
+        m_perfWindow->setCacheRoot(
+            QDir(m_session->root()).filePath(QStringLiteral(".cache/workbench")));
+    else
+        m_perfWindow->setCacheRoot(QString());
+    m_perfWindow->show();
+    m_perfWindow->raise();
+    m_perfWindow->activateWindow();
 }
 
 void MainWindow::wireMcpDialog(SettingsDialog* dialog)
