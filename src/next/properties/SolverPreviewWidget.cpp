@@ -56,6 +56,8 @@ QString effectLabel(SolverEffect effect)
         return QStringLiteral("自转");
     case SolverEffect::BlackHole:
         return QStringLiteral("黑洞");
+    case SolverEffect::Spiral:
+        return QStringLiteral("螺旋");
     }
     return QStringLiteral("求解");
 }
@@ -579,7 +581,8 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
         maxY = std::max(maxY, point.y());
     };
     addPoint(m_startPose);
-    addPoint(m_arrowTipSolver);
+    if (usesVelocity())
+        addPoint(m_arrowTipSolver);
     addPoint(m_targetSolver);
     for (const solver::Sample& sample : m_samples)
         addPoint(sample.pose.position);

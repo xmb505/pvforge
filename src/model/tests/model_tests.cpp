@@ -767,6 +767,23 @@ void testComponentJsonRoundTrip()
         CHECK(parsedSegment->params.value(QStringLiteral("periodFrames")).toInt()
               == 90);
     }
+
+    SolverSegment spiral = makeSolver(SolverEffect::Spiral, 2, 40);
+    spiral.params.insert(QStringLiteral("targetUuid"), newUuid());
+    spiral.params.insert(QStringLiteral("turns"), 4.5);
+    spiral.params.insert(QStringLiteral("direction"), -1);
+    spiral.params.insert(QStringLiteral("endRadius"), 12.0);
+    spiral.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
+    const QJsonObject spiralJson = toJson(spiral);
+    CHECK(spiralJson.value(QStringLiteral("effect")).toString()
+          == QStringLiteral("spiral"));
+    const auto parsedSpiral = solverFromJson(spiralJson, &error);
+    CHECK_DETAIL(parsedSpiral.has_value(), error);
+    if (parsedSpiral)
+    {
+        CHECK(parsedSpiral->effect == SolverEffect::Spiral);
+        CHECK(toJson(*parsedSpiral) == spiralJson);
+    }
 }
 
 void testProjectJsonRoundTrip()

@@ -48,6 +48,9 @@ class MockWorld final : public World
 {
 public:
     QHash<Uuid, Pose> poses;
+    // Optional per-frame poses; when present they win over `poses`, which lets
+    // a test move the target while a spiral is being solved.
+    QHash<Uuid, QHash<int, Pose>> framePoses;
     QHash<Uuid, QPainterPath> shapes;
     QSet<Uuid> interactive;
     QVector<Uuid> bodies;
@@ -56,7 +59,13 @@ public:
 
     Pose poseOf(const Uuid &uuid, int frame) const override
     {
-        (void)frame;
+        const auto perFrame = framePoses.constFind(uuid);
+        if (perFrame != framePoses.constEnd())
+        {
+            const auto it = perFrame->constFind(frame);
+            if (it != perFrame->constEnd())
+                return it.value();
+        }
         return poses.value(uuid);
     }
 
@@ -453,6 +462,239 @@ void testOrbitDirections()
         CHECK_NEAR(ccwQuarter->pose.position.y(), 200.0, 1e-6);
 }
 
+void testSpiralShrinksTowardTarget()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 60;
+    segment.startPose.position = QPointF(100.0, 0.0);
+    segment.startPose.rotation = 33.0;
+    segment.params[QStringLiteral("turns")] = 1.0;
+    segment.params[QStringLiteral("direction")] = 1; // counter-clockwise
+    segment.params[QStringLiteral("endRadius")] = 20.0;
+
+    const Result result = evaluateResult(segment, world, 61, 30);
+    CHECK(result.stopFrame == 60);
+    CHECK(result.reason == StopReason::ExplicitEnd);
+    CHECK(result.samples.size() == 61);
+    if (result.samples.size() != 61)
+        return;
+
+    const Sample *start = atFrame(result.samples, 0);
+    const Sample *quarter = atFrame(result.samples, 15);
+    const Sample *half = atFrame(result.samples, 30);
+    const Sample *last = atFrame(result.samples, 60);
+    CHECK(start && quarter && half && last);
+    if (!start || !quarter || !half || !last)
+        return;
+
+    CHECK_NEAR(start->pose.position.x(), 100.0, 1e-9);
+    CHECK_NEAR(start->pose.position.y(), 0.0, 1e-9);
+    CHECK_NEAR(start->pose.rotation, 33.0, 1e-12);
+
+    // Radius shrinks linearly: 100 -> 20 over the segment.
+    const double radii[] = {
+        std::hypot(start->pose.position.x(), start->pose.position.y()),
+        std::hypot(quarter->pose.position.x(), quarter->pose.position.y()),
+        std::hypot(half->pose.position.x(), half->pose.position.y()),
+        std::hypot(last->pose.position.x(), last->pose.position.y())};
+    CHECK_NEAR(radii[0], 100.0, 1e-6);
+    CHECK_NEAR(radii[1], 80.0, 1e-6);
+    CHECK_NEAR(radii[2], 60.0, 1e-6);
+    CHECK_NEAR(radii[3], 20.0, 1e-6);
+
+    // +1 is counter-clockwise in Y-up model space: a quarter turn from +X
+    // lands above the center.
+    CHECK_NEAR(quarter->pose.position.x(), 0.0, 1e-6);
+    CHECK_NEAR(quarter->pose.position.y(), 80.0, 1e-6);
+    CHECK_NEAR(half->pose.position.x(), -60.0, 1e-6);
+    CHECK_NEAR(half->pose.position.y(), 0.0, 1e-6);
+    CHECK_NEAR(last->pose.position.x(), 20.0, 1e-6);
+    CHECK_NEAR(last->pose.position.y(), 0.0, 1e-6);
+
+    // The spiral is kinematic: no collision and no physical stop.
+    for (const Sample &sample : result.samples)
+    {
+        CHECK(!sample.stopped);
+        CHECK(!sample.collided);
+        CHECK(std::isfinite(sample.velocity.x()));
+        CHECK(std::isfinite(sample.velocity.y()));
+    }
+    CHECK_NEAR(result.samples.last().velocity.x(), 0.0, 1e-12);
+    CHECK_NEAR(result.samples.last().velocity.y(), 0.0, 1e-12);
+}
+
+void testSpiralDirection()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 60;
+    segment.startPose.position = QPointF(100.0, 0.0);
+    segment.params[QStringLiteral("turns")] = 1.0;
+
+    segment.params[QStringLiteral("direction")] = -1; // clockwise
+    const QVector<Sample> clockwise = evaluate(segment, world, 61, 30);
+    const Sample *cwQuarter = atFrame(clockwise, 15);
+    CHECK(cwQuarter != nullptr);
+    if (cwQuarter)
+    {
+        CHECK_NEAR(cwQuarter->pose.position.x(), 0.0, 1e-6);
+        CHECK_NEAR(cwQuarter->pose.position.y(), -75.0, 1e-6);
+    }
+
+    segment.params[QStringLiteral("direction")] = 1;
+    const QVector<Sample> counterClockwise = evaluate(segment, world, 61, 30);
+    const Sample *ccwQuarter = atFrame(counterClockwise, 15);
+    CHECK(ccwQuarter != nullptr);
+    if (ccwQuarter)
+    {
+        CHECK_NEAR(ccwQuarter->pose.position.x(), 0.0, 1e-6);
+        CHECK_NEAR(ccwQuarter->pose.position.y(), 75.0, 1e-6);
+    }
+}
+
+void testSpiralSpeedOverridesTurns()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 60;
+    segment.startPose.position = QPointF(100.0, 0.0);
+    segment.params[QStringLiteral("turns")] = 100.0; // must be ignored
+    segment.params[QStringLiteral("direction")] = 1;
+    segment.params[QStringLiteral("endRadius")] = 100.0;
+    segment.params[QStringLiteral("speedDegPerSec")] = 90.0;
+
+    // 60 frames at 30 fps = 2 s at 90 °/s => half a turn.
+    const QVector<Sample> samples = evaluate(segment, world, 61, 30);
+    const Sample *half = atFrame(samples, 30);
+    const Sample *last = atFrame(samples, 60);
+    CHECK(half && last);
+    if (half && last)
+    {
+        CHECK_NEAR(half->pose.position.x(), 0.0, 1e-6);
+        CHECK_NEAR(half->pose.position.y(), 100.0, 1e-6);
+        CHECK_NEAR(last->pose.position.x(), -100.0, 1e-6);
+        CHECK_NEAR(last->pose.position.y(), 0.0, 1e-6);
+    }
+}
+
+void testSpiralFollowsMovingTarget()
+{
+    MockWorld world;
+    for (int frame = 0; frame <= 20; ++frame)
+    {
+        world.framePoses[QStringLiteral("sun")].insert(
+            frame, Pose{QPointF(frame * 5.0, frame * 2.0), 0.0});
+    }
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 20;
+    // Start 100 px right of the target's frame-0 position.
+    segment.startPose.position = QPointF(100.0, 0.0);
+    segment.params[QStringLiteral("turns")] = 0.0;
+    segment.params[QStringLiteral("endRadius")] = 0.0;
+
+    const QVector<Sample> samples = evaluate(segment, world, 21, 30);
+    CHECK(samples.size() == 21);
+    if (samples.size() != 21)
+        return;
+
+    // Zero turns and zero end radius: the path is a straight shrink and the
+    // final sample sits exactly on the moved center.
+    const Sample &last = samples.last();
+    CHECK_NEAR(last.pose.position.x(), 100.0, 1e-6);
+    CHECK_NEAR(last.pose.position.y(), 40.0, 1e-6);
+
+    // Mid-way the offset is still radial from the (moved) center at frame 10.
+    const Sample *mid = atFrame(samples, 10);
+    CHECK(mid != nullptr);
+    if (mid)
+    {
+        const QPointF center(50.0, 20.0);
+        const QPointF offset = mid->pose.position - center;
+        CHECK_NEAR(std::hypot(offset.x(), offset.y()), 50.0, 1e-6);
+        CHECK_NEAR(offset.x(), 50.0, 1e-6);
+    }
+}
+
+void testSpiralEdgeCases()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 5;
+    segment.endFrame = 5;
+    segment.startPose.position = QPointF(40.0, 30.0);
+
+    // A zero-length segment is a single frozen start frame.
+    const Result single = evaluateResult(segment, world, 60, 30);
+    CHECK(single.samples.size() == 1);
+    CHECK(single.reason == StopReason::ExplicitEnd);
+    if (!single.samples.isEmpty())
+    {
+        CHECK_NEAR(single.samples.first().pose.position.x(), 40.0, 1e-12);
+        CHECK_NEAR(single.samples.first().pose.position.y(), 30.0, 1e-12);
+    }
+
+    // Missing target is invalid.
+    segment.targetUuid.clear();
+    segment.endFrame = 20;
+    CHECK(evaluate(segment, world, 60, 30).isEmpty());
+
+    // Non-finite / negative parameters must not crash; they fall back or clamp.
+    segment.targetUuid = QStringLiteral("sun");
+    segment.params[QStringLiteral("turns")] = std::nan("");
+    segment.params[QStringLiteral("endRadius")] = -30.0;
+    segment.params[QStringLiteral("speedDegPerSec")] = -5.0;
+    segment.params[QStringLiteral("direction")] = -9;
+    const QVector<Sample> fallback = evaluate(segment, world, 60, 30);
+    CHECK(fallback.size() == 16);
+    if (!fallback.isEmpty())
+    {
+        const Sample &last = fallback.last();
+        CHECK(std::isfinite(last.pose.position.x()));
+        CHECK(std::isfinite(last.pose.position.y()));
+        // endRadius is clamped to 0, so the path ends on the center.
+        CHECK_NEAR(last.pose.position.x(), 0.0, 1e-6);
+        CHECK_NEAR(last.pose.position.y(), 0.0, 1e-6);
+    }
+
+    // Automatic mode runs to the clip end without a physical stop.
+    segment.params.clear();
+    segment.endFrame = -1;
+    const Result automatic = evaluateResult(segment, world, 30, 30);
+    CHECK(automatic.stopFrame == 29);
+    CHECK(automatic.reason == StopReason::ClipEnd);
+    CHECK(std::none_of(automatic.samples.cbegin(), automatic.samples.cend(),
+                       [](const Sample &sample) { return sample.stopped; }));
+}
+
 void testSpin()
 {
     MockWorld world;
@@ -756,6 +998,11 @@ int main()
     run("gravity stop threshold", testGravityStopsOnImpact);
     run("orbit period", testOrbitPeriod);
     run("orbit directions", testOrbitDirections);
+    run("spiral shrinks toward target", testSpiralShrinksTowardTarget);
+    run("spiral direction", testSpiralDirection);
+    run("spiral speed overrides turns", testSpiralSpeedOverridesTurns);
+    run("spiral follows moving target", testSpiralFollowsMovingTarget);
+    run("spiral edge cases", testSpiralEdgeCases);
     run("spin", testSpin);
     run("black hole", testBlackHole);
     run("black hole angular momentum", testBlackHoleAngularMomentum);

@@ -35,5 +35,7 @@ EvalOutcome evaluateOrbit(const Segment &segment, const World &world,
 EvalOutcome evaluateSpin(const Segment &segment, const FrameRange &range);
 EvalOutcome evaluateBlackHole(const Segment &segment, const World &world,
                               const FrameRange &range, int fps);
+EvalOutcome evaluateSpiral(const Segment &segment, const World &world,
+                           const FrameRange &range, int fps);
 
 } // namespace pvf::solver::detail

@@ -304,11 +304,11 @@ QJsonObject schemaTopic(const QString& topic)
         return openSchema({
             {QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QStringLiteral("目标实体 UUID"))},
             {QStringLiteral("solverId"), prop(QStringLiteral("string"), QStringLiteral("求解段 id"))},
-            {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole"))},
+            {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole|spiral"))},
             {QStringLiteral("startFrame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration-1"))},
             {QStringLiteral("endFrame"), prop(QStringLiteral("integer"), QStringLiteral("-1 = 自动（物理停止/碰撞/片段末尾）；>=0 = 显式结束帧，startFrame..duration-1"))},
             {QStringLiteral("initialVelocity"), prop(QStringLiteral("object"), QStringLiteral("{x,y} px/s，仅 gravity/blackhole"))},
-            {QStringLiteral("params"), prop(QStringLiteral("object"), QStringLiteral("按效果取字段；gravity/orbit/blackhole 必填 targetUuid"))},
+            {QStringLiteral("params"), prop(QStringLiteral("object"), QStringLiteral("按效果取字段；gravity/orbit/blackhole/spiral 必填 targetUuid"))},
             {QStringLiteral("patch"), prop(QStringLiteral("object"), QStringLiteral("startFrame/endFrame/initialVelocity/params 子集"))},
             {QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("相对帧号，最多 10000 个采样"))},
         });
@@ -383,8 +383,8 @@ QString guideMarkdown(const QString& topic)
             "- 段帧号相对实体 start，闭区间 `[startFrame,endFrame]`；`endFrame=-1`（默认）= 自动：解到第一次物理停止/碰撞，没有停止则到片段末帧。\n"
             "- `endFrame>=0` 是高级显式覆盖：解到该帧并冻结；物理上更早停止时采样仍保留该区间，但 `stopped` 只在真实停止帧为真。\n"
             "- 停止原因分 `collision`（碰撞/落入事件视界）、`stopThreshold`（低速阈值）、`clipEnd`（片段末尾）、`explicitEnd`（显式结束帧）。\n"
-            "- `gravity`/`orbit`/`blackhole` 必填 `params.targetUuid`；`spin` 不需要目标。\n"
-            "- `startFrame` 必须在被驱动轨道上已有关键帧：x/y（gravity/orbit/blackhole）或 rotation（spin）。\n"
+            "- `gravity`/`orbit`/`blackhole`/`spiral` 必填 `params.targetUuid`；`spin` 不需要目标。\n"
+            "- `startFrame` 必须在被驱动轨道上已有关键帧：x/y（gravity/orbit/blackhole/spiral）或 rotation（spin）。\n"
             "- 段不能重叠；段内不能写被驱动属性的普通关键帧。\n"
             "- `solver.evaluate` 只读，返回相对 start 的采样点、速度和碰撞/停止标记，不写关键帧；`summary.stoppedFrame` 是第一次物理停止。\n");
     if (topic == QLatin1String("preview"))
@@ -643,7 +643,7 @@ QJsonObject listTools()
     tools.append(toolSchema(
         QStringLiteral("solver.create"), QStringLiteral("给实体新增一个求解段"),
         objectSchema({{QStringLiteral("entityUuid"), prop(QStringLiteral("string"), QStringLiteral("实体 UUID"))},
-                      {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole"))},
+                      {QStringLiteral("effect"), prop(QStringLiteral("string"), QStringLiteral("gravity|orbit|spin|blackhole|spiral"))},
                       {QStringLiteral("startFrame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start"))},
                       {QStringLiteral("endFrame"), prop(QStringLiteral("integer"), QStringLiteral("默认 -1（自动停止/片段末尾）"))},
                       {QStringLiteral("initialVelocity"), prop(QStringLiteral("object"), QStringLiteral("{x,y} px/s"))},

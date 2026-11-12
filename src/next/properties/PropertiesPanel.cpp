@@ -95,6 +95,9 @@ struct ParamSpec
     double step = 1.0;
     int decimals = 2;
     QString suffix;
+    // The spiral numbers its direction the other way round: +1 is
+    // counter-clockwise there, while orbit/spin keep +1 = clockwise.
+    bool ccwPositive = false;
 };
 
 ParamSpec numberParam(const QString& key, const QString& label, const QString& tooltip,
@@ -125,13 +128,14 @@ ParamSpec uuidParam(const QString& key, const QString& label, const QString& too
     return spec;
 }
 
-ParamSpec directionParam()
+ParamSpec directionParam(bool ccwPositive = false)
 {
     ParamSpec spec;
     spec.key = QStringLiteral("direction");
     spec.label = QStringLiteral("方向");
     spec.kind = ParamKind::Direction;
     spec.defaultValue = 1.0;
+    spec.ccwPositive = ccwPositive;
     return spec;
 }
 
@@ -205,6 +209,22 @@ QVector<ParamSpec> solverParams(SolverEffect effect)
             numberParam(QStringLiteral("maxSpeed"), QStringLiteral("最大速度 (px/s)"),
                         QStringLiteral("速度上限，防止数值爆炸或物体瞬间飞出画布。"),
                         4000.0, 0.0001, 1000000.0, 100.0, 1),
+        };
+    case SolverEffect::Spiral:
+        return {
+            uuidParam(QStringLiteral("targetUuid"), QStringLiteral("中心实体"),
+                      QStringLiteral("螺旋中心实体。每帧读取它当前位置，圆心跟着它移动；不能是目标实体自己。")),
+            numberParam(QStringLiteral("turns"), QStringLiteral("圈数"),
+                        QStringLiteral("从起点绕到终点一共转多少圈。速度 > 0 时按速度覆盖。"),
+                        3.0, 0.0, 1000.0, 0.5, 2),
+            directionParam(true),
+            numberParam(QStringLiteral("endRadius"), QStringLiteral("结束半径 (px)"),
+                        QStringLiteral("段末离中心的距离。0 = 直接落到中心；大于 0 = 停在外圈。半径从起点线性缩小。"),
+                        0.0, 0.0, 1000000.0, 1.0, 1),
+            numberParam(QStringLiteral("speedDegPerSec"),
+                        QStringLiteral("速度 (°/s，覆盖圈数)"),
+                        QStringLiteral("大于 0 时按该角速度换算总角度，忽略圈数；0 = 按圈数在整段内均分。"),
+                        0.0, 0.0, 1000000.0, 10.0, 1),
         };
     }
     return {};
@@ -1713,12 +1733,13 @@ void PropertiesPanel::buildSolverSection()
     m_solverEffectCombo->addItem(QStringLiteral("公转"), int(SolverEffect::Orbit));
     m_solverEffectCombo->addItem(QStringLiteral("自转"), int(SolverEffect::Spin));
     m_solverEffectCombo->addItem(QStringLiteral("黑洞"), int(SolverEffect::BlackHole));
+    m_solverEffectCombo->addItem(QStringLiteral("螺旋"), int(SolverEffect::Spiral));
     createForm->addRow(QStringLiteral("效果"), m_solverEffectCombo);
 
     m_solverTargetCombo = new QComboBox(createBox);
     m_solverTargetCombo->setObjectName(QStringLiteral("solverTargetCombo"));
     m_solverTargetCombo->setToolTip(
-        QStringLiteral("重力地面、公转中心或黑洞实体；不能是当前实体自己。自转不需要目标。"));
+        QStringLiteral("重力地面、公转中心、黑洞或螺旋中心实体；不能是当前实体自己。自转不需要目标。"));
     createForm->addRow(QStringLiteral("目标实体"), m_solverTargetCombo);
 
     m_solverEndSpin = new QSpinBox(createBox);
@@ -2499,8 +2520,12 @@ void PropertiesPanel::rebuildSolverCards(
                 auto* combo = new QComboBox(card.box);
                 combo->setObjectName(
                     QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
-                combo->addItem(QStringLiteral("顺时针 (+1)"), 1);
-                combo->addItem(QStringLiteral("逆时针 (-1)"), -1);
+                combo->addItem(spec.ccwPositive ? QStringLiteral("逆时针 (+1)")
+                                                : QStringLiteral("顺时针 (+1)"),
+                               1);
+                combo->addItem(spec.ccwPositive ? QStringLiteral("顺时针 (-1)")
+                                                : QStringLiteral("逆时针 (-1)"),
+                               -1);
                 editor = combo;
                 connect(combo, &QComboBox::currentIndexChanged, this,
                         [this, solverId, spec, combo](int) {
@@ -2591,7 +2616,7 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
     const QString velocityTip =
         usesVelocity
             ? QStringLiteral("开始帧的求解空间初速度，单位 px/s；负值向上。")
-            : QStringLiteral("orbit / spin 不使用初速度。");
+            : QStringLiteral("orbit / spin / spiral 不使用初速度。");
     card.velocityX->setToolTip(velocityTip);
     card.velocityY->setToolTip(velocityTip);
 
@@ -2837,6 +2862,13 @@ void PropertiesPanel::createSolverFromPlayhead()
         segment.params.insert(QStringLiteral("objectRadius"), 40.0);
         segment.params.insert(QStringLiteral("softening"), 60.0);
         segment.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+        break;
+    case SolverEffect::Spiral:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("turns"), 3.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        segment.params.insert(QStringLiteral("endRadius"), 0.0);
+        segment.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
         break;
     }
 

@@ -19,6 +19,7 @@ add_library(pvf_solver STATIC
     OrbitSolver.cpp
     SpinSolver.cpp
     BlackHoleSolver.cpp
+    SpiralSolver.cpp
 )
 
 target_include_directories(pvf_solver PUBLIC

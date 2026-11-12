@@ -35,7 +35,8 @@ enum class SolverEffect
     Gravity,
     Orbit,
     Spin,
-    BlackHole
+    BlackHole,
+    Spiral
 };
 
 inline QString assetTypeName(AssetType type)
@@ -94,6 +95,8 @@ inline QString solverEffectName(SolverEffect effect)
         return QStringLiteral("spin");
     case SolverEffect::BlackHole:
         return QStringLiteral("blackhole");
+    case SolverEffect::Spiral:
+        return QStringLiteral("spiral");
     }
     return QStringLiteral("gravity");
 }

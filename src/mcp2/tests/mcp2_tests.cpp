@@ -189,6 +189,7 @@ private slots:
     void deleteManyMergesHierarchy();
     void listToolsAndSchema();
     void solverCreateUpdateDelete();
+    void solverSpiralCreateAndEvaluate();
     void solverValidationRejects();
     void viewStateReturnsInjected();
     void previewRenderFrameWritesPng();
@@ -1662,6 +1663,106 @@ void Mcp2Tests::solverValidationRejects()
                  .value(QStringLiteral("details")).toObject()
                  .value(QStringLiteral("lockedBy")).toString(),
              locked);
+}
+
+void Mcp2Tests::solverSpiralCreateAndEvaluate()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    const QString center =
+        uuidOf(fixture.call(QStringLiteral("entity.create"),
+                            entityArgs(QStringLiteral("圆心"), 0, 120)));
+    QJsonObject ballArgs = entityArgs(QStringLiteral("螺旋球"), 0, 120);
+    ballArgs.insert(QStringLiteral("keyframes"),
+                    QJsonObject{{QStringLiteral("x"), keys({{0, 300.0}})},
+                                {QStringLiteral("y"), keys({{0, 0.0}})}});
+    const QString ball =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
+    QVERIFY(!center.isEmpty() && !ball.isEmpty());
+
+    QJsonObject args;
+    args.insert(QStringLiteral("entityUuid"), ball);
+    args.insert(QStringLiteral("effect"), QStringLiteral("spiral"));
+    args.insert(QStringLiteral("startFrame"), 0);
+    args.insert(QStringLiteral("endFrame"), 60);
+    args.insert(QStringLiteral("params"),
+                QJsonObject{{QStringLiteral("targetUuid"), center},
+                            {QStringLiteral("turns"), 1.0},
+                            {QStringLiteral("direction"), 1},
+                            {QStringLiteral("endRadius"), 0.0},
+                            {QStringLiteral("speedDegPerSec"), 0.0}});
+
+    QJsonObject result = fixture.call(QStringLiteral("solver.create"), args);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(result.value(QStringLiteral("error"))
+                            .toObject()
+                            .value(QStringLiteral("message"))
+                            .toString()));
+    const QString solverId = result.value(QStringLiteral("data"))
+                                 .toObject()
+                                 .value(QStringLiteral("solver"))
+                                 .toObject()
+                                 .value(QStringLiteral("id"))
+                                 .toString();
+    QVERIFY(!solverId.isEmpty());
+
+    result = fixture.call(QStringLiteral("solver.evaluate"),
+                          QJsonObject{{QStringLiteral("entityUuid"), ball},
+                                      {QStringLiteral("solverId"), solverId}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QJsonObject evaluation = result.value(QStringLiteral("data"))
+                                       .toObject()
+                                       .value(QStringLiteral("results"))
+                                       .toArray()
+                                       .at(0)
+                                       .toObject();
+    QCOMPARE(evaluation.value(QStringLiteral("effect")).toString(),
+             QStringLiteral("spiral"));
+    const QJsonArray samples = evaluation.value(QStringLiteral("samples")).toArray();
+    QCOMPARE(samples.size(), 61);
+    QVERIFY(std::abs(samples.at(0).toObject().value(QStringLiteral("x")).toDouble()
+                     - 300.0)
+            < 1e-6);
+    QVERIFY(std::abs(samples.at(0).toObject().value(QStringLiteral("y")).toDouble())
+            < 1e-6);
+    // One turn with endRadius 0 returns to the center.
+    QVERIFY(std::abs(samples.at(60).toObject().value(QStringLiteral("x")).toDouble())
+            < 1e-6);
+    QVERIFY(std::abs(samples.at(60).toObject().value(QStringLiteral("y")).toDouble())
+            < 1e-6);
+    QCOMPARE(samples.at(60).toObject().value(QStringLiteral("stopped")).toBool(),
+             false);
+    QVERIFY(evaluation.value(QStringLiteral("summary")).toObject()
+                .value(QStringLiteral("stoppedFrame")).isNull());
+
+    // Unknown params and a missing target are rejected.
+    QJsonObject badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("mass"), 10.0}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"), QJsonObject{});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    // direction must stay 1 or -1, and the range checks apply to the new keys.
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("direction"), 2}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("turns"), -1.0}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
 }
 
 void Mcp2Tests::viewStateReturnsInjected()

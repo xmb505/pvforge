@@ -2976,6 +2976,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                         color = QColor(255, 214, 102);
                     else if (solver.effect == SolverEffect::BlackHole)
                         color = QColor(255, 120, 200);
+                    else if (solver.effect == SolverEffect::Spiral)
+                        color = QColor(80, 190, 160);
                     p.fillRect(band, QColor(color.red(), color.green(),
                                             color.blue(), 85));
                     p.setPen(QPen(color, 1.0));

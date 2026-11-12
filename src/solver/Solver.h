@@ -72,8 +72,8 @@ struct Sample
 {
     int frame = 0;
     Pose pose;
-    // Solver-space velocity in pixels/second.  Gravity, orbit and black-hole
-    // samples carry it; spin samples report zero.
+    // Solver-space velocity in pixels/second.  Gravity, orbit, black-hole and
+    // spiral samples carry it; spin samples report zero.
     QPointF velocity;
     bool collided = false;
     // True only when the motion physically stopped (collision or low-speed
@@ -108,9 +108,9 @@ struct Result
 
 // Evaluate a segment on a fixed 1/fps grid from startFrame through the solved
 // end frame (inclusive).  entityUuid is required; targetUuid is required for
-// gravity, orbit and black-hole (spin ignores it).  Missing required UUIDs
-// return an empty result.  The result is deterministic and contains one sample
-// per frame; an invalid/empty range also returns an empty result.
+// gravity, orbit, black-hole and spiral (spin ignores it).  Missing required
+// UUIDs return an empty result.  The result is deterministic and contains one
+// sample per frame; an invalid/empty range also returns an empty result.
 //
 // Result::stopFrame is the frame the animation should treat as the segment
 // end: the first physical stop in automatic mode, otherwise the clip end, or
@@ -140,6 +140,13 @@ struct Result
 //              default 4000, 0 = unlimited), stopThreshold (px/s, default 0 =
 //              disabled).  Center is targetUuid.  Crossing
 //              eventHorizonRadius + objectRadius stops the motion (capture).
+//   Spiral:    turns (total revolutions, default 3), direction (+1
+//              counter-clockwise / -1 clockwise, default +1), endRadius (px,
+//              default 0, clamped to >= 0), speedDegPerSec (default 0; > 0
+//              overrides turns for the whole segment).  Center is targetUuid;
+//              the path starts at startPose and its radius shrinks linearly
+//              from the start radius to endRadius.  No collision or physical
+//              stop; Sample::rotation keeps startPose.rotation.
 // initialVelocity and Sample::velocity are solver-space px/second; no local
 // axis conversion is applied.
 Result evaluateResult(const Segment &segment, const World &world,

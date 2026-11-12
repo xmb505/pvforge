@@ -114,6 +114,8 @@ QColor solverColor(SolverEffect effect)
         return QColor(245, 166, 35);
     case SolverEffect::BlackHole:
         return QColor(91, 72, 140);
+    case SolverEffect::Spiral:
+        return QColor(80, 190, 160);
     }
     return QColor(63, 167, 214);
 }
@@ -149,7 +151,8 @@ bool trackBlockedAt(const model::Entity& entity, const QString& track, int frame
 
         const bool positionDriven = solver.effect == SolverEffect::Gravity
                                     || solver.effect == SolverEffect::Orbit
-                                    || solver.effect == SolverEffect::BlackHole;
+                                    || solver.effect == SolverEffect::BlackHole
+                                    || solver.effect == SolverEffect::Spiral;
         if (positionDriven
             && (track == QStringLiteral("x") || track == QStringLiteral("y")))
             return true;

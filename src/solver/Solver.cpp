@@ -72,6 +72,9 @@ Result evaluateResult(const Segment &segment, const World &world,
         case SolverEffect::BlackHole:
             outcome = detail::evaluateBlackHole(segment, world, range, safeFps);
             break;
+        case SolverEffect::Spiral:
+            outcome = detail::evaluateSpiral(segment, world, range, safeFps);
+            break;
         }
     }
 

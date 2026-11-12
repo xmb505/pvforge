@@ -348,6 +348,7 @@ private slots:
     void createGravitySolverFromPlayhead();
     void rejectSolverWithoutXYKeys();
     void createSpinSolverFromRotationKey();
+    void createSpiralSolverFromPlayhead();
     void createSolverFailureRollsBack();
     void rejectOverlappingSolver();
     void rejectEmptyOrSelfTarget();
@@ -918,6 +919,64 @@ void PropertiesPanelTest::createSpinSolverFromRotationKey()
     QCOMPARE(solver.params.value(QStringLiteral("angularVelocity")).toDouble(), 6.0);
     QCOMPARE(solver.params.value(QStringLiteral("direction")).toInt(), 1);
     QVERIFY(!solver.params.contains(QStringLiteral("targetUuid")));
+}
+
+void PropertiesPanelTest::createSpiralSolverFromPlayhead()
+{
+    FakeDocument document;
+    const Uuid center = document.addEntity(QStringLiteral("圆心"), 0, 120);
+    const Uuid ball = document.addEntity(QStringLiteral("小球"), 10, 80);
+    document.addKey(ball, QStringLiteral("x"), 15, 200.0);
+    document.addKey(ball, QStringLiteral("y"), 15, 0.0);
+    document.setPlayhead(25);
+
+    PropertiesPanel panel(&document);
+    document.setSelection(ball);
+
+    auto* effect = findWidget<QComboBox>(panel, "solverEffectCombo");
+    auto* target = findWidget<QComboBox>(panel, "solverTargetCombo");
+    auto* create = findWidget<QPushButton>(panel, "solverCreateButton");
+    QVERIFY(effect);
+    QVERIFY(target);
+    QVERIFY(create);
+
+    const int spiralIndex = effect->findData(int(SolverEffect::Spiral));
+    QVERIFY(spiralIndex >= 0);
+    QCOMPARE(effect->itemText(spiralIndex), QStringLiteral("螺旋"));
+    effect->setCurrentIndex(spiralIndex);
+    QVERIFY(target->isEnabled());
+    target->setCurrentIndex(target->findData(center));
+    create->click();
+
+    QCOMPARE(document.entity(ball).solvers.size(), 1);
+    const model::SolverSegment& solver = document.entity(ball).solvers.at(0);
+    QCOMPARE(solver.effect, SolverEffect::Spiral);
+    QCOMPARE(solver.startFrame, 15);
+    QCOMPARE(solver.endFrame, -1);
+    QCOMPARE(solver.params.value(QStringLiteral("targetUuid")).toString(), center);
+    QCOMPARE(solver.params.value(QStringLiteral("turns")).toDouble(), 3.0);
+    QCOMPARE(solver.params.value(QStringLiteral("direction")).toInt(), 1);
+    QCOMPARE(solver.params.value(QStringLiteral("endRadius")).toDouble(), 0.0);
+    QCOMPARE(solver.params.value(QStringLiteral("speedDegPerSec")).toDouble(), 0.0);
+
+    // The spiral numbers +1 as counter-clockwise, unlike orbit/spin.
+    auto* direction = findWidget<QComboBox>(panel, "solverParam0_direction");
+    QVERIFY(direction);
+    QCOMPARE(direction->itemData(0).toInt(), 1);
+    QVERIFY(direction->itemText(0).contains(QStringLiteral("逆时针")));
+
+    auto* turns = findWidget<QDoubleSpinBox>(panel, "solverParam0_turns");
+    QVERIFY(turns);
+    turns->setValue(5.5);
+    QVERIFY(fireEditingFinished(turns));
+    QCOMPARE(document.entity(ball).solvers.at(0)
+                 .params.value(QStringLiteral("turns")).toDouble(),
+             5.5);
+
+    // Spiral is kinematic: the initial velocity fields stay disabled.
+    auto* velocityX = findWidget<QDoubleSpinBox>(panel, "solverVelocityX0");
+    QVERIFY(velocityX);
+    QVERIFY(!velocityX->isEnabled());
 }
 
 void PropertiesPanelTest::createSolverFailureRollsBack()

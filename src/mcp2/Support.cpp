@@ -564,6 +564,7 @@ QStringList drivenTracks(SolverEffect effect)
     case SolverEffect::Gravity:
     case SolverEffect::Orbit:
     case SolverEffect::BlackHole:
+    case SolverEffect::Spiral:
         return {QStringLiteral("x"), QStringLiteral("y")};
     case SolverEffect::Spin:
         return {QStringLiteral("rotation")};

@@ -29,7 +29,17 @@ int structuralEnd(const model::Entity& entity, const model::SolverSegment& segme
 
 bool drivesPosition(SolverEffect effect)
 {
-    return effect != SolverEffect::Spin;
+    switch (effect)
+    {
+    case SolverEffect::Gravity:
+    case SolverEffect::Orbit:
+    case SolverEffect::BlackHole:
+    case SolverEffect::Spiral:
+        return true;
+    case SolverEffect::Spin:
+        return false;
+    }
+    return false;
 }
 
 bool drivesRotation(SolverEffect effect)

@@ -186,6 +186,7 @@ private slots:
     void playheadChangesCurrentPoint();
     void missingTargetShowsErrorWithoutCrash();
     void orbitAndBlackHolePreviewSmoke();
+    void spiralPreviewShowsPathAndTargetWithoutArrow();
     void spinPreviewDoesNotCrash();
     void propertiesPanelEmbedsPreview();
 };
@@ -394,6 +395,45 @@ void SolverPreviewWidgetTest::orbitAndBlackHolePreviewSmoke()
         QVERIFY(preview.hasTarget());
         QVERIFY(!preview.grab().toImage().isNull());
     }
+}
+
+void SolverPreviewWidgetTest::spiralPreviewShowsPathAndTargetWithoutArrow()
+{
+    FakeDocument document;
+    const Uuid center =
+        document.addVector(QStringLiteral("圆心"), 0.0, 0.0, 120.0, 120.0);
+    const Uuid ball =
+        document.addVector(QStringLiteral("物体"), -220.0, 0.0, 40.0, 40.0);
+    document.addKey(ball, QStringLiteral("x"), 0, -220.0);
+    document.addKey(ball, QStringLiteral("y"), 0, 0.0);
+
+    model::SolverSegment solver;
+    solver.id = model::newUuid();
+    solver.effect = SolverEffect::Spiral;
+    solver.startFrame = 0;
+    solver.endFrame = 30;
+    solver.params.insert(QStringLiteral("targetUuid"), center);
+    solver.params.insert(QStringLiteral("turns"), 2.0);
+    solver.params.insert(QStringLiteral("direction"), 1);
+    solver.params.insert(QStringLiteral("endRadius"), 20.0);
+    solver.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
+    document.entity(ball).solvers.append(solver);
+
+    document.movePlayhead(0);
+    SolverPreviewWidget preview(&document);
+    preview.resize(400, 200);
+    preview.setSolver(ball, solver.id);
+
+    QCOMPARE(preview.errorText(), QString());
+    QCOMPARE(preview.sampleCount(), 31);
+    QVERIFY(preview.hasPath());
+    QVERIFY(preview.hasTarget());
+    // A spiral is purely kinematic: no initial-velocity handle.
+    QVERIFY(!preview.hasArrow());
+    QVERIFY(preview.startPoint() != preview.targetPoint());
+    QVERIFY(insideRect(preview.startPoint(), preview.rect()));
+    QVERIFY(insideRect(preview.targetPoint(), preview.rect()));
+    QVERIFY(!preview.grab().toImage().isNull());
 }
 
 void SolverPreviewWidgetTest::spinPreviewDoesNotCrash()

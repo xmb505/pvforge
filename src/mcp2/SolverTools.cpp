@@ -40,6 +40,8 @@ std::optional<SolverEffect> effectFromName(const QString& name)
         return SolverEffect::Spin;
     if (name == QLatin1String("blackhole"))
         return SolverEffect::BlackHole;
+    if (name == QLatin1String("spiral"))
+        return SolverEffect::Spiral;
     return std::nullopt;
 }
 
@@ -213,6 +215,12 @@ bool isKnownParam(SolverEffect effect, const QString& key)
                || key == QLatin1String("objectRadius")
                || key == QLatin1String("softening")
                || key == QLatin1String("maxSpeed");
+    case SolverEffect::Spiral:
+        return key == QLatin1String("targetUuid")
+               || key == QLatin1String("turns")
+               || key == QLatin1String("direction")
+               || key == QLatin1String("endRadius")
+               || key == QLatin1String("speedDegPerSec");
     }
     return false;
 }
@@ -294,6 +302,16 @@ Result validateSolverParams(const model::Project& project,
                     .ok
             || !(result = parseNumericParam(params, "maxSpeed", 0, 1000000,
                                             false, true))
+                    .ok)
+            return result;
+        break;
+    case SolverEffect::Spiral:
+        if (!(result = parseNumericParam(params, "turns", 0, 1000)).ok
+            || !(result = parseDirection(params)).ok
+            || !(result = parseNumericParam(params, "endRadius", 0, 1000000))
+                    .ok
+            || !(result = parseNumericParam(params, "speedDegPerSec", 0,
+                                            1000000))
                     .ok)
             return result;
         break;

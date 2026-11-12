@@ -850,6 +850,9 @@ struct ParamSpec
     double step = 1.0;
     int decimals = 2;
     QString suffix;
+    // Direction params differ per effect: orbit/spin use +1 = clockwise, while
+    // the spiral uses +1 = counter-clockwise.
+    bool ccwPositive = false;
 };
 
 ParamSpec numberParam(const QString& key, const QString& label, double defaultValue,
@@ -878,13 +881,14 @@ ParamSpec uuidParam(const QString& key, const QString& label)
     return spec;
 }
 
-ParamSpec directionParam()
+ParamSpec directionParam(bool ccwPositive = false)
 {
     ParamSpec spec;
     spec.key = QStringLiteral("direction");
     spec.label = QStringLiteral("方向");
     spec.kind = ParamKind::Direction;
     spec.defaultValue = 1.0;
+    spec.ccwPositive = ccwPositive;
     return spec;
 }
 
@@ -940,6 +944,18 @@ QVector<ParamSpec> solverParams(SolverEffect effect)
                         0.0001, 1000000.0, 1.0, 1, QStringLiteral("px")),
             numberParam(QStringLiteral("maxSpeed"), QStringLiteral("最大速度"), 4000.0,
                         0.0001, 1000000.0, 100.0, 1, QStringLiteral("px/s")),
+        };
+    case SolverEffect::Spiral:
+        return {
+            uuidParam(QStringLiteral("targetUuid"), QStringLiteral("中心实体")),
+            numberParam(QStringLiteral("turns"), QStringLiteral("圈数"), 3.0, 0.0,
+                        1000.0, 0.5, 2, QStringLiteral("圈")),
+            directionParam(true),
+            numberParam(QStringLiteral("endRadius"), QStringLiteral("结束半径"),
+                        0.0, 0.0, 1000000.0, 1.0, 1, QStringLiteral("px")),
+            numberParam(QStringLiteral("speedDegPerSec"),
+                        QStringLiteral("速度（覆盖圈数）"), 0.0, 0.0, 1000000.0,
+                        10.0, 1, QStringLiteral("°/s")),
         };
     }
     return {};
@@ -1521,6 +1537,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     m_solverEffectCombo->addItem(QStringLiteral("公转"), int(SolverEffect::Orbit));
     m_solverEffectCombo->addItem(QStringLiteral("自转"), int(SolverEffect::Spin));
     m_solverEffectCombo->addItem(QStringLiteral("黑洞"), int(SolverEffect::BlackHole));
+    m_solverEffectCombo->addItem(QStringLiteral("螺旋"), int(SolverEffect::Spiral));
     createForm->addRow(QStringLiteral("效果"), m_solverEffectCombo);
 
     m_solverTargetCombo = new QComboBox(createBox);
@@ -4095,8 +4112,12 @@ void PropertiesPanel::rebuildSolverCards(
                 auto* combo = new QComboBox(card.box);
                 combo->setObjectName(
                     QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
-                combo->addItem(QStringLiteral("顺时针 (+1)"), 1);
-                combo->addItem(QStringLiteral("逆时针 (-1)"), -1);
+                combo->addItem(spec.ccwPositive ? QStringLiteral("逆时针 (+1)")
+                                                : QStringLiteral("顺时针 (+1)"),
+                               1);
+                combo->addItem(spec.ccwPositive ? QStringLiteral("顺时针 (-1)")
+                                                : QStringLiteral("逆时针 (-1)"),
+                               -1);
                 editor = combo;
                 connect(combo, &QComboBox::currentIndexChanged, this,
                         [this, solverId, spec, combo](int) {
@@ -4269,6 +4290,7 @@ void PropertiesPanel::showSolverConvertMenu()
         {SolverEffect::Orbit, QStringLiteral("公转")},
         {SolverEffect::Spin, QStringLiteral("自转")},
         {SolverEffect::BlackHole, QStringLiteral("黑洞")},
+        {SolverEffect::Spiral, QStringLiteral("螺旋")},
     };
     for (const auto& item : effects)
     {
@@ -4364,6 +4386,13 @@ void PropertiesPanel::convertSolverFromKey(SolverEffect effect)
         segment.params.insert(QStringLiteral("objectRadius"), 40.0);
         segment.params.insert(QStringLiteral("softening"), 60.0);
         segment.params.insert(QStringLiteral("maxSpeed"), 4000.0);
+        break;
+    case SolverEffect::Spiral:
+        segment.params.insert(QStringLiteral("targetUuid"), target);
+        segment.params.insert(QStringLiteral("turns"), 3.0);
+        segment.params.insert(QStringLiteral("direction"), 1);
+        segment.params.insert(QStringLiteral("endRadius"), 0.0);
+        segment.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
         break;
     }
 
