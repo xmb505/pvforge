@@ -1,7 +1,7 @@
 #include "next/app/MediaServices.h"
 
 #include "assets/AssetStore.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "html2/HtmlFrameService.h"
 #include "next/app/NextWindow.h"
 #include "next/app/ProjectDocument.h"

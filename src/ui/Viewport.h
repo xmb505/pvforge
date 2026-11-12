@@ -23,6 +23,7 @@ class QToolButton;
 
 namespace pvf {
 
+class Project;
 class EditorSession;
 namespace assets { class AssetStore; }
 
@@ -73,7 +74,6 @@ public:
     QImage grabProjectFrame(const Uuid& cameraUuid = Uuid()) const;
     QPointF projectToWidgetForTest(const QPointF& pos) const;
     QImage sessionImageForTest() const { return m_sessionImage; }
-
     // The solver trajectory and its initial-velocity handle live in the
     // properties panel's mini preview, not over the canvas.  This hook stays
     // so tests can assert the viewport overlay is really gone.
@@ -163,6 +163,9 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    // Widget wiring shared by the legacy and the session constructor.
+    void initShell();
+
     enum class GizmoMode
     {
         None,

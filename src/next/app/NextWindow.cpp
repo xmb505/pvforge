@@ -1,7 +1,7 @@
 #include "next/app/NextWindow.h"
 
 #include "export2/Export.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 #include "next/app/CameraMonitorWidget.h"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/Project.h"
+#include "core/EntityId.h"
 
 #include <QPointF>
 #include <QPolygonF>
@@ -8,6 +8,9 @@
 #include <QTransform>
 
 namespace pvf {
+
+struct Project;
+
 namespace Camera {
 
 // A 2D camera is a rotated rectangle inside the project canvas. Its values

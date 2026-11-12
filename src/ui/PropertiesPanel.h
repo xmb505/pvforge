@@ -1,7 +1,11 @@
 #pragma once
 
 #include "common/Types.h"
+#include "core/EntityId.h"
+
+#if PVFORGE_LEGACY_SHELL
 #include "core/Project.h"
+#endif
 #include "html/HtmlAsset.h"
 
 #include <QColor>
@@ -45,13 +49,19 @@ class SolverPreviewWidget;
 class CollapsibleSection;
 class EditorSession;
 
+// Retired core::Project DTOs referenced by the legacy shell declarations below.
+struct EasingSpec;
+struct Entity;
+
 class PropertiesPanel : public QWidget
 {
     Q_OBJECT
 
 public:
+#if PVFORGE_LEGACY_SHELL
     // Legacy Project mode, kept for the old shell and its self-tests.
     explicit PropertiesPanel(Project* project, QWidget* parent = nullptr);
+#endif
     // Session mode: reads model::Entity and writes through EditActions.
     explicit PropertiesPanel(EditorSession* session, QWidget* parent = nullptr);
 
@@ -262,7 +272,9 @@ private:
     void deleteSolver(const Uuid& solverId);
     void reportSessionError(const QString& message);
 
+#if PVFORGE_LEGACY_SHELL
     Project* m_project = nullptr;
+#endif
     EditorSession* m_session = nullptr;
     bool m_sessionMode = false;
     Uuid m_sessionUuid;

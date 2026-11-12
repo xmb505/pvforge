@@ -243,19 +243,29 @@ const QPixmap& plusGlyphPixmap()
 class ClipPopup : public QWidget
 {
 public:
+#if PVFORGE_LEGACY_SHELL
     ClipPopup(Project* project, EntityId ownerId, TimelinePanel* source)
         : ClipPopup(project, nullptr, ownerId, source)
     {
     }
+#endif
 
     ClipPopup(EntityId ownerId, TimelinePanel* source, TimelineAdapter* adapter)
+#if PVFORGE_LEGACY_SHELL
         : ClipPopup(nullptr, adapter, ownerId, source)
+#else
+        : ClipPopup(adapter, ownerId, source)
+#endif
     {
     }
 
 private:
+#if PVFORGE_LEGACY_SHELL
     ClipPopup(Project* project, TimelineAdapter* adapter, EntityId ownerId,
               TimelinePanel* source)
+#else
+    ClipPopup(TimelineAdapter* adapter, EntityId ownerId, TimelinePanel* source)
+#endif
         : QWidget(source->window())
         , m_ownerId(ownerId)
         , m_source(source)
@@ -313,7 +323,11 @@ private:
         layout->addWidget(header);
 
         m_panel = adapter ? new TimelinePanel(adapter, this)
+#if PVFORGE_LEGACY_SHELL
                           : new TimelinePanel(project, this);
+#else
+                          : nullptr;
+#endif
         m_panel->m_owner = ownerId;
         m_panel->m_popup = true;
         m_panel->m_sourcePanel = source;
@@ -459,6 +473,7 @@ private:
 
 // ---------------------------------------------------------------- panel
 
+#if PVFORGE_LEGACY_SHELL
 TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
@@ -479,6 +494,7 @@ TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
     });
     assignMissingRows();
 }
+#endif
 
 TimelinePanel::TimelinePanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -610,13 +626,19 @@ const Entity* TimelinePanel::entityById(EntityId id) const
 {
     if (sessionMode())
         return findEntity(m_snapshot.entities, id);
+#if PVFORGE_LEGACY_SHELL
     return m_project ? m_project->entity(id) : nullptr;
+#else
+    return nullptr;
+#endif
 }
 
 int TimelinePanel::currentFps() const
 {
+#if PVFORGE_LEGACY_SHELL
     if (m_project)
         return std::max(1, m_project->fps);
+#endif
     return std::max(1, m_snapshot.fps);
 }
 
@@ -627,7 +649,11 @@ bool TimelinePanel::isEntityLocked(EntityId id) const
         const Entity* entity = entityById(id);
         return entity && entity->locked;
     }
+#if PVFORGE_LEGACY_SHELL
     return m_project && id != kInvalidEntity && m_project->isEffectivelyLocked(id);
+#else
+    return false;
+#endif
 }
 
 EntityId TimelinePanel::entityIdForUuid(const Uuid& uuid) const
@@ -791,8 +817,13 @@ int TimelinePanel::rowOfEntity(const Entity& entity) const
 
 void TimelinePanel::assignMissingRows()
 {
-    if (sessionMode() || !m_project)
+    if (sessionMode()
+#if PVFORGE_LEGACY_SHELL
+        || !m_project
+#endif
+    )
         return;
+#if PVFORGE_LEGACY_SHELL
     QVector<Entity>& entities = m_project->mutableEntities();
     QSet<int> used;
     for (const Entity& entity : entities)
@@ -832,6 +863,7 @@ void TimelinePanel::assignMissingRows()
         entity.data[QStringLiteral("timelineRow")] = next;
         used.insert(next);
     }
+#endif
 }
 
 QVector<EntityId> TimelinePanel::rowIds() const
@@ -1044,11 +1076,16 @@ const QVector<Entity>& TimelinePanel::activeEntities() const
     static const QVector<Entity> empty;
     if (sessionMode())
         return m_snapshot.entities;
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
         return empty;
     if (m_hasExternalPreview)
         return m_externalPreview;
     return m_dragging ? m_preview : m_project->entities();
+#else
+    Q_UNUSED(empty);
+    return m_snapshot.entities;
+#endif
 }
 
 const Entity* TimelinePanel::rangeOwner() const
@@ -1060,10 +1097,16 @@ const Entity* TimelinePanel::rangeOwner() const
 
 Entity* TimelinePanel::activeEntity(EntityId id)
 {
-    if (sessionMode() || !m_project)
+    if (sessionMode()
+#if PVFORGE_LEGACY_SHELL
+        || !m_project
+#endif
+    )
         return nullptr;
+#if PVFORGE_LEGACY_SHELL
     if (!m_dragging)
         return m_project->entity(id);
+#endif
     return findEntity(m_preview, id);
 }
 
@@ -1096,7 +1139,13 @@ int TimelinePanel::clipEndOf(const Entity& entity) const
             entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
         const double trimEnd =
             entity.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
-        const double fps = std::max(1, m_project ? m_project->fps : 30);
+        const double fps = std::max(1,
+#if PVFORGE_LEGACY_SHELL
+                                    m_project ? m_project->fps : 30
+#else
+                                    30
+#endif
+        );
         const double frames =
             std::max(0.0, (media - trimStart - trimEnd) * fps);
         return start + std::max(1, int(std::ceil(frames)));
@@ -1105,7 +1154,13 @@ int TimelinePanel::clipEndOf(const Entity& entity) const
     if (stored > start)
         return stored;
     return std::max(start + 1,
-                    std::max(180, m_project ? m_project->timelineLength() : 180));
+                    std::max(180,
+#if PVFORGE_LEGACY_SHELL
+                             m_project ? m_project->timelineLength() : 180
+#else
+                             180
+#endif
+                             ));
 }
 
 int TimelinePanel::contentEnd() const
@@ -1120,8 +1175,10 @@ int TimelinePanel::contentEnd() const
     int end = 180;
     for (const Entity& entity : activeEntities())
         end = std::max(end, clipEndOf(entity));
+#if PVFORGE_LEGACY_SHELL
     if (m_project)
         end = std::max(end, m_project->timelineLength());
+#endif
     if (sessionMode())
         end = std::max(end, m_snapshot.contentEnd);
     return end;
@@ -1212,8 +1269,10 @@ int TimelinePanel::bodyBottom() const
 
 int TimelinePanel::timelineLength() const
 {
+#if PVFORGE_LEGACY_SHELL
     if (m_project)
         return std::max(1, m_project->timelineLength());
+#endif
     return std::max(1, contentEnd());
 }
 
@@ -1312,7 +1371,11 @@ void TimelinePanel::stepFrame(int delta)
     }
 
     const int length = timelineLength();
+#if PVFORGE_LEGACY_SHELL
     const bool loop = m_project ? m_project->loop : true;
+#else
+    const bool loop = true;
+#endif
     if (delta > 0 && length > 0 && next >= length)
     {
         if (loop)
@@ -1344,9 +1407,11 @@ void TimelinePanel::stopHold()
 
 void TimelinePanel::beginDrag()
 {
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
         return;
     m_before = m_project->entities();
+#endif
     m_preview = m_before;
     m_dragging = false;
     m_moved = false;
@@ -2328,7 +2393,13 @@ void TimelinePanel::setClipRange(Entity& entity, int start, int end)
             entity.data.value(QStringLiteral("duration"), 0.0).toDouble();
         const double trimStart =
             entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
-        const double fps = std::max(1, m_project ? m_project->fps : 30);
+        const double fps = std::max(1,
+#if PVFORGE_LEGACY_SHELL
+                                    m_project ? m_project->fps : 30
+#else
+                                    30
+#endif
+        );
         if (media > 0.0)
         {
             double trimEnd =
@@ -2917,10 +2988,18 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         // enough; short clips fall back to the clip context menu.
         const bool hidden = sessionMode()
                                 ? entity->hidden
+#if PVFORGE_LEGACY_SHELL
                                 : m_project->isEffectivelyHidden(entity->id);
+#else
+                                : entity->hidden;
+#endif
         const bool locked = sessionMode()
                                 ? entity->locked
+#if PVFORGE_LEGACY_SHELL
                                 : m_project->isEffectivelyLocked(entity->id);
+#else
+                                : entity->locked;
+#endif
         const QRect clip = clipRect(*entity);
         if (clip.isEmpty())
             continue;
@@ -3828,6 +3907,7 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 {
     if (sessionMode())
         return dropSessionAsset(mime, frame, row);
+#if PVFORGE_LEGACY_SHELL
     if (!m_project || !hasAssetMime(&mime))
         return kInvalidEntity;
 
@@ -3938,6 +4018,9 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
     emit snapshotEditRequested(before, m_project->entities(),
                                QStringLiteral("添加素材"));
     return id;
+#else
+    return kInvalidEntity;
+#endif
 }
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
@@ -4010,10 +4093,18 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QMenu menu(this);
     const bool hiddenNow = sessionMode()
                                ? entity->hidden
+#if PVFORGE_LEGACY_SHELL
                                : m_project->isEffectivelyHidden(entity->id);
+#else
+                               : entity->hidden;
+#endif
     const bool lockedNow = sessionMode()
                                ? entity->locked
+#if PVFORGE_LEGACY_SHELL
                                : m_project->isEffectivelyLocked(entity->id);
+#else
+                               : entity->locked;
+#endif
     QAction* toggleHidden = menu.addAction(hiddenNow
                                                ? QStringLiteral("显示片段")
                                                : QStringLiteral("隐藏片段"));
@@ -4094,7 +4185,13 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     else
     {
         remove = menu.addAction(QStringLiteral("删除片段"));
-        remove->setEnabled(!m_project->isEffectivelyLocked(id));
+        remove->setEnabled(
+#if PVFORGE_LEGACY_SHELL
+            !m_project->isEffectivelyLocked(id)
+#else
+            true
+#endif
+        );
     }
     QAction* chosen = menu.exec(event->globalPos());
     if (chosen == toggleHidden)
@@ -4357,7 +4454,13 @@ TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
     }
     auto* popup = sessionMode() && m_adapter
                       ? new ClipPopup(ownerId, this, m_adapter)
+#if PVFORGE_LEGACY_SHELL
                       : new ClipPopup(m_project, ownerId, this);
+#else
+                      : nullptr;
+#endif
+    if (!popup)
+        return nullptr;
     m_popups.insert(ownerId, popup);
     popup->panel()->setCurrentFrame(m_frame);
     popup->syncGeometry();

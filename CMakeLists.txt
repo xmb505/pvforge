@@ -33,6 +33,27 @@ option(PVFORGE_BUILD_REFERENCE
     "Build the src/next reference shell (NextWindow, ViewportWidget) and its tests"
     OFF)
 
+# The pre-EditorSession shell — core::Project, the Project* constructors of the
+# old panels, the FFmpeg scene renderer, the legacy MCP service and the HTML
+# layer widgets — is retired and has no users.  Release builds leave it out
+# completely; only MainWindow(EditorSession*) exists there.  Debug/self-test
+# builds keep compiling it so the remaining legacy tests still run.
+set(_pvf_legacy_shell_default OFF)
+if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_pvf_legacy_shell_default ON)
+endif()
+option(PVFORGE_LEGACY_SHELL
+    "Build the retired Project-based shell (legacy panels, renderer, MCP service)"
+    ${_pvf_legacy_shell_default})
+
+# pvforge-tests still has cases that drive core::Project; keep them buildable
+# instead of silently dropping half of the suite.
+if(PVFORGE_BUILD_SELF_TESTS AND NOT PVFORGE_LEGACY_SHELL)
+    message(STATUS "pvforge-tests still covers core::Project; forcing PVFORGE_LEGACY_SHELL=ON")
+    set(PVFORGE_LEGACY_SHELL ON)
+endif()
+message(STATUS "Legacy Project shell (PVFORGE_LEGACY_SHELL): ${PVFORGE_LEGACY_SHELL}")
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia Network)
 # The HTML/CDP renderer only needs QtCore. Prefer the Qt WebSockets module when
 # its development package is present; otherwise WsClient implements the small
@@ -65,9 +86,7 @@ target_link_libraries(pvforge-mcp PRIVATE Qt6::Core Qt6::Network)
 # so `pvforge` and `pvforge-tests` share one compilation of the application
 # sources instead of building them twice.
 set(PVF_APP_SOURCES
-    src/core/Project.cpp
     src/core/CheckpointManager.cpp
-    src/core/History.cpp
     src/core/PerfMonitor.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
@@ -77,23 +96,12 @@ set(PVF_APP_SOURCES
     src/core/LineDeco.cpp
     src/core/BrandWall.cpp
     src/core/VectorShape.cpp
-    src/core/Camera.cpp
     src/core/Easing.cpp
-    src/core/Commands.cpp
     src/media/VideoDecoder.cpp
-    src/media/VideoPlayer.cpp
     src/media/VideoProxy.cpp
     src/media/AudioDecoder.cpp
     src/media/DecoderInfo.cpp
-    src/media/MediaImporter.cpp
-    src/mcp/McpServer.cpp
     src/mcp/StdioBridge.cpp
-    src/mcp/McpCommandService.cpp
-    src/audio/AudioEngine.cpp
-    src/render/SceneRenderer.cpp
-    src/render/CameraRenderer.cpp
-    src/html/HtmlAsset.cpp
-    src/html/HtmlRenderer.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
@@ -125,16 +133,36 @@ set(PVF_APP_SOURCES
     src/ui/TextLayoutDialog.cpp
     src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp
-    src/ui/CurveEditor.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
     src/ui/Viewport.cpp
     src/next/timeline/MarkerDialog.cpp
     src/next/timeline/MarkerDialog.h
-    src/ui/WaveformView.cpp
     src/ui/WorkbenchPanel.cpp
 )
+
+# Retired shell: the old Project model and everything that only exists to drive
+# it.  None of it is reachable from the delivery entry point.
+if(PVFORGE_LEGACY_SHELL)
+    list(APPEND PVF_APP_SOURCES
+        src/core/Project.cpp
+        src/core/History.cpp
+        src/core/Commands.cpp
+        src/core/Camera.cpp
+        src/audio/AudioEngine.cpp
+        src/media/MediaImporter.cpp
+        src/media/VideoPlayer.cpp
+        src/mcp/McpServer.cpp
+        src/mcp/McpCommandService.cpp
+        src/render/SceneRenderer.cpp
+        src/render/CameraRenderer.cpp
+        src/html/HtmlAsset.cpp
+        src/html/HtmlRenderer.cpp
+        src/ui/CurveEditor.cpp
+        src/ui/WaveformView.cpp
+    )
+endif()
 
 add_library(pvf_app STATIC ${PVF_APP_SOURCES})
 
@@ -142,6 +170,9 @@ target_compile_definitions(pvf_app PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
     PVFORGE_BUILD_TYPE="$<CONFIG>"
     PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
+)
+target_compile_definitions(pvf_app PUBLIC
+    PVFORGE_LEGACY_SHELL=$<BOOL:${PVFORGE_LEGACY_SHELL}>
 )
 
 add_dependencies(pvf_app pvforge-mcp)

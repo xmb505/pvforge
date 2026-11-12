@@ -4,7 +4,9 @@
 #include "SystemInfo.h"
 #include "core/Settings.h"
 #include "media/DecoderInfo.h"
+#if PVFORGE_LEGACY_SHELL
 #include "mcp/McpServer.h"
+#endif
 #include "mcp/StdioBridge.h"
 #include "next/settings/GitDetect.h"
 
@@ -1307,6 +1309,7 @@ QWidget* SettingsDialog::createMcpPage()
 
 void SettingsDialog::applyMcpEnabled(bool enabled)
 {
+#if PVFORGE_LEGACY_SHELL
     if (!m_mcpServer)
     {
         refreshMcpState();
@@ -1350,12 +1353,22 @@ void SettingsDialog::applyMcpEnabled(bool enabled)
     m_mcpError->hide();
     refreshMcpState();
     emit mcpStateChanged(false, 0, QString());
+#else
+    Q_UNUSED(enabled);
+    refreshMcpState();
+    emit mcpStateChanged(false, 0, QString());
+#endif
 }
 
 void SettingsDialog::refreshMcpState()
 {
+#if PVFORGE_LEGACY_SHELL
     const bool hasServer = m_mcpServer != nullptr;
     const bool running = hasServer && m_mcpServer->isRunning();
+#else
+    const bool hasServer = false;
+    const bool running = false;
+#endif
 
     {
         const QSignalBlocker blocker(m_mcpEnabled);
@@ -1374,7 +1387,9 @@ void SettingsDialog::refreshMcpState()
 
     if (hasServer)
     {
+#if PVFORGE_LEGACY_SHELL
         m_mcpToken->setText(QString::fromLatin1(m_mcpServer->token()));
+#endif
         m_mcpToken->setEnabled(true);
     }
     else
@@ -1389,8 +1404,10 @@ void SettingsDialog::refreshMcpState()
     }
     else if (running)
     {
+#if PVFORGE_LEGACY_SHELL
         m_mcpStatus->setText(
             QStringLiteral("监听中 · %1").arg(m_mcpServer->endpointUrl()));
+#endif
     }
     else if (!m_mcpError->text().isEmpty())
     {
@@ -1404,17 +1421,21 @@ void SettingsDialog::refreshMcpState()
 
 void SettingsDialog::copyMcpToken()
 {
+#if PVFORGE_LEGACY_SHELL
     if (!m_mcpServer)
         return;
     QApplication::clipboard()->setText(
         QString::fromLatin1(m_mcpServer->token()));
+#endif
 }
 
 void SettingsDialog::resetMcpToken()
 {
+#if PVFORGE_LEGACY_SHELL
     if (!m_mcpServer)
         return;
     m_mcpServer->setToken(QByteArray());
+#endif
     refreshMcpState();
 }
 
@@ -1447,8 +1468,11 @@ void SettingsDialog::setMcpPermissionState(bool armed, const QString& sceneName,
         m_mcpError->setText(QStringLiteral("解锁失败：%1").arg(error));
         m_mcpError->show();
     }
-    else if (error.isEmpty() && m_mcpError && m_mcpServer
-             && m_mcpServer->isRunning())
+    else if (error.isEmpty() && m_mcpError
+#if PVFORGE_LEGACY_SHELL
+             && m_mcpServer && m_mcpServer->isRunning()
+#endif
+    )
     {
         m_mcpError->clear();
         m_mcpError->hide();
@@ -1478,16 +1502,23 @@ void SettingsDialog::copyMcpStdioConfig()
 QString SettingsDialog::mcpConfigJson() const
 {
     QString url;
+#if PVFORGE_LEGACY_SHELL
     if (m_mcpServer && m_mcpServer->isRunning())
         url = m_mcpServer->endpointUrl();
-    else if (m_mcpAutoPort->isChecked())
+    else
+#endif
+    if (m_mcpAutoPort->isChecked())
         url = QStringLiteral("http://127.0.0.1:PORT/mcp");
     else
         url = QStringLiteral("http://127.0.0.1:%1/mcp").arg(m_mcpPort->value());
 
+#if PVFORGE_LEGACY_SHELL
     const QString token = m_mcpServer
                               ? QString::fromLatin1(m_mcpServer->token())
                               : QString();
+#else
+    const QString token;
+#endif
     QJsonObject server;
     server[QStringLiteral("type")] = QStringLiteral("streamable-http");
     server[QStringLiteral("url")] = url;

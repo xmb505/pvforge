@@ -21,6 +21,7 @@ class QStackedWidget;
 
 namespace pvf {
 
+class Project;
 class EditorSession;
 
 // Floating creation panel modelled after the Mine-imator workbench.
@@ -29,7 +30,9 @@ class WorkbenchPanel : public QFrame
     Q_OBJECT
 
 public:
+#if PVFORGE_LEGACY_SHELL
     explicit WorkbenchPanel(Project* project, QWidget* parent = nullptr);
+#endif
     // Session mode: the special page creates model::BrandWallContent through
     // EditorSession. Other legacy creation pages are not shown yet.
     explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);

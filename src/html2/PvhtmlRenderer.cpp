@@ -1,7 +1,7 @@
 #include "html2/PvhtmlRenderer.h"
 
-#include "html/CdpClient.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/CdpClient.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "html2/LocalBundleServer.h"
 
 #include <QElapsedTimer>

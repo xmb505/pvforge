@@ -1,6 +1,10 @@
 #pragma once
 
+#include "core/EntityId.h"
+
+#if PVFORGE_LEGACY_SHELL
 #include "core/Project.h"
+#endif
 
 #include <QWidget>
 
@@ -18,7 +22,9 @@ class ProjectPropertiesPanel : public QWidget
     Q_OBJECT
 
 public:
+#if PVFORGE_LEGACY_SHELL
     explicit ProjectPropertiesPanel(Project* project, QWidget* parent = nullptr);
+#endif
     explicit ProjectPropertiesPanel(EditorSession* session, QWidget* parent = nullptr);
 
     void refresh();
@@ -30,7 +36,9 @@ private:
     void buildUi();
     void applyName(const QString& text);
 
+#if PVFORGE_LEGACY_SHELL
     Project* m_project = nullptr;
+#endif
     EditorSession* m_session = nullptr;
     QLineEdit* m_name = nullptr;
     QLineEdit* m_author = nullptr;

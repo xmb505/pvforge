@@ -29,6 +29,7 @@ class QWheelEvent;
 
 namespace pvf {
 
+class Project;
 class EditorSession;
 class TimelineAdapter;
 
@@ -59,7 +60,9 @@ class TimelinePanel : public QWidget
     Q_OBJECT
 
 public:
+#if PVFORGE_LEGACY_SHELL
     explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
+#endif
     // Session-backed mode.  Painting, rows, scrolling and the private timeline
     // overlay are shared with the legacy mode; clip gestures commit through
     // EditorSession::editActions().

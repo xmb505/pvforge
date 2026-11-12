@@ -1,8 +1,8 @@
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 
-#include "html/CdpClient.h"
-#include "html/CdpTransport.h"
-#include "html/PipeCdpTransport.h"
+#include "htmlcommon/CdpClient.h"
+#include "htmlcommon/CdpTransport.h"
+#include "htmlcommon/PipeCdpTransport.h"
 
 #include <QDir>
 #include <QElapsedTimer>
