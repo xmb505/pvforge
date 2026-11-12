@@ -212,8 +212,11 @@ if(BUILD_TESTING)
         add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
         target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_app Qt6::Test)
         add_test(NAME next.media_services COMMAND pvf_media_services_tests)
+        # Drives html2's HtmlFrameService, i.e. real Chrome/DevTools processes;
+        # share the lock with html2.* so a full `ctest -j4` does not race them.
         set_tests_properties(next.media_services PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+            RESOURCE_LOCK pvforge_chrome)
 
         add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
         target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_app Qt6::Test)
