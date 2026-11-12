@@ -75,6 +75,12 @@ bash tools/doc-metrics.sh --write   # 更新 docs/AI/STATUS.md 顶部指标区�
 bash tools/doc-metrics.sh --check   # CI 校验，数字漂移则退出 1
 ```
 
+代码体量护栏（`main.cpp` ≤ 300 行 + 大文件 ratchet，CI 阻塞）见 [ci/README.md](ci/README.md#代码体量)：
+
+```bash
+bash tools/check-code-size.sh           # 检查；超限或大文件变大则退出 1
+```
+
 ### CI 与本地验证
 
 依赖一次装好，之后用 preset（Qt 6.6.x/6.7.x 参见 [ci/README.md](ci/README.md)）：

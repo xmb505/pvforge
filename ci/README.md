@@ -90,6 +90,36 @@ CI 的 `doc-metrics` job 只跑 `--check`，不需要 Qt/构建产物。规则�
   干净 checkout 也能运行，不会把已有数字覆盖成占位符。
 - 换了源码结构或加了自检后，本地跑一次 `--write` 并提交，CI 才会绿。
 
+## 代码体量
+
+`tools/check-code-size.sh` 防的是“又一个 5000 行文件”，不是把所有历史大文件一次砍平。
+
+```bash
+bash tools/check-code-size.sh                   # 检查，CI 用这个
+bash tools/check-code-size.sh --update-baseline # 重新生成 baseline，只在人类明确要求时用
+```
+
+规则：
+
+- **硬规则**：`src/main.cpp` ≤ 300 行。入口只做装配，逻辑放 `src/app` 等模块；这条不登记
+  baseline，超了直接判红。
+- **单文件 ratchet**：`src/**/*.cpp`、`src/**/*.h`（不含 build 目录）超过 2500 行必须登记在
+  `tools/code-size-baseline.txt`，格式 `路径<TAB>行数`，数字是当前允许的最大行数。
+  - 当前行数 > baseline：判红（文件又变大了）。
+  - 出现新的 >2500 行文件且未登记：判红。
+  - 文件变小：通过，只提示可以收紧 baseline。
+  - baseline 里的条目消失或降到 2500 行以下：通过，只提示可以移除。
+- **baseline 只降不升**。`--update-baseline` 会按当前行数重写整份文件：变小的收紧、
+  消失的移除、变大的会**抬高**——所以它会打印每一处“抬高”，这是需要人类批准的信号。
+  为了让 CI 变绿而手工改大数字，等于取消护栏。
+
+为什么用 ratchet 而不是一次砍到 2500：仓库里已经有 15 个历史大文件（最大
+`src/app/MainWindow.cpp` 5774 行）。一刀切会让 `main` 立刻全红，实际结果通常是被
+`continue-on-error` 或注释掉；ratchet 冻结现状，只禁止继续变大，并允许后续每次拆文件时
+用 `--update-baseline` 把上限一路压下去。
+
+CI 的 `code-size` job 只做文本统计，不装 Qt、不构建，**阻塞合并**。
+
 ## 已知限制
 
 - CI 只跑 Linux x86_64 + offscreen；没有 GPU，像素/视频相关断言依赖软件光栅。

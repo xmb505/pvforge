@@ -40,6 +40,19 @@ jobs:
       - name: 校验 STATUS.md 指标区块
         run: bash tools/doc-metrics.sh --check
 
+  # 代码体量护栏：src/main.cpp 300 行硬上限 + 单文件 ratchet
+  # （tools/code-size-baseline.txt）。纯文本统计，不装 Qt、不构建，几秒结束；
+  # 与 doc-metrics 不同，这个 job 阻塞合并。
+  code-size:
+    name: 代码体量（ratchet）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查代码体量
+        run: bash tools/check-code-size.sh
+
   build-test:
     name: Qt ${{ matrix.qt.version }} / ${{ matrix.preset }}
     runs-on: ubuntu-24.04
