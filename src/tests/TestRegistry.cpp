@@ -1,6 +1,7 @@
 #include "TestRegistry.h"
 
 #include <QApplication>
+#include <QDebug>
 #include <QStringList>
 
 namespace pvf::tests {
@@ -38,7 +39,24 @@ std::optional<int> dispatch(QApplication& app)
     registerAssetTests(registry);
     registerMcpTests(registry);
     registerPerfTests(registry);
-    return registry.run(app);
+    if (const auto result = registry.run(app))
+        return result;
+
+    // A `--*-test` switch that nothing registers is a retired or misspelled
+    // switch (issue #72 retired several). Fail loudly here; falling through to
+    // the welcome window would look like a hang to scripts and CI.
+    for (const QString& argument : app.arguments())
+    {
+        if (argument.startsWith(QStringLiteral("--"))
+            && argument.endsWith(QStringLiteral("-test")))
+        {
+            qCritical().noquote()
+                << "unknown test switch:" << argument
+                << "(retired or misspelled; see src/tests/TestRegistry.cpp)";
+            return 1;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace pvf::tests

@@ -153,111 +153,10 @@ int opacityTest(QApplication& app)
     return app.exec();
 }
 
-int multiDragTest(QApplication& app)
-{
-    auto* project = new pvf::Project;
-    project->fps = 30;
-    pvf::Entity* folder = project->addFolder(QStringLiteral("Target"));
-    const pvf::EntityId folderId = folder->id;
-    QVector<pvf::EntityId> ids;
-    for (int i = 0; i < 3; ++i)
-        ids.append(project->addVector(0, 80, 80, Qt::red, Qt::white, 0)->id);
-
-    pvf::MainWindow window(project);
-    window.resize(1000, 700);
-    window.show();
-
-    QTimer::singleShot(300, &window, [&app, &window, project, folderId, ids] {
-        int failures = 0;
-        auto* timeline = window.findChild<pvf::TimelinePanel*>();
-        if (!timeline)
-        {
-            qCritical() << "multidrag-test: timeline missing";
-            app.exit(1);
-            return;
-        }
-
-        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
-                                    Qt::MouseButtons buttons,
-                                    Qt::KeyboardModifiers modifiers) {
-            QMouseEvent event(type, QPointF(pos),
-                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
-                              buttons, modifiers);
-            QApplication::sendEvent(timeline, &event);
-        };
-
-        const QPoint first(10, timeline->rowCenterYForTest(1));
-        const QPoint second(10, timeline->rowCenterYForTest(2));
-        const QPoint folderRow(10, timeline->rowCenterYForTest(0));
-
-        sendMouse(QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease, first, Qt::NoButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonPress, second, Qt::LeftButton,
-                  Qt::ControlModifier);
-        sendMouse(QEvent::MouseButtonRelease, second, Qt::NoButton,
-                  Qt::ControlModifier);
-        QApplication::processEvents();
-        if (timeline->entitySelectionCountForTest() != 2)
-        {
-            qCritical() << "multidrag-test: ctrl selection"
-                        << timeline->entitySelectionCountForTest();
-            ++failures;
-        }
-
-        // Pressing a row that is already selected keeps the whole selection,
-        // so dragging drops both rows into the folder as one block.
-        sendMouse(QEvent::MouseButtonPress, first, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseMove, folderRow, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease, folderRow, Qt::NoButton, Qt::NoModifier);
-        QApplication::processEvents();
-
-        const pvf::Entity* a = project->entity(ids[0]);
-        const pvf::Entity* b = project->entity(ids[1]);
-        const pvf::Entity* c = project->entity(ids[2]);
-        if (!a || !b || !c || a->parent != folderId || b->parent != folderId
-            || c->parent != pvf::kInvalidEntity)
-        {
-            qCritical() << "multidrag-test: group drop"
-                        << (a ? a->parent : -1) << (b ? b->parent : -1)
-                        << (c ? c->parent : -1);
-            ++failures;
-        }
-        else
-        {
-            QVector<pvf::EntityId> order;
-            for (int index : project->entityOrder())
-            {
-                const pvf::Entity& entity = project->entities()[index];
-                if (entity.parent == folderId)
-                    order.append(entity.id);
-            }
-            if (order != QVector<pvf::EntityId>({ids[0], ids[1]}))
-            {
-                qCritical() << "multidrag-test: child order" << order;
-                ++failures;
-            }
-        }
-
-        if (auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction")))
-        {
-            undo->trigger();
-            QApplication::processEvents();
-            const pvf::Entity* undoneA = project->entity(ids[0]);
-            const pvf::Entity* undoneB = project->entity(ids[1]);
-            if (!undoneA || !undoneB
-                || undoneA->parent != pvf::kInvalidEntity
-                || undoneB->parent != pvf::kInvalidEntity)
-            {
-                qCritical() << "multidrag-test: undo did not restore the rows";
-                ++failures;
-            }
-        }
-
-        qInfo() << "multidrag-test failures" << failures;
-        app.exit(failures == 0 ? 0 : 1);
-    });
-    return app.exec();
-}
+// Entity multi-select (Ctrl/Shift row selection, group drag into a folder) is
+// not part of the current timeline: it is explicitly deferred to issue #23, so
+// `--multidrag-test` was retired with issue #72. Do not re-add a replacement
+// here; the successor test belongs to the multi-select work.
 
 int keyframeDragTest(QApplication& app)
 {
@@ -374,226 +273,11 @@ int keyframeDragTest(QApplication& app)
     return app.exec();
 }
 
-int curveEditorTest(QApplication& app)
-{
-    auto* project = new pvf::Project;
-    project->fps = 30;
-    pvf::Entity* entity = project->addVector(0, 80, 80, Qt::red, Qt::white, 0);
-    const pvf::EntityId id = entity->id;
-    project->setValue(id, QStringLiteral("x"), 10, 100.0, true);
-    project->setValue(id, QStringLiteral("x"), 20, 200.0, true);
-    project->setValue(id, QStringLiteral("y"), 10, 0.0, true);
-    project->setValue(id, QStringLiteral("y"), 20, 50.0, true);
-
-    pvf::EasingSpec bezier;
-    bezier.easing = pvf::Easing::Bezier;
-    bezier.inX = 0.8;
-    bezier.inY = 0.0;
-    bezier.outX = 0.2;
-    bezier.outY = 1.0;
-    project->setKeyframeEasing(id, QStringLiteral("x"), 20, bezier);
-
-    pvf::MainWindow window(project);
-    window.resize(1100, 800);
-    window.show();
-
-    QTimer::singleShot(300, &window, [&app, &window, project, id] {
-        int failures = 0;
-        auto fail = [&failures](const char* text) {
-            qCritical() << "curve-editor-test:" << text;
-            ++failures;
-        };
-
-        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("timelineTabs"));
-        auto* curve = window.findChild<pvf::CurveEditor*>();
-        if (!tabs || !curve || tabs->count() < 2)
-        {
-            qCritical() << "curve-editor-test: timeline tabs/curve editor missing";
-            app.exit(1);
-            return;
-        }
-        tabs->setCurrentWidget(curve);
-        window.setSelectedEntityForTest(id);
-        curve->setPixelsPerFrameForTest(10.0);
-        curve->setCurveVisible(0, true);
-        curve->setCurveVisible(1, true);
-        QApplication::processEvents();
-
-        auto sendMouse = [curve](QEvent::Type type, const QPointF& pos,
-                                 Qt::MouseButtons buttons,
-                                 Qt::KeyboardModifiers modifiers) {
-            QMouseEvent event(type, pos, curve->mapToGlobal(pos), Qt::LeftButton,
-                              buttons, modifiers);
-            QApplication::sendEvent(curve, &event);
-        };
-        auto sendKey = [curve](QEvent::Type type, int key,
-                               Qt::KeyboardModifiers modifiers) {
-            QKeyEvent event(type, key, modifiers);
-            QApplication::sendEvent(curve, &event);
-        };
-
-        const QPointF p10 = curve->keyframePointForTest(QStringLiteral("x"), 10.0);
-        const QPointF p20 = curve->keyframePointForTest(QStringLiteral("x"), 20.0);
-        if (p10.isNull() || p20.isNull()
-            || std::abs(p10.x() - curve->frameXForTest(10.0)) > 1.0)
-        {
-            fail("keyframe points not mapped to the time axis");
-        }
-
-        // Move the selected frame from 10 to 15. Every property at that frame
-        // travels with it, exactly like a timeline group drag.
-        sendMouse(QEvent::MouseButtonPress, p10, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseMove, QPointF(curve->frameXForTest(15.0), p10.y()),
-                  Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease,
-                  QPointF(curve->frameXForTest(15.0), p10.y()), Qt::NoButton,
-                  Qt::NoModifier);
-        QApplication::processEvents();
-
-        const pvf::Keyframe* movedX = project->keyframe(id, QStringLiteral("x"), 15.0);
-        if (!movedX || std::abs(movedX->value - 100.0) > 1e-6
-            || !project->keyframe(id, QStringLiteral("y"), 15.0)
-            || project->keyframe(id, QStringLiteral("x"), 10.0)
-            || project->keyframe(id, QStringLiteral("y"), 10.0))
-        {
-            fail("dragging a keyframe did not move the whole frame");
-        }
-        if (window.currentFrameForTest() != 15)
-        {
-            fail("playhead did not follow the dragged keyframe");
-        }
-
-        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
-        if (!undo)
-        {
-            fail("undo action missing");
-        }
-        else
-        {
-            undo->trigger();
-            QApplication::processEvents();
-            if (!project->keyframe(id, QStringLiteral("x"), 10.0)
-                || !project->keyframe(id, QStringLiteral("y"), 10.0)
-                || project->keyframe(id, QStringLiteral("x"), 15.0))
-            {
-                fail("undo did not restore the dragged keyframes");
-            }
-        }
-
-        // Dragging onto an occupied frame must stop one frame short instead of
-        // overwriting the existing key.
-        const QPointF again10 =
-            curve->keyframePointForTest(QStringLiteral("x"), 10.0);
-        sendMouse(QEvent::MouseButtonPress, again10, Qt::LeftButton,
-                  Qt::NoModifier);
-        sendMouse(QEvent::MouseMove, QPointF(curve->frameXForTest(20.0), again10.y()),
-                  Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease,
-                  QPointF(curve->frameXForTest(20.0), again10.y()), Qt::NoButton,
-                  Qt::NoModifier);
-        QApplication::processEvents();
-        if (!project->keyframe(id, QStringLiteral("x"), 19.0)
-            || !project->keyframe(id, QStringLiteral("x"), 20.0)
-            || project->keyframe(id, QStringLiteral("x"), 10.0))
-        {
-            fail("keyframe drag overwrote a neighbour instead of clamping");
-        }
-        if (undo)
-        {
-            undo->trigger();
-            QApplication::processEvents();
-        }
-
-        // Bezier handle drag: select the incoming key of the segment, grab the
-        // in-handle and move it. The curve changes once, on release.
-        const QPointF key20 = curve->keyframePointForTest(QStringLiteral("x"), 20.0);
-        sendMouse(QEvent::MouseButtonPress, key20, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease, key20, Qt::NoButton, Qt::NoModifier);
-        QApplication::processEvents();
-        if (curve->selectedKeyframeCount() != 1)
-            fail("clicking a graph keyframe did not select it");
-
-        const QPointF handle =
-            curve->bezierHandlePointForTest(QStringLiteral("x"), 20.0, true);
-        if (handle.isNull())
-        {
-            fail("bezier handle was not exposed for the selected keyframe");
-        }
-        else
-        {
-            sendMouse(QEvent::MouseButtonPress, handle, Qt::LeftButton,
-                      Qt::NoModifier);
-            sendMouse(QEvent::MouseMove, handle + QPointF(-15.0, 12.0),
-                      Qt::LeftButton, Qt::NoModifier);
-            sendMouse(QEvent::MouseButtonRelease, handle + QPointF(-15.0, 12.0),
-                      Qt::NoButton, Qt::NoModifier);
-            QApplication::processEvents();
-            const pvf::Keyframe* eased =
-                project->keyframe(id, QStringLiteral("x"), 20.0);
-            if (!eased || eased->ease.easing != pvf::Easing::Bezier
-                || (std::abs(eased->ease.inX - 0.8) < 1e-6
-                    && std::abs(eased->ease.inY) < 1e-6))
-            {
-                fail("dragging the bezier handle did not change the easing");
-            }
-            if (undo)
-            {
-                undo->trigger();
-                QApplication::processEvents();
-                const pvf::Keyframe* restored =
-                    project->keyframe(id, QStringLiteral("x"), 20.0);
-                if (!restored || std::abs(restored->ease.inX - 0.8) > 1e-6
-                    || std::abs(restored->ease.inY) > 1e-6)
-                {
-                    fail("undo did not restore the bezier handles");
-                }
-            }
-        }
-
-        // Rubber-band select both frames, then copy and paste them at frame 40.
-        const QRect plot = curve->plotRectForTest();
-        const QPointF boxStart(curve->frameXForTest(0.0), plot.bottom() - 2.0);
-        const QPointF boxEnd(curve->frameXForTest(30.0), plot.top() + 2.0);
-        sendMouse(QEvent::MouseButtonPress, boxStart, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseMove, boxEnd, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonRelease, boxEnd, Qt::NoButton, Qt::NoModifier);
-        QApplication::processEvents();
-        if (curve->selectedKeyframeCount() < 2)
-            fail("rubber-band selection did not select both keyframes");
-
-        sendKey(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-        window.goToFrame(40);
-        QApplication::processEvents();
-        sendKey(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
-        QApplication::processEvents();
-        const pvf::Keyframe* pastedX40 =
-            project->keyframe(id, QStringLiteral("x"), 40.0);
-        const pvf::Keyframe* pastedX50 =
-            project->keyframe(id, QStringLiteral("x"), 50.0);
-        if (!pastedX40 || !pastedX50
-            || std::abs(pastedX40->value - 100.0) > 1e-6
-            || std::abs(pastedX50->value - 200.0) > 1e-6
-            || !project->keyframe(id, QStringLiteral("y"), 50.0))
-        {
-            fail("copy/paste did not recreate the selected keyframes");
-        }
-        if (undo)
-        {
-            undo->trigger();
-            QApplication::processEvents();
-            if (project->keyframe(id, QStringLiteral("x"), 40.0)
-                || project->keyframe(id, QStringLiteral("x"), 50.0))
-            {
-                fail("undo did not remove pasted keyframes");
-            }
-        }
-
-        window.grab().toImage().save(QStringLiteral("/tmp/pvforge_curve_editor.png"));
-        qInfo() << "curve-editor-test failures" << failures;
-        app.exit(failures == 0 ? 0 : 1);
-    });
-    return app.exec();
-}
+// The keyframe curve editor lives in the retired timeline 「图表」 page: the
+// old `TimelinePanel` no longer creates `timelineTabs` or a `CurveEditor`
+// child, so `--curve-editor-test` was retired with issue #72. Keyframe drag,
+// bezier easing and copy/paste keep their coverage in `--timeline-keys-test`
+// and `--keyframe-edit-test`; a graph-page test has to come back with the page.
 
 int audioUndoTest(QApplication& app)
 {
@@ -725,65 +409,11 @@ int audioUndoTest(QApplication& app)
             }
         }
 
-        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("timelineTabs"));
-        auto* wave = window.findChild<pvf::WaveformView*>();
-        if (!tabs || !wave)
-        {
-            fail("waveform page missing");
-        }
-        else
-        {
-            tabs->setCurrentWidget(wave);
-            QApplication::processEvents();
-            if (wave->laneCountForTest() != 3)
-                fail("waveform page did not create one lane per audio object");
-
-            const double zoomBefore = wave->pixelsPerFrameForTest();
-            const QPointF pos(500, 80);
-            QWheelEvent zoomEvent(pos, wave->mapToGlobal(pos), QPoint(), QPoint(0, 120),
-                                  Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
-                                  false);
-            QApplication::sendEvent(wave, &zoomEvent);
-            if (!(wave->pixelsPerFrameForTest() > zoomBefore))
-                fail("ctrl+wheel did not zoom the waveform");
-
-            wave->setPixelsPerFrameForTest(6.0);
-            window.goToFrame(30);
-            QApplication::processEvents();
-            const QPoint seekPos(wave->frameXForTest(45.0),
-                                 wave->laneRectForTest(0).center().y());
-            QMouseEvent press(QEvent::MouseButtonPress, QPointF(seekPos),
-                              QPointF(wave->mapToGlobal(seekPos)), Qt::LeftButton,
-                              Qt::LeftButton, Qt::NoModifier);
-            QApplication::sendEvent(wave, &press);
-            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(seekPos),
-                                QPointF(wave->mapToGlobal(seekPos)), Qt::LeftButton,
-                                Qt::NoButton, Qt::NoModifier);
-            QApplication::sendEvent(wave, &release);
-            QApplication::processEvents();
-            if (window.currentFrameForTest() != 45)
-                fail("clicking the waveform did not seek the playhead");
-
-            window.goToFrame(0);
-            QApplication::processEvents();
-            const int scrollBefore = wave->horizontalScrollForTest();
-            QWheelEvent scrollEvent(pos, wave->mapToGlobal(pos), QPoint(), QPoint(0, -120),
-                                    Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase,
-                                    false);
-            QApplication::sendEvent(wave, &scrollEvent);
-            if (wave->horizontalScrollForTest() == scrollBefore)
-                fail("shift+wheel did not scroll the waveform page");
-
-            const int verticalBefore = wave->verticalScrollForTest();
-            QWheelEvent verticalEvent(pos, wave->mapToGlobal(pos), QPoint(),
-                                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier,
-                                      Qt::NoScrollPhase, false);
-            QApplication::sendEvent(wave, &verticalEvent);
-            if (wave->verticalScrollForTest() == verticalBefore)
-                fail("wheel did not scroll waveform lanes");
-
-            window.grab().toImage().save(QStringLiteral("/tmp/pvforge_waveform_page.png"));
-        }
+        // The 「波形」 page (one lane per audio object, Ctrl+wheel zoom,
+        // wheel/shift+wheel scroll, click-to-seek) is gone: the timeline no
+        // longer creates `timelineTabs` or a `WaveformView`. Its assertions
+        // were retired with issue #72. Audio undo above still covers the live
+        // properties-panel path.
 
         qInfo() << "audio-undo-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);
@@ -2188,122 +1818,111 @@ int projectLimitTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
-int renameTest(QApplication& app)
+// Renaming moved from the old timeline inline editor (`renameEdit`, started by
+// double-clicking a row) to the properties panel's 「名称」 field
+// (`entityName`). The test follows the capability to the new entry point and
+// keeps the undo assertion; the old window-title / close-prompt assertions it
+// used to carry live in `--session-test`, which covers the unsaved marker.
+int renameTest()
 {
-    const QString assetPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.png");
-    QImage img(32, 32, QImage::Format_ARGB32);
-    img.fill(Qt::red);
-    if (!img.save(assetPath))
+    QTemporaryDir temp;
+    if (!temp.isValid())
         return 1;
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("rename.pvproj"));
 
-    auto* project = new pvf::Project;
-    pvf::MainWindow window(project);
-    window.resize(1200, 800);
-    window.show();
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("Rename");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
 
-    QTimer::singleShot(400, &window, [&app, &window, project, assetPath] {
-        int failures = 0;
-        auto* timeline = window.findChild<pvf::TimelinePanel*>();
-        auto* undo = window.findChild<QAction*>(QStringLiteral("undoAction"));
-        if (!timeline || !undo)
-        {
-            qCritical() << "rename-test: widgets missing";
-            app.exit(1);
-            return;
-        }
-        auto* renameEdit = timeline->findChild<QLineEdit*>(QStringLiteral("renameEdit"));
-        if (!renameEdit)
-        {
-            qCritical() << "rename-test: rename field missing";
-            app.exit(1);
-            return;
-        }
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "rename-test: create failed" << error;
+        return 1;
+    }
 
-        if (window.importImageFile(assetPath) == pvf::kInvalidEntity)
-        {
-            qCritical() << "rename-test: import failed";
-            app.exit(1);
-            return;
-        }
-        const pvf::EntityId id = project->entities().first().id;
-        const QString oldName = project->entities().first().name;
+    auto& project = session->mutableProject();
+    pvf::model::Entity entity;
+    entity.uuid = pvf::model::newUuid();
+    entity.name = QStringLiteral("原名字");
+    entity.start = 0;
+    entity.end = 60;
+    entity.row = 0;
+    entity.content.kind = pvf::ContentKind::Empty;
+    const pvf::Uuid uuid = entity.uuid;
+    project.entities.insert(uuid, entity);
+    if (!session->document()->commitEntities({uuid}, QStringLiteral("rename setup"),
+                                             &error))
+    {
+        qCritical() << "rename-test: setup commit failed" << error;
+        return 1;
+    }
+    session->flush();
 
-        // Double click the name to start renaming.
-        const QPoint namePoint(20, timeline->rowCenterYForTest(0));
-        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(namePoint),
-                                QPointF(timeline->mapToGlobal(namePoint)), Qt::LeftButton,
-                                Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(timeline, &doubleClick);
-        if (!renameEdit->isVisible())
-        {
-            qCritical() << "rename-test: rename field not shown";
-            ++failures;
-        }
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
 
-        renameEdit->setText(QStringLiteral("新名字"));
-        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-        QApplication::sendEvent(renameEdit, &enter);
-        if (project->entity(id)->name != QStringLiteral("新名字"))
-        {
-            qCritical() << "rename-test: name not applied";
-            ++failures;
-        }
+    int failures = 0;
+    auto fail = [&failures](const char* text) {
+        qCritical() << "rename-test:" << text;
+        ++failures;
+    };
 
-        // Renaming is undoable.
-        undo->trigger();
-        if (project->entity(id)->name != oldName)
-        {
-            qCritical() << "rename-test: undo rename failed";
-            ++failures;
-        }
+    auto* live = window->editorSessionForTest();
+    auto* document = live ? live->document() : nullptr;
+    auto* panel = window->findChild<pvf::PropertiesPanel*>();
+    if (!live || !document || !panel || !panel->sessionMode())
+    {
+        qCritical() << "rename-test: session window/panel missing";
+        return 1;
+    }
 
-        // The title tracks the saved/unsaved state.
-        if (!window.windowTitle().contains(QStringLiteral("未保存")))
-        {
-            qCritical() << "rename-test: title not marked unsaved" << window.windowTitle();
-            ++failures;
-        }
+    document->setSelection(uuid);
+    QApplication::processEvents();
+    QApplication::processEvents();
 
-        // Saving clears the modified flag and updates the title.
-        const QString projectPath = QDir::tempPath() + QStringLiteral("/pvforge_rename.pvproj");
-        QString error;
-        if (!project->save(projectPath, &error) || project->modified)
-        {
-            qCritical() << "rename-test: modified flag not cleared";
-            ++failures;
-        }
-        if (auto* saveAction = window.findChild<QAction*>(QStringLiteral("saveAction")))
-            saveAction->trigger();
-        if (!window.windowTitle().contains(QStringLiteral("已保存")))
-        {
-            qCritical() << "rename-test: title not marked saved" << window.windowTitle();
-            ++failures;
-        }
+    auto* nameEdit = panel->findChild<QLineEdit*>(QStringLiteral("entityName"));
+    if (!nameEdit)
+    {
+        qCritical() << "rename-test: rename field missing";
+        return 1;
+    }
+    if (nameEdit->text() != QStringLiteral("原名字"))
+        fail("name field does not show the entity");
 
-        // Closing a modified project asks before discarding.
-        project->setValue(id, QStringLiteral("x"), 0, 120, true);
-        if (!project->modified)
-        {
-            qCritical() << "rename-test: modified flag not set";
-            ++failures;
-        }
-        QTimer::singleShot(400, [] {
-            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
-                box->accept();
-        });
-        window.close();
-        if (window.isVisible())
-        {
-            qCritical() << "rename-test: close prompt did not appear";
-            ++failures;
-        }
+    auto name = [live, uuid] {
+        return live->project().entities.value(uuid).name;
+    };
 
-        QFile::remove(assetPath);
-        QFile::remove(projectPath);
-        qInfo() << "rename-test failures" << failures;
-        app.exit(failures == 0 ? 0 : 1);
-    });
-    return app.exec();
+    const int depthBefore = document->store()->undoDepth();
+    nameEdit->setText(QStringLiteral("新名字"));
+    QMetaObject::invokeMethod(nameEdit, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    live->flush(&error);
+    if (name() != QStringLiteral("新名字"))
+        fail("name edit did not reach the model");
+    if (document->store()->undoDepth() != depthBefore + 1)
+        fail("name edit was not one commit");
+
+    if (!document->undo(&error))
+        fail("undo failed");
+    QApplication::processEvents();
+    if (name() != QStringLiteral("原名字"))
+        fail("undo did not restore the name");
+
+    window->close();
+    QApplication::processEvents();
+
+    qInfo() << "rename-test failures" << failures;
+    return failures == 0 ? 0 : 1;
 }
 
 int undoTest(QApplication& app)
@@ -2449,12 +2068,8 @@ void registerEditorTests(Registry& registry)
                  [](QApplication& app) { return groupTest(app); });
     registry.add(QStringLiteral("--opacity-test"),
                  [](QApplication& app) { return opacityTest(app); });
-    registry.add(QStringLiteral("--multidrag-test"),
-                 [](QApplication& app) { return multiDragTest(app); });
     registry.add(QStringLiteral("--keyframe-drag-test"),
                  [](QApplication& app) { return keyframeDragTest(app); });
-    registry.add(QStringLiteral("--curve-editor-test"),
-                 [](QApplication& app) { return curveEditorTest(app); });
     registry.add(QStringLiteral("--audio-undo-test"),
                  [](QApplication& app) { return audioUndoTest(app); });
     registry.add(QStringLiteral("--clipboard-test"),
@@ -2480,7 +2095,7 @@ void registerEditorTests(Registry& registry)
     registry.add(QStringLiteral("--project-limit-test"),
                  [](QApplication& app) { return projectLimitTest(app); });
     registry.add(QStringLiteral("--rename-test"),
-                 [](QApplication& app) { return renameTest(app); });
+                 [](QApplication&) { return renameTest(); });
     registry.add(QStringLiteral("--undo-test"),
                  [](QApplication& app) { return undoTest(app); });
     registry.add(QStringLiteral("--delete-test"),

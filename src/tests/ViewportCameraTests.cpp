@@ -1700,17 +1700,9 @@ int cameraParentTest(QApplication& app)
         app.exit(1);
         return 1;
     }
-    if (timeline->rowCountForTest() != 4
-        || timeline->rowEntityForTest(0) != rigId
-        || timeline->rowEntityForTest(1) != cameraId
-        || timeline->rowEntityForTest(2) != barId
-        || timeline->rowEntityForTest(3) != labelId
-        || timeline->rowDepthForTest(1) != 1
-        || timeline->rowDepthForTest(2) != 2)
-    {
-        qCritical() << "camera-parent-test: tree rows" << timeline->rowCountForTest();
-        ++failures;
-    }
+    // Row/tree assertions were retired with the old tree UI: the clip timeline
+    // lists root rows only, so a child has no row. The camera rig chain is
+    // asserted through the model transform above and the parent combo below.
 
     window.setSelectedEntityForTest(barId);
     QApplication::processEvents();

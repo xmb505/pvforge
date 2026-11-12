@@ -415,11 +415,18 @@ src/
 
 ## 测试
 
-每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --xxx-test`：
+每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --xxx-test`。
+开关清单以 `src/tests/TestRegistry.cpp` 的 `register*Tests()` 为准（2026-11-13：100 个开关）。
 
-self / save / autosave / special / export / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / curve-editor / audio-undo / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
+历史清单（M3 记录的 52 个模式）里下列开关已退役（issue #72，随旧模型/旧 UI 一起移除）：
 
-共 52 个模式，全部通过。
+- `--scene-test`、`--scene-ui-test`、`--annotation-ui-test`：场景条/注释条已从 `TimelinePanel` 移除，访问器印成空实现
+- `--multidrag-test`：实体多选明确推迟，归 issue #23
+- `--curve-editor-test`：时间轴「图表」页移除，`CurveEditor` 不再挂到任何页签
+- `--mcp-integration-test`：依赖旧 `McpServer` + 场景武装范围；覆盖由 `--mcp-ui-test`、`--mcp-test` 与 `mcp2.*` CTest 接管
+- `--audio-test` / `--audio-undo-test` 中的旧 clip 拖拽与「波形」页断言：新时间轴不画音频行，clip 拖动/裁剪由 `--timeline-edit-test` 覆盖
+
+`--rename-test`（改名迁到属性面板「名称」）、`--folder-test`、`--audio-test`、`--audio-undo-test`、`--camera-parent-test` 保留并迁移到新入口。
 
 ## 已知限制
 

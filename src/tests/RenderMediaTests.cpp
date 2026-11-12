@@ -546,97 +546,11 @@ int folderTest(QApplication& app)
             return;
         }
 
-        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
-                                    Qt::MouseButtons buttons) {
-            QMouseEvent event(type, QPointF(pos),
-                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
-                              buttons, Qt::NoModifier);
-            QApplication::sendEvent(timeline, &event);
-        };
-
-        if (timeline->rowCountForTest() != 3
-            || timeline->rowEntityForTest(0) != firstId
-            || timeline->rowEntityForTest(1) != folderId
-            || timeline->rowEntityForTest(2) != secondId
-            || timeline->rowDepthForTest(2) != 1)
-        {
-            qCritical() << "folder-test: tree rows" << timeline->rowCountForTest();
-            ++failures;
-        }
-
-        // Folder arrow collapses and expands its children.
-        const QPoint arrow = timeline->folderArrowRectForTest(1).center();
-        sendMouse(QEvent::MouseButtonPress, arrow, Qt::LeftButton);
-        sendMouse(QEvent::MouseButtonRelease, arrow, Qt::NoButton);
-        if (timeline->rowCountForTest() != 2
-            || !timeline->rowCollapsedForTest(folderId))
-        {
-            qCritical() << "folder-test: collapse" << timeline->rowCountForTest();
-            ++failures;
-        }
-        sendMouse(QEvent::MouseButtonPress, arrow, Qt::LeftButton);
-        sendMouse(QEvent::MouseButtonRelease, arrow, Qt::NoButton);
-        if (timeline->rowCountForTest() != 3
-            || timeline->rowCollapsedForTest(folderId))
-        {
-            qCritical() << "folder-test: expand" << timeline->rowCountForTest();
-            ++failures;
-        }
-
-        // Drag the first row into the folder row.
-        const QPoint from(10, timeline->rowButtonRect(0, 0).center().y());
-        const QPoint to(10, timeline->rowButtonRect(1, 0).center().y());
-        sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton);
-        sendMouse(QEvent::MouseMove, to, Qt::LeftButton);
-        sendMouse(QEvent::MouseButtonRelease, to, Qt::NoButton);
-        QApplication::processEvents();
-
-        const pvf::Entity* first = project->entity(firstId);
-        if (!first || first->parent != folderId
-            || timeline->rowEntityForTest(0) != folderId
-            || timeline->rowEntityForTest(1) != firstId
-            || timeline->rowDepthForTest(1) != 1)
-        {
-            qCritical() << "folder-test: drag into folder"
-                        << (first ? first->parent : -999)
-                        << timeline->rowEntityForTest(0)
-                        << timeline->rowEntityForTest(1);
-            ++failures;
-        }
-
-        // Layer moves are undoable.
-        auto* undoAction = window.findChild<QAction*>(QStringLiteral("undoAction"));
-        auto* redoAction = window.findChild<QAction*>(QStringLiteral("redoAction"));
-        if (!undoAction || !redoAction)
-        {
-            qCritical() << "folder-test: undo actions missing";
-            ++failures;
-        }
-        else
-        {
-            undoAction->trigger();
-            QApplication::processEvents();
-            first = project->entity(firstId);
-            if (!first || first->parent != pvf::kInvalidEntity
-                || timeline->rowEntityForTest(0) != firstId
-                || timeline->rowEntityForTest(1) != folderId)
-            {
-                qCritical() << "folder-test: move undo"
-                            << (first ? first->parent : -999);
-                ++failures;
-            }
-            redoAction->trigger();
-            QApplication::processEvents();
-            first = project->entity(firstId);
-            if (!first || first->parent != folderId
-                || timeline->rowEntityForTest(0) != folderId
-                || timeline->rowEntityForTest(1) != firstId)
-            {
-                qCritical() << "folder-test: move redo"
-                            << (first ? first->parent : -999);
-                ++failures;
-            }
-        }
+        // Row/tree assertions are retired with the old tree UI: the clip
+        // timeline lists root rows only, so a nested child has no row and the
+        // folder arrow / row drag assertions cannot run. Parenting itself is
+        // asserted below through the model and the parent combo; clip reparent
+        // drag is covered by `--timeline-test`.
 
         // The parent combo switches between world and a specific entity.
         window.setSelectedEntityForTest(firstId);
@@ -659,6 +573,7 @@ int folderTest(QApplication& app)
             }
             else
             {
+                const pvf::Entity* first = project->entity(firstId);
                 parents->setCurrentIndex(worldIndex);
                 QApplication::processEvents();
                 if (first->parent != pvf::kInvalidEntity)
@@ -839,9 +754,12 @@ int audioTest(QApplication& app)
     audio->data[QStringLiteral("trimStart")] = 0.25;
     audio->data[QStringLiteral("trimEnd")] = 0.25;
     project->notifyChanged();
-    if (project->timelineLength() != 25)
+    // The clip row defaults to one second (clipEnd = fps) while the trimmed
+    // media ends at frame 25, so assert the clip's own end instead of the raw
+    // timeline high-water mark (which is now the default clip end).
+    if (project->clipEndFrame(audioId) != 25)
     {
-        qCritical() << "audio-test: timeline length" << project->timelineLength();
+        qCritical() << "audio-test: clip end" << project->clipEndFrame(audioId);
         ++failures;
     }
 
@@ -952,7 +870,10 @@ int audioTest(QApplication& app)
     }
     else
     {
-        // Drag the audio clip on the timeline: 60 px at 6 px/frame = 10 frames.
+        // Audio clip drag on the old clip-mode timeline is retired: the panel
+        // only offers the hand cursor in `EditMode::Clips`, and audio rows are
+        // not drawn there. Moving clips (including audio, with its sourceIn) is
+        // covered by `--timeline-edit-test` on the current timeline.
         uiAudio->data[QStringLiteral("startFrame")] = 10.0;
         uiAudio->data[QStringLiteral("trimStart")] = 0.0;
         uiAudio->data[QStringLiteral("trimEnd")] = 0.0;
@@ -960,76 +881,6 @@ int audioTest(QApplication& app)
         window.goToFrame(0);
         timeline->setPixelsPerFrameForTest(6.0);
         QApplication::processEvents();
-
-        auto sendMouse = [timeline](QEvent::Type type, const QPoint& pos,
-                                    Qt::MouseButtons buttons) {
-            QMouseEvent event(type, QPointF(pos),
-                              QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
-                              buttons, Qt::NoModifier);
-            QApplication::sendEvent(timeline, &event);
-        };
-        const int clipY = timeline->rowCenterYForTest(0);
-        const QPoint dragFrom(300, clipY);   // middle of the 10..40 frame clip
-        const QPoint dragTo(360, clipY);     // +10 frames
-
-        sendMouse(QEvent::MouseMove, dragFrom, Qt::NoButton);
-        if (timeline->cursor().shape() != Qt::OpenHandCursor)
-        {
-            qCritical() << "audio-test: no open-hand cursor over the clip";
-            ++failures;
-        }
-        sendMouse(QEvent::MouseButtonPress, dragFrom, Qt::LeftButton);
-        if (timeline->cursor().shape() != Qt::ClosedHandCursor)
-        {
-            qCritical() << "audio-test: no closed-hand cursor while dragging";
-            ++failures;
-        }
-        sendMouse(QEvent::MouseMove, dragTo, Qt::LeftButton);
-        timeline->grab().toImage().save(QStringLiteral("/tmp/pvf_audio_drag.png"));
-        sendMouse(QEvent::MouseButtonRelease, dragTo, Qt::NoButton);
-        if (timeline->cursor().shape() != Qt::OpenHandCursor)
-        {
-            qCritical() << "audio-test: cursor not restored after drag";
-            ++failures;
-        }
-
-        double startFrame =
-            uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-        if (std::abs(startFrame - 20.0) > 1e-6 || window.currentFrame() != 0)
-        {
-            qCritical() << "audio-test: timeline drag" << startFrame
-                        << window.currentFrame();
-            ++failures;
-        }
-        auto* undoAction =
-            window.findChild<QAction*>(QStringLiteral("undoAction"));
-        if (!undoAction || !undoAction->isEnabled())
-        {
-            qCritical() << "audio-test: audio drag is not undoable";
-            ++failures;
-        }
-        else
-        {
-            undoAction->trigger();
-            startFrame =
-                uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-            if (std::abs(startFrame - 10.0) > 1e-6)
-            {
-                qCritical() << "audio-test: audio drag undo" << startFrame;
-                ++failures;
-            }
-        }
-
-        // A click without dragging still positions the playhead.
-        window.goToFrame(0);
-        sendMouse(QEvent::MouseButtonPress, dragFrom, Qt::LeftButton);
-        sendMouse(QEvent::MouseButtonRelease, dragFrom, Qt::NoButton);
-        if (window.currentFrame() != 20)
-        {
-            qCritical() << "audio-test: audio click did not move the playhead"
-                        << window.currentFrame();
-            ++failures;
-        }
 
         // Capturing the playhead inside the clip moves the start there; it
         // must not fall back to frame 0.
@@ -1043,7 +894,7 @@ int audioTest(QApplication& app)
         }
         window.goToFrame(40);
         trimStartButton->click();
-        startFrame =
+        double startFrame =
             uiAudio->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
         double trimStart =
             uiAudio->data.value(QStringLiteral("trimStart"), 0.0).toDouble();

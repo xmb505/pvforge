@@ -367,6 +367,7 @@ MCP 资源 `pvforge://guide/authoring`：
 - Scene 数据、时间轴场景带、活动场景、实体落点、退休/恢复；
 - 全局标记、关键帧备注、MCP 只读接口；
 - 测试：`--scene-test`、`--annotation-test`。
+  （2026-11-13 更新：场景带已从 `TimelinePanel` 移除，`--scene-test` 与 `--scene-ui-test` 已按 issue #72 退役；`--annotation-test` 保留。Stage 2 若重启，需连同场景带 UI 一起恢复。）
 
 ### Stage 3：MCP 只读 + 日志窗（约 1.5 周）
 
@@ -429,7 +430,7 @@ MCP 资源 `pvforge://guide/authoring`：
 - `--html-determinism-test`：同帧两次像素哈希一致。
 - `--html-variables-test`：变量/关键帧/缓动求值。
 - `--html-export-test`：带 HTML 层的 1 秒 MP4，解码验色。
-- `--scene-test`：场景不重叠、落点、退休。
+- `--scene-test`：场景不重叠、落点、退休。（已退役，见 Stage 2 注）
 - `--annotation-test`：标记/关键帧备注、跳转、AI 只读。
 - `--mcp-readonly-test`：initialize/tools/list/读工具/写拒绝。
 - `--mcp-edit-test`：建实体/关键帧/HTML 变量、批次原子。
