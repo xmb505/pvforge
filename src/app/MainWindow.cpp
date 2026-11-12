@@ -11,6 +11,7 @@
 #include "ExportDialog.h"
 #include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
+#include "TestMode.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
@@ -2349,11 +2350,8 @@ void MainWindow::showSessionOnboardingIfNeeded()
 
     // Tests must never block on the first-run dialog; the setting stays
     // untouched so the test can drive it explicitly.
-    for (const QString& argument : QCoreApplication::arguments())
-    {
-        if (argument.endsWith(QStringLiteral("-test")))
-            return;
-    }
+    if (testMode())
+        return;
 
     auto* dialog = new next::OnboardingDialog(m_session->appSettings(), this);
     dialog->setObjectName(QStringLiteral("onboardingDialog"));

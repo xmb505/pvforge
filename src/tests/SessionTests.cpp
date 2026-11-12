@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include "TestRegistry.h"
+#include "app/TestMode.h"
 
 namespace {
 
@@ -42,6 +43,25 @@ int selfTest()
     if (std::abs(project.value(id, QStringLiteral("opacity"), 0) - 1.0) > 1e-6)
     {
         qCritical() << "self-test: opacity default wrong";
+        return 1;
+    }
+
+    // Issue #96: test mode comes from exact registered switch names, not a
+    // `-test` suffix. A project path that merely ends in `-test` must keep the
+    // user's real QSettings/XDG config.
+    const QStringList projectNotTest{QStringLiteral("pvforge"),
+                                     QStringLiteral("--open"),
+                                     QStringLiteral("/tmp/project-test")};
+    if (pvf::tests::isTestRun(projectNotTest))
+    {
+        qCritical() << "self-test: --open /tmp/project-test entered test mode";
+        return 1;
+    }
+    const QStringList sessionTestArgs{QStringLiteral("pvforge"),
+                                      QStringLiteral("--session-test")};
+    if (!pvf::tests::isTestRun(sessionTestArgs) || !pvf::testMode())
+    {
+        qCritical() << "self-test: --session-test did not enter test mode";
         return 1;
     }
 

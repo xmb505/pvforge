@@ -1,6 +1,7 @@
 #include "app/AppIcon.h"
 #include "app/EditorSession.h"
 #include "app/MainWindow.h"
+#include "app/TestMode.h"
 #include "app/WelcomeWindow.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
@@ -33,14 +34,14 @@ int main(int argc, char* argv[])
     // Keep self-tests independent from the user's saved layout, monitor
     // geometry and last project list. A fresh config per test process makes
     // pixel/geometry checks reproducible.
-    bool testMode = false;
-    for (const QString& argument : app.arguments())
-        if (argument.endsWith(QStringLiteral("-test"))
-            || argument == QStringLiteral("--cache-miss-profile")
-            || argument == QStringLiteral("--cache-encoder-bench"))
-            testMode = true;
-    if (testMode)
+#ifdef PVFORGE_SELF_TESTS
+    // Test mode is decided from the exact switch names registered in
+    // src/tests/TestRegistry.cpp -- no `-test` suffix guessing, so
+    // `--open /tmp/project-test` still uses the user's real config. Release
+    // builds compile no registry, so this whole block is absent there.
+    if (pvf::tests::isTestRun(app.arguments()))
     {
+        pvf::setTestMode(true);
         // Per-process config so parallel test runs in different worktrees do
         // not delete each other's settings mid-test.
         const QString configDir =
@@ -55,6 +56,7 @@ int main(int argc, char* argv[])
         // tests away from the user's real credentials and port file.
         qputenv("XDG_CONFIG_HOME", configDir.toUtf8());
     }
+#endif
 
     pvf::Lang::load(pvf::Settings::language());
 

@@ -11,6 +11,11 @@ void Registry::add(const QString& name, Handler handler)
     m_handlers.insert(name, std::move(handler));
 }
 
+bool Registry::contains(const QString& name) const
+{
+    return m_handlers.contains(name);
+}
+
 std::optional<int> Registry::run(QApplication& app) const
 {
     const QStringList arguments = app.arguments();
@@ -23,7 +28,9 @@ std::optional<int> Registry::run(QApplication& app) const
     return std::nullopt;
 }
 
-std::optional<int> dispatch(QApplication& app)
+namespace {
+
+Registry buildRegistry()
 {
     Registry registry;
     registerSessionTests(registry);
@@ -39,6 +46,25 @@ std::optional<int> dispatch(QApplication& app)
     registerAssetTests(registry);
     registerMcpTests(registry);
     registerPerfTests(registry);
+    return registry;
+}
+
+} // namespace
+
+bool isTestRun(const QStringList& arguments)
+{
+    const Registry registry = buildRegistry();
+    for (const QString& argument : arguments)
+    {
+        if (registry.contains(argument))
+            return true;
+    }
+    return false;
+}
+
+std::optional<int> dispatch(QApplication& app)
+{
+    Registry registry = buildRegistry();
     if (const auto result = registry.run(app))
         return result;
 

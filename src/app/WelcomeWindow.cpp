@@ -3,11 +3,11 @@
 #include "EditorSession.h"
 #include "MainWindow.h"
 #include "NewProjectDialog.h"
+#include "TestMode.h"
 #include "model/Project.h"
 #include "next/settings/OnboardingDialog.h"
 #include "next/settings/SettingsStore.h"
 
-#include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -25,16 +25,6 @@ namespace {
 bool settingsGitEnabled()
 {
     return next::SettingsStore().load().gitEnabled;
-}
-
-bool runningUnderTest()
-{
-    for (const QString& argument : QCoreApplication::arguments())
-    {
-        if (argument.endsWith(QStringLiteral("-test")))
-            return true;
-    }
-    return false;
 }
 
 } // namespace
@@ -112,7 +102,7 @@ WelcomeWindow::WelcomeWindow(QWidget* parent)
     // project shell applies it when the first project opens.
     next::SettingsStore store;
     const next::AppSettings settings = store.load();
-    if (!settings.onboardingDone && !runningUnderTest())
+    if (!settings.onboardingDone && !testMode())
     {
         auto* dialog = new next::OnboardingDialog(settings, this);
         dialog->setObjectName(QStringLiteral("onboardingDialog"));
