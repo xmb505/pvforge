@@ -47,7 +47,7 @@
 ```json
 {
   "format": "pvforge-project",
-  "version": 1,
+  "version": 2,
   "name": "未命名项目",
   "width": 1920,
   "height": 1080,
@@ -81,6 +81,8 @@
 
 ```json
 {
+  "format": "pvforge-entity",
+  "version": 2,
   "uuid": "0190f...",
   "name": "标题",
   "parentUuid": null,
