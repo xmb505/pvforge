@@ -27,10 +27,9 @@ struct AppSettings
     int videoMemoryFrames = 64;
 
     // Workbench cache: whole-frame prerendered scene, hit during playback.
-    // Scale is snapped to 25/50/75/100 percent; the memory budget is fixed at
-    // 256 MB and intentionally not exposed in the UI.  The canvas view caches
-    // a world rectangle expanded by this percentage on every side; camera
-    // views and exports never expand.
+    // Scale is snapped to 25/50/75/100 percent.  The canvas view caches a
+    // world rectangle expanded by this percentage on every side; camera views
+    // and exports never expand.
     bool workbenchCacheEnabled = true;
     int workbenchCacheScalePercent = 50;
     int workbenchCacheExpandPercent = 50;

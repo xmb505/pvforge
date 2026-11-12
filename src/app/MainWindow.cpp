@@ -23,6 +23,7 @@
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
+#include "next/app/WorkbenchServices.h"
 #include "next/core/Document.h"
 #include "next/history/HistoryPanel.h"
 #include "next/settings/OnboardingDialog.h"
@@ -91,6 +92,37 @@
 namespace pvf {
 
 namespace {
+
+struct CacheUsage
+{
+    int frames = 0;
+    qint64 bytes = 0;
+};
+
+// Counts files and bytes without constructing a cache service, so the settings
+// page can show a truthful occupancy before the first lookup opens the index.
+// Workbench directories contain SQLite/meta files too; only the frame images
+// count as frames while every file counts towards the disk number.
+CacheUsage scanCacheUsage(const QString& path, bool frameImagesOnly)
+{
+    CacheUsage usage;
+    if (!QFileInfo::exists(path))
+        return usage;
+    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext())
+    {
+        it.next();
+        usage.bytes += it.fileInfo().size();
+        if (!frameImagesOnly
+            || it.fileInfo().suffix().compare(QStringLiteral("qoi"),
+                                              Qt::CaseInsensitive) == 0
+            || it.fileInfo().suffix().compare(QStringLiteral("webp"),
+                                              Qt::CaseInsensitive) == 0)
+            ++usage.frames;
+    }
+    return usage;
+}
 
 class SceneDialog : public QDialog
 {
@@ -1936,6 +1968,24 @@ void MainWindow::wireSessionSettingsDialog(SettingsDialog* dialog)
                 .arg(files)
                 .arg(bytes / (1024.0 * 1024.0), 0, 'f', 1),
             8000);
+        refreshSessionCacheStats();
+    });
+    connect(dialog, &SettingsDialog::clearWorkbenchCacheRequested, this,
+            [this] { clearSessionWorkbenchCache(); });
+    connect(dialog, &SettingsDialog::openCacheFolderRequested, this,
+            [this] { openSessionCacheFolder({}); });
+    connect(dialog, &SettingsDialog::openHtmlCacheFolderRequested, this,
+            [this] { openSessionCacheFolder(QStringLiteral("html")); });
+    connect(dialog, &SettingsDialog::rebuildSolveCacheRequested, this, [this] {
+        if (!m_session)
+            return;
+        const bool playing =
+            m_session->playback() && m_session->playback()->isPlaying();
+        m_session->invalidateAnimCache();
+        statusBar()->showMessage(
+            playing ? QStringLiteral("播放中：求解缓存将在暂停后重新预计算")
+                    : QStringLiteral("求解缓存已清空，正在重新预计算"),
+            8000);
     });
     connect(dialog, &SettingsDialog::chromeDetectRequested, this,
             [this, dialog] {
@@ -2037,6 +2087,76 @@ void MainWindow::updateSessionSettingsDialogContext()
         server ? QString::fromLatin1(server->token()) : QString(),
         m_session->mcpError(),
         m_session->document() && m_session->document()->store()->gitEnabled());
+
+    refreshSessionCacheStats();
+}
+
+void MainWindow::refreshSessionCacheStats()
+{
+    if (!m_session || !m_sessionSettingsDialog)
+        return;
+
+    const QString workbenchRoot =
+        sessionCacheFolderPathForTest(QStringLiteral("workbench"));
+    const CacheUsage workbench = scanCacheUsage(workbenchRoot, true);
+    m_sessionSettingsDialog->setWorkbenchCacheStats(
+        m_session->appSettings().workbenchCacheEnabled, workbench.frames,
+        workbench.bytes, workbenchRoot);
+
+    const QString htmlRoot = sessionCacheFolderPathForTest(QStringLiteral("html"));
+    const CacheUsage html = scanCacheUsage(htmlRoot, false);
+    m_sessionSettingsDialog->setHtmlCacheStats(html.frames, html.bytes,
+                                               htmlRoot);
+}
+
+void MainWindow::clearSessionWorkbenchCache()
+{
+    if (!m_session)
+        return;
+
+    const QString workbenchRoot =
+        sessionCacheFolderPathForTest(QStringLiteral("workbench"));
+    const CacheUsage before = scanCacheUsage(workbenchRoot, true);
+    next::WorkbenchServices* workbench = m_session->workbench();
+    if (workbench && !workbench->cacheDirectory().isEmpty())
+        workbench->clearCache();
+    else
+        QDir(workbenchRoot).removeRecursively();
+    const CacheUsage after = scanCacheUsage(workbenchRoot, true);
+    refreshSessionCacheStats();
+
+    const int frames = std::max(0, before.frames - after.frames);
+    const qint64 bytes = std::max<qint64>(0, before.bytes - after.bytes);
+    statusBar()->showMessage(
+        QStringLiteral("已清空工作台缓存：%1 帧，释放 %2 MB")
+            .arg(frames)
+            .arg(double(bytes) / (1024.0 * 1024.0), 0, 'f', 1),
+        8000);
+}
+
+void MainWindow::openSessionCacheFolder(const QString& subdirectory)
+{
+    if (!m_session)
+        return;
+    const QString path = sessionCacheFolderPathForTest(subdirectory);
+    if (!QFileInfo::exists(path))
+    {
+        statusBar()->showMessage(
+            QStringLiteral("缓存目录尚不存在：%1").arg(path), 8000);
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+QString MainWindow::sessionCacheFolderPathForTest(
+    const QString& subdirectory) const
+{
+    if (!m_session)
+        return {};
+    QString path = QDir(m_session->root()).filePath(QStringLiteral(".cache"));
+    if (!subdirectory.isEmpty())
+        path = QDir(path).filePath(subdirectory);
+    return QDir::cleanPath(path);
 }
 
 void MainWindow::applySessionSettings(const next::AppSettings& settings)

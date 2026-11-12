@@ -45,6 +45,11 @@ public:
     void setMcpStatus(bool running, quint16 port, const QString& token,
                       const QString& error, bool writesEnabled);
     void setGitInfo(const QString& repositoryPath, const QString& recentCommit);
+    // Cache occupancy is measured by the shell; the dialog only formats it.
+    // `directory` may be empty before the cache has written its first frame.
+    void setWorkbenchCacheStats(bool enabled, int entries, qint64 bytes,
+                                const QString& directory);
+    void setHtmlCacheStats(int files, qint64 bytes, const QString& directory);
     QString gitRepositoryPath() const { return m_appGitRepositoryValue; }
     QString gitRecentCommit() const { return m_appGitRecentValue; }
     void setEndpointPath(const QString& path);
@@ -68,6 +73,10 @@ signals:
     void settingsApplied();
     void resetMcpTokenRequested();
     void clearHtmlCacheRequested();
+    void clearWorkbenchCacheRequested();
+    void openCacheFolderRequested();
+    void openHtmlCacheFolderRequested();
+    void rebuildSolveCacheRequested();
     void chromeDetectRequested();
 
 protected:
@@ -85,9 +94,8 @@ private:
 
     QWidget* createAppGeneralPage();
     QWidget* createAppEditorPage();
+    QWidget* createAppCachePage();
     QWidget* createAppHtmlPage();
-    QWidget* createAppVideoPage();
-    QWidget* createAppWorkbenchPage();
     QWidget* createAppMcpPage();
     QWidget* createAppGitPage();
     void buildAppShell();
@@ -132,6 +140,8 @@ private:
     QPushButton* m_appChromeBrowse = nullptr;
     QPushButton* m_appChromeDetect = nullptr;
     QPushButton* m_appClearHtmlCache = nullptr;
+    QLabel* m_appHtmlCacheStats = nullptr;
+    QPushButton* m_appOpenHtmlCacheFolder = nullptr;
     QCheckBox* m_appVideoProxyEnabled = nullptr;
     QComboBox* m_appVideoProxyWidth = nullptr;
     QComboBox* m_appVideoMemoryFrames = nullptr;
@@ -139,7 +149,11 @@ private:
     QComboBox* m_appWorkbenchScale = nullptr;
     QSpinBox* m_appWorkbenchExpand = nullptr;
     QSpinBox* m_appWorkbenchDiskGb = nullptr;
-    qint64 m_appWorkbenchMemoryBytes = 256LL * 1024 * 1024;
+    QSpinBox* m_appWorkbenchMemoryMb = nullptr;
+    QLabel* m_appWorkbenchCacheStats = nullptr;
+    QPushButton* m_appClearWorkbenchCache = nullptr;
+    QPushButton* m_appOpenCacheFolder = nullptr;
+    QPushButton* m_appRebuildSolveCache = nullptr;
     QSpinBox* m_appMcpPort = nullptr;
     QLineEdit* m_appMcpToken = nullptr;
     QLineEdit* m_appMcpEndpoint = nullptr;

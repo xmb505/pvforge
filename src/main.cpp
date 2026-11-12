@@ -12243,6 +12243,26 @@ int settingsTest(QApplication& app)
             dialog->findChild<QComboBox*>(QStringLiteral("workbenchScale"));
         auto* workbenchExpand =
             dialog->findChild<QSpinBox*>(QStringLiteral("workbenchExpandPercent"));
+        auto* workbenchMemory =
+            dialog->findChild<QSpinBox*>(QStringLiteral("workbenchMemoryMb"));
+        auto* workbenchStats =
+            dialog->findChild<QLabel*>(QStringLiteral("workbenchCacheStats"));
+        auto* clearWorkbench =
+            dialog->findChild<QPushButton*>(QStringLiteral("clearWorkbenchCache"));
+        auto* openCache =
+            dialog->findChild<QPushButton*>(QStringLiteral("openCacheFolder"));
+        auto* htmlStats =
+            dialog->findChild<QLabel*>(QStringLiteral("htmlCacheStats"));
+        auto* openHtmlCache =
+            dialog->findChild<QPushButton*>(QStringLiteral("openHtmlCacheFolder"));
+        auto* solveInfo =
+            dialog->findChild<QLabel*>(QStringLiteral("solveCacheInfo"));
+        auto* rebuildSolve =
+            dialog->findChild<QPushButton*>(QStringLiteral("rebuildSolveCache"));
+        auto* cachePage =
+            dialog->findChild<QWidget*>(QStringLiteral("cachePage"));
+        auto* categories =
+            dialog->findChild<QListWidget*>(QStringLiteral("settingsCategories"));
         auto* mcpPort = dialog->findChild<QSpinBox*>(QStringLiteral("mcpPort"));
         auto* mcpToken = dialog->findChild<QLineEdit*>(QStringLiteral("mcpToken"));
         auto* gitEnabled =
@@ -12250,9 +12270,15 @@ int settingsTest(QApplication& app)
         auto* apply = dialog->findChild<QPushButton*>(QStringLiteral("applyButton"));
         expect(autoSave && commitDelay && snap && snapCenter && htmlScale
                    && htmlMemory && watchdog && videoWidth && workbenchScale
-                   && workbenchExpand && mcpPort && mcpToken && gitEnabled
-                   && apply,
+                   && workbenchExpand && workbenchMemory && workbenchStats
+                   && clearWorkbench && openCache && htmlStats && openHtmlCache
+                   && solveInfo && rebuildSolve && cachePage && categories
+                   && mcpPort && mcpToken && gitEnabled && apply,
                QStringLiteral("app settings widgets missing"));
+        expect(categories && categories->count() == 7
+                   && categories->item(2)->text() == QStringLiteral("缓存")
+                   && categories->item(3)->text() == QStringLiteral("HTML"),
+               QStringLiteral("settings page order changed"));
         if (failures)
             return 1;
 
@@ -12261,11 +12287,24 @@ int settingsTest(QApplication& app)
                    && htmlScale->currentData().toDouble() == 0.5
                    && videoWidth->currentData().toInt() == 960
                    && workbenchScale->currentData().toInt() == 50
+                   && workbenchMemory->value() == 256
+                   && !workbenchStats->text().isEmpty()
+                   && !htmlStats->text().isEmpty()
                    && mcpPort->value() == 47821 && !gitEnabled->isChecked(),
                QStringLiteral("app settings defaults mismatch"));
+        expect(window->sessionCacheFolderPathForTest().endsWith(
+                   QStringLiteral("/.cache"))
+                   && window->sessionCacheFolderPathForTest(
+                          QStringLiteral("workbench"))
+                          .endsWith(QStringLiteral("/.cache/workbench")),
+               QStringLiteral("cache folder path is wrong"));
 
         dialog->grab().toImage().save(
             QStringLiteral("/tmp/opencode/pvforge-p6-settings.png"));
+        categories->setCurrentRow(2);
+        QApplication::processEvents();
+        dialog->grab().toImage().save(
+            QStringLiteral("/tmp/opencode/pvforge-p6-cache.png"));
 
         const quint16 newPort = quint16(
             40000 + (QCoreApplication::applicationPid() % 20000));
@@ -12279,6 +12318,7 @@ int settingsTest(QApplication& app)
         videoWidth->setCurrentIndex(videoWidth->findData(1280));
         workbenchScale->setCurrentIndex(workbenchScale->findData(75));
         workbenchExpand->setValue(75);
+        workbenchMemory->setValue(512);
         mcpPort->setValue(newPort);
         const bool gitAvailable =
             pvf::store::ProjectStore::gitBinaryAvailable();
@@ -12300,7 +12340,8 @@ int settingsTest(QApplication& app)
         expect(saved.videoProxyWidth == 1280,
                QStringLiteral("video proxy width not saved"));
         expect(saved.workbenchCacheScalePercent == 75
-                   && saved.workbenchCacheExpandPercent == 75,
+                   && saved.workbenchCacheExpandPercent == 75
+                   && saved.workbenchCacheMemoryBytes == 512LL * 1024 * 1024,
                QStringLiteral("workbench settings not saved"));
         expect(saved.mcpPort == newPort, QStringLiteral("MCP port not saved"));
         expect(saved.gitEnabled == (gitAvailable
@@ -12317,7 +12358,9 @@ int settingsTest(QApplication& app)
         expect(afterWorkbench != nullptr,
                QStringLiteral("workbench service is missing after apply"));
         expect(afterWorkbench && afterWorkbench->scalePercent() == 75
-                   && afterWorkbench->expandPercent() == 75,
+                   && afterWorkbench->expandPercent() == 75
+                   && afterWorkbench->options().memoryBudgetBytes
+                          == 512LL * 1024 * 1024,
                QStringLiteral("workbench service kept the old settings"));
         expect(window->autosaveIntervalForTest() == 3 * 60 * 1000,
                QStringLiteral("autosave timer interval not rebuilt"));
@@ -12329,6 +12372,30 @@ int settingsTest(QApplication& app)
         if (gitAvailable)
             expect(live->document()->store()->gitEnabled(),
                    QStringLiteral("Git was not enabled on the store"));
+
+        // Exercise the dialog -> MainWindow clear path without the modal
+        // confirmation: drop a fake frame into the workbench cache root, emit
+        // the signal the button would emit, and check the root and label.
+        const QString cacheRoot =
+            window->sessionCacheFolderPathForTest(QStringLiteral("workbench"));
+        // Force a fresh, not-yet-opened cache service so clearing has to fall
+        // back to removing the directory rather than a loaded index.
+        live->invalidateWorkbench();
+        live->workbench();
+        QDir().mkpath(cacheRoot);
+        const QString probePath = QDir(cacheRoot).filePath(
+            QStringLiteral("999999.qoi"));
+        QFile probe(probePath);
+        if (probe.open(QIODevice::WriteOnly))
+            probe.write(QByteArray(4096, '\0'));
+        probe.close();
+        dialog->clearWorkbenchCacheRequested();
+        QApplication::processEvents();
+        expect(!QFileInfo::exists(probePath),
+               QStringLiteral("workbench probe frame was not cleared"));
+        expect(workbenchStats->text().contains(QStringLiteral("帧数 0")),
+               QStringLiteral("workbench stats were not refreshed: %1")
+                   .arg(workbenchStats->text()));
 
         dialog->reject();
         window->close();

@@ -146,6 +146,9 @@ public:
     WorkbenchPanel* workbenchForTest() const { return m_workbench; }
     next::HistoryPanel* historyPanelForTest() const { return m_sessionHistory; }
     SettingsDialog* openSessionSettingsDialogForTest();
+    // Absolute `.cache` path (or one of its subdirectories) for the open
+    // project; tests assert the path without launching a file manager.
+    QString sessionCacheFolderPathForTest(const QString& subdirectory = QString()) const;
     bool openSessionProjectForTest(const QString& path, QString* error = nullptr);
     void setCrashRecoveryHandlerForTest(SessionCrashRecoveryHandler handler)
     {
@@ -314,6 +317,9 @@ private:
     void applySessionSettings(const next::AppSettings& settings);
     void wireSessionSettingsDialog(SettingsDialog* dialog);
     void updateSessionSettingsDialogContext();
+    void refreshSessionCacheStats();
+    void clearSessionWorkbenchCache();
+    void openSessionCacheFolder(const QString& subdirectory);
     void refreshSessionHistory();
     void restoreSessionCommit(const QString& hash);
     bool restoreSessionCommitInternal(const QString& hash, QString* error);

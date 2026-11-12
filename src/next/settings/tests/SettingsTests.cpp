@@ -77,6 +77,7 @@ private slots:
     void workbenchDefaults();
     void workbenchStoreRoundTrip();
     void workbenchStoreSanitizes();
+    void workbenchMemoryMatchesUiRange();
     void editorSnapDefaults();
     void editorSnapRoundTrip();
 
@@ -400,6 +401,24 @@ void SettingsTests::workbenchStoreSanitizes()
     const AppSettings clamped = SettingsStore::sanitized(tooBig);
     QCOMPARE(clamped.workbenchCacheDiskBytes, 64 * kGiB);
     QCOMPARE(clamped.workbenchCacheMemoryBytes, 4096 * kMiB);
+}
+
+void SettingsTests::workbenchMemoryMatchesUiRange()
+{
+    // The cache page exposes the memory budget as a 32..4096 MB spin box; the
+    // store keeps the same byte range and carries arbitrary MB values through.
+    QCOMPARE(AppSettings{}.workbenchCacheMemoryBytes, 256 * kMiB);
+
+    const auto bytes = [](qint64 value) {
+        AppSettings settings;
+        settings.workbenchCacheMemoryBytes = value;
+        return SettingsStore::sanitized(settings).workbenchCacheMemoryBytes;
+    };
+    QCOMPARE(bytes(-1), 32 * kMiB);
+    QCOMPARE(bytes(32 * kMiB), 32 * kMiB);
+    QCOMPARE(bytes(513 * kMiB), 513 * kMiB);
+    QCOMPARE(bytes(4096 * kMiB), 4096 * kMiB);
+    QCOMPARE(bytes(4097 * kMiB), 4096 * kMiB);
 }
 
 void SettingsTests::dialogDefaults()
