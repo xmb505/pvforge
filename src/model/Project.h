@@ -2,6 +2,7 @@
 
 #include "Entity.h"
 #include "JsonUtil.h"
+#include "Migrations.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -12,11 +13,8 @@
 
 namespace pvf::model {
 
-// The one and only on-disk format version. Bumping it means adding a matching
-// migrations::vN_to_vN+1 step in Migrations.cpp; nothing else in the tree
-// carries a project format version.
-inline constexpr int kProjectFormatVersion = 1;
-inline constexpr char kProjectFormat[] = "pvforge-project";
+// The on-disk format version (kProjectFormatVersion) and the format markers
+// live in Migrations.h: project.json and entities/*.json share one version.
 
 struct Marker
 {

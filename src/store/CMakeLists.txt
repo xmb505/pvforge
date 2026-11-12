@@ -68,6 +68,9 @@ if(BUILD_TESTING)
         setGitEnabledReportsMissingGit
         openRejectsFutureVersion
         openRejectsUnmigratableVersion
+        openMigratesV1ProjectAndEntity
+        openRejectsFutureEntityVersion
+        openRejectsStaleEntityVersion
         openStrictRequiredFields
         unknownFieldsSurviveReopen
     )

@@ -144,6 +144,9 @@ private slots:
     void setGitEnabledReportsMissingGit();
     void openRejectsFutureVersion();
     void openRejectsUnmigratableVersion();
+    void openMigratesV1ProjectAndEntity();
+    void openRejectsFutureEntityVersion();
+    void openRejectsStaleEntityVersion();
     void openStrictRequiredFields();
     void unknownFieldsSurviveReopen();
 };
@@ -1817,8 +1820,9 @@ void StoreTests::openRejectsUnmigratableVersion()
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
-    // v1 is the only shipped version: an older document has no migration step
-    // in the registry yet, so opening must fail readably and leave it alone.
+    // The production chain starts at v1, so a v0 document is below the oldest
+    // supported version: opening must fail readably and leave it alone instead
+    // of half-parsing it.
     QJsonObject object = model::toJson(model::Project{});
     object.insert(QStringLiteral("version"), 0);
     object.insert(QStringLiteral("legacyScene"),
@@ -1830,10 +1834,150 @@ void StoreTests::openRejectsUnmigratableVersion()
 
     QString error;
     QVERIFY(!ProjectStore::open(temp.path(), &error, false));
-    QVERIFY2(error.contains(QStringLiteral("无法升级")), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("缺少从版本 0 到 1 的迁移")),
+    QVERIFY2(error.contains(QStringLiteral("过旧")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("最低支持版本")), qPrintable(error));
+    QVERIFY2(error.contains(QString::number(model::migrations::minimumSupportedVersion())),
              qPrintable(error));
     QCOMPARE(readText(projectFile), text);
+}
+
+void StoreTests::openMigratesV1ProjectAndEntity()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    // The exact shape PVForge wrote before v2: project.json at version 1 and an
+    // entity file with neither its own format marker nor its own version.
+    model::Project project;
+    project.settings.name = QStringLiteral("v1 工程");
+
+    model::Entity entity = makeEntity(QStringLiteral("v1 实体"), 0, 30);
+    entity.transform.x = 12.5;
+    model::Keyframe key;
+    key.frame = 7;
+    key.value = 3.5;
+    entity.tracks.insert(QStringLiteral("x"), model::Track{{key}});
+
+    QJsonObject projectObject = model::toJson(project);
+    projectObject.insert(QStringLiteral("version"), 1);
+
+    QJsonObject entityObject = model::toJson(entity);
+    entityObject.remove(QStringLiteral("version"));
+    entityObject.remove(QStringLiteral("format"));
+
+    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
+    const QString entityFile = temp.filePath(QStringLiteral("entities/")
+                                             + entity.uuid
+                                             + QStringLiteral(".json"));
+    const QString projectText =
+        QString::fromUtf8(QJsonDocument(projectObject).toJson(QJsonDocument::Indented));
+    const QString entityText =
+        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
+    QVERIFY(writeText(projectFile, projectText));
+    QVERIFY(writeText(entityFile, entityText));
+
+    QString error;
+    auto opened = ProjectStore::open(temp.path(), &error, false);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QCOMPARE(opened->project().settings.name, QStringLiteral("v1 工程"));
+
+    const auto it = opened->project().entities.constFind(entity.uuid);
+    QVERIFY(it != opened->project().entities.constEnd());
+    QCOMPARE(it->name, QStringLiteral("v1 实体"));
+    QCOMPARE(it->transform.x, 12.5);
+    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.size(), 1);
+    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.first().frame, 7);
+
+    // Opening never writes, so both v1 files stay byte-identical until a save.
+    QCOMPARE(readText(projectFile), projectText);
+    QCOMPARE(readText(entityFile), entityText);
+
+    // Saving writes the current version and the entity format marker.
+    QVERIFY2(opened->saveProject(&error), qPrintable(error));
+    QVERIFY2(opened->saveEntity(entity.uuid, &error), qPrintable(error));
+
+    const QJsonObject savedProject =
+        QJsonDocument::fromJson(readText(projectFile).toUtf8()).object();
+    QCOMPARE(savedProject.value(QStringLiteral("version")).toInt(),
+             model::kProjectFormatVersion);
+    const QJsonObject savedEntity =
+        QJsonDocument::fromJson(readText(entityFile).toUtf8()).object();
+    QCOMPARE(savedEntity.value(QStringLiteral("version")).toInt(),
+             model::kProjectFormatVersion);
+    QCOMPARE(savedEntity.value(QStringLiteral("format")).toString(),
+             QString::fromLatin1(model::kEntityFormat));
+
+    // The upgraded files reopen with the same data.
+    error.clear();
+    auto reopened = ProjectStore::open(temp.path(), &error, false);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    const auto reopenedIt = reopened->project().entities.constFind(entity.uuid);
+    QVERIFY(reopenedIt != reopened->project().entities.constEnd());
+    QCOMPARE(reopenedIt->name, QStringLiteral("v1 实体"));
+    QCOMPARE(reopenedIt->transform.x, 12.5);
+    QCOMPARE(reopenedIt->tracks.value(QStringLiteral("x")).keys.first().value, 3.5);
+}
+
+void StoreTests::openRejectsFutureEntityVersion()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    model::Entity entity = makeEntity(QStringLiteral("未来实体"));
+    QJsonObject entityObject = model::toJson(entity);
+    entityObject.insert(QStringLiteral("version"),
+                        model::kProjectFormatVersion + 1);
+    const QString entityText =
+        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
+
+    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
+    const QString entityFile = temp.filePath(QStringLiteral("entities/")
+                                             + entity.uuid
+                                             + QStringLiteral(".json"));
+    QVERIFY(writeText(
+        projectFile,
+        QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
+                              .toJson(QJsonDocument::Indented))));
+    QVERIFY(writeText(entityFile, entityText));
+
+    QString error;
+    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+    // The error names the file and its uuid, not just "entity invalid".
+    QVERIFY2(error.contains(entity.uuid), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("实体版本")), qPrintable(error));
+    QVERIFY2(error.contains(QString::number(model::kProjectFormatVersion + 1)),
+             qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("不会被修改")), qPrintable(error));
+    QCOMPARE(readText(entityFile), entityText);
+}
+
+void StoreTests::openRejectsStaleEntityVersion()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    model::Entity entity = makeEntity(QStringLiteral("过旧实体"));
+    QJsonObject entityObject = model::toJson(entity);
+    entityObject.insert(QStringLiteral("version"), 0);
+    const QString entityText =
+        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
+
+    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
+    const QString entityFile = temp.filePath(QStringLiteral("entities/")
+                                             + entity.uuid
+                                             + QStringLiteral(".json"));
+    QVERIFY(writeText(
+        projectFile,
+        QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
+                              .toJson(QJsonDocument::Indented))));
+    QVERIFY(writeText(entityFile, entityText));
+
+    QString error;
+    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+    QVERIFY2(error.contains(entity.uuid), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("过旧")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("最低支持版本")), qPrintable(error));
+    QCOMPARE(readText(entityFile), entityText);
 }
 
 void StoreTests::openStrictRequiredFields()

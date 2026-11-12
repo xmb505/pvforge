@@ -390,40 +390,9 @@ std::optional<Project> projectFromJson(const QJsonObject& object,
         return std::nullopt;
     }
 
-    if (!detail::requireField(object, QStringLiteral("version"), options, error))
-        return std::nullopt;
-
-    int version = kProjectFormatVersion;
-    if (detail::hasField(object, QStringLiteral("version")))
+    if (!migrations::checkDocumentVersion(object, QStringLiteral("工程"), options,
+                                          error))
     {
-        const QJsonValue versionValue = object.value(QStringLiteral("version"));
-        if (!versionValue.isDouble())
-        {
-            detail::setError(
-                error, QStringLiteral("字段 version 必须是整数"));
-            return std::nullopt;
-        }
-        version = versionValue.toInt();
-    }
-
-    if (version > kProjectFormatVersion)
-    {
-        detail::setError(
-            error,
-            QStringLiteral("工程版本 %1 高于本程序支持的版本 %2：请升级 PVForge "
-                           "后再打开（原文件不会被修改）")
-                .arg(version)
-                .arg(kProjectFormatVersion));
-        return std::nullopt;
-    }
-    if (version < kProjectFormatVersion)
-    {
-        detail::setError(
-            error,
-            QStringLiteral("工程版本 %1 低于本程序支持的版本 %2：需要先迁移到版本 "
-                           "%2（ProjectStore 打开时会自动升级）")
-                .arg(version)
-                .arg(kProjectFormatVersion));
         return std::nullopt;
     }
 

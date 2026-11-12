@@ -13,6 +13,7 @@
 #include <QSaveFile>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace pvf::store {
@@ -244,6 +245,78 @@ QByteArray readFileBytes(const QString& path)
     return file.readAll();
 }
 
+// One text document (project.json or entities/<uuid>.json): read its version,
+// run the production migration chain up to the current format version, and
+// return the document the strict parser expects. Nothing is written to disk,
+// so a document this build cannot read stays byte-identical.
+bool migrateTextDocument(const QString& path, const QString& label,
+                         const QString& uuid, const QJsonObject& input,
+                         QJsonObject* output, QString* error)
+{
+    const QString subject =
+        uuid.isEmpty()
+            ? path
+            : QStringLiteral("%1（uuid %2）").arg(path, uuid);
+
+    QString versionError;
+    const std::optional<int> version =
+        model::migrations::documentVersion(input, &versionError);
+    if (!version)
+    {
+        setError(error,
+                 QStringLiteral("%1 缺少整数 version（当前格式版本 %2）：%3")
+                     .arg(subject)
+                     .arg(model::kProjectFormatVersion)
+                     .arg(versionError));
+        return false;
+    }
+
+    if (*version > model::kProjectFormatVersion)
+    {
+        setError(error,
+                 QStringLiteral("%1 由更新版本的 PVForge 保存（%2版本 %3，"
+                                "本程序支持到版本 %4）。请升级 PVForge 后再打开；"
+                                "原文件不会被修改。")
+                     .arg(subject, label)
+                     .arg(*version)
+                     .arg(model::kProjectFormatVersion));
+        return false;
+    }
+
+    if (*version < model::migrations::minimumSupportedVersion())
+    {
+        setError(error,
+                 QStringLiteral("%1 的%2版本 %3 过旧（本程序最低支持版本 %4）")
+                     .arg(subject, label)
+                     .arg(*version)
+                     .arg(model::migrations::minimumSupportedVersion()));
+        return false;
+    }
+
+    if (*version == model::kProjectFormatVersion)
+    {
+        *output = input;
+        return true;
+    }
+
+    QString migrationError;
+    const auto upgraded = model::migrations::upgrade(
+        input, *version, model::kProjectFormatVersion, &migrationError);
+    if (!upgraded)
+    {
+        setError(error,
+                 QStringLiteral("%1 的%2版本 %3 无法升级到版本 %4：%5")
+                     .arg(subject, label)
+                     .arg(*version)
+                     .arg(model::kProjectFormatVersion)
+                     .arg(migrationError));
+        return false;
+    }
+
+    *output = *upgraded;
+    return true;
+}
+
 bool loadProjectData(const QString& root, model::Project* project,
                      QString* error)
 {
@@ -268,48 +341,11 @@ bool loadProjectData(const QString& root, model::Project* project,
         return false;
     }
 
-    // Version handling. Nothing here writes to disk, so a project this build
-    // cannot read is always left untouched.
-    const QJsonValue versionValue = object.value(QStringLiteral("version"));
-    if (!versionValue.isDouble())
+    QJsonObject document;
+    if (!migrateTextDocument(projectPath, QStringLiteral("工程"), QString(),
+                             object, &document, error))
     {
-        setError(error,
-                 QStringLiteral("%1 缺少整数 version（当前格式版本 %2）")
-                     .arg(projectPath)
-                     .arg(model::kProjectFormatVersion));
         return false;
-    }
-    const int version = versionValue.toInt(-1);
-
-    if (version > model::kProjectFormatVersion)
-    {
-        setError(error,
-                 QStringLiteral("%1 由更新版本的 PVForge 保存（工程版本 %2，"
-                                "本程序支持到版本 %3）。请升级 PVForge 后再打开；"
-                                "原文件不会被修改。")
-                     .arg(projectPath)
-                     .arg(version)
-                     .arg(model::kProjectFormatVersion));
-        return false;
-    }
-
-    QJsonObject document = object;
-    if (version < model::kProjectFormatVersion)
-    {
-        QString migrationError;
-        const auto upgraded = model::migrations::upgrade(
-            object, version, model::kProjectFormatVersion, &migrationError);
-        if (!upgraded)
-        {
-            setError(error,
-                     QStringLiteral("%1 的工程版本 %2 无法升级到版本 %3：%4")
-                         .arg(projectPath)
-                         .arg(version)
-                         .arg(model::kProjectFormatVersion)
-                         .arg(migrationError));
-            return false;
-        }
-        document = *upgraded;
     }
 
     // Opening a project is strict: a missing required field is an error that
@@ -348,9 +384,17 @@ bool loadProjectData(const QString& root, model::Project* project,
             if (!readJsonObject(fileInfo.absoluteFilePath(), &entityObject, error))
                 return false;
 
+            QJsonObject entityDocument;
+            if (!migrateTextDocument(fileInfo.absoluteFilePath(),
+                                     QStringLiteral("实体"), uuid, entityObject,
+                                     &entityDocument, error))
+            {
+                return false;
+            }
+
             QString entityError;
             const auto entity =
-                model::entityFromJson(entityObject, options, &entityError);
+                model::entityFromJson(entityDocument, options, &entityError);
             if (!entity)
             {
                 setError(error,

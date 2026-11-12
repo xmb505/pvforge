@@ -829,7 +829,8 @@ void testProjectJsonRoundTrip()
     const QJsonObject json = toJson(project);
     CHECK(json.value(QStringLiteral("format")).toString()
           == QStringLiteral("pvforge-project"));
-    CHECK(json.value(QStringLiteral("version")).toInt() == 1);
+    CHECK(json.value(QStringLiteral("version")).toInt()
+          == kProjectFormatVersion);
     CHECK(json.value(QStringLiteral("markers")).toArray().size() == 2);
     CHECK(!json.contains(QStringLiteral("entities")));
 
@@ -1521,7 +1522,7 @@ void testInvalidJson()
     CHECK(!projectFromJson(badProject, &error).has_value());
 
     badProject = toJson(Project{});
-    badProject.insert(QStringLiteral("version"), 2);
+    badProject.insert(QStringLiteral("version"), kProjectFormatVersion + 1);
     CHECK(!projectFromJson(badProject, &error).has_value());
 
     badProject = toJson(Project{});
@@ -1673,7 +1674,7 @@ void testJsonDeterminism()
 
 void testFormatVersion()
 {
-    CHECK(kProjectFormatVersion == 1);
+    CHECK(kProjectFormatVersion == 2);
 
     QString error;
     const QJsonObject current = toJson(Project{});
@@ -1715,6 +1716,54 @@ void testFormatVersion()
     const auto parsed = projectFromJson(noVersion, lenient, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     CHECK(!warnings.isEmpty());
+
+    // Entity files carry their own format marker and version, in the same
+    // numbering as project.json.
+    Entity entity = makeEntity(0, 10);
+    entity.tracks.insert(QStringLiteral("x"), Track{{keyAt(0, 1.0)}});
+    const QJsonObject currentEntity = toJson(entity);
+    CHECK(currentEntity.value(QStringLiteral("format")).toString()
+          == QLatin1String(kEntityFormat));
+    CHECK(currentEntity.value(QStringLiteral("version")).toInt()
+          == kProjectFormatVersion);
+
+    // Unknown keys must not swallow the format/version fields.
+    Entity entityWithExtras = entity;
+    entityWithExtras.extras.insert(QStringLiteral("futureEntity"), 1);
+    const QJsonObject entityWithFuture = toJson(entityWithExtras);
+    CHECK(entityWithFuture.contains(QStringLiteral("futureEntity")));
+    CHECK(entityWithFuture.value(QStringLiteral("version")).toInt()
+          == kProjectFormatVersion);
+
+    // A newer entity file is refused with the same readable reason.
+    QJsonObject futureEntity = currentEntity;
+    futureEntity.insert(QStringLiteral("version"), kProjectFormatVersion + 1);
+    error.clear();
+    CHECK(!entityFromJson(futureEntity, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("实体版本")), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("高于")), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("不会被修改")), error);
+
+    // Strict opening rejects an entity that still needs migration: without
+    // version and format it reads as v1 and must go through the chain first.
+    QJsonObject legacyEntity = currentEntity;
+    legacyEntity.remove(QStringLiteral("version"));
+    legacyEntity.remove(QStringLiteral("format"));
+    error.clear();
+    CHECK(!entityFromJson(legacyEntity, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("实体版本 1")), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("迁移")), error);
+
+    // A v2-sized document with a stripped version is corrupt, not legacy.
+    QJsonObject strippedEntity = currentEntity;
+    strippedEntity.remove(QStringLiteral("version"));
+    error.clear();
+    CHECK(!entityFromJson(strippedEntity, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("version")), error);
+
+    // Lenient mode keeps hand-written fixtures readable.
+    error.clear();
+    CHECK_DETAIL(entityFromJson(legacyEntity, &error).has_value(), error);
 }
 
 void testRequiredFieldsStrict()
@@ -1991,8 +2040,13 @@ void testMigrationFramework()
     error.clear();
     CHECK(!upgrade(v0, 2, 1, chain, &error).has_value());
 
-    // Production registry: current version is a no-op and the oldest readable
-    // version is the current one while no migration step exists.
+    // Production registry: exactly one real step, v1 → v2. It covers both
+    // project.json and entities/*.json; v0 is below the oldest supported
+    // version and has no step.
+    CHECK(registry().size() == 1);
+    CHECK(registry().first().fromVersion == 1);
+    CHECK(minimumSupportedVersion() == 1);
+
     const QJsonObject current = toJson(Project{});
     error.clear();
     const auto same = upgrade(current, kProjectFormatVersion,
@@ -2006,7 +2060,71 @@ void testMigrationFramework()
     error.clear();
     CHECK(!upgrade(old, 0, kProjectFormatVersion, &error).has_value());
     CHECK_DETAIL(error.contains(QStringLiteral("缺少")), error);
-    CHECK(minimumSupportedVersion() == kProjectFormatVersion);
+
+    // A real v1 project document (the shape shipped before v2) upgrades to the
+    // current version and still passes strict parsing.
+    QJsonObject v1Project = current;
+    v1Project.insert(QStringLiteral("version"), 1);
+    v1Project.insert(QStringLiteral("name"), QStringLiteral("旧工程"));
+    error.clear();
+    const auto upgradedProject =
+        upgrade(v1Project, 1, kProjectFormatVersion, &error);
+    CHECK_DETAIL(upgradedProject.has_value(), error);
+    if (upgradedProject)
+    {
+        CHECK(upgradedProject->value(QStringLiteral("version")).toInt()
+              == kProjectFormatVersion);
+        CHECK(upgradedProject->value(QStringLiteral("name")).toString()
+              == QStringLiteral("旧工程"));
+        ParseOptions strict;
+        strict.mode = ParseMode::Strict;
+        CHECK_DETAIL(projectFromJson(*upgradedProject, strict, &error)
+                         .has_value(),
+                     error);
+    }
+    // Steps are pure: the input document is untouched.
+    CHECK(v1Project.value(QStringLiteral("version")).toInt() == 1);
+
+    // A real v1 entity document: entity files had neither "version" nor
+    // "format". The chain must give them the marker and version while keeping
+    // every entity field, so a v1 → v2 → parse → toJson round trip is stable.
+    Entity entity = makeEntity(0, 30);
+    entity.name = QStringLiteral("旧实体");
+    entity.tracks.insert(QStringLiteral("x"),
+                         Track{{keyAt(0, 1.0), keyAt(20, 5.0)}});
+    QJsonObject v1Entity = toJson(entity);
+    v1Entity.remove(QStringLiteral("version"));
+    v1Entity.remove(QStringLiteral("format"));
+
+    const auto rawVersion = documentVersion(v1Entity, &error);
+    CHECK_DETAIL(rawVersion.has_value(), error);
+    if (rawVersion)
+        CHECK(*rawVersion == 1);
+
+    error.clear();
+    const auto upgradedEntity =
+        upgrade(v1Entity, 1, kProjectFormatVersion, &error);
+    CHECK_DETAIL(upgradedEntity.has_value(), error);
+    if (upgradedEntity)
+    {
+        CHECK(upgradedEntity->value(QStringLiteral("format")).toString()
+              == QLatin1String(kEntityFormat));
+        CHECK(upgradedEntity->value(QStringLiteral("version")).toInt()
+              == kProjectFormatVersion);
+
+        ParseOptions strict;
+        strict.mode = ParseMode::Strict;
+        const auto parsedEntity =
+            entityFromJson(*upgradedEntity, strict, &error);
+        CHECK_DETAIL(parsedEntity.has_value(), error);
+        if (parsedEntity)
+        {
+            CHECK(parsedEntity->name == QStringLiteral("旧实体"));
+            CHECK(parsedEntity->tracks.contains(QStringLiteral("x")));
+            CHECK(toJson(*parsedEntity) == toJson(entity));
+        }
+    }
+    CHECK(!v1Entity.contains(QStringLiteral("format")));
 }
 
 struct TestCase

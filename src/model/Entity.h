@@ -93,6 +93,10 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
                                             QString* error = nullptr);
 
 QJsonObject toJson(const Entity& entity);
+// Entity files carry their own "format" ("pvforge-entity") and "version"
+// (kProjectFormatVersion). ProjectStore migrates an older document with
+// migrations::upgrade() before calling this parser; a document from a newer
+// build is refused instead of being half-parsed.
 std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      const ParseOptions& options,
                                      QString* error = nullptr);

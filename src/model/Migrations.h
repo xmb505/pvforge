@@ -1,11 +1,27 @@
 #pragma once
 
+#include "JsonUtil.h"
+
 #include <QJsonObject>
 #include <QString>
 #include <QVector>
 
 #include <functional>
 #include <optional>
+
+namespace pvf::model {
+
+// The one and only on-disk format version. It covers project.json and every
+// entities/<uuid>.json document: bumping it means adding exactly one
+// migrations::vN_to_vN+1 step in Migrations.cpp.
+inline constexpr int kProjectFormatVersion = 2;
+inline constexpr char kProjectFormat[] = "pvforge-project";
+// Entity documents carry their own format marker since v2. v1 entity files had
+// neither "format" nor "version"; the v1_to_v2 step adds the marker and
+// upgrade() stamps the version.
+inline constexpr char kEntityFormat[] = "pvforge-entity";
+
+} // namespace pvf::model
 
 namespace pvf::model::migrations {
 
@@ -24,9 +40,9 @@ struct Migration
     std::function<QJsonObject(const QJsonObject&)> apply;
 };
 
-// The production chain. It is empty while v1 is the only format ever shipped;
-// a future format change appends exactly one step here (for example
-// {"v1_to_v2", v1_to_v2}).
+// The production chain. It is applied to both project.json and every
+// entities/*.json document; a step therefore inspects the document shape
+// itself. v1_to_v2 gives entity documents their own format marker and version.
 const QVector<Migration>& registry();
 
 // Applies `chain` from `fromVersion` up to `toVersion`, step by step, and
@@ -43,9 +59,24 @@ std::optional<QJsonObject> upgrade(const QJsonObject& document,
                                    int fromVersion, int toVersion,
                                    QString* error = nullptr);
 
-// The oldest version the production chain can read. With an empty registry
-// this is the current format version, so older documents are rejected with a
-// readable message instead of being half-parsed.
+// The oldest version the production chain can read. Opening a document older
+// than this is refused with a readable message instead of being half-parsed.
 int minimumSupportedVersion();
+
+// The integer "version" of one text document. A document without "version" and
+// without a "format" marker but with a "uuid" is a v1 entity file (entities
+// only gained their own version in v2) and reads as version 1. Returns nullopt
+// with a readable reason when the field is present but not an integer.
+std::optional<int> documentVersion(const QJsonObject& document,
+                                   QString* error = nullptr);
+
+// Parse-time version gate shared by projectFromJson() and entityFromJson(),
+// `label` being the document kind ("工程" / "实体") used in messages. A
+// document from a newer build or one that still needs migration is refused
+// with a readable reason. In lenient mode a missing version means the current
+// one and is reported as a warning.
+bool checkDocumentVersion(const QJsonObject& document, const QString& label,
+                          const ParseOptions& options,
+                          QString* error = nullptr);
 
 } // namespace pvf::model::migrations

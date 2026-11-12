@@ -1,6 +1,7 @@
 #include "Entity.h"
 
 #include "JsonUtil.h"
+#include "Migrations.h"
 #include "Uuid.h"
 
 #include <QJsonArray>
@@ -149,6 +150,8 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
 QJsonObject toJson(const Entity& entity)
 {
     QJsonObject object;
+    object.insert(QStringLiteral("format"), QLatin1String(kEntityFormat));
+    object.insert(QStringLiteral("version"), kProjectFormatVersion);
     object.insert(QStringLiteral("uuid"), entity.uuid);
     object.insert(QStringLiteral("name"), entity.name);
     object.insert(QStringLiteral("parentUuid"),
@@ -184,6 +187,32 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      const ParseOptions& options,
                                      QString* error)
 {
+    // Version first: a v1 entity document (no "version", no "format") is
+    // reported as "needs migration" rather than "missing format", which is the
+    // actionable message for an opener.
+    if (!migrations::checkDocumentVersion(object, QStringLiteral("实体"),
+                                          options, error))
+    {
+        return std::nullopt;
+    }
+
+    if (detail::hasField(object, QStringLiteral("format")))
+    {
+        const QString format =
+            detail::jsonString(object, QStringLiteral("format"));
+        if (format != QLatin1String(kEntityFormat))
+        {
+            detail::setError(
+                error, QStringLiteral("实体格式不匹配：%1").arg(format));
+            return std::nullopt;
+        }
+    }
+    else if (!detail::requireField(object, QStringLiteral("format"), options,
+                                   error))
+    {
+        return std::nullopt;
+    }
+
     if (!detail::requireField(object, QStringLiteral("uuid"), options, error)
         || !detail::requireField(object, QStringLiteral("start"), options,
                                  error)
@@ -329,7 +358,8 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
     }
 
     entity.extras = detail::extrasFrom(
-        object, {QStringLiteral("uuid"), QStringLiteral("name"),
+        object, {QStringLiteral("format"), QStringLiteral("version"),
+                 QStringLiteral("uuid"), QStringLiteral("name"),
                  QStringLiteral("parentUuid"), QStringLiteral("start"),
                  QStringLiteral("end"), QStringLiteral("row"),
                  QStringLiteral("hidden"), QStringLiteral("locked"),
