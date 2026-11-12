@@ -1381,9 +1381,10 @@ void PerfMonitorWindow::updateRecordingUi()
             QStringLiteral("录制中 %1 / %2 秒")
                 .arg(QString::number(m_profiler.recordingElapsedSeconds(), 'f',
                                      1))
-                .arg(m_profiler.recordingRemainingSeconds()
-                             + m_profiler.recordingElapsedSeconds(),
-                     'f', 1));
+                .arg(QString::number(
+                    m_profiler.recordingRemainingSeconds()
+                        + m_profiler.recordingElapsedSeconds(),
+                    'f', 1));
         return;
     }
 
