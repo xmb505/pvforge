@@ -27,12 +27,13 @@ env:
 
 jobs:
   # 文档指标区块（docs/AI/STATUS.md）由 tools/doc-metrics.sh 生成。
-  # 只跑 --check：源码行数 / 自检开关数与文档不一致就判红；构建相关的
-  # CTest 数、二进制大小、ldd 依赖在没有 build/dist 时由脚本自己跳过。
+  # 只跑 --check：源码行数 / 自检开关数与文档不一致时提示；这是 advisory，
+  # 不阻塞合并——改一行代码就会改变行数，不能让文档数字变成必过门禁。
   doc-metrics:
-    name: 文档指标
+    name: 文档指标（advisory）
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
