@@ -389,9 +389,16 @@ bool mixAudioEntity(const model::Project& project,
         converted.resize(size_t(capacity) * kAudioChannels);
         uint8_t* outputData[1] = {
             reinterpret_cast<uint8_t*>(converted.data())};
+        // FFmpeg 6.x expects `const uint8_t**`; FFmpeg 8's extended_data is
+        // `uint8_t* const*`, so copy the channel pointers into a const array.
+        const int inputChannels =
+            std::max(1, decoderContext->ch_layout.nb_channels);
+        std::vector<const uint8_t*> inputData(
+            static_cast<size_t>(inputChannels));
+        for (int channel = 0; channel < inputChannels; ++channel)
+            inputData[size_t(channel)] = decoded->extended_data[channel];
         const int received = swr_convert(
-            swr, outputData, capacity,
-            reinterpret_cast<const uint8_t* const*>(decoded->extended_data),
+            swr, outputData, capacity, inputData.data(),
             decoded->nb_samples);
         if (received < 0)
         {
