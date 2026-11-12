@@ -32,7 +32,10 @@ constexpr int kMaxCommitDelayMs = 5000;
 constexpr int kMinAutoSaveMinutes = 1;
 constexpr int kMaxAutoSaveMinutes = 60;
 constexpr int kMinWriterThreads = 1;
-constexpr int kMaxWriterThreads = 3;
+// The workbench cache page offers 1..4 encoders.  A fourth only pays off when
+// the UI thread still has headroom; --cache-miss-profile reports which count
+// wins on the current machine.
+constexpr int kMaxWriterThreads = 4;
 
 template <typename T, std::size_t N>
 T nearestOf(T value, const std::array<T, N>& choices)

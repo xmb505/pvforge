@@ -114,6 +114,7 @@
 #include <QEventLoop>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QQueue>
 #include <QSaveFile>
 #include <QSettings>
 #include <QSpinBox>
@@ -2567,6 +2568,208 @@ void reportProfile(const QString& scenario, const QString& label,
                .arg(extra);
 }
 
+// ---------------------------------------------------------------------------
+// Cache writer scheduling models (issue #67).
+//
+// The production writer is one shared queue drained by N pool workers: whoever
+// is free takes the oldest frame.  The proposed alternative gives every worker
+// its own FIFO and assigns playback misses round-robin.  Both are simulated
+// here as discrete events so they can be compared without touching the
+// production scheduler: one event per arrival and per finished encode,
+// deterministic service times (57 ms +- 6 ms, every 7th frame an 80-100 ms
+// complex-frame tail) and the real 64-frame queue bound.
+// ---------------------------------------------------------------------------
+double writerServiceMs(int frame)
+{
+    if (frame % 7 == 3)
+        return 80.0 + double((frame * 13) % 21);
+    return 57.0 + double((frame * 37) % 13) - 6.0;
+}
+
+struct WriterScheduleMetrics
+{
+    int written = 0;
+    int dropped = 0;
+    int peakBacklog = 0;
+    double maxLatencyMs = 0.0;
+    double p95LatencyMs = 0.0;
+    double drainMs = 0.0;
+    // Idle worker time while another worker's FIFO held work (round-robin
+    // head-of-line blocking; always 0 for the shared queue).
+    double holIdleMs = 0.0;
+};
+
+WriterScheduleMetrics simulateWriterSchedule(bool roundRobin, int threads,
+                                             double arrivalFps, int frames,
+                                             int queueCap)
+{
+    const double interval = 1000.0 / arrivalFps;
+    const int laneCap = roundRobin
+                            ? std::max(1, (queueCap + threads - 1) / threads)
+                            : queueCap;
+
+    QVector<QQueue<QPair<int, double>>> lanes(roundRobin ? threads : 1);
+    QVector<double> busyUntil(threads, -1.0);
+    QVector<int> activeFrame(threads, -1);
+    QVector<double> activeArrival(threads, 0.0);
+
+    WriterScheduleMetrics metrics;
+    QVector<double> latencies;
+    double previous = 0.0;
+    double now = 0.0;
+    double lastArrival = 0.0;
+    double lastCompletion = 0.0;
+    int arrived = 0;
+
+    const auto backlog = [&lanes] {
+        int size = 0;
+        for (const auto& lane : lanes)
+            size += lane.size();
+        return size;
+    };
+    const auto busyWorkers = [&activeFrame] {
+        int count = 0;
+        for (const int frame : activeFrame)
+            count += frame >= 0 ? 1 : 0;
+        return count;
+    };
+    // A worker is blocked by another worker's queue while its own is empty.
+    const auto headOfLineBlocked = [&](int worker) {
+        if (activeFrame.at(worker) >= 0)
+            return false;
+        for (int i = 0; i < lanes.size(); ++i) {
+            if (i != worker && !lanes.at(i).isEmpty())
+                return true;
+        }
+        return false;
+    };
+
+    for (;;) {
+        for (int worker = 0; worker < threads; ++worker) {
+            if (activeFrame.at(worker) >= 0)
+                continue;
+            const int lane = roundRobin ? worker : 0;
+            if (lanes.at(lane).isEmpty())
+                continue;
+            const QPair<int, double> job = lanes[lane].dequeue();
+            activeFrame[worker] = job.first;
+            activeArrival[worker] = job.second;
+            busyUntil[worker] = now + writerServiceMs(job.first);
+        }
+        metrics.peakBacklog =
+            std::max(metrics.peakBacklog, backlog() + busyWorkers());
+
+        const double nextArrival = arrived < frames ? arrived * interval : -1.0;
+        double nextFinish = -1.0;
+        for (const double until : busyUntil) {
+            if (until >= 0.0 && (nextFinish < 0.0 || until < nextFinish))
+                nextFinish = until;
+        }
+        if (nextArrival < 0.0 && nextFinish < 0.0 && backlog() == 0)
+            break;
+
+        double next = nextFinish;
+        const bool arrivalNext =
+            nextArrival >= 0.0 && (nextFinish < 0.0 || nextArrival <= nextFinish);
+        if (arrivalNext)
+            next = nextArrival;
+
+        // Charge the elapsed idle-with-work-waiting interval before moving on.
+        // The shared queue cannot head-of-line block (any idle worker takes the
+        // oldest frame), so holIdleMs stays 0 for it by construction.
+        const double elapsed = next - previous;
+        if (elapsed > 0.0 && roundRobin) {
+            for (int worker = 0; worker < threads; ++worker) {
+                if (headOfLineBlocked(worker))
+                    metrics.holIdleMs += elapsed;
+            }
+        }
+        previous = next;
+        now = next;
+
+        if (arrivalNext) {
+            const int lane = roundRobin ? arrived % threads : 0;
+            QQueue<QPair<int, double>>& queue = lanes[lane];
+            while (queue.size() >= laneCap) {
+                queue.dequeue();
+                ++metrics.dropped;
+            }
+            queue.enqueue(qMakePair(arrived, now));
+            lastArrival = now;
+            ++arrived;
+        } else {
+            int worker = -1;
+            for (int i = 0; i < threads; ++i) {
+                if (busyUntil.at(i) < 0.0)
+                    continue;
+                if (worker < 0 || busyUntil.at(i) < busyUntil.at(worker))
+                    worker = i;
+            }
+            if (worker < 0)
+                break;
+            latencies.append(now - activeArrival.at(worker));
+            activeFrame[worker] = -1;
+            busyUntil[worker] = -1.0;
+            lastCompletion = now;
+            ++metrics.written;
+        }
+    }
+
+    for (const double latency : latencies) {
+        metrics.maxLatencyMs = std::max(metrics.maxLatencyMs, latency);
+    }
+    if (!latencies.isEmpty()) {
+        std::sort(latencies.begin(), latencies.end());
+        const int index = std::clamp(
+            int(std::ceil(0.95 * double(latencies.size()))) - 1, 0,
+            int(latencies.size()) - 1);
+        metrics.p95LatencyMs = latencies.at(index);
+    }
+    if (metrics.written > 0)
+        metrics.drainMs = lastCompletion - lastArrival;
+    return metrics;
+}
+
+// Runs both scheduling models for 1..4 writers at 30 and 60 fps and prints one
+// line per case, plus the head-to-head conclusion.
+void runWriterSchedulingModels()
+{
+    constexpr int kFrames = 300;
+    constexpr int kQueueCap = 64;
+    constexpr int kMaxThreads = 4;
+    const auto print = [](const QString& model, int threads, double fps,
+                          const WriterScheduleMetrics& metrics) {
+        qInfo().noquote()
+            << QStringLiteral(
+                   "cache-miss-profile | writer scheduling | model=%1 "
+                   "threads=%2 fps=%3 | frames=%4 written=%5 dropped=%6 "
+                   "peakBacklog=%7 | maxLatency=%8 ms p95Latency=%9 ms | "
+                   "drain=%10 ms holIdle=%11 ms")
+                   .arg(model)
+                   .arg(threads)
+                   .arg(fps, 0, 'f', 0)
+                   .arg(kFrames)
+                   .arg(metrics.written)
+                   .arg(metrics.dropped)
+                   .arg(metrics.peakBacklog)
+                   .arg(metrics.maxLatencyMs, 0, 'f', 0)
+                   .arg(metrics.p95LatencyMs, 0, 'f', 0)
+                   .arg(metrics.drainMs, 0, 'f', 0)
+                   .arg(metrics.holIdleMs, 0, 'f', 0);
+    };
+
+    for (const double fps : {30.0, 60.0}) {
+        for (int threads = 1; threads <= kMaxThreads; ++threads) {
+            print(QStringLiteral("shared-queue"), threads, fps,
+                  simulateWriterSchedule(false, threads, fps, kFrames,
+                                         kQueueCap));
+            print(QStringLiteral("round-robin"), threads, fps,
+                  simulateWriterSchedule(true, threads, fps, kFrames,
+                                         kQueueCap));
+        }
+    }
+}
+
 bool copyProfileProject(const QString& source, const QString& target,
                         QString* error)
 {
@@ -2915,7 +3118,7 @@ int runCacheProfileScenario(const QString& scenario,
         QVector<WriterRun> writerRuns;
         workbench->setPlaybackActive(true);
 
-        for (const int threads : {1, 2, 3})
+        for (const int threads : {1, 2, 3, 4})
         {
             workbench->setWriterThreads(threads);
             WriterRun run;
@@ -3005,6 +3208,9 @@ int runCacheProfileScenario(const QString& scenario,
             const quint64 pacedWritten = workbench->asyncStoresWritten();
             constexpr int kPacedFrames = 300;
             constexpr double kTickBudgetMs = 1000.0 / 30.0;
+            // Non-overlapping 300-frame windows inside the fixture's 3000
+            // frames: 1800..2999 for 1..4 writers.
+            const int pacedFirstFrame = 1800 + (threads - 1) * kPacedFrames;
             ProfileSamples tickSamples;
             for (int i = 0; i < kPacedFrames; ++i)
             {
@@ -3015,7 +3221,7 @@ int runCacheProfileScenario(const QString& scenario,
                         : viewportImages.at(i % viewportImages.size());
                 QElapsedTimer tick;
                 tick.start();
-                workbench->store(1760 + threads * 300 + i,
+                workbench->store(pacedFirstFrame + i,
                                  workbench->cameraUuid(), image);
                 while (tick.elapsed() < kTickBudgetMs)
                 {
@@ -3463,6 +3669,10 @@ int cacheMissProfileTest(QApplication& app)
         {QStringLiteral("complex"), 200, 4, true, false},
         {QStringLiteral("raster-image"), 12, 1, false, true},
     };
+
+    // Scheduling model comparison is pure simulation: it does not touch the
+    // production writer and runs before any project exists.
+    runWriterSchedulingModels();
 
     for (const ProfileFixture& fixture : fixtures)
     {
@@ -12691,14 +12901,14 @@ int settingsTest(QApplication& app)
 
         // Changing only the writer count retunes the live pool: the service
         // instance (and every frame it still has queued) survives the apply.
-        workbenchWriter->setCurrentIndex(workbenchWriter->findData(3));
+        workbenchWriter->setCurrentIndex(workbenchWriter->findData(4));
         apply->click();
         QApplication::processEvents();
         QApplication::processEvents();
-        expect(store.load().workbenchCacheWriterThreads == 3,
+        expect(store.load().workbenchCacheWriterThreads == 4,
                QStringLiteral("writer thread count not saved"));
         expect(live->workbench() == afterWorkbench
-                   && afterWorkbench->writerThreads() == 3,
+                   && afterWorkbench->writerThreads() == 4,
                QStringLiteral("writer thread change rebuilt the workbench "
                               "service instead of retuning its pool"));
         expect(window->autosaveIntervalForTest() == 3 * 60 * 1000,

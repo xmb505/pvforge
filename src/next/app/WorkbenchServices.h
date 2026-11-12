@@ -122,7 +122,7 @@ public:
     quint64 asyncStoresWritten() const { return m_asyncStoresWritten; }
     quint64 workerEncodes() const { return m_workerEncodes; }
     double workerEncodeMeanMs() const;
-    // Background encode threads (1..3).  Retuning the pool never cancels or
+    // Background encode threads (1..4).  Retuning the pool never cancels or
     // reorders the frames already queued: extra slots start draining them on
     // the next dispatch, removed slots finish their current encode.
     void setWriterThreads(int threads);
@@ -231,7 +231,7 @@ private:
     int m_lastMetaFrame = -1;
     bool m_lastMetaValid = false;
 
-    // Playback raster writer: 1..3 serial-ish workers sharing one pool.  The
+    // Playback raster writer: 1..4 serial-ish workers sharing one pool.  The
     // queue is a 64-frame / 256 MB bound and IDs decide what may still write:
     // a frame superseded by a newer meta, an edit or a clear loses its ID and
     // its finished encode is dropped on the UI thread.

@@ -291,7 +291,7 @@ void SettingsDialog::buildWorkbenchPage()
     m_workbenchWriterThreads = new QComboBox(page);
     m_workbenchWriterThreads->setObjectName(
         QStringLiteral("workbenchWriterThreads"));
-    for (int threads = 1; threads <= 3; ++threads)
+    for (int threads = 1; threads <= 4; ++threads)
         m_workbenchWriterThreads->addItem(
             QStringLiteral("%1 线程").arg(threads), threads);
     form->addRow(QStringLiteral("后台编码线程"), m_workbenchWriterThreads);

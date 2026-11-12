@@ -337,7 +337,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     expected.workbenchCacheExpandPercent = 125;
     expected.workbenchCacheDiskBytes = 24 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
-    expected.workbenchCacheWriterThreads = 3;
+    expected.workbenchCacheWriterThreads = 4;
     store.save(expected);
 
     SettingsStore reopened(path);
@@ -347,7 +347,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     QCOMPARE(loaded.workbenchCacheExpandPercent, 125);
     QCOMPARE(loaded.workbenchCacheDiskBytes, 24 * kGiB);
     QCOMPARE(loaded.workbenchCacheMemoryBytes, 512 * kMiB);
-    QCOMPARE(loaded.workbenchCacheWriterThreads, 3);
+    QCOMPARE(loaded.workbenchCacheWriterThreads, 4);
 
     QSettings raw(path, QSettings::IniFormat);
     QCOMPARE(raw.value(QStringLiteral("workbench/enabled")).toBool(), false);
@@ -355,7 +355,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     QCOMPARE(raw.value(QStringLiteral("workbench/expandPercent")).toInt(), 125);
     QCOMPARE(raw.value(QStringLiteral("workbench/diskBytes")).toLongLong(), 24 * kGiB);
     QCOMPARE(raw.value(QStringLiteral("workbench/memoryBytes")).toLongLong(), 512 * kMiB);
-    QCOMPARE(raw.value(QStringLiteral("workbench/writerThreads")).toInt(), 3);
+    QCOMPARE(raw.value(QStringLiteral("workbench/writerThreads")).toInt(), 4);
 }
 
 void SettingsTests::workbenchStoreSanitizes()
@@ -410,7 +410,7 @@ void SettingsTests::workbenchStoreSanitizes()
     QCOMPARE(clamped.workbenchCacheDiskBytes, 64 * kGiB);
     QCOMPARE(clamped.workbenchCacheMemoryBytes, 4096 * kMiB);
 
-    // Writer threads are a hard 1..3 choice, not a snap: hand-edited INI
+    // Writer threads are a hard 1..4 choice, not a snap: hand-edited INI
     // values outside the range clamp to the nearest supported end.
     const auto threads = [](int value) {
         AppSettings settings;
@@ -422,7 +422,8 @@ void SettingsTests::workbenchStoreSanitizes()
     QCOMPARE(threads(1), 1);
     QCOMPARE(threads(2), 2);
     QCOMPARE(threads(3), 3);
-    QCOMPARE(threads(9), 3);
+    QCOMPARE(threads(4), 4);
+    QCOMPARE(threads(9), 4);
 }
 
 void SettingsTests::workbenchMemoryMatchesUiRange()
@@ -582,6 +583,8 @@ void SettingsTests::workbenchDialogRoundTrip()
                  ->currentData()
                  .toInt(),
              2);
+    // The combo mirrors the store's 1..4 range.
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchWriterThreads")->count(), 4);
 
     AppSettings expected;
     expected.workbenchCacheEnabled = false;
@@ -589,7 +592,7 @@ void SettingsTests::workbenchDialogRoundTrip()
     expected.workbenchCacheExpandPercent = 150;
     expected.workbenchCacheDiskBytes = 32 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
-    expected.workbenchCacheWriterThreads = 3;
+    expected.workbenchCacheWriterThreads = 4;
 
     dialog.setSettings(expected);
     QVERIFY(!findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
@@ -599,7 +602,7 @@ void SettingsTests::workbenchDialogRoundTrip()
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchWriterThreads")
                  ->currentData()
                  .toInt(),
-             3);
+             4);
     verifySettingsEqual(dialog.settings(), expected);
 
     // Restoring the defaults puts the writer choice back to 2 threads.

@@ -366,7 +366,7 @@ QWidget* SettingsDialog::createAppCachePage()
     m_appWorkbenchWriterThreads = new QComboBox(workbench);
     m_appWorkbenchWriterThreads->setObjectName(
         QStringLiteral("workbenchWriterThreads"));
-    for (int threads = 1; threads <= 3; ++threads)
+    for (int threads = 1; threads <= 4; ++threads)
         m_appWorkbenchWriterThreads->addItem(
             QStringLiteral("%1 线程").arg(threads), threads);
     workbenchForm->addRow(QStringLiteral("后台编码线程"),

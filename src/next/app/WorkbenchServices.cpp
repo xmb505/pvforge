@@ -27,9 +27,10 @@ constexpr int kMaxPendingStores = 64;
 constexpr qint64 kMaxPendingStoreBytes = 256LL * 1024 * 1024;
 // The Qt WebP plugin on this build is re-entrant (workbench tests encode
 // several frames at once and decode each one), but three writers already
-// saturate a 30-60 fps playback miss stream; more would only add idle threads.
+// saturate a 30-60 fps playback miss stream; a fourth is only useful when the
+// UI thread has headroom.  Measured with --cache-miss-profile.
 constexpr int kMinWriterThreads = 1;
-constexpr int kMaxWriterThreads = 3;
+constexpr int kMaxWriterThreads = 4;
 
 class StoreGuard
 {

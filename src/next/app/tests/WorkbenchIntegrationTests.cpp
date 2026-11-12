@@ -1171,11 +1171,11 @@ void WorkbenchIntegrationTest::writerThreadsRetuneWithoutDropping()
     QCOMPARE(services.pendingStores(), 0);
     QCOMPARE(services.asyncStoresWritten(), quint64(8));
 
-    // Out-of-range values clamp to the supported 1..3 range.
+    // Out-of-range values clamp to the supported 1..4 range.
     services.setWriterThreads(0);
     QCOMPARE(services.writerThreads(), 1);
     services.setWriterThreads(9);
-    QCOMPARE(services.writerThreads(), 3);
+    QCOMPARE(services.writerThreads(), 4);
     services.setWriterThreads(-4);
     QCOMPARE(services.writerThreads(), 1);
 
@@ -1230,12 +1230,22 @@ void WorkbenchIntegrationTest::writerThreadsSpeedUpTheDrain()
     services.setWriterThreads(3);
     const double threeThreads = drain(300, 12);
     QVERIFY2(threeThreads > 0.0, "three-thread drain did not finish");
+    services.setWriterThreads(4);
+    const double fourThreads = drain(400, 12);
+    QVERIFY2(fourThreads > 0.0, "four-thread drain did not finish");
 
     QVERIFY2(threeThreads < oneThread * 0.9,
              qPrintable(QStringLiteral("writers did not overlap: 1 thread %1 "
                                        "ms, 3 threads %2 ms")
                             .arg(oneThread, 0, 'f', 1)
                             .arg(threeThreads, 0, 'f', 1)));
+    // A fourth writer must at least not be slower than a single one; whether it
+    // beats three is machine dependent and reported by --cache-miss-profile.
+    QVERIFY2(fourThreads < oneThread,
+             qPrintable(QStringLiteral("four writers slower than one: 1 "
+                                       "thread %1 ms, 4 threads %2 ms")
+                            .arg(oneThread, 0, 'f', 1)
+                            .arg(fourThreads, 0, 'f', 1)));
     QCOMPARE(services.droppedStores(), quint64(0));
     services.setPlaybackActive(false);
 }
