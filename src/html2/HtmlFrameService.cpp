@@ -354,6 +354,144 @@ private:
     quint64 m_generation = 0;
 };
 
+// Owns the high-resolution export renderer on a private thread. The renderer,
+// its Chrome process and every QObject it creates are constructed and destroyed
+// here, so the service never has to delete thread-affine Qt objects from a
+// foreign thread: stop() only has to ask this thread to exit. Jobs are handed
+// over under a mutex and the caller blocks on a condition variable, the same
+// handoff FrameDiskWorker uses for the disk cache.
+class FinalRendererWorker final : public QThread
+{
+public:
+    explicit FinalRendererWorker(QString chromeExecutable)
+        : m_chromeExecutable(std::move(chromeExecutable))
+    {
+    }
+
+    ~FinalRendererWorker() override
+    {
+        requestStop();
+        wait();
+    }
+
+    // Renders one frame on the worker thread. Returns a null image and fills
+    // `error` when the browser cannot start, the frame fails, or the worker is
+    // already shutting down. Calls from different threads are serialised.
+    QImage render(const FrameRequest& request, QString* error)
+    {
+        QMutexLocker callLocker(&m_callMutex);
+        QMutexLocker locker(&m_mutex);
+        if (m_stop || !isRunning())
+        {
+            if (error)
+                *error = QStringLiteral("the final HTML renderer is not running");
+            return QImage{};
+        }
+
+        m_job = Job{};
+        m_job.request = request;
+        m_jobActive = true;
+        m_jobDone = false;
+        m_cond.wakeAll();
+        while (!m_jobDone)
+            m_doneCond.wait(&m_mutex);
+
+        const QImage image = m_job.image;
+        if (error)
+            *error = m_job.error;
+        m_jobActive = false;
+        return image;
+    }
+
+    void setChromeExecutable(const QString& path)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_chromeExecutable = path;
+    }
+
+    bool browserRunning() const
+    {
+        return m_browserRunning.load(std::memory_order_relaxed);
+    }
+
+    void requestStop()
+    {
+        QMutexLocker locker(&m_mutex);
+        m_stop = true;
+        m_cond.wakeAll();
+    }
+
+protected:
+    void run() override
+    {
+        PvhtmlRenderer renderer;
+
+        for (;;)
+        {
+            Job job;
+            {
+                QMutexLocker locker(&m_mutex);
+                while (!m_stop && !m_jobActive)
+                    m_cond.wait(&m_mutex);
+                if (m_stop && !m_jobActive)
+                    break;
+                job = std::move(m_job);
+                m_job = Job{};
+            }
+
+            QString error;
+            if (!renderer.isRunning())
+            {
+                renderer.setChromeExecutable(chromeExecutable());
+                QString startError;
+                if (!renderer.start(&startError))
+                    error = startError;
+            }
+            if (error.isEmpty())
+                job.image = renderer.renderFrame(job.request, &error);
+            job.error = error;
+            m_browserRunning.store(renderer.isRunning(), std::memory_order_relaxed);
+
+            {
+                QMutexLocker locker(&m_mutex);
+                m_job = std::move(job);
+                m_jobActive = false;
+                m_jobDone = true;
+                m_doneCond.wakeAll();
+            }
+        }
+
+        // The browser and its QObject children die on this thread.
+        renderer.stop();
+        m_browserRunning.store(false, std::memory_order_relaxed);
+    }
+
+private:
+    struct Job
+    {
+        FrameRequest request;
+        QImage image;
+        QString error;
+    };
+
+    QString chromeExecutable()
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_chromeExecutable;
+    }
+
+    QMutex m_mutex;
+    QMutex m_callMutex;
+    QWaitCondition m_cond;
+    QWaitCondition m_doneCond;
+    bool m_jobActive = false;
+    bool m_jobDone = false;
+    bool m_stop = false;
+    Job m_job;
+    std::atomic_bool m_browserRunning{false};
+    QString m_chromeExecutable;
+};
+
 // Owns the DiskCache on a private thread. QSqlDatabase connections are bound
 // to their creating thread, so the SQLite-backed DiskCache must never be
 // touched from the UI thread or from the prefetch thread. Callers submit one
@@ -394,6 +532,8 @@ public:
     {
         QMutexLocker callLocker(&m_callMutex);
         QMutexLocker locker(&m_mutex);
+        if (m_stop || !isRunning())
+            return std::nullopt;
         m_job = Job{};
         m_job.op = Op::Get;
         m_job.key = key;
@@ -411,6 +551,11 @@ public:
     {
         QMutexLocker callLocker(&m_callMutex);
         QMutexLocker locker(&m_mutex);
+        // A job submitted after requestStop() would never be picked up, so the
+        // caller would wait forever. Dropping it keeps the stop path from
+        // hanging (the disk tier is a cache, a miss is always safe).
+        if (m_stop || !isRunning())
+            return;
         m_job = Job{};
         m_job.op = Op::Put;
         m_job.key = key;
@@ -427,6 +572,8 @@ public:
     {
         QMutexLocker callLocker(&m_callMutex);
         QMutexLocker locker(&m_mutex);
+        if (m_stop || !isRunning())
+            return;
         m_job = Job{};
         m_job.op = Op::Clear;
         m_job.assetHash = assetHash;
@@ -460,6 +607,7 @@ protected:
         for (;;)
         {
             Job job;
+            bool stop = false;
             {
                 QMutexLocker locker(&m_mutex);
                 while (!m_stop && !m_jobActive)
@@ -491,9 +639,10 @@ protected:
                 m_jobActive = false;
                 m_jobDone = true;
                 m_doneCond.wakeAll();
+                stop = m_stop;
             }
 
-            if (m_stop)
+            if (stop)
                 break;
         }
     }
@@ -624,7 +773,7 @@ bool HtmlFrameService::start(QString* error)
 
     // A previous attempt may have left a partially started service (for
     // example the frontend crashed while the cache thread survived).
-    if (m_frontendWorker || m_cacheWorker || m_diskWorker)
+    if (m_frontendWorker || m_cacheWorker || m_diskWorker || m_finalWorker)
         stop();
 
     if (!m_memory)
@@ -702,27 +851,23 @@ void HtmlFrameService::stop()
         m_cacheWorker->wait();
         m_cacheWorker.reset();
     }
-    if (m_final)
+    // The final renderer lives on its own thread. requestStop() only asks it to
+    // exit after the frame currently rendering (if any) finishes; joining it
+    // destroys the renderer, its Chrome process and every QObject child on that
+    // thread, so nothing is ever deleted from a foreign thread and nothing is
+    // leaked. A finalFrame() still in flight keeps its own reference and
+    // finishes on the detached worker instead of touching freed memory.
+    std::shared_ptr<FinalRendererWorker> finalWorker;
     {
-        if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
-        {
-            // The final renderer lives on the export worker thread. Deleting
-            // it from here would destroy thread-affine Qt objects on the wrong
-            // thread; leaking until process exit is the safe fallback.
-            qWarning().noquote()
-                << QStringLiteral("html2: stop() found a final renderer owned by "
-                                  "another thread; call stopFinal() on that thread "
-                                  "first (leaking the renderer)");
-            m_final = nullptr;
-        }
-        else
-        {
-            m_final->stop();
-            delete m_final;
-            m_final = nullptr;
-        }
+        QMutexLocker locker(&m_finalMutex);
+        finalWorker = std::move(m_finalWorker);
+        m_finalWorker.reset();
     }
-    m_finalThreadId = nullptr;
+    if (finalWorker)
+    {
+        finalWorker->requestStop();
+        finalWorker->wait();
+    }
 
     m_tiered.reset();
     m_diskProxy.reset();
@@ -959,44 +1104,31 @@ QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
     if (!ensureStarted(error))
         return QImage{};
 
-    if (!m_final)
+    std::shared_ptr<FinalRendererWorker> finalWorker;
     {
-        // No QObject parent: the export worker thread owns and deletes this
-        // renderer through stopFinal().
-        m_final = new PvhtmlRenderer();
-        m_finalThreadId = QThread::currentThreadId();
-    }
-    else if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
-    {
-        const QString message =
-            QStringLiteral("finalFrame() must be called from the thread that created the "
-                           "final renderer; call stopFinal() on that thread first");
-        qWarning().noquote() << QStringLiteral("html2:") << message;
-        if (error)
-            *error = message;
-        return QImage{};
-    }
-    m_final->setChromeExecutable(m_chromeExecutable);
-    if (!m_final->isRunning())
-    {
-        QString startError;
-        if (!m_final->start(&startError))
+        QMutexLocker locker(&m_finalMutex);
+        if (!m_finalWorker)
         {
-            if (error)
-                *error = startError;
-            return QImage{};
+            // The final renderer is created inside this worker's run(), so its
+            // browser and QObject children belong to that thread for their
+            // whole lifetime, whichever thread called finalFrame() first.
+            m_finalWorker = std::make_shared<FinalRendererWorker>(m_chromeExecutable);
+            m_finalWorker->start();
         }
+        finalWorker = m_finalWorker;
     }
 
     FrameRequest finalRequest = request;
     finalRequest.final = true;
 
     QString renderError;
-    const QImage image = m_final->renderFrame(finalRequest, &renderError);
+    const QImage image = finalWorker->render(finalRequest, &renderError);
     if (image.isNull())
     {
         if (error)
-            *error = renderError;
+            *error = renderError.isEmpty()
+                         ? QStringLiteral("the final HTML renderer failed")
+                         : renderError;
         return QImage{};
     }
 
@@ -1009,25 +1141,23 @@ QImage HtmlFrameService::finalFrame(const FrameRequest& request, QString* error)
 
 void HtmlFrameService::stopFinal()
 {
-    if (!m_final)
-        return;
-    if (m_finalThreadId && m_finalThreadId != QThread::currentThreadId())
+    std::shared_ptr<FinalRendererWorker> finalWorker;
     {
-        qWarning().noquote()
-            << QStringLiteral("html2: stopFinal() must be called from the thread that "
-                              "created the final renderer; ignoring this call");
-        return;
+        QMutexLocker locker(&m_finalMutex);
+        finalWorker = std::move(m_finalWorker);
+        m_finalWorker.reset();
     }
+    if (!finalWorker)
+        return;
 
-    m_final->stop();
-    delete m_final;
-    m_final = nullptr;
-    m_finalThreadId = nullptr;
+    finalWorker->requestStop();
+    finalWorker->wait();
 }
 
 bool HtmlFrameService::finalRunning() const
 {
-    return m_final && m_final->isRunning();
+    QMutexLocker locker(&m_finalMutex);
+    return m_finalWorker && m_finalWorker->browserRunning();
 }
 
 void HtmlFrameService::prefetch(const QVector<FrameRequest>& requests)
@@ -1053,8 +1183,11 @@ void HtmlFrameService::clearAsset(const AssetHash& assetHash)
 void HtmlFrameService::setChromeExecutable(const QString& path)
 {
     m_chromeExecutable = path;
-    if (m_final)
-        m_final->setChromeExecutable(path);
+    {
+        QMutexLocker locker(&m_finalMutex);
+        if (m_finalWorker)
+            m_finalWorker->setChromeExecutable(path);
+    }
     if (m_running)
     {
         qWarning().noquote()

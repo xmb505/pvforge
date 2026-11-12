@@ -26,6 +26,7 @@ class FrameDiskWorker;
 class FrontendWorker;
 class DiskCacheProxy;
 class LockedFrameCache;
+class FinalRendererWorker;
 
 struct Stats
 {
@@ -41,19 +42,18 @@ struct Stats
 //    one at a time, and is started by start();
 //  - cache:    renders prefetched low-resolution frames on a second private
 //    QThread, one at a time, and is started by start();
-//  - final:    renders high-resolution frames for export on the caller's
-//    thread, started lazily by the first finalFrame() call. Final frames are
-//    never cached.
+//  - final:    renders high-resolution frames for export. It is started lazily
+//    by the first finalFrame() and lives on a private service-owned thread;
+//    final frames are never cached.
 //
-// Threading of the final renderer: the first finalFrame() creates the final
-// PvhtmlRenderer (and its browser) on the calling thread, and Qt keeps that
-// QObject and its CDP sockets bound to it. finalFrame() must therefore always
-// be called from exactly one thread. Successive export tasks must reuse that
-// thread, or call stopFinal() on it when the task ends. There is no
-// cross-thread migration; stopFinal() itself must run on the thread that first
-// called finalFrame(), so a later task on another thread can create a fresh
-// renderer. Violating either rule is reported as a warning and the call fails
-// instead of silently rendering from the wrong thread.
+// Threading of the final renderer: the renderer, its browser and every QObject
+// they create belong to one dedicated thread owned by the service, so they are
+// created and destroyed on that same thread and never touched from a foreign
+// one. finalFrame() and stopFinal() may therefore be called from any thread;
+// each call is handed to the final thread and blocks until it finishes (calls
+// from different threads are serialised). This is what lets stop() reclaim the
+// final browser even when an export worker created it: stop() asks the final
+// thread to shut down and joins it instead of leaking the renderer.
 //
 // Low-resolution frames go through TieredCache(MemoryCache,
 // DiskCache(cacheRoot)), with 256 MB / 2 GB defaults that the constructor
@@ -102,15 +102,14 @@ public:
     // frontend renderer still runs on its own thread.
     QImage frame(const FrameRequest& request, QString* error = nullptr);
     // High resolution: always uses the final browser. Nothing is cached. The
-    // final browser is created lazily on this thread; see the class comment for
-    // the single-thread contract. An out-of-range size is rejected before any
-    // browser is started.
+    // final browser is created lazily on the service's private final thread; a
+    // call from any thread blocks until that thread finished the frame. An
+    // out-of-range size is rejected before any browser is started.
     QImage finalFrame(const FrameRequest& request, QString* error = nullptr);
 
-    // Releases the final renderer and its browser, so the next finalFrame() can
-    // create a fresh one (possibly on another thread). Must be called from the
-    // thread that first called finalFrame(); a call from any other thread warns
-    // and does nothing. Safe to call when no final renderer exists.
+    // Releases the final renderer, its browser and the private final thread, so
+    // the next finalFrame() starts from a fresh renderer. Can be called from
+    // any thread and is safe when no final renderer exists.
     void stopFinal();
     // True while the final renderer exists and its browser is running.
     bool finalRunning() const;
@@ -197,8 +196,12 @@ private:
     // and joined by stop(); the destructor calls stop() before any member dies,
     // so a worker can never signal a half-destroyed service.
     std::unique_ptr<FrontendWorker> m_frontendWorker;
-    PvhtmlRenderer* m_final = nullptr;
-    Qt::HANDLE m_finalThreadId = nullptr; // thread that created m_final
+    // Owner thread of the final (export) renderer. Declared here so stop() can
+    // join it before the caches below are torn down. Shared ownership lets a
+    // finalFrame() that is already running keep the worker (and its renderer)
+    // alive if another thread stops the service at the same time.
+    std::shared_ptr<FinalRendererWorker> m_finalWorker;
+    mutable QMutex m_finalMutex; // guards m_finalWorker
     std::unique_ptr<FrameCacheWorker> m_cacheWorker;
 
     QMutex m_cacheMutex;

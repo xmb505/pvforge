@@ -14,11 +14,14 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <atomic>
 #include <memory>
 
 namespace pvf::html2 {
 
 namespace {
+
+std::atomic<int> gLiveRenderers{0};
 
 constexpr int kMaxTimeoutMs = 30000;
 constexpr int kMinTimeoutMs = 100;
@@ -139,6 +142,12 @@ QString validateFrameSize(const QSize& size)
 PvhtmlRenderer::PvhtmlRenderer(QObject* parent)
     : QObject(parent)
 {
+    gLiveRenderers.fetch_add(1, std::memory_order_relaxed);
+}
+
+int PvhtmlRenderer::liveInstanceCount()
+{
+    return gLiveRenderers.load(std::memory_order_relaxed);
 }
 
 PvhtmlRenderer::~PvhtmlRenderer()
@@ -157,6 +166,7 @@ PvhtmlRenderer::~PvhtmlRenderer()
         delete m_browser;
         m_browser = nullptr;
     }
+    gLiveRenderers.fetch_sub(1, std::memory_order_relaxed);
 }
 
 bool PvhtmlRenderer::start(QString* error)

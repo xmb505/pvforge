@@ -25,6 +25,9 @@ set(PVF_HTML2_TEST_CASES
     chromeExecutableOverride
     finalFrameSizeLimits
     finalRendererRestart
+    finalRendererCrossThreadStop
+    finalRendererRepeatedStartStop
+    finalRendererStopWhileRendering
 )
 
 foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)

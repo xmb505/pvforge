@@ -16,11 +16,13 @@
 #include <QHostAddress>
 #include <QImage>
 #include <QList>
+#include <QSemaphore>
 #include <QSize>
 #include <QString>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QThread>
 #include <QTimer>
 
 #include <functional>
@@ -1281,6 +1283,211 @@ void finalRendererRestart()
     CHECK(!service.isRunning());
 }
 
+// The service owns the final renderer on its private thread. A cross-thread
+// stop() (the export worker created the browser, the UI thread tears the
+// service down) must reclaim the renderer and its Chrome process instead of
+// leaking them because they belong to a thread that is still busy.
+void finalRendererCrossThreadStop()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    const int renderersBefore = pvf::html2::PvhtmlRenderer::liveInstanceCount();
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    pvf::html2::FrameRequest request;
+    request.bundleDir = bundle;
+    request.size = QSize(96, 64);
+    request.timeoutMs = 15000;
+
+    QImage image;
+    QSemaphore rendered;
+    QSemaphore release;
+    QThread* worker = QThread::create([&service, &request, &image, &rendered, &release]() {
+        QString renderError;
+        image = service.finalFrame(request, &renderError);
+        rendered.release();
+        // Stay alive while the main thread stops the service, so the renderer
+        // must be reclaimed by the service and not by its creator returning.
+        release.acquire();
+    });
+    worker->start();
+
+    CHECK(rendered.tryAcquire(1, 60000));
+    CHECK(!image.isNull());
+    CHECK(service.finalRunning());
+    // frontend + cache + final renderers are alive while the service runs.
+    CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore + 3,
+                 QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+
+    QElapsedTimer timer;
+    timer.start();
+    service.stop();
+    CHECK(timer.elapsed() < 30000);
+    CHECK(!service.isRunning());
+    CHECK(!service.finalRunning());
+    CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore,
+                 QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+
+    release.release();
+    CHECK(worker->wait(15000));
+    delete worker;
+
+    // Restarting after a cross-thread stop must work and stay leak-free.
+    error.clear();
+    CHECK_DETAIL(service.start(&error), error);
+    if (service.isRunning())
+    {
+        error.clear();
+        const QImage again = service.finalFrame(request, &error);
+        CHECK_DETAIL(!again.isNull(), error);
+        service.stop();
+    }
+    CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore,
+                 QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+}
+
+void finalRendererRepeatedStartStop()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    const int renderersBefore = pvf::html2::PvhtmlRenderer::liveInstanceCount();
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    pvf::html2::FrameRequest request;
+    request.bundleDir = bundle;
+    request.size = QSize(64, 64);
+    request.timeoutMs = 15000;
+
+    int renders = 0;
+    for (int round = 0; round < 2; ++round)
+    {
+        QString error;
+        CHECK_DETAIL(service.start(&error), error);
+        if (!service.isRunning())
+            return;
+
+        CHECK(!service.finalRunning());
+        error.clear();
+        const QImage image = service.finalFrame(request, &error);
+        CHECK_DETAIL(!image.isNull(), error);
+        CHECK(service.finalRunning());
+        // frontend + cache + final renderers for this round.
+        CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore + 3,
+                     QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+        if (!image.isNull())
+            ++renders;
+
+        // stop() must reclaim the final renderer without an explicit stopFinal().
+        service.stop();
+        CHECK(!service.isRunning());
+        CHECK(!service.finalRunning());
+        CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore,
+                     QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+
+        // Repeated stops and a stopFinal() after stop() are no-ops.
+        service.stop();
+        service.stopFinal();
+        CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore,
+                     QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+    }
+    CHECK_DETAIL(renders == 2, QString::number(renders));
+    CHECK(service.stats().renders == 2);
+}
+
+// stop() racing a final frame that is still rendering on another thread must
+// neither hang nor destroy the renderer under the caller: stop() asks the final
+// thread to exit after the frame in flight, and the caller keeps the worker
+// alive until renderFrame() has returned.
+void finalRendererStopWhileRendering()
+{
+    if (!chromeAvailable())
+    {
+        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+        return;
+    }
+
+    QTemporaryDir temporary;
+    CHECK(temporary.isValid());
+    if (!temporary.isValid())
+        return;
+
+    const QString bundle = buildDelayedBundle(temporary.path(), 500);
+    CHECK(!bundle.isEmpty());
+    if (bundle.isEmpty())
+        return;
+
+    const int renderersBefore = pvf::html2::PvhtmlRenderer::liveInstanceCount();
+
+    pvf::html2::HtmlFrameService service(temporary.path() + QStringLiteral("/cache"));
+    QString error;
+    CHECK_DETAIL(service.start(&error), error);
+    if (!service.isRunning())
+        return;
+
+    pvf::html2::FrameRequest request;
+    request.bundleDir = bundle;
+    request.size = QSize(64, 64);
+    request.timeoutMs = 10000;
+
+    QImage image;
+    QString renderError;
+    QSemaphore finished;
+    QThread* worker = QThread::create([&service, &request, &image, &renderError, &finished]() {
+        image = service.finalFrame(request, &renderError);
+        finished.release();
+    });
+    worker->start();
+    waitBriefly(150); // let the final render enter its delayed page handshake
+
+    QElapsedTimer timer;
+    timer.start();
+    service.stop();
+    CHECK(timer.elapsed() < 30000);
+
+    CHECK(finished.tryAcquire(1, 30000));
+    CHECK(worker->wait(15000));
+    delete worker;
+
+    CHECK_DETAIL(!image.isNull(), renderError);
+    CHECK(!service.isRunning());
+    CHECK(!service.finalRunning());
+    CHECK_DETAIL(pvf::html2::PvhtmlRenderer::liveInstanceCount() == renderersBefore,
+                 QString::number(pvf::html2::PvhtmlRenderer::liveInstanceCount()));
+}
+
 void customCacheBudgets()
 {
     if (!chromeAvailable())
@@ -1423,7 +1630,9 @@ int main(int argc, char** argv)
                                "asyncRequestLowRes lowResWaitTimeout "
                                "lowResPreemption cancelPendingLowRes "
                                "customCacheBudgets chromeExecutableOverride "
-                               "finalFrameSizeLimits finalRendererRestart\n";
+                               "finalFrameSizeLimits finalRendererRestart "
+                               "finalRendererCrossThreadStop finalRendererRepeatedStartStop "
+                               "finalRendererStopWhileRendering\n";
         return 2;
     }
 
@@ -1460,6 +1669,12 @@ int main(int argc, char** argv)
         finalFrameSizeLimits();
     else if (name == QStringLiteral("finalRendererRestart"))
         finalRendererRestart();
+    else if (name == QStringLiteral("finalRendererCrossThreadStop"))
+        finalRendererCrossThreadStop();
+    else if (name == QStringLiteral("finalRendererRepeatedStartStop"))
+        finalRendererRepeatedStartStop();
+    else if (name == QStringLiteral("finalRendererStopWhileRendering"))
+        finalRendererStopWhileRendering();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';

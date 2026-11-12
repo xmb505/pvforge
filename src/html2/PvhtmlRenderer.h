@@ -84,6 +84,12 @@ public:
     explicit PvhtmlRenderer(QObject* parent = nullptr);
     ~PvhtmlRenderer() override;
 
+    // Number of renderers currently alive in the process. Diagnostics only:
+    // the html2 tests use it to prove that stopping the service reclaims the
+    // final renderer (and with it the browser and its QObject children) instead
+    // of leaking it. Not part of the frame protocol.
+    static int liveInstanceCount();
+
     // Explicit Chromium-based browser path. Empty means auto-detection. The
     // setting is applied by the next start(); it does not restart a running
     // browser.
