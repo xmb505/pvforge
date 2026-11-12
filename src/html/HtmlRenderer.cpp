@@ -1,7 +1,7 @@
 #include "html/HtmlRenderer.h"
 
-#include "html/CdpClient.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/CdpClient.h"
+#include "htmlcommon/HtmlBrowser.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>

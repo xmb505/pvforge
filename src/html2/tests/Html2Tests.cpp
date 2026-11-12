@@ -2,7 +2,7 @@
 #include "html2/LocalBundleServer.h"
 #include "html2/PvhtmlRenderer.h"
 
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "htmlcache/FrameKey.h"
 
 #include <QColor>

@@ -3,23 +3,14 @@
 #include "EditorSession.h"
 #include "NewProjectDialog.h"
 #include "assets/AssetStore.h"
-#include "core/Commands.h"
-#include "core/Camera.h"
 #include "core/CheckpointManager.h"
 #include "core/Lang.h"
 #include "core/PerfMonitor.h"
-#include "audio/AudioEngine.h"
-#include "media/MediaImporter.h"
-#include "media/VideoProxy.h"
 #include "core/Settings.h"
-#include "html/HtmlBrowser.h"
-#include "html/HtmlRenderer.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "ExportDialog.h"
 #include "ExportProgressDialog.h"
 #include "SettingsDialog.h"
-#include "media/VideoPlayer.h"
-#include "mcp/McpCommandService.h"
-#include "mcp/McpServer.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
@@ -35,7 +26,6 @@
 #include "ui/AssetLibraryPanel.h"
 #include "ui/CameraMonitor.h"
 #include "ui/CollapsibleSection.h"
-#include "ui/CurveEditor.h"
 #include "ui/EnvironmentPanel.h"
 #include "ui/McpLogPanel.h"
 #include "ui/PerfMonitorWindow.h"
@@ -43,8 +33,21 @@
 #include "ui/PropertiesPanel.h"
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
-#include "ui/WaveformView.h"
 #include "ui/WorkbenchPanel.h"
+
+#if PVFORGE_LEGACY_SHELL
+#include "core/Commands.h"
+#include "core/Camera.h"
+#include "audio/AudioEngine.h"
+#include "media/MediaImporter.h"
+#include "media/VideoProxy.h"
+#include "media/VideoPlayer.h"
+#include "html/HtmlRenderer.h"
+#include "mcp/McpCommandService.h"
+#include "mcp/McpServer.h"
+#include "ui/CurveEditor.h"
+#include "ui/WaveformView.h"
+#endif
 
 #include <QAction>
 #include <QActionGroup>
@@ -125,6 +128,7 @@ CacheUsage scanCacheUsage(const QString& path, bool frameImagesOnly)
     return usage;
 }
 
+#if PVFORGE_LEGACY_SHELL
 class SceneDialog : public QDialog
 {
 public:
@@ -367,8 +371,11 @@ QString htmlFileStamp(const QString& path)
         .arg(info.lastModified().toMSecsSinceEpoch());
 }
 
+#endif // PVFORGE_LEGACY_SHELL
+
 } // namespace
 
+#if PVFORGE_LEGACY_SHELL
 MainWindow::MainWindow(Project* project, QWidget* parent)
     : QMainWindow(parent)
     , m_project(project)
@@ -786,6 +793,8 @@ MainWindow::MainWindow(Project* project, QWidget* parent)
             });
     ensureProxies();
 }
+
+#endif // PVFORGE_LEGACY_SHELL
 
 MainWindow::MainWindow(EditorSession* session, QWidget* parent)
     : QMainWindow(parent)
@@ -2661,6 +2670,7 @@ MainWindow::~MainWindow()
     if (m_exportTimer)
         m_exportTimer->stop();
 
+#if PVFORGE_LEGACY_SHELL
     // Stop MCP before the HTTP server and log panel children are destroyed;
     // this also removes the endpoint file if the window bypassed closeEvent.
     if (m_mcpServer)
@@ -2688,8 +2698,10 @@ MainWindow::~MainWindow()
         delete m_htmlBrowser;
         m_htmlBrowser = nullptr;
     }
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::createActions()
 {
     m_undoAction = new QAction(Lang::t(QStringLiteral("action.undo"), QStringLiteral("撤销")), this);
@@ -2976,6 +2988,7 @@ void MainWindow::createToolBar()
     bar->addAction(m_autoKeyAction);
     bar->setFixedHeight(bar->sizeHint().height());
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::toggleWorkbench()
 {
@@ -3001,6 +3014,7 @@ void MainWindow::updateWindowTitle()
                                 pending ? QStringLiteral(" *") : QString()));
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
     {
         setWindowTitle(QStringLiteral("PVForge"));
@@ -3011,8 +3025,10 @@ void MainWindow::updateWindowTitle()
                                ? Lang::t(QStringLiteral("title.unsaved"), QStringLiteral("未保存"))
                                : Lang::t(QStringLiteral("title.saved"), QStringLiteral("已保存"));
     setWindowTitle(QStringLiteral("PVForge — %1 [%2]").arg(m_project->name, status));
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::deleteSelectedEntity()
 {
     if (m_selected == kInvalidEntity)
@@ -3032,6 +3048,7 @@ void MainWindow::deleteSelectedEntity()
     m_history->push(std::make_unique<RemoveEntityCommand>(copy, index), *m_project);
     statusBar()->showMessage(QStringLiteral("已删除实体"), 2000);
 }
+#endif
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
@@ -3041,12 +3058,14 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         QMainWindow::keyPressEvent(event);
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (event->key() == Qt::Key_Delete && m_selected != kInvalidEntity)
     {
         deleteSelectedEntity();
         event->accept();
         return;
     }
+#endif
     QMainWindow::keyPressEvent(event);
 }
 
@@ -3054,6 +3073,7 @@ bool MainWindow::saveProject()
 {
     if (m_session)
         return saveSessionProject();
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
         return false;
 
@@ -3070,6 +3090,9 @@ bool MainWindow::saveProject()
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已保存"), 2000);
     return true;
+#else
+    return false;
+#endif
 }
 
 void MainWindow::autoSave()
@@ -3079,6 +3102,7 @@ void MainWindow::autoSave()
         sessionAutoSave();
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (!Settings::autosaveEnabled() || m_project->filePath.isEmpty()
         || !m_project->modified)
         return;
@@ -3093,6 +3117,7 @@ void MainWindow::autoSave()
     Settings::setProjectFrame(m_project->filePath, m_frame);
     updateWindowTitle();
     statusBar()->showMessage(QStringLiteral("已自动保存"), 2000);
+#endif
 }
 
 void MainWindow::updateAutosaveTimer()
@@ -3106,12 +3131,16 @@ void MainWindow::updateAutosaveTimer()
         m_autosaveTimer->start(minutes * 60 * 1000);
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (!Settings::autosaveEnabled())
     {
         m_autosaveTimer->stop();
         return;
     }
     m_autosaveTimer->start(Settings::autosaveMinutes() * 60 * 1000);
+#else
+    m_autosaveTimer->stop();
+#endif
 }
 
 void MainWindow::autoSaveNowForTest()
@@ -3134,6 +3163,7 @@ int MainWindow::autosaveIntervalForTest() const
     return m_autosaveTimer ? m_autosaveTimer->interval() : 0;
 }
 
+#if PVFORGE_LEGACY_SHELL
 bool MainWindow::saveProjectAs()
 {
     QString path = QFileDialog::getSaveFileName(
@@ -3155,7 +3185,9 @@ bool MainWindow::saveProjectAs()
     statusBar()->showMessage(QStringLiteral("已保存到 %1").arg(path), 3000);
     return true;
 }
+#endif
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::scheduleHtmlPreview(bool immediate)
 {
     if (!m_htmlPreviewTimer)
@@ -3405,6 +3437,7 @@ void MainWindow::applyHtmlFrame(EntityId id, quint64 token, const QString& cache
     if (!image.isNull())
         scheduleHtmlPreview(!m_playing);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::exportVideo()
 {
@@ -3658,6 +3691,7 @@ void MainWindow::startSessionExportForTest(
                        overwrite);
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::packAllAssets()
 {
     if (m_project->filePath.isEmpty())
@@ -4289,6 +4323,7 @@ EntityId MainWindow::createFolderForTest(EntityId parent)
     onCreateFolderRequested(parent);
     return m_selected;
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
@@ -4319,6 +4354,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
 
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
     {
         event->accept();
@@ -4348,9 +4384,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     disarmMcpWrites();
     if (m_mcpServer)
         m_mcpServer->stop();
+#endif
     event->accept();
 }
 
+#if PVFORGE_LEGACY_SHELL
 EntityId MainWindow::importImageFile(const QString& path)
 {
     Entity* e = m_project->addImage(path);
@@ -4361,6 +4399,7 @@ EntityId MainWindow::importImageFile(const QString& path)
     onEntityCreated(id);
     return id;
 }
+#endif
 
 void MainWindow::setFrame(int frame)
 {
@@ -4369,7 +4408,7 @@ void MainWindow::setFrame(int frame)
         sessionGoToFrame(frame);
         return;
     }
-
+#if PVFORGE_LEGACY_SHELL
     m_frame = std::max(0, frame);
     m_videoPlayer.update(*m_project, m_frame);
     m_viewport->setCurrentFrame(m_frame);
@@ -4398,8 +4437,10 @@ void MainWindow::setFrame(int frame)
     }
 
     scheduleHtmlPreview(!m_playing);
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::setSelectedEntity(EntityId id)
 {
     Entity* selected = m_project->entity(id);
@@ -4662,6 +4703,7 @@ void MainWindow::replaceSourceFromDialog(EntityId id)
     watcher->setFuture(QtConcurrent::run(
         [file, directory] { return processMediaFile(file, directory); }));
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::replaceSessionAssetFromDialog(const QString& uuid)
 {
@@ -4719,6 +4761,7 @@ bool MainWindow::replaceAssetForTest(const QString& uuid, const QString& hash,
     return m_session->editActions()->replaceAsset(uuid, hash, error);
 }
 
+#if PVFORGE_LEGACY_SHELL
 MainWindow::EntityClipboard MainWindow::buildEntityClip(EntityId id) const
 {
     EntityClipboard clip;
@@ -5189,6 +5232,7 @@ void MainWindow::onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec
     m_timeline->update();
     statusBar()->showMessage(QStringLiteral("已更新关键帧缓动"), 2000);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::refreshAll()
 {
@@ -5197,6 +5241,7 @@ void MainWindow::refreshAll()
         refreshSession();
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (!m_project)
         return;
 
@@ -5219,8 +5264,10 @@ void MainWindow::refreshAll()
     updateStatus();
     updateWindowTitle();
     scheduleHtmlPreview(!m_playing);
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::ensureProxies()
 {
     if (!m_proxyGenerator)
@@ -5236,6 +5283,7 @@ void MainWindow::ensureProxies()
             m_proxyGenerator->ensure(entity.sourcePath);
     }
 }
+#endif
 
 void MainWindow::togglePlayback()
 {
@@ -5257,7 +5305,7 @@ void MainWindow::togglePlayback()
         updateSessionPlaybackUi();
         return;
     }
-
+#if PVFORGE_LEGACY_SHELL
     if (m_playing)
     {
         m_playTimer->stop();
@@ -5285,8 +5333,10 @@ void MainWindow::togglePlayback()
     if (m_monitor)
         m_monitor->setPlaying(true);
     m_playAction->setText(Lang::t(QStringLiteral("action.pause"), QStringLiteral("暂停")));
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::onPlayTick()
 {
     PerfMonitor::instance().tick();
@@ -5341,6 +5391,7 @@ void MainWindow::updatePerfLabel()
             .arg(perf.videoMs, 0, 'f', 1)
             .arg(perf.entities));
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 QAction* MainWindow::createPerfMonitorWindowAction()
 {
@@ -5384,6 +5435,7 @@ void MainWindow::showPerfMonitorWindow(bool show)
     m_perfWindow->activateWindow();
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::wireMcpDialog(SettingsDialog* dialog)
 {
     connect(dialog, &SettingsDialog::mcpStateChanged, this,
@@ -5580,6 +5632,7 @@ SettingsDialog* MainWindow::openSettingsDialogForTest()
     dialog->show();
     return dialog;
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void MainWindow::arrangeMcpLog()
 {
@@ -5632,6 +5685,7 @@ void MainWindow::arrangeMcpLog()
     m_mcpLog->raise();
 }
 
+#if PVFORGE_LEGACY_SHELL
 void MainWindow::updateMcpStatus()
 {
     if (!m_mcpStatusButton)
@@ -5717,5 +5771,6 @@ void MainWindow::updateStatus()
                           + common);
     }
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 } // namespace pvf

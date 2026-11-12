@@ -38,6 +38,7 @@
 
 namespace pvf {
 
+#if PVFORGE_LEGACY_SHELL
 CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
@@ -151,6 +152,7 @@ CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* pare
     updateFpsLabel();
     resize(Settings::monitorDockGeometry().size());
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 CameraMonitor::CameraMonitor(EditorSession* session, Viewport* viewport,
                              QWidget* parent)
@@ -342,6 +344,7 @@ void CameraMonitor::rebuildCameraCombo()
         rebuildSessionCameraCombo();
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     const QSignalBlocker blocker(m_cameraCombo);
     m_cameraCombo->clear();
     m_cameraCombo->addItem(QStringLiteral("工作摄像机"), kWorkCameraView);
@@ -357,6 +360,7 @@ void CameraMonitor::rebuildCameraCombo()
         m_project->monitorView = kWorkCameraView;
     }
     m_cameraCombo->setCurrentIndex(index);
+#endif
 }
 
 void CameraMonitor::rebuildSessionCameraCombo()
@@ -484,7 +488,11 @@ void CameraMonitor::updateFpsLabel()
         return;
     const int projectFps = m_session
                                ? std::max(1, m_session->settings().fps)
+#if PVFORGE_LEGACY_SHELL
                                : std::max(1, m_project->fps);
+#else
+                               : 30;
+#endif
     const int shown = m_playing && m_displayFps > 0 ? m_displayFps : projectFps;
     m_fpsLabel->setText(QStringLiteral("%1 FPS").arg(shown));
     QPalette pal = m_fpsLabel->palette();
@@ -526,11 +534,13 @@ QRect CameraMonitor::fitRect() const
     if (m_session)
         aspect = m_session->settings().width
                  / double(std::max(1, m_session->settings().height));
+#if PVFORGE_LEGACY_SHELL
     else if (m_project)
         aspect = m_project->width / double(std::max(1, m_project->height));
     if (!m_session && m_project && m_project->monitorView == kWorkCameraView
         && m_viewport)
         aspect = m_viewport->width() / double(std::max(1, m_viewport->height()));
+#endif
 
     int w = area.width();
     int h = int(std::lround(w / std::max(0.0001, aspect)));
@@ -635,6 +645,7 @@ void CameraMonitor::renderPreview(QPainter& painter)
         return;
     }
 
+#if PVFORGE_LEGACY_SHELL
     const bool high = m_highQuality && !m_playing;
     const int view = m_project->monitorView;
 
@@ -676,6 +687,7 @@ void CameraMonitor::renderPreview(QPainter& painter)
     {
         CameraRenderer::renderCamera(painter, *m_project, m_frame, target, state, true);
     }
+#endif
 }
 
 
@@ -790,6 +802,7 @@ bool CameraMonitor::loadTraceVideo(const QString& path)
         return true;
     }
 
+#if PVFORGE_LEGACY_SHELL
     QString error;
     double duration = 0.0;
     const QImage first = decodeVideoFirstFrame(path, &error, &duration);
@@ -831,12 +844,15 @@ bool CameraMonitor::loadTraceVideo(const QString& path)
     updateTraceMenu();
     update();
     return true;
+#endif
 }
 
 void CameraMonitor::clearTraceVideo()
 {
+#if PVFORGE_LEGACY_SHELL
     m_tracePlayer.reset();
     m_traceProject.reset();
+#endif
     m_traceFrames.reset();
     m_tracePath.clear();
     m_traceEntity = kInvalidEntity;
@@ -853,6 +869,7 @@ void CameraMonitor::updateTraceImage()
         updateTraceImageSession();
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     if (!m_traceProject || !m_tracePlayer || m_traceEntity == kInvalidEntity)
     {
         m_traceImage = QImage();
@@ -862,6 +879,9 @@ void CameraMonitor::updateTraceImage()
     m_tracePlayer->update(*m_traceProject, m_frame);
     const Entity* entity = m_traceProject->entity(m_traceEntity);
     m_traceImage = entity ? entity->image : QImage();
+#else
+    m_traceImage = QImage();
+#endif
 }
 
 void CameraMonitor::updateTraceImageSession()

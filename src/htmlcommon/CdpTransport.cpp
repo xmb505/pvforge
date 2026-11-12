@@ -1,7 +1,7 @@
-#include "html/CdpTransport.h"
+#include "htmlcommon/CdpTransport.h"
 
-#include "html/PipeCdpTransport.h"
-#include "html/WsClient.h"
+#include "htmlcommon/PipeCdpTransport.h"
+#include "htmlcommon/WsClient.h"
 
 #include <QUrl>
 

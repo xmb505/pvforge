@@ -1,5 +1,13 @@
 #pragma once
 
+// The retired single-file `.pvproj` model.  The class below — and the code that
+// drives it — is only compiled for the legacy shell (PVFORGE_LEGACY_SHELL) and
+// the self-tests that still exercise it.  Delivery builds keep the plain value
+// structs (Entity/Keyframe/Template/…) because the timeline paints read-only
+// DTOs through them; EntityId and the view sentinels moved to EntityId.h.
+
+#include "core/EntityId.h"
+
 #include "core/Easing.h"
 #include "core/BrandWall.h"
 #include "core/TextStyle.h"
@@ -22,10 +30,11 @@ class QJsonObject;
 
 namespace pvf {
 
-using EntityId = int;
-constexpr EntityId kInvalidEntity = -1;
-constexpr int kWorkCameraView = -2;
-constexpr int kWholeCanvasView = -3;
+// NOTE: the value structs below (EntityType, Keyframe, Track, Entity, Template,
+// KeyframeRecord, Scene, Annotation, EntityFlag) are still compiled in delivery
+// builds: the timeline and the property panels paint read-only DTOs built from
+// model::Entity through them.  The retired class that owned them — Project — is
+// legacy-only; see the guard above it.
 
 // Current on-disk project format. The loader also accepts 1..kProjectVersion
 // so older projects open and get migrated with a default scene.
@@ -191,6 +200,7 @@ enum class EntityFlag { Hidden, Locked };
 
 struct MediaImportResult;
 
+#if PVFORGE_LEGACY_SHELL
 class Project : public QObject
 {
     Q_OBJECT
@@ -410,5 +420,7 @@ private:
     QVector<Annotation> m_annotations;
     EntityId m_nextId = 1;
 };
+
+#endif // PVFORGE_LEGACY_SHELL
 
 } // namespace pvf

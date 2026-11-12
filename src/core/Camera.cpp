@@ -1,5 +1,7 @@
 #include "Camera.h"
 
+#include "core/Project.h"
+
 #include <QSet>
 
 #include <algorithm>

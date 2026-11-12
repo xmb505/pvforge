@@ -1,6 +1,6 @@
-#include "html/CdpClient.h"
+#include "htmlcommon/CdpClient.h"
 
-#include "html/CdpTransport.h"
+#include "htmlcommon/CdpTransport.h"
 
 #include <QJsonDocument>
 #include <QJsonValue>

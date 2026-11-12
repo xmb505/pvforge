@@ -15,36 +15,39 @@
       "name": "debug",
       "inherits": "base",
       "displayName": "Debug + 测试",
-      "description": "开发用：Debug，BUILD_TESTING=ON，参考壳 PVFORGE_BUILD_REFERENCE=ON，自检 PVFORGE_BUILD_SELF_TESTS=ON，产物在 build/debug。",
+      "description": "开发用：Debug，BUILD_TESTING=ON，参考壳 PVFORGE_BUILD_REFERENCE=ON，自检 PVFORGE_BUILD_SELF_TESTS=ON，旧 Project 壳 PVFORGE_LEGACY_SHELL=ON，产物在 build/debug。",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON",
         "PVFORGE_BUILD_REFERENCE": "ON",
-        "PVFORGE_BUILD_SELF_TESTS": "ON"
+        "PVFORGE_BUILD_SELF_TESTS": "ON",
+        "PVFORGE_LEGACY_SHELL": "ON"
       }
     },
     {
       "name": "release",
       "inherits": "base",
       "displayName": "Release",
-      "description": "发布用：Release，不构建测试/参考壳/自检目标，只产出 pvforge 与 pvforge-mcp，产物在 build/release。",
+      "description": "发布用：Release，不构建测试/参考壳/自检目标，也不编译旧 Project 壳（PVFORGE_LEGACY_SHELL=OFF），只产出 pvforge 与 pvforge-mcp，产物在 build/release。",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "OFF",
         "PVFORGE_BUILD_REFERENCE": "OFF",
-        "PVFORGE_BUILD_SELF_TESTS": "OFF"
+        "PVFORGE_BUILD_SELF_TESTS": "OFF",
+        "PVFORGE_LEGACY_SHELL": "OFF"
       }
     },
     {
       "name": "tests",
       "inherits": "debug",
       "displayName": "Debug + 测试（build-coord 风格）",
-      "description": "对齐历史 build-coord-tests 的用法：不优化、全量测试（含参考壳）、独立构建目录 build/tests。",
+      "description": "对齐历史 build-coord-tests 的用法：不优化、全量测试（含参考壳与旧 Project 壳）、独立构建目录 build/tests。",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON",
         "PVFORGE_BUILD_REFERENCE": "ON",
         "PVFORGE_BUILD_SELF_TESTS": "ON",
+        "PVFORGE_LEGACY_SHELL": "ON",
         "CMAKE_CXX_FLAGS_DEBUG": "-O0 -g"
       }
     },
@@ -52,12 +55,13 @@
       "name": "reference",
       "inherits": "debug",
       "displayName": "Debug + 参考壳",
-      "description": "只想看 src/next 参考壳（NextWindow/ViewportWidget）时用；同样打开全部测试。",
+      "description": "只想看 src/next 参考壳（NextWindow/ViewportWidget）时用；同样打开全部测试与旧 Project 壳。",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON",
         "PVFORGE_BUILD_REFERENCE": "ON",
-        "PVFORGE_BUILD_SELF_TESTS": "ON"
+        "PVFORGE_BUILD_SELF_TESTS": "ON",
+        "PVFORGE_LEGACY_SHELL": "ON"
       }
     }
   ],

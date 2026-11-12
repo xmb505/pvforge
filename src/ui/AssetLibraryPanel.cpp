@@ -12,12 +12,15 @@
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
 #include "html/HtmlAsset.h"
-#include "media/MediaImporter.h"
 #include "model/Query.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "video2/VideoExtractionQueue.h"
 #include "video2/VideoFrames.h"
+
+#if PVFORGE_LEGACY_SHELL
+#include "media/MediaImporter.h"
+#endif
 
 #include <QAbstractItemView>
 #include <QComboBox>
@@ -57,6 +60,7 @@ namespace pvf {
 
 namespace {
 
+#if PVFORGE_LEGACY_SHELL
 QString templateTypeName(EntityType type)
 {
     switch (type)
@@ -90,6 +94,7 @@ QString templateTypeName(EntityType type)
     }
     return QString();
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 QString elidedPath(const QString& path)
 {
@@ -177,6 +182,7 @@ QPixmap checkerPixmap(const QSize& size, const QString& text, const QColor& bord
     return pixmap;
 }
 
+#if PVFORGE_LEGACY_SHELL
 QStringList htmlAssetPaths(const Project& project)
 {
     QStringList paths;
@@ -234,6 +240,7 @@ QImage htmlAssetThumbnail(const Project& project, const QString& path, const QSi
     }
     return QImage();
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 QPixmap htmlPlaceholder(const QSize& size, const QString& text)
 {
@@ -252,6 +259,7 @@ QPixmap htmlPlaceholder(const QSize& size, const QString& text)
     return pixmap;
 }
 
+#if PVFORGE_LEGACY_SHELL
 QPixmap renderTemplate(const Template& tmpl, const QSize& size)
 {
     QPixmap pixmap(size);
@@ -475,6 +483,7 @@ QIcon listIcon(const Template& tmpl)
     }
     return QIcon(pixmap);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 // The list must provide a custom MIME payload so the timeline can tell which
 // template (or HTML asset) was dragged, instead of receiving plain text.
@@ -634,6 +643,7 @@ private:
     QString m_error;
 };
 
+#if PVFORGE_LEGACY_SHELL
 AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
@@ -642,6 +652,7 @@ AssetLibraryPanel::AssetLibraryPanel(Project* project, QWidget* parent)
     connect(m_project, &Project::changed, this, &AssetLibraryPanel::refresh);
     refresh();
 }
+#endif
 
 AssetLibraryPanel::AssetLibraryPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -777,6 +788,7 @@ void AssetLibraryPanel::buildUi()
         connect(htmlImportButton, &QToolButton::clicked, this,
                 &AssetLibraryPanel::chooseSessionImportHtml);
     }
+#if PVFORGE_LEGACY_SHELL
     else
     {
         connect(htmlImportButton, &QToolButton::clicked, this,
@@ -822,6 +834,7 @@ void AssetLibraryPanel::buildUi()
                 });
         });
     }
+#endif // PVFORGE_LEGACY_SHELL
 
     auto* list = new AssetListWidget(this);
     m_list = list;
@@ -880,6 +893,7 @@ void AssetLibraryPanel::buildUi()
         connect(m_remove, &QPushButton::clicked, this,
                 &AssetLibraryPanel::removeSelectedSession);
     }
+#if PVFORGE_LEGACY_SHELL
     else
     {
         m_remove->setToolTip(
@@ -889,6 +903,7 @@ void AssetLibraryPanel::buildUi()
         connect(m_remove, &QPushButton::clicked, this,
                 &AssetLibraryPanel::removeSelected);
     }
+#endif
     m_remove->setEnabled(false);
     buttons->addWidget(m_remove);
     layout->addLayout(buttons);
@@ -905,14 +920,18 @@ void AssetLibraryPanel::buildUi()
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString&) {
         if (m_sessionMode)
             applySessionFilter();
+#if PVFORGE_LEGACY_SHELL
         else
             rebuild();
+#endif
     });
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int) {
         if (m_sessionMode)
             updateSessionSelection();
+#if PVFORGE_LEGACY_SHELL
         else
             updatePreview();
+#endif
     });
 }
 
@@ -945,7 +964,7 @@ void AssetLibraryPanel::refresh()
         rebuildSessionEntries();
         return;
     }
-
+#if PVFORGE_LEGACY_SHELL
     QStringList signature;
     for (const Template& tmpl : m_project->templates())
         signature << QStringLiteral("%1|%2|%3").arg(int(tmpl.type)).arg(tmpl.name, tmpl.path);
@@ -960,6 +979,7 @@ void AssetLibraryPanel::refresh()
 
     m_signature = signature;
     rebuild();
+#endif
 }
 
 void AssetLibraryPanel::rebuildSessionEntries()
@@ -2133,6 +2153,7 @@ void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
         if (found != m_entries.cend())
             preview = previewFor(*found, QSize(240, 150));
     }
+#if PVFORGE_LEGACY_SHELL
     else if (item->data(Qt::UserRole + 1).toInt() == 0)
     {
         const int index = item->data(Qt::UserRole).toInt();
@@ -2146,6 +2167,7 @@ void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
         preview = QPixmap::fromImage(
             htmlAssetThumbnail(*m_project, path, QSize(240, 150)));
     }
+#endif
     if (preview.isNull())
     {
         hideHoverPreview();
@@ -2197,6 +2219,7 @@ bool AssetLibraryPanel::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+#if PVFORGE_LEGACY_SHELL
 void AssetLibraryPanel::rebuild()
 {
     hideHoverPreview();
@@ -2390,6 +2413,7 @@ QVector<int> AssetLibraryPanel::mediaTemplateIndices(const Project& project,
             indices.append(index);
     return indices;
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 QString AssetLibraryPanel::pickAsset(QWidget* parent, EditorSession* session,
                                      ContentKind contentKind, AssetType currentType,
@@ -2569,6 +2593,7 @@ QString AssetLibraryPanel::pickAsset(QWidget* parent, EditorSession* session,
     return item ? item->data(Qt::UserRole).toString() : QString();
 }
 
+#if PVFORGE_LEGACY_SHELL
 QString AssetLibraryPanel::pickMedia(QWidget* parent, Project* project,
                                      EntityType type, const QString& filter)
 {
@@ -2688,6 +2713,7 @@ void AssetLibraryPanel::removeSelected()
     for (EntityId id : instances)
         m_project->removeEntity(id);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void AssetLibraryPanel::createSelectedSession()
 {

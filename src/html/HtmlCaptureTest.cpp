@@ -1,8 +1,8 @@
 #include "html/HtmlCaptureTest.h"
 
-#include "html/CdpClient.h"
+#include "htmlcommon/CdpClient.h"
 #include "html/HtmlAsset.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "html/HtmlRenderer.h"
 
 #include <QByteArrayView>

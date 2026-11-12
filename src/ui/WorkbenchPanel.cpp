@@ -14,11 +14,14 @@
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
 #include "ui/TextLayoutDialog.h"
-#include "media/MediaImporter.h"
 #include "model/Query.h"
 #include "model/Uuid.h"
 #include "next/app/ProjectDocument.h"
 #include "video2/VideoFrames.h"
+
+#if PVFORGE_LEGACY_SHELL
+#include "media/MediaImporter.h"
+#endif
 
 #include <QApplication>
 #include <QCheckBox>
@@ -71,12 +74,14 @@ QString assetTypeLabelForWorkbench(AssetType type)
 
 } // namespace
 
+#if PVFORGE_LEGACY_SHELL
 WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
     : QFrame(parent)
     , m_project(project)
 {
     buildUi();
 }
+#endif
 
 WorkbenchPanel::WorkbenchPanel(EditorSession* session, QWidget* parent)
     : QFrame(parent)
@@ -531,6 +536,7 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     if (m_session)
         return buildSessionSpecialPage();
 
+#if PVFORGE_LEGACY_SHELL
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -721,6 +727,9 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     updateWallSummary();
     m_specialTypes->setCurrentRow(0);
     return page;
+#else
+    return new QWidget(this);
+#endif
 }
 
 QWidget* WorkbenchPanel::buildSessionSpecialPage()
@@ -1070,6 +1079,7 @@ void WorkbenchPanel::refreshMediaLibrary()
         return;
     }
 
+#if PVFORGE_LEGACY_SHELL
     for (int i = 0; i < m_project->templateCount(); ++i)
     {
         const Template* tmpl = m_project->templateAt(i);
@@ -1086,10 +1096,12 @@ void WorkbenchPanel::refreshMediaLibrary()
                                     .scaled(40, 40, Qt::KeepAspectRatio,
                                             Qt::SmoothTransformation)));
     }
+#endif
 }
 
 void WorkbenchPanel::selectMedia(int templateIndex)
 {
+#if PVFORGE_LEGACY_SHELL
     const Template* tmpl = m_project->templateAt(templateIndex);
     if (!tmpl)
         return;
@@ -1119,6 +1131,9 @@ void WorkbenchPanel::selectMedia(int templateIndex)
     m_mediaInfo->setText(info);
 
     updateCreateState();
+#else
+    Q_UNUSED(templateIndex);
+#endif
 }
 
 void WorkbenchPanel::selectSessionMedia(const QString& hash)
@@ -1218,6 +1233,7 @@ void WorkbenchPanel::pickMedia()
         return;
     }
 
+#if PVFORGE_LEGACY_SHELL
     auto* mainWindow = qobject_cast<MainWindow*>(window());
     if (!mainWindow)
         return;
@@ -1254,6 +1270,7 @@ void WorkbenchPanel::pickMedia()
                 break;
             }
         });
+#endif
 }
 
 TextStyle WorkbenchPanel::currentTextStyle() const
@@ -1383,6 +1400,7 @@ void WorkbenchPanel::updateTextBoxPreview()
     m_textBoxPreview->setPixmap(QPixmap::fromImage(image));
 }
 
+#if PVFORGE_LEGACY_SHELL
 EntityId WorkbenchPanel::createSpecial()
 {
     const int row = m_specialTypes ? m_specialTypes->currentRow() : 0;
@@ -1467,6 +1485,7 @@ EntityId WorkbenchPanel::createTextBox()
         return entity->id;
     return kInvalidEntity;
 }
+#endif
 
 void WorkbenchPanel::createSessionBrandWall()
 {
@@ -1696,7 +1715,7 @@ void WorkbenchPanel::createCurrent()
         createSessionCurrent();
         return;
     }
-
+#if PVFORGE_LEGACY_SHELL
     const int page = m_pages->currentIndex();
     EntityId id = kInvalidEntity;
 
@@ -1765,6 +1784,7 @@ void WorkbenchPanel::createCurrent()
 
     emit created(id);
     hidePanel();
+#endif
 }
 
 void WorkbenchPanel::setColorButton(QPushButton* button, const QColor& color)

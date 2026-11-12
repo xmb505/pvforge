@@ -1,12 +1,16 @@
 #pragma once
 
-#include "core/History.h"
-#include "core/Project.h"
+#include "core/EntityId.h"
 #include "export2/Export.h"
 #include "html/HtmlAsset.h"
-#include "media/VideoPlayer.h"
 #include "next/settings/SettingsStore.h"
 #include "store/Store.h"
+
+#if PVFORGE_LEGACY_SHELL
+#include "core/History.h"
+#include "core/Project.h"
+#include "media/VideoPlayer.h"
+#endif
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -92,15 +96,20 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    // Legacy shell used by the pre-P2 panels and the existing self-tests.
+#if PVFORGE_LEGACY_SHELL
+    // Retired shell: drives the old core::Project model.  Delivery builds only
+    // have the EditorSession constructor below.
     explicit MainWindow(Project* project, QWidget* parent = nullptr);
+#endif
     // P1 shell: takes ownership of the session and builds the minimal window
     // (project properties + read-only placeholder). Panels from the legacy
     // shell are intentionally not instantiated in this mode.
     explicit MainWindow(EditorSession* session, QWidget* parent = nullptr);
     ~MainWindow() override;
 
+#if PVFORGE_LEGACY_SHELL
     Project* project() const { return m_project; }
+#endif
     // P2a session shell: the window owns the session; tests read the Document
     // through this accessor instead of reaching into private members.
     EditorSession* editorSessionForTest() const { return m_session; }
@@ -113,8 +122,10 @@ public:
     int currentFrame() const { return m_frame; }
     void togglePlayback();
     void setSelectedEntityForTest(EntityId id) { setSelectedEntity(id); }
+#if PVFORGE_LEGACY_SHELL
     void importMediaFiles(const QStringList& files,
                           std::function<void(const QVector<MediaImportResult>&)> done);
+#endif
     void applyPivotForTest(EntityId id, double ax, double ay) { applyPivot(id, ax, ay); }
     void applyCameraForTest(EntityId id, double x, double y, double scale, double rotation)
     {
@@ -122,17 +133,20 @@ public:
     }
     EntityId selectedEntityForTest() const { return m_selected; }
     int currentFrameForTest() const { return m_frame; }
+#if PVFORGE_LEGACY_SHELL
     void copyEntityForTest(EntityId id) { copyEntityToClipboard(id); }
-    void pasteEntityForTest() { pasteEntity(); }
     void duplicateEntityForTest(EntityId id) { duplicateEntity(id); }
     void groupEntitiesForTest(const QVector<EntityId>& ids) { groupEntitiesIntoFolder(ids); }
+#endif
+    void pasteEntityForTest() { pasteEntity(); }
     void autoSaveNowForTest();
     void reloadAutosaveSettingsForTest();
     bool autosaveActiveForTest() const;
     int autosaveIntervalForTest() const;
-    McpServer* mcpServerForTest() const { return m_mcpServer; }
     McpLogPanel* mcpLogPanelForTest() const { return m_mcpLog; }
     PerfMonitorWindow* perfMonitorWindowForTest() const { return m_perfWindow; }
+#if PVFORGE_LEGACY_SHELL
+    McpServer* mcpServerForTest() const { return m_mcpServer; }
     McpCommandService* mcpCommandsForTest() const { return m_mcpCommands.get(); }
     bool armMcpWritesForTest(QString* error = nullptr) { return armMcpWrites(error); }
     void stopMcpWritesForTest() { stopMcpWrites(); }
@@ -140,6 +154,7 @@ public:
     // Test entry point that uses the same dialog wiring as Edit -> Settings,
     // but shows the dialog non-modally so a test can drive its controls.
     SettingsDialog* openSettingsDialogForTest();
+#endif
 
     // ---- P6 session-shell test accessors --------------------------------
     bool humanEditingEnabledForTest() const;
@@ -233,6 +248,8 @@ private:
     void replaceSourceFromDialog(EntityId id);
     void replaceSessionAssetFromDialog(const QString& uuid);
 
+#if PVFORGE_LEGACY_SHELL
+    // Legacy clipboard entries wrap the old core::Entity value type.
     struct EntityClipboardEntry
     {
         Entity entity;
@@ -248,6 +265,8 @@ private:
     EntityClipboard buildEntityClip(EntityId id) const;
     void copyEntityToClipboard(EntityId id);
     void pasteEntityClip(EntityClipboard& clip);
+    html::HtmlAsset htmlAssetFor(const Entity& entity, QString* error);
+#endif
     void copySelectedEntity();
     void pasteEntity();
     void duplicateEntity(EntityId id);
@@ -270,10 +289,12 @@ private:
     void onUndo();
     void onRedo();
     void onEntityCreated(EntityId id);
+#if PVFORGE_LEGACY_SHELL
     void onEntityFlagChanged(EntityId id, EntityFlag flag, bool value);
     void onDeleteKeyframesRequested();
     void onKeyframeEasingRequested(const EasingSpec& spec);
     void onKeyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
+#endif
     void updateWindowTitle();
     void updatePerfLabel();
     QAction* createPerfMonitorWindowAction();
@@ -329,6 +350,7 @@ private:
     bool restoreSessionCommitInternal(const QString& hash, QString* error);
     void showSessionOnboardingIfNeeded();
     void sessionAutoSave();
+#if PVFORGE_LEGACY_SHELL
     void onEntityRenamed(EntityId id, const QString& name);
     void onAudioMoved(EntityId id, double startFrame);
     void onParentEdited(EntityId id, EntityId parent);
@@ -339,6 +361,7 @@ private:
                                   double delta);
     void onCreateFolderRequested(EntityId parent);
     void packAllAssets();
+#endif
 
     // Scene and annotation UI helpers.
     void showSceneDialog(const QString& sceneId = QString());
@@ -370,16 +393,19 @@ private:
     void cleanupHtmlRenderers();
     QVector<EntityId> htmlLayersForFrame(int frame) const;
     QSize htmlPreviewSize() const;
-    html::HtmlAsset htmlAssetFor(const Entity& entity, QString* error);
     html::HtmlRenderer* htmlRendererFor(EntityId id);
     void applyHtmlFrame(EntityId id, quint64 token, const QString& cacheKey,
                         const QImage& image, const QString& error);
 
+#if PVFORGE_LEGACY_SHELL
     Project* m_project = nullptr;
+#endif
     EditorSession* m_session = nullptr;
     // Declared before the session-mode panels so the session outlives them.
     std::unique_ptr<EditorSession> m_sessionOwner;
+#if PVFORGE_LEGACY_SHELL
     History* m_history = nullptr;
+#endif
     Viewport* m_viewport = nullptr;
     PropertiesPanel* m_props = nullptr;
     AssetLibraryPanel* m_library = nullptr;
@@ -389,8 +415,10 @@ private:
     QWidget* m_projectTab = nullptr;
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
+#if PVFORGE_LEGACY_SHELL
     CurveEditor* m_curve = nullptr;
     WaveformView* m_wave = nullptr;
+#endif
     WorkbenchPanel* m_workbench = nullptr;
     CameraMonitor* m_monitor = nullptr;
     McpServer* m_mcpServer = nullptr;
@@ -415,8 +443,9 @@ private:
     // objects (active camera, audio, root-level logos) stay locked because
     // McpCommandService::allowGlobal() is false by default; a future UI can
     // call setAllowGlobal(true) after a separate human confirmation.
-    std::unique_ptr<McpCommandService> m_mcpCommands;
     std::unique_ptr<CheckpointManager> m_mcpCheckpoints;
+#if PVFORGE_LEGACY_SHELL
+    std::unique_ptr<McpCommandService> m_mcpCommands;
     html::HtmlBrowser* m_htmlBrowser = nullptr;
     QHash<EntityId, html::HtmlRenderer*> m_htmlRenderers;
     QHash<QString, html::HtmlAsset> m_htmlAssets;
@@ -430,6 +459,7 @@ private:
     AudioEngine* m_audioEngine = nullptr;
     VideoPlayer m_videoPlayer;
     VideoProxyGenerator* m_proxyGenerator = nullptr;
+#endif
 
     QTimer* m_playTimer = nullptr;
     QTimer* m_scrubTimer = nullptr;
@@ -477,7 +507,9 @@ private:
     int m_playStart = 0;
     bool m_playing = false;
     EntityId m_selected = kInvalidEntity;
+#if PVFORGE_LEGACY_SHELL
     std::unique_ptr<EntityClipboard> m_entityClip;
+#endif
 
     // P1 session shell widgets/actions (unused by the legacy constructor).
     ProjectPropertiesPanel* m_sessionProps = nullptr;

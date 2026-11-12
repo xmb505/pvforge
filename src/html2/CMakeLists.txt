@@ -15,8 +15,10 @@ if(NOT TARGET pvf_htmlcache)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../htmlcache ${CMAKE_BINARY_DIR}/pvf_htmlcache)
 endif()
 
-# The Pvhtml renderer reuses the proven Chrome/CDP plumbing from the old HTML
-# module without linking the old pvforge target.
+# The Pvhtml renderer reuses the proven Chrome/CDP plumbing, which now lives in
+# src/htmlcommon/ (CdpClient/CdpTransport/WsClient/HtmlBrowser).  It used to sit
+# in src/html/ next to the retired html-layer widgets; the shared transport was
+# split out so the old module could go away without losing CDP.
 add_library(pvf_html2 STATIC
     PvhtmlRenderer.h
     PvhtmlRenderer.cpp
@@ -24,11 +26,11 @@ add_library(pvf_html2 STATIC
     HtmlFrameService.cpp
     LocalBundleServer.h
     LocalBundleServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../html/CdpClient.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../html/CdpTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../html/PipeCdpTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../html/WsClient.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../html/HtmlBrowser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../htmlcommon/CdpClient.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../htmlcommon/CdpTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../htmlcommon/PipeCdpTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../htmlcommon/WsClient.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../htmlcommon/HtmlBrowser.cpp
 )
 
 target_include_directories(pvf_html2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

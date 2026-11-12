@@ -992,6 +992,7 @@ void setSpinIfIdle(QSpinBox* spin, int value)
 
 } // namespace
 
+#if PVFORGE_LEGACY_SHELL
 PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     : QWidget(parent)
     , m_project(project)
@@ -999,6 +1000,7 @@ PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
     buildUi();
     refresh();
 }
+#endif
 
 PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -1136,6 +1138,7 @@ void PropertiesPanel::buildUi()
             sessionAddTransformKeys();
             return;
         }
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -1148,11 +1151,13 @@ void PropertiesPanel::buildUi()
                                 m_project->value(m_entity, r.prop, m_frame), true);
         }
         refresh();
+#endif
     });
 
     connect(m_easeButton, &QPushButton::clicked, this, [this] {
         if (m_sessionMode)
             return;
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -1191,6 +1196,7 @@ void PropertiesPanel::buildUi()
             m_easeButton->mapToGlobal(QPoint(0, m_easeButton->height()));
         if (EasingChooser::choose(this, current, anchor, &chosen, title))
             emit keyframeEasingEdited(m_entity, m_frame, chosen);
+#endif
     });
 }
 
@@ -1653,6 +1659,7 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
             sessionToggleKey(prop);
             return;
         }
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -1668,6 +1675,7 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
                     break;
                 }
         emit keyframeToggled(m_entity, prop, m_frame, hasKey);
+#endif
     });
     rowLayout->addWidget(key);
     auto* labelWidget = new QLabel(label, form->parentWidget());
@@ -1884,6 +1892,7 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
                 });
             return;
         }
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -1895,6 +1904,7 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
         QVariantMap data;
         dialog.style().writeTo(data);
         emit dataEdited(m_entity, data);
+#endif
     });
     form->addRow(layoutButton);
 
@@ -2066,6 +2076,7 @@ void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
     auto* edit = new QPushButton(QStringLiteral("编辑瓷砖墙…"), content);
     edit->setObjectName(QStringLiteral("wallEditButton"));
     connect(edit, &QPushButton::clicked, this, [this] {
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -2078,6 +2089,7 @@ void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
         QVariantMap data;
         dialog.params().writeTo(data);
         emit dataEdited(m_entity, data);
+#endif
     });
     form->addRow(edit);
 
@@ -2290,6 +2302,7 @@ void PropertiesPanel::addHtmlVariableRow(QFormLayout* form,
     key->setToolTip(QStringLiteral("在当前帧打关键帧"));
     key->setCursor(Qt::PointingHandCursor);
     connect(key, &QToolButton::clicked, this, [this, prop] {
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         const Entity* entity = m_project->entity(m_entity);
@@ -2305,6 +2318,7 @@ void PropertiesPanel::addHtmlVariableRow(QFormLayout* form,
                     break;
                 }
         emit keyframeToggled(m_entity, prop, m_frame, hasKey);
+#endif
     });
     rowLayout->addWidget(key);
 
@@ -2313,9 +2327,11 @@ void PropertiesPanel::addHtmlVariableRow(QFormLayout* form,
     form->addRow(labelWidget, rowWidget);
 
     connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop](double value) {
+#if PVFORGE_LEGACY_SHELL
         if (m_entity == kInvalidEntity)
             return;
         emit valueEdited(m_entity, prop, value);
+#endif
     });
 
     HtmlRow row;
@@ -2792,7 +2808,11 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
         QStringLiteral("裁掉开头"), m_audioTrimStart,
         QStringLiteral("audioTrimStartFromPlayhead"),
         QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；后面的波形保持原位"),
-        [this] { applyAudioTrimStart(m_frame); });
+        [this] {
+#if PVFORGE_LEGACY_SHELL
+            applyAudioTrimStart(m_frame);
+#endif
+        });
 
     m_audioTrimEnd = new QDoubleSpinBox(content);
     m_audioTrimEnd->setObjectName(QStringLiteral("audioTrimEnd"));
@@ -2806,7 +2826,11 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
         QStringLiteral("裁掉结尾"), m_audioTrimEnd,
         QStringLiteral("audioTrimEndFromPlayhead"),
         QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；前面的波形保持原位"),
-        [this] { applyAudioTrimEnd(m_frame); });
+        [this] {
+#if PVFORGE_LEGACY_SHELL
+            applyAudioTrimEnd(m_frame);
+#endif
+        });
 
     m_audioVolume = new QSpinBox(content);
     m_audioVolume->setObjectName(QStringLiteral("audioVolume"));
@@ -2889,12 +2913,16 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     form->addRow(hint);
 
     connect(m_usePivot, &QCheckBox::toggled, this, [this](bool on) {
+#if PVFORGE_LEGACY_SHELL
         Entity* e = m_project->entity(m_entity);
         if (!e)
             return;
         e->data[QStringLiteral("rotPointCustom")] = on;
         m_project->notifyChanged();
         refresh();
+#else
+        Q_UNUSED(on);
+#endif
     });
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_sessionMode)
@@ -2902,9 +2930,11 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
             sessionSetTrackValue(QStringLiteral("pivotX"), value);
             return;
         }
+#if PVFORGE_LEGACY_SHELL
         if (m_entity != kInvalidEntity)
             emit pivotEdited(m_entity, value,
                              m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
+#endif
     });
     connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_sessionMode)
@@ -2912,10 +2942,12 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
             sessionSetTrackValue(QStringLiteral("pivotY"), value);
             return;
         }
+#if PVFORGE_LEGACY_SHELL
         if (m_entity != kInvalidEntity)
             emit pivotEdited(m_entity,
                              m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame),
                              value);
+#endif
     });
 
     m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
@@ -2930,14 +2962,20 @@ void PropertiesPanel::applyData(const QString& key, const QVariant& value)
         applySessionData(key, value);
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     Entity* e = m_project->entity(m_entity);
     if (!e)
         return;
     e->data[key] = value;
     m_project->modified = true;
     m_project->notifyChanged();
+#else
+    Q_UNUSED(key);
+    Q_UNUSED(value);
+#endif
 }
 
+#if PVFORGE_LEGACY_SHELL
 void PropertiesPanel::applyAudioTrimStart(int playheadFrame)
 {
     Entity* e = m_project->entity(m_entity);
@@ -3003,6 +3041,7 @@ void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
     data.insert(QStringLiteral("trimEnd"), value);
     emit dataEdited(m_entity, data);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 const model::Entity* PropertiesPanel::sessionEntity() const
 {
@@ -4962,6 +5001,7 @@ void PropertiesPanel::refresh()
         refreshSession();
         return;
     }
+#if PVFORGE_LEGACY_SHELL
     const Entity* e = m_project->entity(m_entity);
     const bool valid = e != nullptr;
     const bool audio = valid && e->isAudio();
@@ -5534,6 +5574,7 @@ void PropertiesPanel::refresh()
             }
         }
     }
+#endif // PVFORGE_LEGACY_SHELL
 }
 
 } // namespace pvf

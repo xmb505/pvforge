@@ -1,4 +1,4 @@
-#include "html/WsClient.h"
+#include "htmlcommon/WsClient.h"
 
 #include <QCryptographicHash>
 #include <QElapsedTimer>

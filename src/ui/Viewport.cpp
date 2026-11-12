@@ -691,9 +691,7 @@ SolverPreviewEval evaluateSolverPreview(const model::Project& project,
 }
 
 
-Viewport::Viewport(Project* project, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
+void Viewport::initShell()
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
@@ -716,9 +714,20 @@ Viewport::Viewport(Project* project, QWidget* parent)
     connect(m_workbenchButton, &QToolButton::clicked, this, &Viewport::workbenchRequested);
 }
 
-Viewport::Viewport(EditorSession* session, QWidget* parent)
-    : Viewport(static_cast<Project*>(nullptr), parent)
+#if PVFORGE_LEGACY_SHELL
+Viewport::Viewport(Project* project, QWidget* parent)
+    : QWidget(parent)
+    , m_project(project)
 {
+    initShell();
+}
+#endif
+
+Viewport::Viewport(EditorSession* session, QWidget* parent)
+    : QWidget(parent)
+    , m_session(session)
+{
+    initShell();
     m_session = session;
     if (!m_session)
         return;
@@ -766,8 +775,10 @@ QSize Viewport::canvasSize() const
         const model::ProjectSettings& settings = m_session->settings();
         return QSize(std::max(1, settings.width), std::max(1, settings.height));
     }
+#if PVFORGE_LEGACY_SHELL
     if (m_project)
         return QSize(std::max(1, m_project->width), std::max(1, m_project->height));
+#endif
     return QSize(16, 9);
 }
 
@@ -2418,6 +2429,7 @@ void Viewport::paintSession(QPainter& p)
         emit framePresented(m_session->playhead());
 }
 
+#if PVFORGE_LEGACY_SHELL
 EntityId Viewport::activeCameraEntity() const
 {
     const Entity* entity = m_project->entity(m_project->activeCamera);
@@ -3230,7 +3242,6 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     const Entity* entity = m_project->entity(m_dragEntity);
     if (!entity)
         return;
-
     const QRectF bounds = entityLocalBounds(*entity);
     const double s = viewScale();
     const double rotation = m_project->value(m_dragEntity, "rotation", m_frame);
@@ -3523,6 +3534,7 @@ void Viewport::applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap)
     // Rotated entities still scale around their centre.
     emit scaleEdited(m_dragEntity, newScaleX, newScaleY, currentX, currentY);
 }
+#endif // PVFORGE_LEGACY_SHELL
 
 void Viewport::paintEvent(QPaintEvent*)
 {
@@ -3538,7 +3550,7 @@ void Viewport::paintEvent(QPaintEvent*)
         painter.fillRect(rect(), QApplication::palette().color(QPalette::Window));
         return;
     }
-
+#if PVFORGE_LEGACY_SHELL
     QElapsedTimer profile;
     profile.start();
     QPainter p(this);
@@ -3612,6 +3624,7 @@ void Viewport::paintEvent(QPaintEvent*)
     }
 
     PerfMonitor::instance().recordViewport(profile.nsecsElapsed() / 1e6);
+#endif
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event)
@@ -3695,9 +3708,12 @@ void Viewport::mousePressEvent(QMouseEvent* event)
 
     // The camera frame is selected through its border/title; clicks inside
     // pass through to the scene so entities remain editable.
+#if PVFORGE_LEGACY_SHELL
     if (handleCameraPress(event))
         return;
+#endif
 
+#if PVFORGE_LEGACY_SHELL
     const Entity* selectedEntity = m_project->entity(m_selected);
     if (!selectedEntity || !m_project->isEffectivelyLocked(selectedEntity->id))
     {
@@ -3779,6 +3795,7 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         emit entitySelected(kInvalidEntity);
         update();
     }
+#endif
 }
 
 void Viewport::mouseMoveEvent(QMouseEvent* event)
@@ -3827,6 +3844,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+#if PVFORGE_LEGACY_SHELL
     if (m_cameraPart != CameraPart::None)
     {
         applyCameraDrag(event->position(), event->modifiers());
@@ -4230,6 +4248,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event)
 
     emit positionEdited(m_dragEntity, x, y);
     update();
+#endif // PVFORGE_LEGACY_SHELL
 }
 
 void Viewport::mouseReleaseEvent(QMouseEvent* event)

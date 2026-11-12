@@ -4,7 +4,7 @@
 #include "core/Camera.h"
 #include "core/Project.h"
 #include "html/HtmlAsset.h"
-#include "html/HtmlBrowser.h"
+#include "htmlcommon/HtmlBrowser.h"
 #include "html/HtmlRenderer.h"
 #include "render/SceneRenderer.h"
 
