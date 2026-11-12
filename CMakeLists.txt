@@ -24,6 +24,15 @@ option(PVFORGE_BUILD_SELF_TESTS
     "Build pvforge-tests, the executable that answers the --*-test switches"
     ${_pvf_self_tests_default})
 
+# The reference shell (src/next/app NextWindow + src/next/viewport) is a design
+# reference, not part of the delivered editor.  It stays off by default so the
+# delivery build only compiles pvforge/pvforge-mcp and the modules they link.
+# Developers who need the reference UI or its tests pass
+# -DPVFORGE_BUILD_REFERENCE=ON (the debug/tests presets do).
+option(PVFORGE_BUILD_REFERENCE
+    "Build the src/next reference shell (NextWindow, ViewportWidget) and its tests"
+    OFF)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia Network)
 # The HTML/CDP renderer only needs QtCore. Prefer the Qt WebSockets module when
 # its development package is present; otherwise WsClient implements the small
@@ -222,7 +231,14 @@ add_subdirectory(src/next/assets)
 add_subdirectory(src/next/mcp)
 add_subdirectory(src/next/timeline)
 add_subdirectory(src/next/properties)
-add_subdirectory(src/next/viewport)
+# The reference shell's viewport must be added before src/next/app so the app
+# subdirectory reuses the target instead of registering a duplicate.
+if(PVFORGE_BUILD_REFERENCE)
+    add_subdirectory(src/next/viewport)
+endif()
+# src/next/app also carries pvf_next_document/pvf_next_services, which the
+# delivery shell links.  The reference-only libraries and tests inside it are
+# guarded by PVFORGE_BUILD_REFERENCE.
 add_subdirectory(src/next/app)
 
 # P1/P2 delivery shell: link only the document slice and the shared entity

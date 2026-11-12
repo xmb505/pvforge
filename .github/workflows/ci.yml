@@ -65,6 +65,8 @@ jobs:
           max-size: 2G
 
       - name: Configure
+        # debug/tests preset 打开 PVFORGE_BUILD_REFERENCE=ON（参考壳与它的测试），
+        # release preset 关闭，只保留 pvforge/pvforge-mcp 的交付构建图。
         run: >
           cmake --preset ${{ matrix.preset }}
           -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
