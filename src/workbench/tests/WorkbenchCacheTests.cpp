@@ -3,14 +3,17 @@
 #include "workbench/PrewarmService.h"
 #include "workbench/Qoi.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
 #include <QRandomGenerator>
+#include <QRunnable>
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -18,7 +21,9 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
+#include <QThreadPool>
 
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <functional>
@@ -197,6 +202,8 @@ private slots:
     void qoiRoundtrip();
     void qoiRejectsInvalid();
     void cacheStoreLookup();
+    void cacheEncodeStoreEncoded();
+    void cacheEncodesWebpOnWorkerThread();
     void cacheMetaMismatch();
     void cacheSurvivesRestart();
     void cacheDiskLru();
@@ -1019,6 +1026,114 @@ void WorkbenchCacheTests::cacheStoreLookup()
     QCOMPARE(cache.stats().hits, quint64(1));
     QVERIFY(cache.matches(10, meta));
     QVERIFY(cache.cachedFrames() == QSet<int>{10});
+}
+
+void WorkbenchCacheTests::cacheEncodeStoreEncoded()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const workbench::FrameMeta vectorMeta =
+        builder.build(10, QString(), options);
+    workbench::FrameMeta rasterMeta = vectorMeta;
+    rasterMeta.hasRaster = true;
+
+    workbench::Cache cache(QDir(root.path()).filePath(QStringLiteral("cache")),
+                           QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+
+    QImage source(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(40, 90, 160));
+
+    const workbench::EncodedFrame vector =
+        workbench::Cache::encode(source, options.targetSize, false);
+    QVERIFY(!vector.bytes.isEmpty());
+    QCOMPARE(vector.codec, QStringLiteral("qoi"));
+    QCOMPARE(vector.image.size(), options.targetSize);
+    QVERIFY(cache.storeEncoded(10, vectorMeta, vector));
+
+    const workbench::EncodedFrame raster =
+        workbench::Cache::encode(source, options.targetSize, true);
+    QVERIFY(!raster.bytes.isEmpty());
+    QCOMPARE(raster.codec, QStringLiteral("webp"));
+    QCOMPARE(raster.image.size(), options.targetSize);
+    QVERIFY(cache.storeEncoded(11, rasterMeta, raster));
+
+    QVERIFY(QFileInfo::exists(
+        QDir(cache.directory()).filePath(QStringLiteral("10.qoi"))));
+    QVERIFY(QFileInfo::exists(
+        QDir(cache.directory()).filePath(QStringLiteral("11.webp"))));
+    QCOMPARE(cache.stats().entries, 2);
+    QCOMPARE(cache.stats().stores, quint64(2));
+
+    bool hit = false;
+    QVERIFY(!cache.lookup(10, vectorMeta, &hit).isNull());
+    QVERIFY(hit);
+    QVERIFY(!cache.lookup(11, rasterMeta, &hit).isNull());
+    QVERIFY(hit);
+
+    // A failed encode never reaches the index or the disk.
+    const workbench::EncodedFrame nullEncoded =
+        workbench::Cache::encode(QImage(), options.targetSize, true);
+    QVERIFY(nullEncoded.bytes.isEmpty());
+    QString error;
+    QVERIFY(!cache.storeEncoded(12, rasterMeta, nullEncoded, &error));
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(cache.stats().entries, 2);
+}
+
+void WorkbenchCacheTests::cacheEncodesWebpOnWorkerThread()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+
+    // The playback writer encodes WebP on a QThreadPool worker.  Guard the
+    // plugin against a non-reentrant build and verify the bytes really decode.
+    QImage source(640, 360, QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&source);
+        QLinearGradient gradient(0, 0, 640, 360);
+        gradient.setColorAt(0.0, QColor(255, 0, 0));
+        gradient.setColorAt(1.0, QColor(0, 0, 255));
+        painter.fillRect(source.rect(), gradient);
+    }
+    const QSize target(320, 180);
+
+    QThreadPool pool;
+    pool.setMaxThreadCount(1);
+    std::array<QByteArray, 4> encoded;
+    std::array<QSize, 4> sizes;
+    for (int i = 0; i < int(encoded.size()); ++i)
+    {
+        pool.start(QRunnable::create([&, i] {
+            const workbench::EncodedFrame frame =
+                workbench::Cache::encode(source, target, true);
+            encoded[size_t(i)] = frame.bytes;
+            sizes[size_t(i)] = frame.image.size();
+        }));
+    }
+    QVERIFY(pool.waitForDone(30000));
+
+    for (int i = 0; i < int(encoded.size()); ++i)
+    {
+        QVERIFY2(!encoded[size_t(i)].isEmpty(),
+                 qPrintable(QStringLiteral("worker WebP %1 is empty").arg(i)));
+        QCOMPARE(sizes[size_t(i)], target);
+        QBuffer buffer(&encoded[size_t(i)]);
+        QVERIFY(buffer.open(QIODevice::ReadOnly));
+        QImageReader reader(&buffer, QByteArrayLiteral("webp"));
+        const QImage decoded = reader.read();
+        QVERIFY2(!decoded.isNull(),
+                 qPrintable(reader.errorString()));
+        QCOMPARE(decoded.size(), target);
+    }
 }
 
 void WorkbenchCacheTests::cacheMetaMismatch()

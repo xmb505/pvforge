@@ -84,6 +84,15 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
                          if (m_solverResultsDirty)
                              invalidateAnimCache();
                      });
+    // Playback raster misses are encoded off the UI thread.  The service may
+    // be created later by the first viewport lookup; workbench() re-applies
+    // the current state in that case.
+    QObject::connect(m_playback.get(),
+                     &next::PlaybackController::playbackStateChanged,
+                     m_playback.get(), [this](bool playing) {
+                         if (m_workbench)
+                             m_workbench->setPlaybackActive(playing);
+                     });
     invalidateAnimCache();
 
     m_editActions = std::make_unique<EditActions>(this);

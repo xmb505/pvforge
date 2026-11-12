@@ -32,11 +32,6 @@ constexpr int kCacheFormatVersion = 2;
 const QString kQoiCodec = QStringLiteral("qoi");
 const QString kWebpCodec = QStringLiteral("webp");
 
-QString codecForMeta(const FrameMeta& meta)
-{
-    return meta.hasRaster ? kWebpCodec : kQoiCodec;
-}
-
 QString codecExtension(const QString& codec)
 {
     return QStringLiteral(".") + (codec == kQoiCodec ? kQoiCodec : kWebpCodec);
@@ -578,6 +573,29 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
     return image;
 }
 
+EncodedFrame Cache::encode(const QImage& image, const QSize& targetSize,
+                           bool hasRaster)
+{
+    EncodedFrame result;
+    result.codec = hasRaster ? kWebpCodec : kQoiCodec;
+    if (image.isNull())
+        return result;
+
+    QImage scaled = image;
+    if (targetSize.isValid() && scaled.size() != targetSize)
+    {
+        perf::Scope scaleScope("缓存缩放", perf::Category::Other);
+        scaled = scaled.scaled(targetSize, Qt::IgnoreAspectRatio,
+                               Qt::SmoothTransformation);
+    }
+    if (scaled.isNull())
+        return result;
+
+    result.image = scaled;
+    result.bytes = encodeFrame(scaled, result.codec);
+    return result;
+}
+
 bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
                   QString* error)
 {
@@ -594,22 +612,33 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     if (image.isNull())
         return fail(QStringLiteral("cannot store a null image"));
 
-    QImage scaled = image;
-    const QSize target = d->options.targetSize;
-    if (target.isValid() && scaled.size() != target)
-    {
-        perf::Scope scaleScope("缓存缩放", perf::Category::Other);
-        scaled = scaled.scaled(target, Qt::IgnoreAspectRatio,
-                               Qt::SmoothTransformation);
-    }
-    if (scaled.isNull())
-        return fail(QStringLiteral("image scaling failed"));
+    const EncodedFrame encoded =
+        encode(image, d->options.targetSize, meta.hasRaster);
+    if (encoded.bytes.isEmpty())
+        return fail(encoded.codec == kQoiCodec
+                        ? QStringLiteral("QOI encoding failed")
+                        : QStringLiteral("WebP encoding failed"));
+    return storeEncoded(frame, meta, encoded, error);
+}
 
-    const QString codec = codecForMeta(meta);
-    const QByteArray data = encodeFrame(scaled, codec);
-    if (data.isEmpty())
-        return fail(codec == kQoiCodec ? QStringLiteral("QOI encoding failed")
-                                       : QStringLiteral("WebP encoding failed"));
+bool Cache::storeEncoded(int frame, const FrameMeta& meta,
+                         const EncodedFrame& encoded, QString* error)
+{
+    auto fail = [&](const QString& message) {
+        d->error = message;
+        if (error)
+            *error = message;
+        return false;
+    };
+
+    if (!d->valid)
+        return fail(d->error.isEmpty() ? QStringLiteral("cache is not valid")
+                                      : d->error);
+    if (encoded.bytes.isEmpty())
+        return fail(QStringLiteral("cannot store empty encoded bytes"));
+
+    const QString codec = normalizedCodec(encoded.codec);
+    const QByteArray& data = encoded.bytes;
 
     const QString path = d->framePath(frame, codec);
     QSaveFile file(path);
@@ -654,7 +683,7 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     d->diskBytes = std::max<qint64>(0, d->diskBytes - oldBytes);
     d->entries.insert(frame, entry);
     d->diskBytes += entry.bytes;
-    d->rememberImage(frame, scaled);
+    d->rememberImage(frame, encoded.image);
     ++d->counters.stores;
     perf::FrameProfiler::instance().noteCacheStore(codec == kWebpCodec);
 

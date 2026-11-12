@@ -975,6 +975,9 @@ QImage Viewport::ensureSessionImage()
 
     bool missing = false;
     QImage image = renderSessionFrame(targetSize, camera, expand, &missing);
+    // Publish the finished picture before the cache hook.  A paused store is
+    // synchronous (about 2 ms QOI), while a playback raster miss only queues
+    // its WebP encode, so the next paint never waits for encode or disk I/O.
     m_sessionImage = image;
     m_sessionImageSize = targetSize;
     m_sessionImageFrame = frame;

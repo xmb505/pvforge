@@ -66,6 +66,8 @@ if(BUILD_TESTING)
         qoiRoundtrip
         qoiRejectsInvalid
         cacheStoreLookup
+        cacheEncodeStoreEncoded
+        cacheEncodesWebpOnWorkerThread
         cacheMetaMismatch
         cacheSurvivesRestart
         cacheDiskLru

@@ -2615,6 +2615,7 @@ struct ProfileFixture
     int vectors = 0;
     int texts = 0;
     bool strokes = false;
+    bool raster = false;
 };
 
 pvf::Uuid buildProfileFixture(pvf::EditorSession& session,
@@ -2673,6 +2674,47 @@ pvf::Uuid buildProfileFixture(pvf::EditorSession& session,
         entity.transform.x = -420.0 + 380.0 * i;
         entity.transform.y = 360.0 - 90.0 * i;
 
+        project.entities.insert(entity.uuid, entity);
+        uuids.append(entity.uuid);
+    }
+
+    if (fixture.raster)
+    {
+        // A real image asset makes the frame meta hasRaster=true, which is the
+        // WebP (asynchronous during playback) store path.
+        QImage photo(640, 360, QImage::Format_ARGB32_Premultiplied);
+        {
+            QPainter painter(&photo);
+            QLinearGradient gradient(0, 0, 640, 360);
+            gradient.setColorAt(0.0, QColor(210, 70, 40));
+            gradient.setColorAt(0.5, QColor(40, 170, 120));
+            gradient.setColorAt(1.0, QColor(40, 70, 210));
+            painter.fillRect(photo.rect(), gradient);
+            painter.setPen(QColor(255, 255, 255, 220));
+            painter.drawRect(40, 40, 560, 280);
+        }
+        const QString photoPath =
+            QDir(session.root()).filePath(QStringLiteral("profile-photo.png"));
+        if (!photo.save(photoPath))
+        {
+            *error = QStringLiteral("cannot write %1").arg(photoPath);
+            return {};
+        }
+        const auto stored = session.assets().importFile(photoPath, error);
+        if (!stored.has_value())
+            return {};
+
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = QStringLiteral("照片");
+        entity.start = 0;
+        entity.end = 3000;
+        entity.row = fixture.vectors + fixture.texts;
+        entity.transform.x = 260.0;
+        entity.transform.y = -190.0;
+        entity.content.kind = pvf::ContentKind::Asset;
+        entity.content.asset.type = pvf::AssetType::Image;
+        entity.content.asset.hash = stored->hash;
         project.entities.insert(entity.uuid, entity);
         uuids.append(entity.uuid);
     }
@@ -2835,6 +2877,71 @@ int runCacheProfileScenario(const QString& scenario,
     const QImage lookupImage = viewportImages.isEmpty()
                                    ? QImage()
                                    : viewportImages.first();
+
+    // Playback raster misses use the asynchronous writer.  This is the
+    // issue #58 scenario: the paint frame enqueues, one worker encodes, and the
+    // UI thread writes the file and index row after the frame is already up.
+    if (workbench->buildMetaForTest(1000).hasRaster)
+    {
+        workbench->setPlaybackActive(true);
+
+        const quint64 storesBefore = workbench->stats().stores;
+        const quint64 droppedBefore = workbench->droppedStores();
+        const quint64 writtenBefore = workbench->asyncStoresWritten();
+        const quint64 encodesBefore = workbench->workerEncodes();
+
+        // A normal playback pass: render + cache lookup + meta + render2, no
+        // synchronous WebP encode on the paint thread.
+        measureWholeFrame(QStringLiteral("whole-frame raster miss (async store)"),
+                          1000, MonitorPaint::Hidden, nullptr);
+
+        ProfileSamples enqueueSamples;
+        int maxQueue = 0;
+        for (int i = 0; i < 120; ++i)
+        {
+            const QImage image =
+                viewportImages.isEmpty()
+                    ? QImage(workbench->targetSize(),
+                             QImage::Format_ARGB32_Premultiplied)
+                    : viewportImages.at(i % viewportImages.size());
+            QElapsedTimer timer;
+            timer.start();
+            workbench->store(2000 + i, workbench->cameraUuid(), image);
+            enqueueSamples.addNs(timer.nsecsElapsed());
+            maxQueue = std::max(maxQueue, workbench->pendingStores());
+        }
+        const int queuedAtBurstEnd = workbench->pendingStores();
+
+        QElapsedTimer drain;
+        drain.start();
+        const bool drained = workbench->waitForPendingStores(60000);
+        const double drainMs = double(drain.nsecsElapsed()) / 1.0e6;
+        const pvf::workbench::CacheStats after = workbench->stats();
+        qInfo().noquote()
+            << QStringLiteral(
+                   "cache-miss-profile | %1 | playback raster store | "
+                   "ui-enqueue mean=%2 ms p50=%3 ms p95=%4 ms | maxQueue=%5 "
+                   "queuedBurstEnd=%6 drained=%7 drain=%8 ms | workerEncode "
+                   "n=%9 mean=%10 ms | written +%11 dropped +%12 stores +%13 "
+                   "entries=%14 pending=%15")
+                   .arg(scenario)
+                   .arg(enqueueSamples.mean(), 0, 'f', 3)
+                   .arg(enqueueSamples.percentile(0.5), 0, 'f', 3)
+                   .arg(enqueueSamples.percentile(0.95), 0, 'f', 3)
+                   .arg(maxQueue)
+                   .arg(queuedAtBurstEnd)
+                   .arg(drained ? QStringLiteral("yes") : QStringLiteral("no"))
+                   .arg(drainMs, 0, 'f', 1)
+                   .arg(workbench->workerEncodes() - encodesBefore)
+                   .arg(workbench->workerEncodeMeanMs(), 0, 'f', 2)
+                   .arg(workbench->asyncStoresWritten() - writtenBefore)
+                   .arg(workbench->droppedStores() - droppedBefore)
+                   .arg(after.stores - storesBefore)
+                   .arg(after.entries)
+                   .arg(after.pendingStores);
+        workbench->setPlaybackActive(false);
+    }
+
     // Warm hit with a known-resident frame: 20 stores fit in the 256 MB LRU
     // budget (about 3.7 MB per 1280x720 frame), so the image comes back from
     // memory.  The meta is still rebuilt and the SQLite row touched.
@@ -3145,9 +3252,10 @@ int cacheMissProfileTest(QApplication& app)
     }
 
     const QVector<ProfileFixture> fixtures = {
-        {QStringLiteral("simple"), 3, 0, false},
-        {QStringLiteral("medium"), 50, 2, false},
-        {QStringLiteral("complex"), 200, 4, true},
+        {QStringLiteral("simple"), 3, 0, false, false},
+        {QStringLiteral("medium"), 50, 2, false, false},
+        {QStringLiteral("complex"), 200, 4, true, false},
+        {QStringLiteral("raster-image"), 12, 1, false, true},
     };
 
     for (const ProfileFixture& fixture : fixtures)

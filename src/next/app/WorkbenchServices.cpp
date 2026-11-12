@@ -3,7 +3,12 @@
 #include "next/app/ProjectDocument.h"
 #include "perf/FrameProfiler.h"
 
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QRunnable>
+#include <QThread>
+#include <QThreadPool>
 
 #include <algorithm>
 
@@ -16,6 +21,11 @@ constexpr int kTickIntervalMs = 20;
 // A held frame waits at most this long for the asynchronous HTML renderer.
 constexpr int kHtmlWaitMs = 3000;
 constexpr int kMaxCacheWidth = 1280;
+// Playback misses beyond these bounds are dropped oldest-first.  One 1280x720
+// frame is about 3.7 MB, so 64 frames also stay well under the byte cap.
+constexpr int kMaxPendingStores = 64;
+constexpr qint64 kMaxPendingStoreBytes = 256LL * 1024 * 1024;
+constexpr int kStoreWorkerThreads = 1;
 
 class StoreGuard
 {
@@ -82,6 +92,11 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
     connect(&m_htmlWaitTimeout, &QTimer::timeout, this,
             &WorkbenchServices::onHtmlWaitTimeout);
 
+    // One serial writer.  Encoding runs here, SQLite stays on the UI thread.
+    m_storePool = new QThreadPool(this);
+    m_storePool->setMaxThreadCount(kStoreWorkerThreads);
+    m_storePool->setExpiryTimeout(30000);
+
     // Edits invalidate the memoised meta; they never start a scan.
     connect(m_document, &Document::changed, this,
             &WorkbenchServices::onDocumentChanged);
@@ -92,6 +107,13 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
 WorkbenchServices::~WorkbenchServices()
 {
     cancelScan();
+    // In-flight encodes cannot be cancelled.  They finish before the pool is
+    // destroyed, but their result callbacks are already forbidden from
+    // writing (the queue was cleared) and the queued invocation is dropped
+    // with this object.
+    discardPendingStores();
+    if (m_storePool)
+        m_storePool->waitForDone();
 }
 
 bool WorkbenchServices::cacheValid() const
@@ -156,8 +178,6 @@ void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
     if (!m_enabled || image.isNull() || cameraUuid != m_cameraUuid)
         return;
 
-    const StoreGuard storeGuard;
-
     // First miss creates the directory, index and the frame file (QOI for
     // pure vector frames, WebP when the meta flags image/video/HTML content).
     ensureCache();
@@ -165,7 +185,196 @@ void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
         return;
 
     const workbench::FrameMeta meta = buildMeta(frame);
+
+    // Playback raster misses are the expensive ones (37-47 ms WebP q80).
+    // The paint frame only hands over the implicitly shared image and the
+    // meta; a serial worker encodes it and the UI thread writes the file and
+    // index row.  Vector QOI stays synchronous (~2 ms), and pausing returns to
+    // the synchronous path so the next lookup is hot immediately.
+    if (m_playbackActive && meta.hasRaster)
+    {
+        enqueueStore(frame, meta, image);
+        return;
+    }
+
+    const StoreGuard storeGuard;
     m_cache->store(frame, meta, image);
+}
+
+void WorkbenchServices::enqueueStore(int frame,
+                                     const workbench::FrameMeta& meta,
+                                     const QImage& image)
+{
+    const qint64 bytes = image.sizeInBytes();
+
+    // Same frame/meta already queued: the copy that will be written is
+    // identical, so a second encode would only waste the writer.
+    for (int i = 0; i < m_pendingStores.size(); ++i)
+    {
+        const PendingStore& pending = m_pendingStores.at(i);
+        if (pending.frame != frame)
+            continue;
+        if (pending.meta.bytes == meta.bytes
+            && pending.meta.sha1 == meta.sha1)
+            return;
+    }
+
+    // A newer meta for the same frame supersedes the queued picture: writing
+    // both would make the final file depend on writer order.
+    for (int i = 0; i < m_pendingStores.size();)
+    {
+        if (m_pendingStores.at(i).frame != frame)
+        {
+            ++i;
+            continue;
+        }
+        m_pendingStoreBytes -= m_pendingStores.at(i).bytes;
+        m_pendingStores.removeAt(i);
+        ++m_droppedStores;
+        m_lastDroppedFrame = frame;
+        perf::FrameProfiler::instance().endStore();
+    }
+
+    while (!m_pendingStores.isEmpty()
+           && (m_pendingStores.size() >= kMaxPendingStores
+               || m_pendingStoreBytes + bytes > kMaxPendingStoreBytes))
+    {
+        const PendingStore dropped = m_pendingStores.dequeue();
+        m_pendingStoreBytes -= dropped.bytes;
+        ++m_droppedStores;
+        m_lastDroppedFrame = dropped.frame;
+        perf::FrameProfiler::instance().endStore();
+    }
+
+    PendingStore task;
+    task.id = ++m_nextStoreId;
+    task.frame = frame;
+    task.meta = meta;
+    task.image = image;
+    task.bytes = bytes;
+    m_pendingStores.enqueue(task);
+    m_pendingStoreBytes += bytes;
+    perf::FrameProfiler::instance().beginStore();
+
+    // Dispatch from the event loop, not from this call: a burst of misses (a
+    // fast playback tick) fills the bounded queue first, so frames the queue
+    // drops are never encoded.
+    scheduleStoreDispatch();
+}
+
+void WorkbenchServices::scheduleStoreDispatch()
+{
+    if (m_storeDispatchPosted || m_storeTaskRunning)
+        return;
+    m_storeDispatchPosted = true;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            m_storeDispatchPosted = false;
+            dispatchStoreTask();
+        },
+        Qt::QueuedConnection);
+}
+
+void WorkbenchServices::dispatchStoreTask()
+{
+    if (m_storeTaskRunning || m_pendingStores.isEmpty() || !m_storePool)
+        return;
+    m_storeTaskRunning = true;
+    startStoreTask(m_pendingStores.head());
+}
+
+void WorkbenchServices::startStoreTask(const PendingStore& task)
+{
+    if (!m_storePool)
+        return;
+
+    WorkbenchServices* self = this;
+    const quint64 id = task.id;
+    const QImage image = task.image;
+    const QSize targetSize = m_options.targetSize;
+    const bool hasRaster = task.meta.hasRaster;
+
+    m_storePool->start(QRunnable::create(
+        [self, id, image, targetSize, hasRaster] {
+            QElapsedTimer timer;
+            timer.start();
+            workbench::EncodedFrame encoded =
+                workbench::Cache::encode(image, targetSize, hasRaster);
+            const double encodeMs =
+                static_cast<double>(timer.nsecsElapsed()) / 1.0e6;
+            QMetaObject::invokeMethod(
+                self,
+                [self, id, encoded = std::move(encoded), encodeMs]() mutable {
+                    self->onStoreEncoded(id, encoded, encodeMs);
+                },
+                Qt::QueuedConnection);
+        }));
+}
+
+void WorkbenchServices::onStoreEncoded(quint64 id,
+                                       const workbench::EncodedFrame& encoded,
+                                       double encodeMs)
+{
+    m_storeTaskRunning = false;
+    ++m_workerEncodes;
+    m_workerEncodeMs += encodeMs;
+
+    int index = -1;
+    for (int i = 0; i < m_pendingStores.size(); ++i)
+    {
+        if (m_pendingStores.at(i).id == id)
+        {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0)
+    {
+        // Superseded, document edit, shutdown or clearCache(): the picture
+        // belongs to the old state.  Keep draining whatever is still valid.
+        dispatchStoreTask();
+        return;
+    }
+
+    const PendingStore task = m_pendingStores.at(index);
+    m_pendingStoreBytes -= task.bytes;
+    m_pendingStores.removeAt(index);
+    perf::FrameProfiler::instance().endStore();
+
+    if (m_cache && m_cache->isValid() && !encoded.bytes.isEmpty()
+        && m_cache->storeEncoded(task.frame, task.meta, encoded))
+        ++m_asyncStoresWritten;
+
+    dispatchStoreTask();
+}
+
+double WorkbenchServices::workerEncodeMeanMs() const
+{
+    return m_workerEncodes == 0 ? 0.0
+                                : m_workerEncodeMs / double(m_workerEncodes);
+}
+
+bool WorkbenchServices::waitForPendingStores(int timeoutMs)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!m_pendingStores.isEmpty() && timer.elapsed() < timeoutMs)
+    {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    return m_pendingStores.isEmpty();
+}
+
+void WorkbenchServices::discardPendingStores()
+{
+    while (!m_pendingStores.isEmpty())
+    {
+        const PendingStore dropped = m_pendingStores.dequeue();
+        m_pendingStoreBytes -= dropped.bytes;
+        perf::FrameProfiler::instance().endStore();
+    }
 }
 
 void WorkbenchServices::startScanNow(int startFrame, int endFrame)
@@ -249,6 +458,8 @@ void WorkbenchServices::notifyHtmlFrameReady()
 void WorkbenchServices::clearCache()
 {
     cancelScan();
+    // Never let a queued playback frame repopulate the cache after the clear.
+    discardPendingStores();
     invalidateMeta();
     if (m_cache && m_cache->isValid())
         m_cache->clear();
@@ -262,11 +473,12 @@ void WorkbenchServices::setSolverResults(
 
 workbench::CacheStats WorkbenchServices::stats() const
 {
-    if (m_cache)
-        return m_cache->stats();
-
     workbench::CacheStats stats;
-    stats.budgetBytes = m_options.diskBudgetBytes;
+    if (m_cache)
+        stats = m_cache->stats();
+    else
+        stats.budgetBytes = m_options.diskBudgetBytes;
+    stats.pendingStores = pendingStores();
     return stats;
 }
 
@@ -338,8 +550,13 @@ void WorkbenchServices::tick()
 
 void WorkbenchServices::onDocumentChanged()
 {
-    // Any committed edit can change a frame's meta.  The next viewport lookup
-    // builds a fresh meta and misses; nothing is rendered in the background.
+    // Any committed edit can change a frame's meta.  Drop the queued raster
+    // frames before their file/index write: they belong to the old state and
+    // would otherwise turn into permanent cache entries.  An encode already
+    // running finishes but its result is discarded (its ID is gone).
+    discardPendingStores();
+    // The next viewport lookup builds a fresh meta and misses; nothing is
+    // rendered in the background.
     invalidateMeta();
 }
 

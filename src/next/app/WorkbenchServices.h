@@ -10,11 +10,14 @@
 #include <QHash>
 #include <QImage>
 #include <QObject>
+#include <QQueue>
 #include <QString>
 #include <QTimer>
 
 #include <functional>
 #include <memory>
+
+class QThreadPool;
 
 namespace pvf::next {
 
@@ -99,11 +102,28 @@ public:
 
     // Viewport hooks.  lookup() builds the frame meta and reads/decodes QOI
     // (vector frames) or WebP (raster frames) on the UI thread; it never
-    // creates the cache directory.  store() writes synchronously (~2 ms QOI,
-    // 5-20 ms WebP) and creates the directory on the first miss.  No timer or
-    // signal starts a scan on its own.
+    // creates the cache directory.  Outside playback store() writes
+    // synchronously (~2 ms QOI, 5-20 ms WebP) and creates the directory on the
+    // first miss.  During playback a raster (WebP) miss is encoded and written
+    // by a single background writer instead: the call only enqueues an
+    // implicitly shared image, so the paint frame never pays the 37-47 ms
+    // encode.  Pure vector misses stay synchronous so the cache is hot
+    // immediately.  No timer or signal starts a scan on its own.
     QImage lookup(int frame, const Uuid& cameraUuid, bool* hit);
     void store(int frame, const Uuid& cameraUuid, const QImage& image);
+
+    // Asynchronous store status for the playback raster path.  pendingStores
+    // counts queued plus in-flight encodes; a bounded queue drops the oldest
+    // frame when playback produces misses faster than the writer can encode.
+    int pendingStores() const { return int(m_pendingStores.size()); }
+    quint64 droppedStores() const { return m_droppedStores; }
+    int lastDroppedFrame() const { return m_lastDroppedFrame; }
+    quint64 asyncStoresWritten() const { return m_asyncStoresWritten; }
+    quint64 workerEncodes() const { return m_workerEncodes; }
+    double workerEncodeMeanMs() const;
+    // Pumps the UI event loop until the writer queue is empty or the timeout
+    // expires (tests and the cache-miss profile only).
+    bool waitForPendingStores(int timeoutMs);
 
     // Explicit cache pass.  Nothing calls these automatically: they back the
     // optional "cache all", "cache to playhead" and "rescan" commands.
@@ -113,8 +133,10 @@ public:
     void cancelScan();
 
     // Playback pauses an explicitly started pass; stopping resumes it from the
-    // held frame.  It does not start a pass.
+    // held frame.  It does not start a pass.  While active, raster misses are
+    // stored asynchronously.
     void setPlaybackActive(bool active);
+    bool playbackActive() const { return m_playbackActive; }
 
     // Called when MediaServices finished an asynchronous HTML frame.  Releases
     // a scan frame held waiting for HTML.
@@ -158,6 +180,24 @@ private:
     int contentEnd() const;
     bool htmlPending() const;
 
+    struct PendingStore
+    {
+        quint64 id = 0;
+        int frame = -1;
+        workbench::FrameMeta meta;
+        QImage image; // implicitly shared with the rendered frame
+        qint64 bytes = 0;
+    };
+
+    void enqueueStore(int frame, const workbench::FrameMeta& meta,
+                      const QImage& image);
+    void scheduleStoreDispatch();
+    void dispatchStoreTask();
+    void startStoreTask(const PendingStore& task);
+    void onStoreEncoded(quint64 id, const workbench::EncodedFrame& encoded,
+                        double encodeMs);
+    void discardPendingStores();
+
     ProjectDocument* m_document = nullptr;
     Providers m_providers;
     Uuid m_cameraUuid;
@@ -184,6 +224,21 @@ private:
     workbench::FrameMeta m_lastMeta;
     int m_lastMetaFrame = -1;
     bool m_lastMetaValid = false;
+
+    // Playback raster writer: one serial worker (Qt's WebP plugin is not
+    // documented as safe for several concurrent writers), a 64-frame / 256 MB
+    // bounded queue, and the IDs still allowed to write.
+    QThreadPool* m_storePool = nullptr;
+    QQueue<PendingStore> m_pendingStores;
+    qint64 m_pendingStoreBytes = 0;
+    bool m_storeTaskRunning = false;
+    bool m_storeDispatchPosted = false;
+    quint64 m_nextStoreId = 0;
+    quint64 m_droppedStores = 0;
+    int m_lastDroppedFrame = -1;
+    quint64 m_asyncStoresWritten = 0;
+    quint64 m_workerEncodes = 0;
+    double m_workerEncodeMs = 0.0;
 };
 
 } // namespace pvf::next

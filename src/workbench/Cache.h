@@ -22,6 +22,18 @@ struct CacheStats
     quint64 misses = 0;
     quint64 stores = 0;
     quint64 evictions = 0;
+    // Filled by WorkbenchServices: queued or in-flight asynchronous stores.
+    int pendingStores = 0;
+};
+
+// Result of Cache::encode(): the encoded file bytes, its codec, and the scaled
+// image that belongs in the memory LRU.  All three are implicitly shared, so
+// moving one between the encode worker and the UI thread does not copy pixels.
+struct EncodedFrame
+{
+    QByteArray bytes;
+    QString codec;
+    QImage image;
 };
 
 // One camera's frame cache: <root>/<signature>/<cameraKey|nocamera>/.
@@ -38,6 +50,10 @@ struct CacheStats
 // Existing caches from the WebP-only format keep working: the codec column is
 // added by ALTER TABLE with a 'webp' default, and orphan cleanup understands
 // both extensions.
+//
+// Encoding is a pure function of (image, targetSize, hasRaster): encode() may
+// run on a worker thread, while storeEncoded() and store() write the file and
+// index on the cache-owning (UI) thread.
 //
 // Not thread-safe: the background scan worker owns its instance and the UI
 // thread owns another one.  QSqlDatabase connections are bound to the thread
@@ -66,6 +82,18 @@ public:
     // Writes atomically, updates the index and both LRU budgets.
     bool store(int frame, const FrameMeta& meta, const QImage& image,
                QString* error = nullptr);
+
+    // Pure image work: smooth-scale to `targetSize`, then encode QOI (vector)
+    // or WebP q80 (raster).  Touches no Cache state and no SQLite connection,
+    // so a background writer may call it while the UI thread uses this cache.
+    static EncodedFrame encode(const QImage& image, const QSize& targetSize,
+                               bool hasRaster);
+
+    // Writes a frame produced by encode() and updates the index, memory LRU
+    // and disk budget.  Must run on the thread that owns the Cache: SQLite
+    // connections are thread-bound.  store() is this function plus encode().
+    bool storeEncoded(int frame, const FrameMeta& meta,
+                      const EncodedFrame& encoded, QString* error = nullptr);
 
     // Meta-only comparison; never touches image files or LRU counters.
     bool matches(int frame, const FrameMeta& current) const;

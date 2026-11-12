@@ -13,6 +13,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -248,6 +249,38 @@ Uuid addImageEntity(ProjectDocument* document, const AssetHash& hash)
     return uuid;
 }
 
+Uuid addImageEntityRange(ProjectDocument* document, const AssetHash& hash,
+                         int endFrame)
+{
+    Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("Image");
+    entity.start = 0;
+    entity.end = endFrame;
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Image;
+    entity.content.asset.hash = hash;
+
+    const Uuid uuid = entity.uuid;
+    document->mutableProject().entities.insert(uuid, entity);
+    QString ignored;
+    document->commitEntity(uuid, QStringLiteral("pvf: create image"),
+                           &ignored);
+    document->flush(&ignored);
+    return uuid;
+}
+
+AssetHash importProfileImage(ProjectDocument* document, const QString& path,
+                             QString* error)
+{
+    QImage image(64, 36, QImage::Format_ARGB32);
+    image.fill(QColor(0, 90, 200));
+    if (!image.save(path))
+        return {};
+    const auto stored = document->assets().importFile(path, error);
+    return stored.has_value() ? stored->hash : AssetHash();
+}
+
 } // namespace
 
 class WorkbenchIntegrationTest : public QObject
@@ -272,6 +305,10 @@ private slots:
     void expandedCanvasCachesOutsideEntity();
     void cameraCacheDoesNotExpand();
     void sharedSolverResultsSkipMetaSolves();
+    void playbackRasterStoreIsQueued();
+    void playbackViewportQueuesRasterStore();
+    void editDiscardsQueuedRasterStores();
+    void shutdownDiscardsQueuedRasterStores();
 };
 
 void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
@@ -898,6 +935,198 @@ void WorkbenchIntegrationTest::sharedSolverResultsSkipMetaSolves()
     QCOMPARE(plain.sha1, injected.sha1);
     QCOMPARE(plain.bytes, injected.bytes);
     QCOMPARE(anim::solverEvaluationCount(), plainBefore + 6);
+}
+
+// Playback raster misses must not encode or write on the paint thread.  The
+// queue is bounded, drops the oldest pending frame, and the serial writer
+// fills the cache with whatever survived.
+void WorkbenchIntegrationTest::playbackRasterStoreIsQueued()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/async.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(),
+                               providers);
+    QVERIFY(services.cacheValid());
+    QVERIFY(services.buildMetaForTest(5).hasRaster);
+
+    QImage rendered(1280, 720, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(0, 90, 200));
+
+    services.setPlaybackActive(true);
+    QVERIFY(services.playbackActive());
+
+    QElapsedTimer timer;
+    timer.start();
+    constexpr int kFrames = 120;
+    for (int frame = 0; frame < kFrames; ++frame)
+        services.store(frame, Uuid(), rendered);
+    const double uiMeanMs =
+        double(timer.nsecsElapsed()) / 1.0e6 / double(kFrames);
+
+    // No event loop ran during the loop, so the writer could not drain the
+    // queue: the bound and its oldest-first drops are deterministic.
+    QCOMPARE(services.pendingStores(), 64);
+    QCOMPARE(services.droppedStores(), quint64(kFrames - 64));
+    QCOMPARE(services.lastDroppedFrame(), kFrames - 65);
+    QVERIFY2(uiMeanMs < 10.0,
+             qPrintable(QStringLiteral("store enqueue averaged %1 ms; WebP "
+                                       "encoding is still on the UI thread")
+                            .arg(uiMeanMs, 0, 'f', 2)));
+
+    QVERIFY(services.waitForPendingStores(30000));
+    QTest::qWait(50);
+    QCOMPARE(services.pendingStores(), 0);
+    QCOMPARE(services.asyncStoresWritten(), quint64(64));
+    QCOMPARE(services.workerEncodes(), quint64(64));
+    QCOMPARE(services.stats().entries, 64);
+    QCOMPARE(services.stats().pendingStores, 0);
+
+    // The newest frames survived the drop, so returning to the playhead after
+    // playback is a hit.
+    QVERIFY(!services.lookupForTest(kFrames - 1, Uuid()).isNull());
+    QVERIFY(services.lookupForTest(0, Uuid()).isNull());
+    QVERIFY(services.workerEncodeMeanMs() > 0.0);
+
+    services.setPlaybackActive(false);
+}
+
+void WorkbenchIntegrationTest::playbackViewportQueuesRasterStore()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/vpasync.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    NextWindow window(std::move(document));
+    window.resize(1280, 800);
+    window.show();
+    QTest::qWait(100);
+
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+    QVERIFY(services->buildMetaForTest(5).hasRaster);
+
+    window.document()->setPlayhead(5);
+    window.togglePlaybackForTest();
+    QVERIFY(window.isPlayingForTest());
+    QVERIFY(services->playbackActive());
+
+    const quint64 storesBefore = services->stats().stores;
+    const int pendingBefore = services->pendingStores();
+
+    // Paint one raster miss without pumping the event loop afterwards: the
+    // viewport must already have the picture and the store must be queued.
+    window.viewportForTest()->refresh();
+    window.viewportForTest()->repaint();
+    QVERIFY2(services->pendingStores() > pendingBefore,
+             "raster playback miss did not enter the writer queue");
+    QCOMPARE(services->stats().stores, storesBefore);
+
+    QVERIFY(services->waitForPendingStores(30000));
+    QVERIFY(!window.lookupForTest(5, Uuid()).isNull());
+    QVERIFY(services->asyncStoresWritten() > 0);
+
+    if (window.isPlayingForTest())
+        window.togglePlaybackForTest();
+}
+
+void WorkbenchIntegrationTest::editDiscardsQueuedRasterStores()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/edit.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    const Uuid image = addImageEntityRange(document.get(), hash, 400);
+
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(),
+                               providers);
+    QVERIFY(services.cacheValid());
+
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(0, 90, 200));
+    services.setPlaybackActive(true);
+    for (int frame = 0; frame < 5; ++frame)
+        services.store(frame, Uuid(), rendered);
+    QCOMPARE(services.pendingStores(), 5);
+
+    // Commit an edit without pumping events.  Document::changed clears the
+    // queue; the running encode may finish but must never write its old frame.
+    Entity moved = document->project().entities.value(image);
+    moved.transform.x = 12.0;
+    document->mutableProject().entities.insert(image, moved);
+    QVERIFY2(document->commitEntity(image, QStringLiteral("pvf: move image"),
+                                    &error),
+             qPrintable(error));
+    document->flush(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(services.pendingStores(), 0);
+
+    QVERIFY(services.waitForPendingStores(5000));
+    QTest::qWait(100);
+    QCOMPARE(services.asyncStoresWritten(), quint64(0));
+    QCOMPARE(services.stats().entries, 0);
+    QVERIFY(services.lookupForTest(0, Uuid()).isNull());
+}
+
+void WorkbenchIntegrationTest::shutdownDiscardsQueuedRasterStores()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/close.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    workbench::Options options;
+    {
+        WorkbenchServices::Providers providers;
+        WorkbenchServices services(document.get(), AppSettings{}, Uuid(),
+                                   providers);
+        QVERIFY(services.cacheValid());
+        options = services.options();
+        QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+        rendered.fill(QColor(0, 90, 200));
+        services.setPlaybackActive(true);
+        for (int frame = 0; frame < 5; ++frame)
+            services.store(frame, Uuid(), rendered);
+        QCOMPARE(services.pendingStores(), 5);
+    } // destructor waits for the worker and discards the queued frames
+
+    workbench::Cache reopened(
+        QDir(document->root()).filePath(QStringLiteral(".cache/workbench")),
+        QString(), options);
+    QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
+    QCOMPARE(reopened.cachedFrames().size(), 0);
 }
 
 QTEST_MAIN(WorkbenchIntegrationTest)
