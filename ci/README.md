@@ -38,10 +38,10 @@ cmake --preset tests                  # build-coord 风格：-O0 -g，全量测�
 
 ```bash
 mkdir -p /tmp/opencode               # solver/perf 自检会往这里写截图
-QT_QPA_PLATFORM=offscreen ./build/debug/pvforge --self-test
-QT_QPA_PLATFORM=offscreen ./build/debug/pvforge --solver-ui-test
-QT_QPA_PLATFORM=offscreen ./build/debug/pvforge --perf-monitor-test
-QT_QPA_PLATFORM=offscreen ./build/debug/pvforge --settings-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --self-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --solver-ui-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --perf-monitor-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --settings-test
 ```
 
 ## 预留选项（CMake 里尚未实现）

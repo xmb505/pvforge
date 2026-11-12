@@ -93,10 +93,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          ./build/debug/pvforge --self-test
-          ./build/debug/pvforge --solver-ui-test
-          ./build/debug/pvforge --perf-monitor-test
-          ./build/debug/pvforge --settings-test
+          ./build/debug/pvforge-tests --self-test
+          ./build/debug/pvforge-tests --solver-ui-test
+          ./build/debug/pvforge-tests --perf-monitor-test
+          ./build/debug/pvforge-tests --settings-test
 
       - name: 上传 Release 产物
         if: matrix.preset == 'release'

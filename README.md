@@ -57,13 +57,13 @@ cmake --build build
 ## 测试
 
 ```bash
-QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
-QT_QPA_PLATFORM=offscreen ./build/pvforge --export-test
-QT_QPA_PLATFORM=offscreen ./build/pvforge --mcp-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --self-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --export-test
+QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --mcp-test
 ctest --test-dir build --output-on-failure
 ```
 
-`src/main.cpp` 里还有按功能分组的离屏自检参数；完整清单以源码为准。
+`src/tests/` 里是按功能分组的离屏自检；自检只编进 `pvforge-tests`，Release 的 `pvforge` 不包含测试入口。完整清单以源码为准。
 
 ### CI 与本地验证
 

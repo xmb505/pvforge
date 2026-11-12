@@ -415,7 +415,7 @@ src/
 
 ## 测试
 
-每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge --xxx-test`：
+每个测试是独立启动模式，`QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --xxx-test`：
 
 self / save / autosave / special / export / keyframe-edit / frame-restore / layer / replace / library-picker / clipboard / group / opacity / multidrag / keyframe-drag / curve-editor / audio-undo / delete / undo / rename / pack / lock / gizmo / pivot / pivot-gizmo / scale-handle / scale-undo / snap / settings / shape / import-async / drag-undo / rotation-snap / entity-snap / guide / timeline-frame / camera / camera-parent / monitor-feature / easing / audio / video / folder / timeline-interaction / timeline-rowbuttons / open-timeline / timeline-zoom / play / workbench / layout / library / welcome
 
