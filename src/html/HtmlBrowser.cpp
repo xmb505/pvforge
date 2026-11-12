@@ -242,6 +242,14 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
     arguments.insert(1, m_usingPipe ? QStringLiteral("--remote-debugging-pipe")
                                     : QStringLiteral("--remote-debugging-port=0"));
 
+    // Some CI kernels disallow the Chrome sandbox; opt in explicitly rather
+    // than weakening the default local sandbox.
+    if (qEnvironmentVariableIsSet("PVFORGE_CHROME_NO_SANDBOX"))
+    {
+        arguments << QStringLiteral("--no-sandbox")
+                  << QStringLiteral("--disable-setuid-sandbox");
+    }
+
     if (options.offline && !hasArguments(arguments, QStringLiteral("--host-resolver-rules")))
     {
         arguments << QStringLiteral("--host-resolver-rules=MAP * ~NOTFOUND")

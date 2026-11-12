@@ -72,6 +72,7 @@ APT_PACKAGES=(
     libxcb-shape0
     libxcb-xkb1
     xvfb
+    fonts-noto-cjk
     python3-venv
 )
 

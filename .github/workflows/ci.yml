@@ -22,6 +22,8 @@ env:
   #   next.camera_monitor —— 取色阈值（软件光栅下偏暗）
   # 它们在下面单独跑、失败不判红；其余测试必须全绿，构建失败一律判红。
   KNOWN_FLAKY: '(viewport\.tests|next\.media_services|next\.camera_monitor)'
+  # Chrome 在 GitHub runner 上无法使用内核 sandbox；只对 CI 打开。
+  PVFORGE_CHROME_NO_SANDBOX: '1'
 
 jobs:
   build-test:
