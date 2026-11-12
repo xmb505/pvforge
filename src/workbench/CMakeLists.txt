@@ -26,6 +26,11 @@ if(NOT TARGET pvf_perf)
                      ${CMAKE_CURRENT_BINARY_DIR}/perf_dep)
 endif()
 
+if(NOT TARGET pvf_framecache)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../framecache
+                     ${CMAKE_CURRENT_BINARY_DIR}/framecache_dep)
+endif()
+
 add_library(pvf_workbench STATIC
     Cache.cpp
     MetaBuilder.cpp
@@ -35,7 +40,7 @@ add_library(pvf_workbench STATIC
 target_include_directories(pvf_workbench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 target_link_libraries(pvf_workbench
-    PUBLIC pvf_render2 Qt6::Core Qt6::Gui Qt6::Sql pvf_perf
+    PUBLIC pvf_render2 Qt6::Core Qt6::Gui Qt6::Sql pvf_perf pvf_framecache
 )
 
 target_compile_features(pvf_workbench PUBLIC cxx_std_20)

@@ -1,7 +1,11 @@
 #include "htmlcache/HtmlCache.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -67,6 +71,9 @@ private slots:
     void diskClearAsset();
     void diskCorruptFileIsMiss();
     void diskIndexSurvivesRestart();
+    void diskLegacyEntriesIndexMigrates();
+    void diskLegacyJsonIndexMigrates();
+    void diskStatsCounters();
     void tieredColdHitBackfillsHot();
     void tieredPutAndClear();
 };
@@ -381,6 +388,144 @@ void HtmlCacheTest::diskIndexSurvivesRestart()
         DiskCache cache(directory.path());
         QCOMPARE(cache.entryCount(), 0);
     }
+}
+
+void HtmlCacheTest::diskLegacyEntriesIndexMigrates()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const FrameKey key = makeKey(repeatedHash(QLatin1Char('a')), 9);
+    const QString canonical = canonicalKey(key);
+    const QString path =
+        QDir(directory.path()).filePath(canonical + QStringLiteral(".webp"));
+    const QImage image = makeImage();
+    const QByteArray data = encodeWebp(image);
+    QVERIFY(!data.isEmpty());
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(data), qint64(data.size()));
+    }
+
+    // htmlcache's historical index: entries(key, path, size, last_access,
+    // asset_hash), with user_version left at 0.
+    const QString connection =
+        QStringLiteral("pvf_htmlcache_legacy_%1").arg(quintptr(&directory), 0, 16);
+    {
+        QSqlDatabase db =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(
+            QDir(directory.path()).filePath(QStringLiteral("index.sqlite")));
+        QVERIFY2(db.open(), qPrintable(db.lastError().text()));
+        QSqlQuery query(db);
+        QVERIFY2(query.exec(QStringLiteral(
+                     "CREATE TABLE entries ("
+                     "key TEXT PRIMARY KEY, path TEXT NOT NULL, "
+                     "size INTEGER NOT NULL, last_access INTEGER NOT NULL, "
+                     "asset_hash TEXT NOT NULL)")),
+                 qPrintable(query.lastError().text()));
+        QSqlQuery insert(db);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO entries(key, path, size, last_access, asset_hash) "
+            "VALUES(?, ?, ?, ?, ?)"));
+        insert.addBindValue(canonical);
+        insert.addBindValue(QStringLiteral("/stale/absolute/") + canonical
+                            + QStringLiteral(".webp"));
+        insert.addBindValue(data.size());
+        insert.addBindValue(1234);
+        insert.addBindValue(key.assetHash);
+        QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+
+    DiskCache cache(directory.path());
+    QVERIFY2(cache.isReady(), qPrintable(cache.lastError()));
+    QCOMPARE(cache.entryCount(), 1);
+    QCOMPARE(cache.indexBackend(), QStringLiteral("SQLite"));
+
+    const std::optional<QImage> loaded = cache.get(key);
+    QVERIFY(loaded.has_value());
+    QCOMPARE(loaded->size(), image.size());
+
+    // The migrated asset hash must still drive clearAsset.
+    cache.clearAsset(key.assetHash);
+    QCOMPARE(cache.entryCount(), 0);
+    QVERIFY(!QFileInfo::exists(path));
+}
+
+void HtmlCacheTest::diskLegacyJsonIndexMigrates()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const FrameKey key = makeKey(repeatedHash(QLatin1Char('b')), 11);
+    const QString canonical = canonicalKey(key);
+    const QString path =
+        QDir(directory.path()).filePath(canonical + QStringLiteral(".webp"));
+    const QImage image = makeImage();
+    const QByteArray data = encodeWebp(image);
+    QVERIFY(!data.isEmpty());
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(data), qint64(data.size()));
+    }
+
+    // htmlcache's no-SQLite fallback index.
+    const QString json = QStringLiteral(
+                             "{\"version\":1,\"entries\":["
+                             "{\"key\":\"%1\",\"path\":\"%2\",\"size\":%3,"
+                             "\"lastAccess\":42,\"assetHash\":\"%4\"}]}")
+                             .arg(canonical, path)
+                             .arg(data.size())
+                             .arg(key.assetHash);
+    {
+        QFile file(
+            QDir(directory.path()).filePath(QStringLiteral("index.json")));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(json.toUtf8()), qint64(json.toUtf8().size()));
+    }
+
+    DiskCache cache(directory.path());
+    QVERIFY2(cache.isReady(), qPrintable(cache.lastError()));
+    QCOMPARE(cache.entryCount(), 1);
+    QVERIFY(cache.get(key).has_value());
+
+    cache.clearAsset(key.assetHash);
+    QCOMPARE(cache.entryCount(), 0);
+    QVERIFY(!QFileInfo::exists(path));
+}
+
+void HtmlCacheTest::diskStatsCounters()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    DiskCache cache(directory.path(), 1024LL * 1024);
+    QVERIFY2(cache.isReady(), qPrintable(cache.lastError()));
+
+    const FrameKey key = makeKey(repeatedHash(QLatin1Char('a')), 4);
+    cache.put(key, makeImage());
+    QVERIFY(cache.get(key).has_value());
+
+    FrameKey miss = key;
+    miss.localFrame = 5;
+    QVERIFY(!cache.get(miss).has_value());
+
+    framecache::Stats stats = cache.stats();
+    QCOMPARE(stats.entries, 1);
+    QCOMPARE(stats.stores, quint64(1));
+    QCOMPARE(stats.hits, quint64(1));
+    QCOMPARE(stats.misses, quint64(1));
+    QCOMPARE(stats.diskBytes, cache.currentBytes());
+    QCOMPARE(stats.budgetBytes, cache.maxBytes());
+
+    cache.setMaxBytes(0);
+    QCOMPARE(cache.entryCount(), 0);
+    QCOMPARE(cache.stats().evictions, quint64(1));
+    QCOMPARE(cache.stats().diskBytes, qint64(0));
 }
 
 void HtmlCacheTest::tieredColdHitBackfillsHot()

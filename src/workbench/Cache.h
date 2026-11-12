@@ -40,24 +40,25 @@ struct EncodedFrame
 //
 // Frames without raster assets are stored as <frame>.qoi (built-in codec,
 // lossless alpha, ~2 ms encode at 1280x720); frames containing an image, video
-// or HTML asset stay <frame>.webp so photos do not balloon the disk.  A
-// SQLite row holds the full FrameMeta plus the codec name.  A lookup only hits
-// when the current meta is byte-identical to the stored one; stale images are
-// left in place until store() overwrites them.  Loading the index also drops
-// rows whose file disappeared and deletes frame files that have no row
-// (leftovers from an interrupted store).
+// or HTML asset stay <frame>.webp so photos do not balloon the disk.  The
+// shared framecache Store keeps one row per frame in frame_entries, with the
+// full FrameMeta in its payload blob and the sha1 in its tag blob.  A lookup
+// only hits when the current meta is byte-identical to the stored one; stale
+// images are left in place until store() overwrites them.  Loading the index
+// also drops rows whose file disappeared and deletes frame files that have no
+// row (leftovers from an interrupted store).
 //
-// Existing caches from the WebP-only format keep working: the codec column is
-// added by ALTER TABLE with a 'webp' default, and orphan cleanup understands
-// both extensions.
+// Existing caches from the WebP-only format and the v2 codec column are
+// imported into frame_entries on first open (the old table is kept as a
+// read-only backup), and orphan cleanup understands both extensions.
 //
 // Encoding is a pure function of (image, targetSize, hasRaster): encode() may
 // run on a worker thread, while storeEncoded() and store() write the file and
 // index on the cache-owning (UI) thread.
 //
 // Not thread-safe: the background scan worker owns its instance and the UI
-// thread owns another one.  QSqlDatabase connections are bound to the thread
-// that created the Cache (and are removed in the destructor).
+// thread owns another one.  framecache::Store connections are bound to the
+// thread that created the Cache (and are removed in the destructor).
 class Cache : public QObject
 {
 public:

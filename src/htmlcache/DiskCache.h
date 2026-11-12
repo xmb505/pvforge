@@ -2,6 +2,8 @@
 
 #include "htmlcache/FrameCache.h"
 
+#include "framecache/Store.h"
+
 #include <QString>
 
 #include <memory>
@@ -9,8 +11,8 @@
 namespace pvf::htmlcache {
 
 // Local disk LRU cache. Frames live in <directory>/<canonicalKey>.webp; the
-// index is SQLite when Qt6::Sql is available, otherwise a JSON file. The
-// directory is disposable: startup removes orphaned or corrupt entries.
+// index is the shared framecache SQLite schema. The directory is disposable:
+// startup removes orphaned or corrupt entries.
 class DiskCache : public FrameCache
 {
 public:
@@ -30,9 +32,10 @@ public:
     qint64 maxBytes() const;
 
     QString directory() const;
-    QString indexBackend() const; // "SQLite" or "JSON"
+    QString indexBackend() const; // "SQLite"
     bool isReady() const;
     QString lastError() const;
+    framecache::Stats stats() const;
 
 private:
     struct Impl;

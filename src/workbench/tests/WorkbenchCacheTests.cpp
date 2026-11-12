@@ -1492,10 +1492,28 @@ void WorkbenchCacheTests::cacheReadsLegacyWebp()
             QStringLiteral("QSQLITE"), connectionName);
         db.setDatabaseName(QDir(directory).filePath(QStringLiteral("index.sqlite")));
         QVERIFY2(db.open(), qPrintable(db.lastError().text()));
+
+        QByteArray metaBytes;
+        QByteArray sha1;
+        qint64 bytes = 0;
+        qint64 lastAccess = 0;
         {
             QSqlQuery query(db);
             QVERIFY2(query.exec(QStringLiteral(
-                         "ALTER TABLE frames RENAME TO frames_v2")),
+                         "SELECT payload, tag, bytes, last_access "
+                         "FROM frame_entries WHERE key = '3'")),
+                     qPrintable(query.lastError().text()));
+            QVERIFY(query.next());
+            metaBytes = query.value(0).toByteArray();
+            sha1 = query.value(1).toByteArray();
+            bytes = query.value(2).toLongLong();
+            lastAccess = query.value(3).toLongLong();
+        }
+        {
+            // Replace the shared index with the pre-framecache WebP-only
+            // schema (no codec column, user_version 2).
+            QSqlQuery query(db);
+            QVERIFY2(query.exec(QStringLiteral("DROP TABLE frame_entries")),
                      qPrintable(query.lastError().text()));
             QVERIFY2(query.exec(QStringLiteral(
                          "CREATE TABLE frames ("
@@ -1505,11 +1523,16 @@ void WorkbenchCacheTests::cacheReadsLegacyWebp()
                          "bytes INTEGER NOT NULL, "
                          "last_access INTEGER NOT NULL)")),
                      qPrintable(query.lastError().text()));
-            QVERIFY2(query.exec(QStringLiteral(
-                         "INSERT INTO frames SELECT frame, meta, sha1, bytes, "
-                         "last_access FROM frames_v2")),
-                     qPrintable(query.lastError().text()));
-            QVERIFY2(query.exec(QStringLiteral("DROP TABLE frames_v2")),
+            QSqlQuery insert(db);
+            insert.prepare(QStringLiteral(
+                "INSERT INTO frames(frame, meta, sha1, bytes, last_access) "
+                "VALUES(3, ?, ?, ?, ?)"));
+            insert.addBindValue(metaBytes);
+            insert.addBindValue(sha1);
+            insert.addBindValue(bytes);
+            insert.addBindValue(lastAccess);
+            QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
+            QVERIFY2(query.exec(QStringLiteral("PRAGMA user_version=2")),
                      qPrintable(query.lastError().text()));
         }
         db.close();
