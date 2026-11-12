@@ -34,6 +34,7 @@
 #include "mcp2/HttpServer.h"
 #include "model/Project.h"
 #include "model/Uuid.h"
+#include "render2/Render.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
@@ -69,15 +70,18 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QBuffer>
 #include <QComboBox>
 #include <QCryptographicHash>
 #include <QClipboard>
 #include <QDialog>
 #include <QDebug>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QImageWriter>
 #include <QCheckBox>
 #include <QFocusEvent>
 #include <QDataStream>
@@ -105,6 +109,7 @@
 #include <QEventLoop>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSettings>
 #include <QSpinBox>
 #include <QSplitter>
@@ -2485,6 +2490,713 @@ int solverPlaybackPerfTest(QApplication& app)
         << " ms/frame=" << secondMsPerFrame << " fps=" << secondFps
         << " workbenchHits=" << workbenchHits << " editDelta=" << editDelta
         << " finalCount=" << finalCount;
+    return 0;
+}
+
+// ---- Cache-miss playback profile (issue #58) -----------------------------
+//
+// Measurement-only mode.  It builds synthetic 1920x1080 projects plus a copy
+// of the user's project and separates the cost of one uncached playback frame
+// into render / workbench store / lookup / CameraMonitor.  Nothing here is on
+// a production path.
+
+struct ProfileSamples
+{
+    QVector<double> ms;
+
+    void addNs(qint64 ns)
+    {
+        ms.append(static_cast<double>(ns) / 1.0e6);
+    }
+
+    double mean() const
+    {
+        if (ms.isEmpty())
+            return 0.0;
+        double sum = 0.0;
+        for (const double value : ms)
+            sum += value;
+        return sum / double(ms.size());
+    }
+
+    double percentile(double p) const
+    {
+        if (ms.isEmpty())
+            return 0.0;
+        QVector<double> sorted = ms;
+        std::sort(sorted.begin(), sorted.end());
+        const int index =
+            std::clamp(int(std::ceil(p * double(sorted.size()))) - 1, 0,
+                       int(sorted.size()) - 1);
+        return sorted.at(index);
+    }
+};
+
+QString profileStatsDelta(const pvf::workbench::CacheStats& before,
+                          const pvf::workbench::CacheStats& after)
+{
+    return QStringLiteral("stores +%1 hits +%2 misses +%3 entries %4 "
+                          "memFrames %5")
+        .arg(after.stores - before.stores)
+        .arg(after.hits - before.hits)
+        .arg(after.misses - before.misses)
+        .arg(after.entries)
+        .arg(after.memoryFrames);
+}
+
+void reportProfile(const QString& scenario, const QString& label,
+                   const ProfileSamples& samples, const QString& extra = {})
+{
+    qInfo().noquote()
+        << QStringLiteral("cache-miss-profile | %1 | %2 | n=%3 mean=%4 ms "
+                          "p50=%5 ms p95=%6 ms fps=%7 | %8")
+               .arg(scenario, label)
+               .arg(samples.ms.size())
+               .arg(samples.mean(), 0, 'f', 2)
+               .arg(samples.percentile(0.5), 0, 'f', 2)
+               .arg(samples.percentile(0.95), 0, 'f', 2)
+               .arg(samples.mean() > 0.0 ? 1000.0 / samples.mean() : 0.0, 0,
+                    'f', 1)
+               .arg(extra);
+}
+
+bool copyProfileProject(const QString& source, const QString& target,
+                        QString* error)
+{
+    const QDir sourceDir(source);
+    if (!sourceDir.exists())
+    {
+        *error = QStringLiteral("missing project: %1").arg(source);
+        return false;
+    }
+    if (!QDir().mkpath(target))
+    {
+        *error = QStringLiteral("cannot create %1").arg(target);
+        return false;
+    }
+
+    QDirIterator it(source, QDir::Files | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext())
+    {
+        const QString from = it.next();
+        const QString relative = sourceDir.relativeFilePath(from);
+        // The copy must start with a cold cache, and history is not needed for
+        // a render profile.
+        if (relative.startsWith(QStringLiteral(".git/"))
+            || relative.startsWith(QStringLiteral(".cache/")))
+            continue;
+        const QString to = QDir(target).filePath(relative);
+        if (!QDir().mkpath(QFileInfo(to).absolutePath()))
+        {
+            *error = QStringLiteral("cannot create %1")
+                         .arg(QFileInfo(to).absolutePath());
+            return false;
+        }
+        if (!QFile::copy(from, to))
+        {
+            *error = QStringLiteral("cannot copy %1").arg(relative);
+            return false;
+        }
+    }
+    return true;
+}
+
+struct ProfileFixture
+{
+    QString name;
+    int vectors = 0;
+    int texts = 0;
+    bool strokes = false;
+};
+
+pvf::Uuid buildProfileFixture(pvf::EditorSession& session,
+                              const ProfileFixture& fixture, QString* error)
+{
+    pvf::model::Project& project = session.mutableProject();
+    QVector<pvf::Uuid> uuids;
+
+    const int perRow =
+        fixture.vectors <= 10 ? 3 : (fixture.vectors <= 60 ? 10 : 20);
+    const int rows = std::max(1, (fixture.vectors + perRow - 1) / perRow);
+    for (int i = 0; i < fixture.vectors; ++i)
+    {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = QStringLiteral("图元 %1").arg(i + 1);
+        entity.start = 0;
+        entity.end = 3000;
+        entity.row = i;
+        entity.content.kind = pvf::ContentKind::Vector;
+        pvf::model::VectorContent& vector = entity.content.vector;
+        vector.shape = i % 2;
+        vector.width = 90.0 + 14.0 * (i % 5);
+        vector.height = 64.0 + 12.0 * (i % 4);
+        vector.fillColor =
+            QColor::fromHsv((i * 37) % 360, 180, 235).name(QColor::HexArgb);
+        vector.strokeWidth = fixture.strokes && i % 3 == 0 ? 6.0 : 0.0;
+        vector.strokeColor = QStringLiteral("#101014");
+
+        const int column = i % perRow;
+        const int row = i / perRow;
+        entity.transform.x =
+            -880.0 + 1760.0 * double(column + 1) / double(perRow + 1);
+        entity.transform.y =
+            400.0 - 800.0 * double(row + 1) / double(rows + 1);
+
+        project.entities.insert(entity.uuid, entity);
+        uuids.append(entity.uuid);
+    }
+
+    for (int i = 0; i < fixture.texts; ++i)
+    {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = QStringLiteral("标题 %1").arg(i + 1);
+        entity.start = 0;
+        entity.end = 3000;
+        entity.row = fixture.vectors + i;
+        entity.content.kind = pvf::ContentKind::Text;
+        entity.content.text.text =
+            QStringLiteral("PVForge 性能标题 %1 · 未缓存播放").arg(i + 1);
+        entity.content.text.pixelSize = 96;
+        entity.content.text.color = QStringLiteral("#ffffff");
+        entity.content.text.strokeColor = QStringLiteral("#000000");
+        entity.content.text.strokeWidth = fixture.strokes ? 5.0 : 0.0;
+        entity.transform.x = -420.0 + 380.0 * i;
+        entity.transform.y = 360.0 - 90.0 * i;
+
+        project.entities.insert(entity.uuid, entity);
+        uuids.append(entity.uuid);
+    }
+
+    if (uuids.isEmpty())
+    {
+        *error = QStringLiteral("fixture has no entities");
+        return {};
+    }
+    if (!session.document()->commitEntities(
+            uuids, QStringLiteral("cache miss profile fixture"), error))
+        return {};
+    session.flush();
+    return uuids.first();
+}
+
+int runCacheProfileScenario(const QString& scenario,
+                            std::unique_ptr<pvf::EditorSession> session,
+                            const pvf::Uuid& selected, QString* error)
+{
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1440, 900);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    auto* live = window->editorSessionForTest();
+    auto* viewport = window->viewportForTest();
+    auto* monitor = window->findChild<pvf::CameraMonitor*>();
+    auto* workbench = live ? live->workbench() : nullptr;
+    auto* document = live ? live->document() : nullptr;
+    if (!live || !viewport || !monitor || !workbench || !document)
+    {
+        *error = QStringLiteral("window parts missing");
+        window->close();
+        QApplication::processEvents();
+        return 1;
+    }
+
+    // The user's screenshot has an entity selected and the floating monitor
+    // open; keep both states for every measured frame.
+    document->setSelection(selected);
+    monitor->setVisible(true);
+    live->setPlayhead(0);
+    QApplication::processEvents();
+    QApplication::processEvents();
+
+    constexpr int kFrames = 50;
+    qInfo().nospace()
+        << "cache-miss-profile | scenario=" << scenario
+        << " entities=" << live->project().entities.size()
+        << " viewport=" << viewport->width() << 'x' << viewport->height()
+        << " monitor=" << monitor->width() << 'x' << monitor->height()
+        << " cacheTarget=" << workbench->targetSize().width() << 'x'
+        << workbench->targetSize().height()
+        << " scale=" << workbench->scalePercent()
+        << "% expand=" << workbench->expandPercent()
+        << "% cacheDir=" << workbench->cacheDirectory();
+
+    auto stats = [workbench] { return workbench->stats(); };
+
+    // Hidden: no monitor paint at all.  Auto: the monitor is visible but only
+    // the playhead's update() request paints it inside processEvents().
+    // Explicit: monitor->repaint() runs in the timed paint slot.
+    enum class MonitorPaint { Hidden, Auto, Explicit };
+    auto measureWholeFrame = [&](const QString& label, int firstFrame,
+                                 MonitorPaint monitorPaint,
+                                 QVector<QImage>* captured) {
+        const bool monitorVisible = monitorPaint != MonitorPaint::Hidden;
+        monitor->setVisible(monitorVisible);
+        QApplication::processEvents();
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        ProfileSamples paintSamples;
+        ProfileSamples eventSamples;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            QElapsedTimer timer;
+            timer.start();
+            live->setPlayhead(firstFrame + i);
+            viewport->repaint();
+            if (monitorPaint == MonitorPaint::Explicit)
+                monitor->repaint();
+            const qint64 paintNs = timer.nsecsElapsed();
+            paintSamples.addNs(paintNs);
+            QApplication::processEvents();
+            const qint64 totalNs = timer.nsecsElapsed();
+            eventSamples.addNs(totalNs - paintNs);
+            samples.addNs(totalNs);
+            if (captured)
+                captured->append(viewport->sessionImageForTest());
+        }
+        const pvf::workbench::CacheStats after = stats();
+        reportProfile(scenario, label, samples,
+                      QStringLiteral("paint=%1 ms events=%2 ms | %3")
+                          .arg(paintSamples.mean(), 0, 'f', 2)
+                          .arg(eventSamples.mean(), 0, 'f', 2)
+                          .arg(profileStatsDelta(before, after)));
+    };
+
+    // Interleaved so a drifting CPU frequency cannot look like a monitor
+    // effect; each condition is sampled twice.
+    QVector<QImage> viewportImages;
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=hidden A"), 0,
+                      MonitorPaint::Hidden, nullptr);
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=visible A"),
+                      kFrames, MonitorPaint::Explicit, &viewportImages);
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=hidden B"),
+                      2 * kFrames, MonitorPaint::Hidden, nullptr);
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=visible B"),
+                      3 * kFrames, MonitorPaint::Explicit, nullptr);
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=auto (visible)"),
+                      4 * kFrames, MonitorPaint::Auto, nullptr);
+    measureWholeFrame(QStringLiteral("whole-frame miss monitor=hidden C"),
+                      5 * kFrames, MonitorPaint::Hidden, nullptr);
+
+    // CameraMonitor alone: a fresh playhead invalidates its preview and grab()
+    // renders the draft-size camera image plus the widget chrome.
+    {
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            QElapsedTimer timer;
+            timer.start();
+            live->setPlayhead(1000 + i);
+            monitor->grab();
+            samples.addNs(timer.nsecsElapsed());
+        }
+        reportProfile(scenario, QStringLiteral("camera-monitor render (grab)"),
+                      samples, profileStatsDelta(before, stats()));
+        QApplication::processEvents();
+    }
+
+    // Store microbenchmark with the real viewport-sized images.  Fresh frame
+    // numbers keep every call a real miss (new file + new index row).
+    double storeMeanMs = 0.0;
+    {
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            const QImage image =
+                viewportImages.isEmpty()
+                    ? QImage()
+                    : viewportImages.at(i % viewportImages.size());
+            QElapsedTimer timer;
+            timer.start();
+            workbench->store(400 + i, workbench->cameraUuid(), image);
+            samples.addNs(timer.nsecsElapsed());
+        }
+        const pvf::workbench::CacheStats after = stats();
+        storeMeanMs = samples.mean();
+        reportProfile(scenario,
+                      QStringLiteral("store (viewport frame -> cache)"),
+                      samples, profileStatsDelta(before, after));
+    }
+
+    const QImage lookupImage = viewportImages.isEmpty()
+                                   ? QImage()
+                                   : viewportImages.first();
+    // Warm hit with a known-resident frame: 20 stores fit in the 256 MB LRU
+    // budget (about 3.7 MB per 1280x720 frame), so the image comes back from
+    // memory.  The meta is still rebuilt and the SQLite row touched.
+    {
+        for (int i = 0; i < 20; ++i)
+            workbench->store(500 + i, workbench->cameraUuid(), lookupImage);
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        int hits = 0;
+        for (int i = 0; i < 20; ++i)
+        {
+            bool hit = false;
+            QElapsedTimer timer;
+            timer.start();
+            const QImage image =
+                workbench->lookup(500 + i, workbench->cameraUuid(), &hit);
+            samples.addNs(timer.nsecsElapsed());
+            if (hit && !image.isNull())
+                ++hits;
+        }
+        reportProfile(scenario, QStringLiteral("lookup hit (memory LRU)"),
+                      samples, QStringLiteral("hits %1/20 | %2")
+                                   .arg(hits)
+                                   .arg(profileStatsDelta(before, stats())));
+    }
+
+    // Push the 500..519 images out of the LRU with 80 fresh stores; the same
+    // lookups now decode the WebP from disk.
+    {
+        for (int i = 0; i < 80; ++i)
+            workbench->store(600 + i, workbench->cameraUuid(), lookupImage);
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        int hits = 0;
+        for (int i = 0; i < 20; ++i)
+        {
+            bool hit = false;
+            QElapsedTimer timer;
+            timer.start();
+            const QImage image =
+                workbench->lookup(500 + i, workbench->cameraUuid(), &hit);
+            samples.addNs(timer.nsecsElapsed());
+            if (hit && !image.isNull())
+                ++hits;
+        }
+        reportProfile(scenario,
+                      QStringLiteral("lookup hit (evicted, WebP decode)"),
+                      samples, QStringLiteral("hits %1/20 | %2")
+                                   .arg(hits)
+                                   .arg(profileStatsDelta(before, stats())));
+    }
+
+    // Cached playback, whole frame: a resident hit and a decode hit.  This is
+    // the framerate the uncached path is compared against.
+    auto measureCachedWholeFrame = [&](const QString& label, int firstFrame,
+                                       int count) {
+        monitor->setVisible(true);
+        QApplication::processEvents();
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        for (int i = 0; i < count; ++i)
+        {
+            QElapsedTimer timer;
+            timer.start();
+            live->setPlayhead(firstFrame + i);
+            viewport->repaint();
+            monitor->repaint();
+            QApplication::processEvents();
+            samples.addNs(timer.nsecsElapsed());
+        }
+        const pvf::workbench::CacheStats after = stats();
+        reportProfile(scenario, label, samples,
+                      QStringLiteral("hits +%1 | %2")
+                          .arg(after.hits - before.hits)
+                          .arg(profileStatsDelta(before, after)));
+    };
+    measureCachedWholeFrame(QStringLiteral("whole-frame cached (memory hit)"),
+                            670, 10);
+    // The lookup-hit benchmark above re-inserted 500..519 into the LRU when it
+    // decoded them; evict them again so the next pass really decodes.
+    for (int i = 0; i < 80; ++i)
+        workbench->store(700 + i, workbench->cameraUuid(), lookupImage);
+    measureCachedWholeFrame(QStringLiteral("whole-frame cached (decode)"),
+                            500, 10);
+
+    // Raw render2 cost at project resolution, exactly what export and
+    // grabProjectFrame use.
+    {
+        ProfileSamples samples;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            live->setPlayhead(100 + i);
+            QElapsedTimer timer;
+            timer.start();
+            const QImage image = viewport->grabProjectFrame();
+            samples.addNs(timer.nsecsElapsed());
+            if (image.isNull())
+            {
+                *error = QStringLiteral("grabProjectFrame returned null");
+                window->close();
+                QApplication::processEvents();
+                return 1;
+            }
+        }
+        reportProfile(scenario,
+                      QStringLiteral("render 1920x1080 (grabProjectFrame)"),
+                      samples, QStringLiteral("output=1920x1080"));
+        QApplication::processEvents();
+    }
+
+    // Raw render2 cost at the viewport's paint size with the same expanded
+    // world rect the workbench lookup/render path uses.
+    {
+        const int expand = workbench->expandPercent();
+        ProfileSamples samples;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            live->setPlayhead(100 + i);
+            QElapsedTimer timer;
+            timer.start();
+            pvf::render2::Options options;
+            options.projectFrame = live->playhead();
+            options.outputSize = viewport->size();
+            if (expand > 0)
+            {
+                options.worldRect = pvf::workbench::renderRect(
+                    live->project(), expand);
+                options.transparentOutsideCanvas = true;
+            }
+            pvf::anim::Cache& cache = live->animCache();
+            pvf::render2::SceneWorld world(live->project(), live->assets(),
+                                           &cache);
+            const QImage image = pvf::render2::renderFrame(
+                live->project(), live->assets(), options, world, cache);
+            samples.addNs(timer.nsecsElapsed());
+            if (image.isNull())
+            {
+                *error = QStringLiteral("viewport render returned null");
+                window->close();
+                QApplication::processEvents();
+                return 1;
+            }
+        }
+        reportProfile(scenario,
+                      QStringLiteral("render @ viewport size (render2)"),
+                      samples,
+                      QStringLiteral("output=%1x%2")
+                          .arg(viewport->width())
+                          .arg(viewport->height()));
+    }
+
+    // Lookup on fresh frames: meta build + SHA-1 + SQLite miss.
+    {
+        const pvf::workbench::CacheStats before = stats();
+        ProfileSamples samples;
+        int hits = 0;
+        for (int i = 0; i < kFrames; ++i)
+        {
+            bool hit = false;
+            QElapsedTimer timer;
+            timer.start();
+            const QImage image =
+                workbench->lookup(300 + i, workbench->cameraUuid(), &hit);
+            samples.addNs(timer.nsecsElapsed());
+            if (hit)
+                ++hits;
+        }
+        reportProfile(scenario, QStringLiteral("lookup miss (meta + sqlite)"),
+                      samples, QStringLiteral("hits %1/%2 | %3")
+                                   .arg(hits)
+                                   .arg(kFrames)
+                                   .arg(profileStatsDelta(before, stats())));
+    }
+
+    // Split the store cost with the same Qt primitives the cache uses:
+    // smooth scale, WebP quality 80, QSaveFile write.  The residual is
+    // SQLite upsert, LRU bookkeeping and directory stat work.
+    if (!viewportImages.isEmpty())
+    {
+        const QSize target = workbench->targetSize();
+        const QImage source = viewportImages.first();
+        const QString encodePath =
+            QDir(QDir::tempPath()).filePath(
+                QStringLiteral("pvf-cache-profile-encode.webp"));
+        ProfileSamples scaleSamples;
+        ProfileSamples encodeSamples;
+        ProfileSamples writeSamples;
+        qint64 encodedBytes = 0;
+        bool encodeOk = true;
+        for (int i = 0; i < 20; ++i)
+        {
+            QElapsedTimer timer;
+            timer.start();
+            const QImage scaled = source.scaled(
+                target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            scaleSamples.addNs(timer.nsecsElapsed());
+
+            QByteArray data;
+            QBuffer buffer(&data);
+            buffer.open(QIODevice::WriteOnly);
+            QImageWriter writer(&buffer, QByteArrayLiteral("webp"));
+            writer.setQuality(80);
+            timer.restart();
+            encodeOk = writer.write(scaled);
+            encodeSamples.addNs(timer.nsecsElapsed());
+            buffer.close();
+            if (!encodeOk)
+                break;
+            encodedBytes = data.size();
+
+            QSaveFile file(encodePath);
+            timer.restart();
+            if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size()
+                || !file.commit())
+            {
+                encodeOk = false;
+                break;
+            }
+            writeSamples.addNs(timer.nsecsElapsed());
+        }
+
+        const double measured =
+            scaleSamples.mean() + encodeSamples.mean() + writeSamples.mean();
+        qInfo().noquote()
+            << QStringLiteral(
+                   "cache-miss-profile | %1 | store split | scale=%2 ms "
+                   "webp-encode=%3 ms qsave-write=%4 ms "
+                   "residual(sqlite/lru)=%5 ms total=%6 ms | %7 KB")
+                   .arg(scenario)
+                   .arg(scaleSamples.mean(), 0, 'f', 2)
+                   .arg(encodeSamples.mean(), 0, 'f', 2)
+                   .arg(writeSamples.mean(), 0, 'f', 2)
+                   .arg(std::max(0.0, storeMeanMs - measured), 0, 'f', 2)
+                   .arg(storeMeanMs, 0, 'f', 2)
+                   .arg(encodedBytes / 1024);
+        if (!encodeOk)
+        {
+            *error = QStringLiteral("WebP encode failed during store split");
+            window->close();
+            QApplication::processEvents();
+            return 1;
+        }
+
+        // How much of the encode cost is the cached size itself?  960x540 is
+        // the workbench target when expandPercent is 0 (plain 50% project
+        // scale); 1280x720 is what the default 50% expand produces.
+        auto encodeMs = [&source](const QSize& size, int quality) {
+            ProfileSamples samples;
+            for (int i = 0; i < 10; ++i)
+            {
+                const QImage scaled = source.scaled(
+                    size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                QByteArray data;
+                QBuffer buffer(&data);
+                buffer.open(QIODevice::WriteOnly);
+                QImageWriter writer(&buffer, QByteArrayLiteral("webp"));
+                writer.setQuality(quality);
+                QElapsedTimer timer;
+                timer.start();
+                if (!writer.write(scaled))
+                    return -1.0;
+                samples.addNs(timer.nsecsElapsed());
+            }
+            return samples.mean();
+        };
+        qInfo().noquote()
+            << QStringLiteral(
+                   "cache-miss-profile | %1 | encode-size sweep | "
+                   "1280x720-q80=%2 ms 960x540-q80=%3 ms 640x360-q80=%4 ms "
+                   "1280x720-q60=%5 ms")
+                   .arg(scenario)
+                   .arg(encodeMs(QSize(1280, 720), 80), 0, 'f', 2)
+                   .arg(encodeMs(QSize(960, 540), 80), 0, 'f', 2)
+                   .arg(encodeMs(QSize(640, 360), 80), 0, 'f', 2)
+                   .arg(encodeMs(QSize(1280, 720), 60), 0, 'f', 2);
+    }
+
+    window->close();
+    QApplication::processEvents();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return 0;
+}
+
+int cacheMissProfileTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+    {
+        qCritical() << "cache-miss-profile: no temp dir";
+        return 1;
+    }
+
+    const QVector<ProfileFixture> fixtures = {
+        {QStringLiteral("simple"), 3, 0, false},
+        {QStringLiteral("medium"), 50, 2, false},
+        {QStringLiteral("complex"), 200, 4, true},
+    };
+
+    for (const ProfileFixture& fixture : fixtures)
+    {
+        QString error;
+        pvf::model::ProjectSettings settings;
+        settings.name = QStringLiteral("cache-miss-%1").arg(fixture.name);
+        settings.width = 1920;
+        settings.height = 1080;
+        settings.fps = 30;
+        const QString directory =
+            QDir(temp.path()).filePath(fixture.name
+                                       + QStringLiteral(".pvproj"));
+        auto session = pvf::EditorSession::createProject(
+            directory, settings, &error, false);
+        if (!session)
+        {
+            qCritical() << "cache-miss-profile: create" << fixture.name
+                        << "failed:" << error;
+            return 1;
+        }
+        const pvf::Uuid selected = buildProfileFixture(*session, fixture, &error);
+        if (selected.isEmpty())
+        {
+            qCritical() << "cache-miss-profile: fixture" << fixture.name
+                        << "failed:" << error;
+            return 1;
+        }
+        if (runCacheProfileScenario(fixture.name, std::move(session), selected,
+                                    &error)
+            != 0)
+        {
+            qCritical() << "cache-miss-profile: scenario" << fixture.name
+                        << "failed:" << error;
+            return 1;
+        }
+    }
+
+    // The user's reported project: copied so the profile never writes to it.
+    const QString userSource =
+        QStringLiteral("/home/xmb505/视频/PVForge/未命名项目1.pvproj");
+    if (!QFileInfo::exists(userSource))
+    {
+        qWarning() << "cache-miss-profile: user project not found, skipping"
+                   << userSource;
+        return 0;
+    }
+
+    QString error;
+    const QString copy =
+        QDir(temp.path()).filePath(QStringLiteral("user-project.pvproj"));
+    if (!copyProfileProject(userSource, copy, &error))
+    {
+        qWarning() << "cache-miss-profile: copy failed:" << error;
+        return 0;
+    }
+    auto session = pvf::EditorSession::openProject(copy, &error, false);
+    if (!session)
+    {
+        qWarning() << "cache-miss-profile: open user copy failed:" << error;
+        return 0;
+    }
+    const pvf::Uuid selected = session->project().entities.isEmpty()
+                                   ? pvf::Uuid()
+                                   : session->project().entities.constBegin()->uuid;
+    if (runCacheProfileScenario(QStringLiteral("user-project"),
+                                std::move(session), selected, &error)
+        != 0)
+    {
+        qCritical() << "cache-miss-profile: user-project failed:" << error;
+        return 1;
+    }
     return 0;
 }
 
@@ -23981,7 +24693,8 @@ int main(int argc, char* argv[])
     // pixel/geometry checks reproducible.
     bool testMode = false;
     for (const QString& argument : app.arguments())
-        if (argument.endsWith(QStringLiteral("-test")))
+        if (argument.endsWith(QStringLiteral("-test"))
+            || argument == QStringLiteral("--cache-miss-profile"))
             testMode = true;
     if (testMode)
     {
@@ -24026,6 +24739,8 @@ int main(int argc, char* argv[])
         return solverPreviewFreezeTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-playback-perf-test")))
         return solverPlaybackPerfTest(app);
+    if (app.arguments().contains(QStringLiteral("--cache-miss-profile")))
+        return cacheMissProfileTest(app);
     if (app.arguments().contains(QStringLiteral("--solver-convert-test")))
         return solverConvertTest(app);
     if (app.arguments().contains(QStringLiteral("--html-vars-test")))
