@@ -25,6 +25,7 @@ add_library(pvf_workbench STATIC
     Cache.cpp
     MetaBuilder.cpp
     PrewarmService.cpp
+    Qoi.cpp
 )
 
 target_include_directories(pvf_workbench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -56,13 +57,19 @@ if(BUILD_TESTING)
         renderRectAndExpandedSize
         metaTracksExpandAndTransparency
         signatureTracksExpandAndTransparency
+        metaMarksRasterAssets
+        qoiRoundtrip
+        qoiRejectsInvalid
         cacheStoreLookup
         cacheMetaMismatch
         cacheSurvivesRestart
         cacheDiskLru
         cacheMemoryBudget
         cacheClear
-        cacheCleansOrphanWebp
+        cacheCleansOrphanFrames
+        cacheStoresRasterAsWebp
+        cacheReadsLegacyWebp
+        cacheSwitchesCodecWhenRasterChanges
         cachePerCameraDirectories
         prewarmInitialScan
         prewarmSkipsCachedFrames

@@ -1,20 +1,26 @@
 #include "workbench/Cache.h"
 #include "workbench/MetaBuilder.h"
 #include "workbench/PrewarmService.h"
+#include "workbench/Qoi.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
-#include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
+#include <QRandomGenerator>
 #include <QSignalSpy>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
 
 #include <atomic>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -62,6 +68,36 @@ QImage testImage(const QSize& size)
     QImage image(size, QImage::Format_ARGB32_Premultiplied);
     image.fill(QColor(32, 120, 200));
     return image;
+}
+
+model::Entity assetEntity(const Uuid& uuid, int start, int end,
+                          AssetType type = AssetType::Image)
+{
+    model::Entity entity = textEntity(uuid, start, end);
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = type;
+    entity.content.asset.hash = QStringLiteral("missing-asset");
+    return entity;
+}
+
+// QOI is lossless; compare the stored straight RGBA bytes (not the container
+// format, which may legitimately differ from the input).
+bool samePixels(const QImage& first, const QImage& second)
+{
+    if (first.isNull() || second.isNull() || first.size() != second.size())
+        return false;
+    const QImage left = first.convertToFormat(QImage::Format_RGBA8888);
+    const QImage right = second.convertToFormat(QImage::Format_RGBA8888);
+    if (left.isNull() || right.isNull() || left.size() != right.size())
+        return false;
+    for (int y = 0; y < left.height(); ++y)
+    {
+        if (std::memcmp(left.constScanLine(y), right.constScanLine(y),
+                        size_t(left.width()) * 4)
+            != 0)
+            return false;
+    }
+    return true;
 }
 
 // A 10-frame-ish project whose single entity is active for [0, endFrame) and
@@ -157,13 +193,19 @@ private slots:
     void renderRectAndExpandedSize();
     void metaTracksExpandAndTransparency();
     void signatureTracksExpandAndTransparency();
+    void metaMarksRasterAssets();
+    void qoiRoundtrip();
+    void qoiRejectsInvalid();
     void cacheStoreLookup();
     void cacheMetaMismatch();
     void cacheSurvivesRestart();
     void cacheDiskLru();
     void cacheMemoryBudget();
     void cacheClear();
-    void cacheCleansOrphanWebp();
+    void cacheCleansOrphanFrames();
+    void cacheStoresRasterAsWebp();
+    void cacheReadsLegacyWebp();
+    void cacheSwitchesCodecWhenRasterChanges();
     void cachePerCameraDirectories();
     void prewarmInitialScan();
     void prewarmSkipsCachedFrames();
@@ -812,6 +854,121 @@ void WorkbenchCacheTests::signatureTracksExpandAndTransparency()
             != workbench::renderSignature(project, transparent));
 }
 
+void WorkbenchCacheTests::metaMarksRasterAssets()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    const workbench::Options options = metaOptions(model::Project{});
+
+    const auto buildWith = [&](model::Entity entity) {
+        model::Project project;
+        project.entities.insert(entity.uuid, entity);
+        const workbench::MetaBuilder builder(project, assets);
+        return builder.build(50, QString(), options);
+    };
+
+    QVERIFY(!buildWith(textEntity(QStringLiteral("text"), 0, 100)).hasRaster);
+    QVERIFY(!buildWith(assetEntity(QStringLiteral("audio"), 0, 100,
+                                   AssetType::Audio))
+                 .hasRaster);
+    for (const AssetType type :
+         {AssetType::Image, AssetType::Video, AssetType::Html})
+        QVERIFY2(buildWith(assetEntity(QStringLiteral("raster"), 0, 100, type))
+                     .hasRaster,
+                 qPrintable(QStringLiteral("type %1 not marked raster")
+                                .arg(int(type))));
+
+    // Only entities visible at the requested frame count.
+    QVERIFY(!buildWith(assetEntity(QStringLiteral("later"), 200, 300))
+                 .hasRaster);
+    model::Entity hidden = assetEntity(QStringLiteral("hidden"), 0, 100);
+    hidden.hidden = true;
+    QVERIFY(!buildWith(hidden).hasRaster);
+    model::Entity invisible = assetEntity(QStringLiteral("invisible"), 0, 100);
+    invisible.visible = false;
+    QVERIFY(!buildWith(invisible).hasRaster);
+}
+
+void WorkbenchCacheTests::qoiRoundtrip()
+{
+    // Solid colour: long runs and the end-marker path.
+    QImage solid(96, 64, QImage::Format_RGBA8888);
+    solid.fill(QColor(24, 130, 210, 255));
+    const QByteArray solidData = workbench::encodeQoi(solid);
+    QVERIFY(!solidData.isEmpty());
+    QCOMPARE(solidData.left(4), QByteArrayLiteral("qoif"));
+    QVERIFY(samePixels(workbench::decodeQoi(solidData), solid));
+
+    // Gradient with alpha, including transparent pixels.
+    QImage gradient(320, 180, QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&gradient);
+        QLinearGradient linear(0, 0, 320, 180);
+        linear.setColorAt(0.0, QColor(255, 0, 0, 0));
+        linear.setColorAt(0.5, QColor(0, 255, 0, 128));
+        linear.setColorAt(1.0, QColor(0, 0, 255, 255));
+        painter.fillRect(gradient.rect(), linear);
+    }
+    const QImage gradientData =
+        gradient.convertToFormat(QImage::Format_RGBA8888);
+    QVERIFY(samePixels(workbench::decodeQoi(workbench::encodeQoi(gradient)),
+                       gradientData));
+
+    // Random pixels exercise RGB/RGBA/DIFF/LUMA/INDEX/RUN.
+    QImage random(73, 41, QImage::Format_RGBA8888);
+    QRandomGenerator generator(0x51u);
+    for (int y = 0; y < random.height(); ++y)
+    {
+        uchar* line = random.scanLine(y);
+        for (int x = 0; x < random.width(); ++x)
+        {
+            line[x * 4] = uchar(generator.bounded(256));
+            line[x * 4 + 1] = uchar(generator.bounded(256));
+            line[x * 4 + 2] = uchar(generator.bounded(256));
+            line[x * 4 + 3] = uchar(generator.bounded(256));
+        }
+    }
+    const QByteArray randomData = workbench::encodeQoi(random);
+    QVERIFY(!randomData.isEmpty());
+    QVERIFY(samePixels(workbench::decodeQoi(randomData), random));
+}
+
+void WorkbenchCacheTests::qoiRejectsInvalid()
+{
+    QVERIFY(workbench::encodeQoi(QImage()).isEmpty());
+    QVERIFY(workbench::decodeQoi({}).isNull());
+    QVERIFY(workbench::decodeQoi(QByteArrayLiteral("not a qoi stream")).isNull());
+
+    QImage image(37, 19, QImage::Format_RGBA8888);
+    QRandomGenerator generator(7u);
+    for (int y = 0; y < image.height(); ++y)
+    {
+        uchar* line = image.scanLine(y);
+        for (int x = 0; x < image.width() * 4; ++x)
+            line[x] = uchar(generator.bounded(256));
+    }
+    const QByteArray data = workbench::encodeQoi(image);
+    QVERIFY(!data.isEmpty());
+
+    QByteArray badMagic = data;
+    badMagic[0] = 'x';
+    QVERIFY(workbench::decodeQoi(badMagic).isNull());
+
+    QByteArray badChannels = data;
+    badChannels[12] = 2;
+    QVERIFY(workbench::decodeQoi(badChannels).isNull());
+
+    QByteArray badColorspace = data;
+    badColorspace[13] = 2;
+    QVERIFY(workbench::decodeQoi(badColorspace).isNull());
+
+    QVERIFY(workbench::decodeQoi(data.left(14)).isNull());
+    QVERIFY(workbench::decodeQoi(data.left(data.size() / 2)).isNull());
+    QVERIFY(workbench::decodeQoi(data.left(data.size() - 1)).isNull());
+}
+
 void WorkbenchCacheTests::cacheStoreLookup()
 {
     QTemporaryDir root;
@@ -836,10 +993,17 @@ void WorkbenchCacheTests::cacheStoreLookup()
              qPrintable(error));
 
     const QString path =
-        QDir(cache.directory()).filePath(QStringLiteral("10.webp"));
+        QDir(cache.directory()).filePath(QStringLiteral("10.qoi"));
     QVERIFY(QFileInfo::exists(path));
-    QImageReader reader(path, QByteArrayLiteral("webp"));
-    QCOMPARE(reader.read().size(), options.targetSize);
+    QVERIFY(!QFileInfo::exists(
+        QDir(cache.directory()).filePath(QStringLiteral("10.webp"))));
+    QFile qoiFile(path);
+    QVERIFY(qoiFile.open(QIODevice::ReadOnly));
+    const QByteArray qoiData = qoiFile.readAll();
+    QCOMPARE(qoiData.left(4), QByteArrayLiteral("qoif"));
+    const QImage decoded = workbench::decodeQoi(qoiData);
+    QCOMPARE(decoded.size(), options.targetSize);
+    QCOMPARE(decoded.pixelColor(0, 0), QColor(32, 120, 200));
 
     const workbench::CacheStats stored = cache.stats();
     QCOMPARE(stored.entries, 1);
@@ -877,7 +1041,7 @@ void WorkbenchCacheTests::cacheMetaMismatch()
     QVERIFY(cache.store(10, meta, testImage(QSize(640, 360))));
 
     const QString path =
-        QDir(cache.directory()).filePath(QStringLiteral("10.webp"));
+        QDir(cache.directory()).filePath(QStringLiteral("10.qoi"));
     QVERIFY(QFileInfo::exists(path));
 
     model::Project changed = project;
@@ -970,8 +1134,8 @@ void WorkbenchCacheTests::cacheDiskLru()
     QVERIFY(!frames.contains(1));
     QVERIFY(frames.contains(2));
     QCOMPARE(cache.stats().evictions, quint64(1));
-    QVERIFY(!QFileInfo::exists(QDir(cache.directory()).filePath(QStringLiteral("1.webp"))));
-    QVERIFY(QFileInfo::exists(QDir(cache.directory()).filePath(QStringLiteral("2.webp"))));
+    QVERIFY(!QFileInfo::exists(QDir(cache.directory()).filePath(QStringLiteral("1.qoi"))));
+    QVERIFY(QFileInfo::exists(QDir(cache.directory()).filePath(QStringLiteral("2.qoi"))));
 }
 
 void WorkbenchCacheTests::cacheMemoryBudget()
@@ -1026,7 +1190,7 @@ void WorkbenchCacheTests::cacheClear()
     QCOMPARE(cache.stats().entries, 2);
 
     const QString firstPath =
-        QDir(cache.directory()).filePath(QStringLiteral("1.webp"));
+        QDir(cache.directory()).filePath(QStringLiteral("1.qoi"));
     cache.clear();
 
     QVERIFY(cache.cachedFrames().isEmpty());
@@ -1041,7 +1205,7 @@ void WorkbenchCacheTests::cacheClear()
     QVERIFY(!hit);
 }
 
-void WorkbenchCacheTests::cacheCleansOrphanWebp()
+void WorkbenchCacheTests::cacheCleansOrphanFrames()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -1064,17 +1228,173 @@ void WorkbenchCacheTests::cacheCleansOrphanWebp()
         directory = cache.directory();
     }
 
-    const QString keptPath = QDir(directory).filePath(QStringLiteral("3.webp"));
-    const QString orphanPath = QDir(directory).filePath(QStringLiteral("99.webp"));
+    const QString keptPath = QDir(directory).filePath(QStringLiteral("3.qoi"));
+    const QString orphanQoi = QDir(directory).filePath(QStringLiteral("99.qoi"));
+    const QString orphanWebp = QDir(directory).filePath(QStringLiteral("98.webp"));
     QVERIFY(QFileInfo::exists(keptPath));
-    writeTextFile(orphanPath, QByteArrayLiteral("not in the index"));
+    writeTextFile(orphanQoi, QByteArrayLiteral("not in the index"));
+    writeTextFile(orphanWebp, QByteArrayLiteral("not in the index"));
 
     workbench::Cache reopened(cacheRoot, QString(), options);
     QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
     QCOMPARE(reopened.cachedFrames(), QSet<int>{3});
     QVERIFY(QFileInfo::exists(keptPath));
-    QVERIFY(!QFileInfo::exists(orphanPath));
+    QVERIFY(!QFileInfo::exists(orphanQoi));
+    QVERIFY(!QFileInfo::exists(orphanWebp));
     QVERIFY(reopened.stats().diskBytes > 0);
+}
+
+void WorkbenchCacheTests::cacheStoresRasterAsWebp()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    const model::Entity entity =
+        assetEntity(QStringLiteral("image"), 0, 100, AssetType::Image);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const workbench::FrameMeta meta = builder.build(10, QString(), options);
+    QVERIFY(meta.hasRaster);
+
+    workbench::Cache cache(QDir(root.path()).filePath(QStringLiteral("cache")),
+                           QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    QVERIFY(cache.store(10, meta, testImage(QSize(640, 360))));
+
+    const QString webpPath =
+        QDir(cache.directory()).filePath(QStringLiteral("10.webp"));
+    const QString qoiPath =
+        QDir(cache.directory()).filePath(QStringLiteral("10.qoi"));
+    QVERIFY(QFileInfo::exists(webpPath));
+    QVERIFY(!QFileInfo::exists(qoiPath));
+
+    bool hit = false;
+    const QImage image = cache.lookup(10, meta, &hit);
+    QVERIFY(hit);
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), options.targetSize);
+}
+
+void WorkbenchCacheTests::cacheReadsLegacyWebp()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    const model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const workbench::FrameMeta meta = builder.build(3, QString(), options);
+    const QString cacheRoot = QDir(root.path()).filePath(QStringLiteral("cache"));
+
+    // Write a WebP through the normal raster path, then rewrite the index to
+    // the pre-codec schema to imitate a cache left by the WebP-only format.
+    workbench::FrameMeta rasterMeta = meta;
+    rasterMeta.hasRaster = true;
+
+    QString directory;
+    {
+        workbench::Cache cache(cacheRoot, QString(), options);
+        QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+        QVERIFY(cache.store(3, rasterMeta, testImage(QSize(640, 360))));
+        directory = cache.directory();
+    }
+    const QString webpPath = QDir(directory).filePath(QStringLiteral("3.webp"));
+    QVERIFY(QFileInfo::exists(webpPath));
+
+    const QString connectionName =
+        QStringLiteral("pvf_legacy_%1").arg(quintptr(&root), 0, 16);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(
+            QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(QDir(directory).filePath(QStringLiteral("index.sqlite")));
+        QVERIFY2(db.open(), qPrintable(db.lastError().text()));
+        {
+            QSqlQuery query(db);
+            QVERIFY2(query.exec(QStringLiteral(
+                         "ALTER TABLE frames RENAME TO frames_v2")),
+                     qPrintable(query.lastError().text()));
+            QVERIFY2(query.exec(QStringLiteral(
+                         "CREATE TABLE frames ("
+                         "frame INTEGER PRIMARY KEY, "
+                         "meta BLOB NOT NULL, "
+                         "sha1 BLOB NOT NULL, "
+                         "bytes INTEGER NOT NULL, "
+                         "last_access INTEGER NOT NULL)")),
+                     qPrintable(query.lastError().text()));
+            QVERIFY2(query.exec(QStringLiteral(
+                         "INSERT INTO frames SELECT frame, meta, sha1, bytes, "
+                         "last_access FROM frames_v2")),
+                     qPrintable(query.lastError().text()));
+            QVERIFY2(query.exec(QStringLiteral("DROP TABLE frames_v2")),
+                     qPrintable(query.lastError().text()));
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    // Opening migrates the table (codec defaults to 'webp') and the old frame
+    // is still a hit.  The current meta has hasRaster=false but equality is
+    // bytes-only, exactly like before the codec field existed.
+    workbench::Cache reopened(cacheRoot, QString(), options);
+    QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
+    QCOMPARE(reopened.cachedFrames(), QSet<int>{3});
+
+    bool hit = false;
+    const QImage image = reopened.lookup(3, meta, &hit);
+    QVERIFY(hit);
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), options.targetSize);
+}
+
+void WorkbenchCacheTests::cacheSwitchesCodecWhenRasterChanges()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    const model::Entity vector = textEntity(QStringLiteral("e1"), 0, 100);
+    project.entities.insert(vector.uuid, vector);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const workbench::FrameMeta vectorMeta = builder.build(5, QString(), options);
+    QVERIFY(!vectorMeta.hasRaster);
+    workbench::FrameMeta rasterMeta = vectorMeta;
+    rasterMeta.hasRaster = true;
+
+    workbench::Cache cache(QDir(root.path()).filePath(QStringLiteral("cache")),
+                           QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    const QString qoiPath =
+        QDir(cache.directory()).filePath(QStringLiteral("5.qoi"));
+    const QString webpPath =
+        QDir(cache.directory()).filePath(QStringLiteral("5.webp"));
+
+    QVERIFY(cache.store(5, vectorMeta, testImage(QSize(640, 360))));
+    QVERIFY(QFileInfo::exists(qoiPath));
+    QVERIFY(!QFileInfo::exists(webpPath));
+
+    QVERIFY(cache.store(5, rasterMeta, testImage(QSize(640, 360))));
+    QVERIFY(QFileInfo::exists(webpPath));
+    QVERIFY(!QFileInfo::exists(qoiPath));
+
+    QVERIFY(cache.store(5, vectorMeta, testImage(QSize(640, 360))));
+    QVERIFY(QFileInfo::exists(qoiPath));
+    QVERIFY(!QFileInfo::exists(webpPath));
+
+    bool hit = false;
+    QVERIFY(!cache.lookup(5, vectorMeta, &hit).isNull());
+    QVERIFY(hit);
+    QCOMPARE(cache.stats().entries, 1);
 }
 
 void WorkbenchCacheTests::cachePerCameraDirectories()

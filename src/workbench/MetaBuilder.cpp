@@ -355,6 +355,8 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     QStringList uuids = collected.values();
     std::sort(uuids.begin(), uuids.end());
 
+    bool hasRaster = false;
+
     out << quint32(uuids.size());
     for (const Uuid& uuid : uuids)
     {
@@ -362,6 +364,15 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
         if (found == m_project.entities.constEnd())
             continue;
         const model::Entity& entity = found.value();
+
+        if (!hasRaster && activeAt(entity, frame) && !entity.hidden
+            && entity.visible && entity.content.kind == ContentKind::Asset)
+        {
+            const AssetType type = entity.content.asset.type;
+            hasRaster = type == AssetType::Image || type == AssetType::Video
+                        || type == AssetType::Html;
+        }
+
         const anim::Pose pose =
             anim::evaluateEntity(m_project, uuid, frame, world, cache);
 
@@ -383,6 +394,7 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     FrameMeta meta;
     meta.bytes = buffer;
     meta.sha1 = QCryptographicHash::hash(buffer, QCryptographicHash::Sha1);
+    meta.hasRaster = hasRaster;
     return meta;
 }
 

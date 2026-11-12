@@ -40,6 +40,12 @@ struct FrameMeta
     QByteArray bytes;
     QByteArray sha1; // 20 bytes
 
+    // True when any visible entity at this frame is an image, video or HTML
+    // asset.  The cache uses it to pick WebP for raster frames and the built-in
+    // QOI codec for pure vector/text frames.  Derived from bytes, so equality
+    // deliberately stays bytes+sha1 only.
+    bool hasRaster = false;
+
     bool equals(const FrameMeta& other) const;
 };
 

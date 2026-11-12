@@ -42,6 +42,7 @@
 #include "next/history/HistoryPanel.h"
 #include "next/properties/SolverPreviewWidget.h"
 #include "next/settings/SettingsStore.h"
+#include "workbench/Qoi.h"
 #include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
@@ -2875,7 +2876,7 @@ int runCacheProfileScenario(const QString& scenario,
                 ++hits;
         }
         reportProfile(scenario,
-                      QStringLiteral("lookup hit (evicted, WebP decode)"),
+                      QStringLiteral("lookup hit (evicted, disk decode)"),
                       samples, QStringLiteral("hits %1/20 | %2")
                                    .arg(hits)
                                    .arg(profileStatsDelta(before, stats())));
@@ -3003,16 +3004,22 @@ int runCacheProfileScenario(const QString& scenario,
                                    .arg(profileStatsDelta(before, stats())));
     }
 
-    // Split the store cost with the same Qt primitives the cache uses:
-    // smooth scale, WebP quality 80, QSaveFile write.  The residual is
-    // SQLite upsert, LRU bookkeeping and directory stat work.
+    // Split the store cost with the same primitives the cache uses: smooth
+    // scale, QOI (vector frames) or WebP q80 (raster frames) and QSaveFile
+    // write.  The residual is SQLite upsert, LRU bookkeeping and stat work.
     if (!viewportImages.isEmpty())
     {
         const QSize target = workbench->targetSize();
         const QImage source = viewportImages.first();
+        const bool rasterStore = workbench->buildMetaForTest(400).hasRaster;
+        const QString encoderName =
+            rasterStore ? QStringLiteral("webp-encode")
+                        : QStringLiteral("qoi-encode");
         const QString encodePath =
             QDir(QDir::tempPath()).filePath(
-                QStringLiteral("pvf-cache-profile-encode.webp"));
+                QStringLiteral("pvf-cache-profile-encode.%1")
+                    .arg(rasterStore ? QStringLiteral("webp")
+                                     : QStringLiteral("qoi")));
         ProfileSamples scaleSamples;
         ProfileSamples encodeSamples;
         ProfileSamples writeSamples;
@@ -3027,14 +3034,22 @@ int runCacheProfileScenario(const QString& scenario,
             scaleSamples.addNs(timer.nsecsElapsed());
 
             QByteArray data;
-            QBuffer buffer(&data);
-            buffer.open(QIODevice::WriteOnly);
-            QImageWriter writer(&buffer, QByteArrayLiteral("webp"));
-            writer.setQuality(80);
             timer.restart();
-            encodeOk = writer.write(scaled);
+            if (rasterStore)
+            {
+                QBuffer buffer(&data);
+                buffer.open(QIODevice::WriteOnly);
+                QImageWriter writer(&buffer, QByteArrayLiteral("webp"));
+                writer.setQuality(80);
+                encodeOk = writer.write(scaled);
+                buffer.close();
+            }
+            else
+            {
+                data = pvf::workbench::encodeQoi(scaled);
+                encodeOk = !data.isEmpty();
+            }
             encodeSamples.addNs(timer.nsecsElapsed());
-            buffer.close();
             if (!encodeOk)
                 break;
             encodedBytes = data.size();
@@ -3055,10 +3070,11 @@ int runCacheProfileScenario(const QString& scenario,
         qInfo().noquote()
             << QStringLiteral(
                    "cache-miss-profile | %1 | store split | scale=%2 ms "
-                   "webp-encode=%3 ms qsave-write=%4 ms "
-                   "residual(sqlite/lru)=%5 ms total=%6 ms | %7 KB")
+                   "%3=%4 ms qsave-write=%5 ms "
+                   "residual(sqlite/lru)=%6 ms total=%7 ms | %8 KB")
                    .arg(scenario)
                    .arg(scaleSamples.mean(), 0, 'f', 2)
+                   .arg(encoderName)
                    .arg(encodeSamples.mean(), 0, 'f', 2)
                    .arg(writeSamples.mean(), 0, 'f', 2)
                    .arg(std::max(0.0, storeMeanMs - measured), 0, 'f', 2)
@@ -3066,7 +3082,8 @@ int runCacheProfileScenario(const QString& scenario,
                    .arg(encodedBytes / 1024);
         if (!encodeOk)
         {
-            *error = QStringLiteral("WebP encode failed during store split");
+            *error = QStringLiteral("%1 failed during store split")
+                         .arg(encoderName);
             window->close();
             QApplication::processEvents();
             return 1;
@@ -3529,7 +3546,7 @@ int cacheEncoderBenchTest(QApplication& app)
     qInfo().noquote()
         << QStringLiteral("cache-encoder-bench | qt=%1 formats webp=%2 "
                           "jpeg=%3 png=%4 qoi=%5 | webp-method-option=%6 | "
-                          "libwebp=%7")
+                          "libwebp=%7 | qoi-builtin=yes")
                .arg(QString::fromLatin1(qVersion()))
                .arg(hasWebp ? QStringLiteral("yes") : QStringLiteral("no"))
                .arg(hasJpeg ? QStringLiteral("yes") : QStringLiteral("no"))
@@ -3583,6 +3600,12 @@ int cacheEncoderBenchTest(QApplication& app)
             reader.setAutoTransform(false);
             return reader.read();
         };
+    };
+    const auto builtinQoiEncode = [](const QImage& image) {
+        return pvf::workbench::encodeQoi(image);
+    };
+    const auto builtinQoiDecode = [](const QByteArray& data) {
+        return pvf::workbench::decodeQoi(data);
     };
 
     auto addRow = [&](const QString& imageName, const QString& encoder,
@@ -3651,6 +3674,8 @@ int cacheEncoderBenchTest(QApplication& app)
                 addRow(source.first, QStringLiteral("qoi"), size, frame, frame,
                        qtEncode(QByteArrayLiteral("qoi"), -1, -1),
                        qtDecode(QByteArrayLiteral("qoi")));
+            addRow(source.first, QStringLiteral("qoi-builtin"), size, frame,
+                   frame, builtinQoiEncode, builtinQoiDecode);
         }
     }
 
@@ -3680,6 +3705,8 @@ int cacheEncoderBenchTest(QApplication& app)
             addRow(QStringLiteral("photo"), QStringLiteral("qoi"), size, frame,
                    frame, qtEncode(QByteArrayLiteral("qoi"), -1, -1),
                    qtDecode(QByteArrayLiteral("qoi")));
+        addRow(QStringLiteral("photo"), QStringLiteral("qoi-builtin"), size,
+               frame, frame, builtinQoiEncode, builtinQoiDecode);
 
         // expandPercent=0 / camera cache: the raster fills the whole frame.
         // QOI is lossless and therefore near-raw on this content.
@@ -3701,6 +3728,8 @@ int cacheEncoderBenchTest(QApplication& app)
             addRow(QStringLiteral("photo-full"), QStringLiteral("qoi"), size,
                    full, full, qtEncode(QByteArrayLiteral("qoi"), -1, -1),
                    qtDecode(QByteArrayLiteral("qoi")));
+        addRow(QStringLiteral("photo-full"), QStringLiteral("qoi-builtin"), size,
+               full, full, builtinQoiEncode, builtinQoiDecode);
     }
 
     auto findRow = [&rows](const QString& imageName, const QString& encoder,
@@ -3746,7 +3775,7 @@ int cacheEncoderBenchTest(QApplication& app)
     for (const QString& encoder :
          {QStringLiteral("webp-q80"), QStringLiteral("webp-q60"),
           QStringLiteral("webp-q50"), QStringLiteral("qoi"),
-          QStringLiteral("jpeg-q90")})
+          QStringLiteral("qoi-builtin"), QStringLiteral("jpeg-q90")})
     {
         const EncoderBenchRow* row =
             findRow(QStringLiteral("user"), encoder, QSize(1280, 720));

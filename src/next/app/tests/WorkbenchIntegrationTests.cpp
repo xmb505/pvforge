@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -159,6 +160,18 @@ int webpCount(const QString& root)
     return files;
 }
 
+int qoiCount(const QString& root)
+{
+    int files = 0;
+    QDirIterator it(root, {QStringLiteral("*.qoi")}, QDir::Files,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        ++files;
+    }
+    return files;
+}
+
 // Writes a minimal HTML asset directly into the store so render2 asks the HTML
 // provider for a picture without needing Chrome or an import pipeline.
 AssetHash writeHtmlAsset(ProjectDocument* document, const QString& name)
@@ -215,6 +228,26 @@ Uuid addHtmlEntity(ProjectDocument* document, const AssetHash& hash)
     return uuid;
 }
 
+Uuid addImageEntity(ProjectDocument* document, const AssetHash& hash)
+{
+    Entity entity;
+    entity.uuid = model::newUuid();
+    entity.name = QStringLiteral("Image");
+    entity.start = 0;
+    entity.end = kLastFrame;
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = AssetType::Image;
+    entity.content.asset.hash = hash;
+
+    const Uuid uuid = entity.uuid;
+    document->mutableProject().entities.insert(uuid, entity);
+    QString ignored;
+    document->commitEntity(uuid, QStringLiteral("pvf: create image"),
+                           &ignored);
+    document->flush(&ignored);
+    return uuid;
+}
+
 } // namespace
 
 class WorkbenchIntegrationTest : public QObject
@@ -224,6 +257,8 @@ class WorkbenchIntegrationTest : public QObject
 private slots:
     void openDoesNotScanOrCreateCache();
     void onDemandLookupStoresThenHitsAndEditMisses();
+    void vectorFramesAreStoredAsQoi();
+    void rasterAssetFramesUseWebp();
     void scrubCachesOnlyVisitedFrames();
     void manualScanFillsCacheThenRescanHits();
     void cacheSurvivesReopen();
@@ -313,6 +348,84 @@ void WorkbenchIntegrationTest::onDemandLookupStoresThenHitsAndEditMisses()
 
     QVERIFY(window.lookupForTest(frame, Uuid()).isNull());
     QVERIFY(services->stats().misses >= 1);
+}
+
+void WorkbenchIntegrationTest::vectorFramesAreStoredAsQoi()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    const QString projectDir = temp.path() + QStringLiteral("/qoi.pvproj");
+    auto document = createProject(projectDir, &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+
+    NextWindow window(std::move(document));
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(255, 0, 0));
+    services->store(5, Uuid(), rendered);
+
+    const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
+    QVERIFY(!services->cacheDirectory().isEmpty());
+    QVERIFY(QFileInfo::exists(
+        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+    QVERIFY(!QFileInfo::exists(
+        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+    QCOMPARE(qoiCount(cacheRoot), 1);
+    QCOMPARE(webpCount(cacheRoot), 0);
+
+    // The QOI path is lossless: the cached pixel is exactly the stored one.
+    const QImage hit = window.lookupForTest(5, Uuid());
+    QVERIFY(!hit.isNull());
+    QCOMPARE(hit.pixelColor(160, 90), QColor(255, 0, 0));
+}
+
+void WorkbenchIntegrationTest::rasterAssetFramesUseWebp()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    const QString projectDir = temp.path() + QStringLiteral("/raster.pvproj");
+    auto document = createProject(projectDir, &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString source = temp.path() + QStringLiteral("/source.png");
+    {
+        QImage image(32, 32, QImage::Format_ARGB32);
+        image.fill(QColor(0, 0, 255));
+        QVERIFY(image.save(source));
+    }
+    const auto stored = document->assets().importFile(source, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    addImageEntity(document.get(), stored->hash);
+
+    NextWindow window(std::move(document));
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+    QVERIFY(services->buildMetaForTest(5).hasRaster);
+
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(0, 0, 255));
+    services->store(5, Uuid(), rendered);
+
+    const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
+    QVERIFY(QFileInfo::exists(
+        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+    QVERIFY(!QFileInfo::exists(
+        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+    QCOMPARE(webpCount(cacheRoot), 1);
+    QCOMPARE(qoiCount(cacheRoot), 0);
+
+    const QImage hit = window.lookupForTest(5, Uuid());
+    QVERIFY(!hit.isNull());
+    QCOMPARE(hit.size(), services->targetSize());
+    QCOMPARE(services->stats().entries, 1);
 }
 
 void WorkbenchIntegrationTest::scrubCachesOnlyVisitedFrames()

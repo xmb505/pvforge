@@ -1,5 +1,7 @@
 #include "workbench/Cache.h"
 
+#include "workbench/Qoi.h"
+
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDataStream>
@@ -24,6 +26,25 @@ namespace pvf::workbench {
 namespace {
 
 constexpr int kWebpQuality = 80;
+constexpr int kCacheFormatVersion = 2;
+
+const QString kQoiCodec = QStringLiteral("qoi");
+const QString kWebpCodec = QStringLiteral("webp");
+
+QString codecForMeta(const FrameMeta& meta)
+{
+    return meta.hasRaster ? kWebpCodec : kQoiCodec;
+}
+
+QString codecExtension(const QString& codec)
+{
+    return QStringLiteral(".") + (codec == kQoiCodec ? kQoiCodec : kWebpCodec);
+}
+
+QString normalizedCodec(const QString& codec)
+{
+    return codec == kQoiCodec ? kQoiCodec : kWebpCodec;
+}
 
 QString sha1Hex(const QByteArray& bytes)
 {
@@ -77,6 +98,26 @@ QByteArray encodeWebp(const QImage& image)
     return data;
 }
 
+QByteArray encodeFrame(const QImage& image, const QString& codec)
+{
+    return codec == kQoiCodec ? encodeQoi(image) : encodeWebp(image);
+}
+
+QImage decodeFrame(const QString& path, const QString& codec)
+{
+    if (codec == kQoiCodec)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        return decodeQoi(file.readAll());
+    }
+
+    QImageReader reader(path, QByteArrayLiteral("webp"));
+    reader.setAutoTransform(false);
+    return reader.read();
+}
+
 } // namespace
 
 struct Cache::Impl
@@ -87,6 +128,7 @@ struct Cache::Impl
         QByteArray sha1;
         qint64 bytes = 0;
         qint64 lastAccess = 0;
+        QString codec = kWebpCodec; // legacy rows default to WebP
     };
 
     QString root;
@@ -106,9 +148,10 @@ struct Cache::Impl
 
     CacheStats counters;
 
-    QString framePath(int frame) const
+    QString framePath(int frame, const QString& codec) const
     {
-        return QDir(directory).filePath(QString::number(frame) + QStringLiteral(".webp"));
+        return QDir(directory).filePath(QString::number(frame)
+                                        + codecExtension(codec));
     }
 
     qint64 nextAccess()
@@ -158,7 +201,8 @@ struct Cache::Impl
                 "meta BLOB NOT NULL, "
                 "sha1 BLOB NOT NULL, "
                 "bytes INTEGER NOT NULL, "
-                "last_access INTEGER NOT NULL)"));
+                "last_access INTEGER NOT NULL, "
+                "codec TEXT NOT NULL DEFAULT 'webp')"));
             if (!created)
                 error = query.lastError().text();
         }
@@ -167,6 +211,46 @@ struct Cache::Impl
             db.close();
             return false;
         }
+
+        // Cache format v1 had no codec column.  Adding it with the historical
+        // WebP default keeps every existing frame readable; nothing has to be
+        // re-rendered.  A failed migration disables this cache (store/lookup
+        // become no-ops) but never crashes.
+        bool hasCodec = false;
+        {
+            QSqlQuery query(db);
+            if (!query.exec(QStringLiteral("PRAGMA table_info(frames)")))
+            {
+                error = query.lastError().text();
+                db.close();
+                return false;
+            }
+            while (query.next())
+            {
+                if (query.value(1).toString() == QStringLiteral("codec"))
+                {
+                    hasCodec = true;
+                    break;
+                }
+            }
+        }
+        if (!hasCodec)
+        {
+            QSqlQuery query(db);
+            if (!query.exec(QStringLiteral(
+                    "ALTER TABLE frames ADD COLUMN "
+                    "codec TEXT NOT NULL DEFAULT 'webp'")))
+            {
+                error = query.lastError().text();
+                db.close();
+                return false;
+            }
+        }
+
+        QSqlQuery versionQuery(db);
+        versionQuery.exec(
+            QStringLiteral("PRAGMA user_version=%1").arg(kCacheFormatVersion));
+
         return true;
     }
 
@@ -191,7 +275,8 @@ struct Cache::Impl
         {
             QSqlQuery query(db);
             if (!query.exec(QStringLiteral(
-                    "SELECT frame, meta, sha1, bytes, last_access FROM frames")))
+                    "SELECT frame, meta, sha1, bytes, last_access, codec "
+                    "FROM frames")))
             {
                 error = query.lastError().text();
                 return false;
@@ -204,8 +289,9 @@ struct Cache::Impl
                 entry.meta = query.value(1).toByteArray();
                 entry.sha1 = query.value(2).toByteArray();
                 entry.lastAccess = query.value(4).toLongLong();
+                entry.codec = normalizedCodec(query.value(5).toString());
 
-                const QString path = framePath(frame);
+                const QString path = framePath(frame, entry.codec);
                 const QFileInfo info(path);
                 if (!info.exists() || !info.isFile() || info.size() <= 0)
                 {
@@ -225,15 +311,17 @@ struct Cache::Impl
         for (const int frame : staleRows)
             deleteRow(frame);
 
-        // A WebP without an index row is a leftover from an interrupted
+        // A frame file without an index row is a leftover from an interrupted
         // store.  Nothing will ever look it up, so it would only escape the
         // disk accounting and the LRU budget.
         QSet<QString> indexedFiles;
         for (auto it = entries.constBegin(); it != entries.constEnd(); ++it)
-            indexedFiles.insert(QFileInfo(framePath(it.key())).fileName());
+            indexedFiles.insert(
+                QFileInfo(framePath(it.key(), it->codec)).fileName());
 
         const QFileInfoList files = QDir(directory).entryInfoList(
-            QStringList{QStringLiteral("*.webp")}, QDir::Files);
+            QStringList{QStringLiteral("*.webp"), QStringLiteral("*.qoi")},
+            QDir::Files);
         for (const QFileInfo& info : files)
         {
             if (!indexedFiles.contains(info.fileName()))
@@ -249,16 +337,18 @@ struct Cache::Impl
         QSqlDatabase db = database();
         QSqlQuery query(db);
         query.prepare(QStringLiteral(
-            "INSERT INTO frames(frame, meta, sha1, bytes, last_access) "
-            "VALUES(?, ?, ?, ?, ?) "
+            "INSERT INTO frames(frame, meta, sha1, bytes, last_access, codec) "
+            "VALUES(?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(frame) DO UPDATE SET "
             "meta = excluded.meta, sha1 = excluded.sha1, "
-            "bytes = excluded.bytes, last_access = excluded.last_access"));
+            "bytes = excluded.bytes, last_access = excluded.last_access, "
+            "codec = excluded.codec"));
         query.addBindValue(frame);
         query.addBindValue(entry.meta);
         query.addBindValue(entry.sha1);
         query.addBindValue(entry.bytes);
         query.addBindValue(entry.lastAccess);
+        query.addBindValue(entry.codec);
         if (!query.exec())
         {
             error = query.lastError().text();
@@ -309,7 +399,7 @@ struct Cache::Impl
             return;
 
         if (deleteFile)
-            QFile::remove(framePath(frame));
+            QFile::remove(framePath(frame, it->codec));
         diskBytes = std::max<qint64>(0, diskBytes - it->bytes);
         entries.erase(it);
         forgetImage(frame);
@@ -462,9 +552,7 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
         return memory.value();
     }
 
-    QImageReader reader(d->framePath(frame), QByteArrayLiteral("webp"));
-    reader.setAutoTransform(false);
-    const QImage image = reader.read();
+    const QImage image = decodeFrame(d->framePath(frame, it->codec), it->codec);
     if (image.isNull())
     {
         // The index still matched but the file is gone/corrupt; drop the row.
@@ -506,11 +594,13 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     if (scaled.isNull())
         return fail(QStringLiteral("image scaling failed"));
 
-    const QByteArray data = encodeWebp(scaled);
+    const QString codec = codecForMeta(meta);
+    const QByteArray data = encodeFrame(scaled, codec);
     if (data.isEmpty())
-        return fail(QStringLiteral("WebP encoding failed"));
+        return fail(codec == kQoiCodec ? QStringLiteral("QOI encoding failed")
+                                       : QStringLiteral("WebP encoding failed"));
 
-    const QString path = d->framePath(frame);
+    const QString path = d->framePath(frame, codec);
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
         return fail(file.errorString());
@@ -522,20 +612,30 @@ bool Cache::store(int frame, const FrameMeta& meta, const QImage& image,
     entry.sha1 = meta.sha1;
     entry.bytes = data.size();
     entry.lastAccess = d->nextAccess();
+    entry.codec = codec;
 
     const auto old = d->entries.constFind(frame);
     const qint64 oldBytes = old == d->entries.constEnd() ? 0 : old->bytes;
+    const QString oldPath =
+        old != d->entries.constEnd() && old->codec != codec
+            ? d->framePath(frame, old->codec)
+            : QString();
     if (!d->upsertRow(entry, frame))
     {
         // Keep index and disk consistent: the old image has already been
         // replaced, so neither the old row nor a half-written state survives.
         QFile::remove(path);
+        if (!oldPath.isEmpty())
+            QFile::remove(oldPath);
         d->deleteRow(frame);
         d->entries.remove(frame);
         d->forgetImage(frame);
         d->diskBytes = std::max<qint64>(0, d->diskBytes - oldBytes);
         return fail(d->error);
     }
+
+    if (!oldPath.isEmpty())
+        QFile::remove(oldPath);
 
     d->diskBytes = std::max<qint64>(0, d->diskBytes - oldBytes);
     d->entries.insert(frame, entry);
@@ -587,12 +687,13 @@ void Cache::clear()
     }
 
     for (auto it = d->entries.constBegin(); it != d->entries.constEnd(); ++it)
-        QFile::remove(d->framePath(it.key()));
+        QFile::remove(d->framePath(it.key(), it->codec));
 
     // Orphaned images from an interrupted earlier run would otherwise escape
     // the byte accounting forever.
     const QFileInfoList files = QDir(d->directory).entryInfoList(
-        QStringList{QStringLiteral("*.webp")}, QDir::Files);
+        QStringList{QStringLiteral("*.webp"), QStringLiteral("*.qoi")},
+        QDir::Files);
     for (const QFileInfo& info : files)
         QFile::remove(info.absoluteFilePath());
 

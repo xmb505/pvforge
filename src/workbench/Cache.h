@@ -26,11 +26,18 @@ struct CacheStats
 
 // One camera's frame cache: <root>/<signature>/<cameraKey|nocamera>/.
 //
-// Frames are stored as <frame>.webp plus an index.sqlite row holding the full
-// FrameMeta.  A lookup only hits when the current meta is byte-identical to the
-// stored one; stale images are left in place until store() overwrites them.
-// Loading the index also drops rows whose file disappeared and deletes WebP
-// files that have no row (leftovers from an interrupted store).
+// Frames without raster assets are stored as <frame>.qoi (built-in codec,
+// lossless alpha, ~2 ms encode at 1280x720); frames containing an image, video
+// or HTML asset stay <frame>.webp so photos do not balloon the disk.  A
+// SQLite row holds the full FrameMeta plus the codec name.  A lookup only hits
+// when the current meta is byte-identical to the stored one; stale images are
+// left in place until store() overwrites them.  Loading the index also drops
+// rows whose file disappeared and deletes frame files that have no row
+// (leftovers from an interrupted store).
+//
+// Existing caches from the WebP-only format keep working: the codec column is
+// added by ALTER TABLE with a 'webp' default, and orphan cleanup understands
+// both extensions.
 //
 // Not thread-safe: the background scan worker owns its instance and the UI
 // thread owns another one.  QSqlDatabase connections are bound to the thread
@@ -54,8 +61,9 @@ public:
     // image was unreadable" (false) from a real hit (true).
     QImage lookup(int frame, const FrameMeta& current, bool* hit = nullptr);
 
-    // Scales to options.targetSize when needed, encodes WebP quality 80 and
-    // writes atomically, then updates the index and both LRU budgets.
+    // Scales to options.targetSize when needed, then encodes QOI for pure
+    // vector frames or WebP quality 80 when the frame contains raster content.
+    // Writes atomically, updates the index and both LRU budgets.
     bool store(int frame, const FrameMeta& meta, const QImage& image,
                QString* error = nullptr);
 

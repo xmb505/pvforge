@@ -120,12 +120,14 @@ void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
     if (!m_enabled || image.isNull() || cameraUuid != m_cameraUuid)
         return;
 
-    // First miss creates the directory, index and WebP.
+    // First miss creates the directory, index and the frame file (QOI for
+    // pure vector frames, WebP when the meta flags image/video/HTML content).
     ensureCache();
     if (!m_cache || !m_cache->isValid())
         return;
 
-    m_cache->store(frame, buildMeta(frame), image);
+    const workbench::FrameMeta meta = buildMeta(frame);
+    m_cache->store(frame, meta, image);
 }
 
 void WorkbenchServices::startScanNow(int startFrame, int endFrame)

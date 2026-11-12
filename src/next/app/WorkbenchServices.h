@@ -97,10 +97,11 @@ public:
     // Frames 0..totalFrames()-1 cover the project content.
     int totalFrames() const;
 
-    // Viewport hooks.  lookup() builds the frame meta and reads/decodes the
-    // WebP on the UI thread; it never creates the cache directory.  store()
-    // writes synchronously (5-20 ms WebP encode) and creates the directory on
-    // the first miss.  No timer or signal starts a scan on its own.
+    // Viewport hooks.  lookup() builds the frame meta and reads/decodes QOI
+    // (vector frames) or WebP (raster frames) on the UI thread; it never
+    // creates the cache directory.  store() writes synchronously (~2 ms QOI,
+    // 5-20 ms WebP) and creates the directory on the first miss.  No timer or
+    // signal starts a scan on its own.
     QImage lookup(int frame, const Uuid& cameraUuid, bool* hit);
     void store(int frame, const Uuid& cameraUuid, const QImage& image);
 
