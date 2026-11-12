@@ -90,6 +90,7 @@ GitHub Actions 用同一套 preset 跑 Qt 6.6.3/6.7.3 × Debug/Release，见 `.g
 
 - [功能详情](docs/FEATURES.md)
 - [操作手册](docs/USAGE.md)
+- [人类规范与 AI 规则](docs/human/README.md)：人类确认过的伪代码、不变量和 AI 硬规则，优先级最高。
 
 内部设计、状态与交接文档在 [docs/AI](docs/AI/README.md)：这些文档由 AI/代理编写，面向开发者与 AI，可能滞后于代码，不作为用户文档或实现契约。
 
