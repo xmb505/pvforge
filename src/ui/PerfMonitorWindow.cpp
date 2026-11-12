@@ -1384,7 +1384,7 @@ void PerfMonitorWindow::updateRecordingUi()
                 .arg(QString::number(
                     m_profiler.recordingRemainingSeconds()
                         + m_profiler.recordingElapsedSeconds(),
-                    'f', 1));
+                    'f', 1)));
         return;
     }
 
