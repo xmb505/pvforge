@@ -54,7 +54,7 @@ jobs:
           arch: ${{ matrix.qt.arch }}
           # Widgets/Concurrent/Network/Sql/Test 都在 qtbase；Multimedia 是单独模块。
           # 不装 WebSockets，顺便覆盖内置 RFC 6455 客户端那条分支。
-          modules: qtmultimedia
+          modules: qtmultimedia qtimageformats
           cache: true
           cache-key-prefix: qt-${{ matrix.qt.version }}
 

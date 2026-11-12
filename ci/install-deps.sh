@@ -60,6 +60,9 @@ APT_PACKAGES=(
     libxkbcommon-x11-0
     libpulse-dev
     libasound2-dev
+    # Qt image format plugins (WebP) for distro Qt builds; aqt installs the
+    # qtimageformats module separately (see below).
+    qt6-image-formats-plugins
     libxcb-cursor0
     libxcb-icccm4
     libxcb-image0
@@ -109,9 +112,9 @@ if [ -z "$QT_ARCH" ]; then
     echo "找不到 Qt ${QT_VERSION} 的 Linux 桌面架构，检查版本号（aqt list-qt linux desktop）" >&2
     exit 1
 fi
-# qtmultimedia 是 qtbase 之外唯一需要的模块（Widgets/Concurrent/Network/Sql/Test 都在 qtbase 里）。
+# qtmultimedia 是 qtbase 之外需要的模块；qtimageformats 提供 WebP 读写插件。
 aqt install-qt linux desktop "$QT_VERSION" "$QT_ARCH" \
-    -m qtmultimedia \
+    -m qtmultimedia qtimageformats \
     --outputdir "$ROOT/build/qt"
 
 echo
