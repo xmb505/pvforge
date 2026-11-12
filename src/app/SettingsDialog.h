@@ -150,6 +150,7 @@ private:
     QSpinBox* m_appWorkbenchExpand = nullptr;
     QSpinBox* m_appWorkbenchDiskGb = nullptr;
     QSpinBox* m_appWorkbenchMemoryMb = nullptr;
+    QComboBox* m_appWorkbenchWriterThreads = nullptr;
     QLabel* m_appWorkbenchCacheStats = nullptr;
     QPushButton* m_appClearWorkbenchCache = nullptr;
     QPushButton* m_appOpenCacheFolder = nullptr;

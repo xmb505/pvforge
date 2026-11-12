@@ -68,6 +68,7 @@ if(BUILD_TESTING)
         cacheStoreLookup
         cacheEncodeStoreEncoded
         cacheEncodesWebpOnWorkerThread
+        cacheEncodesWebpConcurrently
         cacheMetaMismatch
         cacheSurvivesRestart
         cacheDiskLru

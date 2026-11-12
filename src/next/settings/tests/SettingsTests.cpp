@@ -50,6 +50,8 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.workbenchCacheExpandPercent, expected.workbenchCacheExpandPercent);
     QCOMPARE(actual.workbenchCacheDiskBytes, expected.workbenchCacheDiskBytes);
     QCOMPARE(actual.workbenchCacheMemoryBytes, expected.workbenchCacheMemoryBytes);
+    QCOMPARE(actual.workbenchCacheWriterThreads,
+             expected.workbenchCacheWriterThreads);
     QCOMPARE(actual.snapPixels, expected.snapPixels);
     QCOMPARE(actual.snapCanvasCenter, expected.snapCanvasCenter);
     QCOMPARE(actual.snapEntityEdges, expected.snapEntityEdges);
@@ -314,6 +316,7 @@ void SettingsTests::workbenchDefaults()
     QCOMPARE(defaults.workbenchCacheExpandPercent, 50);
     QCOMPARE(defaults.workbenchCacheDiskBytes, 8 * kGiB);
     QCOMPARE(defaults.workbenchCacheMemoryBytes, 256 * kMiB);
+    QCOMPARE(defaults.workbenchCacheWriterThreads, 2);
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -334,6 +337,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     expected.workbenchCacheExpandPercent = 125;
     expected.workbenchCacheDiskBytes = 24 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
+    expected.workbenchCacheWriterThreads = 3;
     store.save(expected);
 
     SettingsStore reopened(path);
@@ -343,6 +347,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     QCOMPARE(loaded.workbenchCacheExpandPercent, 125);
     QCOMPARE(loaded.workbenchCacheDiskBytes, 24 * kGiB);
     QCOMPARE(loaded.workbenchCacheMemoryBytes, 512 * kMiB);
+    QCOMPARE(loaded.workbenchCacheWriterThreads, 3);
 
     QSettings raw(path, QSettings::IniFormat);
     QCOMPARE(raw.value(QStringLiteral("workbench/enabled")).toBool(), false);
@@ -350,6 +355,7 @@ void SettingsTests::workbenchStoreRoundTrip()
     QCOMPARE(raw.value(QStringLiteral("workbench/expandPercent")).toInt(), 125);
     QCOMPARE(raw.value(QStringLiteral("workbench/diskBytes")).toLongLong(), 24 * kGiB);
     QCOMPARE(raw.value(QStringLiteral("workbench/memoryBytes")).toLongLong(), 512 * kMiB);
+    QCOMPARE(raw.value(QStringLiteral("workbench/writerThreads")).toInt(), 3);
 }
 
 void SettingsTests::workbenchStoreSanitizes()
@@ -363,6 +369,7 @@ void SettingsTests::workbenchStoreSanitizes()
         raw.setValue(QStringLiteral("workbench/expandPercent"), 900);
         raw.setValue(QStringLiteral("workbench/diskBytes"), Q_INT64_C(0));
         raw.setValue(QStringLiteral("workbench/memoryBytes"), Q_INT64_C(1));
+        raw.setValue(QStringLiteral("workbench/writerThreads"), 0);
         raw.sync();
     }
 
@@ -372,6 +379,7 @@ void SettingsTests::workbenchStoreSanitizes()
     QCOMPARE(loaded.workbenchCacheExpandPercent, 200);
     QCOMPARE(loaded.workbenchCacheDiskBytes, 1 * kGiB);
     QCOMPARE(loaded.workbenchCacheMemoryBytes, 32 * kMiB);
+    QCOMPARE(loaded.workbenchCacheWriterThreads, 1);
 
     const auto snapped = [](int percent) {
         AppSettings settings;
@@ -401,6 +409,20 @@ void SettingsTests::workbenchStoreSanitizes()
     const AppSettings clamped = SettingsStore::sanitized(tooBig);
     QCOMPARE(clamped.workbenchCacheDiskBytes, 64 * kGiB);
     QCOMPARE(clamped.workbenchCacheMemoryBytes, 4096 * kMiB);
+
+    // Writer threads are a hard 1..3 choice, not a snap: hand-edited INI
+    // values outside the range clamp to the nearest supported end.
+    const auto threads = [](int value) {
+        AppSettings settings;
+        settings.workbenchCacheWriterThreads = value;
+        return SettingsStore::sanitized(settings).workbenchCacheWriterThreads;
+    };
+    QCOMPARE(threads(-5), 1);
+    QCOMPARE(threads(0), 1);
+    QCOMPARE(threads(1), 1);
+    QCOMPARE(threads(2), 2);
+    QCOMPARE(threads(3), 3);
+    QCOMPARE(threads(9), 3);
 }
 
 void SettingsTests::workbenchMemoryMatchesUiRange()
@@ -556,6 +578,10 @@ void SettingsTests::workbenchDialogRoundTrip()
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 50);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 50);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 8);
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchWriterThreads")
+                 ->currentData()
+                 .toInt(),
+             2);
 
     AppSettings expected;
     expected.workbenchCacheEnabled = false;
@@ -563,13 +589,25 @@ void SettingsTests::workbenchDialogRoundTrip()
     expected.workbenchCacheExpandPercent = 150;
     expected.workbenchCacheDiskBytes = 32 * kGiB;
     expected.workbenchCacheMemoryBytes = 512 * kMiB;
+    expected.workbenchCacheWriterThreads = 3;
 
     dialog.setSettings(expected);
     QVERIFY(!findWidget<QCheckBox>(dialog, "workbenchCacheEnabled")->isChecked());
     QCOMPARE(findWidget<QComboBox>(dialog, "workbenchScale")->currentData().toInt(), 100);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->value(), 150);
     QCOMPARE(findWidget<QSpinBox>(dialog, "workbenchDiskGb")->value(), 32);
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchWriterThreads")
+                 ->currentData()
+                 .toInt(),
+             3);
     verifySettingsEqual(dialog.settings(), expected);
+
+    // Restoring the defaults puts the writer choice back to 2 threads.
+    dialog.setSettings(AppSettings{});
+    QCOMPARE(findWidget<QComboBox>(dialog, "workbenchWriterThreads")
+                 ->currentData()
+                 .toInt(),
+             2);
 }
 
 void SettingsTests::workbenchDialogCancelDoesNotSave()
@@ -608,6 +646,8 @@ void SettingsTests::workbenchDialogApplySaves()
     scale->setCurrentIndex(scale->findData(25));
     findWidget<QSpinBox>(dialog, "workbenchDiskGb")->setValue(16);
     findWidget<QSpinBox>(dialog, "workbenchExpandPercent")->setValue(25);
+    findWidget<QComboBox>(dialog, "workbenchWriterThreads")
+        ->setCurrentIndex(0);
     findWidget<QPushButton>(dialog, "applyButton")->click();
 
     QCOMPARE(dialog.result(), 0);
@@ -617,6 +657,7 @@ void SettingsTests::workbenchDialogApplySaves()
     QCOMPARE(saved.workbenchCacheExpandPercent, 25);
     QCOMPARE(saved.workbenchCacheDiskBytes, 16 * kGiB);
     QCOMPARE(saved.workbenchCacheMemoryBytes, 256 * kMiB);
+    QCOMPARE(saved.workbenchCacheWriterThreads, 1);
 }
 
 void SettingsTests::workbenchDialogSnapsAndClamps()

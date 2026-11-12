@@ -11,6 +11,7 @@
 #include <QImage>
 #include <QObject>
 #include <QQueue>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 
@@ -105,7 +106,7 @@ public:
     // creates the cache directory.  Outside playback store() writes
     // synchronously (~2 ms QOI, 5-20 ms WebP) and creates the directory on the
     // first miss.  During playback a raster (WebP) miss is encoded and written
-    // by a single background writer instead: the call only enqueues an
+    // by a small background writer pool instead: the call only enqueues an
     // implicitly shared image, so the paint frame never pays the 37-47 ms
     // encode.  Pure vector misses stay synchronous so the cache is hot
     // immediately.  No timer or signal starts a scan on its own.
@@ -114,13 +115,18 @@ public:
 
     // Asynchronous store status for the playback raster path.  pendingStores
     // counts queued plus in-flight encodes; a bounded queue drops the oldest
-    // frame when playback produces misses faster than the writer can encode.
+    // frame when playback produces misses faster than the writers can encode.
     int pendingStores() const { return int(m_pendingStores.size()); }
     quint64 droppedStores() const { return m_droppedStores; }
     int lastDroppedFrame() const { return m_lastDroppedFrame; }
     quint64 asyncStoresWritten() const { return m_asyncStoresWritten; }
     quint64 workerEncodes() const { return m_workerEncodes; }
     double workerEncodeMeanMs() const;
+    // Background encode threads (1..3).  Retuning the pool never cancels or
+    // reorders the frames already queued: extra slots start draining them on
+    // the next dispatch, removed slots finish their current encode.
+    void setWriterThreads(int threads);
+    int writerThreads() const { return m_writerThreads; }
     // Pumps the UI event loop until the writer queue is empty or the timeout
     // expires (tests and the cache-miss profile only).
     bool waitForPendingStores(int timeoutMs);
@@ -225,13 +231,18 @@ private:
     int m_lastMetaFrame = -1;
     bool m_lastMetaValid = false;
 
-    // Playback raster writer: one serial worker (Qt's WebP plugin is not
-    // documented as safe for several concurrent writers), a 64-frame / 256 MB
-    // bounded queue, and the IDs still allowed to write.
+    // Playback raster writer: 1..3 serial-ish workers sharing one pool.  The
+    // queue is a 64-frame / 256 MB bound and IDs decide what may still write:
+    // a frame superseded by a newer meta, an edit or a clear loses its ID and
+    // its finished encode is dropped on the UI thread.
     QThreadPool* m_storePool = nullptr;
     QQueue<PendingStore> m_pendingStores;
     qint64 m_pendingStoreBytes = 0;
-    bool m_storeTaskRunning = false;
+    // IDs started on the pool whose result has not come back yet.  They stay
+    // here after being dropped from the queue so the slot is not reused before
+    // the encode really ends.
+    QSet<quint64> m_inFlightStores;
+    int m_writerThreads = 2;
     bool m_storeDispatchPosted = false;
     quint64 m_nextStoreId = 0;
     quint64 m_droppedStores = 0;

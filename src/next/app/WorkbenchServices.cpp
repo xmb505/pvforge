@@ -25,7 +25,11 @@ constexpr int kMaxCacheWidth = 1280;
 // frame is about 3.7 MB, so 64 frames also stay well under the byte cap.
 constexpr int kMaxPendingStores = 64;
 constexpr qint64 kMaxPendingStoreBytes = 256LL * 1024 * 1024;
-constexpr int kStoreWorkerThreads = 1;
+// The Qt WebP plugin on this build is re-entrant (workbench tests encode
+// several frames at once and decode each one), but three writers already
+// saturate a 30-60 fps playback miss stream; more would only add idle threads.
+constexpr int kMinWriterThreads = 1;
+constexpr int kMaxWriterThreads = 3;
 
 class StoreGuard
 {
@@ -92,9 +96,11 @@ WorkbenchServices::WorkbenchServices(ProjectDocument* document,
     connect(&m_htmlWaitTimeout, &QTimer::timeout, this,
             &WorkbenchServices::onHtmlWaitTimeout);
 
-    // One serial writer.  Encoding runs here, SQLite stays on the UI thread.
+    // Background writers.  Encoding runs here, SQLite stays on the UI thread.
+    m_writerThreads = std::clamp(settings.workbenchCacheWriterThreads,
+                                 kMinWriterThreads, kMaxWriterThreads);
     m_storePool = new QThreadPool(this);
-    m_storePool->setMaxThreadCount(kStoreWorkerThreads);
+    m_storePool->setMaxThreadCount(m_writerThreads);
     m_storePool->setExpiryTimeout(30000);
 
     // Edits invalidate the memoised meta; they never start a scan.
@@ -188,9 +194,9 @@ void WorkbenchServices::store(int frame, const Uuid& cameraUuid,
 
     // Playback raster misses are the expensive ones (37-47 ms WebP q80).
     // The paint frame only hands over the implicitly shared image and the
-    // meta; a serial worker encodes it and the UI thread writes the file and
-    // index row.  Vector QOI stays synchronous (~2 ms), and pausing returns to
-    // the synchronous path so the next lookup is hot immediately.
+    // meta; a background writer encodes it and the UI thread writes the file
+    // and index row.  Vector QOI stays synchronous (~2 ms), and pausing returns
+    // to the synchronous path so the next lookup is hot immediately.
     if (m_playbackActive && meta.hasRaster)
     {
         enqueueStore(frame, meta, image);
@@ -264,7 +270,9 @@ void WorkbenchServices::enqueueStore(int frame,
 
 void WorkbenchServices::scheduleStoreDispatch()
 {
-    if (m_storeDispatchPosted || m_storeTaskRunning)
+    if (m_storeDispatchPosted || !m_storePool || m_pendingStores.isEmpty())
+        return;
+    if (m_inFlightStores.size() >= m_writerThreads)
         return;
     m_storeDispatchPosted = true;
     QMetaObject::invokeMethod(
@@ -278,10 +286,22 @@ void WorkbenchServices::scheduleStoreDispatch()
 
 void WorkbenchServices::dispatchStoreTask()
 {
-    if (m_storeTaskRunning || m_pendingStores.isEmpty() || !m_storePool)
+    if (!m_storePool)
         return;
-    m_storeTaskRunning = true;
-    startStoreTask(m_pendingStores.head());
+
+    // Fill every free slot with the oldest frame that no worker owns yet.
+    // In-flight frames stay in the queue (pendingStores counts them) until
+    // their result arrives, so a supersede can still drop their ID.
+    const QQueue<PendingStore>& pending = m_pendingStores;
+    for (const PendingStore& task : pending)
+    {
+        if (m_inFlightStores.size() >= m_writerThreads)
+            break;
+        if (m_inFlightStores.contains(task.id))
+            continue;
+        m_inFlightStores.insert(task.id);
+        startStoreTask(task);
+    }
 }
 
 void WorkbenchServices::startStoreTask(const PendingStore& task)
@@ -316,7 +336,7 @@ void WorkbenchServices::onStoreEncoded(quint64 id,
                                        const workbench::EncodedFrame& encoded,
                                        double encodeMs)
 {
-    m_storeTaskRunning = false;
+    m_inFlightStores.remove(id);
     ++m_workerEncodes;
     m_workerEncodeMs += encodeMs;
 
@@ -353,6 +373,19 @@ double WorkbenchServices::workerEncodeMeanMs() const
 {
     return m_workerEncodes == 0 ? 0.0
                                 : m_workerEncodeMs / double(m_workerEncodes);
+}
+
+void WorkbenchServices::setWriterThreads(int threads)
+{
+    const int value = std::clamp(threads, kMinWriterThreads, kMaxWriterThreads);
+    if (value == m_writerThreads)
+        return;
+    m_writerThreads = value;
+    if (m_storePool)
+        m_storePool->setMaxThreadCount(value);
+    // Extra slots start on already queued frames; a reduced count only stops
+    // new encodes, the ones in flight finish and their results still land.
+    scheduleStoreDispatch();
 }
 
 bool WorkbenchServices::waitForPendingStores(int timeoutMs)

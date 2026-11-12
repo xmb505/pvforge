@@ -20,6 +20,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QPainter>
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -309,6 +310,8 @@ private slots:
     void playbackViewportQueuesRasterStore();
     void editDiscardsQueuedRasterStores();
     void shutdownDiscardsQueuedRasterStores();
+    void writerThreadsRetuneWithoutDropping();
+    void writerThreadsSpeedUpTheDrain();
 };
 
 void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
@@ -1127,6 +1130,114 @@ void WorkbenchIntegrationTest::shutdownDiscardsQueuedRasterStores()
         QString(), options);
     QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
     QCOMPARE(reopened.cachedFrames().size(), 0);
+}
+
+void WorkbenchIntegrationTest::writerThreadsRetuneWithoutDropping()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/workers.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    AppSettings settings;
+    settings.workbenchCacheWriterThreads = 1;
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), settings, Uuid(), providers);
+    QVERIFY(services.cacheValid());
+    QCOMPARE(services.writerThreads(), 1);
+
+    QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(0, 90, 200));
+    services.setPlaybackActive(true);
+    for (int frame = 0; frame < 8; ++frame)
+        services.store(frame, Uuid(), rendered);
+    QCOMPARE(services.pendingStores(), 8);
+    QCOMPARE(services.droppedStores(), quint64(0));
+
+    // Raising the count mid-flight only adds slots: every queued frame is
+    // still there and gets written.
+    services.setWriterThreads(3);
+    QCOMPARE(services.writerThreads(), 3);
+    QCOMPARE(services.pendingStores(), 8);
+    QCOMPARE(services.droppedStores(), quint64(0));
+    QVERIFY(services.waitForPendingStores(30000));
+    QCOMPARE(services.pendingStores(), 0);
+    QCOMPARE(services.asyncStoresWritten(), quint64(8));
+
+    // Out-of-range values clamp to the supported 1..3 range.
+    services.setWriterThreads(0);
+    QCOMPARE(services.writerThreads(), 1);
+    services.setWriterThreads(9);
+    QCOMPARE(services.writerThreads(), 3);
+    services.setWriterThreads(-4);
+    QCOMPARE(services.writerThreads(), 1);
+
+    services.setPlaybackActive(false);
+}
+
+void WorkbenchIntegrationTest::writerThreadsSpeedUpTheDrain()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/speed.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    const AssetHash hash = importProfileImage(
+        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
+    QVERIFY2(!hash.isEmpty(), qPrintable(error));
+    addImageEntityRange(document.get(), hash, 400);
+
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(),
+                               providers);
+    QVERIFY(services.cacheValid());
+    QImage rendered(1280, 720, QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&rendered);
+        QLinearGradient gradient(0, 0, 1280, 720);
+        gradient.setColorAt(0.0, QColor(240, 80, 40));
+        gradient.setColorAt(1.0, QColor(30, 60, 230));
+        painter.fillRect(rendered.rect(), gradient);
+    }
+    services.setPlaybackActive(true);
+
+    const auto drain = [&services, &rendered](int first, int count) {
+        QElapsedTimer timer;
+        timer.start();
+        for (int frame = 0; frame < count; ++frame)
+            services.store(first + frame, Uuid(), rendered);
+        const bool drained = services.waitForPendingStores(120000);
+        const double ms = double(timer.nsecsElapsed()) / 1.0e6;
+        return drained ? ms : -1.0;
+    };
+
+    // One warm-up frame so plugin/driver pages are resident in both runs.
+    services.setWriterThreads(1);
+    QVERIFY(drain(100, 1) > 0.0);
+
+    services.setWriterThreads(1);
+    const double oneThread = drain(200, 12);
+    QVERIFY2(oneThread > 0.0, "single-thread drain did not finish");
+    services.setWriterThreads(3);
+    const double threeThreads = drain(300, 12);
+    QVERIFY2(threeThreads > 0.0, "three-thread drain did not finish");
+
+    QVERIFY2(threeThreads < oneThread * 0.9,
+             qPrintable(QStringLiteral("writers did not overlap: 1 thread %1 "
+                                       "ms, 3 threads %2 ms")
+                            .arg(oneThread, 0, 'f', 1)
+                            .arg(threeThreads, 0, 'f', 1)));
+    QCOMPARE(services.droppedStores(), quint64(0));
+    services.setPlaybackActive(false);
 }
 
 QTEST_MAIN(WorkbenchIntegrationTest)

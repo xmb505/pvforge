@@ -361,8 +361,24 @@ bool EditorSession::applyAppSettings(const next::AppSettings& settings,
 
     // Scale/expansion/disk budget are baked into the cache directory key, so
     // the service is rebuilt on the next viewport request.  Frames are cached
-    // on demand; nothing is rescanned in the background.
-    invalidateWorkbench();
+    // on demand; nothing is rescanned in the background.  The writer thread
+    // count is not part of that key: retune the live pool so the frames it
+    // already queued still get written.
+    const bool workbenchLayoutChanged =
+        previous.workbenchCacheEnabled != m_appSettings.workbenchCacheEnabled
+        || previous.workbenchCacheScalePercent
+               != m_appSettings.workbenchCacheScalePercent
+        || previous.workbenchCacheExpandPercent
+               != m_appSettings.workbenchCacheExpandPercent
+        || previous.workbenchCacheDiskBytes
+               != m_appSettings.workbenchCacheDiskBytes
+        || previous.workbenchCacheMemoryBytes
+               != m_appSettings.workbenchCacheMemoryBytes;
+    if (workbenchLayoutChanged)
+        invalidateWorkbench();
+    else if (m_workbench)
+        m_workbench->setWriterThreads(
+            m_appSettings.workbenchCacheWriterThreads);
 
     bool ok = true;
     const bool actualGit =

@@ -35,6 +35,9 @@ struct AppSettings
     int workbenchCacheExpandPercent = 50;
     qint64 workbenchCacheDiskBytes = 8LL * 1024 * 1024 * 1024;
     qint64 workbenchCacheMemoryBytes = 256LL * 1024 * 1024;
+    // Background threads that encode playback raster misses (1..3).  Two
+    // roughly cover a 30 fps 1280x720 miss stream; one falls behind.
+    int workbenchCacheWriterThreads = 2;
 
     // Viewport snapping.  snapPixels is the screen-pixel threshold for canvas
     // centre lines and entity edges (1..32); the pixel grid step stays at one

@@ -29,6 +29,7 @@
 #include <functional>
 #include <memory>
 #include <utility>
+#include <vector>
 
 using namespace pvf;
 
@@ -204,6 +205,7 @@ private slots:
     void cacheStoreLookup();
     void cacheEncodeStoreEncoded();
     void cacheEncodesWebpOnWorkerThread();
+    void cacheEncodesWebpConcurrently();
     void cacheMetaMismatch();
     void cacheSurvivesRestart();
     void cacheDiskLru();
@@ -1133,6 +1135,141 @@ void WorkbenchCacheTests::cacheEncodesWebpOnWorkerThread()
         QVERIFY2(!decoded.isNull(),
                  qPrintable(reader.errorString()));
         QCOMPARE(decoded.size(), target);
+    }
+}
+
+void WorkbenchCacheTests::cacheEncodesWebpConcurrently()
+{
+    // The playback writer may scale the pool past one thread, but the Qt WebP
+    // plugin has no documented re-entrancy guarantee.  Encode several distinct
+    // 1280x720 frames at the same time and prove every result still decodes to
+    // its own picture (no shared encoder state, no cross-thread byte mixups).
+    constexpr int kWidth = 1280;
+    constexpr int kHeight = 720;
+    constexpr int kRounds = 12;
+    const QSize target(640, 360);
+    const int tolerance = 12;
+
+    const auto makeSource = [](const QColor& color) {
+        QImage image(kWidth, kHeight, QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        painter.fillRect(image.rect(), color);
+        painter.fillRect(QRect(0, 0, 320, 180), QColor(0, 0, 0));
+        return image;
+    };
+    const auto close = [tolerance](const QColor& actual, const QColor& wanted) {
+        return qAbs(actual.red() - wanted.red()) <= tolerance
+               && qAbs(actual.green() - wanted.green()) <= tolerance
+               && qAbs(actual.blue() - wanted.blue()) <= tolerance;
+    };
+    const auto decode = [](const QByteArray& bytes) {
+        QBuffer buffer;
+        buffer.setData(bytes);
+        buffer.open(QIODevice::ReadOnly);
+        QImageReader reader(&buffer, QByteArrayLiteral("webp"));
+        return reader.read();
+    };
+
+    for (const int threads : {2, 3})
+    {
+        QThreadPool pool;
+        pool.setMaxThreadCount(threads);
+        std::vector<QByteArray> encoded;
+        std::vector<QSize> sizes;
+        std::vector<QString> failures;
+        encoded.resize(size_t(threads));
+        sizes.resize(size_t(threads));
+        failures.resize(size_t(threads));
+
+        for (int round = 0; round < kRounds; ++round)
+        {
+            std::vector<QColor> colors;
+            std::vector<QImage> sources;
+            for (int i = 0; i < threads; ++i)
+            {
+                const QColor color =
+                    QColor::fromHsv((round * 47 + i * 97) % 360, 200, 220);
+                colors.push_back(color);
+                sources.push_back(makeSource(color));
+                encoded[size_t(i)].clear();
+                sizes[size_t(i)] = QSize();
+                failures[size_t(i)].clear();
+            }
+
+            for (int i = 0; i < threads; ++i)
+            {
+                pool.start(QRunnable::create([&, i] {
+                    const workbench::EncodedFrame frame =
+                        workbench::Cache::encode(sources[size_t(i)], target,
+                                                 true);
+                    encoded[size_t(i)] = frame.bytes;
+                    sizes[size_t(i)] = frame.image.size();
+                    if (frame.bytes.isEmpty())
+                    {
+                        failures[size_t(i)] = QStringLiteral("empty bytes");
+                        return;
+                    }
+                    const QImage decoded = decode(frame.bytes);
+                    if (decoded.isNull())
+                    {
+                        failures[size_t(i)] = QStringLiteral("decode failed");
+                        return;
+                    }
+                    if (decoded.size() != target)
+                    {
+                        failures[size_t(i)] =
+                            QStringLiteral("decoded %1x%2")
+                                .arg(decoded.width())
+                                .arg(decoded.height());
+                        return;
+                    }
+                    if (!close(decoded.pixelColor(480, 270), colors[size_t(i)]))
+                    {
+                        failures[size_t(i)] =
+                            QStringLiteral("pixel color %1 != %2")
+                                .arg(decoded.pixelColor(480, 270).name(),
+                                     colors[size_t(i)].name());
+                        return;
+                    }
+                    if (!close(decoded.pixelColor(20, 20), QColor(0, 0, 0)))
+                    {
+                        failures[size_t(i)] = QStringLiteral(
+                            "black patch turned %1")
+                                                  .arg(decoded.pixelColor(20, 20)
+                                                           .name());
+                    }
+                }));
+            }
+            QVERIFY2(pool.waitForDone(60000),
+                     qPrintable(QStringLiteral("threads=%1 round=%2 timed out")
+                                    .arg(threads)
+                                    .arg(round)));
+
+            for (int i = 0; i < threads; ++i)
+            {
+                QVERIFY2(failures[size_t(i)].isEmpty(),
+                         qPrintable(QStringLiteral(
+                                        "threads=%1 round=%2 image=%3: %4")
+                                        .arg(threads)
+                                        .arg(round)
+                                        .arg(i)
+                                        .arg(failures[size_t(i)])));
+                QVERIFY(!encoded[size_t(i)].isEmpty());
+                QCOMPARE(sizes[size_t(i)], target);
+            }
+            // Different pictures must never produce the same bytes; a shared
+            // scratch buffer would show up as duplicates here.
+            for (int a = 0; a < threads; ++a)
+                for (int b = a + 1; b < threads; ++b)
+                    QVERIFY2(encoded[size_t(a)] != encoded[size_t(b)],
+                             qPrintable(QStringLiteral(
+                                            "threads=%1 round=%2: pictures %3 "
+                                            "and %4 encoded identically")
+                                            .arg(threads)
+                                            .arg(round)
+                                            .arg(a)
+                                            .arg(b)));
+        }
     }
 }
 

@@ -2879,66 +2879,272 @@ int runCacheProfileScenario(const QString& scenario,
                                    : viewportImages.first();
 
     // Playback raster misses use the asynchronous writer.  This is the
-    // issue #58 scenario: the paint frame enqueues, one worker encodes, and the
-    // UI thread writes the file and index row after the frame is already up.
+    // issue #58/#66 scenario: the paint frame enqueues, 1..3 workers encode,
+    // and the UI thread writes the file and index row after the frame is
+    // already up.  Every run repeats the same three measurements:
+    //   * whole-frame paint (UI cost with the writer running),
+    //   * an unpaced 120-frame burst (queue bound + drain throughput),
+    //   * paced 30 fps and 60 fps passes (the drop counts that matter in
+    //     playback).
     if (workbench->buildMetaForTest(1000).hasRaster)
     {
-        workbench->setPlaybackActive(true);
+        struct WriterRun
+        {
+            int threads = 1;
+            double enqueueMs = 0.0;
+            double drainMs = 0.0;
+            double encodesPerSecond = 0.0;
+            int burstDropped = 0;
+            int burstWritten = 0;
+            double tickMs = 0.0;
+            int pacedDropped = 0;
+            int pacedBacklog = 0;
+            double pacedDrainMs = 0.0;
+            double fastTickMs = 0.0;
+            int fastWritten = 0;
+            int fastDropped = 0;
+            int fastBacklog = 0;
+            double fastDrainMs = 0.0;
+            bool drained = false;
+        };
 
-        const quint64 storesBefore = workbench->stats().stores;
         const quint64 droppedBefore = workbench->droppedStores();
         const quint64 writtenBefore = workbench->asyncStoresWritten();
         const quint64 encodesBefore = workbench->workerEncodes();
+        const double encodeMeanBefore = workbench->workerEncodeMeanMs();
+        QVector<WriterRun> writerRuns;
+        workbench->setPlaybackActive(true);
 
-        // A normal playback pass: render + cache lookup + meta + render2, no
-        // synchronous WebP encode on the paint thread.
-        measureWholeFrame(QStringLiteral("whole-frame raster miss (async store)"),
-                          1000, MonitorPaint::Hidden, nullptr);
-
-        ProfileSamples enqueueSamples;
-        int maxQueue = 0;
-        for (int i = 0; i < 120; ++i)
+        for (const int threads : {1, 2, 3})
         {
-            const QImage image =
-                viewportImages.isEmpty()
-                    ? QImage(workbench->targetSize(),
-                             QImage::Format_ARGB32_Premultiplied)
-                    : viewportImages.at(i % viewportImages.size());
-            QElapsedTimer timer;
-            timer.start();
-            workbench->store(2000 + i, workbench->cameraUuid(), image);
-            enqueueSamples.addNs(timer.nsecsElapsed());
-            maxQueue = std::max(maxQueue, workbench->pendingStores());
-        }
-        const int queuedAtBurstEnd = workbench->pendingStores();
+            workbench->setWriterThreads(threads);
+            WriterRun run;
+            run.threads = threads;
 
-        QElapsedTimer drain;
-        drain.start();
-        const bool drained = workbench->waitForPendingStores(60000);
-        const double drainMs = double(drain.nsecsElapsed()) / 1.0e6;
-        const pvf::workbench::CacheStats after = workbench->stats();
+            // A normal playback pass: render + cache lookup + meta + render2,
+            // no synchronous WebP encode on the paint thread.  The frame
+            // ranges stay inside the fixture's 3000-frame content so the meta
+            // really flags the raster asset.
+            measureWholeFrame(
+                QStringLiteral("whole-frame raster miss (async store, %1 thr)")
+                    .arg(threads),
+                1000 + threads * 50, MonitorPaint::Hidden, nullptr);
+            // Drain whatever the pass queued so the burst starts empty.
+            if (!workbench->waitForPendingStores(120000))
+            {
+                *error = QStringLiteral("writer pass did not drain");
+                window->close();
+                QApplication::processEvents();
+                return 1;
+            }
+
+            const quint64 runDropped = workbench->droppedStores();
+            const quint64 runWritten = workbench->asyncStoresWritten();
+            const quint64 runEncodes = workbench->workerEncodes();
+
+            // Unpaced burst: 120 misses with no event loop.  The bounded queue
+            // must keep the last 64 and drop the rest oldest-first.
+            ProfileSamples enqueueSamples;
+            int maxQueue = 0;
+            for (int i = 0; i < 120; ++i)
+            {
+                const QImage image =
+                    viewportImages.isEmpty()
+                        ? QImage(workbench->targetSize(),
+                                 QImage::Format_ARGB32_Premultiplied)
+                        : viewportImages.at(i % viewportImages.size());
+                QElapsedTimer timer;
+                timer.start();
+                workbench->store(1200 + threads * 130 + i,
+                                 workbench->cameraUuid(), image);
+                enqueueSamples.addNs(timer.nsecsElapsed());
+                maxQueue = std::max(maxQueue, workbench->pendingStores());
+            }
+            const int queuedAtBurstEnd = workbench->pendingStores();
+
+            QElapsedTimer drain;
+            drain.start();
+            run.drained = workbench->waitForPendingStores(120000);
+            run.drainMs = double(drain.nsecsElapsed()) / 1.0e6;
+            const quint64 runEncodesAfter = workbench->workerEncodes();
+            run.encodesPerSecond =
+                run.drainMs > 0.0
+                    ? double(runEncodesAfter - runEncodes) * 1000.0 / run.drainMs
+                    : 0.0;
+            run.burstDropped =
+                int(workbench->droppedStores() - runDropped);
+            run.burstWritten =
+                int(workbench->asyncStoresWritten() - runWritten);
+            run.enqueueMs = enqueueSamples.mean();
+
+            qInfo().noquote()
+                << QStringLiteral(
+                       "cache-miss-profile | %1 | playback burst | threads=%2 | "
+                       "ui-enqueue mean=%3 ms p50=%4 ms p95=%5 ms | maxQueue=%6 "
+                       "queuedBurstEnd=%7 drained=%8 drain=%9 ms | encodes/s=%10 "
+                       "| written +%11 dropped +%12")
+                       .arg(scenario)
+                       .arg(threads)
+                       .arg(enqueueSamples.mean(), 0, 'f', 3)
+                       .arg(enqueueSamples.percentile(0.5), 0, 'f', 3)
+                       .arg(enqueueSamples.percentile(0.95), 0, 'f', 3)
+                       .arg(maxQueue)
+                       .arg(queuedAtBurstEnd)
+                       .arg(run.drained ? QStringLiteral("yes")
+                                        : QStringLiteral("no"))
+                       .arg(run.drainMs, 0, 'f', 1)
+                       .arg(run.encodesPerSecond, 0, 'f', 1)
+                       .arg(run.burstWritten)
+                       .arg(run.burstDropped);
+
+            // Paced 30 fps pass: one store per playback tick, then pump the
+            // event loop for the rest of the 33.3 ms budget so the writers get
+            // exactly the time a real 30 fps playhead would give them.  10 s
+            // is long enough for a slow writer to hit the 64-frame bound.
+            const quint64 pacedDropped = workbench->droppedStores();
+            const quint64 pacedWritten = workbench->asyncStoresWritten();
+            constexpr int kPacedFrames = 300;
+            constexpr double kTickBudgetMs = 1000.0 / 30.0;
+            ProfileSamples tickSamples;
+            for (int i = 0; i < kPacedFrames; ++i)
+            {
+                const QImage image =
+                    viewportImages.isEmpty()
+                        ? QImage(workbench->targetSize(),
+                                 QImage::Format_ARGB32_Premultiplied)
+                        : viewportImages.at(i % viewportImages.size());
+                QElapsedTimer tick;
+                tick.start();
+                workbench->store(1760 + threads * 300 + i,
+                                 workbench->cameraUuid(), image);
+                while (tick.elapsed() < kTickBudgetMs)
+                {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+                    QThread::msleep(1);
+                }
+                tickSamples.addNs(tick.nsecsElapsed());
+            }
+            run.tickMs = tickSamples.mean();
+            run.pacedBacklog = workbench->pendingStores();
+            run.pacedDropped =
+                int(workbench->droppedStores() - pacedDropped);
+            const int pacedWrittenDuring =
+                int(workbench->asyncStoresWritten() - pacedWritten);
+
+            QElapsedTimer pacedDrain;
+            pacedDrain.start();
+            const bool pacedDrained = workbench->waitForPendingStores(120000);
+            run.pacedDrainMs =
+                double(pacedDrain.nsecsElapsed()) / 1.0e6;
+            const int pacedWrittenCount =
+                int(workbench->asyncStoresWritten() - pacedWritten);
+
+            qInfo().noquote()
+                << QStringLiteral(
+                       "cache-miss-profile | %1 | playback 30fps | threads=%2 | "
+                       "tick mean=%3 ms | written during=%4/%5 after drain=%6 "
+                       "dropped=%7 backlog=%8 drain=%9 ms drained=%10")
+                       .arg(scenario)
+                       .arg(threads)
+                       .arg(run.tickMs, 0, 'f', 2)
+                       .arg(pacedWrittenDuring)
+                       .arg(kPacedFrames)
+                       .arg(pacedWrittenCount)
+                       .arg(run.pacedDropped)
+                       .arg(run.pacedBacklog)
+                       .arg(run.pacedDrainMs, 0, 'f', 1)
+                       .arg(pacedDrained ? QStringLiteral("yes")
+                                         : QStringLiteral("no"));
+
+            // 60 fps pass: the same 300 frames with half the tick budget.  One
+            // writer cannot keep up here; the number shows how much the extra
+            // slots claw back.
+            const quint64 fastDropped = workbench->droppedStores();
+            const quint64 fastWrittenBase = workbench->asyncStoresWritten();
+            constexpr double kFastBudgetMs = 1000.0 / 60.0;
+            ProfileSamples fastTicks;
+            for (int i = 0; i < kPacedFrames; ++i)
+            {
+                const QImage image =
+                    viewportImages.isEmpty()
+                        ? QImage(workbench->targetSize(),
+                                 QImage::Format_ARGB32_Premultiplied)
+                        : viewportImages.at(i % viewportImages.size());
+                QElapsedTimer tick;
+                tick.start();
+                workbench->store(i, workbench->cameraUuid(), image);
+                while (tick.elapsed() < kFastBudgetMs)
+                {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+                    QThread::msleep(1);
+                }
+                fastTicks.addNs(tick.nsecsElapsed());
+            }
+            run.fastTickMs = fastTicks.mean();
+            run.fastBacklog = workbench->pendingStores();
+            run.fastDropped = int(workbench->droppedStores() - fastDropped);
+            run.fastWritten =
+                int(workbench->asyncStoresWritten() - fastWrittenBase);
+            QElapsedTimer fastDrain;
+            fastDrain.start();
+            const bool fastDrained = workbench->waitForPendingStores(120000);
+            run.fastDrainMs = double(fastDrain.nsecsElapsed()) / 1.0e6;
+            qInfo().noquote()
+                << QStringLiteral(
+                       "cache-miss-profile | %1 | playback 60fps | threads=%2 | "
+                       "tick mean=%3 ms | written during=%4/%5 dropped=%6 "
+                       "backlog=%7 drain=%8 ms drained=%9")
+                       .arg(scenario)
+                       .arg(threads)
+                       .arg(run.fastTickMs, 0, 'f', 2)
+                       .arg(run.fastWritten)
+                       .arg(kPacedFrames)
+                       .arg(run.fastDropped)
+                       .arg(run.fastBacklog)
+                       .arg(run.fastDrainMs, 0, 'f', 1)
+                       .arg(fastDrained ? QStringLiteral("yes")
+                                        : QStringLiteral("no"));
+            writerRuns.append(run);
+        }
+
+        // Conclusion: which writer count actually keeps up at 30 fps.
+        QString conclusion;
+        for (const WriterRun& run : writerRuns)
+        {
+            if (!conclusion.isEmpty())
+                conclusion += QStringLiteral(" | ");
+            conclusion +=
+                QStringLiteral("%1 thr: 30fps %2/300 dropped, 60fps %3/300, "
+                               "%4 encodes/s, post-run drain %5 ms")
+                    .arg(run.threads)
+                    .arg(run.pacedDropped)
+                    .arg(run.fastDropped)
+                    .arg(run.encodesPerSecond, 0, 'f', 1)
+                    .arg(run.pacedDrainMs, 0, 'f', 1);
+        }
+        qInfo().noquote()
+            << QStringLiteral("cache-miss-profile | %1 | writer scale "
+                              "conclusion | %2")
+                   .arg(scenario, conclusion);
+
+        const quint64 encodesAfter = workbench->workerEncodes();
+        const double encodeMeanAfter = workbench->workerEncodeMeanMs();
+        const quint64 encodeCount = encodesAfter - encodesBefore;
+        const double runMean =
+            encodeCount == 0
+                ? 0.0
+                : (encodeMeanAfter * double(encodesAfter)
+                   - encodeMeanBefore * double(encodesBefore))
+                      / double(encodeCount);
         qInfo().noquote()
             << QStringLiteral(
-                   "cache-miss-profile | %1 | playback raster store | "
-                   "ui-enqueue mean=%2 ms p50=%3 ms p95=%4 ms | maxQueue=%5 "
-                   "queuedBurstEnd=%6 drained=%7 drain=%8 ms | workerEncode "
-                   "n=%9 mean=%10 ms | written +%11 dropped +%12 stores +%13 "
-                   "entries=%14 pending=%15")
+                   "cache-miss-profile | %1 | writer totals | encodes=%2 "
+                   "mean=%3 ms | written +%4 dropped +%5")
                    .arg(scenario)
-                   .arg(enqueueSamples.mean(), 0, 'f', 3)
-                   .arg(enqueueSamples.percentile(0.5), 0, 'f', 3)
-                   .arg(enqueueSamples.percentile(0.95), 0, 'f', 3)
-                   .arg(maxQueue)
-                   .arg(queuedAtBurstEnd)
-                   .arg(drained ? QStringLiteral("yes") : QStringLiteral("no"))
-                   .arg(drainMs, 0, 'f', 1)
-                   .arg(workbench->workerEncodes() - encodesBefore)
-                   .arg(workbench->workerEncodeMeanMs(), 0, 'f', 2)
+                   .arg(encodeCount)
+                   .arg(runMean, 0, 'f', 2)
                    .arg(workbench->asyncStoresWritten() - writtenBefore)
-                   .arg(workbench->droppedStores() - droppedBefore)
-                   .arg(after.stores - storesBefore)
-                   .arg(after.entries)
-                   .arg(after.pendingStores);
+                   .arg(workbench->droppedStores() - droppedBefore);
         workbench->setPlaybackActive(false);
     }
 
@@ -12358,6 +12564,8 @@ int settingsTest(QApplication& app)
             dialog->findChild<QSpinBox*>(QStringLiteral("workbenchExpandPercent"));
         auto* workbenchMemory =
             dialog->findChild<QSpinBox*>(QStringLiteral("workbenchMemoryMb"));
+        auto* workbenchWriter = dialog->findChild<QComboBox*>(
+            QStringLiteral("workbenchWriterThreads"));
         auto* workbenchStats =
             dialog->findChild<QLabel*>(QStringLiteral("workbenchCacheStats"));
         auto* clearWorkbench =
@@ -12383,7 +12591,8 @@ int settingsTest(QApplication& app)
         auto* apply = dialog->findChild<QPushButton*>(QStringLiteral("applyButton"));
         expect(autoSave && commitDelay && snap && snapCenter && htmlScale
                    && htmlMemory && watchdog && videoWidth && workbenchScale
-                   && workbenchExpand && workbenchMemory && workbenchStats
+                   && workbenchExpand && workbenchMemory && workbenchWriter
+                   && workbenchStats
                    && clearWorkbench && openCache && htmlStats && openHtmlCache
                    && solveInfo && rebuildSolve && cachePage && categories
                    && mcpPort && mcpToken && gitEnabled && apply,
@@ -12401,6 +12610,7 @@ int settingsTest(QApplication& app)
                    && videoWidth->currentData().toInt() == 960
                    && workbenchScale->currentData().toInt() == 50
                    && workbenchMemory->value() == 256
+                   && workbenchWriter->currentData().toInt() == 2
                    && !workbenchStats->text().isEmpty()
                    && !htmlStats->text().isEmpty()
                    && mcpPort->value() == 47821 && !gitEnabled->isChecked(),
@@ -12432,6 +12642,7 @@ int settingsTest(QApplication& app)
         workbenchScale->setCurrentIndex(workbenchScale->findData(75));
         workbenchExpand->setValue(75);
         workbenchMemory->setValue(512);
+        workbenchWriter->setCurrentIndex(workbenchWriter->findData(1));
         mcpPort->setValue(newPort);
         const bool gitAvailable =
             pvf::store::ProjectStore::gitBinaryAvailable();
@@ -12454,7 +12665,8 @@ int settingsTest(QApplication& app)
                QStringLiteral("video proxy width not saved"));
         expect(saved.workbenchCacheScalePercent == 75
                    && saved.workbenchCacheExpandPercent == 75
-                   && saved.workbenchCacheMemoryBytes == 512LL * 1024 * 1024,
+                   && saved.workbenchCacheMemoryBytes == 512LL * 1024 * 1024
+                   && saved.workbenchCacheWriterThreads == 1,
                QStringLiteral("workbench settings not saved"));
         expect(saved.mcpPort == newPort, QStringLiteral("MCP port not saved"));
         expect(saved.gitEnabled == (gitAvailable
@@ -12473,8 +12685,22 @@ int settingsTest(QApplication& app)
         expect(afterWorkbench && afterWorkbench->scalePercent() == 75
                    && afterWorkbench->expandPercent() == 75
                    && afterWorkbench->options().memoryBudgetBytes
-                          == 512LL * 1024 * 1024,
+                          == 512LL * 1024 * 1024
+                   && afterWorkbench->writerThreads() == 1,
                QStringLiteral("workbench service kept the old settings"));
+
+        // Changing only the writer count retunes the live pool: the service
+        // instance (and every frame it still has queued) survives the apply.
+        workbenchWriter->setCurrentIndex(workbenchWriter->findData(3));
+        apply->click();
+        QApplication::processEvents();
+        QApplication::processEvents();
+        expect(store.load().workbenchCacheWriterThreads == 3,
+               QStringLiteral("writer thread count not saved"));
+        expect(live->workbench() == afterWorkbench
+                   && afterWorkbench->writerThreads() == 3,
+               QStringLiteral("writer thread change rebuilt the workbench "
+                              "service instead of retuning its pool"));
         expect(window->autosaveIntervalForTest() == 3 * 60 * 1000,
                QStringLiteral("autosave timer interval not rebuilt"));
         expect(live->mcpServer() && live->mcpServer()->isRunning()

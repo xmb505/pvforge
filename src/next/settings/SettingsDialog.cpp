@@ -288,8 +288,17 @@ void SettingsDialog::buildWorkbenchPage()
     m_workbenchDiskGb->setSuffix(QStringLiteral(" GB"));
     form->addRow(QStringLiteral("磁盘上限"), m_workbenchDiskGb);
 
+    m_workbenchWriterThreads = new QComboBox(page);
+    m_workbenchWriterThreads->setObjectName(
+        QStringLiteral("workbenchWriterThreads"));
+    for (int threads = 1; threads <= 3; ++threads)
+        m_workbenchWriterThreads->addItem(
+            QStringLiteral("%1 线程").arg(threads), threads);
+    form->addRow(QStringLiteral("后台编码线程"), m_workbenchWriterThreads);
+
     form->addRow(selectableLabel(
-        QStringLiteral("整帧预渲染缓存；命中时播放直接贴图。关闭后只实时渲染。"),
+        QStringLiteral("整帧预渲染缓存；命中时播放直接贴图。关闭后只实时渲染。"
+                       "后台编码线程决定播放时同时编码的帧数，改完立即生效。"),
         page));
 
     m_tabs->addTab(page, QStringLiteral("工作台缓存"));
@@ -430,6 +439,8 @@ AppSettings SettingsDialog::settings() const
     settings.workbenchCacheExpandPercent = m_workbenchExpandPercent->value();
     settings.workbenchCacheDiskBytes = qint64(m_workbenchDiskGb->value()) * kGiB;
     settings.workbenchCacheMemoryBytes = m_workbenchMemoryBytes;
+    settings.workbenchCacheWriterThreads =
+        m_workbenchWriterThreads->currentData().toInt();
 
     settings.snapPixels = m_snapPixels->value();
     settings.snapCanvasCenter = m_snapCanvasCenter->isChecked();
@@ -486,6 +497,10 @@ void SettingsDialog::setSettings(const AppSettings& settings)
     m_workbenchExpandPercent->setValue(value.workbenchCacheExpandPercent);
     m_workbenchDiskGb->setValue(int(value.workbenchCacheDiskBytes / kGiB));
     m_workbenchMemoryBytes = value.workbenchCacheMemoryBytes;
+    const int workbenchThreadsIndex = m_workbenchWriterThreads->findData(
+        value.workbenchCacheWriterThreads);
+    if (workbenchThreadsIndex >= 0)
+        m_workbenchWriterThreads->setCurrentIndex(workbenchThreadsIndex);
 
     m_snapPixels->setValue(value.snapPixels);
     m_snapCanvasCenter->setChecked(value.snapCanvasCenter);

@@ -31,6 +31,8 @@ constexpr int kMinCommitDelayMs = 200;
 constexpr int kMaxCommitDelayMs = 5000;
 constexpr int kMinAutoSaveMinutes = 1;
 constexpr int kMaxAutoSaveMinutes = 60;
+constexpr int kMinWriterThreads = 1;
+constexpr int kMaxWriterThreads = 3;
 
 template <typename T, std::size_t N>
 T nearestOf(T value, const std::array<T, N>& choices)
@@ -137,6 +139,9 @@ AppSettings SettingsStore::sanitized(AppSettings settings)
         std::clamp(settings.workbenchCacheDiskBytes, kMinDiskBytes, kMaxDiskBytes);
     settings.workbenchCacheMemoryBytes = std::clamp(
         settings.workbenchCacheMemoryBytes, kMinMemoryBytes, kMaxMemoryBytes);
+    settings.workbenchCacheWriterThreads =
+        std::clamp(settings.workbenchCacheWriterThreads, kMinWriterThreads,
+                   kMaxWriterThreads);
 
     settings.snapPixels = std::clamp(settings.snapPixels, 1, 32);
     settings.snapAngles = sanitizedSnapAngles(std::move(settings.snapAngles));
@@ -205,6 +210,11 @@ AppSettings SettingsStore::load() const
             .value(QStringLiteral("workbench/memoryBytes"),
                    settings.workbenchCacheMemoryBytes)
             .toLongLong();
+    settings.workbenchCacheWriterThreads =
+        m_settings
+            .value(QStringLiteral("workbench/writerThreads"),
+                   settings.workbenchCacheWriterThreads)
+            .toInt();
 
     settings.snapPixels =
         m_settings.value(QStringLiteral("snap/pixels"), settings.snapPixels).toInt();
@@ -270,6 +280,8 @@ void SettingsStore::save(const AppSettings& settings)
                         value.workbenchCacheDiskBytes);
     m_settings.setValue(QStringLiteral("workbench/memoryBytes"),
                         value.workbenchCacheMemoryBytes);
+    m_settings.setValue(QStringLiteral("workbench/writerThreads"),
+                        value.workbenchCacheWriterThreads);
 
     m_settings.setValue(QStringLiteral("snap/pixels"), value.snapPixels);
     m_settings.setValue(QStringLiteral("snap/canvasCenter"),

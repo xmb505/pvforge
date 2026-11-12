@@ -363,6 +363,14 @@ QWidget* SettingsDialog::createAppCachePage()
     m_appWorkbenchMemoryMb->setRange(32, 4096);
     m_appWorkbenchMemoryMb->setSuffix(QStringLiteral(" MB"));
     workbenchForm->addRow(QStringLiteral("内存上限"), m_appWorkbenchMemoryMb);
+    m_appWorkbenchWriterThreads = new QComboBox(workbench);
+    m_appWorkbenchWriterThreads->setObjectName(
+        QStringLiteral("workbenchWriterThreads"));
+    for (int threads = 1; threads <= 3; ++threads)
+        m_appWorkbenchWriterThreads->addItem(
+            QStringLiteral("%1 线程").arg(threads), threads);
+    workbenchForm->addRow(QStringLiteral("后台编码线程"),
+                          m_appWorkbenchWriterThreads);
     m_appWorkbenchCacheStats = infoLabel(QStringLiteral("（尚未统计）"), workbench);
     m_appWorkbenchCacheStats->setObjectName(QStringLiteral("workbenchCacheStats"));
     workbenchForm->addRow(QStringLiteral("当前占用"), m_appWorkbenchCacheStats);
@@ -382,7 +390,9 @@ QWidget* SettingsDialog::createAppCachePage()
     workbenchForm->addRow(QStringLiteral("缓存维护"), workbenchButtons);
     workbenchForm->addRow(infoLabel(
         QStringLiteral("缓存世界矩形在画布四周各扩展宽高的该比例；只影响编辑器"
-                       "画布视图，相机视图和导出不扩展。清空后播放时按需重建。"),
+                       "画布视图，相机视图和导出不扩展。清空后播放时按需重建。"
+                       "「后台编码线程」决定播放时同时编码的帧数，改完立即生效，"
+                       "已经排队的帧不会丢。"),
         workbench));
     layout->addWidget(workbench);
 
@@ -695,6 +705,8 @@ next::AppSettings SettingsDialog::appSettings() const
         qint64(m_appWorkbenchDiskGb->value()) * 1024 * 1024 * 1024;
     settings.workbenchCacheMemoryBytes =
         qint64(m_appWorkbenchMemoryMb->value()) * 1024 * 1024;
+    settings.workbenchCacheWriterThreads =
+        m_appWorkbenchWriterThreads->currentData().toInt();
 
     settings.mcpPort = static_cast<quint16>(m_appMcpPort->value());
     settings.gitEnabled = m_appGitEnabled->isChecked();
@@ -748,6 +760,10 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
         int(value.workbenchCacheDiskBytes / (1024 * 1024 * 1024)));
     m_appWorkbenchMemoryMb->setValue(
         int(value.workbenchCacheMemoryBytes / (1024 * 1024)));
+    const int writerThreads =
+        m_appWorkbenchWriterThreads->findData(value.workbenchCacheWriterThreads);
+    if (writerThreads >= 0)
+        m_appWorkbenchWriterThreads->setCurrentIndex(writerThreads);
 
     m_appMcpPort->setValue(value.mcpPort);
     m_appGitEnabled->setChecked(value.gitEnabled);

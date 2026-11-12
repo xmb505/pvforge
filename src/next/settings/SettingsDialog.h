@@ -90,6 +90,7 @@ private:
     QComboBox* m_workbenchScale = nullptr;
     QSpinBox* m_workbenchExpandPercent = nullptr;
     QSpinBox* m_workbenchDiskGb = nullptr;
+    QComboBox* m_workbenchWriterThreads = nullptr;
     // Not exposed in the UI; carried through so load → edit → save keeps it.
     qint64 m_workbenchMemoryBytes = 256LL * 1024 * 1024;
 
