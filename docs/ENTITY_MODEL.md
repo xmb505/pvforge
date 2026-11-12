@@ -453,7 +453,7 @@ solver.evaluate(entityUuid, solverId?, frames[])
 "solvers": [
   {
     "id": "uuid",
-    "effect": "gravity | orbit | spin | blackhole",
+    "effect": "gravity | orbit | spin | blackhole | spiral",
     "startFrame": 0,
     "endFrame": 60,
     "version": 1,

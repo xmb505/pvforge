@@ -297,7 +297,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 ```
 
 - `id` 由服务端生成。
-- `effect`：`gravity`、`orbit`、`spin`、`blackhole`。
+- `effect`：`gravity`、`orbit`、`spin`、`blackhole`、`spiral`。
 - `startFrame` / `endFrame`：相对实体 start；`endFrame = -1` 表示到 clip 最后一帧。
 - `version`：解算器版本，只读；预览和导出使用同一版本。
 - `initialVelocity`：px/s，求解空间（画布/父级空间）；只有 `gravity` / `blackhole` 使用。
@@ -1430,15 +1430,15 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 ### 5.1 求解段规则
 
 - 一个实体只有一条时间轴；求解段按时间顺序排列，**不能重叠**。段是闭区间 `[startFrame, endFrame]`；下一段必须从 `endFrame + 1` 或更晚开始。
-- 一个求解段只装**一个效果**：`gravity` / `orbit` / `spin` / `blackhole`。
+- 一个求解段只装**一个效果**：`gravity` / `orbit` / `spin` / `blackhole` / `spiral`。
 - **开始帧带值**：`solver.create` 要求开始帧在受驱动轨道上已有关键帧。
-  - `gravity` / `orbit` / `blackhole`：`x` 和 `y` 都必须在 `startFrame` 有关键帧。
+  - `gravity` / `orbit` / `blackhole` / `spiral`：`x` 和 `y` 都必须在 `startFrame` 有关键帧。
   - `spin`：`rotation` 必须在 `startFrame` 有关键帧。
 - **结束帧是标记，不存值**：解算到 `endFrame` 后速度归零、值保持；没有结束帧时（`endFrame = -1`）一直解到 clip 最后一帧。只有时间上最后一个求解段允许省略结束帧；要在它后面再建段，必须先补结束帧。
 - 段内受驱动轨道锁定：不能在 `[startFrame+1, endFrame]` 加普通关键帧；结束帧之后才能继续普通关键帧。
 - 段结束后接普通关键帧：结束帧的解算位姿作为隐式左值，下一个普通关键帧从它开始插值，不能跳回段前旧值或默认值。
 - 被驱动属性：
-  - `gravity` / `orbit` / `blackhole`：`x`、`y`
+  - `gravity` / `orbit` / `blackhole` / `spiral`：`x`、`y`
   - `spin`：`rotation`
   - 其他属性仍可用普通关键帧。
 - 移动实体：求解段随实体平移，相对帧号和参数不变。
@@ -1519,6 +1519,21 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 - 只改 `x/y`；不改大小、rotation、可见性。
 - 速度够大可以逃离黑洞；事件视界不是硬边界。
 
+#### spiral
+
+| 参数 | 类型 | 单位 | 默认 | 范围 | 用途（tooltip） |
+|---|---|---|---|---|---|
+| `targetUuid` | string | — | 必填 | 已存在实体 | 螺旋中心实体。每帧读取它的位置；不能是目标实体自己。 |
+| `turns` | number | 圈 | 3 | 0..1000 | 总圈数；`speedDegPerSec = 0` 时使用。 |
+| `direction` | integer | — | 1 | `1` 或 `-1` | 旋转方向。**`1` 逆时针，`-1` 顺时针**（Y-up 正角逆时针；注意与 orbit/spin 的约定相反）。 |
+| `endRadius` | number | px | 0 | ≥ 0 | 结束半径；0 = 收到中心，>0 = 停在外圈。 |
+| `speedDegPerSec` | number | deg/s | 0 | ≥ 0 | > 0 时总角度 = 速度 × 段时长，覆盖 `turns`。 |
+
+- 只驱动 `x/y`；rotation 仍走普通关键帧。
+- 起始半径/角度由段起点相对目标在 `startFrame` 的位置决定；半径线性缩到 `endRadius`。
+- 中心跟随目标动画；纯运动学，无碰撞/物理停止；自动结束为 `ClipEnd`，显式 `endFrame` 为 `ExplicitEnd`。
+- `initialVelocity` 对 spiral 无效，传入返回 `invalid_argument`。
+
 ### 5.3 `solver.create` — 写
 
 **参数**：
@@ -1526,7 +1541,7 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `entityUuid` | string | **是** | — | 目标实体 UUID |
-| `effect` | string | **是** | — | `gravity` / `orbit` / `spin` / `blackhole` |
+| `effect` | string | **是** | — | `gravity` / `orbit` / `spin` / `blackhole` / `spiral` |
 | `startFrame` | integer | **是** | — | 相对实体 start，`0..duration-1` |
 | `endFrame` | integer | 否 | -1 | 相对帧号，`> startFrame` 且 `<= duration-1`；`-1` = clip 末帧 |
 | `initialVelocity` | object | 否 | `{x:0,y:0}` | px/s，仅 `gravity` / `blackhole` |
@@ -1534,9 +1549,9 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 
 **规则**：
 
-- 开始帧必须已有关键帧：`gravity`/`orbit`/`blackhole` 需要 `x` 和 `y`；`spin` 需要 `rotation`。缺失返回 `conflict`，`details.missingTracks`。
+- 开始帧必须已有关键帧：`gravity`/`orbit`/`blackhole`/`spiral` 需要 `x` 和 `y`；`spin` 需要 `rotation`。缺失返回 `conflict`，`details.missingTracks`。
 - 新段不能与已有段重叠；重叠返回 `conflict`，`details.conflicts`。
-- `initialVelocity` 给 `orbit` / `spin` 是 `invalid_argument`。
+- `initialVelocity` 给 `orbit` / `spin` / `spiral` 是 `invalid_argument`。
 - 创建成功只新增段，不修改开始帧关键帧的值。
 - 一次调用一个 commit。
 

@@ -46,7 +46,7 @@
 - 帧号相对实体 start，整数，只允许 `0..duration-1`。
 - 移动实体不改关键帧；裁剪 start 时 key 平移/删除，sourceIn 同步调整；裁剪 end 删除越界 key。
 - Auto-key 默认开启；Properties 有关键帧区、菱形按钮、缓动预设 + 自定义贝塞尔。
-- 求解段：一个实体一条时间轴，段不能重叠；一个段一个效果（gravity/orbit/spin/blackhole）。
+- 求解段：一个实体一条时间轴，段不能重叠；一个段一个效果（gravity/orbit/spin/blackhole/spiral）。
 - 开始帧必须是已有普通关键帧，人类把它“转换为求解开始帧”；不自动创建 key。
 - 结束帧只是停止标记；段内被驱动属性不能有普通 key；段后普通 key 从解算结束位姿继续。
 - 裁剪 start 切进段：删段并把新起点解算位姿落成普通 key；裁剪 end 切进段：结束标记冻结在新末帧。

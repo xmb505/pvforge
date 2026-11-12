@@ -43,7 +43,7 @@ ctest --test-dir /tmp/pvf-model-build --output-on-failure
 - `pvf::AssetHash` = `QString`
 - `AssetType` = Image / Video / Audio / Html
 - `ContentKind` = Empty / Text / Vector / Camera / Asset
-- `SolverEffect` = Gravity / Orbit / Spin / BlackHole
+- `SolverEffect` = Gravity / Orbit / Spin / BlackHole / Spiral
 
 ## Model 模块 API
 
@@ -201,7 +201,7 @@ QVector<Sample> evaluate(const Segment&, const World&, int clipDuration, int fps
 
 参数约定：
 
-- `entityUuid` 必填；`targetUuid` 对 gravity/orbit/blackhole 必填，spin 忽略。
+- `entityUuid` 必填；`targetUuid` 对 gravity/orbit/blackhole/spiral 必填，spin 忽略。
 - `initialVelocity` 和 `Sample::velocity` 都在**求解空间**（与 startPose.position 同空间），不是目标局部轴。
 - Gravity：方向 = `targetUuid` 实体的局部 +Y，按目标实体**当前帧 rotation**旋转；运动形状取 `entityUuid` 的形状；碰撞候选 = 所有 `physicsInteract=1` 的实体，排除 `entityUuid`，包含 target（如果 target 自己开了物理干涉）。`strength`、`elasticity`、`friction`、`stopThreshold` 参数不变。
 - Orbit：中心 = `targetUuid`；椭圆经过 startPose.position；`aspect`（短轴/长轴）、`angle`（相对目标实体局部）、`direction`（+1 顺 / -1 逆）、`periodFrames`。
