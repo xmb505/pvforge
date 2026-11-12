@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QStringList>
@@ -538,6 +539,10 @@ void MediaServicesTests::switchingProjectsUsesNewAssets()
     QVERIFY(window->viewportForTest() != nullptr);
     MediaServices* firstMedia = window->mediaServicesForTest();
     QVERIFY(firstMedia != nullptr);
+    // Guards against a swapped-in instance reusing the freed address: the
+    // QObject is destroyed by setDocument(), so the guard must go null even
+    // when the allocator hands the new MediaServices the same address.
+    QPointer<MediaServices> firstMediaGuard(firstMedia);
 
     auto secondDocument =
         makeDocument(second.path() + QStringLiteral("/second.pvproj"), &error);
@@ -556,9 +561,11 @@ void MediaServicesTests::switchingProjectsUsesNewAssets()
     QVERIFY(window->document()->root().startsWith(second.path()));
     QVERIFY(window->viewportForTest() != nullptr);
 
+    // The old instance must be gone (a pointer-only compare is unreliable:
+    // the allocator reuses the freed address for the new MediaServices).
+    QVERIFY(firstMediaGuard.isNull());
     MediaServices* secondMedia = window->mediaServicesForTest();
     QVERIFY(secondMedia != nullptr);
-    QVERIFY(secondMedia != firstMedia);
     QCOMPARE(secondMedia->cacheRoot(),
              second.path() + QStringLiteral("/second.pvproj/.cache"));
     QVERIFY(!secondMedia->videoFrame(entity.uuid, 1.0).isNull());

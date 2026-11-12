@@ -23,6 +23,8 @@
 #include <QTextStream>
 #include <QTimer>
 
+#include <functional>
+
 namespace {
 
 int gChecks = 0;
@@ -291,6 +293,20 @@ void waitBriefly(int milliseconds)
 void drainEvents()
 {
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+// The render future finishes before its queued frameReady/frameFailed is
+// delivered on the service thread (finishLowRes() finishes the promise, then
+// posts the signal).  A single processEvents() can therefore run in between
+// when the machine is busy (e.g. ctest -j8 starts several Chrome instances at
+// once), so wait for the signal instead of assuming it is already queued.
+bool waitFor(const std::function<bool()>& predicate, int timeoutMs)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!predicate() && timer.elapsed() < timeoutMs)
+        waitBriefly(5);
+    return predicate();
 }
 
 void serverServesAndRejects()
@@ -881,8 +897,9 @@ void asyncRequestLowRes()
             CHECK(colorNear(image, 80, 45, QColor(255, 0, 0)));
         }
     }
+    CHECK(waitFor([&readyCount] { return readyCount >= 1; }, 15000));
     drainEvents();
-    CHECK(readyCount == 1);
+    CHECK_DETAIL(readyCount == 1, QString::number(readyCount));
     CHECK(service.stats().renders == 1);
 
     // A second request is a cache hit: already finished, no new frameReady.
@@ -891,7 +908,7 @@ void asyncRequestLowRes()
     if (hit.isFinished() && hit.resultCount() > 0)
         CHECK(!hit.result().isNull());
     drainEvents();
-    CHECK(readyCount == 1);
+    CHECK_DETAIL(readyCount == 1, QString::number(readyCount));
     CHECK(service.stats().renders == 1);
     CHECK(service.stats().memoryHits + service.stats().diskHits >= 1);
 
@@ -1033,9 +1050,14 @@ void lowResPreemption()
     }
     CHECK(waitForFuture(slowFuture, 20000));
 
+    CHECK(waitFor(
+        [&readyCount, &failedCount] {
+            return readyCount >= 1 && failedCount >= 1;
+        },
+        15000));
     drainEvents();
-    CHECK(readyCount == 1);
-    CHECK(failedCount == 1);
+    CHECK_DETAIL(readyCount == 1, QString::number(readyCount));
+    CHECK_DETAIL(failedCount == 1, QString::number(failedCount));
     CHECK(service.stats().renders == 1);
 
     service.stop();
@@ -1091,6 +1113,9 @@ void cancelPendingLowRes()
         CHECK(cancelled.resultCount() == 0);
 
     CHECK(waitForFuture(slowFuture, 20000));
+    // Give any stray frameReady a chance to arrive: a cancelled request must
+    // not emit one.
+    waitBriefly(50);
     drainEvents();
     CHECK(readyCount == 0);
 
@@ -1107,8 +1132,9 @@ void cancelPendingLowRes()
         if (!image.isNull())
             CHECK(colorNear(image, 80, 45, QColor(0, 255, 0)));
     }
+    CHECK(waitFor([&readyCount] { return readyCount >= 1; }, 15000));
     drainEvents();
-    CHECK(readyCount == 1);
+    CHECK_DETAIL(readyCount == 1, QString::number(readyCount));
 
     service.stop();
 }

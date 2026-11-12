@@ -1,8 +1,10 @@
 #include "next/viewport/ViewportWidget.h"
 
+#include "anim/Anim.h"
 #include "gizmo/Gizmo.h"
 #include "model/Model.h"
 #include "next/core/Document.h"
+#include "render2/Render.h"
 
 #include <QApplication>
 #include <QCryptographicHash>
@@ -126,7 +128,10 @@ public:
         return uuid;
     }
 
-    // Asset entity centered on the project canvas.
+    // Asset entity centered on the project canvas.  Model space is Y-up with
+    // the origin at the canvas centre (docs/AI/ENTITY_MODEL.md), so "centred"
+    // is (0, 0) — not the screen-space (width / 2, height / 2) of the old
+    // renderer.
     Uuid addAsset(const QString& name, AssetType type, const QString& hash)
     {
         model::Entity entity;
@@ -134,8 +139,8 @@ public:
         entity.name = name;
         entity.start = 0;
         entity.end = 30;
-        entity.transform.x = 160.0;
-        entity.transform.y = 90.0;
+        entity.transform.x = 0.0;
+        entity.transform.y = 0.0;
         entity.content.kind = ContentKind::Asset;
         entity.content.asset.type = type;
         entity.content.asset.hash = hash;
@@ -564,10 +569,28 @@ void ViewportWidgetTest::gizmoFollowsSpinSolver()
 
     const model::Entity entity = document.project().entities.value(uuid);
     const double scale = projectScale(view);
-    const QPointF expectedHandle = view.projectToWidget(
-        QPointF(160.0, 90.0 + 48.0 / scale));
 
-    const QPointF target = expectedHandle + QPointF(0.0, 40.0);
+    // The gizmo must follow the solver pose, not the authored transform: the
+    // default spin direction is clockwise on screen, so at frame 15 the
+    // solver-driven rotation is -90 degrees and the MoveX handle sits above
+    // the entity instead of below it.
+    render2::SceneWorld world(document.project(), document.assets());
+    anim::Cache cache;
+    const anim::Pose pose = anim::evaluateEntity(
+        document.project(), uuid, 15, world, cache);
+    gizmo::Transform spun = gizmoTransformOf(entity);
+    spun.rotation =
+        qRadiansToDegrees(std::atan2(pose.world.m12(), pose.world.m11()));
+    const QPointF expectedHandle = view.projectToWidget(gizmo::handlePosition(
+        gizmo::Handle::MoveX, spun, vectorBoundsOf(entity), scale));
+    // Sanity check: the handle is 48 px above the entity on screen.
+    QVERIFY(QLineF(expectedHandle,
+                   view.projectToWidget(QPointF(160.0, 90.0 - 48.0 / scale)))
+                .length()
+            < 0.5);
+
+    // Dragging the handle up the screen is local +X for this pose.
+    const QPointF target = expectedHandle + QPointF(0.0, -40.0);
     QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
                       expectedHandle.toPoint());
     sendMouseMove(view, target, Qt::ControlModifier);
@@ -1344,7 +1367,8 @@ void ViewportWidgetTest::sceneCacheLookupSkipsRender()
 void ViewportWidgetTest::sceneCacheMissStoresRenderedFrame()
 {
     FakeDocument document;
-    document.addVector(QStringLiteral("Red"), 160.0, 90.0, 320.0, 180.0);
+    // Canvas-centred (model space origin) full-canvas red block.
+    document.addVector(QStringLiteral("Red"), 0.0, 0.0, 320.0, 180.0);
 
     ViewportWidget view(&document);
     showWidget(view);
@@ -1385,7 +1409,8 @@ void ViewportWidgetTest::sceneCacheMissStoresRenderedFrame()
 void ViewportWidgetTest::sceneCacheBypassedDuringGizmoDrag()
 {
     FakeDocument document;
-    const Uuid uuid = document.addVector(QStringLiteral("Box"), 160.0, 90.0,
+    // Canvas-centred (model space origin) so every canvas point is covered.
+    const Uuid uuid = document.addVector(QStringLiteral("Box"), 0.0, 0.0,
                                          320.0, 180.0);
     document.setSelection(uuid);
 

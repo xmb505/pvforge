@@ -47,8 +47,11 @@ Entity makeEntity(ContentKind kind, const QString& name, double x = 0.0)
 Entity makeWhiteVector()
 {
     Entity entity = makeEntity(ContentKind::Vector, QStringLiteral("白块"));
-    entity.transform.x = 320.0;
-    entity.transform.y = 180.0;
+    // Model space is Y-up with the canvas centre at the origin
+    // (docs/AI/ENTITY_MODEL.md), so "centre" is (0, 0), not the screen-space
+    // (width / 2, height / 2) the pre-render2 test used.
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
     entity.content.vector.shape = 0;
     entity.content.vector.width = 200.0;
     entity.content.vector.height = 120.0;
