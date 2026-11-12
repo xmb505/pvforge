@@ -219,7 +219,8 @@ bool isKnownParam(SolverEffect effect, const QString& key)
         return key == QLatin1String("targetUuid")
                || key == QLatin1String("turns")
                || key == QLatin1String("direction")
-               || key == QLatin1String("endRadius")
+               || key == QLatin1String("aspect")
+               || key == QLatin1String("angle")
                || key == QLatin1String("speedDegPerSec");
     }
     return false;
@@ -308,8 +309,8 @@ Result validateSolverParams(const model::Project& project,
     case SolverEffect::Spiral:
         if (!(result = parseNumericParam(params, "turns", 0, 1000)).ok
             || !(result = parseDirection(params)).ok
-            || !(result = parseNumericParam(params, "endRadius", 0, 1000000))
-                    .ok
+            || !(result = parseNumericParam(params, "aspect", 0.01, 1)).ok
+            || !(result = parseNumericParam(params, "angle", -360, 360)).ok
             || !(result = parseNumericParam(params, "speedDegPerSec", 0,
                                             1000000))
                     .ok)

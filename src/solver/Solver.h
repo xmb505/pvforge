@@ -140,12 +140,14 @@ struct Result
 //              default 4000, 0 = unlimited), stopThreshold (px/s, default 0 =
 //              disabled).  Center is targetUuid.  Crossing
 //              eventHorizonRadius + objectRadius stops the motion (capture).
-//   Spiral:    turns (total revolutions, default 3), direction (+1
-//              counter-clockwise / -1 clockwise, default +1), endRadius (px,
-//              default 0, clamped to >= 0), speedDegPerSec (default 0; > 0
-//              overrides turns for the whole segment).  Center is targetUuid;
-//              the path starts at startPose and its radius shrinks linearly
-//              from the start radius to endRadius.  No collision or physical
+//   Spiral:    turns (total revolutions, default 3), aspect (minor/major,
+//              0.01..1, default 1), angle (ellipse rotation in degrees,
+//              relative to targetUuid's local rotation, default 0),
+//              direction (+1 counter-clockwise / -1 clockwise, default +1),
+//              speedDegPerSec (default 0; > 0 overrides turns for the whole
+//              segment).  Center is targetUuid; the ellipse passes through
+//              startPose and its semi-axes shrink linearly to 0, so the last
+//              frame lands exactly on the center.  No collision or physical
 //              stop; Sample::rotation keeps startPose.rotation.
 // initialVelocity and Sample::velocity are solver-space px/second; no local
 // axis conversion is applied.

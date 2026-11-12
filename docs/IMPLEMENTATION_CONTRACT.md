@@ -207,6 +207,7 @@ QVector<Sample> evaluate(const Segment&, const World&, int clipDuration, int fps
 - Orbit：中心 = `targetUuid`；椭圆经过 startPose.position；`aspect`（短轴/长轴）、`angle`（相对目标实体局部）、`direction`（+1 顺 / -1 逆）、`periodFrames`。
 - Spin：`angularVelocity`（度/帧）、`direction`；轴心 = entity pivot；不需要 target。
 - BlackHole：中心 = `targetUuid`；`simulationSpeed`、`mass`、`angularMomentum`、`eventHorizonRadius`、`objectRadius`、`softening`、`maxSpeed`；只改位置；可穿视界、可逃逸。
+- Spiral：中心 = `targetUuid`；椭圆经过 startPose.position；`aspect`（短轴/长轴）、`angle`（相对目标实体局部）、`turns`、`direction`（+1 逆 / -1 顺）、`speedDegPerSec`；半轴线性缩到 0，末帧精确落在中心。
 - 旧参数 `centerUuid` / `blackHoleUuid` / `collisionEntities` 不再作为主接口；只保留 `collisionUuids` 作为 World 枚举不可用时的回退。
 
 要求：

@@ -218,9 +218,12 @@ QVector<ParamSpec> solverParams(SolverEffect effect)
                         QStringLiteral("从起点绕到终点一共转多少圈。速度 > 0 时按速度覆盖。"),
                         3.0, 0.0, 1000.0, 0.5, 2),
             directionParam(true),
-            numberParam(QStringLiteral("endRadius"), QStringLiteral("结束半径 (px)"),
-                        QStringLiteral("段末离中心的距离。0 = 直接落到中心；大于 0 = 停在外圈。半径从起点线性缩小。"),
-                        0.0, 0.0, 1000000.0, 1.0, 1),
+            numberParam(QStringLiteral("aspect"), QStringLiteral("扁率 (短/长轴)"),
+                        QStringLiteral("螺旋轨道的短轴/长轴。1 = 正圆；越小轨迹越扁。"),
+                        1.0, 0.01, 1.0, 0.05, 3),
+            numberParam(QStringLiteral("angle"), QStringLiteral("椭圆角度 (°)"),
+                        QStringLiteral("椭圆长轴相对中心实体局部坐标的旋转角。"),
+                        0.0, -360.0, 360.0, 1.0, 2),
             numberParam(QStringLiteral("speedDegPerSec"),
                         QStringLiteral("速度 (°/s，覆盖圈数)"),
                         QStringLiteral("大于 0 时按该角速度换算总角度，忽略圈数；0 = 按圈数在整段内均分。"),
@@ -2867,7 +2870,8 @@ void PropertiesPanel::createSolverFromPlayhead()
         segment.params.insert(QStringLiteral("targetUuid"), target);
         segment.params.insert(QStringLiteral("turns"), 3.0);
         segment.params.insert(QStringLiteral("direction"), 1);
-        segment.params.insert(QStringLiteral("endRadius"), 0.0);
+        segment.params.insert(QStringLiteral("aspect"), 1.0);
+        segment.params.insert(QStringLiteral("angle"), 0.0);
         segment.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
         break;
     }

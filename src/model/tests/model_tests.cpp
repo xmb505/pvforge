@@ -772,7 +772,8 @@ void testComponentJsonRoundTrip()
     spiral.params.insert(QStringLiteral("targetUuid"), newUuid());
     spiral.params.insert(QStringLiteral("turns"), 4.5);
     spiral.params.insert(QStringLiteral("direction"), -1);
-    spiral.params.insert(QStringLiteral("endRadius"), 12.0);
+    spiral.params.insert(QStringLiteral("aspect"), 0.5);
+    spiral.params.insert(QStringLiteral("angle"), 30.0);
     spiral.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
     const QJsonObject spiralJson = toJson(spiral);
     CHECK(spiralJson.value(QStringLiteral("effect")).toString()

@@ -951,8 +951,10 @@ QVector<ParamSpec> solverParams(SolverEffect effect)
             numberParam(QStringLiteral("turns"), QStringLiteral("圈数"), 3.0, 0.0,
                         1000.0, 0.5, 2, QStringLiteral("圈")),
             directionParam(true),
-            numberParam(QStringLiteral("endRadius"), QStringLiteral("结束半径"),
-                        0.0, 0.0, 1000000.0, 1.0, 1, QStringLiteral("px")),
+            numberParam(QStringLiteral("aspect"), QStringLiteral("扁率"), 1.0, 0.01,
+                        1.0, 0.05, 3),
+            numberParam(QStringLiteral("angle"), QStringLiteral("椭圆角度"), 0.0,
+                        -360.0, 360.0, 1.0, 2, QStringLiteral("°")),
             numberParam(QStringLiteral("speedDegPerSec"),
                         QStringLiteral("速度（覆盖圈数）"), 0.0, 0.0, 1000000.0,
                         10.0, 1, QStringLiteral("°/s")),
@@ -4391,7 +4393,8 @@ void PropertiesPanel::convertSolverFromKey(SolverEffect effect)
         segment.params.insert(QStringLiteral("targetUuid"), target);
         segment.params.insert(QStringLiteral("turns"), 3.0);
         segment.params.insert(QStringLiteral("direction"), 1);
-        segment.params.insert(QStringLiteral("endRadius"), 0.0);
+        segment.params.insert(QStringLiteral("aspect"), 1.0);
+        segment.params.insert(QStringLiteral("angle"), 0.0);
         segment.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
         break;
     }

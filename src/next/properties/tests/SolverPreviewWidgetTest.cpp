@@ -415,7 +415,8 @@ void SolverPreviewWidgetTest::spiralPreviewShowsPathAndTargetWithoutArrow()
     solver.params.insert(QStringLiteral("targetUuid"), center);
     solver.params.insert(QStringLiteral("turns"), 2.0);
     solver.params.insert(QStringLiteral("direction"), 1);
-    solver.params.insert(QStringLiteral("endRadius"), 20.0);
+    solver.params.insert(QStringLiteral("aspect"), 0.5);
+    solver.params.insert(QStringLiteral("angle"), 30.0);
     solver.params.insert(QStringLiteral("speedDegPerSec"), 0.0);
     document.entity(ball).solvers.append(solver);
 

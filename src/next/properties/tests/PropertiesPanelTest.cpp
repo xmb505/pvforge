@@ -956,7 +956,8 @@ void PropertiesPanelTest::createSpiralSolverFromPlayhead()
     QCOMPARE(solver.params.value(QStringLiteral("targetUuid")).toString(), center);
     QCOMPARE(solver.params.value(QStringLiteral("turns")).toDouble(), 3.0);
     QCOMPARE(solver.params.value(QStringLiteral("direction")).toInt(), 1);
-    QCOMPARE(solver.params.value(QStringLiteral("endRadius")).toDouble(), 0.0);
+    QCOMPARE(solver.params.value(QStringLiteral("aspect")).toDouble(), 1.0);
+    QCOMPARE(solver.params.value(QStringLiteral("angle")).toDouble(), 0.0);
     QCOMPARE(solver.params.value(QStringLiteral("speedDegPerSec")).toDouble(), 0.0);
 
     // The spiral numbers +1 as counter-clockwise, unlike orbit/spin.

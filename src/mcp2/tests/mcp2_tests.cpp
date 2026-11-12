@@ -1690,7 +1690,8 @@ void Mcp2Tests::solverSpiralCreateAndEvaluate()
                 QJsonObject{{QStringLiteral("targetUuid"), center},
                             {QStringLiteral("turns"), 1.0},
                             {QStringLiteral("direction"), 1},
-                            {QStringLiteral("endRadius"), 0.0},
+                            {QStringLiteral("aspect"), 0.5},
+                            {QStringLiteral("angle"), 30.0},
                             {QStringLiteral("speedDegPerSec"), 0.0}});
 
     QJsonObject result = fixture.call(QStringLiteral("solver.create"), args);
@@ -1726,7 +1727,7 @@ void Mcp2Tests::solverSpiralCreateAndEvaluate()
             < 1e-6);
     QVERIFY(std::abs(samples.at(0).toObject().value(QStringLiteral("y")).toDouble())
             < 1e-6);
-    // One turn with endRadius 0 returns to the center.
+    // The spiral always collapses onto the center, whatever aspect/angle are.
     QVERIFY(std::abs(samples.at(60).toObject().value(QStringLiteral("x")).toDouble())
             < 1e-6);
     QVERIFY(std::abs(samples.at(60).toObject().value(QStringLiteral("y")).toDouble())
@@ -1761,6 +1762,29 @@ void Mcp2Tests::solverSpiralCreateAndEvaluate()
     badArgs.insert(QStringLiteral("params"),
                    QJsonObject{{QStringLiteral("targetUuid"), center},
                                {QStringLiteral("turns"), -1.0}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    // endRadius was removed; it is now an unknown field.
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("endRadius"), 10.0}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    // aspect/angle range checks.
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("aspect"), 1.5}});
+    result = fixture.call(QStringLiteral("solver.create"), badArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    badArgs = args;
+    badArgs.insert(QStringLiteral("params"),
+                   QJsonObject{{QStringLiteral("targetUuid"), center},
+                               {QStringLiteral("angle"), 400.0}});
     result = fixture.call(QStringLiteral("solver.create"), badArgs);
     QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
 }

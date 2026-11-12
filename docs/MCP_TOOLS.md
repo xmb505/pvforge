@@ -1526,11 +1526,12 @@ P0 固定 `(0,0)`，P3 固定 `(1,1)`；`inX/outX` 会被夹到 `0..1`，`inY/ou
 | `targetUuid` | string | — | 必填 | 已存在实体 | 螺旋中心实体。每帧读取它的位置；不能是目标实体自己。 |
 | `turns` | number | 圈 | 3 | 0..1000 | 总圈数；`speedDegPerSec = 0` 时使用。 |
 | `direction` | integer | — | 1 | `1` 或 `-1` | 旋转方向。**`1` 逆时针，`-1` 顺时针**（Y-up 正角逆时针；注意与 orbit/spin 的约定相反）。 |
-| `endRadius` | number | px | 0 | ≥ 0 | 结束半径；0 = 收到中心，>0 = 停在外圈。 |
+| `aspect` | number | 短轴/长轴 | 1 | 0.01..1 | 椭圆的短轴/长轴。1 = 正圆；越小轨道越扁。 |
+| `angle` | number | deg | 0 | -360..360 | 椭圆长轴相对中心实体局部坐标的旋转角。 |
 | `speedDegPerSec` | number | deg/s | 0 | ≥ 0 | > 0 时总角度 = 速度 × 段时长，覆盖 `turns`。 |
 
 - 只驱动 `x/y`；rotation 仍走普通关键帧。
-- 起始半径/角度由段起点相对目标在 `startFrame` 的位置决定；半径线性缩到 `endRadius`。
+- 起始半径/角度由段起点相对目标在 `startFrame` 的位置决定；椭圆半轴线性缩到 0，最后一帧精确落在目标中心。
 - 中心跟随目标动画；纯运动学，无碰撞/物理停止；自动结束为 `ClipEnd`，显式 `endFrame` 为 `ExplicitEnd`。
 - `initialVelocity` 对 spiral 无效，传入返回 `invalid_argument`。
 

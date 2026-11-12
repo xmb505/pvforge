@@ -462,7 +462,7 @@ void testOrbitDirections()
         CHECK_NEAR(ccwQuarter->pose.position.y(), 200.0, 1e-6);
 }
 
-void testSpiralShrinksTowardTarget()
+void testSpiralLandsOnCenter()
 {
     MockWorld world;
     world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
@@ -477,7 +477,6 @@ void testSpiralShrinksTowardTarget()
     segment.startPose.rotation = 33.0;
     segment.params[QStringLiteral("turns")] = 1.0;
     segment.params[QStringLiteral("direction")] = 1; // counter-clockwise
-    segment.params[QStringLiteral("endRadius")] = 20.0;
 
     const Result result = evaluateResult(segment, world, 61, 30);
     CHECK(result.stopFrame == 60);
@@ -498,24 +497,25 @@ void testSpiralShrinksTowardTarget()
     CHECK_NEAR(start->pose.position.y(), 0.0, 1e-9);
     CHECK_NEAR(start->pose.rotation, 33.0, 1e-12);
 
-    // Radius shrinks linearly: 100 -> 20 over the segment.
+    // Radius shrinks linearly all the way to 0: 100 -> 75 -> 50 -> 0.
     const double radii[] = {
         std::hypot(start->pose.position.x(), start->pose.position.y()),
         std::hypot(quarter->pose.position.x(), quarter->pose.position.y()),
         std::hypot(half->pose.position.x(), half->pose.position.y()),
         std::hypot(last->pose.position.x(), last->pose.position.y())};
     CHECK_NEAR(radii[0], 100.0, 1e-6);
-    CHECK_NEAR(radii[1], 80.0, 1e-6);
-    CHECK_NEAR(radii[2], 60.0, 1e-6);
-    CHECK_NEAR(radii[3], 20.0, 1e-6);
+    CHECK_NEAR(radii[1], 75.0, 1e-6);
+    CHECK_NEAR(radii[2], 50.0, 1e-6);
+    CHECK_NEAR(radii[3], 0.0, 1e-6);
 
     // +1 is counter-clockwise in Y-up model space: a quarter turn from +X
     // lands above the center.
     CHECK_NEAR(quarter->pose.position.x(), 0.0, 1e-6);
-    CHECK_NEAR(quarter->pose.position.y(), 80.0, 1e-6);
-    CHECK_NEAR(half->pose.position.x(), -60.0, 1e-6);
+    CHECK_NEAR(quarter->pose.position.y(), 75.0, 1e-6);
+    CHECK_NEAR(half->pose.position.x(), -50.0, 1e-6);
     CHECK_NEAR(half->pose.position.y(), 0.0, 1e-6);
-    CHECK_NEAR(last->pose.position.x(), 20.0, 1e-6);
+    // The final frame lands exactly on the target center.
+    CHECK_NEAR(last->pose.position.x(), 0.0, 1e-6);
     CHECK_NEAR(last->pose.position.y(), 0.0, 1e-6);
 
     // The spiral is kinematic: no collision and no physical stop.
@@ -565,6 +565,98 @@ void testSpiralDirection()
     }
 }
 
+void testSpiralEllipseAspect()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 60;
+    segment.startPose.position = QPointF(100.0, 0.0);
+    segment.params[QStringLiteral("turns")] = 1.0;
+    segment.params[QStringLiteral("aspect")] = 0.5;
+
+    const QVector<Sample> samples = evaluate(segment, world, 61, 30);
+    const Sample *quarter = atFrame(samples, 15);
+    const Sample *half = atFrame(samples, 30);
+    CHECK(quarter && half);
+    if (!quarter || !half)
+        return;
+
+    // With aspect 0.5 the semi-axes are a = 100, b = 50.  At progress p the
+    // radius has shrunk by (1 - p), so the un-shrunk local point must satisfy
+    // (u/a)^2 + (v/b)^2 = 1.
+    const double quarterShrink = 1.0 - 15.0 / 60.0;
+    const double halfShrink = 1.0 - 30.0 / 60.0;
+    const double uq = quarter->pose.position.x();
+    const double vq = quarter->pose.position.y();
+    CHECK_NEAR(uq / (100.0 * quarterShrink), 0.0, 1e-9);
+    CHECK_NEAR(vq / (50.0 * quarterShrink), 1.0, 1e-9);
+    const double uh = half->pose.position.x();
+    const double vh = half->pose.position.y();
+    CHECK_NEAR(uh / (100.0 * halfShrink), -1.0, 1e-9);
+    CHECK_NEAR(vh / (50.0 * halfShrink), 0.0, 1e-9);
+
+    // The un-shrunk x / y half-axes keep the 1/aspect ratio.
+    const double semiMajor = std::abs(uh) / halfShrink;
+    const double semiMinor = std::abs(vq) / quarterShrink;
+    CHECK_NEAR(semiMajor, 100.0, 1e-6);
+    CHECK_NEAR(semiMinor, 50.0, 1e-6);
+    CHECK_NEAR(semiMajor / semiMinor, 1.0 / 0.5, 1e-9);
+}
+
+void testSpiralAngleRotatesEllipse()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("sun"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    const double angleDegrees = 30.0;
+    const double angleRadians = qDegreesToRadians(angleDegrees);
+    const QPointF start(100.0 * std::cos(angleRadians),
+                        100.0 * std::sin(angleRadians));
+
+    Segment segment;
+    segment.effect = SolverEffect::Spiral;
+    segment.entityUuid = QStringLiteral("dot");
+    segment.targetUuid = QStringLiteral("sun");
+    segment.startFrame = 0;
+    segment.endFrame = 60;
+    segment.startPose.position = start;
+    segment.params[QStringLiteral("turns")] = 1.0;
+    segment.params[QStringLiteral("aspect")] = 0.5;
+    segment.params[QStringLiteral("angle")] = angleDegrees;
+
+    const QVector<Sample> samples = evaluate(segment, world, 61, 30);
+    const Sample *first = atFrame(samples, 0);
+    const Sample *quarter = atFrame(samples, 15);
+    const Sample *last = atFrame(samples, 60);
+    CHECK(first && quarter && last);
+    if (!first || !quarter || !last)
+        return;
+
+    // The start position still lies exactly on the rotated ellipse.
+    CHECK_NEAR(first->pose.position.x(), start.x(), 1e-9);
+    CHECK_NEAR(first->pose.position.y(), start.y(), 1e-9);
+
+    // The minor axis is now rotated 30 degrees.  A quarter turn from the
+    // major-axis start gives local (0, 0.75 * 50), rotated by 30 degrees.
+    const double localY = 0.75 * 50.0;
+    CHECK_NEAR(quarter->pose.position.x(),
+               -localY * std::sin(angleRadians), 1e-6);
+    CHECK_NEAR(quarter->pose.position.y(),
+               localY * std::cos(angleRadians), 1e-6);
+    CHECK_NEAR(std::hypot(quarter->pose.position.x(),
+                          quarter->pose.position.y()),
+               localY, 1e-6);
+
+    CHECK_NEAR(last->pose.position.x(), 0.0, 1e-6);
+    CHECK_NEAR(last->pose.position.y(), 0.0, 1e-6);
+}
+
 void testSpiralSpeedOverridesTurns()
 {
     MockWorld world;
@@ -579,10 +671,9 @@ void testSpiralSpeedOverridesTurns()
     segment.startPose.position = QPointF(100.0, 0.0);
     segment.params[QStringLiteral("turns")] = 100.0; // must be ignored
     segment.params[QStringLiteral("direction")] = 1;
-    segment.params[QStringLiteral("endRadius")] = 100.0;
     segment.params[QStringLiteral("speedDegPerSec")] = 90.0;
 
-    // 60 frames at 30 fps = 2 s at 90 °/s => half a turn.
+    // 60 frames at 30 fps = 2 s at 90 °/s => half a turn, independent of turns.
     const QVector<Sample> samples = evaluate(segment, world, 61, 30);
     const Sample *half = atFrame(samples, 30);
     const Sample *last = atFrame(samples, 60);
@@ -590,9 +681,21 @@ void testSpiralSpeedOverridesTurns()
     if (half && last)
     {
         CHECK_NEAR(half->pose.position.x(), 0.0, 1e-6);
-        CHECK_NEAR(half->pose.position.y(), 100.0, 1e-6);
-        CHECK_NEAR(last->pose.position.x(), -100.0, 1e-6);
+        CHECK_NEAR(half->pose.position.y(), 50.0, 1e-6);
+        CHECK_NEAR(last->pose.position.x(), 0.0, 1e-6);
         CHECK_NEAR(last->pose.position.y(), 0.0, 1e-6);
+    }
+
+    // Changing turns must not change a speed-driven path.
+    segment.params[QStringLiteral("turns")] = 0.0;
+    const QVector<Sample> zeroTurns = evaluate(segment, world, 61, 30);
+    CHECK(zeroTurns.size() == samples.size());
+    for (int i = 0; i < zeroTurns.size() && i < samples.size(); ++i)
+    {
+        CHECK_NEAR(zeroTurns.at(i).pose.position.x(),
+                   samples.at(i).pose.position.x(), 1e-9);
+        CHECK_NEAR(zeroTurns.at(i).pose.position.y(),
+                   samples.at(i).pose.position.y(), 1e-9);
     }
 }
 
@@ -614,15 +717,14 @@ void testSpiralFollowsMovingTarget()
     // Start 100 px right of the target's frame-0 position.
     segment.startPose.position = QPointF(100.0, 0.0);
     segment.params[QStringLiteral("turns")] = 0.0;
-    segment.params[QStringLiteral("endRadius")] = 0.0;
 
     const QVector<Sample> samples = evaluate(segment, world, 21, 30);
     CHECK(samples.size() == 21);
     if (samples.size() != 21)
         return;
 
-    // Zero turns and zero end radius: the path is a straight shrink and the
-    // final sample sits exactly on the moved center.
+    // Zero turns: the path is a straight shrink and the final sample sits
+    // exactly on the moved center.
     const Sample &last = samples.last();
     CHECK_NEAR(last.pose.position.x(), 100.0, 1e-6);
     CHECK_NEAR(last.pose.position.y(), 40.0, 1e-6);
@@ -670,7 +772,8 @@ void testSpiralEdgeCases()
     // Non-finite / negative parameters must not crash; they fall back or clamp.
     segment.targetUuid = QStringLiteral("sun");
     segment.params[QStringLiteral("turns")] = std::nan("");
-    segment.params[QStringLiteral("endRadius")] = -30.0;
+    segment.params[QStringLiteral("aspect")] = std::nan("");
+    segment.params[QStringLiteral("angle")] = std::nan("");
     segment.params[QStringLiteral("speedDegPerSec")] = -5.0;
     segment.params[QStringLiteral("direction")] = -9;
     const QVector<Sample> fallback = evaluate(segment, world, 60, 30);
@@ -680,9 +783,21 @@ void testSpiralEdgeCases()
         const Sample &last = fallback.last();
         CHECK(std::isfinite(last.pose.position.x()));
         CHECK(std::isfinite(last.pose.position.y()));
-        // endRadius is clamped to 0, so the path ends on the center.
+        // The spiral always ends on the center.
         CHECK_NEAR(last.pose.position.x(), 0.0, 1e-6);
         CHECK_NEAR(last.pose.position.y(), 0.0, 1e-6);
+    }
+
+    // Starting exactly on the center is a degenerate ellipse (zero axes) and
+    // must stay finite while still collapsing to the center.
+    segment.params.clear();
+    segment.startPose.position = QPointF(0.0, 0.0);
+    const QVector<Sample> degenerate = evaluate(segment, world, 60, 30);
+    CHECK(degenerate.size() == 16);
+    for (const Sample &sample : degenerate)
+    {
+        CHECK(std::isfinite(sample.pose.position.x()));
+        CHECK(std::isfinite(sample.pose.position.y()));
     }
 
     // Automatic mode runs to the clip end without a physical stop.
@@ -998,8 +1113,10 @@ int main()
     run("gravity stop threshold", testGravityStopsOnImpact);
     run("orbit period", testOrbitPeriod);
     run("orbit directions", testOrbitDirections);
-    run("spiral shrinks toward target", testSpiralShrinksTowardTarget);
+    run("spiral lands on center", testSpiralLandsOnCenter);
     run("spiral direction", testSpiralDirection);
+    run("spiral ellipse aspect", testSpiralEllipseAspect);
+    run("spiral angle rotates ellipse", testSpiralAngleRotatesEllipse);
     run("spiral speed overrides turns", testSpiralSpeedOverridesTurns);
     run("spiral follows moving target", testSpiralFollowsMovingTarget);
     run("spiral edge cases", testSpiralEdgeCases);

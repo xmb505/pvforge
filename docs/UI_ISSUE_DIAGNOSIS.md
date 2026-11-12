@@ -377,7 +377,7 @@ rowAt(y)    = (body.bottom() - y + m_rowScroll) / kRowHeight
   - 轨迹点从 solver/parent 空间映射到 widget：`sessionParentToWidget(entity).map(point)`；不要直接拿世界坐标，父级变换会错。
   - 画折线、起点圆点、停止/碰撞点（不同颜色/图标）、目标实体连线、当前帧游标；轨迹裁剪到画布/扩展矩形。
 - 初速度手柄：
-  - 只在 gravity/blackhole 显示（`SolverPreviewWidget::usesVelocity()`，`src/next/properties/SolverPreviewWidget.cpp:331-335`）；orbit/spin 不显示。
+  - 只在 gravity/blackhole 显示（`SolverPreviewWidget::usesVelocity()`，`src/next/properties/SolverPreviewWidget.cpp:331-335`）；orbit/spin/spiral 不显示。
   - 箭头长度用 `kVelocitySeconds = 0.25`（`src/next/properties/SolverPreviewWidget.cpp:22-24`），tip = `startPose + initialVelocity * 0.25`，与属性面板预览保持一致。
   - 命中半径 13px（同文件 `kArrowHitRadius`，`28`），拖拽时把 widget 坐标逆变换回 solver/parent 空间，`velocity = (solverPos - startPose) / 0.25`，clamp 到 ±1e6。
   - 拖动中直接改 `m_session->mutableProject()` 的 `SolverSegment.initialVelocity`，实时重算轨迹；松手调用 `Document::commitEntity(uuid, "pvf: set solver initial velocity")` 一次；失败恢复拖动前值。
