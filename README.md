@@ -2,9 +2,11 @@
 
 **学过 Mine-imator，就能画 PV。**
 
-用 Mine-imator 的工作流做 2D 音乐 PV 的桌面编辑器。纯 C++20 + Qt 6，工程格式是可读的 `.pvproj` JSON。
+用 Mine-imator 的工作流做 2D 音乐 PV 的桌面编辑器。纯 C++20 + Qt 6，工程格式是可读的 `.pvproj/` 目录（JSON 文本 + 素材）。
 
-> 当前状态：**M4 / 0.2.0**。时间轴、关键帧、素材、工作台、撤销、保存、摄像机、监视器、音频、自动保存、文字排版、文本框、特殊工具、**MP4 导出**都已可用。
+> 当前状态：**0.3.0 预览（2026-11-12）**。旧 UI 的布局、面板、快捷键和交互保留，后端已切到新实体模型：时间轴、关键帧、求解、素材、工作台缓存、撤销、保存、摄像机、监视器、音频、文字、MP4 导出与 MCP 都已可用。
+>
+> Linux x86_64 评鉴包见 [Releases](https://github.com/xmb505/pvforge/releases)；运行需要系统 Qt 6.5+ 与 FFmpeg 运行库。
 
 ## 亮点
 
@@ -13,8 +15,10 @@
 - **摄像机与监视器**：摄像机关键帧、取景框、临摹参考视频、手机 HTTP/RTP 串流、独立弹出窗口
 - **文字与漫画**：多行/竖排、行距字距、文字描边、云朵/椭圆/爆炸气泡、可拖动尖角
 - **特殊工具**：放射状线条、快速流过、漫画点阵、品牌瓷砖墙
+- **物理求解**：重力、公转、自转、黑洞、螺旋；整段预计算并缓存，时间轴显示停止色带，属性面板带轨迹 / 初速度手柄
+- **缓存与性能**：矢量帧 QOI、栅格帧 WebP，按需写入、异步后台编码（1–4 线程）；独立性能监视窗口，含帧耗时、阶段耗时、缓存/系统指标和可下钻的火焰图
 - **音频与视频**：FFmpeg 软件解码、视频内嵌音轨自动拆分、波形时间轴、预览代理
-- **工程体验**：自动保存、播放头记忆、更换素材、全局撤销/重做、性能监视
+- **工程体验**：自动保存、播放头记忆、更换素材、内存撤销/重做与 git 冷备、工程内文本式版本历史
 - **出片**：文件 → 导出视频（`Ctrl+E`），实时预览窗、整画布或任意摄像机视角，H.264 MP4 + AAC 音频，软件/VAAPI 硬件编码，进度显示与取消
 - **性能**：文字/气泡/点阵按参数缓存，大量实体和 0 透明度对象不会拖慢播放
 
@@ -57,13 +61,14 @@ Linux 优先；Windows/macOS 在代码上没有硬依赖，但未验证。
 
 ## 测试
 
-52 个离屏自检。完整模式列表和验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)。
+离屏自检按功能分组，完整列表与验收项见 [docs/MILESTONE.md](docs/MILESTONE.md)；单元/集成测试走 CTest。
 
 ```bash
 QT_QPA_PLATFORM=offscreen ./build/pvforge --self-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --special-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --export-test
 QT_QPA_PLATFORM=offscreen ./build/pvforge --monitor-feature-test
+ctest --test-dir build --output-on-failure
 ```
 
 ## 路线

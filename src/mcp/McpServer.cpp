@@ -32,7 +32,7 @@
 #include <memory>
 
 #ifndef PVFORGE_VERSION
-#define PVFORGE_VERSION "0.2.0"
+#define PVFORGE_VERSION "0.3.0"
 #endif
 
 namespace pvf {
