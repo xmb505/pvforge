@@ -119,7 +119,7 @@ struct TrimSummary
 Result trimEntityRange(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
                        TrimSummary* summary);
 
-// Easing helpers accept both the lowercase presets from docs/MCP_TOOLS.md and
+// Easing helpers accept both the lowercase presets from docs/AI/MCP_TOOLS.md and
 // the canonical camelCase names used by model::EasingSpec.
 bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
                  QJsonValue* normalized, Result* error);

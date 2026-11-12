@@ -39,7 +39,7 @@ public:
     // Highest end frame among root entities.  0 means no content.
     int contentEnd() const;
 
-    // Frame watchdog (docs/ENTITY_MODEL.md 6.5).  While playing, every real
+    // Frame watchdog (docs/AI/ENTITY_MODEL.md 6.5).  While playing, every real
     // frame that reaches the screen must call noteFramePresented(); when no
     // such frame arrives for longer than watchdogMs(), playback pauses and
     // stalled() fires.  The clock timer never feeds the watchdog itself.

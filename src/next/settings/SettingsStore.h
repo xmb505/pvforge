@@ -7,7 +7,7 @@
 namespace pvf::next {
 
 // Persisted application-wide preferences for the new UI.  The defaults are the
-// values documented in docs/ENTITY_MODEL.md: HTML cache 256 MB memory / 2 GB
+// values documented in docs/AI/ENTITY_MODEL.md: HTML cache 256 MB memory / 2 GB
 // disk, low-resolution preview at half the project resolution, a 3 s watchdog,
 // 960 px video proxies and the fixed MCP port 47821.
 struct AppSettings

@@ -127,7 +127,7 @@ bool isVisualAsset(AssetType type)
 }
 
 // Assets that can replace an entity of this content kind, following
-// docs/ENTITY_MODEL.md 6.2.
+// docs/AI/ENTITY_MODEL.md 6.2.
 bool assetCompatible(ContentKind kind, AssetType currentType, AssetType incoming)
 {
     switch (kind)

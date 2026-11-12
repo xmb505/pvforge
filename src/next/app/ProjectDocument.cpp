@@ -430,7 +430,7 @@ void ProjectDocument::loadPlayheadState()
         return;
 
     // With content, the playhead must stay inside it.  An empty project has an
-    // open timeline (docs/DESIGN.md), so only the toolbar spin box's sanity
+    // open timeline (docs/AI/DESIGN.md), so only the toolbar spin box's sanity
     // bound applies.
     const int end = contentEnd();
     const int frame = value.toInt();

@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 用户原始需求（从 OpenCode 对话数据库提取）
 
 > 提取时间：2026-11-10 19:00（UTC+8）
@@ -588,9 +590,9 @@
 - 项目计划上 GitHub、MIT 开源；README 要简单，一句话“学过 mi 就能画 PV”；长文档放 `doc/`/`docs/`。
 - 把参考/抄过的项目列清楚（Mine-imator、LibreOffice、Krita、qBittorrent、ffmpeg 等）。
 
-## 4. 与现有 `docs/USER_REQUIREMENTS.md` 的差异
+## 4. 与现有 `docs/AI/USER_REQUIREMENTS.md` 的差异
 
-> 对照文件：`/home/xmb505/pvforge/docs/USER_REQUIREMENTS.md`（157 行，当前工作树版本）。行号以该文件为准。
+> 对照文件：`/home/xmb505/pvforge/docs/AI/USER_REQUIREMENTS.md`（157 行，当前工作树版本）。行号以该文件为准。
 > 只列“原文与文档不一致/文档没有覆盖”的条目；纯实现细节不展开。
 
 ### A. 原文明确、现有文档漏掉 / 写错 / 顺序反了（22 条）

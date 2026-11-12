@@ -1,9 +1,11 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 旧 UI 语义问题诊断
 
 > 只读诊断，未改代码、未提交。
 > 仓库：`/home/xmb505/pvforge`，分支 `new-entity-model`，诊断时 HEAD `f7ae3df`（诊断开始时 `58b16fa`；期间仅多了一笔 `USER_REQUIREMENTS.md` 文档提交）。
 > 旧 UI 基线：`legacy-ui-baseline` = `ba07a59`（annotated tag `0cc6d43`）。
-> 对照口径：旧代码行为以 `git show legacy-ui-baseline:<path>` 为准；新行为以当前工作树为准；冲突时以最新 `docs/USER_REQUIREMENTS.md` 和甲方本次澄清为准。
+> 对照口径：旧代码行为以 `git show legacy-ui-baseline:<path>` 为准；新行为以当前工作树为准；冲突时以最新 `docs/AI/USER_REQUIREMENTS.md` 和甲方本次澄清为准。
 >
 > **本次新增澄清（覆盖文档旧写法）**：求解段不是“停止位置预览”，而是**视口轨迹预览 + 初速度手柄**。轨迹终点必须是**实际停止 / 碰撞 / 片段末尾**；拖手柄直接得到方向/速度向量，不必手填参数；`initialVelocity` 必须写回模型。
 
@@ -86,7 +88,7 @@
 ### 用户期望
 
 - 选中实体后，X 箭头向右、Y 箭头向上；拖动 X 只横移、拖动 Y 只纵移。
-- 需求又明确“X/Y 轴跟随实体旋转”（`docs/ENTITY_MODEL.md:253`，决策账本 #60），所以实体旋转后箭头应跟着转。
+- 需求又明确“X/Y 轴跟随实体旋转”（`docs/AI/ENTITY_MODEL.md:253`，决策账本 #60），所以实体旋转后箭头应跟着转。
 - 旋转拖动方向要符合视觉直觉：顺时针拖，画面顺时针转。
 
 ### 当前行为与证据
@@ -129,7 +131,7 @@
 - `src/anim/Anim.cpp`：`composePose()` 的 rotation 符号与 Gizmo 保持一致；父子链、负 scale 一起验证。
 - `src/render2/Render.cpp`：`canvasView` 和 `cameraView` 共用同一 Y 约定；不能在渲染里翻、Gizmo 里不翻。
 - `src/ui/Viewport.cpp`：`sessionWorldToScreen()`、`applySessionGizmoDrag()` 的 `MoveX/MoveY`、`Rotate` 角度、`sessionGizmoTransform()` 的 atan2 全部走同一转换。
-- 求解器 `src/solver/*`：重力方向文档写“目标局部 +Y 向下”（`docs/ENTITY_MODEL.md:468`）。如果世界改 Y 向上，重力加速度要改为 `-Y`，否则物体会往天上掉。
+- 求解器 `src/solver/*`：重力方向文档写“目标局部 +Y 向下”（`docs/AI/ENTITY_MODEL.md:468`）。如果世界改 Y 向上，重力加速度要改为 `-Y`，否则物体会往天上掉。
 
 **风险：高。** 任何一处漏翻都会造成“Gizmo 和画面差一个镜像”。必须加测试：rotation = 0/90/180/-90 时 X/Y 箭头屏幕方向、拖 X/Y 的数值符号、顺时针旋转拖动的角度符号、父级旋转/负 scale 下的轴向。
 
@@ -238,7 +240,7 @@
 - `src/ui/TimelinePanel.cpp:792-803`：`rowTop(row) = kRulerHeight + row * kRowHeight - m_scrollY`；row 0 在顶部，row 增大向下。
 - `src/ui/TimelinePanel.cpp:757-783`：`rowIds()` 直接以模型 row 为下标，`row 0` 是数组第 0 项；绘制循环 `2515-2530` 从 row 0 往下画。
 - `src/app/TimelineAdapter.cpp:171`：`data["timelineRow"] = source.row`，没有做“视觉行 = 最大行 - 模型行”的转换。
-- `docs/ENTITY_MODEL.md:246`、`:275-281`、`docs/STATUS.md:38` 明确要求 row 0 在最底、新行向上加。
+- `docs/AI/ENTITY_MODEL.md:246`、`:275-281`、`docs/AI/STATUS.md:38` 明确要求 row 0 在最底、新行向上加。
 - 垂直拖动：`src/ui/TimelinePanel.cpp:1869-1919` 松手时 `sessionBaseEntityAtRow(baseRow)` 找目标；只有目标 clip 存在且同父级时才 `siblingOrderForDrop`。拖到空白行时 `targetId` 为空，`order` 为空，`planMove` 不执行，clip 回到原行。
 - `src/ui/TimelinePanel.cpp:1222-1234`：`sessionBaseEntityAtRow()` 只返回“该行已有实体”的 id；没有“把实体放到第 N 行”的 plan。
 - 水平方向本身没有固定右边界：`EditActions::planMove()` 只校验 `start >= 父级 start/0`（`src/app/EditActions.cpp:325-346`），右移不限；所以“不能随便拖”的主因是垂直行，不是时间轴长度。
@@ -292,8 +294,8 @@ rowAt(y)    = (body.bottom() - y + m_rowScroll) / kRowHeight
 - `src/solver/GravitySolver.cpp:345-357`：`last` 时强制 `velocity=0; stopped=true`；最后一帧的 `stopped` 与“物理撞停”混在一起。碰撞时也会 `stopped=true`（`340-341`），但没有单独字段区分“碰撞停”“阈值停”“片段末尾”。
 - `src/ui/PropertiesPanel.cpp:1341-1347`：新建求解段 UI 有“结束帧” spin，默认 `-1`、特殊值文本“片段末帧”；`3790-3798` 仍然读取这个值并校验。也就是说默认虽然不是强制，但 UI 把“结束帧”呈现成一个必须理解的参数。
 - `src/ui/PropertiesPanel.cpp:3524-3529`：已有求解段卡片同样有“结束帧” spin。
-- `docs/ENTITY_MODEL.md:424-428`：旧设计写“结束帧只是停止标记”“没有结束帧时解到 clip 最后一帧”；没有“物理停止自动结束”的语义。
-- `docs/USER_REQUIREMENTS.md:56`（本次新增）：轨迹显示到**实际停止/碰撞/片段末尾**；这条新要求覆盖旧文档的“-1 = 片段末帧”。
+- `docs/AI/ENTITY_MODEL.md:424-428`：旧设计写“结束帧只是停止标记”“没有结束帧时解到 clip 最后一帧”；没有“物理停止自动结束”的语义。
+- `docs/AI/USER_REQUIREMENTS.md:56`（本次新增）：轨迹显示到**实际停止/碰撞/片段末尾**；这条新要求覆盖旧文档的“-1 = 片段末帧”。
 
 ### 旧版实现
 
@@ -411,7 +413,7 @@ rowAt(y)    = (body.bottom() - y + m_rowScroll) / kRowHeight
 ### 8.1 默认决策
 
 1. **坐标**：采用“画布中心原点 + Y 向上”的 Mine-imator 语义；后端 `render2/anim/gizmo/solver` 统一适配，旧 UI 布局和面板不动。
-2. **时间轴**：严格按 `docs/ENTITY_MODEL.md` 的 bottom-up；row 0 最底；drag 到任意行都算数。
+2. **时间轴**：严格按 `docs/AI/ENTITY_MODEL.md` 的 bottom-up；row 0 最底；drag 到任意行都算数。
 3. **缓动**：按旧版“当前帧整组缓动”，不按轨道；属性面板恢复旧按钮；时间轴移除缓动入口。
 4. **求解结束**：默认自动（物理停止/碰撞/片段末尾）；高级才显示手动结束帧。
 5. **求解预览**：视口轨迹 + 初速度手柄为一等功能；属性面板的 `SolverPreviewWidget` 作为精确输入补充。
@@ -521,12 +523,12 @@ rowAt(y)    = (body.bottom() - y + m_rowScroll) / kRowHeight
 
 ### 文档
 
-- `docs/ENTITY_MODEL.md:246`、`:275-281`：row 0 最底、新行向上。
-- `docs/ENTITY_MODEL.md:253`：X/Y 跟随实体旋转。
-- `docs/ENTITY_MODEL.md:424-428`：结束帧/`-1` 旧语义。
-- `docs/ENTITY_MODEL.md:437`、`:470`：求解轨迹预览 + 初速度手柄。
-- `docs/USER_REQUIREMENTS.md:34`、`:56`、`:130-131`：bottom-up、轨迹/手柄、UI 逻辑保留、后端适配 UI。
-- `docs/STATUS.md:38`、`:51-53`：bottom-up、求解段、预览在 Properties（本次澄清改为视口）。
+- `docs/AI/ENTITY_MODEL.md:246`、`:275-281`：row 0 最底、新行向上。
+- `docs/AI/ENTITY_MODEL.md:253`：X/Y 跟随实体旋转。
+- `docs/AI/ENTITY_MODEL.md:424-428`：结束帧/`-1` 旧语义。
+- `docs/AI/ENTITY_MODEL.md:437`、`:470`：求解轨迹预览 + 初速度手柄。
+- `docs/AI/USER_REQUIREMENTS.md:34`、`:56`、`:130-131`：bottom-up、轨迹/手柄、UI 逻辑保留、后端适配 UI。
+- `docs/AI/STATUS.md:38`、`:51-53`：bottom-up、求解段、预览在 Properties（本次澄清改为视口）。
 
 ---
 

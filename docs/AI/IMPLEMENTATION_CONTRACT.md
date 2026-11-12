@@ -1,6 +1,8 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 新模型并行实现合同
 
-> 目标：把 `docs/ENTITY_MODEL.md` 拆成可并行的底层模块。先做纯数据和纯算法，不动旧 UI/旧 MCP/旧渲染。
+> 目标：把 `docs/AI/ENTITY_MODEL.md` 拆成可并行的底层模块。先做纯数据和纯算法，不动旧 UI/旧 MCP/旧渲染。
 
 ## 文件所有权
 
@@ -10,7 +12,7 @@
 | Solver | `src/solver/**` | 全部 |
 | Assets | `src/assets/**` | 全部 |
 | Gizmo | `src/gizmo/**` | 全部 |
-| MCP 文档 | `docs/MCP_TOOLS.md` | 全部 |
+| MCP 文档 | `docs/AI/MCP_TOOLS.md` | 全部 |
 
 公共类型 `src/common/Types.h` 由总控维护，agent **只读不改**。
 
@@ -357,9 +359,9 @@ DragResult rotate(const Transform&, double angleDelta, bool aroundBoundingBoxCen
 
 ## MCP 文档 Agent
 
-只写 `docs/MCP_TOOLS.md`：
+只写 `docs/AI/MCP_TOOLS.md`：
 
-- 按 `docs/ENTITY_MODEL.md` 列出所有工具、参数、返回、错误、示例。
+- 按 `docs/AI/ENTITY_MODEL.md` 列出所有工具、参数、返回、错误、示例。
 - 重点：`entity.createTree`、`keyframes.setMany`、`solver.create/evaluate`、`preview.render_frame`、`asset.import`、`history.undo/redo`。
 - 每个参数写类型、单位、默认值、是否必填。
 - 给 3 个完整 AI 工作流示例。

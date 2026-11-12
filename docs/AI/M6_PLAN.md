@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # M6：HTML 组件与 MCP
 
 记录时间：2026-11-08
@@ -351,7 +353,7 @@ MCP 资源 `pvforge://guide/authoring`：
   - 导出不节流、全分辨率逐帧等待；1080p HTML 层本身约 11–16fps，长工程会比实时慢，属于可接受成本。
   - 多 HTML 层串行 `bringToFront` 抓帧；RSS 高，v1 最多 2 层。
 - 关键实现发现：headless 只为前台标签页合成，每次截图前必须 `Page.bringToFront`/`Target.activateTarget`；`Page.addScriptToEvaluateOnNewDocument` 对 `Page.setDocumentContent` 不生效，确定性 stub 必须内联到文档第一个 `<script>`。
-- 产出：`docs/M6_SPIKE.md` 测量报告 + go/no-go；spike 不集成进主程序。
+- 产出：`docs/AI/M6_SPIKE.md` 测量报告 + go/no-go；spike 不集成进主程序。
 
 ### Stage 1：HTML 层核心（约 2 周）
 
@@ -380,7 +382,7 @@ MCP 资源 `pvforge://guide/authoring`：
 
 ### Stage 5：硬化与文档（约 1 周）
 
-- `docs/AI_AUTHORING.md`、HTML 示例（进度条/字幕条/卡拉 OK）、FEATURES/USAGE/MILESTONE 更新；
+- `docs/AI/AI_AUTHORING.md`、HTML 示例（进度条/字幕条/卡拉 OK）、FEATURES/USAGE/MILESTONE 更新；
 - 性能、内存、长会话、浏览器崩溃、MCP 客户端兼容；
 - 全量自检（现有 52 + 新增）。
 

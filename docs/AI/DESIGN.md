@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 设计文档
 
 > 工作名 PVForge，可随时更名。仓库 `pvforge`。

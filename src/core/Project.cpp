@@ -59,7 +59,7 @@ QString typeToString(EntityType type)
     return QStringLiteral("image");
 }
 
-// Load limits for untrusted project files. See docs/M6_SECURITY.md A1/A2.
+// Load limits for untrusted project files. See docs/AI/M6_SECURITY.md A1/A2.
 constexpr qint64 kMaxProjectFileBytes = 64LL * 1024 * 1024;
 constexpr int kMaxEntityCount = 5000;
 constexpr int kMaxTemplateCount = 1000;

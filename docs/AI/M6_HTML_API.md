@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # HTML 组件契约（M6）
 
 > 面向组件作者和通过 MCP 写组件的 AI。工作流与安全边界见 [AI_AUTHORING.md](AI_AUTHORING.md)，方案与阶段拆分见 [M6_PLAN.md](M6_PLAN.md)。

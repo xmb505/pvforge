@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 旧 UI 接入新后端方案
 
 > 只读分析，未改代码、未提交。
@@ -235,7 +237,7 @@ anim / render2 / html2 / video2 / audio2 / export2 / mcp2 / workbench
   - ✅ 已打 annotated tag `legacy-ui-baseline`（指向 `ba07a59`）；
   - 交付目标保持 `pvforge`（旧 `src/app` + `src/ui` + 新模块）；`pvforge-next` 只作参考且不安装。P0 暂不做 CMake 目标清理/改名；内部临时目标名不得出现在窗口/安装包/MCP serverInfo；
   - ✅ `QApplication::setApplicationName("PVForge")`、`setOrganizationName("PVForge")`、`setApplicationDisplayName("PVForge")`；沿用旧 QSettings 键（`recentProjects` 等），避免升级后最近项目和界面设置丢失；
-  - ✅ 更新 `docs/STATUS.md`、`docs/INTEGRATION_PLAN.md`、`docs/OLD_UI_FEATURES.md` 中“新壳是交付、旧 app 最终删除”的过时描述；同时修正 `ENTITY_MODEL.md`/`STATUS.md` 里“MCP 日志底部 dock”的写法，按 `USER_REQUIREMENTS.md` 和旧代码 `arrangeMcpLog()` 改为“监视器旁浮窗”。
+  - ✅ 更新 `docs/AI/STATUS.md`、`docs/AI/INTEGRATION_PLAN.md`、`docs/AI/OLD_UI_FEATURES.md` 中“新壳是交付、旧 app 最终删除”的过时描述；同时修正 `ENTITY_MODEL.md`/`STATUS.md` 里“MCP 日志底部 dock”的写法，按 `USER_REQUIREMENTS.md` 和旧代码 `arrangeMcpLog()` 改为“监视器旁浮窗”。
 - 里程碑：✅ `legacy-ui-baseline` tag 存在（`ba07a59`）；构建文档写清“交付目标 = 旧壳 + 新后端”。
 
 ### P1 会话层与工程生命周期（M，3–4 天）

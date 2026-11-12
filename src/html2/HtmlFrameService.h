@@ -35,7 +35,7 @@ struct Stats
     int prefetched = 0;
 };
 
-// Manages the three headless browsers described in docs/ENTITY_MODEL.md 6.5:
+// Manages the three headless browsers described in docs/AI/ENTITY_MODEL.md 6.5:
 //
 //  - frontend: renders the current low-resolution frame on a private QThread,
 //    one at a time, and is started by start();

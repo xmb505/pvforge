@@ -1552,7 +1552,7 @@ bool isVisualAssetType(AssetType type)
            || type == AssetType::Html;
 }
 
-// The compatibility table from docs/ENTITY_MODEL.md 6.2.  Empty entities
+// The compatibility table from docs/AI/ENTITY_MODEL.md 6.2.  Empty entities
 // accept any asset group; cameras and generated content never accept assets.
 bool assetGroupMatches(const model::Content& content, AssetType incoming)
 {

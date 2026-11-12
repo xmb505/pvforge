@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # Inkscape 选择框旋转手柄研究
 
 > 目的：给 PVForge 旧 UI 的 Gizmo 提供可复用的实现依据。

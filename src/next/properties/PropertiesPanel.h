@@ -269,7 +269,7 @@ private:
     bool m_assetMissing = false;
     QHash<AssetHash, QPixmap> m_assetThumbnails;
 
-    // HTML manifest variables (docs/ENTITY_MODEL.md 6.4)
+    // HTML manifest variables (docs/AI/ENTITY_MODEL.md 6.4)
     QGroupBox* m_htmlGroup = nullptr;
     QLabel* m_htmlStatus = nullptr;
     QLabel* m_htmlEmpty = nullptr;

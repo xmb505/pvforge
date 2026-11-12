@@ -77,12 +77,15 @@ ctest --test-dir build --output-on-failure
 
 - [功能详情](docs/FEATURES.md)
 - [操作手册](docs/USAGE.md)
-- [实体模型](docs/ENTITY_MODEL.md)
-- [工作台缓存](docs/WORKBENCH_CACHE.md)
-- [MCP 工具](docs/MCP_TOOLS.md)
-- [里程碑](docs/MILESTONE.md)
-- [当前状态与交接](docs/STATUS.md)
-- [架构与设计](docs/DESIGN.md)
+
+内部设计、状态与交接文档在 [docs/AI](docs/AI/README.md)：这些文档由 AI/代理编写，面向开发者与 AI，可能滞后于代码，不作为用户文档或实现契约。
+
+- [实体模型](docs/AI/ENTITY_MODEL.md)
+- [工作台缓存](docs/AI/WORKBENCH_CACHE.md)
+- [MCP 工具](docs/AI/MCP_TOOLS.md)
+- [里程碑](docs/AI/MILESTONE.md)
+- [当前状态与交接](docs/AI/STATUS.md)
+- [架构与设计](docs/AI/DESIGN.md)
 
 ## 参考与致谢
 

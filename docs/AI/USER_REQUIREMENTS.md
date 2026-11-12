@@ -1,8 +1,10 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 用户需求总表（来自对话，权威）
 
 > 用途：给独立审查 agent 对照项目设计与实现。
 > 规则：**同一问题后出现的决定覆盖先前的**；本文与 `ENTITY_MODEL.md` 等设计文档冲突时，以本文为准，并应修正设计文档。
-> 来源：`docs/USER_REQUIREMENTS_FROM_DB.md`（原始 `role=user` 消息）与 `docs/USER_DECISIONS_FROM_DB.md`（选择题决策账本）。冲突时以决策账本为准。
+> 来源：`docs/AI/USER_REQUIREMENTS_FROM_DB.md`（原始 `role=user` 消息）与 `docs/AI/USER_DECISIONS_FROM_DB.md`（选择题决策账本）。冲突时以决策账本为准。
 > 范围：PVForge 新实体模型（`pvforge-next`），不迁移旧 `.pvproj`。
 
 ## 0. 总体原则

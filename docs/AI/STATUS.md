@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 新模型状态与交接
 
 > 日期：2026-11-11  
@@ -5,10 +7,10 @@
 > 最新已提交：`491c270 chore: retire the legacy export path and reference shell target`  
 > **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端模块逐步接入旧壳；`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。本文以下历史描述以本段为准。  
 > **2026-11-11 旧 UI 接入完成**：P1–P7 已合并；最终二进制 `dist/pvforge`（9.5MB）与 `dist/pvforge-mcp`。旧 UI 的时间轴/属性/视口/Gizmo/相机监视器/素材箱/MCP/设置/导出均已接新后端。  
-> 设计主文档：`docs/ENTITY_MODEL.md`  
-> 并行实现合同：`docs/IMPLEMENTATION_CONTRACT.md`  
-> 整合计划：`docs/INTEGRATION_PLAN.md`  
-> MCP 工具文档：`docs/MCP_TOOLS.md`
+> 设计主文档：`docs/AI/ENTITY_MODEL.md`  
+> 并行实现合同：`docs/AI/IMPLEMENTATION_CONTRACT.md`  
+> 整合计划：`docs/AI/INTEGRATION_PLAN.md`  
+> MCP 工具文档：`docs/AI/MCP_TOOLS.md`
 
 ## 1. 当前结论
 

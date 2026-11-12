@@ -46,7 +46,7 @@ class ProjectDocument;
 // destroys this object before the document it points at.
 //
 // The HTML frontend/cache browsers are only started when the project actually
-// has an HTML entity (docs/ENTITY_MODEL.md 6.5: "有 HTML 层就常驻"); an HTML
+// has an HTML entity (docs/AI/ENTITY_MODEL.md 6.5: "有 HTML 层就常驻"); an HTML
 // entity assigned later starts them on the first frame request.  A start
 // failure never blocks the rest of the editor: htmlFrame() returns an empty
 // image and the viewport keeps render2's placeholder.

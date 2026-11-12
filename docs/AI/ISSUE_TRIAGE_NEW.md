@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 新模型风险清单（现有 issue 未覆盖）
 
 > 对照范围：新实体模型设计、实现合同、全部 33 个 open issue。

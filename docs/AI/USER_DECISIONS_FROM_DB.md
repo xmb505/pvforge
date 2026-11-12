@@ -1,10 +1,12 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 用户决定账本（选择题回答 × 原始消息）
 
 > 提取时间：2026-11-10 19:30（UTC+8）
 > 数据源：`/home/xmb505/.local/share/opencode/opencode.db`（SQLite WAL），Python `sqlite3` 以只读 URI `file:...?mode=ro` 打开；未写入数据库、未做 checkpoint、未改代码、未 commit。
 > 目标会话：主会话 `ses_e4b7e7169ffdPDFgEcWetV9HAx`（《基于 Mine-imator 的软件改造》，目录 `/home/xmb505/pvforge`）。
 > 本文只采信两类用户证据：`session_message.type = 'user'` 的原文，以及 `question` 工具结果里的用户选择/自由输入。assistant 的总结、文档推断、子 agent 的 prompt 不作为用户决定。
-> 与 `docs/USER_REQUIREMENTS_FROM_DB.md` 的关系：那份文档只提取了原始消息；本文补上选择题回答，并对它因缺少选择题证据而判错的条目做修正（见第 4 节）。
+> 与 `docs/AI/USER_REQUIREMENTS_FROM_DB.md` 的关系：那份文档只提取了原始消息；本文补上选择题回答，并对它因缺少选择题证据而判错的条目做修正（见第 4 节）。
 
 ## 0. 摘要
 
@@ -439,7 +441,7 @@ content[i].state.error                  # dismissed / interrupted
   - #7（seq 8432）只问“摄像机移动和旋转时要不要沿用现有吸附”，用户答“沿用现有吸附”，没有定义角度或按键。
   - #62（seq 46944）/#63（seq 46955）里的 **Alt** 是“旋转轴心切换”（Alt = 包围盒中心），**不是吸附旁路**。
 - **当前代码/文档的实际实现**：
-  - `docs/USER_REQUIREMENTS.md:40` 写：“视口吸附：像素、画布中心线、其他实体边缘/中点、**角度 15°**；**Alt 临时关闭**。”
+  - `docs/AI/USER_REQUIREMENTS.md:40` 写：“视口吸附：像素、画布中心线、其他实体边缘/中点、**角度 15°**；**Alt 临时关闭**。”
   - `src/next/viewport/ViewportWidget.h:190` 的 `m_snapAngleDegrees = 15.0`；`ViewportWidget.cpp:921` 用 `!modifiers.testFlag(Qt::AltModifier)` 关闭吸附。
   - 同一文件的 `m_snapAngles{0.0, 90.0, 180.0, 270.0}` 和 `setSnapAngles()` 存在，但 `snapAngle()` 实际用的是 `m_snapAngleDegrees` 的 15° 倍数，角度列表没有参与判定。
   - 旧壳 `src/ui/Viewport.cpp:434/459/1633` 用的是 **Ctrl** + `Settings::snapAngles()`（0/90 等列表）。
@@ -457,7 +459,7 @@ content[i].state.error                  # dismissed / interrupted
 - **更晚选择题**：
   - #42（11-09 16:28）“MCP 能不能让 AI 导入素材？” → 用户选 **`允许路径导入（推荐）`**。
 - **判定**：按时间顺序，#42 覆盖 #17/#14 的“无路径”限制，至少对**素材导入**允许路径。但 #42 的选项没有区分“项目目录内路径”还是“任意本地路径”，范围未定。
-- **文档冲突**：`docs/M6_SECURITY.md:339` 明确写“v1 写工具**不接受任何路径**；`assets.import_blob` 只收 base64…”。这与 #42 冲突。不能既不问用户又坚持“完全无路径”，也不能直接开放任意路径；需要明确是“仅工程目录/仅素材目录”还是“任意本地路径 + 用户确认”。
+- **文档冲突**：`docs/AI/M6_SECURITY.md:339` 明确写“v1 写工具**不接受任何路径**；`assets.import_blob` 只收 base64…”。这与 #42 冲突。不能既不问用户又坚持“完全无路径”，也不能直接开放任意路径；需要明确是“仅工程目录/仅素材目录”还是“任意本地路径 + 用户确认”。
 - **证据强度**：中高（用户确实选了“允许路径导入”，但范围没定）。这是 MCP 安全审查必须解决的一条。
 
 ### i. 额外发现：MCP “禁止删除” vs 后续“级联删除”
@@ -468,7 +470,7 @@ content[i].state.error                  # dismissed / interrupted
   - #39（11-09 14:15）“删除父实体时子实体怎么办？” → 用户选 **`级联删除（推荐）`**。
   - #64（11-09 19:22）“删除视频时拆出的音频怎么处理？” → 用户选 **`完全不提示`**。
 - **判定**：更晚的回答确立了“删除父实体要级联删子实体”“删视频不提示音频”的**行为**，但没有明确说“MCP 可以删除”。#14 的“MCP 工具边界禁止删除”仍然有效，除非后续有明确覆盖。
-- **文档冲突**：`docs/MCP_TOOLS.md` 列了 `entity.delete`、`entity.deleteMany`、`asset.delete`，并说危险操作要 `confirm:true`；这与 #14 的“禁止删除”直接冲突。当前更像“允许 MCP 删除 + confirm”，但用户从未在选择题里明确改口。
+- **文档冲突**：`docs/AI/MCP_TOOLS.md` 列了 `entity.delete`、`entity.deleteMany`、`asset.delete`，并说危险操作要 `confirm:true`；这与 #14 的“禁止删除”直接冲突。当前更像“允许 MCP 删除 + confirm”，但用户从未在选择题里明确改口。
 - **证据强度**：中（删除行为明确，MCP 是否可删不明确）。第三位 agent 需要把它列为安全边界待确认项，不能默认 `entity.delete` 就是用户要的。
 
 ### j. 额外发现：Git “强制依赖” vs “找不到 git 就不用”
@@ -479,7 +481,7 @@ content[i].state.error                  # dismissed / interrupted
   - #89（11-10 11:53）“已有 `.git` 工程打开时怎么处理？” → **“学 MC 启动器，系统自动找 git 二进制，没有就算工程有 git 也不用 git”**。
   - #89 “启用 Git 操作” → **“看全局设置，git 开了就用，没开就不用；工程有 `.git` 但没找到 git 二进制不用”**。
 - **判定**：更晚的 #89 覆盖 #39：**Git 不是硬依赖**；找不到 git 二进制时，工程照常运行，只是不用 git，内存 undo 仍可用，MCP 只读。用户明确要的是“像 MC 启动器找 Java 一样自动探测”，不是“没装 git 就拒绝启动”。
-- **文档冲突**：`docs/STATUS.md:81` 仍写“`git` 硬依赖”，与 #89 冲突；`docs/USER_REQUIREMENTS.md:83–86` 的“Git 可选、默认关闭、找不到就不用”才是最终语义。
+- **文档冲突**：`docs/AI/STATUS.md:81` 仍写“`git` 硬依赖”，与 #89 冲突；`docs/AI/USER_REQUIREMENTS.md:83–86` 的“Git 可选、默认关闭、找不到就不用”才是最终语义。
 - **证据强度**：高（#89 直接回答“没有就不用”）。
 
 ## 4. 对 `USER_REQUIREMENTS_FROM_DB.md` 的关键修正
@@ -512,19 +514,19 @@ content[i].state.error                  # dismissed / interrupted
 
 | 设计规格 | 文档/代码位置 | 用户实际给过的依据 |
 |---|---|---|
-| MCP **46 个工具** | `docs/MCP_TOOLS.md:372`、`docs/STATUS.md:101`、`docs/USER_REQUIREMENTS.md:97` | 用户只选了“语义工具 + batch”“批量工具一次调用一个 commit”（#17/#47），没给数量 |
-| MCP 端口 **47821** | `docs/STATUS.md:102`、`docs/USER_REQUIREMENTS.md:97` | 用户只要求端口/key 固定可改、不要天天换（#65/#79），没给数字 |
-| 内存 undo **200 步 / 512MB** | `docs/ENTITY_MODEL.md:773`、`docs/STATUS.md:85` | 用户选了“1 秒合并”（#89）、“人类+AI 都可撤销”（#81）、“只撤文本”（#83），没给步数/内存上限 |
-| HTML/视频 **8192 上限** | `docs/M6_SECURITY.md:545`、`docs/USER_REQUIREMENTS.md:117` | 用户选了“4x 8K 允许但确认”（#87）；8K=7680×4320，8192 是设计圆整上限 |
-| 欢迎页 **最近 10 个**项目 | `docs/ENTITY_MODEL.md:351`、`docs/USER_REQUIREMENTS.md:128` | 用户只选了“最近项目列表”（#88），没给数量 |
-| **33 项缓动**（30 预设 + linear/instant/bezier） | `docs/USER_REQUIREMENTS.md:130` | 用户只选了“预设 + 自定义”（#66），没给数量 |
-| CRF 档位 / VAAPI / 具体编码器 | `docs/USER_REQUIREMENTS.md:120` | 用户说“CRF + 编码器 + ETA 全都要”（#90）；具体档位/编码器是设计 |
-| 音频“可见才混音” | `docs/USER_REQUIREMENTS.md:122` | 用户只选了“首版混音频”（#65）；“可见才混音”是设计条件 |
-| “不做像素风改造” | `docs/USER_REQUIREMENTS.md:118` | 用户选了“旧深色主题”（#86）；这是合理推导，不是原话 |
-| 导出完成**自动**打开输出文件夹 | `docs/USER_REQUIREMENTS.md:119` | 用户原话是“给个按钮：导出完自动打开输出文件夹”（#88）；“按钮触发”与“无条件自动打开”有差别 |
-| 素材标签不进 undo | `docs/USER_REQUIREMENTS.md:90` | 用户说“只撤文本数据”（#83）；标签是否算文本、是否进 undo 未明确 |
-| HTML 缓存“保留” | `docs/USER_REQUIREMENTS.md:80`、`:150` | 用户要求“评估还要不要”（seq 54094），没有选择题回答“保留” |
-| HTML 缓存**不用 MySQL/cache-cat** | `docs/USER_REQUIREMENTS.md:76`、`docs/STATUS.md:72` | 用户 #74 只说“完全删 Redis”；#71 提过 cache-cat、#72 提过 MySQL 冷缓存，但没有明确说 MySQL 也删 |
+| MCP **46 个工具** | `docs/AI/MCP_TOOLS.md:372`、`docs/AI/STATUS.md:101`、`docs/AI/USER_REQUIREMENTS.md:97` | 用户只选了“语义工具 + batch”“批量工具一次调用一个 commit”（#17/#47），没给数量 |
+| MCP 端口 **47821** | `docs/AI/STATUS.md:102`、`docs/AI/USER_REQUIREMENTS.md:97` | 用户只要求端口/key 固定可改、不要天天换（#65/#79），没给数字 |
+| 内存 undo **200 步 / 512MB** | `docs/AI/ENTITY_MODEL.md:773`、`docs/AI/STATUS.md:85` | 用户选了“1 秒合并”（#89）、“人类+AI 都可撤销”（#81）、“只撤文本”（#83），没给步数/内存上限 |
+| HTML/视频 **8192 上限** | `docs/AI/M6_SECURITY.md:545`、`docs/AI/USER_REQUIREMENTS.md:117` | 用户选了“4x 8K 允许但确认”（#87）；8K=7680×4320，8192 是设计圆整上限 |
+| 欢迎页 **最近 10 个**项目 | `docs/AI/ENTITY_MODEL.md:351`、`docs/AI/USER_REQUIREMENTS.md:128` | 用户只选了“最近项目列表”（#88），没给数量 |
+| **33 项缓动**（30 预设 + linear/instant/bezier） | `docs/AI/USER_REQUIREMENTS.md:130` | 用户只选了“预设 + 自定义”（#66），没给数量 |
+| CRF 档位 / VAAPI / 具体编码器 | `docs/AI/USER_REQUIREMENTS.md:120` | 用户说“CRF + 编码器 + ETA 全都要”（#90）；具体档位/编码器是设计 |
+| 音频“可见才混音” | `docs/AI/USER_REQUIREMENTS.md:122` | 用户只选了“首版混音频”（#65）；“可见才混音”是设计条件 |
+| “不做像素风改造” | `docs/AI/USER_REQUIREMENTS.md:118` | 用户选了“旧深色主题”（#86）；这是合理推导，不是原话 |
+| 导出完成**自动**打开输出文件夹 | `docs/AI/USER_REQUIREMENTS.md:119` | 用户原话是“给个按钮：导出完自动打开输出文件夹”（#88）；“按钮触发”与“无条件自动打开”有差别 |
+| 素材标签不进 undo | `docs/AI/USER_REQUIREMENTS.md:90` | 用户说“只撤文本数据”（#83）；标签是否算文本、是否进 undo 未明确 |
+| HTML 缓存“保留” | `docs/AI/USER_REQUIREMENTS.md:80`、`:150` | 用户要求“评估还要不要”（seq 54094），没有选择题回答“保留” |
+| HTML 缓存**不用 MySQL/cache-cat** | `docs/AI/USER_REQUIREMENTS.md:76`、`docs/AI/STATUS.md:72` | 用户 #74 只说“完全删 Redis”；#71 提过 cache-cat、#72 提过 MySQL 冷缓存，但没有明确说 MySQL 也删 |
 
 ### 5.2 未解决歧义（需要向用户确认或第三位 agent 重点核对）
 
@@ -535,13 +537,13 @@ content[i].state.error                  # dismissed / interrupted
 5. **串流取消后的工作区长条**：#90 说“串流不要了，其他都留着”。长条是串流形态的一部分，按取消处理；如果用户认为长条属于“其他”，则需要恢复一个无画面的操作栏。当前按取消处理。
 6. **导出后自动打开 vs 按钮**：#88 原话是“给个按钮：导出完自动打开输出文件夹”。文档写成“导出完成后自动打开”，可能把“按钮触发”写成了“无条件自动”。需要确认交互。
 7. **场景/空实体术语**：最终无场景对象、用空实体，已由 #30 明确；但 #91“所有都是实体”与 markers 的关系仍需统一术语，避免文档/代码里“场景”残响。
-8. **MCP 素材导入路径范围**：#17 选“blob 传入、无路径”，#42 又选“允许路径导入”，后者更晚、覆盖前者；但“项目目录内路径”还是“任意本地路径”没有再次确认。`docs/M6_SECURITY.md:339` 仍写“v1 写工具不接受任何路径”，与 #42 直接冲突，需要明确允许到哪一层。
+8. **MCP 素材导入路径范围**：#17 选“blob 传入、无路径”，#42 又选“允许路径导入”，后者更晚、覆盖前者；但“项目目录内路径”还是“任意本地路径”没有再次确认。`docs/AI/M6_SECURITY.md:339` 仍写“v1 写工具不接受任何路径”，与 #42 直接冲突，需要明确允许到哪一层。
 9. **频谱可视化**：#2 用户在多选里选了“频谱可视化”，但 `docs/FEATURES.md:13`、`:119` 写“频谱对象待后续/无频谱可视化对象”；没有用户取消记录。需要确认是 v1 就要，还是明确延期。
 10. **MCP 删除权限**：#14 明确“MCP 工具边界禁止删除”，但 #39/#64 又确立了级联删除/删除视频不提示音频的行为，`MCP_TOOLS.md` 也列了 `entity.delete`/`deleteMany`/`asset.delete`。需要确认“禁止删除”是仅指 AI 不能删，还是已被后续回答覆盖。
 
 ## 6. 最终需求账本（按主题，供第三位 agent 对照代码）
 
-> 标签：`[选#n]` = 选择题第 n 次调用；`[原seq]` = 用户原文；`[设计]` = 设计规格/未拍板。只写最终结论，不写被覆盖的中间态。原文的完整上下文可在 `docs/USER_REQUIREMENTS_FROM_DB.md` 按 seq 查；选择题的原始问答在第 2 节索引。
+> 标签：`[选#n]` = 选择题第 n 次调用；`[原seq]` = 用户原文；`[设计]` = 设计规格/未拍板。只写最终结论，不写被覆盖的中间态。原文的完整上下文可在 `docs/AI/USER_REQUIREMENTS_FROM_DB.md` 按 seq 查；选择题的原始问答在第 2 节索引。
 
 ### 6.1 产品 / 平台 / 技术
 

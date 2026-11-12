@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 工作台缓存（Workbench Cache）
 
 > 目标：3 分钟 PV 做到 2:30 后，前面 2 分钟整帧缓存直接命中，从头播放不再逐层求值/解码。

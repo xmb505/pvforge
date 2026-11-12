@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # 新模型整合计划
 
 > 第一波只做底层模块；本文定义第二波如何接入旧 app，以及哪些旧文件最终会被替换。
@@ -34,7 +36,7 @@
 ## 当前状态
 
 - 分支：`new-entity-model`。
-- 新设计：`docs/ENTITY_MODEL.md`；状态/交接：`docs/STATUS.md`。
+- 新设计：`docs/AI/ENTITY_MODEL.md`；状态/交接：`docs/AI/STATUS.md`。
 - 旧模型仍在 `src/core/Project.*`、`src/ui/TimelinePanel.*`、`src/mcp/*`、`src/render/SceneRenderer.*`，是当前交付壳的数据层；随新后端接入逐步替换内部实现，源码不整体删除（2026-11-10 方向修正）。
 - 新模块：`src/model`、`store`、`assets`、`solver`、`anim`、`gizmo`、`render2`、`htmlcache`、`html2`、`video2`、`audio2`、`export2`、`mcp2`、`next/*`；其中 `next/*` 面板只作行为参考。
 
@@ -109,7 +111,7 @@ Store agent 必须写独立测试：临时目录建工程、保存/打开往返�
 
 新增 `src/mcp2/`（或重写 `src/mcp/McpCommandService.*`），依赖 `store`。
 
-- 工具注册表 + JSON schema（来自 `docs/MCP_TOOLS.md`）。
+- 工具注册表 + JSON schema（来自 `docs/AI/MCP_TOOLS.md`）。
 - 一次工具调用 = 一个逻辑操作 = 一个 commit。
 - 批量工具：`entity.createTree/createMany/updateMany/deleteMany`、`keyframes.setMany`。
 - 危险操作 `confirm: true`。

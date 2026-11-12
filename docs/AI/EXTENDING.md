@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 扩展指南
 
 > 目的：新想法落地时，按清单改，不要绕过既有层。
@@ -52,7 +54,7 @@
 | 分发 | `src/mcp2/Service.cpp` | 工具表；写工具自动进急停/只读检查 |
 | 实现 | 对应 `*Tools.cpp` | 用 `Tx`，一次 `finish()` 一个 commit；批量循环检查 `stopRequested` |
 | schema | `src/mcp2/SchemaTools.cpp` | 参数、错误码、guide |
-| 文档 | `docs/MCP_TOOLS.md` | 参数/返回/confirm/错误 |
+| 文档 | `docs/AI/MCP_TOOLS.md` | 参数/返回/confirm/错误 |
 | 测试 | `src/mcp2/tests` | 成功、回滚、confirm、只读、急停 |
 
 工具数、端口、token 是设计规格；新增工具时同步更新文档总数。

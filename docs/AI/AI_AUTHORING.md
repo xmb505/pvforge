@@ -1,3 +1,5 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge AI 作者指南
 
 > 面向通过 MCP 操作 PVForge 的大模型。本文讲工作流、坐标、场景边界和安全规则；HTML 组件的完整契约见 [M6_HTML_API.md](M6_HTML_API.md)，方案与阶段拆分见 [M6_PLAN.md](M6_PLAN.md)。

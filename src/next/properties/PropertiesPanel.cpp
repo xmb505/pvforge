@@ -139,7 +139,7 @@ ParamSpec directionParam(bool ccwPositive = false)
     return spec;
 }
 
-// Labels and tooltips mirror docs/MCP_TOOLS.md 5.2; they are shown next to each
+// Labels and tooltips mirror docs/AI/MCP_TOOLS.md 5.2; they are shown next to each
 // parameter so the panel is self-explanatory without the MCP guide.
 QVector<ParamSpec> solverParams(SolverEffect effect)
 {
@@ -300,7 +300,7 @@ QString assetTypeLabel(AssetType type)
     return QStringLiteral("素材");
 }
 
-// docs/ENTITY_MODEL.md 6.2: images, video and HTML swap freely; audio only
+// docs/AI/ENTITY_MODEL.md 6.2: images, video and HTML swap freely; audio only
 // swaps with audio.
 bool isVisualAsset(AssetType type)
 {
@@ -478,7 +478,7 @@ void applyAssetReplacement(model::Entity& entity, const assets::StoredAsset& ass
     if (plan.needsTrim)
     {
         entity.end = entity.start + plan.duration;
-        // docs/ENTITY_MODEL.md 6.2: trimming end drops keyframes at or past the
+        // docs/AI/ENTITY_MODEL.md 6.2: trimming end drops keyframes at or past the
         // new duration.
         for (auto it = entity.tracks.begin(); it != entity.tracks.end();)
         {
@@ -495,7 +495,7 @@ void applyAssetReplacement(model::Entity& entity, const assets::StoredAsset& ass
                 ++it;
         }
 
-        // docs/ENTITY_MODEL.md 5.4: a trim that cuts into a solver moves its
+        // docs/AI/ENTITY_MODEL.md 5.4: a trim that cuts into a solver moves its
         // end marker to the new last frame; segments entirely outside are
         // dropped. Legacy solver endFrame must stay inside the clip.
         QVector<model::SolverSegment> solvers;

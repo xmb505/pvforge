@@ -46,7 +46,7 @@ struct FrameRequest
 
 // Single-browser Pvhtml frame renderer.
 //
-// Page protocol (also documented in docs/ENTITY_MODEL.md):
+// Page protocol (also documented in docs/AI/ENTITY_MODEL.md):
 //
 //   // The host runs this after the document reaches readyState=complete and
 //   // before every screenshot. It dispatches a synchronous DOM event, so a

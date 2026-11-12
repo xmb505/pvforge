@@ -1,6 +1,8 @@
+> **AI 文档（非用户文档）**：本文由 AI/代理生成，面向 AI 与开发者，可能滞后于代码。用户请以 `README.md`、`docs/USAGE.md`、`docs/FEATURES.md` 为准。
+
 # PVForge 路线图（2026-11-10）
 
-> 依据：`docs/ENTITY_MODEL.md`、`docs/OLD_UI_FEATURES.md` 和人类逐项拍板。
+> 依据：`docs/AI/ENTITY_MODEL.md`、`docs/AI/OLD_UI_FEATURES.md` 和人类逐项拍板。
 > **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端逐步接入；旧 app 不删除，`src/next/app` / `pvforge-next` 只作参考。产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。下文“旧壳删除前 / 第五批旧壳退休”的历史排序作废，保留原文供追溯。
 > 原则：新核心不重写；旧面板原地接入新后端；产品名只有 `PVForge`。
 
