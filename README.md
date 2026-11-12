@@ -65,6 +65,19 @@ ctest --test-dir build --output-on-failure
 
 `src/main.cpp` 里还有按功能分组的离屏自检参数；完整清单以源码为准。
 
+### CI 与本地验证
+
+依赖一次装好，之后用 preset（Qt 6.6.x/6.7.x 参见 [ci/README.md](ci/README.md)）：
+
+```bash
+ci/install-deps.sh --qt 6.7.3        # 只有 apt 依赖就去掉 --qt
+cmake --preset debug -DCMAKE_PREFIX_PATH="$PWD/build/qt/6.7.3/linux_gcc_64"
+cmake --build --preset debug -j 8
+ctest --preset debug                 # offscreen + --output-on-failure 已内置
+```
+
+GitHub Actions 用同一套 preset 跑 Qt 6.6.3/6.7.3 × Debug/Release，见 `.github/workflows/ci.yml`。
+
 ## 已知限制
 
 - Linux x86_64 是当前验证目标，Windows/macOS 未验证；性能监视的进程与系统指标只读取 Linux `/proc`。

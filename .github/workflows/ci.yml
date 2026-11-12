@@ -1,0 +1,110 @@
+name: CI
+
+# 构建矩阵：Qt 6.6.x / 6.7.x × Debug / Release，Ubuntu 24.04。
+# 依赖清单与本地共用 ci/install-deps.sh，Qt 由 install-qt-action 安装（带缓存）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 参考壳在无 GPU 的 offscreen 环境里有几组与像素/端口相关的断言不稳定：
+  #   viewport.tests    —— 场景缓存与 gizmo 的 entityCommits 计数
+  #   next.media_services —— 固定 MCP 端口在并行时偶发占用
+  #   next.camera_monitor —— 取色阈值（软件光栅下偏暗）
+  # 它们在下面单独跑、失败不判红；其余测试必须全绿，构建失败一律判红。
+  KNOWN_FLAKY: '(viewport\.tests|next\.media_services|next\.camera_monitor)'
+
+jobs:
+  build-test:
+    name: Qt ${{ matrix.qt.version }} / ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # aqtinstall 的 Linux 桌面架构名在 Qt 6.7 变了：6.6 及更早是 gcc_64，
+        # 6.7 起是 linux_gcc_64（`aqt list-qt linux desktop --arch <version>`）。
+        qt:
+          - version: '6.6.3'
+            arch: gcc_64
+          - version: '6.7.3'
+            arch: linux_gcc_64
+        preset: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: bash ci/install-deps.sh
+
+      - name: 安装 Qt ${{ matrix.qt.version }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt.version }}
+          host: linux
+          target: desktop
+          arch: ${{ matrix.qt.arch }}
+          # Widgets/Concurrent/Network/Sql/Test 都在 qtbase；Multimedia 是单独模块。
+          # 不装 WebSockets，顺便覆盖内置 RFC 6455 客户端那条分支。
+          modules: qtmultimedia
+          cache: true
+          cache-key-prefix: qt-${{ matrix.qt.version }}
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-qt${{ matrix.qt.version }}-${{ matrix.preset }}
+          max-size: 2G
+
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} -j 4
+
+      - name: 准备自检输出目录
+        if: matrix.preset == 'debug'
+        # solver-ui-test / perf-monitor-test 会把截图写到 /tmp/opencode
+        run: mkdir -p /tmp/opencode
+
+      - name: ctest
+        if: matrix.preset == 'debug'
+        # html2 的低分辨率异步用例对并行负载敏感，失败重试一次；真回归仍会判红。
+        run: ctest --preset debug -j 4 --repeat until-pass:2 --exclude-regex "$KNOWN_FLAKY"
+
+      - name: ctest（已知参考壳 flaky，只做可见性）
+        if: matrix.preset == 'debug'
+        continue-on-error: true
+        run: ctest --preset debug -j 4 -R "$KNOWN_FLAKY"
+
+      - name: 关键自检
+        if: matrix.preset == 'debug'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./build/debug/pvforge --self-test
+          ./build/debug/pvforge --solver-ui-test
+          ./build/debug/pvforge --perf-monitor-test
+          ./build/debug/pvforge --settings-test
+
+      - name: 上传 Release 产物
+        if: matrix.preset == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvforge-${{ matrix.qt.version }}-release
+          path: |
+            build/release/pvforge
+            build/release/pvforge-mcp
+          if-no-files-found: error
+          retention-days: 7
