@@ -234,7 +234,7 @@
 2. 导入“+”识别所有文件、素材自动打包开关（默认关）。
 3. 导出 CRF 档位、编码器（VAAPI）、ETA、导出前预览。
 4. 特殊内容创建入口（菜单/工具栏）与 MCP schema/update 支持新 kind。
-5. 工作台后台预热：`PrewarmService` QThread 尚未接生产，当前 `WorkbenchServices` 在 UI 线程扫描；文档 3 秒 vs 代码 500ms。
+5. 工作台后台预热已取消（产品决策：按需缓存、不预热）；`PrewarmService` 已删除，`WorkbenchServices` 在 UI 线程按需扫描；文档 3 秒 vs 代码 500ms。
 6. 相机监视器 dock 几何不持久化；参考视频同步解码。
 7. 旧 app 删除/改名（2026-11-10 方向修正：取消；旧 app 原地保留，只替换内部实现；先迁移 core 文字/矢量与 html CDP 共享件仍有效）。
 8. 品牌墙为文字标签版，旧图片/SVG 贴图未迁；Properties 无关键帧轨道。

@@ -29,7 +29,6 @@ endif()
 add_library(pvf_workbench STATIC
     Cache.cpp
     MetaBuilder.cpp
-    PrewarmService.cpp
     Qoi.cpp
 )
 
@@ -79,13 +78,6 @@ if(BUILD_TESTING)
         cacheReadsLegacyWebp
         cacheSwitchesCodecWhenRasterChanges
         cachePerCameraDirectories
-        prewarmInitialScan
-        prewarmSkipsCachedFrames
-        prewarmRerendersChangedProject
-        prewarmCancel
-        prewarmPauseResume
-        prewarmProgressIsMonotonic
-        prewarmFailedFrameContinues
     )
 
     foreach(test_case IN LISTS PVF_WORKBENCH_TEST_CASES)
