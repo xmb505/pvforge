@@ -8,7 +8,7 @@
 
 [v0.3.0-preview](https://github.com/xmb505/pvforge/releases/tag/v0.3.0-preview) 提供 Linux x86_64 的 `pvforge` 与 `pvforge-mcp`（MCP stdio 桥，可选）。
 
-运行需要系统 Qt 6.5+ 运行库（Widgets、Concurrent、Multimedia、Network、Sql）与 FFmpeg 8 运行库；发布包在 Ubuntu 25.10 / Qt 6.9 / FFmpeg 8.0 上构建，建议使用同等或更新版本。其他发行版请从源码构建。
+运行需要系统 Qt 6.5+ 运行库（Widgets、Concurrent、Multimedia、Network、Sql）与 FFmpeg 8 运行库；发布包在 Ubuntu 26.04 / Qt 6.10 / FFmpeg 8.0 上构建，建议使用同等或更新版本。其他发行版请从源码构建。
 
 ```bash
 chmod +x pvforge pvforge-mcp

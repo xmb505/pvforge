@@ -15671,12 +15671,16 @@ int monitorFeatureTest(QApplication& app)
     }
     auto* traceButton =
         monitor->findChild<QToolButton*>(QStringLiteral("monitorTraceButton"));
-    auto* streamButton =
-        monitor->findChild<QToolButton*>(QStringLiteral("monitorStreamButton"));
     int failures = 0;
-    if (!traceButton || !streamButton)
+    if (!traceButton)
     {
         qCritical() << "monitor-feature-test: monitor buttons missing";
+        ++failures;
+    }
+    // Streaming was removed; the monitor must not expose a network button.
+    if (monitor->findChild<QToolButton*>(QStringLiteral("monitorStreamButton")))
+    {
+        qCritical() << "monitor-feature-test: monitor still has a stream button";
         ++failures;
     }
 
@@ -15806,65 +15810,6 @@ int monitorFeatureTest(QApplication& app)
                         << clearedColor;
             ++failures;
         }
-    }
-
-    if (!QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty())
-    {
-        const bool started = monitor->startStreamingForTest();
-        if (!started || !monitor->isStreaming())
-        {
-            qCritical() << "monitor-feature-test: RTP stream did not start";
-            ++failures;
-        }
-        else if (monitor->height() > 60)
-        {
-            qCritical() << "monitor-feature-test: monitor not collapsed"
-                        << monitor->height();
-            ++failures;
-        }
-        else
-        {
-            // Verify the default HTTP mode actually serves MPEG-TS.
-            const QUrl url(monitor->streamUrlForTest());
-            QTcpSocket socket;
-            socket.connectToHost(QStringLiteral("127.0.0.1"),
-                                 quint16(url.port(8080)));
-            if (!socket.waitForConnected(2000))
-            {
-                qCritical() << "monitor-feature-test: HTTP stream connect failed";
-                ++failures;
-            }
-            else
-            {
-                socket.write("GET /stream.ts HTTP/1.0\r\nHost: localhost\r\n\r\n");
-                QByteArray response;
-                QEventLoop loop;
-                QObject::connect(&socket, &QTcpSocket::readyRead, &loop,
-                                 [&response, &socket] { response += socket.readAll(); });
-                QTimer::singleShot(2000, &loop, &QEventLoop::quit);
-                loop.exec();
-                const int headerEnd = response.indexOf("\r\n\r\n");
-                if (!response.contains("200 OK") || headerEnd < 0
-                    || response.indexOf('\x47', headerEnd) < 0)
-                {
-                    qCritical() << "monitor-feature-test: HTTP stream payload"
-                                << response.size();
-                    ++failures;
-                }
-            }
-        }
-        monitor->stopStreamingForTest();
-        QApplication::processEvents();
-        if (monitor->isStreaming() || monitor->height() < 100)
-        {
-            qCritical() << "monitor-feature-test: RTP stream did not stop"
-                        << monitor->height();
-            ++failures;
-        }
-    }
-    else
-    {
-        qInfo() << "monitor-feature-test: ffmpeg missing, streaming skipped";
     }
 
     qInfo() << "monitor-feature-test failures" << failures;
