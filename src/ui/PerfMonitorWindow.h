@@ -9,6 +9,7 @@
 
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QShowEvent;
@@ -16,11 +17,13 @@ class QHideEvent;
 class QCloseEvent;
 class QTableWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace pvf {
 
 class FrameSparkline;
 class FrameWaterfall;
+class FlameGraph;
 
 // Independent performance monitor window.  It never owns the profiler: closing
 // the window only releases the capture listener, and the singleton keeps its
@@ -40,9 +43,12 @@ public:
 
     bool isRecording() const;
     QString currentReportText() const;
-    // Writes frames + system info + the last recording report.  The toolbar
-    // button uses a file dialog; tests and the CLI call this directly.
+    // Writes frames + system info + the last recording report, including both
+    // call trees.  The toolbar button uses a file dialog; tests and the CLI
+    // call this directly.
     bool exportDiagnostics(const QString& path, QString* error = nullptr);
+    // Writes only the tree currently shown in the advanced area.
+    bool exportCallTree(const QString& path, QString* error = nullptr);
     void refreshNow();
 
 signals:
@@ -61,6 +67,11 @@ private:
     void toggleRecording();
     void copyReport();
     void exportReport();
+    void buildAdvancedArea(QVBoxLayout* root);
+    void setAdvancedVisible(bool visible);
+    void updateAdvanced();
+    void updateCallTable(const perf::CallNode& tree);
+    perf::CallNode selectedTree() const;
 
     perf::FrameProfiler& m_profiler;
     std::unique_ptr<perf::SystemStatsProvider> m_systemProvider;
@@ -82,6 +93,17 @@ private:
     QPlainTextEdit* m_report = nullptr;
     QPushButton* m_copyButton = nullptr;
     QPushButton* m_exportButton = nullptr;
+    QPushButton* m_advancedButton = nullptr;
+    QWidget* m_advancedPanel = nullptr;
+    QComboBox* m_treeSource = nullptr;
+    QLineEdit* m_treeSearch = nullptr;
+    QPushButton* m_treeBackButton = nullptr;
+    QPushButton* m_treeExportButton = nullptr;
+    QLabel* m_treeStatus = nullptr;
+    FlameGraph* m_flame = nullptr;
+    QTableWidget* m_callTable = nullptr;
+    bool m_advancedOpen = false;
+    QString m_lastTreeKey;
     QTimer* m_timer = nullptr;
 };
 

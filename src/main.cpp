@@ -136,6 +136,7 @@
 #include <QWheelEvent>
 #include <cmath>
 #include <functional>
+#include <thread>
 #include <memory>
 
 namespace {
@@ -25634,6 +25635,419 @@ int perfMonitorTest(QApplication& app)
     return failures == 0 ? 0 : 1;
 }
 
+int perfFlameTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    const auto check = [&failures](bool condition, const QString& message) {
+        if (condition)
+            return;
+        qCritical() << "perf-flame-test:" << message;
+        ++failures;
+    };
+    const auto busyWait = [](int milliseconds) {
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < milliseconds)
+        {
+        }
+    };
+    std::function<const pvf::perf::CallNode*(const pvf::perf::CallNode&,
+                                             const QString&)>
+        findNode;
+    findNode = [&findNode](const pvf::perf::CallNode& node,
+                           const QString& name) -> const pvf::perf::CallNode* {
+        if (node.name == name)
+            return &node;
+        for (const pvf::perf::CallNode& child : node.children)
+            if (const auto* found = findNode(child, name))
+                return found;
+        return nullptr;
+    };
+
+    pvf::perf::FrameProfiler& profiler =
+        pvf::perf::FrameProfiler::instance();
+    profiler.clear();
+    profiler.setCaptureEnabled(true);
+
+    // frame -> UI thread -> A -> A1/A2, B.  The tree must keep the nested
+    // parent/child relation and split inclusive from exclusive time.
+    {
+        pvf::perf::FrameScope frame;
+        {
+            pvf::perf::Scope a(QStringLiteral("A"),
+                               pvf::perf::Category::Render2);
+            busyWait(3);
+            {
+                pvf::perf::Scope a1(QStringLiteral("A1"),
+                                    pvf::perf::Category::Lookup);
+                busyWait(1);
+            }
+            {
+                pvf::perf::Scope a2(QStringLiteral("A2"),
+                                    pvf::perf::Category::Decode);
+                busyWait(1);
+            }
+        }
+        pvf::perf::Scope b(QStringLiteral("B"), pvf::perf::Category::Paint);
+        busyWait(1);
+    }
+
+    const pvf::perf::Snapshot snapshot = profiler.snapshot();
+    check(!snapshot.frames.isEmpty(),
+          QStringLiteral("synthetic frame was not captured"));
+    const pvf::perf::CallNode& root = snapshot.lastFrameTree;
+    check(root.name == QStringLiteral("帧"),
+          QStringLiteral("last frame tree root is not 帧 (%1)").arg(root.name));
+    const auto* uiRoot = findNode(root, QStringLiteral("界面线程"));
+    check(uiRoot != nullptr,
+          QStringLiteral("UI thread node is missing from the tree"));
+    const auto* nodeA = findNode(root, QStringLiteral("A"));
+    const auto* nodeB = findNode(root, QStringLiteral("B"));
+    const auto* nodeA1 = findNode(root, QStringLiteral("A1"));
+    const auto* nodeA2 = findNode(root, QStringLiteral("A2"));
+    check(nodeA && nodeB && nodeA1 && nodeA2,
+          QStringLiteral("synthetic scope names are missing"));
+    if (nodeA && nodeB && nodeA1 && nodeA2)
+    {
+        check(nodeA->children.size() == 2,
+              QStringLiteral("A does not have two children (%1)")
+                  .arg(nodeA->children.size()));
+        check(nodeA1->calls == 1 && nodeA2->calls == 1,
+              QStringLiteral("nested call counts are not merged"));
+        check(nodeB->category == pvf::perf::Category::Paint,
+              QStringLiteral("B lost its category"));
+        check(nodeA->inclusiveMs + 0.001
+                  >= nodeA1->inclusiveMs + nodeA2->inclusiveMs,
+              QStringLiteral("A inclusive is smaller than its children"));
+        const double expectedExclusive =
+            nodeA->inclusiveMs - nodeA1->inclusiveMs - nodeA2->inclusiveMs;
+        check(std::abs(nodeA->exclusiveMs - expectedExclusive) < 0.01,
+              QStringLiteral("A exclusive does not split from children (%1 vs %2)")
+                  .arg(nodeA->exclusiveMs)
+                  .arg(expectedExclusive));
+        check(nodeA->exclusiveMs > 0.0,
+              QStringLiteral("A exclusive time is empty"));
+    }
+    check(uiRoot != nullptr
+              && std::abs(uiRoot->inclusiveMs - root.inclusiveMs) < 0.1,
+          QStringLiteral("UI inclusive does not cover the frame"));
+
+    // The classic misleading pair: 帧缓存查找 wraps 缓存解码/QOI.  The stage
+    // table must show lookup inclusive slightly above decode and lookup self
+    // far below decode, instead of counting both as independent 100% stages.
+    profiler.clear();
+    {
+        pvf::perf::FrameScope frame;
+        {
+            pvf::perf::Scope lookup(QStringLiteral("帧缓存查找"),
+                                    pvf::perf::Category::Lookup);
+            busyWait(1);
+            {
+                pvf::perf::Scope decode(QStringLiteral("缓存解码/QOI"),
+                                        pvf::perf::Category::Decode);
+                busyWait(3);
+            }
+        }
+        pvf::perf::Scope paint(QStringLiteral("B"),
+                               pvf::perf::Category::Paint);
+        busyWait(4);
+    }
+    const pvf::perf::Snapshot lookupSnapshot = profiler.snapshot();
+    const auto* lookupNode = findNode(lookupSnapshot.lastFrameTree,
+                                      QStringLiteral("帧缓存查找"));
+    const auto* decodeNode = findNode(lookupSnapshot.lastFrameTree,
+                                      QStringLiteral("缓存解码/QOI"));
+    check(lookupNode && decodeNode,
+          QStringLiteral("lookup/decode parent-child tree is missing"));
+    if (lookupNode && decodeNode)
+    {
+        check(lookupNode->exclusiveMs < decodeNode->inclusiveMs,
+              QStringLiteral("lookup self time is not smaller than decode"));
+        check(std::abs(decodeNode->exclusiveMs - decodeNode->inclusiveMs)
+                  < 0.01,
+              QStringLiteral("decode self time was reduced by a child"));
+    }
+    const auto& lookupSummary = lookupSnapshot.summary;
+    const size_t lookupIndex = size_t(int(pvf::perf::Category::Lookup));
+    const size_t decodeIndex = size_t(int(pvf::perf::Category::Decode));
+    const size_t paintIndex = size_t(int(pvf::perf::Category::Paint));
+    check(lookupSummary.categorySelfMs[lookupIndex] > 0.0,
+          QStringLiteral("lookup self time was not accumulated"));
+    check(std::abs(lookupSummary.categorySelfMs[lookupIndex]
+                   - (lookupSummary.categoryTotalMs[lookupIndex]
+                      - lookupSummary.categoryTotalMs[decodeIndex]))
+              < 0.05,
+          QStringLiteral("lookup self != lookup inclusive - decode inclusive"));
+    check(lookupSummary.categoryShare[lookupIndex] < 0.75,
+          QStringLiteral("lookup inclusive share uses the overlapping sum (%1)")
+              .arg(lookupSummary.categoryShare[lookupIndex]));
+    check(lookupSummary.categoryShare[lookupIndex]
+                  + lookupSummary.categoryShare[decodeIndex]
+                  + lookupSummary.categoryShare[paintIndex]
+              > 1.1,
+          QStringLiteral("inclusive shares do not expose parent/child overlap"));
+    check(lookupSummary.categorySelfShare[lookupIndex]
+                  + lookupSummary.categorySelfShare[decodeIndex]
+                  + lookupSummary.categorySelfShare[paintIndex]
+              <= 1.05,
+          QStringLiteral("self shares do not use the frame total denominator"));
+    check(lookupSummary.categorySelfShare[lookupIndex]
+              < lookupSummary.categoryShare[lookupIndex],
+          QStringLiteral("lookup self share is not smaller than inclusive share"));
+
+    // A worker task without FrameScope (cache encode path) joins the next
+    // frame under its thread-name node.
+    std::thread worker([&busyWait]() {
+        pvf::perf::Scope task(QStringLiteral("worker-task"),
+                              pvf::perf::Category::Encode);
+        busyWait(2);
+    });
+    worker.join();
+    {
+        pvf::perf::FrameScope frame;
+        pvf::perf::Scope render(QStringLiteral("after-worker"),
+                                pvf::perf::Category::Render2);
+        busyWait(1);
+    }
+    const pvf::perf::Snapshot workerSnapshot = profiler.snapshot();
+    const pvf::perf::CallNode* workerThread = nullptr;
+    for (const pvf::perf::CallNode& child : workerSnapshot.lastFrameTree.children)
+        if (child.name.startsWith(QStringLiteral("线程 ")))
+            workerThread = &child;
+    check(workerThread != nullptr,
+          QStringLiteral("worker thread root is missing from the frame tree"));
+    check(workerThread
+              && findNode(*workerThread, QStringLiteral("worker-task")) != nullptr,
+          QStringLiteral("worker scope was not attached to its thread node"));
+
+    // Ten recorded frames collapse into one aggregate tree keyed by path.
+    check(profiler.startRecording(60),
+          QStringLiteral("recording did not start"));
+    for (int i = 0; i < 10; ++i)
+    {
+        pvf::perf::FrameScope frame;
+        pvf::perf::Scope a(QStringLiteral("A"),
+                           pvf::perf::Category::Render2);
+        busyWait(1);
+        pvf::perf::Scope a1(QStringLiteral("A1"),
+                            pvf::perf::Category::Other);
+        busyWait(1);
+    }
+    profiler.stopRecording();
+    const pvf::perf::RecordingReport report = profiler.recordedReport();
+    check(report.valid, QStringLiteral("recording report is invalid"));
+    check(report.callTree.name == QStringLiteral("录制聚合"),
+          QStringLiteral("recording tree root is not 录制聚合"));
+    check(report.text.contains(QStringLiteral("自身"))
+              && report.text.contains(QStringLiteral("整帧总时长")),
+          QStringLiteral("report does not separate inclusive and self time"));
+    const auto* recUi = findNode(report.callTree, QStringLiteral("界面线程"));
+    const auto* recA = findNode(report.callTree, QStringLiteral("A"));
+    const auto* recA1 = findNode(report.callTree, QStringLiteral("A1"));
+    check(recUi && recUi->calls == 10,
+          QStringLiteral("recorded UI root did not merge calls"));
+    check(recA && recA->calls == 10,
+          QStringLiteral("recorded A calls are %1, expected 10")
+              .arg(recA ? recA->calls : -1));
+    check(recA1 && recA1->calls == 10,
+          QStringLiteral("recorded A1 calls did not merge"));
+
+    const QJsonObject diagnostics = profiler.diagnosticsJson();
+    check(diagnostics.contains(QStringLiteral("lastFrameTree")),
+          QStringLiteral("diagnostics has no lastFrameTree"));
+    check(diagnostics.value(QStringLiteral("lastFrameTree"))
+              .toObject()
+              .value(QStringLiteral("name"))
+              .toString()
+              == QStringLiteral("帧"),
+          QStringLiteral("diagnostics lastFrameTree has no name"));
+    const QJsonObject reportJson =
+        diagnostics.value(QStringLiteral("report")).toObject();
+    check(reportJson.contains(QStringLiteral("callTree")),
+          QStringLiteral("diagnostics report has no callTree"));
+    check(reportJson.value(QStringLiteral("callTree"))
+              .toObject()
+              .value(QStringLiteral("name"))
+              .toString()
+              == QStringLiteral("录制聚合"),
+          QStringLiteral("diagnostics callTree has no aggregate root"));
+    check(!reportJson.value(QStringLiteral("callTree"))
+               .toObject()
+               .value(QStringLiteral("children"))
+               .toArray()
+               .isEmpty(),
+          QStringLiteral("diagnostics callTree has no children"));
+    const QJsonObject summaryJson =
+        diagnostics.value(QStringLiteral("summary")).toObject();
+    const QJsonObject lookupJson =
+        summaryJson.value(QStringLiteral("categories"))
+            .toObject()
+            .value(QStringLiteral("lookup"))
+            .toObject();
+    check(lookupJson.contains(QStringLiteral("selfMs"))
+              && lookupJson.contains(QStringLiteral("selfShare")),
+          QStringLiteral("summary JSON has no self time for lookup"));
+    const QJsonArray diagnosticFrames =
+        diagnostics.value(QStringLiteral("frames")).toArray();
+    check(!diagnosticFrames.isEmpty()
+              && diagnosticFrames.first()
+                     .toObject()
+                     .contains(QStringLiteral("selfCategories")),
+          QStringLiteral("frame JSON has no selfCategories"));
+
+    // Leave lookup/decode frames as the newest tree so the screenshot and the
+    // stage table cover the parent/child example.
+    for (int i = 0; i < 3; ++i)
+    {
+        pvf::perf::FrameScope frame;
+        pvf::perf::Scope lookup(QStringLiteral("帧缓存查找"),
+                                pvf::perf::Category::Lookup);
+        busyWait(1);
+        pvf::perf::Scope decode(QStringLiteral("缓存解码/QOI"),
+                                pvf::perf::Category::Decode);
+        busyWait(3);
+    }
+
+    // Advanced area: hidden by default, flame graph and sortable call table
+    // appear only after the user presses 高级.
+    QTemporaryDir temp;
+    check(temp.isValid(), QStringLiteral("no temp dir for the window test"));
+    pvf::PerfMonitorWindow window;
+    window.setCacheRoot(temp.path());
+    window.resize(1040, 1320);
+    window.show();
+    QApplication::processEvents();
+    window.refreshNow();
+
+    auto* stageTable =
+        window.findChild<QTableWidget*>(QStringLiteral("perfStageTable"));
+    check(stageTable && stageTable->columnCount() == 5,
+          QStringLiteral("stage table does not show inclusive/self columns"));
+    if (stageTable)
+    {
+        int lookupRow = -1;
+        int decodeRow = -1;
+        for (int row = 0; row < stageTable->rowCount(); ++row)
+        {
+            const QTableWidgetItem* item = stageTable->item(row, 0);
+            if (item && item->text() == QStringLiteral("缓存查找"))
+                lookupRow = row;
+            if (item && item->text() == QStringLiteral("缓存解码"))
+                decodeRow = row;
+        }
+        check(lookupRow >= 0,
+              QStringLiteral("stage table has no lookup row"));
+        check(decodeRow >= 0 && lookupRow >= 0 && decodeRow < lookupRow,
+              QStringLiteral("stage table is not sorted by self time"));
+        if (lookupRow >= 0)
+        {
+            const double inclusive =
+                stageTable->item(lookupRow, 1)->data(Qt::UserRole).toDouble();
+            const double self =
+                stageTable->item(lookupRow, 2)->data(Qt::UserRole).toDouble();
+            check(self > 0.0 && self < inclusive,
+                  QStringLiteral(
+                      "stage table lookup self %1 ms is not below inclusive %2 ms")
+                      .arg(self)
+                      .arg(inclusive));
+        }
+    }
+
+    auto* advancedPanel =
+        window.findChild<QWidget*>(QStringLiteral("perfAdvancedPanel"));
+    auto* advancedButton =
+        window.findChild<QPushButton*>(QStringLiteral("perfAdvancedButton"));
+    check(advancedPanel != nullptr && advancedButton != nullptr,
+          QStringLiteral("advanced panel/button missing"));
+    check(advancedPanel && !advancedPanel->isVisible(),
+          QStringLiteral("advanced panel is visible before the user opens it"));
+    if (advancedButton)
+        advancedButton->click();
+    QApplication::processEvents();
+    check(advancedPanel && advancedPanel->isVisible(),
+          QStringLiteral("advanced panel did not open"));
+
+    auto* flame = window.findChild<QWidget*>(QStringLiteral("perfFlameGraph"));
+    auto* table = window.findChild<QTableWidget*>(QStringLiteral("perfCallTable"));
+    check(flame != nullptr && flame->isVisible(),
+          QStringLiteral("flame graph is missing after opening advanced"));
+    check(table != nullptr && table->isVisible(),
+          QStringLiteral("call table is missing after opening advanced"));
+    check(table && table->rowCount() > 0,
+          QStringLiteral("call table has no rows"));
+    check(table && table->columnCount() == 5,
+          QStringLiteral("call table does not have 5 columns"));
+
+    auto* source = window.findChild<QComboBox*>(
+        QStringLiteral("perfTreeSource"));
+    if (source && table)
+    {
+        source->setCurrentIndex(1);
+        QApplication::processEvents();
+        window.refreshNow();
+        check(table->rowCount() > 0,
+              QStringLiteral("recording aggregate has no call table rows"));
+    }
+
+    auto* search =
+        window.findChild<QLineEdit*>(QStringLiteral("perfCallSearch"));
+    if (search && table)
+    {
+        search->setText(QStringLiteral("A1"));
+        QApplication::processEvents();
+        int visibleRows = 0;
+        for (int i = 0; i < table->rowCount(); ++i)
+            if (!table->isRowHidden(i))
+                ++visibleRows;
+        check(visibleRows >= 1 && visibleRows < table->rowCount(),
+              QStringLiteral("call tree search did not filter rows (%1 of %2)")
+                  .arg(visibleRows)
+                  .arg(table->rowCount()));
+        search->clear();
+        QApplication::processEvents();
+    }
+
+    const QString treeJson =
+        QDir(temp.path()).filePath(QStringLiteral("calltree.json"));
+    QString treeError;
+    check(window.exportCallTree(treeJson, &treeError),
+          QStringLiteral("call tree export failed: %1").arg(treeError));
+    QFile treeFile(treeJson);
+    if (treeFile.open(QIODevice::ReadOnly))
+    {
+        const QJsonObject treeObject =
+            QJsonDocument::fromJson(treeFile.readAll()).object();
+        check(treeObject.value(QStringLiteral("name")).toString()
+                  == QStringLiteral("录制聚合"),
+              QStringLiteral("exported call tree is not the selected aggregate"));
+        check(treeObject.contains(QStringLiteral("children")),
+              QStringLiteral("exported call tree has no children"));
+    }
+    else
+    {
+        check(false, QStringLiteral("exported call tree cannot be read"));
+    }
+
+    // Screenshot the newest lookup/decode tree, not the aggregate recording.
+    if (source)
+    {
+        source->setCurrentIndex(0);
+        QApplication::processEvents();
+        window.refreshNow();
+    }
+    window.grab().toImage().save(
+        QStringLiteral("/tmp/pvforge_perf_flame.png"));
+    window.close();
+    QApplication::processEvents();
+
+    profiler.setCaptureEnabled(false);
+    qInfo() << "perf-flame-test OK: tree root" << root.name
+            << "children" << root.children.size() << "recorded frames"
+            << report.frameCount << "failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 int main(int argc, char* argv[])
 {
     // The current media pipeline decodes video first frames and audio with
@@ -25684,6 +26098,8 @@ int main(int argc, char* argv[])
         return mcpLockTest(app);
     if (app.arguments().contains(QStringLiteral("--perf-monitor-test")))
         return perfMonitorTest(app);
+    if (app.arguments().contains(QStringLiteral("--perf-flame-test")))
+        return perfFlameTest(app);
     if (app.arguments().contains(QStringLiteral("--self-test")))
         return selfTest();
     if (app.arguments().contains(QStringLiteral("--session-test")))

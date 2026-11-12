@@ -14,7 +14,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPlainTextEdit>
@@ -25,10 +28,12 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace pvf {
 namespace {
@@ -61,9 +66,25 @@ QColor categoryColor(perf::Category category)
         return QColor(120, 200, 120);
     case perf::Category::Ui:
         return QColor(160, 160, 165);
+    case perf::Category::Frame:
+        return QColor(70, 76, 84);
     default:
         return QColor(110, 110, 115);
     }
+}
+
+bool isDarkColor(const QColor& color)
+{
+    return 0.299 * color.redF() + 0.587 * color.greenF()
+               + 0.114 * color.blueF()
+           < 0.55;
+}
+
+QString treeNodeLabel(const perf::CallNode& node)
+{
+    if (!node.name.isEmpty())
+        return node.name;
+    return perf::categoryLabel(node.category);
 }
 
 QString formatBytes(qint64 bytes)
@@ -104,6 +125,25 @@ QJsonObject systemStatsToJson(const perf::SystemStats& stats)
     object.insert(QStringLiteral("cacheFileCount"), stats.cacheFileCount);
     return object;
 }
+
+// Table cell that sorts by the stored number instead of the formatted text.
+class NumberTableItem : public QTableWidgetItem
+{
+public:
+    NumberTableItem(double value, const QString& text)
+        : QTableWidgetItem(text)
+    {
+        setData(Qt::UserRole, value);
+    }
+
+    bool operator<(const QTableWidgetItem& other) const override
+    {
+        const QVariant value = other.data(Qt::UserRole);
+        if (value.isValid())
+            return data(Qt::UserRole).toDouble() < value.toDouble();
+        return QTableWidgetItem::operator<(other);
+    }
+};
 
 } // namespace
 
@@ -229,17 +269,15 @@ protected:
             return;
         }
 
-        double total = 0.0;
-        for (int i = 1; i < perf::kCategoryCount; ++i)
-            total += m_sample.categoryMs[size_t(i)];
-        if (total <= 0.0)
-            total = std::max(0.001, m_sample.totalMs);
+        // Self time keeps the stacked bar from double-counting a child scope
+        // inside its parent; the frame total is the width denominator.
+        const double total = std::max(0.001, m_sample.totalMs);
 
         const QRectF bar = QRectF(rect()).adjusted(10.0, 8.0, -10.0, -22.0);
         double x = bar.left();
         for (int i = 1; i < perf::kCategoryCount; ++i)
         {
-            const double value = m_sample.categoryMs[size_t(i)];
+            const double value = m_sample.categorySelfMs[size_t(i)];
             if (value <= 0.0)
                 continue;
             const double width = std::max(1.0, value / total * bar.width());
@@ -269,6 +307,281 @@ protected:
 private:
     perf::FrameSample m_sample;
     bool m_valid = false;
+};
+
+// Flame graph drawn directly with QPainter: one row per call depth, child width
+// proportional to its inclusive share of the parent.  Clicking a block drills
+// into that subtree; clicking the background or pressing Esc restores the root.
+class FlameGraph : public QWidget
+{
+public:
+    explicit FlameGraph(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("perfFlameGraph"));
+        setMinimumHeight(190);
+        setMouseTracking(true);
+        setFocusPolicy(Qt::StrongFocus);
+    }
+
+    void setTree(const perf::CallNode& tree)
+    {
+        m_tree = tree;
+        // m_items holds pointers into the old tree; drop them before the next
+        // paint so a mouse event cannot dereference freed nodes.
+        m_items.clear();
+        if (m_tree.name.isEmpty())
+            m_focus.clear();
+        else if (!pathExists(m_tree, m_focus))
+            m_focus.clear();
+        m_hovered = -1;
+        update();
+    }
+
+    bool popFocus()
+    {
+        if (m_focus.isEmpty())
+            return false;
+        m_focus.removeLast();
+        m_hovered = -1;
+        update();
+        return true;
+    }
+
+    void resetFocus()
+    {
+        if (m_focus.isEmpty())
+            return;
+        m_focus.clear();
+        m_hovered = -1;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.fillRect(rect(), QColor(16, 18, 20));
+        painter.setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+        const perf::CallNode* root = nodeAtPath(m_focus);
+        if (root == nullptr || root->name.isEmpty())
+        {
+            painter.setPen(QColor(150, 154, 158));
+            painter.drawText(rect(), Qt::AlignCenter,
+                             QStringLiteral("暂无调用树样本；打开预览或录制后再看。"));
+            return;
+        }
+
+        const QString breadcrumb =
+            m_focus.isEmpty()
+                ? treeNodeLabel(*root)
+                : QStringLiteral("根 / ") + treeNodeLabel(*root);
+        painter.setPen(QColor(120, 124, 128));
+        painter.drawText(QRectF(8.0, 2.0, width() - 16.0, 16.0),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         QStringLiteral("火焰图 · %1（点击下钻，空白处返回）")
+                             .arg(breadcrumb));
+
+        const QRectF plot =
+            QRectF(rect()).adjusted(8.0, 20.0, -8.0, -6.0);
+        if (plot.width() <= 0.0 || plot.height() <= 0.0)
+            return;
+
+        m_items.clear();
+        int levels = 0;
+        depthOf(*root, 0, &levels);
+        const double rowHeight =
+            std::clamp(plot.height() / std::max(1, levels), 9.0, 22.0);
+        layoutNode(*root, 0, plot.left(), plot.width(), plot.top(), rowHeight,
+                   QVector<int>());
+
+        for (int i = 0; i < m_items.size(); ++i)
+        {
+            const Item& item = m_items.at(i);
+            const QColor color = categoryColor(item.node->category);
+            painter.fillRect(item.rect, color);
+            painter.setPen(QPen(QColor(16, 18, 20), 1.0));
+            painter.drawRect(item.rect);
+
+            if (i == m_hovered)
+            {
+                painter.setPen(QPen(QColor(245, 245, 245), 2.0));
+                painter.drawRect(item.rect.adjusted(1.0, 1.0, -1.0, -1.0));
+            }
+
+            if (item.rect.width() < 30.0 || item.rect.height() < 10.0)
+                continue;
+            painter.setPen(isDarkColor(color) ? QColor(235, 238, 240)
+                                              : QColor(20, 20, 22));
+            const QString text =
+                painter.fontMetrics().elidedText(
+                    treeNodeLabel(*item.node), Qt::ElideRight,
+                    int(item.rect.width()) - 6);
+            painter.drawText(item.rect.adjusted(3.0, 0.0, -3.0, 0.0),
+                             Qt::AlignVCenter | Qt::AlignLeft, text);
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        const int index = itemAt(event->position());
+        if (index != m_hovered)
+        {
+            m_hovered = index;
+            update();
+            if (index >= 0)
+            {
+                const Item& item = m_items.at(index);
+                const perf::CallNode* root = nodeAtPath(m_focus);
+                const double total =
+                    root != nullptr ? std::max(1e-6, root->inclusiveMs) : 1.0;
+                const QString text =
+                    QStringLiteral("%1\n阶段：%2\n含子：%3 ms（%4%）\n独占：%5 ms\n调用：%6 次")
+                        .arg(treeNodeLabel(*item.node),
+                             perf::categoryLabel(item.node->category),
+                             QString::number(item.node->inclusiveMs, 'f', 2),
+                             QString::number(item.node->inclusiveMs / total
+                                                 * 100.0,
+                                             'f', 1),
+                             QString::number(item.node->exclusiveMs, 'f', 2))
+                        .arg(item.node->calls);
+                QToolTip::showText(event->globalPosition().toPoint(), text,
+                                   this);
+            }
+            else
+            {
+                QToolTip::hideText();
+            }
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void leaveEvent(QEvent* event) override
+    {
+        m_hovered = -1;
+        QToolTip::hideText();
+        update();
+        QWidget::leaveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        setFocus(Qt::MouseFocusReason);
+        if (event->button() != Qt::LeftButton)
+        {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+        const int index = itemAt(event->position());
+        if (index < 0)
+        {
+            resetFocus();
+            return;
+        }
+        m_focus = m_items.at(index).path;
+        m_hovered = -1;
+        QToolTip::hideText();
+        update();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if (event->key() == Qt::Key_Escape)
+        {
+            resetFocus();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
+
+private:
+    struct Item
+    {
+        QRectF rect;
+        QVector<int> path;
+        const perf::CallNode* node = nullptr;
+    };
+
+    const perf::CallNode* nodeAtPath(const QVector<int>& path) const
+    {
+        const perf::CallNode* node = &m_tree;
+        for (int index : path)
+        {
+            if (index < 0 || index >= node->children.size())
+                return nullptr;
+            node = &node->children.at(index);
+        }
+        return node;
+    }
+
+    static bool pathExists(const perf::CallNode& root, const QVector<int>& path)
+    {
+        const perf::CallNode* node = &root;
+        for (int index : path)
+        {
+            if (index < 0 || index >= node->children.size())
+                return false;
+            node = &node->children.at(index);
+        }
+        return true;
+    }
+
+    static void depthOf(const perf::CallNode& node, int depth, int* levels)
+    {
+        *levels = std::max(*levels, depth + 1);
+        for (const perf::CallNode& child : node.children)
+            depthOf(child, depth + 1, levels);
+    }
+
+    void layoutNode(const perf::CallNode& node, int depth, double x,
+                    double width, double top, double rowHeight,
+                    const QVector<int>& path)
+    {
+        Item item;
+        item.rect = QRectF(x, top + depth * rowHeight, width, rowHeight);
+        item.path = path;
+        item.node = &node;
+        m_items.append(item);
+
+        if (node.children.isEmpty())
+            return;
+        double childSum = 0.0;
+        for (const perf::CallNode& child : node.children)
+            childSum += child.inclusiveMs;
+        const double denominator = std::max(node.inclusiveMs, childSum);
+        if (denominator <= 0.0)
+            return;
+        double childX = x;
+        for (int i = 0; i < node.children.size(); ++i)
+        {
+            const perf::CallNode& child = node.children.at(i);
+            const double share =
+                std::clamp(child.inclusiveMs / denominator, 0.0, 1.0);
+            const double childWidth = width * share;
+            if (childWidth <= 0.0)
+                continue;
+            QVector<int> childPath = path;
+            childPath.append(i);
+            layoutNode(child, depth + 1, childX, childWidth, top, rowHeight,
+                       childPath);
+            childX += childWidth;
+        }
+    }
+
+    int itemAt(const QPointF& position) const
+    {
+        for (int i = 0; i < m_items.size(); ++i)
+            if (m_items.at(i).rect.contains(position))
+                return i;
+        return -1;
+    }
+
+    perf::CallNode m_tree;
+    QVector<Item> m_items;
+    QVector<int> m_focus;
+    int m_hovered = -1;
 };
 
 PerfMonitorWindow::PerfMonitorWindow(QWidget* parent)
@@ -324,15 +637,20 @@ void PerfMonitorWindow::buildUi()
     auto* middle = new QHBoxLayout();
     middle->setSpacing(6);
 
-    auto* stageBox = new QGroupBox(QStringLiteral("阶段占比（含子阶段）"), this);
+    auto* stageBox = new QGroupBox(QStringLiteral("阶段耗时（含子 / 自身）"),
+                                   this);
     stageBox->setToolTip(
-        QStringLiteral("父阶段包含子阶段，百分比之和可能超过 100%。"));
+        QStringLiteral("占比以整帧总时长为分母，不是以重叠阶段合计为分母。\n"
+                       "「含子」包含子阶段（如缓存查找包含缓存解码），"
+                       "「自身」= 含子 - 子阶段，默认按自身耗时排序。"));
     auto* stageLayout = new QVBoxLayout(stageBox);
     stageLayout->setContentsMargins(6, 6, 6, 6);
-    m_stageTable = new QTableWidget(0, 3, stageBox);
+    m_stageTable = new QTableWidget(0, 5, stageBox);
     m_stageTable->setObjectName(QStringLiteral("perfStageTable"));
     m_stageTable->setHorizontalHeaderLabels(
-        {QStringLiteral("阶段"), QStringLiteral("平均"), QStringLiteral("占比")});
+        {QStringLiteral("阶段"), QStringLiteral("含子"),
+         QStringLiteral("自身"), QStringLiteral("含子占比"),
+         QStringLiteral("自身占比")});
     m_stageTable->verticalHeader()->hide();
     m_stageTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_stageTable->setSelectionMode(QAbstractItemView::NoSelection);
@@ -340,12 +658,19 @@ void PerfMonitorWindow::buildUi()
     m_stageTable->setFont(mono);
     m_stageTable->horizontalHeader()->setSectionResizeMode(
         0, QHeaderView::Stretch);
-    m_stageTable->horizontalHeader()->setSectionResizeMode(
-        1, QHeaderView::ResizeToContents);
-    m_stageTable->horizontalHeader()->setSectionResizeMode(
-        2, QHeaderView::ResizeToContents);
+    for (int column = 1; column < 5; ++column)
+        m_stageTable->horizontalHeader()->setSectionResizeMode(
+            column, QHeaderView::ResizeToContents);
     m_stageTable->setMinimumHeight(150);
     stageLayout->addWidget(m_stageTable);
+    auto* stageHint = new QLabel(
+        QStringLiteral("提示：父阶段包含子阶段（如缓存查找含缓存解码），"
+                       "请按「自身」列比较；占比以整帧总时长为分母。"),
+        stageBox);
+    stageHint->setObjectName(QStringLiteral("perfStageHint"));
+    stageHint->setFont(mono);
+    stageHint->setWordWrap(true);
+    stageLayout->addWidget(stageHint);
     middle->addWidget(stageBox, 3);
 
     auto* side = new QVBoxLayout();
@@ -377,7 +702,8 @@ void PerfMonitorWindow::buildUi()
 
     root->addLayout(middle);
 
-    auto* waterfallBox = new QGroupBox(QStringLiteral("最近一帧阶段瀑布"), this);
+    auto* waterfallBox =
+        new QGroupBox(QStringLiteral("最近一帧阶段瀑布（自身时间）"), this);
     auto* waterfallLayout = new QVBoxLayout(waterfallBox);
     waterfallLayout->setContentsMargins(6, 6, 6, 6);
     m_waterfall = new FrameWaterfall(waterfallBox);
@@ -437,6 +763,21 @@ void PerfMonitorWindow::buildUi()
 
     root->addWidget(recordBox, 1);
 
+    // The advanced section stays collapsed for normal users: no function names
+    // or call trees appear until this button is pressed.
+    auto* advancedBar = new QHBoxLayout();
+    advancedBar->addStretch(1);
+    m_advancedButton = new QPushButton(QStringLiteral("高级 ▸"), this);
+    m_advancedButton->setObjectName(QStringLiteral("perfAdvancedButton"));
+    m_advancedButton->setToolTip(
+        QStringLiteral("阶段火焰图与调用树；排查具体函数与嵌套阶段时再打开。"));
+    connect(m_advancedButton, &QPushButton::clicked, this,
+            [this]() { setAdvancedVisible(!m_advancedOpen); });
+    advancedBar->addWidget(m_advancedButton);
+    root->addLayout(advancedBar);
+
+    buildAdvancedArea(root);
+
     setStyleSheet(QStringLiteral(
         "QWidget { border-radius: 0px; }"
         "QGroupBox { border: 1px solid #6b6b73; margin-top: 9px; }"
@@ -449,8 +790,122 @@ void PerfMonitorWindow::buildUi()
         " border-bottom: 1px solid #505056; padding: 3px; }"
         "QPushButton, QComboBox { border: 1px solid #6b6b73;"
         " border-radius: 0px; padding: 3px 10px; }"
+        "QLineEdit { border: 1px solid #6b6b73;"
+        " border-radius: 0px; padding: 2px 5px; }"
         "QPlainTextEdit { border: 1px solid #6b6b73;"
         " border-radius: 0px; }"));
+}
+
+void PerfMonitorWindow::buildAdvancedArea(QVBoxLayout* root)
+{
+    const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+
+    auto* panel = new QGroupBox(QStringLiteral("高级：阶段火焰图与调用树"), this);
+    panel->setObjectName(QStringLiteral("perfAdvancedPanel"));
+    panel->setVisible(false);
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(6);
+
+    auto* controls = new QHBoxLayout();
+    controls->setSpacing(6);
+    controls->addWidget(new QLabel(QStringLiteral("数据源"), panel));
+    m_treeSource = new QComboBox(panel);
+    m_treeSource->setObjectName(QStringLiteral("perfTreeSource"));
+    m_treeSource->addItem(QStringLiteral("最近一帧"));
+    m_treeSource->addItem(QStringLiteral("录制聚合"));
+    connect(m_treeSource, &QComboBox::currentIndexChanged, this,
+            [this]() {
+                updateAdvanced();
+                if (m_flame)
+                    m_flame->resetFocus();
+            });
+    controls->addWidget(m_treeSource);
+
+    controls->addWidget(new QLabel(QStringLiteral("搜索"), panel));
+    m_treeSearch = new QLineEdit(panel);
+    m_treeSearch->setObjectName(QStringLiteral("perfCallSearch"));
+    m_treeSearch->setPlaceholderText(QStringLiteral("按名称筛选"));
+    m_treeSearch->setClearButtonEnabled(true);
+    m_treeSearch->setMaximumWidth(180);
+    connect(m_treeSearch, &QLineEdit::textChanged, this, [this]() {
+        if (!m_callTable)
+            return;
+        const QString needle = m_treeSearch->text().trimmed();
+        for (int row = 0; row < m_callTable->rowCount(); ++row)
+        {
+            const QTableWidgetItem* item = m_callTable->item(row, 0);
+            const bool matches =
+                needle.isEmpty()
+                || (item && item->text().contains(needle, Qt::CaseInsensitive));
+            m_callTable->setRowHidden(row, !matches);
+        }
+    });
+    controls->addWidget(m_treeSearch);
+
+    m_treeStatus = new QLabel(QStringLiteral("暂无调用树"), panel);
+    m_treeStatus->setObjectName(QStringLiteral("perfTreeStatus"));
+    m_treeStatus->setFont(mono);
+    controls->addWidget(m_treeStatus, 1);
+
+    m_treeBackButton = new QPushButton(QStringLiteral("返回"), panel);
+    m_treeBackButton->setObjectName(QStringLiteral("perfTreeBackButton"));
+    connect(m_treeBackButton, &QPushButton::clicked, this, [this]() {
+        if (m_flame)
+            m_flame->popFocus();
+    });
+    controls->addWidget(m_treeBackButton);
+
+    m_treeExportButton =
+        new QPushButton(QStringLiteral("导出调用树 JSON"), panel);
+    m_treeExportButton->setObjectName(QStringLiteral("perfTreeExportButton"));
+    connect(m_treeExportButton, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(
+            this, QStringLiteral("导出调用树"),
+            QStringLiteral("pvforge-calltree.json"),
+            QStringLiteral("JSON 文件 (*.json)"));
+        if (path.isEmpty())
+            return;
+        QString error;
+        if (!exportCallTree(path, &error) && !error.isEmpty())
+            m_treeStatus->setText(QStringLiteral("导出失败：%1").arg(error));
+        else
+            m_treeStatus->setText(QStringLiteral("调用树已导出：%1").arg(path));
+    });
+    controls->addWidget(m_treeExportButton);
+    layout->addLayout(controls);
+
+    m_flame = new FlameGraph(panel);
+    layout->addWidget(m_flame, 1);
+
+    auto* tableLabel = new QLabel(
+        QStringLiteral("调用树（默认按含子时间降序，点表头切换排序）"), panel);
+    tableLabel->setFont(mono);
+    layout->addWidget(tableLabel);
+
+    m_callTable = new QTableWidget(0, 5, panel);
+    m_callTable->setObjectName(QStringLiteral("perfCallTable"));
+    m_callTable->setHorizontalHeaderLabels(
+        {QStringLiteral("名称"), QStringLiteral("含子"),
+         QStringLiteral("独占"), QStringLiteral("占比"),
+         QStringLiteral("调用")});
+    m_callTable->verticalHeader()->hide();
+    m_callTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_callTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_callTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_callTable->setShowGrid(false);
+    m_callTable->setFont(mono);
+    m_callTable->setSortingEnabled(true);
+    m_callTable->horizontalHeader()->setSectionResizeMode(
+        0, QHeaderView::Stretch);
+    for (int column = 1; column < 5; ++column)
+        m_callTable->horizontalHeader()->setSectionResizeMode(
+            column, QHeaderView::ResizeToContents);
+    m_callTable->setMinimumHeight(170);
+    layout->addWidget(m_callTable, 1);
+
+    root->addWidget(panel);
+    m_advancedPanel = panel;
 }
 
 void PerfMonitorWindow::setCacheRoot(const QString& root)
@@ -459,6 +914,191 @@ void PerfMonitorWindow::setCacheRoot(const QString& root)
         return;
     m_cacheRoot = root;
     refreshNow();
+}
+
+void PerfMonitorWindow::setAdvancedVisible(bool visible)
+{
+    m_advancedOpen = visible;
+    if (m_advancedPanel)
+        m_advancedPanel->setVisible(visible);
+    if (m_advancedButton)
+    {
+        m_advancedButton->setText(visible ? QStringLiteral("高级 ▾")
+                                          : QStringLiteral("高级 ▸"));
+        m_advancedButton->setToolTip(
+            visible ? QStringLiteral("收起火焰图与调用树")
+                    : QStringLiteral("阶段火焰图与调用树；排查具体函数与嵌套阶段时再打开。"));
+    }
+    if (visible)
+    {
+        updateAdvanced();
+        resize(width(), std::max(height(), 1180));
+    }
+    else if (height() > 900)
+    {
+        resize(width(), 820);
+    }
+}
+
+perf::CallNode PerfMonitorWindow::selectedTree() const
+{
+    if (m_treeSource && m_treeSource->currentIndex() == 1)
+        return m_profiler.recordedReport().callTree;
+    return m_snapshot.lastFrameTree;
+}
+
+void PerfMonitorWindow::updateAdvanced()
+{
+    if (!m_advancedOpen || m_advancedPanel == nullptr || m_flame == nullptr)
+        return;
+
+    const perf::RecordingReport report = m_profiler.recordedReport();
+    if (m_treeSource)
+    {
+        m_treeSource->setItemText(
+            1, report.valid ? QStringLiteral("录制聚合")
+                            : QStringLiteral("录制聚合（暂无）"));
+        if (!report.valid && m_treeSource->currentIndex() == 1)
+            m_treeSource->setCurrentIndex(0);
+    }
+
+    const perf::CallNode tree = selectedTree();
+    QString key = QStringLiteral("%1|%2|%3|%4")
+                      .arg(tree.name)
+                      .arg(tree.calls)
+                      .arg(qRound64(tree.inclusiveMs * 100.0))
+                      .arg(tree.children.size());
+    if (m_treeSource && m_treeSource->currentIndex() == 1)
+    {
+        key += QStringLiteral("|r%1|%2")
+                   .arg(report.frameCount)
+                   .arg(qRound64(report.elapsedSeconds * 10.0));
+    }
+    else if (!m_snapshot.frames.isEmpty())
+    {
+        key += QStringLiteral("|f%1").arg(m_snapshot.frames.last().index);
+    }
+    if (key == m_lastTreeKey)
+        return;
+    m_lastTreeKey = key;
+
+    m_flame->setTree(tree);
+    updateCallTable(tree);
+
+    int nodes = 0;
+    std::function<void(const perf::CallNode&)> count =
+        [&nodes, &count](const perf::CallNode& node) {
+            ++nodes;
+            for (const perf::CallNode& child : node.children)
+                count(child);
+        };
+    if (!tree.name.isEmpty())
+        count(tree);
+    m_treeStatus->setText(
+        tree.name.isEmpty()
+            ? QStringLiteral("暂无调用树")
+            : QStringLiteral("%1 · %2 个节点 · %3")
+                  .arg(tree.name)
+                  .arg(nodes)
+                  .arg(m_treeSource && m_treeSource->currentIndex() == 1
+                           ? QStringLiteral("录制聚合")
+                           : QStringLiteral("最近一帧")));
+    if (m_treeExportButton)
+        m_treeExportButton->setEnabled(!tree.name.isEmpty());
+}
+
+void PerfMonitorWindow::updateCallTable(const perf::CallNode& tree)
+{
+    if (m_callTable == nullptr)
+        return;
+    m_callTable->setSortingEnabled(false);
+    m_callTable->clearContents();
+    m_callTable->setRowCount(0);
+    if (tree.name.isEmpty())
+    {
+        m_callTable->setSortingEnabled(true);
+        return;
+    }
+
+    const double rootMs = std::max(1e-6, tree.inclusiveMs);
+    int row = 0;
+    std::function<void(const perf::CallNode&, int)> append =
+        [&](const perf::CallNode& node, int depth) {
+            m_callTable->insertRow(row);
+            const QString indent =
+                depth > 0 ? QString(depth * 2, QLatin1Char(' ')) : QString();
+            auto* name = new QTableWidgetItem(indent + treeNodeLabel(node));
+            name->setToolTip(perf::categoryLabel(node.category));
+            name->setForeground(categoryColor(node.category).lighter(150));
+
+            const auto numberItem = [](double value) {
+                auto* item = new NumberTableItem(
+                    value, QString::number(value, 'f', 2));
+                item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                return item;
+            };
+            auto* inclusive = numberItem(node.inclusiveMs);
+            auto* exclusive = numberItem(node.exclusiveMs);
+            auto* share = new NumberTableItem(
+                node.inclusiveMs / rootMs,
+                QString::number(node.inclusiveMs / rootMs * 100.0, 'f', 1)
+                    + QStringLiteral("%"));
+            share->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            auto* calls = new NumberTableItem(double(node.calls),
+                                              QString::number(node.calls));
+            calls->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+            m_callTable->setItem(row, 0, name);
+            m_callTable->setItem(row, 1, inclusive);
+            m_callTable->setItem(row, 2, exclusive);
+            m_callTable->setItem(row, 3, share);
+            m_callTable->setItem(row, 4, calls);
+            ++row;
+            for (const perf::CallNode& child : node.children)
+                append(child, depth + 1);
+        };
+    append(tree, 0);
+
+    m_callTable->setSortingEnabled(true);
+    m_callTable->sortItems(1, Qt::DescendingOrder);
+
+    if (m_treeSearch)
+    {
+        const QString needle = m_treeSearch->text().trimmed();
+        for (int i = 0; i < m_callTable->rowCount(); ++i)
+        {
+            const QTableWidgetItem* item = m_callTable->item(i, 0);
+            m_callTable->setRowHidden(
+                i, !needle.isEmpty()
+                       && (!item
+                           || !item->text().contains(needle,
+                                                     Qt::CaseInsensitive)));
+        }
+    }
+}
+
+bool PerfMonitorWindow::exportCallTree(const QString& path, QString* error)
+{
+    const perf::CallNode tree = selectedTree();
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    const QByteArray data =
+        QJsonDocument(perf::FrameProfiler::callTreeToJson(tree))
+            .toJson(QJsonDocument::Indented);
+    if (file.write(data) != data.size() || !file.commit())
+    {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    if (error)
+        error->clear();
+    return true;
 }
 
 void PerfMonitorWindow::showEvent(QShowEvent* event)
@@ -515,9 +1155,16 @@ void PerfMonitorWindow::refreshNow()
 
     const bool recording = m_profiler.isRecording();
     if (m_wasRecording && !recording)
+    {
         updateReportText();
+        // After a recording the aggregate tree is the interesting one.
+        if (m_treeSource && m_advancedOpen)
+            m_treeSource->setCurrentIndex(1);
+        m_lastTreeKey.clear();
+    }
     m_wasRecording = recording;
     updateRecordingUi();
+    updateAdvanced();
 }
 
 void PerfMonitorWindow::updateOverview()
@@ -542,18 +1189,25 @@ void PerfMonitorWindow::updateOverview()
     {
         perf::Category category;
         double totalMs;
+        double selfMs;
         double share;
+        double selfShare;
     };
     QVector<Row> rows;
     for (int i = 1; i < perf::kCategoryCount; ++i)
     {
         const double total = summary.categoryTotalMs[size_t(i)];
-        if (total <= 0.0)
+        const double self = summary.categorySelfMs[size_t(i)];
+        if (total <= 0.0 && self <= 0.0)
             continue;
-        rows.append(Row{perf::Category(i), total, summary.categoryShare[size_t(i)]});
+        rows.append(Row{perf::Category(i), total, self,
+                        summary.categoryShare[size_t(i)],
+                        summary.categorySelfShare[size_t(i)]});
     }
+    // Self time first: the lookup parent wraps decode, so ranking by inclusive
+    // would keep blaming lookup for time actually spent decoding.
     std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
-        return a.totalMs > b.totalMs;
+        return a.selfMs > b.selfMs;
     });
 
     m_stageTable->setRowCount(rows.size());
@@ -561,17 +1215,52 @@ void PerfMonitorWindow::updateOverview()
     {
         const Row& stage = rows.at(row);
         auto* name = new QTableWidgetItem(perf::categoryLabel(stage.category));
-        auto* average = new QTableWidgetItem(
-            sampleCount > 0 ? msText(stage.totalMs / sampleCount)
-                            : QStringLiteral("—"));
-        auto* share = new QTableWidgetItem(QString::number(stage.share * 100.0,
-                                                           'f', 1)
-                                           + QStringLiteral("%"));
-        average->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        const auto averageItem = [sampleCount](double totalMs) {
+            auto* item = new QTableWidgetItem(
+                sampleCount > 0 ? msText(totalMs / sampleCount)
+                                : QStringLiteral("—"));
+            item->setData(Qt::UserRole, totalMs / std::max(1, sampleCount));
+            item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            return item;
+        };
+        auto* inclusive = averageItem(stage.totalMs);
+        auto* self = averageItem(stage.selfMs);
+        auto* share = new QTableWidgetItem(
+            QString::number(stage.share * 100.0, 'f', 1)
+            + QStringLiteral("%"));
+        share->setData(Qt::UserRole, stage.share);
         share->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto* selfShare = new QTableWidgetItem(
+            QString::number(stage.selfShare * 100.0, 'f', 1)
+            + QStringLiteral("%"));
+        selfShare->setData(Qt::UserRole, stage.selfShare);
+        selfShare->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        const QString hint =
+            QStringLiteral("%1：含子 %2 ms（整帧 %3%），其中子阶段 %4 ms；"
+                           "自身 %5 ms（整帧 %6%）。\n"
+                           "含子包含子阶段，可与子阶段重叠；自身才是该阶段真正"
+                           "占用的时间。")
+                .arg(perf::categoryLabel(stage.category))
+                .arg(QString::number(stage.totalMs / std::max(1, sampleCount),
+                                     'f', 2))
+                .arg(QString::number(stage.share * 100.0, 'f', 1))
+                .arg(QString::number(
+                         std::max(0.0, stage.totalMs - stage.selfMs)
+                             / std::max(1, sampleCount),
+                         'f', 2))
+                .arg(QString::number(stage.selfMs / std::max(1, sampleCount),
+                                     'f', 2))
+                .arg(QString::number(stage.selfShare * 100.0, 'f', 1));
+        for (QTableWidgetItem* item :
+             {name, inclusive, self, share, selfShare})
+            item->setToolTip(hint);
+
         m_stageTable->setItem(row, 0, name);
-        m_stageTable->setItem(row, 1, average);
-        m_stageTable->setItem(row, 2, share);
+        m_stageTable->setItem(row, 1, inclusive);
+        m_stageTable->setItem(row, 2, self);
+        m_stageTable->setItem(row, 3, share);
+        m_stageTable->setItem(row, 4, selfShare);
     }
 
     const perf::CacheTotals& cache = m_snapshot.cache;
@@ -673,6 +1362,9 @@ void PerfMonitorWindow::toggleRecording()
         m_profiler.stopRecording();
         updateReportText();
         m_wasRecording = false;
+        m_lastTreeKey.clear();
+        if (m_treeSource && m_advancedOpen)
+            m_treeSource->setCurrentIndex(1);
         updateRecordingUi();
         refreshNow();
         return;

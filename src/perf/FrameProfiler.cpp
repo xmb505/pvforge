@@ -1,12 +1,16 @@
 #include "perf/FrameProfiler.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QJsonArray>
 #include <QStringList>
+#include <QThread>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 namespace pvf::perf {
 namespace {
@@ -37,13 +41,49 @@ qint64 steadyNowMs()
     return steadyNowNs() / 1000000;
 }
 
+QString threadLabel()
+{
+    static thread_local QString label;
+    if (!label.isEmpty())
+        return label;
+    const QThread* thread = QThread::currentThread();
+    if (QCoreApplication::instance() != nullptr
+        && thread == QCoreApplication::instance()->thread())
+    {
+        label = QStringLiteral("界面线程");
+        return label;
+    }
+    label = thread->objectName();
+    if (label.isEmpty())
+        label = QStringLiteral("线程 %1")
+                    .arg(QString::number(
+                        reinterpret_cast<quintptr>(QThread::currentThreadId()),
+                        16));
+    return label;
+}
+
+// A scope that is still open on the thread-local stack.  Timing is filled in
+// when endScope() folds the child into its parent, which avoids allocating a
+// CallNode until the scope actually closes.
+struct ScopeEntry
+{
+    QString name;
+    Category category = Category::Other;
+    double childMs = 0.0;
+    QVector<CallNode> children;
+};
+
 struct ThreadFrameState
 {
     int depth = 0;
     bool active = false;
     qint64 startNs = 0;
     qint64 startMs = 0;
+    QString threadName;
+    std::vector<ScopeEntry> stack;
+    size_t frameRootIndex = 0;
     std::array<double, kCategoryCount> categoryMs{};
+    std::array<double, kCategoryCount> categorySelfMs{};
     int cacheHits = 0;
     int cacheMisses = 0;
     int cacheStores = 0;
@@ -56,6 +96,38 @@ struct ThreadFrameState
 };
 
 thread_local ThreadFrameState tlsFrame;
+
+double childrenInclusiveMs(const QVector<CallNode>& children)
+{
+    double sum = 0.0;
+    for (const CallNode& child : children)
+        sum += child.inclusiveMs;
+    return sum;
+}
+
+void mergeCallNode(CallNode& target, const CallNode& source);
+
+void mergeCallNodeList(QVector<CallNode>& target, const CallNode& source)
+{
+    for (CallNode& child : target)
+    {
+        if (child.name == source.name && child.category == source.category)
+        {
+            mergeCallNode(child, source);
+            return;
+        }
+    }
+    target.append(source);
+}
+
+void mergeCallNode(CallNode& target, const CallNode& source)
+{
+    target.inclusiveMs += source.inclusiveMs;
+    target.exclusiveMs += source.exclusiveMs;
+    target.calls += source.calls;
+    for (const CallNode& child : source.children)
+        mergeCallNodeList(target.children, child);
+}
 
 double percentile(const QVector<double>& sorted, double fraction)
 {
@@ -113,13 +185,15 @@ QString buildConclusion(const Summary& summary, const CacheTotals& cache,
         return lines.join(QLatin1Char('\n'));
     }
 
+    // Rank hotspots by self time: a lookup parent that mostly wraps decode
+    // must not hide the decode cost behind double-counted inclusive time.
     int hotspot = -1;
     double hotspotMs = 0.0;
     for (int i = static_cast<int>(Category::Render2); i < kCategoryCount; ++i)
     {
-        if (summary.categoryTotalMs[size_t(i)] > hotspotMs)
+        if (summary.categorySelfMs[size_t(i)] > hotspotMs)
         {
-            hotspotMs = summary.categoryTotalMs[size_t(i)];
+            hotspotMs = summary.categorySelfMs[size_t(i)];
             hotspot = i;
         }
     }
@@ -127,7 +201,7 @@ QString buildConclusion(const Summary& summary, const CacheTotals& cache,
     if (hotspot >= 0)
     {
         const double avgMs = hotspotMs / std::max(1, summary.count);
-        const double share = summary.categoryShare[size_t(hotspot)];
+        const double share = summary.categorySelfShare[size_t(hotspot)];
         const Category category = Category(hotspot);
         QString headline;
         switch (category)
@@ -195,7 +269,7 @@ QString buildConclusion(const Summary& summary, const CacheTotals& cache,
     }
     if (summary.meanMs > 0.0 && summary.meanMs < 8.0 && solverCalls == 0
         && (hotspot < 0
-            || summary.categoryShare[size_t(hotspot)] < 0.5))
+            || summary.categorySelfShare[size_t(hotspot)] < 0.5))
     {
         lines << QStringLiteral("帧耗时充足，未发现单一瓶颈。");
     }
@@ -223,30 +297,42 @@ QString buildReportText(const RecordingReport& report, int solverCalls)
         {
             int index = -1;
             double totalMs = 0.0;
+            double selfMs = 0.0;
             double share = 0.0;
+            double selfShare = 0.0;
         };
         QVector<Stage> stages;
         for (int i = 1; i < kCategoryCount; ++i)
         {
-            if (s.categoryTotalMs[size_t(i)] <= 0.0)
+            if (s.categoryTotalMs[size_t(i)] <= 0.0
+                && s.categorySelfMs[size_t(i)] <= 0.0)
                 continue;
             stages.append(Stage{i, s.categoryTotalMs[size_t(i)],
-                                s.categoryShare[size_t(i)]});
+                                s.categorySelfMs[size_t(i)],
+                                s.categoryShare[size_t(i)],
+                                s.categorySelfShare[size_t(i)]});
         }
+        // Self time is the honest comparison; inclusive order stays visible
+        // in the same line for parent/child stages.
         std::sort(stages.begin(), stages.end(),
                   [](const Stage& a, const Stage& b) {
-                      return a.totalMs > b.totalMs;
+                      return a.selfMs > b.selfMs;
                   });
         QStringList stageLines;
         for (const Stage& stage : stages)
         {
-            stageLines << QStringLiteral("  %1 %2（平均 %3 ms/帧）")
+            stageLines << QStringLiteral(
+                              "  %1 含子 %2 ms/帧（%3） · 自身 %4 ms（%5）")
                               .arg(categoryText(Category(stage.index)),
+                                   msText(stage.totalMs / std::max(1, s.count)),
                                    percentText(stage.share),
-                                   msText(stage.totalMs / std::max(1, s.count)));
+                                   msText(stage.selfMs / std::max(1, s.count)),
+                                   percentText(stage.selfShare));
         }
         if (!stageLines.isEmpty())
-            lines << QString() << QStringLiteral("阶段占比（含子阶段）：")
+            lines << QString()
+                  << QStringLiteral(
+                         "阶段耗时（占比分母为整帧总时长；含子阶段可互相重叠）：")
                   << stageLines.join(QLatin1Char('\n'));
     }
 
@@ -339,15 +425,20 @@ void FrameProfiler::beginFrame()
     ThreadFrameState& state = tlsFrame;
     if (state.depth++ > 0)
         return;
+    // A nested frame never opens its own tree.  Any scope opened outside a
+    // frame (worker-style) may still be open on this thread; keep it below the
+    // frame root instead of clearing the stack.
     if (!captureEnabled())
     {
         state.active = false;
         return;
     }
     state.active = true;
+    state.threadName = threadLabel();
     state.startNs = steadyNowNs();
     state.startMs = steadyNowMs();
     state.categoryMs.fill(0.0);
+    state.categorySelfMs.fill(0.0);
     state.cacheHits = 0;
     state.cacheMisses = 0;
     state.cacheStores = 0;
@@ -357,6 +448,10 @@ void FrameProfiler::beginFrame()
     state.solverCalls = 0;
     state.html = false;
     state.video = false;
+    state.frameRootIndex = state.stack.size();
+    state.stack.emplace_back();
+    state.stack.back().name = state.threadName;
+    state.stack.back().category = Category::Frame;
 }
 
 void FrameProfiler::endFrame()
@@ -375,6 +470,7 @@ void FrameProfiler::endFrame()
     sample.startMs = state.startMs;
     sample.totalMs = (steadyNowNs() - state.startNs) / 1e6;
     sample.categoryMs = state.categoryMs;
+    sample.categorySelfMs = state.categorySelfMs;
     sample.cacheHits = state.cacheHits;
     sample.cacheMisses = state.cacheMisses;
     sample.cacheStores = state.cacheStores;
@@ -385,14 +481,58 @@ void FrameProfiler::endFrame()
     sample.html = state.html;
     sample.video = state.video;
 
+    // Fold the UI thread's open scopes into one thread root.  Scopes left open
+    // by an unbalanced frame are dropped with the stack so they cannot leak
+    // into the next frame.
+    CallNode uiRoot;
+    uiRoot.name = state.threadName.isEmpty() ? threadLabel() : state.threadName;
+    uiRoot.category = Category::Frame;
+    uiRoot.inclusiveMs = sample.totalMs;
+    uiRoot.calls = 1;
+    if (state.frameRootIndex < state.stack.size())
+    {
+        uiRoot.children =
+            std::move(state.stack[state.frameRootIndex].children);
+        uiRoot.exclusiveMs =
+            std::max(0.0, sample.totalMs - childrenInclusiveMs(uiRoot.children));
+        // Drop the frame root and any scope still open above it; those belong
+        // to an unbalanced frame and must not leak into the next one.
+        state.stack.erase(state.stack.begin() + state.frameRootIndex,
+                          state.stack.end());
+    }
+    else
+    {
+        uiRoot.exclusiveMs = sample.totalMs;
+    }
+    state.threadName.clear();
+
+    CallNode frameRoot;
+    frameRoot.name = QStringLiteral("帧");
+    frameRoot.category = Category::Frame;
+    frameRoot.inclusiveMs = sample.totalMs;
+    frameRoot.calls = 1;
+    frameRoot.children.append(std::move(uiRoot));
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        // Worker scopes that finished since the last frame belong to this one.
+        for (const CallNode& worker : m_pendingThreadTrees)
+            mergeCallNodeList(frameRoot.children, worker);
+        m_pendingThreadTrees.clear();
+        frameRoot.exclusiveMs = std::max(
+            0.0, sample.totalMs - childrenInclusiveMs(frameRoot.children));
+        sample.callTree = std::move(frameRoot);
+
         m_ring.push_back(sample);
         while (int(m_ring.size()) > kRingCapacity)
             m_ring.pop_front();
         if (m_recording.load(std::memory_order_relaxed))
         {
-            m_recorded.push_back(sample);
+            if (!sample.callTree.name.isEmpty())
+                mergeRecordingTreeLocked(sample.callTree, sample.totalMs);
+            FrameSample stored = sample;
+            stored.callTree = CallNode{};
+            m_recorded.push_back(std::move(stored));
             if (m_recorded.size() > kMaxRecordedFrames)
                 m_recorded.remove(0, m_recorded.size() - kMaxRecordedFrames);
         }
@@ -400,31 +540,125 @@ void FrameProfiler::endFrame()
     maybeFinishRecording();
 }
 
+bool FrameProfiler::beginScopeName(const QString& name, Category category)
+{
+    ThreadFrameState& state = tlsFrame;
+    const bool inFrame = state.active;
+    if (!inFrame && state.stack.empty())
+    {
+        // Worker threads have no FrameScope: start an implicit thread frame so
+        // cache encode/decode scopes still reach the aggregate tree.
+        if (!captureEnabled())
+            return false;
+        state.stack.emplace_back();
+        state.stack.back().name = threadLabel();
+        state.stack.back().category = Category::Frame;
+    }
+
+    state.stack.emplace_back();
+    ScopeEntry& entry = state.stack.back();
+    entry.name = name.isEmpty() ? categoryText(category) : name;
+    entry.category = category;
+
+    if (inFrame)
+    {
+        if (category == Category::Html)
+            state.html = true;
+        else if (category == Category::Video)
+            state.video = true;
+    }
+    return true;
+}
+
 bool FrameProfiler::beginScope(const char* name, Category category)
 {
-    Q_UNUSED(name);
-    if (!tlsFrame.active)
-        return false;
-    if (category == Category::Html)
-        tlsFrame.html = true;
-    else if (category == Category::Video)
-        tlsFrame.video = true;
-    return true;
+    return beginScopeName(name != nullptr ? QString::fromUtf8(name) : QString(),
+                          category);
 }
 
 bool FrameProfiler::beginScope(const QString& name, Category category)
 {
-    Q_UNUSED(name);
-    return beginScope(static_cast<const char*>(nullptr), category);
+    return beginScopeName(name, category);
 }
 
 void FrameProfiler::endScope(Category category, qint64 elapsedNs)
 {
-    if (!tlsFrame.active)
+    ThreadFrameState& state = tlsFrame;
+    const bool inFrame = state.active;
+    if (state.stack.size() <= (inFrame ? 1u : 0u))
         return;
-    const int index = static_cast<int>(category);
-    if (index >= 0 && index < kCategoryCount)
-        tlsFrame.categoryMs[size_t(index)] += double(elapsedNs) / 1e6;
+
+    ScopeEntry entry = std::move(state.stack.back());
+    state.stack.pop_back();
+
+    const double inclusiveMs = std::max(0.0, double(elapsedNs) / 1e6);
+    CallNode node;
+    node.name = std::move(entry.name);
+    node.category = entry.category;
+    node.inclusiveMs = inclusiveMs;
+    node.exclusiveMs = std::max(0.0, inclusiveMs - entry.childMs);
+    node.calls = 1;
+    node.children = std::move(entry.children);
+
+    if (inFrame)
+    {
+        const int index = static_cast<int>(category);
+        if (index >= 0 && index < kCategoryCount)
+        {
+            state.categoryMs[size_t(index)] += inclusiveMs;
+            state.categorySelfMs[size_t(index)] += node.exclusiveMs;
+        }
+    }
+
+    if (state.stack.empty())
+        return;
+    ScopeEntry& parent = state.stack.back();
+    parent.childMs += inclusiveMs;
+    parent.children.append(std::move(node));
+
+    if (!inFrame && state.stack.size() == 1)
+    {
+        // The implicit worker root just closed; submit the finished task tree.
+        ScopeEntry root = std::move(state.stack.back());
+        state.stack.pop_back();
+        CallNode tree;
+        tree.name = std::move(root.name);
+        tree.category = Category::Frame;
+        tree.inclusiveMs = childrenInclusiveMs(root.children);
+        tree.exclusiveMs = 0.0;
+        tree.calls = 1;
+        tree.children = std::move(root.children);
+        submitThreadTree(std::move(tree));
+    }
+}
+
+void FrameProfiler::submitThreadTree(CallNode tree)
+{
+    if (tree.name.isEmpty() || tree.children.isEmpty())
+        return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    mergeCallNodeList(m_pendingThreadTrees, tree);
+    // Bound the wait between frames; the tree merges by thread name, so a
+    // stalled preview cannot grow this list without limit.
+    while (m_pendingThreadTrees.size() > 16)
+        m_pendingThreadTrees.removeFirst();
+}
+
+void FrameProfiler::mergeRecordingTreeLocked(const CallNode& tree,
+                                             double totalMs)
+{
+    if (m_recordTree.name.isEmpty())
+    {
+        m_recordTree.name = QStringLiteral("录制聚合");
+        m_recordTree.category = Category::Frame;
+    }
+    m_recordTree.inclusiveMs += totalMs;
+    m_recordTree.calls += 1;
+    for (const CallNode& child : tree.children)
+        mergeCallNodeList(m_recordTree.children, child);
+    m_recordTree.exclusiveMs =
+        std::max(0.0, m_recordTree.inclusiveMs
+                          - childrenInclusiveMs(m_recordTree.children));
 }
 
 void FrameProfiler::noteCacheLookup(bool hit)
@@ -493,7 +727,6 @@ Summary FrameProfiler::summarize(
     QVector<double> totals;
     totals.reserve(frames.size());
     double sum = 0.0;
-    double categorySum = 0.0;
     for (const FrameSample& sample : frames)
     {
         totals.append(sample.totalMs);
@@ -501,7 +734,8 @@ Summary FrameProfiler::summarize(
         for (int i = 0; i < kCategoryCount; ++i)
         {
             summary.categoryTotalMs[size_t(i)] += sample.categoryMs[size_t(i)];
-            categorySum += sample.categoryMs[size_t(i)];
+            summary.categorySelfMs[size_t(i)] +=
+                sample.categorySelfMs[size_t(i)];
         }
         if (sample.totalMs > kDroppedFrameMs)
             ++summary.droppedFrames;
@@ -517,11 +751,18 @@ Summary FrameProfiler::summarize(
     if (frames.size() > 1 && spanMs > 0)
         summary.fps = (frames.size() - 1) * 1000.0 / double(spanMs);
 
-    if (categorySum > 0.0)
+    // The denominator is the real frame time, not the overlapping category
+    // sum: a parent (lookup) and its child (decode) must not add up to 100%
+    // together while hiding the lookup self time.
+    if (sum > 0.0)
     {
         for (int i = 0; i < kCategoryCount; ++i)
+        {
             summary.categoryShare[size_t(i)] =
-                summary.categoryTotalMs[size_t(i)] / categorySum;
+                summary.categoryTotalMs[size_t(i)] / sum;
+            summary.categorySelfShare[size_t(i)] =
+                summary.categorySelfMs[size_t(i)] / sum;
+        }
     }
     return summary;
 }
@@ -544,6 +785,8 @@ Snapshot FrameProfiler::snapshot()
                      m_pendingStores.load(std::memory_order_relaxed));
     snapshot.totalFrames = m_frameCounter.load(std::memory_order_relaxed);
     snapshot.solverCalls = m_solverCalls.load(std::memory_order_relaxed);
+    if (!m_ring.empty())
+        snapshot.lastFrameTree = m_ring.back().callTree;
     return snapshot;
 }
 
@@ -553,6 +796,8 @@ void FrameProfiler::clear()
         std::lock_guard<std::mutex> lock(m_mutex);
         m_ring.clear();
         m_recorded.clear();
+        m_pendingThreadTrees.clear();
+        m_recordTree = CallNode{};
         m_lastReport = RecordingReport{};
     }
     m_frameCounter.store(0, std::memory_order_relaxed);
@@ -576,6 +821,8 @@ bool FrameProfiler::startRecording(int seconds)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_recorded.clear();
+        m_pendingThreadTrees.clear();
+        m_recordTree = CallNode{};
         m_lastReport = RecordingReport{};
     }
     m_recordStartNs.store(steadyNowNs(), std::memory_order_relaxed);
@@ -677,9 +924,11 @@ void FrameProfiler::finishRecordingLocked()
     report.cache.webpStores = quint64(std::max<qint64>(0, webp));
     report.cache.pendingStores = pending;
 
+    report.callTree = m_recordTree;
     report.conclusion = buildConclusion(report.summary, report.cache, solverCalls);
     report.text = buildReportText(report, solverCalls);
     m_lastReport = report;
+    m_recordTree = CallNode{};
     m_recorded.clear();
     m_finishing.store(false, std::memory_order_relaxed);
 }
@@ -703,16 +952,23 @@ QJsonObject FrameProfiler::sampleToJson(const FrameSample& sample)
     object.insert(QStringLiteral("totalMs"),
                   QJsonValue(std::round(sample.totalMs * 1000.0) / 1000.0));
     QJsonObject categories;
+    QJsonObject selfCategories;
     for (int i = 0; i < kCategoryCount; ++i)
     {
-        if (sample.categoryMs[size_t(i)] <= 0.0)
+        if (sample.categoryMs[size_t(i)] <= 0.0
+            && sample.categorySelfMs[size_t(i)] <= 0.0)
             continue;
         categories.insert(categoryKey(Category(i)),
                           QJsonValue(std::round(
                                          sample.categoryMs[size_t(i)] * 1000.0)
                                      / 1000.0));
+        selfCategories.insert(
+            categoryKey(Category(i)),
+            QJsonValue(std::round(sample.categorySelfMs[size_t(i)] * 1000.0)
+                       / 1000.0));
     }
     object.insert(QStringLiteral("categories"), categories);
+    object.insert(QStringLiteral("selfCategories"), selfCategories);
     object.insert(QStringLiteral("cacheHits"), sample.cacheHits);
     object.insert(QStringLiteral("cacheMisses"), sample.cacheMisses);
     object.insert(QStringLiteral("cacheStores"), sample.cacheStores);
@@ -742,8 +998,14 @@ QJsonObject FrameProfiler::summaryToJson(const Summary& summary)
         QJsonObject stage;
         stage.insert(QStringLiteral("totalMs"),
                      summary.categoryTotalMs[size_t(i)]);
+        stage.insert(QStringLiteral("selfMs"),
+                     summary.categorySelfMs[size_t(i)]);
+        // Shares use the summed frame time as denominator; totalShare can
+        // exceed 1 across nested stages, selfShare cannot in practice.
         stage.insert(QStringLiteral("share"),
                      summary.categoryShare[size_t(i)]);
+        stage.insert(QStringLiteral("selfShare"),
+                     summary.categorySelfShare[size_t(i)]);
         categories.insert(categoryKey(Category(i)), stage);
     }
     object.insert(QStringLiteral("categories"), categories);
@@ -761,6 +1023,24 @@ QJsonObject FrameProfiler::cacheTotalsToJson(const CacheTotals& cache)
     object.insert(QStringLiteral("webpStores"),
                   QJsonValue(qint64(cache.webpStores)));
     object.insert(QStringLiteral("pendingStores"), cache.pendingStores);
+    return object;
+}
+
+QJsonObject FrameProfiler::callTreeToJson(const CallNode& node)
+{
+    const auto rounded = [](double value) {
+        return std::round(value * 1000.0) / 1000.0;
+    };
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), node.name);
+    object.insert(QStringLiteral("category"), categoryKey(node.category));
+    object.insert(QStringLiteral("inclusiveMs"), rounded(node.inclusiveMs));
+    object.insert(QStringLiteral("exclusiveMs"), rounded(node.exclusiveMs));
+    object.insert(QStringLiteral("calls"), node.calls);
+    QJsonArray children;
+    for (const CallNode& child : node.children)
+        children.append(callTreeToJson(child));
+    object.insert(QStringLiteral("children"), children);
     return object;
 }
 
@@ -783,6 +1063,8 @@ QJsonObject FrameProfiler::diagnosticsJson()
     root.insert(QStringLiteral("frames"), frames);
     root.insert(QStringLiteral("summary"), summaryToJson(current.summary));
     root.insert(QStringLiteral("cache"), cacheTotalsToJson(current.cache));
+    root.insert(QStringLiteral("lastFrameTree"),
+                callTreeToJson(current.lastFrameTree));
 
     const RecordingReport report = recordedReport();
     QJsonObject reportObject;
@@ -798,6 +1080,8 @@ QJsonObject FrameProfiler::diagnosticsJson()
                             summaryToJson(report.summary));
         reportObject.insert(QStringLiteral("cache"),
                             cacheTotalsToJson(report.cache));
+        reportObject.insert(QStringLiteral("callTree"),
+                            callTreeToJson(report.callTree));
         reportObject.insert(QStringLiteral("conclusion"), report.conclusion);
         reportObject.insert(QStringLiteral("text"), report.text);
         QJsonArray slow;

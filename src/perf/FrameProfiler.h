@@ -39,12 +39,31 @@ inline constexpr int kRingCapacity = 300;
 QString categoryKey(Category category);
 QString categoryLabel(Category category);
 
+// One scope in the per-frame call tree.  Inclusive time includes all child
+// scopes; exclusive time is inclusive minus the child inclusive sum.  Trees are
+// merged by parent path + name + category, so the recorded aggregate keeps one
+// node per distinct call path with summed time and call counts.
+struct CallNode
+{
+    QString name;
+    Category category = Category::Other;
+    double inclusiveMs = 0.0;
+    double exclusiveMs = 0.0;
+    int calls = 0;
+    QVector<CallNode> children;
+};
+
 struct FrameSample
 {
     quint64 index = 0;
     qint64 startMs = 0;
     double totalMs = 0.0;
+    // Inclusive per-category time.  Nested scopes overlap, so the sum can be
+    // larger than totalMs.
     std::array<double, kCategoryCount> categoryMs{};
+    // Self time per category: inclusive minus child scopes.  Summed over the
+    // categories this approximates totalMs; use it when comparing stages.
+    std::array<double, kCategoryCount> categorySelfMs{};
     int cacheHits = 0;
     int cacheMisses = 0;
     int cacheStores = 0;
@@ -54,6 +73,10 @@ struct FrameSample
     int solverCalls = 0;
     bool html = false;
     bool video = false;
+    // Root is "帧" with one child per contributing thread; the frame sample
+    // keeps its tree only in the ring, the recorded copy drops it to bound
+    // memory (the recording aggregate is merged incrementally instead).
+    CallNode callTree;
 };
 
 struct CacheTotals
@@ -76,7 +99,12 @@ struct Summary
     double p99Ms = 0.0;
     int droppedFrames = 0;
     std::array<double, kCategoryCount> categoryTotalMs{};
+    std::array<double, kCategoryCount> categorySelfMs{};
+    // Both shares use the summed frame total as denominator, never the
+    // overlapping category sum.  Inclusive shares can therefore exceed 100%
+    // together; self shares approach 100%.
     std::array<double, kCategoryCount> categoryShare{};
+    std::array<double, kCategoryCount> categorySelfShare{};
 };
 
 struct Snapshot
@@ -86,6 +114,8 @@ struct Snapshot
     CacheTotals cache;
     quint64 totalFrames = 0;
     quint64 solverCalls = 0;
+    // Tree of the newest ring frame; empty name means no captured frame yet.
+    CallNode lastFrameTree;
 };
 
 struct RecordingReport
@@ -97,6 +127,8 @@ struct RecordingReport
     Summary summary;
     CacheTotals cache;
     QVector<FrameSample> slowFrames;
+    // All recorded frames merged under "录制聚合".
+    CallNode callTree;
     QString conclusion;
     QString text;
 };
@@ -107,7 +139,10 @@ struct RecordingReport
 //
 // Scope timings are inclusive: a nested scope is also part of its parent, so
 // the per-category totals can overlap.  That matches what a normal profiler
-// shows; the UI labels the column "含子阶段".
+// shows; the UI labels the column "含子阶段".  Every captured frame also keeps
+// a scope tree.  The stack is thread-local, worker task trees are folded into
+// the next frame under a thread-name node, and recording merges all frame trees
+// into one aggregate.
 class FrameProfiler
 {
 public:
@@ -155,11 +190,15 @@ public:
     static QJsonObject sampleToJson(const FrameSample& sample);
     static QJsonObject summaryToJson(const Summary& summary);
     static QJsonObject cacheTotalsToJson(const CacheTotals& cache);
+    static QJsonObject callTreeToJson(const CallNode& node);
 
 private:
     FrameProfiler();
 
     Summary summarize(const QVector<FrameSample>& frames) const;
+    bool beginScopeName(const QString& name, Category category);
+    void submitThreadTree(CallNode tree);
+    void mergeRecordingTreeLocked(const CallNode& tree, double totalMs);
     void maybeFinishRecording();
     void finishRecordingLocked();
     void resetRecordingState();
@@ -167,6 +206,8 @@ private:
     mutable std::mutex m_mutex;
     std::deque<FrameSample> m_ring;
     QVector<FrameSample> m_recorded;
+    QVector<CallNode> m_pendingThreadTrees;
+    CallNode m_recordTree;
     RecordingReport m_lastReport;
 
     std::atomic<int> m_listeners{0};
@@ -195,8 +236,9 @@ public:
 };
 
 // RAII stage timer.  Disabled capture makes construction/destruction no-ops.
-// The scope name is kept in the API for the function-level call tree batch
-// (#65); this batch only aggregates the category timings.
+// While capturing, the scope name feeds the call tree; the category total keeps
+// its existing inclusive semantics.  A scope opened outside FrameScope (for
+// example on a cache worker thread) opens an implicit thread task tree.
 class Scope
 {
 public:
