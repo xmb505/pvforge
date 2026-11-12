@@ -26060,6 +26060,21 @@ int perfMonitorTest(QApplication& app)
     check(window.findChild<QWidget*>(QStringLiteral("perfWaterfall")),
           QStringLiteral("waterfall missing"));
 
+    auto* scrollArea = window.findChild<QScrollArea*>(
+        QStringLiteral("perfScrollArea"));
+    check(scrollArea != nullptr,
+          QStringLiteral("perfScrollArea is missing"));
+    if (scrollArea)
+    {
+        check(scrollArea->widgetResizable(),
+              QStringLiteral("perfScrollArea is not widget-resizable"));
+        check(scrollArea->frameShape() == QFrame::NoFrame,
+              QStringLiteral("perfScrollArea still draws a frame"));
+        check(scrollArea->horizontalScrollBarPolicy()
+                  == Qt::ScrollBarAlwaysOff,
+              QStringLiteral("perfScrollArea allows horizontal scrolling"));
+    }
+
     auto* duration = window.findChild<QComboBox*>(
         QStringLiteral("perfRecordDuration"));
     auto* recordButton = window.findChild<QPushButton*>(
@@ -26127,6 +26142,50 @@ int perfMonitorTest(QApplication& app)
     {
         check(false, QStringLiteral("exported JSON cannot be read"));
     }
+
+    // The content column scrolls instead of being clipped, and opening the
+    // advanced area must not resize the window.
+    QDir().mkpath(QStringLiteral("/tmp/opencode"));
+    const auto saveShot = [&check](QWidget& widget, const QString& path) {
+        const QImage image = widget.grab().toImage();
+        check(!image.isNull() && image.save(path),
+              QStringLiteral("screenshot failed: %1").arg(path));
+    };
+    auto* advancedButton = window.findChild<QPushButton*>(
+        QStringLiteral("perfAdvancedButton"));
+    check(advancedButton != nullptr,
+          QStringLiteral("advanced button missing"));
+
+    window.resize(760, 600);
+    QApplication::processEvents();
+    if (scrollArea)
+    {
+        QScrollBar* bar = scrollArea->verticalScrollBar();
+        check(bar->maximum() > 0,
+              QStringLiteral("no vertical scrolling at 760x600"));
+        bar->setValue(bar->maximum());
+        QApplication::processEvents();
+        check(bar->value() == bar->maximum(),
+              QStringLiteral("could not scroll to the bottom"));
+    }
+    saveShot(window, QStringLiteral("/tmp/opencode/pvforge-perf-monitor.png"));
+
+    const QSize sizeBeforeAdvanced = window.size();
+    if (advancedButton)
+        advancedButton->click();
+    QApplication::processEvents();
+    check(window.size() == sizeBeforeAdvanced,
+          QStringLiteral("opening the advanced area resized the window"));
+    if (scrollArea)
+    {
+        QScrollBar* bar = scrollArea->verticalScrollBar();
+        check(bar->maximum() > 0,
+              QStringLiteral("advanced area does not scroll"));
+        bar->setValue(bar->maximum());
+        QApplication::processEvents();
+    }
+    saveShot(window,
+             QStringLiteral("/tmp/opencode/pvforge-perf-monitor-advanced.png"));
 
     const int framesBeforeClose = window.findChild<QWidget*>(
                                       QStringLiteral("perfSparkline"))

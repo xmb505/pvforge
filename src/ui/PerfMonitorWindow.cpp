@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFontDatabase>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -23,6 +24,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScrollArea>
 #include <QShowEvent>
 #include <QSysInfo>
 #include <QTableWidget>
@@ -168,7 +170,16 @@ protected:
     {
         Q_UNUSED(event);
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(16, 18, 20));
+        // Theme follows the host palette so the charts do not look like a
+        // foreign dark box inside a light (or dark) main window.
+        const QColor base = palette().color(QPalette::Base);
+        const QColor text = palette().color(QPalette::Text);
+        const QColor mid = palette().color(QPalette::Mid);
+        QColor muted = text;
+        muted.setAlpha(160);
+        QColor grid = mid;
+        grid.setAlpha(150);
+        painter.fillRect(rect(), base);
 
         const QRectF plot = QRectF(rect()).adjusted(10.0, 22.0, -10.0, -16.0);
         if (plot.width() <= 0.0 || plot.height() <= 0.0)
@@ -180,21 +191,21 @@ protected:
         maxMs = std::max(1.0, maxMs * 1.1);
 
         painter.setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        painter.setPen(QColor(120, 124, 128));
+        painter.setPen(muted);
         painter.drawText(QRectF(10.0, 2.0, plot.width(), 16.0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("帧耗时 · 最近 %1 帧")
                              .arg(m_frames.size()));
 
-        const std::array<double, 3> grid = {16.7, 33.4, maxMs};
-        for (double value : grid)
+        const std::array<double, 3> gridValues = {16.7, 33.4, maxMs};
+        for (double value : gridValues)
         {
             if (value > maxMs)
                 continue;
             const double y = plot.bottom() - value / maxMs * plot.height();
-            painter.setPen(QPen(QColor(52, 56, 60), 1.0, Qt::DashLine));
+            painter.setPen(QPen(grid, 1.0, Qt::DashLine));
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-            painter.setPen(QColor(110, 114, 118));
+            painter.setPen(muted);
             painter.drawText(QRectF(plot.right() - 54.0, y - 14.0, 54.0, 12.0),
                              Qt::AlignRight | Qt::AlignVCenter,
                              QString::number(value, 'f', 0)
@@ -204,7 +215,7 @@ protected:
         const int count = m_frames.size();
         if (count == 0)
         {
-            painter.setPen(QColor(150, 154, 158));
+            painter.setPen(muted);
             painter.drawText(plot, Qt::AlignCenter, QStringLiteral("等待预览帧…"));
             return;
         }
@@ -228,7 +239,7 @@ protected:
                              color);
         }
 
-        painter.setPen(QPen(QColor(70, 74, 78), 1.0));
+        painter.setPen(QPen(mid, 1.0));
         painter.drawLine(plot.bottomLeft(), plot.bottomRight());
     }
 
@@ -258,12 +269,16 @@ protected:
     {
         Q_UNUSED(event);
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(16, 18, 20));
+        const QColor base = palette().color(QPalette::Base);
+        const QColor text = palette().color(QPalette::Text);
+        QColor muted = text;
+        muted.setAlpha(165);
+        painter.fillRect(rect(), base);
         painter.setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
         if (!m_valid)
         {
-            painter.setPen(QColor(150, 154, 158));
+            painter.setPen(muted);
             painter.drawText(rect(), Qt::AlignCenter,
                              QStringLiteral("最近一帧：暂无样本"));
             return;
@@ -284,7 +299,7 @@ protected:
             const QRectF part(x, bar.top(), width, bar.height());
             const QColor color = categoryColor(perf::Category(i));
             painter.fillRect(part, color);
-            painter.setPen(QPen(QColor(16, 18, 20), 1.0));
+            painter.setPen(QPen(base, 1.0));
             painter.drawRect(part);
             if (width >= 46.0)
             {
@@ -296,7 +311,7 @@ protected:
             x += width;
         }
 
-        painter.setPen(QColor(150, 154, 158));
+        painter.setPen(muted);
         painter.drawText(QRectF(bar.left(), bar.bottom() + 2.0, bar.width(), 18.0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("第 %1 帧 · %2")
@@ -362,13 +377,17 @@ protected:
     {
         Q_UNUSED(event);
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(16, 18, 20));
+        const QColor base = palette().color(QPalette::Base);
+        const QColor text = palette().color(QPalette::Text);
+        QColor muted = text;
+        muted.setAlpha(165);
+        painter.fillRect(rect(), base);
         painter.setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 
         const perf::CallNode* root = nodeAtPath(m_focus);
         if (root == nullptr || root->name.isEmpty())
         {
-            painter.setPen(QColor(150, 154, 158));
+            painter.setPen(muted);
             painter.drawText(rect(), Qt::AlignCenter,
                              QStringLiteral("暂无调用树样本；打开预览或录制后再看。"));
             return;
@@ -378,7 +397,7 @@ protected:
             m_focus.isEmpty()
                 ? treeNodeLabel(*root)
                 : QStringLiteral("根 / ") + treeNodeLabel(*root);
-        painter.setPen(QColor(120, 124, 128));
+        painter.setPen(muted);
         painter.drawText(QRectF(8.0, 2.0, width() - 16.0, 16.0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("火焰图 · %1（点击下钻，空白处返回）")
@@ -402,12 +421,14 @@ protected:
             const Item& item = m_items.at(i);
             const QColor color = categoryColor(item.node->category);
             painter.fillRect(item.rect, color);
-            painter.setPen(QPen(QColor(16, 18, 20), 1.0));
+            painter.setPen(QPen(base, 1.0));
             painter.drawRect(item.rect);
 
             if (i == m_hovered)
             {
-                painter.setPen(QPen(QColor(245, 245, 245), 2.0));
+                QColor hover = text;
+                hover.setAlpha(230);
+                painter.setPen(QPen(hover, 2.0));
                 painter.drawRect(item.rect.adjusted(1.0, 1.0, -1.0, -1.0));
             }
 
@@ -617,7 +638,31 @@ void PerfMonitorWindow::buildUi()
 {
     const QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
 
-    auto* root = new QVBoxLayout(this);
+    // The window itself only hosts a scroll area: the content column below is
+    // taller than most screens once the recording report and the advanced area
+    // are open, so it scrolls instead of squeezing every section.
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("perfScrollArea"));
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    outer->addWidget(scroll);
+
+    auto* body = new QWidget(scroll);
+    body->setObjectName(QStringLiteral("perfScrollContent"));
+    // Grow with the layout's natural height so the sections keep their
+    // minimum sizes; the window scrolls instead of squeezing them.
+    body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    scroll->setWidget(body);
+
+    // Children are still created with `this` as parent and reparented by the
+    // layout below.
+    auto* root = new QVBoxLayout(body);
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(6);
 
@@ -778,22 +823,29 @@ void PerfMonitorWindow::buildUi()
 
     buildAdvancedArea(root);
 
-    setStyleSheet(QStringLiteral(
-        "QWidget { border-radius: 0px; }"
-        "QGroupBox { border: 1px solid #6b6b73; margin-top: 9px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px;"
-        " padding: 0px 3px; }"
-        "QTableWidget { border: 1px solid #6b6b73;"
-        " gridline-color: #505056; }"
-        "QHeaderView::section { border: 0px;"
-        " border-right: 1px solid #505056;"
-        " border-bottom: 1px solid #505056; padding: 3px; }"
-        "QPushButton, QComboBox { border: 1px solid #6b6b73;"
-        " border-radius: 0px; padding: 3px 10px; }"
-        "QLineEdit { border: 1px solid #6b6b73;"
-        " border-radius: 0px; padding: 2px 5px; }"
-        "QPlainTextEdit { border: 1px solid #6b6b73;"
-        " border-radius: 0px; }"));
+    // Palette-derived chrome only: borders come from QPalette::Mid, grid lines
+    // use a slightly darker Mid and backgrounds are left to the native style,
+    // so the window matches a light or a dark main UI instead of forcing its
+    // own dark theme.
+    const QColor border = palette().color(QPalette::Mid);
+    const QColor grid = border.darker(120);
+    setStyleSheet(
+        QStringLiteral("QWidget { border-radius: 0px; }"
+                       "QGroupBox { border: 1px solid %1; margin-top: 9px; }"
+                       "QGroupBox::title { subcontrol-origin: margin;"
+                       " left: 8px; padding: 0px 3px; }"
+                       "QTableWidget { border: 1px solid %1;"
+                       " gridline-color: %2; }"
+                       "QHeaderView::section { border: 0px;"
+                       " border-right: 1px solid %2;"
+                       " border-bottom: 1px solid %2; padding: 3px; }"
+                       "QPushButton, QComboBox { border: 1px solid %1;"
+                       " border-radius: 0px; padding: 3px 10px; }"
+                       "QLineEdit { border: 1px solid %1;"
+                       " border-radius: 0px; padding: 2px 5px; }"
+                       "QPlainTextEdit { border: 1px solid %1;"
+                       " border-radius: 0px; }")
+            .arg(border.name(), grid.name()));
 }
 
 void PerfMonitorWindow::buildAdvancedArea(QVBoxLayout* root)
@@ -930,14 +982,9 @@ void PerfMonitorWindow::setAdvancedVisible(bool visible)
                     : QStringLiteral("阶段火焰图与调用树；排查具体函数与嵌套阶段时再打开。"));
     }
     if (visible)
-    {
         updateAdvanced();
-        resize(width(), std::max(height(), 1180));
-    }
-    else if (height() > 900)
-    {
-        resize(width(), 820);
-    }
+    // The scroll area takes care of the extra height: the window keeps its
+    // size and the user scrolls to the flame graph and call table.
 }
 
 perf::CallNode PerfMonitorWindow::selectedTree() const
@@ -1029,7 +1076,14 @@ void PerfMonitorWindow::updateCallTable(const perf::CallNode& tree)
                 depth > 0 ? QString(depth * 2, QLatin1Char(' ')) : QString();
             auto* name = new QTableWidgetItem(indent + treeNodeLabel(node));
             name->setToolTip(perf::categoryLabel(node.category));
-            name->setForeground(categoryColor(node.category).lighter(150));
+            // categoryColor is tuned for a dark chart background; on a light
+            // palette the lighter variant washes out, so pick the direction
+            // that contrasts with the table base.
+            const QColor category = categoryColor(node.category);
+            name->setForeground(
+                isDarkColor(palette().color(QPalette::Base))
+                    ? category.lighter(150)
+                    : category.darker(140));
 
             const auto numberItem = [](double value) {
                 auto* item = new NumberTableItem(
