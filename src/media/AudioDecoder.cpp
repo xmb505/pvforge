@@ -13,6 +13,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace pvf {
 
@@ -128,8 +129,16 @@ AudioDecodeResult decodeAudioFile(const QString& path)
         clip->samples.resize(oldSize + outSamples * kChannels);
         uint8_t* output[1] = {
             reinterpret_cast<uint8_t*>(clip->samples.data() + oldSize)};
-        const int converted = swr_convert(ff.swr, output, outSamples, frame->data,
-                                          frame->nb_samples);
+        // FFmpeg 6.x expects `const uint8_t**`; FFmpeg 8's frame->data is
+        // `uint8_t* const*`, so copy the channel pointers into a const array.
+        const int inputChannels =
+            std::max(1, ff.codec->ch_layout.nb_channels);
+        std::vector<const uint8_t*> input(
+            static_cast<size_t>(inputChannels));
+        for (int channel = 0; channel < inputChannels; ++channel)
+            input[size_t(channel)] = frame->data[channel];
+        const int converted = swr_convert(ff.swr, output, outSamples,
+                                          input.data(), frame->nb_samples);
         if (converted < 0)
             return false;
         clip->samples.resize(oldSize + converted * kChannels);
