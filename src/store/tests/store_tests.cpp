@@ -142,6 +142,10 @@ private slots:
     void enableGitLater();
     void disableGitThenCommitStillUndoable();
     void setGitEnabledReportsMissingGit();
+    void openRejectsFutureVersion();
+    void openRejectsUnmigratableVersion();
+    void openStrictRequiredFields();
+    void unknownFieldsSurviveReopen();
 };
 
 void StoreTests::createOpenRoundTrip()
@@ -1783,6 +1787,160 @@ void StoreTests::setGitEnabledReportsMissingGit()
     QVERIFY2(error.contains(QStringLiteral("git")), qPrintable(error));
     QVERIFY(!store->gitEnabled());
     QVERIFY(!QFileInfo::exists(path + QStringLiteral("/.git")));
+}
+
+void StoreTests::openRejectsFutureVersion()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QJsonObject object = model::toJson(model::Project{});
+    object.insert(QStringLiteral("version"), model::kProjectFormatVersion + 1);
+    const QString text =
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
+    QVERIFY(writeText(projectFile, text));
+
+    QString error;
+    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+    QVERIFY2(error.contains(QStringLiteral("工程版本")), qPrintable(error));
+    QVERIFY2(error.contains(QString::number(model::kProjectFormatVersion + 1)),
+             qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("升级")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("不会被修改")), qPrintable(error));
+    // Opening never writes, so the refused file must be byte-identical.
+    QCOMPARE(readText(projectFile), text);
+}
+
+void StoreTests::openRejectsUnmigratableVersion()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    // v1 is the only shipped version: an older document has no migration step
+    // in the registry yet, so opening must fail readably and leave it alone.
+    QJsonObject object = model::toJson(model::Project{});
+    object.insert(QStringLiteral("version"), 0);
+    object.insert(QStringLiteral("legacyScene"),
+                  QJsonObject{{QStringLiteral("name"), QStringLiteral("旧")}});
+    const QString text =
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
+    QVERIFY(writeText(projectFile, text));
+
+    QString error;
+    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+    QVERIFY2(error.contains(QStringLiteral("无法升级")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("缺少从版本 0 到 1 的迁移")),
+             qPrintable(error));
+    QCOMPARE(readText(projectFile), text);
+}
+
+void StoreTests::openStrictRequiredFields()
+{
+    // project.json: a required settings field is gone.
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QJsonObject object = model::toJson(model::Project{});
+        object.remove(QStringLiteral("fps"));
+        QVERIFY(writeText(
+            temp.filePath(QStringLiteral("project.json")),
+            QString::fromUtf8(
+                QJsonDocument(object).toJson(QJsonDocument::Indented))));
+
+        QString error;
+        QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+        QVERIFY2(error.contains(QStringLiteral("fps")), qPrintable(error));
+    }
+
+    // Entity file: the error names the missing field.
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QVERIFY(writeText(
+            temp.filePath(QStringLiteral("project.json")),
+            QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
+                                  .toJson(QJsonDocument::Indented))));
+
+        model::Entity entity = makeEntity();
+        QJsonObject entityObject = model::toJson(entity);
+        entityObject.remove(QStringLiteral("start"));
+        QVERIFY(writeText(
+            temp.filePath(QStringLiteral("entities/") + entity.uuid
+                          + QStringLiteral(".json")),
+            QString::fromUtf8(
+                QJsonDocument(entityObject).toJson(QJsonDocument::Indented))));
+
+        QString error;
+        QVERIFY(!ProjectStore::open(temp.path(), &error, false));
+        QVERIFY2(error.contains(QStringLiteral("start")), qPrintable(error));
+        QVERIFY2(error.contains(entity.uuid), qPrintable(error));
+    }
+}
+
+void StoreTests::unknownFieldsSurviveReopen()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    model::Project project;
+    project.settings.name = QStringLiteral("未知字段");
+    project.extras.insert(QStringLiteral("futureProjectField"),
+                          QJsonObject{{QStringLiteral("a"), 1}});
+
+    model::Entity entity = makeEntity(QStringLiteral("带未知字段"));
+    entity.content.kind = ContentKind::Text;
+    entity.content.text.text = QStringLiteral("x");
+    entity.extras.insert(QStringLiteral("futureEntityField"), 3.25);
+    entity.content.extras.insert(QStringLiteral("futureContentField"), true);
+    project.entities.insert(entity.uuid, entity);
+
+    QVERIFY(writeText(
+        temp.filePath(QStringLiteral("project.json")),
+        QString::fromUtf8(QJsonDocument(model::toJson(project))
+                              .toJson(QJsonDocument::Indented))));
+    const QString entityFile = temp.filePath(QStringLiteral("entities/")
+                                             + entity.uuid
+                                             + QStringLiteral(".json"));
+    QVERIFY(writeText(entityFile,
+                      QString::fromUtf8(QJsonDocument(model::toJson(entity))
+                                            .toJson(QJsonDocument::Indented))));
+
+    QString error;
+    auto opened = ProjectStore::open(temp.path(), &error, false);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(opened->project().extras.contains(
+        QStringLiteral("futureProjectField")));
+    QCOMPARE(opened->project()
+                 .entities.value(entity.uuid)
+                 .extras.value(QStringLiteral("futureEntityField"))
+                 .toDouble(),
+             3.25);
+    QVERIFY(opened->project()
+                .entities.value(entity.uuid)
+                .content.extras.contains(QStringLiteral("futureContentField")));
+
+    // Saving writes the unknown keys back instead of dropping them.
+    QVERIFY2(opened->saveProject(&error), qPrintable(error));
+    QVERIFY2(opened->saveEntity(entity.uuid, &error), qPrintable(error));
+    QVERIFY(readText(temp.filePath(QStringLiteral("project.json")))
+                .contains(QStringLiteral("futureProjectField")));
+    const QString entityText = readText(entityFile);
+    QVERIFY2(entityText.contains(QStringLiteral("futureEntityField")),
+             qPrintable(entityText));
+    QVERIFY2(entityText.contains(QStringLiteral("futureContentField")),
+             qPrintable(entityText));
+
+    // A second open sees the same document.
+    error.clear();
+    auto reopened = ProjectStore::open(temp.path(), &error, false);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    QVERIFY(reopened->project().extras.contains(
+        QStringLiteral("futureProjectField")));
+    QVERIFY(reopened->project()
+                .entities.value(entity.uuid)
+                .extras.contains(QStringLiteral("futureEntityField")));
 }
 
 QTEST_GUILESS_MAIN(StoreTests)

@@ -13,6 +13,7 @@ add_library(pvf_model STATIC
     Easing.cpp
     Entity.cpp
     Keyframe.cpp
+    Migrations.cpp
     Project.cpp
     Query.cpp
     Uuid.cpp

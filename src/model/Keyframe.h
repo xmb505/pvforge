@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Easing.h"
+#include "JsonUtil.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -17,6 +18,8 @@ struct Keyframe
     double value = 0.0;
     EasingSpec easing;
     QString note;
+    // Unknown keys, preserved verbatim across a load/save cycle.
+    QJsonObject extras;
 
     bool operator==(const Keyframe& other) const;
     bool operator!=(const Keyframe& other) const { return !(*this == other); }
@@ -47,9 +50,17 @@ std::optional<double> evaluateTrack(const Track& track, int frame,
                                     bool step = false);
 
 QJsonObject toJson(const Keyframe& keyframe);
-std::optional<Keyframe> keyframeFromJson(const QJsonObject& object, QString* error = nullptr);
+std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
+                                         const ParseOptions& options,
+                                         QString* error = nullptr);
+std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
+                                         QString* error = nullptr);
 
 QJsonArray toJson(const Track& track);
-std::optional<Track> trackFromJson(const QJsonValue& value, QString* error = nullptr);
+std::optional<Track> trackFromJson(const QJsonValue& value,
+                                   const ParseOptions& options,
+                                   QString* error = nullptr);
+std::optional<Track> trackFromJson(const QJsonValue& value,
+                                   QString* error = nullptr);
 
 } // namespace pvf::model

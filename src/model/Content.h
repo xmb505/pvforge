@@ -1,5 +1,6 @@
 #pragma once
 
+#include "JsonUtil.h"
 #include "common/Types.h"
 
 #include <QJsonObject>
@@ -182,6 +183,8 @@ struct Content
     FlowLinesContent flow;
     HalftoneDotsContent halftone;
     BrandWallContent brandWall;
+    // Unknown top-level keys, preserved verbatim across a load/save cycle.
+    QJsonObject extras;
 };
 
 QJsonObject toJson(const Transform& transform);
@@ -189,6 +192,9 @@ std::optional<Transform> transformFromJson(const QJsonObject& object,
                                            QString* error = nullptr);
 
 QJsonObject toJson(const Content& content);
+std::optional<Content> contentFromJson(const QJsonObject& object,
+                                       const ParseOptions& options,
+                                       QString* error = nullptr);
 std::optional<Content> contentFromJson(const QJsonObject& object,
                                        QString* error = nullptr);
 

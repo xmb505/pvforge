@@ -1,10 +1,12 @@
 #include "model/Model.h"
+#include "model/Migrations.h"
 
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QRandomGenerator>
 #include <QSet>
 #include <QUuid>
 
@@ -374,7 +376,7 @@ void testSpecialContentJsonRoundTrip()
         CHECK(parsedWall->content.brandWall.seed == 9);
     }
 
-    // Unknown fields in a content object are ignored, not rejected.
+    // Unknown top-level fields in a content object are preserved, not dropped.
     QJsonObject unknown = comicJson;
     QJsonObject unknownContent =
         unknown.value(QStringLiteral("content")).toObject();
@@ -387,7 +389,18 @@ void testSpecialContentJsonRoundTrip()
     const auto parsedUnknown = entityFromJson(unknown, &error);
     CHECK_DETAIL(parsedUnknown.has_value(), error);
     if (parsedUnknown)
-        CHECK(toJson(*parsedUnknown) == comicJson);
+    {
+        CHECK(parsedUnknown->content.extras.contains(
+            QStringLiteral("futureKindData")));
+        const QJsonObject writtenContent =
+            toJson(*parsedUnknown).value(QStringLiteral("content")).toObject();
+        CHECK(writtenContent.value(QStringLiteral("futureKindData")).toBool());
+        // Nested payload objects are outside the top-level preservation
+        // policy, so a field inside comicText is still dropped.
+        CHECK(!writtenContent.value(QStringLiteral("comicText"))
+                   .toObject()
+                   .contains(QStringLiteral("speechBubbleGlow")));
+    }
 
     // The same tolerance applies inside brandWall.
     QJsonObject unknownWall = toJson(wallEntity);
@@ -401,7 +414,7 @@ void testSpecialContentJsonRoundTrip()
     const auto parsedUnknownWall = entityFromJson(unknownWall, &error);
     CHECK_DETAIL(parsedUnknownWall.has_value(), error);
     if (parsedUnknownWall)
-        CHECK(toJson(*parsedUnknownWall) == wallJson);
+        CHECK(toJson(*parsedUnknownWall) == toJson(wallEntity));
 }
 
 void testSpecialContentValidation()
@@ -1658,12 +1671,349 @@ void testJsonDeterminism()
     CHECK_DETAIL(jc == ja, QString::fromUtf8(jc));
 }
 
+void testFormatVersion()
+{
+    CHECK(kProjectFormatVersion == 1);
+
+    QString error;
+    const QJsonObject current = toJson(Project{});
+    CHECK(current.value(QStringLiteral("version")).toInt()
+          == kProjectFormatVersion);
+    CHECK(projectFromJson(current, &error).has_value());
+
+    // A file from a newer build is refused with a readable reason instead of
+    // being half-parsed.
+    QJsonObject future = current;
+    future.insert(QStringLiteral("version"), kProjectFormatVersion + 1);
+    error.clear();
+    CHECK(!projectFromJson(future, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("高于")), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("不会被修改")), error);
+
+    // An older file must be migrated first, not read with today's rules.
+    QJsonObject older = current;
+    older.insert(QStringLiteral("version"), kProjectFormatVersion - 1);
+    error.clear();
+    CHECK(!projectFromJson(older, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("低于")), error);
+
+    // Strict mode (project opening) requires the version field.
+    QJsonObject noVersion = current;
+    noVersion.remove(QStringLiteral("version"));
+    ParseOptions strict;
+    strict.mode = ParseMode::Strict;
+    error.clear();
+    CHECK(!projectFromJson(noVersion, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("version")), error);
+
+    // Lenient mode assumes the current version so old test fixtures stay
+    // readable, and reports the missing key as a warning.
+    QStringList warnings;
+    ParseOptions lenient;
+    lenient.warnings = &warnings;
+    error.clear();
+    const auto parsed = projectFromJson(noVersion, lenient, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    CHECK(!warnings.isEmpty());
+}
+
+void testRequiredFieldsStrict()
+{
+    ParseOptions strict;
+    strict.mode = ParseMode::Strict;
+    QString error;
+
+    Entity base = makeEntity(0, 10);
+    base.name = QStringLiteral("base");
+    const QJsonObject entityJson = toJson(base);
+
+    const auto requireEntityKey = [&](const QString& key) {
+        QJsonObject object = entityJson;
+        object.remove(key);
+        error.clear();
+        CHECK(!entityFromJson(object, strict, &error).has_value());
+        CHECK_DETAIL(error.contains(key), error);
+    };
+    requireEntityKey(QStringLiteral("uuid"));
+    requireEntityKey(QStringLiteral("start"));
+    requireEntityKey(QStringLiteral("end"));
+
+    // Nested objects report their full JSON path.
+    Entity keyed = makeEntity(0, 10);
+    keyed.tracks.insert(QStringLiteral("x"), Track{{keyAt(3, 7.0)}});
+    QJsonObject keyedJson = toJson(keyed);
+    QJsonObject keyframes =
+        keyedJson.value(QStringLiteral("keyframes")).toObject();
+    QJsonObject key =
+        keyframes.value(QStringLiteral("x")).toArray().at(0).toObject();
+    key.remove(QStringLiteral("value"));
+    keyframes.insert(QStringLiteral("x"), QJsonArray{key});
+    keyedJson.insert(QStringLiteral("keyframes"), keyframes);
+    error.clear();
+    CHECK(!entityFromJson(keyedJson, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("keyframes.x[0].value")), error);
+
+    Entity solved = makeEntity(0, 10);
+    solved.solvers.append(makeSolver(SolverEffect::Gravity, 0, 5));
+    QJsonObject solvedJson = toJson(solved);
+    QJsonObject segment =
+        solvedJson.value(QStringLiteral("solvers")).toArray().at(0).toObject();
+    segment.remove(QStringLiteral("effect"));
+    solvedJson.insert(QStringLiteral("solvers"), QJsonArray{segment});
+    error.clear();
+    CHECK(!entityFromJson(solvedJson, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("solvers[0].effect")), error);
+
+    QJsonObject projectJson = toJson(Project{});
+    QJsonObject noFps = projectJson;
+    noFps.remove(QStringLiteral("fps"));
+    error.clear();
+    CHECK(!projectFromJson(noFps, strict, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("fps")), error);
+
+    // Lenient mode keeps the default and records a warning.
+    QStringList warnings;
+    ParseOptions lenient;
+    lenient.warnings = &warnings;
+    QJsonObject keyNoValue;
+    keyNoValue.insert(QStringLiteral("frame"), 2);
+    error.clear();
+    const auto parsedKey = keyframeFromJson(keyNoValue, lenient, &error);
+    CHECK_DETAIL(parsedKey.has_value(), error);
+    if (parsedKey)
+        CHECK(nearly(parsedKey->value, 0.0));
+    CHECK_DETAIL(warnings.join(QLatin1Char(';')).contains(QStringLiteral("value")),
+                 warnings.join(QLatin1Char(';')));
+}
+
+void testUnknownFieldsRoundTrip()
+{
+    QRandomGenerator rng(0xC0FFEEu);
+    const auto randomValue = [&rng]() -> QJsonValue {
+        switch (rng.bounded(6))
+        {
+        case 0:
+            return QStringLiteral("s%1").arg(rng.bounded(1000));
+        case 1:
+            return rng.bounded(1000);
+        case 2:
+            return double(rng.bounded(1000)) / 7.0;
+        case 3:
+            return rng.bounded(2) != 0;
+        case 4:
+        {
+            QJsonObject nested;
+            nested.insert(QStringLiteral("n"), rng.bounded(100));
+            return nested;
+        }
+        default:
+        {
+            QJsonArray array;
+            array.append(rng.bounded(10));
+            array.append(QStringLiteral("x"));
+            return array;
+        }
+        }
+    };
+    const auto fill = [&](QJsonObject object, const QString& prefix, int count) {
+        QStringList names;
+        for (int i = 0; i < count; ++i)
+        {
+            const QString name = prefix + QString::number(i);
+            object.insert(name, randomValue());
+            names << name;
+        }
+        return std::make_pair(object, names);
+    };
+
+    Entity entity = makeEntity(0, 24);
+    entity.content.kind = ContentKind::Text;
+    entity.content.text.text = QStringLiteral("hi");
+    entity.tracks.insert(QStringLiteral("x"), Track{{keyAt(5, 3.0)}});
+    entity.solvers.append(makeSolver(SolverEffect::Gravity, 0, 3));
+
+    Project project;
+    Marker marker;
+    marker.id = newUuid();
+    marker.frame = 3;
+    marker.title = QStringLiteral("m");
+    project.markers.append(marker);
+
+    const auto entityFill =
+        fill(toJson(entity), QStringLiteral("futureEntity"), 5);
+    QJsonObject entityJson = entityFill.first;
+    QStringList entityNames = entityFill.second;
+
+    const auto contentFill = fill(
+        entityJson.value(QStringLiteral("content")).toObject(),
+        QStringLiteral("futureContent"), 5);
+    entityJson.insert(QStringLiteral("content"), contentFill.first);
+    entityNames += contentFill.second;
+
+    QJsonObject keyframes = entityJson.value(QStringLiteral("keyframes")).toObject();
+    const auto keyFill = fill(
+        keyframes.value(QStringLiteral("x")).toArray().at(0).toObject(),
+        QStringLiteral("futureKey"), 5);
+    keyframes.insert(QStringLiteral("x"), QJsonArray{keyFill.first});
+    entityJson.insert(QStringLiteral("keyframes"), keyframes);
+    entityNames += keyFill.second;
+
+    const auto solverFill = fill(
+        entityJson.value(QStringLiteral("solvers")).toArray().at(0).toObject(),
+        QStringLiteral("futureSolver"), 5);
+    entityJson.insert(QStringLiteral("solvers"),
+                      QJsonArray{solverFill.first});
+    entityNames += solverFill.second;
+
+    QString error;
+    const auto parsed = entityFromJson(entityJson, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+    {
+        const QJsonObject written = toJson(*parsed);
+        for (const QString& name : entityNames)
+        {
+            const bool atTop = written.contains(name);
+            const bool inContent = written.value(QStringLiteral("content"))
+                                       .toObject()
+                                       .contains(name);
+            const bool inKey = written.value(QStringLiteral("keyframes"))
+                                   .toObject()
+                                   .value(QStringLiteral("x"))
+                                   .toArray()
+                                   .at(0)
+                                   .toObject()
+                                   .contains(name);
+            const bool inSolver = written.value(QStringLiteral("solvers"))
+                                      .toArray()
+                                      .at(0)
+                                      .toObject()
+                                      .contains(name);
+            CHECK_DETAIL(atTop || inContent || inKey || inSolver, name);
+        }
+
+        // A second pass is stable: no duplicates, no drift.
+        const auto again = entityFromJson(written, &error);
+        CHECK_DETAIL(again.has_value(), error);
+        if (again)
+            CHECK(toJson(*again) == written);
+    }
+
+    // Project-level unknown keys (including marker extras) survive as well.
+    const auto projectFill =
+        fill(toJson(project), QStringLiteral("futureProject"), 5);
+    QJsonObject projectJson = projectFill.first;
+    const auto markerFill = fill(
+        projectJson.value(QStringLiteral("markers")).toArray().at(0).toObject(),
+        QStringLiteral("futureMarker"), 5);
+    projectJson.insert(QStringLiteral("markers"),
+                       QJsonArray{markerFill.first});
+
+    const auto parsedProject = projectFromJson(projectJson, &error);
+    CHECK_DETAIL(parsedProject.has_value(), error);
+    if (parsedProject)
+    {
+        const QJsonObject written = toJson(*parsedProject);
+        for (const QString& name : projectFill.second)
+            CHECK_DETAIL(written.contains(name), name);
+        for (const QString& name : markerFill.second)
+        {
+            CHECK_DETAIL(written.value(QStringLiteral("markers"))
+                             .toArray()
+                             .at(0)
+                             .toObject()
+                             .contains(name),
+                         name);
+        }
+        const auto again = projectFromJson(written, &error);
+        CHECK_DETAIL(again.has_value(), error);
+        if (again)
+            CHECK(toJson(*again) == written);
+    }
+
+    // A stale extras entry can never shadow a real field.
+    Entity shadowed = makeEntity(4, 9);
+    shadowed.name = QStringLiteral("real");
+    shadowed.extras.insert(QStringLiteral("name"), QStringLiteral("evil"));
+    CHECK(toJson(shadowed).value(QStringLiteral("name")).toString()
+          == QStringLiteral("real"));
+}
+
+void testMigrationFramework()
+{
+    using namespace migrations;
+
+    QVector<Migration> chain;
+    chain.append(Migration{0, QStringLiteral("v0_to_v1"),
+                           [](const QJsonObject& document) {
+                               QJsonObject next = document;
+                               next.remove(QStringLiteral("legacyScene"));
+                               next.insert(QStringLiteral("scenes"),
+                                           QJsonArray{});
+                               return next;
+                           }});
+    chain.append(Migration{1, QStringLiteral("v1_to_v2"),
+                           [](const QJsonObject& document) {
+                               QJsonObject next = document;
+                               next.insert(QStringLiteral("format"),
+                                           QStringLiteral("pvforge-project"));
+                               return next;
+                           }});
+
+    QJsonObject v0;
+    v0.insert(QStringLiteral("version"), 0);
+    v0.insert(QStringLiteral("legacyScene"), QJsonObject{});
+
+    QString error;
+    const auto upgraded = upgrade(v0, 0, 2, chain, &error);
+    CHECK_DETAIL(upgraded.has_value(), error);
+    if (upgraded)
+    {
+        CHECK(upgraded->value(QStringLiteral("version")).toInt() == 2);
+        CHECK(!upgraded->contains(QStringLiteral("legacyScene")));
+        CHECK(upgraded->contains(QStringLiteral("scenes")));
+        CHECK(upgraded->value(QStringLiteral("format")).toString()
+              == QStringLiteral("pvforge-project"));
+    }
+    // Steps are pure: the input document is untouched.
+    CHECK(v0.contains(QStringLiteral("legacyScene")));
+
+    // A gap in the chain is a readable error, not a silent skip.
+    QVector<Migration> gapped;
+    gapped.append(Migration{0, QStringLiteral("v0_to_v1"),
+                            [](const QJsonObject& document) {
+                                return document;
+                            }});
+    error.clear();
+    CHECK(!upgrade(v0, 0, 2, gapped, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("缺少")), error);
+
+    error.clear();
+    CHECK(!upgrade(v0, 2, 1, chain, &error).has_value());
+
+    // Production registry: current version is a no-op and the oldest readable
+    // version is the current one while no migration step exists.
+    const QJsonObject current = toJson(Project{});
+    error.clear();
+    const auto same = upgrade(current, kProjectFormatVersion,
+                              kProjectFormatVersion, &error);
+    CHECK_DETAIL(same.has_value(), error);
+    if (same)
+        CHECK(*same == current);
+
+    QJsonObject old = current;
+    old.insert(QStringLiteral("version"), 0);
+    error.clear();
+    CHECK(!upgrade(old, 0, kProjectFormatVersion, &error).has_value());
+    CHECK_DETAIL(error.contains(QStringLiteral("缺少")), error);
+    CHECK(minimumSupportedVersion() == kProjectFormatVersion);
+}
+
 struct TestCase
 {
     const char* name;
     void (*run)();
 };
-
 const TestCase kTests[] = {
     {"uuid", testUuid},
     {"content-json-roundtrip", testContentJsonRoundTrip},
@@ -1684,6 +2034,10 @@ const TestCase kTests[] = {
     {"invalid-json", testInvalidJson},
     {"defaults", testDefaults},
     {"children-and-root-sorting", testChildrenAndRootSorting},
+    {"format-version", testFormatVersion},
+    {"required-fields-strict", testRequiredFieldsStrict},
+    {"unknown-fields-roundtrip", testUnknownFieldsRoundTrip},
+    {"migration-framework", testMigrationFramework},
 };
 
 } // namespace

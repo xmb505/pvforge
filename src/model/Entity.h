@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Content.h"
+#include "JsonUtil.h"
 #include "Keyframe.h"
 #include "common/Types.h"
 
@@ -27,6 +28,7 @@ struct SolverSegment
     int version = 1;
     QPointF initialVelocity;
     QVariantMap params;
+    QJsonObject extras;
 };
 
 struct Entity
@@ -46,6 +48,9 @@ struct Entity
     Content content;
     QHash<QString, Track> tracks; // serialized as "keyframes"
     QVector<SolverSegment> solvers;
+    // Unknown keys, preserved verbatim so fields written by a newer version or
+    // an external tool survive a load/save cycle.
+    QJsonObject extras;
 
     int duration() const { return end - start; }
     bool isRoot() const { return parentUuid.isEmpty(); }
@@ -82,9 +87,15 @@ bool validateEntity(const Entity& entity, QString* error = nullptr);
 
 QJsonObject toJson(const SolverSegment& segment);
 std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
+                                            const ParseOptions& options,
+                                            QString* error = nullptr);
+std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
                                             QString* error = nullptr);
 
 QJsonObject toJson(const Entity& entity);
+std::optional<Entity> entityFromJson(const QJsonObject& object,
+                                     const ParseOptions& options,
+                                     QString* error = nullptr);
 std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      QString* error = nullptr);
 

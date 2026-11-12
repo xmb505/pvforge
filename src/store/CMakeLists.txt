@@ -66,6 +66,10 @@ if(BUILD_TESTING)
         enableGitLater
         disableGitThenCommitStillUndoable
         setGitEnabledReportsMissingGit
+        openRejectsFutureVersion
+        openRejectsUnmigratableVersion
+        openStrictRequiredFields
+        unknownFieldsSurviveReopen
     )
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)

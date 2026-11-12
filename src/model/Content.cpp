@@ -504,14 +504,16 @@ QJsonObject toJson(const Content& content)
                       brandWallToJson(content.brandWall));
         break;
     }
+    detail::mergeExtras(object, content.extras);
     return object;
 }
 
 std::optional<Content> contentFromJson(const QJsonObject& object,
+                                       const ParseOptions& options,
                                        QString* error)
 {
-    const QString kindName = detail::jsonString(
-        object, QStringLiteral("kind"), QStringLiteral("empty"));
+    const QString kindName = detail::optionalString(
+        object, QStringLiteral("kind"), QStringLiteral("empty"), options);
     const auto kind = contentKindFromName(kindName);
     if (!kind)
     {
@@ -636,9 +638,50 @@ std::optional<Content> contentFromJson(const QJsonObject& object,
     }
     }
 
+    QStringList knownKeys{QStringLiteral("kind")};
+    switch (content.kind)
+    {
+    case ContentKind::Empty:
+        break;
+    case ContentKind::Text:
+        knownKeys << QStringLiteral("text");
+        break;
+    case ContentKind::Vector:
+        knownKeys << QStringLiteral("vector");
+        break;
+    case ContentKind::Camera:
+        knownKeys << QStringLiteral("camera");
+        break;
+    case ContentKind::Asset:
+        knownKeys << QStringLiteral("assetHash") << QStringLiteral("assetType")
+                  << QStringLiteral("sourceIn") << QStringLiteral("volume");
+        break;
+    case ContentKind::ComicText:
+        knownKeys << QStringLiteral("comicText");
+        break;
+    case ContentKind::RadialLines:
+        knownKeys << QStringLiteral("radialLines");
+        break;
+    case ContentKind::FlowLines:
+        knownKeys << QStringLiteral("flowLines");
+        break;
+    case ContentKind::HalftoneDots:
+        knownKeys << QStringLiteral("halftoneDots");
+        break;
+    case ContentKind::BrandWall:
+        knownKeys << QStringLiteral("brandWall");
+        break;
+    }
+    content.extras = detail::extrasFrom(object, knownKeys);
+
     if (!validateContent(content, error))
         return std::nullopt;
     return content;
+}
+
+std::optional<Content> contentFromJson(const QJsonObject& object, QString* error)
+{
+    return contentFromJson(object, ParseOptions{}, error);
 }
 
 bool validateContent(const Content& content, QString* error)

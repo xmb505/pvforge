@@ -24,21 +24,43 @@ QJsonObject toJson(const Marker& marker)
         tags.append(tag);
     object.insert(QStringLiteral("tags"), tags);
     object.insert(QStringLiteral("color"), marker.color);
+    detail::mergeExtras(object, marker.extras);
     return object;
+}
+
+std::optional<Marker> markerFromJson(const QJsonObject& object,
+                                     const ParseOptions& options,
+                                     QString* error)
+{
+    if (!detail::requireField(object, QStringLiteral("id"), options, error)
+        || !detail::requireField(object, QStringLiteral("frame"), options, error))
+    {
+        return std::nullopt;
+    }
+
+    Marker marker;
+    marker.id = detail::jsonString(object, QStringLiteral("id"));
+    marker.frame = detail::optionalInt(
+        object, QStringLiteral("frame"), marker.frame, options);
+    marker.title = detail::optionalString(
+        object, QStringLiteral("title"), marker.title, options);
+    marker.note = detail::optionalString(
+        object, QStringLiteral("note"), marker.note, options);
+    detail::warnDefaulted(object, QStringLiteral("tags"), options);
+    marker.tags = detail::jsonStringList(object, QStringLiteral("tags"));
+    marker.color = detail::optionalString(
+        object, QStringLiteral("color"), marker.color, options);
+
+    marker.extras = detail::extrasFrom(
+        object, {QStringLiteral("id"), QStringLiteral("frame"),
+                 QStringLiteral("title"), QStringLiteral("note"),
+                 QStringLiteral("tags"), QStringLiteral("color")});
+    return marker;
 }
 
 std::optional<Marker> markerFromJson(const QJsonObject& object, QString* error)
 {
-    Q_UNUSED(error);
-    Marker marker;
-    marker.id = detail::jsonString(object, QStringLiteral("id"));
-    marker.frame = detail::jsonInt(object, QStringLiteral("frame"), marker.frame);
-    marker.title = detail::jsonString(object, QStringLiteral("title"));
-    marker.note = detail::jsonString(object, QStringLiteral("note"));
-    marker.tags = detail::jsonStringList(object, QStringLiteral("tags"));
-    marker.color = detail::jsonString(
-        object, QStringLiteral("color"), marker.color);
-    return marker;
+    return markerFromJson(object, ParseOptions{}, error);
 }
 
 QJsonObject toJson(const ProjectSettings& settings)
@@ -49,24 +71,43 @@ QJsonObject toJson(const ProjectSettings& settings)
     object.insert(QStringLiteral("height"), settings.height);
     object.insert(QStringLiteral("fps"), settings.fps);
     object.insert(QStringLiteral("background"), settings.background);
+    detail::mergeExtras(object, settings.extras);
     return object;
+}
+
+std::optional<ProjectSettings> projectSettingsFromJson(
+    const QJsonObject& object, const ParseOptions& options, QString* error)
+{
+    if (!detail::requireField(object, QStringLiteral("width"), options, error)
+        || !detail::requireField(object, QStringLiteral("height"), options, error)
+        || !detail::requireField(object, QStringLiteral("fps"), options, error))
+    {
+        return std::nullopt;
+    }
+
+    ProjectSettings settings;
+    settings.name = detail::optionalString(
+        object, QStringLiteral("name"), settings.name, options);
+    settings.width = detail::optionalInt(
+        object, QStringLiteral("width"), settings.width, options);
+    settings.height = detail::optionalInt(
+        object, QStringLiteral("height"), settings.height, options);
+    settings.fps = detail::optionalInt(
+        object, QStringLiteral("fps"), settings.fps, options);
+    settings.background = detail::optionalString(
+        object, QStringLiteral("background"), settings.background, options);
+
+    settings.extras = detail::extrasFrom(
+        object, {QStringLiteral("name"), QStringLiteral("width"),
+                 QStringLiteral("height"), QStringLiteral("fps"),
+                 QStringLiteral("background")});
+    return settings;
 }
 
 std::optional<ProjectSettings> projectSettingsFromJson(const QJsonObject& object,
                                                        QString* error)
 {
-    Q_UNUSED(error);
-    ProjectSettings settings;
-    settings.name = detail::jsonString(
-        object, QStringLiteral("name"), settings.name);
-    settings.width = detail::jsonInt(
-        object, QStringLiteral("width"), settings.width);
-    settings.height = detail::jsonInt(
-        object, QStringLiteral("height"), settings.height);
-    settings.fps = detail::jsonInt(object, QStringLiteral("fps"), settings.fps);
-    settings.background = detail::jsonString(
-        object, QStringLiteral("background"), settings.background);
-    return settings;
+    return projectSettingsFromJson(object, ParseOptions{}, error);
 }
 
 namespace {
@@ -324,35 +365,75 @@ QJsonObject toJson(const Project& project)
     for (const Marker& marker : project.markers)
         markers.append(toJson(marker));
     object.insert(QStringLiteral("markers"), markers);
+    detail::mergeExtras(object, project.extras);
     return object;
 }
 
-std::optional<Project> projectFromJson(const QJsonObject& object, QString* error)
+std::optional<Project> projectFromJson(const QJsonObject& object,
+                                       const ParseOptions& options,
+                                       QString* error)
 {
-    const QJsonValue formatValue = object.value(QStringLiteral("format"));
-    if (!formatValue.isUndefined() && !formatValue.isNull()
-        && formatValue.toString() != QLatin1String(kProjectFormat))
+    if (detail::hasField(object, QStringLiteral("format")))
     {
-        detail::setError(
-            error,
-            QStringLiteral("工程格式不匹配：%1").arg(formatValue.toString()));
+        const QString format =
+            detail::jsonString(object, QStringLiteral("format"));
+        if (format != QLatin1String(kProjectFormat))
+        {
+            detail::setError(
+                error, QStringLiteral("工程格式不匹配：%1").arg(format));
+            return std::nullopt;
+        }
+    }
+    else if (!detail::requireField(object, QStringLiteral("format"), options,
+                                   error))
+    {
         return std::nullopt;
     }
 
-    const QJsonValue versionValue = object.value(QStringLiteral("version"));
-    if (!versionValue.isUndefined() && !versionValue.isNull()
-        && detail::jsonInt(object, QStringLiteral("version"), -1)
-               != kProjectFormatVersion)
+    if (!detail::requireField(object, QStringLiteral("version"), options, error))
+        return std::nullopt;
+
+    int version = kProjectFormatVersion;
+    if (detail::hasField(object, QStringLiteral("version")))
+    {
+        const QJsonValue versionValue = object.value(QStringLiteral("version"));
+        if (!versionValue.isDouble())
+        {
+            detail::setError(
+                error, QStringLiteral("字段 version 必须是整数"));
+            return std::nullopt;
+        }
+        version = versionValue.toInt();
+    }
+
+    if (version > kProjectFormatVersion)
     {
         detail::setError(
             error,
-            QStringLiteral("不支持的工程版本：%1")
-                .arg(detail::jsonInt(object, QStringLiteral("version"), -1)));
+            QStringLiteral("工程版本 %1 高于本程序支持的版本 %2：请升级 PVForge "
+                           "后再打开（原文件不会被修改）")
+                .arg(version)
+                .arg(kProjectFormatVersion));
+        return std::nullopt;
+    }
+    if (version < kProjectFormatVersion)
+    {
+        detail::setError(
+            error,
+            QStringLiteral("工程版本 %1 低于本程序支持的版本 %2：需要先迁移到版本 "
+                           "%2（ProjectStore 打开时会自动升级）")
+                .arg(version)
+                .arg(kProjectFormatVersion));
         return std::nullopt;
     }
 
     Project project;
-    project.settings = *projectSettingsFromJson(object, error);
+    // Settings live flattened at the top level of project.json; their extras
+    // mirror the document's unknown keys and are superseded by project.extras.
+    const auto settings = projectSettingsFromJson(object, options, error);
+    if (!settings)
+        return std::nullopt;
+    project.settings = *settings;
 
     const QJsonValue markersValue = object.value(QStringLiteral("markers"));
     if (!markersValue.isUndefined() && !markersValue.isNull())
@@ -371,16 +452,31 @@ std::optional<Project> projectFromJson(const QJsonObject& object, QString* error
                                  QStringLiteral("第 %1 个 marker 不是对象").arg(i));
                 return std::nullopt;
             }
-            const auto marker = markerFromJson(markers.at(i).toObject(), error);
+            ParseOptions markerOptions = detail::childOptions(
+                options, QStringLiteral("markers[%1]").arg(i));
+            const auto marker =
+                markerFromJson(markers.at(i).toObject(), markerOptions, error);
             if (!marker)
                 return std::nullopt;
             project.markers.append(*marker);
         }
     }
 
+    project.extras = detail::extrasFrom(
+        object,
+        {QStringLiteral("format"), QStringLiteral("version"),
+         QStringLiteral("name"), QStringLiteral("width"),
+         QStringLiteral("height"), QStringLiteral("fps"),
+         QStringLiteral("background"), QStringLiteral("markers")});
+
     if (!validateProject(project, error))
         return std::nullopt;
     return project;
+}
+
+std::optional<Project> projectFromJson(const QJsonObject& object, QString* error)
+{
+    return projectFromJson(object, ParseOptions{}, error);
 }
 
 } // namespace pvf::model

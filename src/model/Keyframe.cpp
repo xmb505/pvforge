@@ -12,7 +12,8 @@ bool Keyframe::operator==(const Keyframe& other) const
     return frame == other.frame
            && qFuzzyCompare(value + 1.0, other.value + 1.0)
            && easing == other.easing
-           && note == other.note;
+           && note == other.note
+           && extras == other.extras;
 }
 
 std::optional<double> evaluateTrack(const Track& track, int frame, bool step)
@@ -94,20 +95,33 @@ QJsonObject toJson(const Keyframe& keyframe)
 
     if (!keyframe.note.isEmpty())
         object.insert(QStringLiteral("note"), keyframe.note);
+    detail::mergeExtras(object, keyframe.extras);
     return object;
 }
 
 std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
+                                         const ParseOptions& options,
                                          QString* error)
 {
+    if (!detail::requireField(object, QStringLiteral("frame"), options, error)
+        || !detail::requireField(object, QStringLiteral("value"), options,
+                                 error))
+    {
+        return std::nullopt;
+    }
+
     Keyframe keyframe;
-    keyframe.frame = detail::jsonInt(object, QStringLiteral("frame"), 0);
-    keyframe.value = detail::jsonDouble(object, QStringLiteral("value"), 0.0);
-    keyframe.note = detail::jsonString(object, QStringLiteral("note"));
+    keyframe.frame = detail::optionalInt(
+        object, QStringLiteral("frame"), keyframe.frame, options);
+    keyframe.value = detail::optionalDouble(
+        object, QStringLiteral("value"), keyframe.value, options);
+    keyframe.note = detail::optionalString(
+        object, QStringLiteral("note"), keyframe.note, options);
 
     const QJsonValue easingValue = object.value(QStringLiteral("easing"));
     if (easingValue.isUndefined() || easingValue.isNull())
     {
+        detail::warnDefaulted(object, QStringLiteral("easing"), options);
         keyframe.easing = EasingSpec{};
     }
     else if (easingValue.isString())
@@ -134,7 +148,16 @@ std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
         return std::nullopt;
     }
 
+    keyframe.extras = detail::extrasFrom(
+        object, {QStringLiteral("frame"), QStringLiteral("value"),
+                 QStringLiteral("easing"), QStringLiteral("note")});
     return keyframe;
+}
+
+std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
+                                         QString* error)
+{
+    return keyframeFromJson(object, ParseOptions{}, error);
 }
 
 QJsonArray toJson(const Track& track)
@@ -145,10 +168,16 @@ QJsonArray toJson(const Track& track)
     return array;
 }
 
-std::optional<Track> trackFromJson(const QJsonValue& value, QString* error)
+std::optional<Track> trackFromJson(const QJsonValue& value,
+                                   const ParseOptions& options,
+                                   QString* error)
 {
     if (value.isUndefined() || value.isNull())
+    {
+        detail::warn(options, QStringLiteral("缺少字段 %1，使用空轨道")
+                                  .arg(options.prefix));
         return Track{};
+    }
 
     if (!value.isArray())
     {
@@ -166,12 +195,20 @@ std::optional<Track> trackFromJson(const QJsonValue& value, QString* error)
             return std::nullopt;
         }
 
-        const auto keyframe = keyframeFromJson(array.at(i).toObject(), error);
+        ParseOptions keyOptions = options;
+        keyOptions.prefix = options.prefix + QStringLiteral("[%1]").arg(i);
+        const auto keyframe =
+            keyframeFromJson(array.at(i).toObject(), keyOptions, error);
         if (!keyframe)
             return std::nullopt;
         track.keys.append(*keyframe);
     }
     return track;
+}
+
+std::optional<Track> trackFromJson(const QJsonValue& value, QString* error)
+{
+    return trackFromJson(value, ParseOptions{}, error);
 }
 
 } // namespace pvf::model

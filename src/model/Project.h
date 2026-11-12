@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Entity.h"
+#include "JsonUtil.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -11,6 +12,9 @@
 
 namespace pvf::model {
 
+// The one and only on-disk format version. Bumping it means adding a matching
+// migrations::vN_to_vN+1 step in Migrations.cpp; nothing else in the tree
+// carries a project format version.
 inline constexpr int kProjectFormatVersion = 1;
 inline constexpr char kProjectFormat[] = "pvforge-project";
 
@@ -22,6 +26,9 @@ struct Marker
     QString note;
     QStringList tags;
     QString color = QStringLiteral("#ffbe3c");
+    // Unknown keys, preserved verbatim so an external tool's annotations
+    // survive a load/save cycle.
+    QJsonObject extras;
 };
 
 struct ProjectSettings
@@ -31,6 +38,7 @@ struct ProjectSettings
     int height = 1080;
     int fps = 30;
     QString background = QStringLiteral("#101014");
+    QJsonObject extras;
 };
 
 // The project file stores settings and markers only. Entities live in
@@ -40,21 +48,36 @@ struct Project
     ProjectSettings settings;
     QHash<Uuid, Entity> entities;
     QVector<Marker> markers;
+    QJsonObject extras;
 };
 
+// Parsing defaults to lenient: missing keys fall back to defaults. Opening a
+// project uses ParseMode::Strict, where missing required keys are errors that
+// name their JSON path.
 QJsonObject toJson(const Marker& marker);
+std::optional<Marker> markerFromJson(const QJsonObject& object,
+                                     const ParseOptions& options,
+                                     QString* error = nullptr);
 std::optional<Marker> markerFromJson(const QJsonObject& object,
                                      QString* error = nullptr);
 
 QJsonObject toJson(const ProjectSettings& settings);
-std::optional<ProjectSettings> projectSettingsFromJson(const QJsonObject& object,
-                                                       QString* error = nullptr);
+std::optional<ProjectSettings> projectSettingsFromJson(
+    const QJsonObject& object, const ParseOptions& options,
+    QString* error = nullptr);
+std::optional<ProjectSettings> projectSettingsFromJson(
+    const QJsonObject& object, QString* error = nullptr);
 
 // Checks every entity, unique UUIDs, parent existence, parent/child time
 // ranges, parent cycles, marker frames and project settings.
 bool validateProject(const Project& project, QString* error = nullptr);
 
+// Writes format and the current kProjectFormatVersion. The caller migrates an
+// older document to kProjectFormatVersion before calling projectFromJson().
 QJsonObject toJson(const Project& project);
+std::optional<Project> projectFromJson(const QJsonObject& object,
+                                       const ParseOptions& options,
+                                       QString* error = nullptr);
 std::optional<Project> projectFromJson(const QJsonObject& object,
                                        QString* error = nullptr);
 

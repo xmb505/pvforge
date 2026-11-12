@@ -60,17 +60,28 @@ QJsonObject toJson(const SolverSegment& segment)
     object.insert(QStringLiteral("initialVelocity"), velocity);
     object.insert(QStringLiteral("params"),
                   QJsonObject::fromVariantMap(segment.params));
+    detail::mergeExtras(object, segment.extras);
     return object;
 }
 
 std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
+                                            const ParseOptions& options,
                                             QString* error)
 {
+    if (!detail::requireField(object, QStringLiteral("id"), options, error)
+        || !detail::requireField(object, QStringLiteral("effect"), options,
+                                 error)
+        || !detail::requireField(object, QStringLiteral("startFrame"), options,
+                                 error))
+    {
+        return std::nullopt;
+    }
+
     SolverSegment segment;
     segment.id = detail::jsonString(object, QStringLiteral("id"));
 
-    const QString effectName = detail::jsonString(
-        object, QStringLiteral("effect"), QStringLiteral("gravity"));
+    const QString effectName = detail::optionalString(
+        object, QStringLiteral("effect"), QStringLiteral("gravity"), options);
     const auto effect = solverEffectFromName(effectName);
     if (!effect)
     {
@@ -79,12 +90,12 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
         return std::nullopt;
     }
     segment.effect = *effect;
-    segment.startFrame = detail::jsonInt(
-        object, QStringLiteral("startFrame"), segment.startFrame);
-    segment.endFrame = detail::jsonInt(
-        object, QStringLiteral("endFrame"), segment.endFrame);
-    segment.version = detail::jsonInt(
-        object, QStringLiteral("version"), segment.version);
+    segment.startFrame = detail::optionalInt(
+        object, QStringLiteral("startFrame"), segment.startFrame, options);
+    segment.endFrame = detail::optionalInt(
+        object, QStringLiteral("endFrame"), segment.endFrame, options);
+    segment.version = detail::optionalInt(
+        object, QStringLiteral("version"), segment.version, options);
 
     const QJsonValue velocityValue = object.value(
         QStringLiteral("initialVelocity"));
@@ -100,6 +111,11 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
             detail::jsonDouble(velocity, QStringLiteral("x"), 0.0),
             detail::jsonDouble(velocity, QStringLiteral("y"), 0.0));
     }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("initialVelocity"),
+                              options);
+    }
 
     const QJsonValue paramsValue = object.value(QStringLiteral("params"));
     if (!paramsValue.isUndefined() && !paramsValue.isNull())
@@ -111,8 +127,23 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
         }
         segment.params = paramsValue.toObject().toVariantMap();
     }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("params"), options);
+    }
 
+    segment.extras = detail::extrasFrom(
+        object, {QStringLiteral("id"), QStringLiteral("effect"),
+                 QStringLiteral("startFrame"), QStringLiteral("endFrame"),
+                 QStringLiteral("version"), QStringLiteral("initialVelocity"),
+                 QStringLiteral("params")});
     return segment;
+}
+
+std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
+                                            QString* error)
+{
+    return solverFromJson(object, ParseOptions{}, error);
 }
 
 QJsonObject toJson(const Entity& entity)
@@ -145,14 +176,26 @@ QJsonObject toJson(const Entity& entity)
     object.insert(QStringLiteral("solvers"), solvers);
 
     object.insert(QStringLiteral("content"), toJson(entity.content));
+    detail::mergeExtras(object, entity.extras);
     return object;
 }
 
-std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
+std::optional<Entity> entityFromJson(const QJsonObject& object,
+                                     const ParseOptions& options,
+                                     QString* error)
 {
+    if (!detail::requireField(object, QStringLiteral("uuid"), options, error)
+        || !detail::requireField(object, QStringLiteral("start"), options,
+                                 error)
+        || !detail::requireField(object, QStringLiteral("end"), options, error))
+    {
+        return std::nullopt;
+    }
+
     Entity entity;
     entity.uuid = detail::jsonString(object, QStringLiteral("uuid"));
-    entity.name = detail::jsonString(object, QStringLiteral("name"));
+    entity.name = detail::optionalString(
+        object, QStringLiteral("name"), entity.name, options);
 
     const QJsonValue parentValue = object.value(QStringLiteral("parentUuid"));
     if (parentValue.isString())
@@ -163,22 +206,26 @@ std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
         return std::nullopt;
     }
 
-    entity.start = detail::jsonInt(object, QStringLiteral("start"), entity.start);
-    entity.end = object.contains(QStringLiteral("end"))
+    entity.start = detail::optionalInt(
+        object, QStringLiteral("start"), entity.start, options);
+    entity.end = detail::hasField(object, QStringLiteral("end"))
                      ? detail::jsonInt(object, QStringLiteral("end"),
                                        entity.start + 1)
                      : entity.start + 1;
-    entity.row = detail::jsonInt(object, QStringLiteral("row"), entity.row);
-    entity.hidden = detail::jsonBool(
-        object, QStringLiteral("hidden"), entity.hidden);
-    entity.locked = detail::jsonBool(
-        object, QStringLiteral("locked"), entity.locked);
-    entity.inheritVisibility = detail::jsonBool(
-        object, QStringLiteral("inheritVisibility"), entity.inheritVisibility);
-    entity.visible = detail::jsonBool(
-        object, QStringLiteral("visible"), entity.visible);
-    entity.physicsInteract = detail::jsonBool(
-        object, QStringLiteral("physicsInteract"), entity.physicsInteract);
+    entity.row = detail::optionalInt(
+        object, QStringLiteral("row"), entity.row, options);
+    entity.hidden = detail::optionalBool(
+        object, QStringLiteral("hidden"), entity.hidden, options);
+    entity.locked = detail::optionalBool(
+        object, QStringLiteral("locked"), entity.locked, options);
+    entity.inheritVisibility = detail::optionalBool(
+        object, QStringLiteral("inheritVisibility"), entity.inheritVisibility,
+        options);
+    entity.visible = detail::optionalBool(
+        object, QStringLiteral("visible"), entity.visible, options);
+    entity.physicsInteract = detail::optionalBool(
+        object, QStringLiteral("physicsInteract"), entity.physicsInteract,
+        options);
 
     const QJsonValue transformValue = object.value(QStringLiteral("transform"));
     if (!transformValue.isUndefined() && !transformValue.isNull())
@@ -192,6 +239,10 @@ std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
         if (!transform)
             return std::nullopt;
         entity.transform = *transform;
+    }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("transform"), options);
     }
 
     const QJsonValue keyframesValue = object.value(QStringLiteral("keyframes"));
@@ -210,11 +261,20 @@ std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
                 detail::setError(error, QStringLiteral("关键帧轨道名不能为空"));
                 return std::nullopt;
             }
-            const auto track = trackFromJson(it.value(), error);
+            ParseOptions trackOptions = options;
+            trackOptions.prefix =
+                detail::joinPath(detail::joinPath(options.prefix,
+                                                  QStringLiteral("keyframes")),
+                                 it.key());
+            const auto track = trackFromJson(it.value(), trackOptions, error);
             if (!track)
                 return std::nullopt;
             entity.tracks.insert(it.key(), *track);
         }
+    }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("keyframes"), options);
     }
 
     const QJsonValue contentValue = object.value(QStringLiteral("content"));
@@ -225,10 +285,16 @@ std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
             detail::setError(error, QStringLiteral("content 必须是对象"));
             return std::nullopt;
         }
-        const auto content = contentFromJson(contentValue.toObject(), error);
+        const auto content = contentFromJson(
+            contentValue.toObject(),
+            detail::childOptions(options, QStringLiteral("content")), error);
         if (!content)
             return std::nullopt;
         entity.content = *content;
+    }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("content"), options);
     }
 
     const QJsonValue solversValue = object.value(QStringLiteral("solvers"));
@@ -248,16 +314,38 @@ std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
                                  QStringLiteral("第 %1 个求解段不是对象").arg(i));
                 return std::nullopt;
             }
-            const auto segment = solverFromJson(solvers.at(i).toObject(), error);
+            ParseOptions segmentOptions = detail::childOptions(
+                options, QStringLiteral("solvers[%1]").arg(i));
+            const auto segment =
+                solverFromJson(solvers.at(i).toObject(), segmentOptions, error);
             if (!segment)
                 return std::nullopt;
             entity.solvers.append(*segment);
         }
     }
+    else
+    {
+        detail::warnDefaulted(object, QStringLiteral("solvers"), options);
+    }
+
+    entity.extras = detail::extrasFrom(
+        object, {QStringLiteral("uuid"), QStringLiteral("name"),
+                 QStringLiteral("parentUuid"), QStringLiteral("start"),
+                 QStringLiteral("end"), QStringLiteral("row"),
+                 QStringLiteral("hidden"), QStringLiteral("locked"),
+                 QStringLiteral("inheritVisibility"), QStringLiteral("visible"),
+                 QStringLiteral("physicsInteract"),
+                 QStringLiteral("transform"), QStringLiteral("keyframes"),
+                 QStringLiteral("solvers"), QStringLiteral("content")});
 
     if (!validateEntity(entity, error))
         return std::nullopt;
     return entity;
+}
+
+std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
+{
+    return entityFromJson(object, ParseOptions{}, error);
 }
 
 bool validateTrack(const Track& track, int duration, const QString& trackName,
