@@ -207,7 +207,12 @@ bool extractWav(const QString& videoPath, const QString& outPath, QString* error
             return true;
         QByteArray buffer(outSamples * kChannels * kBytesPerSample, Qt::Uninitialized);
         uint8_t* outputData[1] = {reinterpret_cast<uint8_t*>(buffer.data())};
-        const int converted = swr_convert(ff.swr, outputData, outSamples, frame->data,
+        // FFmpeg 6.x takes `const uint8_t**`; newer AVFrame::data is
+        // `uint8_t* const*`, which cannot implicitly decay to that type.
+        const uint8_t* inputData[AV_NUM_DATA_POINTERS] = {};
+        for (int channel = 0; channel < AV_NUM_DATA_POINTERS; ++channel)
+            inputData[channel] = frame->data[channel];
+        const int converted = swr_convert(ff.swr, outputData, outSamples, inputData,
                                           frame->nb_samples);
         if (converted < 0)
         {
