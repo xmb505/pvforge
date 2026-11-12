@@ -30,6 +30,7 @@ target_link_libraries(pvf_assets
     PRIVATE PkgConfig::FFMPEG
 )
 
+if(BUILD_TESTING)
 add_executable(pvf_assets_tests tests/TestAssets.cpp)
 target_link_libraries(pvf_assets_tests PRIVATE pvf_assets Qt6::Test)
 
@@ -58,3 +59,4 @@ set(PVF_ASSET_TEST_CASES
 foreach(test_case IN LISTS PVF_ASSET_TEST_CASES)
     add_test(NAME assets.${test_case} COMMAND pvf_assets_tests ${test_case})
 endforeach()
+endif()

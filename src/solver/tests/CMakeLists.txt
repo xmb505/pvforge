@@ -1,3 +1,4 @@
+if(BUILD_TESTING)
 add_executable(pvf_solver_tests
     SolverTests.cpp
 )
@@ -7,3 +8,4 @@ target_link_libraries(pvf_solver_tests PRIVATE
 )
 
 add_test(NAME pvf_solver_tests COMMAND pvf_solver_tests)
+endif()
