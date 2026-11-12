@@ -329,12 +329,12 @@ void WorkbenchServices::startStoreTask(const PendingStore& task)
                 workbench::Cache::encode(image, targetSize, hasRaster);
             const double encodeMs =
                 static_cast<double>(timer.nsecsElapsed()) / 1.0e6;
-            // The encode ended; the result itself still has to be delivered to
-            // the UI thread, which onStoreEncoded() reports through the queue.
+            // The callback must be queued before the active counter drops:
+            // waitForPendingStores() treats "no encode in flight" as "every
+            // finished result is already deliverable".
             {
                 QMutexLocker locker(&self->m_storeWaitMutex);
-                --self->m_storeEncodesActive;
-                self->m_storeIdle.wakeAll();
+                ++self->m_storeCompletionsPending;
             }
             QMetaObject::invokeMethod(
                 self,
@@ -342,6 +342,11 @@ void WorkbenchServices::startStoreTask(const PendingStore& task)
                     self->onStoreEncoded(id, encoded, encodeMs);
                 },
                 Qt::QueuedConnection);
+            {
+                QMutexLocker locker(&self->m_storeWaitMutex);
+                --self->m_storeEncodesActive;
+                self->m_storeIdle.wakeAll();
+            }
         }));
 }
 
@@ -349,6 +354,13 @@ void WorkbenchServices::onStoreEncoded(quint64 id,
                                        const workbench::EncodedFrame& encoded,
                                        double encodeMs)
 {
+    {
+        // The callback is being delivered: it no longer counts as outstanding.
+        QMutexLocker locker(&m_storeWaitMutex);
+        if (m_storeCompletionsPending > 0)
+            --m_storeCompletionsPending;
+        m_storeIdle.wakeAll();
+    }
     m_inFlightStores.remove(id);
     ++m_workerEncodes;
     m_workerEncodeMs += encodeMs;
@@ -413,37 +425,45 @@ bool WorkbenchServices::waitForPendingStores(int timeoutMs)
 
     QElapsedTimer timer;
     timer.start();
+    // sendPostedEvents() may leave events that were posted while it was
+    // dispatching in the queue; two extra drain passes cover one that lands
+    // right after a pass.  A third pass without progress cannot happen: with
+    // no encode in flight every remaining callback was posted before the
+    // counter dropped, and undispatched frames start a new encode below.
+    int stalledDrains = 0;
 
     for (;;)
     {
         deliverCompletions();
-        // Nothing else runs the queued dispatch while we block, and the flag
+        // Nothing else runs the posted dispatch while we block, and the flag
         // only guards against posting a second dispatch.
         m_storeDispatchPosted = false;
         dispatchStoreTask();
 
+        bool stalled = false;
         {
             QMutexLocker locker(&m_storeWaitMutex);
-            if (m_pendingStores.isEmpty() && m_storeEncodesActive == 0)
+            if (m_pendingStores.isEmpty() && m_storeEncodesActive == 0
+                && m_storeCompletionsPending == 0)
                 return true;
+            const qint64 remaining = qint64(timeoutMs) - timer.elapsed();
+            if (remaining <= 0)
+                return false;
             if (m_storeEncodesActive > 0)
             {
-                const qint64 remaining = qint64(timeoutMs) - timer.elapsed();
-                if (remaining <= 0)
-                    return false;
+                // A worker finishing its encode wakes us; by then its result
+                // callback is already queued, so the next pass makes progress.
+                stalledDrains = 0;
                 m_storeIdle.wait(&m_storeWaitMutex,
                                  static_cast<unsigned long>(remaining));
-                continue; // a writer finished: deliver its result
+                continue;
             }
+            // No encode is running: what is left is a callback posted while the
+            // drain above ran, or frames the pool refused to start.
+            stalled = ++stalledDrains > 2;
         }
-
-        // No encode is in flight and the queue still has frames: the only
-        // remaining work is a completion callback that arrived after the drain
-        // above.  Deliver it once more before giving up.
-        deliverCompletions();
-        if (m_pendingStores.isEmpty() && m_storeEncodesActive == 0)
-            return true;
-        return false; // the pool cannot advance the queue
+        if (stalled)
+            return false;
     }
 }
 

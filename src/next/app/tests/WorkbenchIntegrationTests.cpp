@@ -1256,7 +1256,10 @@ void WorkbenchIntegrationTest::writerThreadsSpeedUpTheDrain()
 // waitForPendingStores() must drain the writer queue without running a nested
 // event loop: only the service's own completion callbacks are delivered, so a
 // due zero-interval timer stays unfired, and no frame is dispatched to the pool
-// twice while several writers run concurrently.
+// twice while several writers run concurrently.  The repeated rounds catch the
+// window where a worker has finished encoding but its completion callback has
+// not been posted yet: "no encode in flight" alone must never be read as
+// "drained", or the wait returns false early.
 void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
 {
     QTemporaryDir temp;
@@ -1269,13 +1272,14 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
     const AssetHash hash = importProfileImage(
         document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
     QVERIFY2(!hash.isEmpty(), qPrintable(error));
-    addImageEntityRange(document.get(), hash, 400);
+    addImageEntityRange(document.get(), hash, 1200);
 
     AppSettings settings;
-    settings.workbenchCacheWriterThreads = 3;
+    settings.workbenchCacheWriterThreads = 3; // fixed concurrency
     WorkbenchServices::Providers providers;
     WorkbenchServices services(document.get(), settings, Uuid(), providers);
     QVERIFY(services.cacheValid());
+    QCOMPARE(services.writerThreads(), 3);
 
     QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
     rendered.fill(QColor(0, 90, 200));
@@ -1316,16 +1320,47 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
     QVERIFY(services.waitForPendingStores(30000));
     QVERIFY(empty.elapsed() < 1000);
 
+    // Repeated enqueue/drain rounds: each one asserts the exact per-round
+    // encode and write counts, so both an early false return and a repeated
+    // dispatch fail the test instead of hiding in a cumulative total.
+    constexpr int kRounds = 24;
+    constexpr int kPerRound = 12;
+    quint64 expectedEncodes = kFrames;
+    quint64 expectedWritten = kFrames;
+    for (int round = 0; round < kRounds; ++round)
+    {
+        for (int i = 0; i < kPerRound; ++i)
+            services.store(100 + round * kPerRound + i, Uuid(), rendered);
+        QVERIFY2(services.waitForPendingStores(30000),
+                 qPrintable(QStringLiteral("round %1 did not drain (queue %2)")
+                                .arg(round)
+                                .arg(services.pendingStores())));
+        QCOMPARE(services.pendingStores(), 0);
+        expectedEncodes += kPerRound;
+        expectedWritten += kPerRound;
+        QVERIFY2(services.workerEncodes() == expectedEncodes,
+                 qPrintable(QStringLiteral("round %1 encoded %2 times for %3 "
+                                           "frames")
+                                .arg(round)
+                                .arg(services.workerEncodes() - (expectedEncodes
+                                                                 - kPerRound))
+                                .arg(kPerRound)));
+        QCOMPARE(services.asyncStoresWritten(), expectedWritten);
+        QCOMPARE(services.droppedStores(), quint64(0));
+    }
+    QCOMPARE(timerHits, 0);
+
     // A zero timeout with encodes still queued reports failure instead of
     // spinning or blocking.
     for (int frame = 0; frame < 4; ++frame)
-        services.store(100 + frame, Uuid(), rendered);
+        services.store(500 + frame, Uuid(), rendered);
     QCOMPARE(services.pendingStores(), 4);
     QVERIFY(!services.waitForPendingStores(0));
     QVERIFY(services.waitForPendingStores(30000));
     QCOMPARE(services.pendingStores(), 0);
-    QCOMPARE(services.workerEncodes(), quint64(kFrames + 4));
-    QCOMPARE(services.asyncStoresWritten(), quint64(kFrames + 4));
+    expectedEncodes += 4;
+    QCOMPARE(services.workerEncodes(), expectedEncodes);
+    QCOMPARE(services.asyncStoresWritten(), expectedEncodes);
 
     // Concurrent enqueue while waiting: a second thread posts store() calls to
     // this object's event queue.  waitForPendingStores() has to deliver them,
@@ -1338,7 +1373,7 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
             QMetaObject::invokeMethod(
                 &services,
                 [&services, frame, rendered] {
-                    services.store(200 + frame, Uuid(), rendered);
+                    services.store(600 + frame, Uuid(), rendered);
                 },
                 Qt::QueuedConnection);
         }
@@ -1347,11 +1382,11 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
 
     QVERIFY(services.waitForPendingStores(30000));
     QCOMPARE(services.pendingStores(), 0);
-    QCOMPARE(services.workerEncodes(), quint64(kFrames + 4 + kPostedFrames));
-    QCOMPARE(services.asyncStoresWritten(),
-             quint64(kFrames + 4 + kPostedFrames));
-    QCOMPARE(services.stats().entries, kFrames + 4 + kPostedFrames);
-    QVERIFY(!services.lookupForTest(200, Uuid()).isNull());
+    expectedEncodes += kPostedFrames;
+    QCOMPARE(services.workerEncodes(), expectedEncodes);
+    QCOMPARE(services.asyncStoresWritten(), expectedEncodes);
+    QCOMPARE(services.stats().entries, int(expectedEncodes));
+    QVERIFY(!services.lookupForTest(600, Uuid()).isNull());
 
     // The timer was only held back by the wait, not disabled.
     QTRY_VERIFY(timerHits > 0);

@@ -129,12 +129,14 @@ public:
     // the next dispatch, removed slots finish their current encode.
     void setWriterThreads(int threads);
     int writerThreads() const { return m_writerThreads; }
-    // Blocks until the writer queue is empty or the timeout expires (tests and
-    // the cache-miss profile only).  No nested event loop: it dispatches only
-    // the completion callbacks this object posted itself and sleeps on a wait
-    // condition while an encode is in flight, so timers, paint and input do
-    // not re-enter the caller.  Must be called from the thread owning this
-    // object.  Returns false on timeout.
+    // Blocks until the writer queue is empty, no encode is in flight and every
+    // posted result callback has been delivered — or the timeout expires
+    // (tests and the cache-miss profile only).  No nested event loop: it
+    // delivers only the completion callbacks this object posted itself and
+    // sleeps on a wait condition while an encode is in flight, so timers,
+    // paint and input do not re-enter the caller.  Must be called from the
+    // thread owning this object.  Returns false on timeout (or when the pool
+    // cannot make progress).
     bool waitForPendingStores(int timeoutMs);
 
     // Explicit cache pass.  Nothing calls these automatically: they back the
@@ -257,13 +259,18 @@ private:
     quint64 m_workerEncodes = 0;
     double m_workerEncodeMs = 0.0;
 
-    // waitForPendingStores(): the queue itself stays UI-thread only, the
-    // counter tells a waiter whether an encode is still running and the
-    // condition wakes it when the pool finishes one.  m_storePool is drained
-    // by the destructor, so no worker touches these after the members die.
+    // waitForPendingStores(): the queue itself stays UI-thread only.  The two
+    // counters make the drain deterministic: m_storeEncodesActive tells a
+    // waiter whether a worker still owes it a result, m_storeCompletionsPending
+    // counts results posted to this object but not delivered yet.  A worker
+    // posts its callback before decrementing the active counter, so
+    // "active == 0" always implies "every finished encode already has its
+    // callback queued".  m_storePool is drained by the destructor, so no worker
+    // touches these after the members die.
     QMutex m_storeWaitMutex;
     QWaitCondition m_storeIdle;
     int m_storeEncodesActive = 0;
+    int m_storeCompletionsPending = 0;
 };
 
 } // namespace pvf::next
