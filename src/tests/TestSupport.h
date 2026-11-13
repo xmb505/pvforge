@@ -1,154 +1,17 @@
 #pragma once
 
-// Shared harness for the pvforge self-tests.
+// Small shared helpers for the pvforge self-tests.
 //
-// The tests used to live in one 27k-line src/main.cpp. They are now split into
-// per-module translation units under src/tests/; this header carries the include
-// set they all rely on plus the helpers that more than one test file uses.
-//
-// Nothing here belongs in the release `pvforge` binary: src/tests/ is compiled
-// only into `pvforge-tests` (see PVFORGE_BUILD_SELF_TESTS in CMakeLists.txt).
+// This header deliberately carries no application/UI headers: those live in
+// TestApp.h (current model/shell) and LegacyTestSupport.h (removed legacy
+// shell). Keeping the helper layer narrow lets a test translation unit pull in
+// only the headers it actually exercises.
 
-#include "app/AppIcon.h"
-#include "core/Commands.h"
-#include "core/Camera.h"
-#include "core/History.h"
-#include "core/Lang.h"
-#include "core/Settings.h"
-#include "media/MediaImporter.h"
-#include "media/AudioDecoder.h"
-#include "media/VideoPlayer.h"
-#include "media/VideoProxy.h"
-#include "media/DecoderInfo.h"
-#include "render/CameraRenderer.h"
-#include "render/SceneRenderer.h"
-#include "audio/AudioEngine.h"
-#include "app/MainWindow.h"
-#include "app/EditorSession.h"
-#include "app/EditActions.h"
-#include "app/NewProjectDialog.h"
-#include "app/ExportDialog.h"
-#include "app/ExportProgressDialog.h"
-#include "app/SettingsDialog.h"
-#include "app/SystemInfo.h"
-#include "app/WelcomeWindow.h"
-#include "anim/Anim.h"
-#include "assets/AssetStore.h"
-#include "assets/AssetTypeDetect.h"
-#include "gizmo/Gizmo.h"
-#include "html/HtmlCaptureTest.h"
-#include "html/HtmlLayerTest.h"
-#include "core/Project.h"
-#include "export2/Export.h"
-#include "mcp2/Service.h"
-#include "mcp2/HttpServer.h"
-#include "model/Project.h"
-#include "model/Uuid.h"
-#include "render2/Render.h"
-#include "next/app/MediaServices.h"
-#include "next/app/PlaybackController.h"
-#include "next/app/ProjectDocument.h"
-#include "next/app/WorkbenchServices.h"
-#include "next/history/HistoryPanel.h"
-#include "next/properties/SolverPreviewWidget.h"
-#include "next/settings/SettingsStore.h"
-#include "workbench/Qoi.h"
-#include "core/CheckpointManager.h"
-#include "core/ComicBox.h"
-#include "core/PerfMonitor.h"
-#include "perf/FrameProfiler.h"
-#include "perf/SystemStats.h"
-#include "core/LineDeco.h"
-#include "core/TextBlock.h"
-#include "core/TextStyle.h"
-#include "ui/BrandWallDialog.h"
-#include "ui/PropertiesPanel.h"
-#include "ui/TextLayoutDialog.h"
-#include "ui/WorkbenchPanel.h"
-#include "media/VideoDecoder.h"
-#include "mcp/McpServer.h"
-#include "mcp/StdioBridgeTest.h"
-#include "mcp/McpCommandService.h"
-#include "ui/BezierEditorDialog.h"
-#include "ui/CameraMonitor.h"
-#include "ui/EasingPicker.h"
-#include "ui/CollapsibleSection.h"
-#include "ui/AssetLibraryPanel.h"
-#include "ui/CurveEditor.h"
-#include "ui/McpLogPanel.h"
-#include "ui/PerfMonitorWindow.h"
-#include "ui/TimelinePanel.h"
-#include "ui/Viewport.h"
-#include "ui/WaveformView.h"
-#include "ui/WorkbenchPanel.h"
-
-#include <QApplication>
-#include <QAction>
-#include <QBuffer>
-#include <QComboBox>
-#include <QCryptographicHash>
-#include <QClipboard>
-#include <QDialog>
-#include <QDebug>
-#include <QDir>
-#include <QDirIterator>
-#include <QElapsedTimer>
-#include <QFile>
-#include <QFileInfo>
-#include <QImageWriter>
-#include <QCheckBox>
-#include <QFocusEvent>
-#include <QDataStream>
-#include <QDoubleSpinBox>
-#include <QDropEvent>
-#include <QFont>
-#include <QHostAddress>
-#include <QImage>
-#include <QImageReader>
-#include <QKeyEvent>
-#include <QLineEdit>
-#include <QJsonDocument>
-#include <QLabel>
-#include <QJsonArray>
+#include <QByteArray>
 #include <QJsonObject>
-#include <QMessageBox>
-#include <QMenu>
-#include <QMimeData>
-#include <QMouseEvent>
-#include <QListView>
-#include <QListWidget>
-#include <QPainter>
-#include <QPalette>
-#include <QPlainTextEdit>
-#include <QProcess>
-#include <QEventLoop>
-#include <QProgressBar>
-#include <QPushButton>
-#include <QQueue>
-#include <QSaveFile>
-#include <QSettings>
-#include <QSpinBox>
-#include <QSplitter>
-#include <QTableWidget>
-#include <QStandardPaths>
-#include <QStatusBar>
-#include <QScrollArea>
-#include <QScrollBar>
-#include <QTabWidget>
-#include <QTcpServer>
-#include <QTcpSocket>
-#include <QTemporaryDir>
-#include <QThread>
-#include <QTimer>
-#include <QToolButton>
-#include <QTreeWidget>
-#include <QUrl>
-#include <QWidgetAction>
-#include <QWheelEvent>
-#include <cmath>
+#include <QString>
+
 #include <functional>
-#include <thread>
-#include <memory>
 
 namespace pvf::tests {
 

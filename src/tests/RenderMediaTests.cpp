@@ -1,5 +1,6 @@
-#include "TestSupport.h"
+#include "LegacyTestSupport.h"
 #include "TestRegistry.h"
+#include "html/HtmlCaptureTest.h"
 
 namespace {
 

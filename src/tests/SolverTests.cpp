@@ -1,4 +1,5 @@
 #include "TestSupport.h"
+#include "TestApp.h"
 #include "TestRegistry.h"
 
 namespace {

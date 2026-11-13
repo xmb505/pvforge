@@ -1,4 +1,4 @@
-#include "TestSupport.h"
+#include "LegacyTestSupport.h"
 #include "TestRegistry.h"
 #include "app/TestMode.h"
 

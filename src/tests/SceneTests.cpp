@@ -1,4 +1,4 @@
-#include "TestSupport.h"
+#include "LegacyTestSupport.h"
 #include "TestRegistry.h"
 
 // Historically this translation unit covered scenes and annotations in the

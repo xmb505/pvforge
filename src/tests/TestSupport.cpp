@@ -1,5 +1,12 @@
 #include "TestSupport.h"
 
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QHostAddress>
+#include <QJsonDocument>
+#include <QTcpSocket>
+#include <QTimer>
+
 namespace pvf::tests {
 
 McpHttpResponse mcpExchange(quint16 port, const QByteArray& request,

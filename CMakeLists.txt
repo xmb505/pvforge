@@ -208,6 +208,9 @@ pvf_add_lang_resources(pvforge)
 if(PVFORGE_BUILD_SELF_TESTS)
     set(PVF_TEST_SOURCES
         src/tests/TestSupport.cpp
+        src/tests/PropertiesSpecialTests.cpp
+        src/tests/TimelineEditTests.cpp
+        src/tests/McpWriteTests.cpp
         src/tests/TestRegistry.cpp
         src/tests/SessionTests.cpp
         src/tests/PropertiesTests.cpp
