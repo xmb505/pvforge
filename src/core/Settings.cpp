@@ -303,6 +303,58 @@ void setMcpLogWindowGeometry(const QRect& geometry)
     store().setValue(QStringLiteral("mcp/logWindowGeometry"), geometry);
 }
 
+QString workbenchMode()
+{
+    const QString mode =
+        store().value(QStringLiteral("panel/workbench/mode"),
+                      QStringLiteral("docked"))
+            .toString();
+    return mode == QStringLiteral("floating") ? mode : QStringLiteral("docked");
+}
+
+void setWorkbenchMode(const QString& mode)
+{
+    store().setValue(QStringLiteral("panel/workbench/mode"),
+                     mode == QStringLiteral("floating") ? mode
+                                                        : QStringLiteral("docked"));
+}
+
+bool workbenchVisible()
+{
+    return store().value(QStringLiteral("panel/workbench/visible"), false).toBool();
+}
+
+void setWorkbenchVisible(bool on)
+{
+    store().setValue(QStringLiteral("panel/workbench/visible"), on);
+}
+
+QRect workbenchDockGeometry()
+{
+    return store()
+        .value(QStringLiteral("panel/workbench/dockGeometry"),
+               QRect(-1, -1, 640, 560))
+        .toRect();
+}
+
+void setWorkbenchDockGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("panel/workbench/dockGeometry"), geometry);
+}
+
+QRect workbenchWindowGeometry()
+{
+    return store()
+        .value(QStringLiteral("panel/workbench/windowGeometry"),
+               QRect(-1, -1, 640, 560))
+        .toRect();
+}
+
+void setWorkbenchWindowGeometry(const QRect& geometry)
+{
+    store().setValue(QStringLiteral("panel/workbench/windowGeometry"), geometry);
+}
+
 QString exportDirectory()
 {
     return store().value(QStringLiteral("export/directory")).toString();

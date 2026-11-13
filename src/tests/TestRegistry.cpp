@@ -44,6 +44,7 @@ Registry buildRegistry()
     registerAssetTests(registry);
     registerMcpTests(registry);
     registerPerfTests(registry);
+    registerPanelLayoutTests(registry);
     return registry;
 }
 

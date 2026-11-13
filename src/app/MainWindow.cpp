@@ -22,6 +22,8 @@
 #include "ui/TimelinePanel.h"
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
+#include "ui/panels/PanelGeometry.h"
+#include "ui/panels/WorkbenchPanelHost.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -78,6 +80,13 @@ void MainWindow::buildSessionShell()
         m_workbench = new WorkbenchPanel(m_session, m_viewport);
         m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
         m_workbench->hide();
+        m_workbenchHost = new WorkbenchPanelHost(
+            m_workbench, m_viewport, this,
+            [this] {
+                return m_viewport->workbenchButton()->geometry().bottomLeft()
+                       + QPoint(0, 8);
+            },
+            this);
         connect(m_viewport, &Viewport::workbenchRequested, this,
                 &MainWindow::toggleWorkbench);
         connect(m_workbench, &WorkbenchPanel::sessionCreated, this,
@@ -545,6 +554,8 @@ void MainWindow::buildSessionShell()
     updateSessionPlaybackUi();
     updateWindowTitle();
     showSessionOnboardingIfNeeded();
+    if (m_workbenchHost)
+        m_workbenchHost->restoreOnStartup();
 }
 
 void MainWindow::refreshSession()
@@ -757,6 +768,14 @@ MainWindow::~MainWindow()
 
 void MainWindow::toggleWorkbench()
 {
+    if (m_workbenchHost)
+    {
+        m_workbenchHost->toggle();
+        return;
+    }
+
+    if (!m_workbench || !m_viewport)
+        return;
     if (m_workbench->isVisible())
     {
         m_workbench->hidePanel();
@@ -765,7 +784,10 @@ void MainWindow::toggleWorkbench()
 
     const QPoint anchor =
         m_viewport->workbenchButton()->geometry().bottomLeft() + QPoint(0, 8);
-    m_workbench->showAt(anchor);
+    const QSize parentSize = m_viewport->size();
+    m_workbench->showDocked(
+        pvf::panels::defaultDockRect(anchor, parentSize, QSize(640, 560),
+                                     QSize(420, 300)));
 }
 
 void MainWindow::updateWindowTitle()

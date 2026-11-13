@@ -56,6 +56,7 @@ class TimelinePanel;
 class VideoProxyGenerator;
 class Viewport;
 class WorkbenchPanel;
+class WorkbenchPanelHost;
 
 // Crash recovery choices for the session shell.  The store scans uncommitted
 // text when the project opens; the shell asks before touching anything.
@@ -118,6 +119,7 @@ public:
     TimelinePanel* timelineForTest() const { return m_timeline; }
     PropertiesPanel* propertiesForTest() const { return m_props; }
     WorkbenchPanel* workbenchForTest() const { return m_workbench; }
+    WorkbenchPanelHost* workbenchHostForTest() const { return m_workbenchHost; }
     next::HistoryPanel* historyPanelForTest() const { return m_sessionHistory; }
     SettingsDialog* openSessionSettingsDialogForTest();
     // Absolute `.cache` path (or one of its subdirectories) for the open
@@ -320,6 +322,7 @@ private:
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
+    WorkbenchPanelHost* m_workbenchHost = nullptr;
     CameraMonitor* m_monitor = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
     PerfMonitorWindow* m_perfWindow = nullptr;

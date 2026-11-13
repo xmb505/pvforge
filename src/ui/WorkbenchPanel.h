@@ -17,14 +17,22 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QShortcut;
 class QSpinBox;
 class QStackedWidget;
+class QToolButton;
 
 namespace pvf {
 
 class EditorSession;
 
 // Floating creation panel modelled after the Mine-imator workbench.
+//
+// The panel always carries a slim 22 px header (title + float/dock + close).
+// Docked it is a QFrame child of the viewport; floating it is the same widget
+// reparented to the main window as a native Qt::Window.  The host owns the
+// parent/geometry transitions; the panel only swaps its chrome and reports
+// user intent through signals.
 class WorkbenchPanel : public QFrame
 {
     Q_OBJECT
@@ -34,9 +42,15 @@ public:
     // EditorSession. Other legacy creation pages are not shown yet.
     explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);
 
-    void showAt(const QPoint& pos);
+    // Show docked at an explicit viewport rectangle.  Installs the click-away
+    // filter while docked and makes sure no stale app filter survives a float.
+    void showDocked(const QRect& rect);
     void hidePanel();
     void setIgnoreMouseWidget(QWidget* widget) { m_ignoreWidget = widget; }
+    // Floating chrome: drop the drop shadow / QFrame border and swap the
+    // header button to "dock"; docked restores the old look.
+    void setFloatingChrome(bool floating);
+    bool isFloating() const { return m_floating; }
     // Session-mode refresh after an external (MCP) project change: re-reads
     // the wall summary and media choices from the document/assets.
     void refreshSession();
@@ -46,11 +60,20 @@ public:
 signals:
     void created(EntityId id);
     void sessionCreated(const Uuid& uuid);
+    // User intent from the built-in header.
+    void floatToggleRequested();
+    void hideRequested();
+    void dockRequested();
+    void visibilityChanged(bool visible);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
+    QWidget* buildHeader();
     void buildUi();
     QWidget* buildSessionSpecialPage();
     void createSessionBrandWall();
@@ -86,6 +109,12 @@ private:
 
     EditorSession* m_session = nullptr;
     QWidget* m_ignoreWidget = nullptr;
+    QWidget* m_header = nullptr;
+    QLabel* m_title = nullptr;
+    QToolButton* m_floatButton = nullptr;
+    QToolButton* m_closeButton = nullptr;
+    QShortcut* m_escapeShortcut = nullptr;
+    bool m_floating = false;
     QListWidget* m_types = nullptr;
     QStackedWidget* m_pages = nullptr;
     QPushButton* m_create = nullptr;

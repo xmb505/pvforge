@@ -75,6 +75,17 @@ void setMcpLogDockGeometry(const QRect& geometry);
 QRect mcpLogWindowGeometry();
 void setMcpLogWindowGeometry(const QRect& geometry);
 
+// Workbench panel host state.  Keys live under `panel/workbench/*` so the
+// remaining panels can adopt the same layout scheme later.
+QString workbenchMode();                // "docked" (default) or "floating"
+void setWorkbenchMode(const QString& mode);
+bool workbenchVisible();
+void setWorkbenchVisible(bool on);
+QRect workbenchDockGeometry();          // (-1,-1,...) means "not set"
+void setWorkbenchDockGeometry(const QRect& geometry);
+QRect workbenchWindowGeometry();        // (-1,-1,...) means "not set"
+void setWorkbenchWindowGeometry(const QRect& geometry);
+
 bool showCameraFrame();
 void setShowCameraFrame(bool on);
 

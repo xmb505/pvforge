@@ -8,24 +8,43 @@
 #include "next/app/ProjectDocument.h"
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMouseEvent>
-#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShortcut>
+#include <QShowEvent>
 #include <QStackedWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace pvf {
+
+namespace {
+
+QString workbenchStyle(bool floating)
+{
+    return QStringLiteral(
+               "QFrame#workbench { background: palette(window); border: %1; }"
+               "QWidget#workbenchHeader { background: palette(midlight);"
+               " border-bottom: 1px solid palette(mid); }")
+        .arg(floating ? QStringLiteral("none")
+                      : QStringLiteral("1px solid palette(mid)"));
+}
+
+} // namespace
 
 WorkbenchPanel::WorkbenchPanel(EditorSession* session, QWidget* parent)
     : QFrame(parent)
@@ -34,15 +53,60 @@ WorkbenchPanel::WorkbenchPanel(EditorSession* session, QWidget* parent)
     buildUi();
 }
 
+QWidget* WorkbenchPanel::buildHeader()
+{
+    auto* header = new QWidget(this);
+    header->setObjectName(QStringLiteral("workbenchHeader"));
+    header->setFixedHeight(22);
+
+    auto* layout = new QHBoxLayout(header);
+    layout->setContentsMargins(8, 0, 4, 0);
+    layout->setSpacing(4);
+
+    m_title = new QLabel(Lang::t(QStringLiteral("panel.workbench"),
+                                 QStringLiteral("工作台")),
+                         header);
+    m_title->setObjectName(QStringLiteral("workbenchTitle"));
+    QFont titleFont = m_title->font();
+    titleFont.setBold(true);
+    titleFont.setPointSizeF(std::max(7.0, titleFont.pointSizeF() - 0.5));
+    m_title->setFont(titleFont);
+    layout->addWidget(m_title);
+    layout->addStretch(1);
+
+    m_floatButton = new QToolButton(header);
+    m_floatButton->setObjectName(QStringLiteral("workbenchFloatButton"));
+    m_floatButton->setAutoRaise(true);
+    m_floatButton->setFocusPolicy(Qt::NoFocus);
+    m_floatButton->setFixedHeight(18);
+    m_floatButton->setText(QStringLiteral("浮出"));
+    m_floatButton->setToolTip(QStringLiteral("浮出为独立窗口"));
+    connect(m_floatButton, &QToolButton::clicked, this,
+            &WorkbenchPanel::floatToggleRequested);
+    layout->addWidget(m_floatButton);
+
+    m_closeButton = new QToolButton(header);
+    m_closeButton->setObjectName(QStringLiteral("workbenchCloseButton"));
+    m_closeButton->setAutoRaise(true);
+    m_closeButton->setFocusPolicy(Qt::NoFocus);
+    m_closeButton->setFixedSize(18, 18);
+    m_closeButton->setText(QStringLiteral("×"));
+    m_closeButton->setToolTip(QStringLiteral("关闭工作台"));
+    connect(m_closeButton, &QToolButton::clicked, this,
+            &WorkbenchPanel::hideRequested);
+    layout->addWidget(m_closeButton);
+
+    return header;
+}
+
 void WorkbenchPanel::buildUi()
 {
     setObjectName(QStringLiteral("workbench"));
     setFrameShape(QFrame::StyledPanel);
-    setStyleSheet(QStringLiteral(
-        "QFrame#workbench { background: palette(window); border: 1px solid palette(mid); }"));
+    setStyleSheet(workbenchStyle(false));
     // The old wall is 640x560, but it must fit above the timeline in smaller
-    // viewports. showAt() shrinks it to the viewport; the page stack scrolls
-    // while the create button stays outside the scroll area.
+    // viewports. showDocked() shrinks it to the viewport; the page stack
+    // scrolls while the create button stays outside the scroll area.
     setMinimumSize(420, 300);
     resize(640, 560);
 
@@ -52,11 +116,18 @@ void WorkbenchPanel::buildUi()
     shadow->setColor(QColor(0, 0, 0, 170));
     setGraphicsEffect(shadow);
 
-    auto* root = new QHBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(12);
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    m_header = buildHeader();
+    root->addWidget(m_header);
 
-    m_types = new QListWidget(this);
+    auto* content = new QWidget(this);
+    auto* contentRow = new QHBoxLayout(content);
+    contentRow->setContentsMargins(12, 12, 12, 12);
+    contentRow->setSpacing(12);
+
+    m_types = new QListWidget(content);
     m_types->setObjectName(QStringLiteral("typeList"));
     m_types->setFixedWidth(170);
     m_types->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -66,7 +137,7 @@ void WorkbenchPanel::buildUi()
 
     auto* right = new QVBoxLayout();
     right->setSpacing(10);
-    m_pages = new QStackedWidget(this);
+    m_pages = new QStackedWidget(content);
     m_pages->setObjectName(QStringLiteral("typePages"));
 
     if (m_session)
@@ -125,9 +196,10 @@ void WorkbenchPanel::buildUi()
         m_pages->addWidget(buildSpecialPage());
         m_pages->addWidget(buildCameraPage());
     }
-    root->addWidget(m_types);
+    root->addWidget(content, 1);
+    contentRow->addWidget(m_types);
 
-    auto* pageScroll = new QScrollArea(this);
+    auto* pageScroll = new QScrollArea(content);
     pageScroll->setObjectName(QStringLiteral("workbenchPageScroll"));
     pageScroll->setWidgetResizable(true);
     pageScroll->setFrameShape(QFrame::NoFrame);
@@ -137,11 +209,19 @@ void WorkbenchPanel::buildUi()
     right->addWidget(pageScroll, 1);
 
     m_create = new QPushButton(
-        Lang::t(QStringLiteral("workbench.create"), QStringLiteral("创建")), this);
+        Lang::t(QStringLiteral("workbench.create"), QStringLiteral("创建")), content);
     m_create->setObjectName(QStringLiteral("createButton"));
     m_create->setMinimumHeight(38);
     right->addWidget(m_create);
-    root->addLayout(right, 1);
+    contentRow->addLayout(right, 1);
+
+    m_escapeShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    m_escapeShortcut->setContext(Qt::WindowShortcut);
+    m_escapeShortcut->setEnabled(false);
+    connect(m_escapeShortcut, &QShortcut::activated, this, [this] {
+        if (m_floating)
+            emit dockRequested();
+    });
 
     connect(m_types, &QListWidget::currentRowChanged, this, [this](int row) {
         if (row >= 0)
@@ -157,45 +237,62 @@ void WorkbenchPanel::buildUi()
     updateCreateState();
 }
 
-void WorkbenchPanel::showAt(const QPoint& pos)
+void WorkbenchPanel::showDocked(const QRect& rect)
 {
     refreshMediaLibrary();
     if (m_session)
         updateSessionWallSummary();
 
-    QWidget* parent = parentWidget();
-    QSize panelSize = size();
-    if (parent)
-    {
-        panelSize.setWidth(std::min(640, std::max(420, parent->width() - 16)));
-        panelSize.setHeight(std::min(560, std::max(300, parent->height() - 16)));
-    }
-    resize(panelSize);
-
-    QPoint target = pos;
-    if (parent)
-    {
-        target.setX(std::clamp(target.x(), 8, std::max(8, parent->width() - width() - 8)));
-        target.setY(std::clamp(target.y(), 8, std::max(8, parent->height() - height() - 8)));
-    }
+    setFloatingChrome(false);
+    resize(rect.size());
+    move(rect.topLeft());
 
     if (qApp)
     {
         qApp->removeEventFilter(this);
         qApp->installEventFilter(this);
     }
-
-    const QPoint start = target - QPoint(18, 0);
-    move(start);
     show();
     raise();
+}
 
-    auto* animation = new QPropertyAnimation(this, "pos", this);
-    animation->setDuration(160);
-    animation->setStartValue(start);
-    animation->setEndValue(target);
-    animation->setEasingCurve(QEasingCurve::OutCubic);
-    animation->start(QAbstractAnimation::DeleteWhenStopped);
+void WorkbenchPanel::setFloatingChrome(bool floating)
+{
+    m_floating = floating;
+    setFrameShape(floating ? QFrame::NoFrame : QFrame::StyledPanel);
+    setStyleSheet(workbenchStyle(floating));
+
+    if (floating)
+    {
+        // A drop shadow on a top-level window is clipped by the window edge
+        // and leaves a border around the native frame.
+        setGraphicsEffect(nullptr);
+    }
+    else if (!graphicsEffect())
+    {
+        auto* shadow = new QGraphicsDropShadowEffect(this);
+        shadow->setBlurRadius(28);
+        shadow->setOffset(0, 8);
+        shadow->setColor(QColor(0, 0, 0, 170));
+        setGraphicsEffect(shadow);
+    }
+
+    if (m_floatButton)
+    {
+        m_floatButton->setText(floating ? QStringLiteral("停靠")
+                                        : QStringLiteral("浮出"));
+        m_floatButton->setToolTip(floating
+                                      ? QStringLiteral("停靠回视口")
+                                      : QStringLiteral("浮出为独立窗口"));
+    }
+    if (m_closeButton)
+        m_closeButton->setToolTip(floating ? QStringLiteral("隐藏工作台窗口")
+                                           : QStringLiteral("关闭工作台"));
+    if (m_escapeShortcut)
+        m_escapeShortcut->setEnabled(floating);
+    if (floating)
+        setWindowTitle(Lang::t(QStringLiteral("panel.workbench"),
+                               QStringLiteral("工作台")));
 }
 
 void WorkbenchPanel::hidePanel()
@@ -205,6 +302,31 @@ void WorkbenchPanel::hidePanel()
     if (qApp)
         qApp->removeEventFilter(this);
     hide();
+}
+
+void WorkbenchPanel::showEvent(QShowEvent* event)
+{
+    QFrame::showEvent(event);
+    emit visibilityChanged(true);
+}
+
+void WorkbenchPanel::hideEvent(QHideEvent* event)
+{
+    QFrame::hideEvent(event);
+    emit visibilityChanged(false);
+}
+
+void WorkbenchPanel::closeEvent(QCloseEvent* event)
+{
+    if (m_floating)
+    {
+        // Closing the floating window only hides it; the panel and its session
+        // stay alive and the host keeps the floating mode/geometry.
+        event->ignore();
+        emit hideRequested();
+        return;
+    }
+    QFrame::closeEvent(event);
 }
 
 bool WorkbenchPanel::eventFilter(QObject* watched, QEvent* event)
