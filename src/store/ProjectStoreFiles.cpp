@@ -175,7 +175,8 @@ bool migrateTextDocument(const QString& path, const QString& label,
     if (*version < model::migrations::minimumSupportedVersion())
     {
         setError(error,
-                 QStringLiteral("%1 的%2版本 %3 过旧（本程序最低支持版本 %4）")
+                 QStringLiteral("%1 的%2版本 %3 过旧（本程序最低支持版本 %4；"
+                                "旧扁平实体目录/单文件工程已不兼容，不做导入）")
                      .arg(subject, label)
                      .arg(*version)
                      .arg(model::migrations::minimumSupportedVersion()));
@@ -263,52 +264,71 @@ bool loadProjectData(const QString& root, model::Project* project,
         {
             const QString fileName = fileInfo.fileName();
             const QString uuid = fileName.left(fileName.size() - 5);
+            const QString path = fileInfo.absoluteFilePath();
             if (!model::isValidUuid(uuid))
             {
                 setError(error,
-                         QStringLiteral("实体文件名不是合法 UUID：%1")
-                             .arg(fileInfo.absoluteFilePath()));
+                         QStringLiteral("实体文件名不是合法 UUID：%1").arg(path));
                 return false;
             }
 
             QJsonObject entityObject;
-            if (!readJsonObject(fileInfo.absoluteFilePath(), &entityObject, error))
+            if (!readJsonObject(path, &entityObject, error))
                 return false;
 
             QJsonObject entityDocument;
-            if (!migrateTextDocument(fileInfo.absoluteFilePath(),
-                                     QStringLiteral("实体"), uuid, entityObject,
-                                     &entityDocument, error))
+            if (!migrateTextDocument(path, QStringLiteral("实体"), uuid,
+                                     entityObject, &entityDocument, error))
             {
                 return false;
             }
 
-            QString entityError;
-            const auto entity =
-                model::entityFromJson(entityDocument, options, &entityError);
-            if (!entity)
+            // Opening is strict and names the file in every diagnostic. The
+            // root object owns the recursive children; the file name must be
+            // the root UUID, not any descendant.
+            model::ParseOptions entityOptions = options;
+            entityOptions.prefix = path;
+            QString treeError;
+            const auto tree =
+                model::entityTreeFromJson(entityDocument, entityOptions, &treeError);
+            if (!tree)
             {
                 setError(error,
                          QStringLiteral("实体文件 %1 无效：%2")
-                             .arg(fileInfo.absoluteFilePath(), entityError));
+                             .arg(path, treeError));
+                return false;
+            }
+            if (tree->entity.uuid != uuid)
+            {
+                setError(error,
+                         QStringLiteral("实体文件 %1 内的根 UUID（%2）与文件名不一致")
+                             .arg(path, tree->entity.uuid));
                 return false;
             }
 
-            if (entity->uuid != uuid)
+            QHash<Uuid, model::Entity> treeEntities;
+            QString flattenError;
+            if (!model::flattenEntityTree(*tree, &treeEntities, &flattenError))
             {
                 setError(error,
-                         QStringLiteral("实体文件 %1 内的 uuid（%2）与文件名不一致")
-                             .arg(fileInfo.absoluteFilePath(), entity->uuid));
+                         QStringLiteral("实体文件 %1 的根子树无效：%2")
+                             .arg(path, flattenError));
                 return false;
             }
 
-            if (loaded.entities.contains(uuid))
+            for (auto it = treeEntities.constBegin();
+                 it != treeEntities.constEnd(); ++it)
             {
-                setError(error,
-                         QStringLiteral("实体 UUID 重复：%1").arg(uuid));
-                return false;
+                if (loaded.entities.contains(it.key()))
+                {
+                    setError(
+                        error,
+                        QStringLiteral("实体 UUID 重复：%1（文件 %2）")
+                            .arg(it.key(), path));
+                    return false;
+                }
+                loaded.entities.insert(it.key(), it.value());
             }
-            loaded.entities.insert(uuid, *entity);
         }
     }
 

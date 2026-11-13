@@ -19,15 +19,12 @@
 #include <QTransform>
 #include <QtMath>
 #include <QtTest>
-
 #include <cmath>
 #include <memory>
 #include <optional>
-
 using namespace pvf;
 
 namespace {
-
 QString lfsBinDir()
 {
     return QStringLiteral("/tmp/opencode/gitlfs/root/usr/bin");
@@ -102,7 +99,6 @@ QJsonObject entityArgs(const QString& name, int start, int end,
         args.insert(QStringLiteral("parentUuid"), parent);
     return args;
 }
-
 QJsonArray keys(std::initializer_list<QPair<int, double>> values)
 {
     QJsonArray array;
@@ -115,7 +111,6 @@ QJsonArray keys(std::initializer_list<QPair<int, double>> values)
     }
     return array;
 }
-
 constexpr char kSkipMessage[] = "git/git-lfs 不可用，跳过依赖 git 的测试";
 constexpr char kReadOnlyMessage[] =
     "Git 未启用，MCP 当前只读；请先在设置中启用 Git";
@@ -127,7 +122,6 @@ QByteArray fileBytes(const QString& path)
         return QByteArray();
     return file.readAll();
 }
-
 bool writeWav(const QString& path, double seconds, int sampleRate)
 {
     const int frameCount = int(sampleRate * seconds);
@@ -149,7 +143,6 @@ bool writeWav(const QString& path, double seconds, int sampleRate)
     return file.open(QIODevice::WriteOnly)
            && file.write(bytes) == bytes.size();
 }
-
 QString createEntity(Fixture& fixture, const QString& name, int start, int end,
                      const Uuid& parent = QString())
 {
@@ -165,7 +158,6 @@ class Mcp2Tests : public QObject
 
 private slots:
     void initTestCase();
-
     void createTreeOneCommit();
     void keyframesSetRespectsDuration();
     void solverDrivenTrackRejectsNormalKeys();
@@ -195,7 +187,6 @@ private slots:
     void previewRenderFrameWritesPng();
     void previewRejectsOversize();
     void solverEvaluateNestedEntity();
-
     void moveRowOnlyAndGetDefaults();
     void entityGetIncludesSolvers();
     void textualContentCanBecomeEmpty();
@@ -209,7 +200,6 @@ private slots:
     void deleteReportsSolverDependencies();
     void reparentPreserveWorldRejectsKeyframes();
     void assetImportRejectsOversize();
-
     void stopBlocksWrites();
     void stopKeepsReadsWorking();
     void resumeRestoresWrites();
@@ -236,7 +226,6 @@ void Mcp2Tests::createTreeOneCommit()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
-
     QJsonArray children;
     children.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("背景")},
                                 {QStringLiteral("start"), 0},
@@ -2305,17 +2294,30 @@ void Mcp2Tests::moveRowOnlyAndGetDefaults()
     QJsonObject childArgs = entityArgs(QStringLiteral("子"), 0, 60, parent);
     childArgs.insert(QStringLiteral("transform"),
                      QJsonObject{{QStringLiteral("x"), 10.0}});
+    childArgs.insert(QStringLiteral("space"), QStringLiteral("canvas"));
     const QString child =
         uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
     result = fixture.call(QStringLiteral("entity.get"),
                           QJsonObject{{QStringLiteral("uuid"), child}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject().value(QStringLiteral("space")).toString(), QStringLiteral("canvas"));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject().value(QStringLiteral("followParentRange")).toBool(), false);
+    result = fixture.call(
+        QStringLiteral("entity.update"),
+        QJsonObject{{QStringLiteral("uuid"), child},
+                    {QStringLiteral("patch"),
+                     QJsonObject{{QStringLiteral("space"), QStringLiteral("parent")},
+                                 {QStringLiteral("followParentRange"), true}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    result = fixture.call(QStringLiteral("entity.get"),
+                          QJsonObject{{QStringLiteral("uuid"), child}});
+    QCOMPARE(result.value(QStringLiteral("data")).toObject().value(QStringLiteral("space")).toString(), QStringLiteral("parent"));
+    QVERIFY(result.value(QStringLiteral("data")).toObject().value(QStringLiteral("followParentRange")).toBool());
     QVERIFY(std::abs(result.value(QStringLiteral("data")).toObject()
                          .value(QStringLiteral("evaluated")).toObject()
                          .value(QStringLiteral("x")).toDouble()
                      - 10.0)
             < 1e-6);
-
     QJsonObject animatedArgs = entityArgs(QStringLiteral("动画"), 0, 60);
     animatedArgs.insert(QStringLiteral("keyframes"),
                         QJsonObject{{QStringLiteral("x"),
@@ -2323,11 +2325,9 @@ void Mcp2Tests::moveRowOnlyAndGetDefaults()
     const QString animated =
         uuidOf(fixture.call(QStringLiteral("entity.create"), animatedArgs));
     QVERIFY(!animated.isEmpty());
-
     pvf::mcp2::ViewState state;
     state.playhead = 15;
     fixture.service->setViewStateProvider([state] { return state; });
-
     result = fixture.call(QStringLiteral("entity.get"),
                           QJsonObject{{QStringLiteral("uuid"), animated}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));

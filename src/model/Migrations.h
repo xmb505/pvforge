@@ -12,13 +12,13 @@
 namespace pvf::model {
 
 // The one and only on-disk format version. It covers project.json and every
-// entities/<uuid>.json document: bumping it means adding exactly one
-// migrations::vN_to_vN+1 step in Migrations.cpp.
-inline constexpr int kProjectFormatVersion = 2;
+// entities/<root-uuid>.json document. v3 stores one root subtree per entity
+// file (recursive "children"); the old flat entity directory and single-file
+// projects are intentionally not importable, so no production migration step
+// exists any more.
+inline constexpr int kProjectFormatVersion = 3;
 inline constexpr char kProjectFormat[] = "pvforge-project";
-// Entity documents carry their own format marker since v2. v1 entity files had
-// neither "format" nor "version"; the v1_to_v2 step adds the marker and
-// upgrade() stamps the version.
+// Entity documents carry their own format marker since v2.
 inline constexpr char kEntityFormat[] = "pvforge-entity";
 
 } // namespace pvf::model
@@ -41,8 +41,10 @@ struct Migration
 };
 
 // The production chain. It is applied to both project.json and every
-// entities/*.json document; a step therefore inspects the document shape
-// itself. v1_to_v2 gives entity documents their own format marker and version.
+// entities/<root-uuid>.json document; a step therefore inspects the document
+// shape itself. The v3 root-subtree format breaks the old flat directory, so
+// the production registry is intentionally empty: older projects are refused,
+// not imported.
 const QVector<Migration>& registry();
 
 // Applies `chain` from `fromVersion` up to `toVersion`, step by step, and
@@ -59,8 +61,8 @@ std::optional<QJsonObject> upgrade(const QJsonObject& document,
                                    int fromVersion, int toVersion,
                                    QString* error = nullptr);
 
-// The oldest version the production chain can read. Opening a document older
-// than this is refused with a readable message instead of being half-parsed.
+// The oldest version the production chain can read. With no production steps
+// this is the current version: v3 projects only.
 int minimumSupportedVersion();
 
 // The integer "version" of one text document. A document without "version" and

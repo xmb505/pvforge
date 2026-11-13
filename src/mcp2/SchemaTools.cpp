@@ -225,6 +225,8 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("uuid"), prop(QStringLiteral("string"), QStringLiteral("UUID v4"))},
             {QStringLiteral("name"), prop(QStringLiteral("string"), QStringLiteral("1..256 字符"))},
             {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("null = 根实体"))},
+            {QStringLiteral("space"), prop(QStringLiteral("string"), QStringLiteral("parent|canvas；canvas 不继承父级 transform"))},
+            {QStringLiteral("followParentRange"), prop(QStringLiteral("boolean"), QStringLiteral("true 时区间必须等于直接父区间"))},
             {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= 0"))},
             {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，> start"))},
             {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral(">= 0，0 在最底"))},
@@ -500,6 +502,8 @@ QJsonObject listTools()
     const QJsonObject entityCreateSchema = objectSchema(
         {{QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
          {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
+         {QStringLiteral("space"), prop(QStringLiteral("string"), QStringLiteral("parent|canvas"))},
+         {QStringLiteral("followParentRange"), prop(QStringLiteral("boolean"), QStringLiteral("true 时区间必须等于直接父区间"))},
          {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("必填"))},
          {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("默认按内容类型"))},
          {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1"))},

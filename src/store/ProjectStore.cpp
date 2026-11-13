@@ -41,11 +41,34 @@ Thumbs.db
 
 } // namespace
 
+namespace {
+
+QVector<Uuid> collectSubtree(const model::Project& project, const Uuid& uuid)
+{
+    QVector<Uuid> result{uuid};
+    QSet<Uuid> seen{uuid};
+    for (int i = 0; i < result.size(); ++i)
+    {
+        const QVector<Uuid> children = model::childrenOf(project, result.at(i));
+        for (const Uuid& child : children)
+        {
+            if (seen.contains(child))
+                continue;
+            seen.insert(child);
+            result.append(child);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 ProjectStore::ProjectStore(QString root, model::Project project)
     : m_root(std::move(root))
     , m_project(std::move(project))
 {
     m_assets.emplace(m_root);
+    rebuildEntityRootIndex();
 }
 
 bool ProjectStore::gitBinaryAvailable(QString* version)
@@ -266,6 +289,89 @@ bool ProjectStore::setGitEnabled(bool enabled, QString* error)
     return true;
 }
 
+Uuid ProjectStore::entityRootOf(const Uuid& uuid, QString* error) const
+{
+    QSet<Uuid> visited;
+    Uuid current = uuid;
+    while (!current.isEmpty())
+    {
+        if (visited.contains(current))
+        {
+            setError(error,
+                     QStringLiteral("实体父子关系存在循环：%1").arg(current));
+            return QString();
+        }
+        visited.insert(current);
+
+        const auto entity = m_project.entities.constFind(current);
+        if (entity == m_project.entities.constEnd())
+        {
+            setError(error, QStringLiteral("实体不存在：%1").arg(current));
+            return QString();
+        }
+        if (entity->parentUuid.isEmpty())
+            return current;
+        current = entity->parentUuid;
+    }
+
+    setError(error, QStringLiteral("实体 %1 没有根实体").arg(uuid));
+    return QString();
+}
+
+void ProjectStore::rebuildEntityRootIndex()
+{
+    m_entityRoots.clear();
+    for (auto it = m_project.entities.constBegin(); it != m_project.entities.constEnd();
+         ++it)
+    {
+        const Uuid root = entityRootOf(it.key());
+        if (!root.isEmpty())
+            m_entityRoots.insert(it.key(), root);
+    }
+}
+
+bool ProjectStore::writeEntityTree(const Uuid& rootUuid, QString* error)
+{
+    model::EntityTreeNode tree;
+    QString buildError;
+    if (!model::buildEntityTree(m_project, rootUuid, &tree, &buildError))
+    {
+        setError(error, buildError);
+        return false;
+    }
+
+    // Reuse the reader's checks before writing: a subtree that would be
+    // refused on open must not be written in the first place.
+    QHash<Uuid, model::Entity> checked;
+    QString treeError;
+    if (!model::flattenEntityTree(tree, &checked, &treeError))
+    {
+        setError(error, treeError);
+        return false;
+    }
+
+    const QString relativePath = entityRelativePath(rootUuid);
+    notePath(relativePath);
+    return writeJsonObject(absolutePath(m_root, relativePath),
+                           model::toJson(tree), error);
+}
+
+bool ProjectStore::removeEntityTreeFile(const Uuid& rootUuid, QString* error)
+{
+    const QString relativePath = entityRelativePath(rootUuid);
+    const QString path = absolutePath(m_root, relativePath);
+    notePath(relativePath);
+
+    QFile file(path);
+    if (file.exists() && !file.remove())
+    {
+        setError(error,
+                 QStringLiteral("无法删除 %1：%2").arg(path, file.errorString()));
+        return false;
+    }
+    return true;
+}
+
 bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
 {
     const auto it = m_project.entities.constFind(uuid);
@@ -281,19 +387,42 @@ bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
                      .arg(uuid, it->uuid));
         return false;
     }
-    if (!model::validateEntity(*it, error))
+
+    const Uuid newRoot = entityRootOf(uuid, error);
+    if (newRoot.isEmpty())
+        return false;
+    const Uuid oldRoot = m_entityRoots.value(uuid);
+
+    if (!writeEntityTree(newRoot, error))
         return false;
 
-    const QString relativePath = entityRelativePath(uuid);
-    notePath(relativePath);
-    return writeJsonObject(absolutePath(m_root, relativePath),
-                           model::toJson(*it), error);
+    // A reparent can move this entity (or its whole subtree) between files.
+    // Rewrite the previous root file so no stale copy of the entity survives,
+    // and drop it when that root no longer exists in the model.
+    if (!oldRoot.isEmpty() && oldRoot != newRoot)
+    {
+        const bool oldRootStillRoot =
+            m_project.entities.contains(oldRoot)
+            && entityRootOf(oldRoot) == oldRoot;
+        if (oldRootStillRoot)
+        {
+            if (!writeEntityTree(oldRoot, error))
+                return false;
+        }
+        else if (!removeEntityTreeFile(oldRoot, error))
+        {
+            return false;
+        }
+    }
+
+    rebuildEntityRootIndex();
+    return true;
 }
 
 bool ProjectStore::saveProject(QString* error)
 {
     // Validate settings and markers without requiring the entity tree to be
-    // consistent; deleting a parent without cascading is the caller's job.
+    // consistent; the entity files are written separately.
     model::Project check;
     check.settings = m_project.settings;
     check.markers = m_project.markers;
@@ -314,25 +443,35 @@ bool ProjectStore::deleteEntity(const Uuid& uuid, QString* error)
         return false;
     }
 
-    const auto it = m_project.entities.find(uuid);
-    if (it == m_project.entities.end())
+    if (!m_project.entities.contains(uuid))
     {
         setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
         return false;
     }
 
-    const QString relativePath = entityRelativePath(uuid);
-    const QString path = absolutePath(m_root, relativePath);
-    notePath(relativePath);
-    QFile file(path);
-    if (file.exists() && !file.remove())
+    const Uuid root = entityRootOf(uuid, error);
+    if (root.isEmpty())
+        return false;
+
+    const QVector<Uuid> ids = collectSubtree(m_project, uuid);
+    QHash<Uuid, model::Entity> removed;
+    for (const Uuid& id : ids)
+        removed.insert(id, m_project.entities.take(id));
+
+    bool written = true;
+    if (uuid == root)
+        written = removeEntityTreeFile(root, error);
+    else if (m_project.entities.contains(root))
+        written = writeEntityTree(root, error);
+
+    if (!written)
     {
-        setError(error,
-                 QStringLiteral("无法删除 %1：%2").arg(path, file.errorString()));
+        for (auto it = removed.constBegin(); it != removed.constEnd(); ++it)
+            m_project.entities.insert(it.key(), it.value());
         return false;
     }
 
-    m_project.entities.erase(it);
+    rebuildEntityRootIndex();
     return true;
 }
 
@@ -842,6 +981,7 @@ bool ProjectStore::reload(QString* error)
         return false;
 
     m_project = std::move(project);
+    rebuildEntityRootIndex();
     clearDirty();
     refreshDirtyText();
     return true;

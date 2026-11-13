@@ -127,7 +127,8 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
         QStringLiteral("name"),        QStringLiteral("row"),
         QStringLiteral("hidden"),      QStringLiteral("locked"),
         QStringLiteral("inheritVisibility"), QStringLiteral("visible"),
-        QStringLiteral("physicsInteract"),   QStringLiteral("transform"),
+        QStringLiteral("physicsInteract"),   QStringLiteral("space"),
+        QStringLiteral("followParentRange"), QStringLiteral("transform"),
         QStringLiteral("content"),
     };
     for (auto it = patch.constBegin(); it != patch.constEnd(); ++it)
@@ -178,6 +179,8 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
         {"inheritVisibility", &model::Entity::inheritVisibility, "inheritVisibility"},
         {"visible", &model::Entity::visible, "visible"},
         {"physicsInteract", &model::Entity::physicsInteract, "physicsInteract"},
+        {"followParentRange", &model::Entity::followParentRange,
+         "followParentRange"},
     };
     for (const auto& flag : flags)
     {
@@ -190,6 +193,22 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
         {
             entity.*(flag.member) = value;
             changed->append(QLatin1String(flag.label));
+        }
+    }
+
+    if (patch.contains(QStringLiteral("space")))
+    {
+        QString spaceName;
+        if (!readString(patch, "space", &spaceName, &error, true))
+            return error;
+        const auto space = model::entitySpaceFromName(spaceName);
+        if (!space)
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("space 必须是 parent 或 canvas"));
+        if (*space != entity.space)
+        {
+            entity.space = *space;
+            changed->append(QStringLiteral("space"));
         }
     }
 

@@ -33,8 +33,8 @@ struct DirtyText
 };
 
 // One in-memory undo step. Paths are relative to the project root and only
-// cover text project data (project.json, entities/*.json); assets never enter
-// the stack. An empty byte array means "the file did not exist".
+// cover text project data (project.json, entities/<root-uuid>.json); assets
+// never enter the stack. An empty byte array means "the file did not exist".
 struct UndoEntry
 {
     QHash<QString, QByteArray> before;
@@ -49,8 +49,8 @@ struct UndoEntry
 // never runs git and no history survives a restart.
 //
 // Layout:
-//   project.json
-//   entities/<uuid>.json
+//   project.json            (settings + markers only; no entity list)
+//   entities/<root-uuid>.json  (one recursive root subtree per file)
 //   assets/                 (owned by assets::AssetStore, ignored by git)
 //   .cache/                 (local caches, ignored by git)
 //   .gitignore
@@ -160,6 +160,10 @@ private:
     void trimStack(QVector<UndoEntry>& stack);
     bool applySnapshot(const QHash<QString, QByteArray>& snapshot,
                        QString* error);
+    Uuid entityRootOf(const Uuid& uuid, QString* error = nullptr) const;
+    void rebuildEntityRootIndex();
+    bool writeEntityTree(const Uuid& rootUuid, QString* error);
+    bool removeEntityTreeFile(const Uuid& rootUuid, QString* error);
 
     QString m_root;
     model::Project m_project;
@@ -167,6 +171,11 @@ private:
     QVector<UndoEntry> m_undoStack;
     QVector<UndoEntry> m_redoStack;
     QVector<DirtyText> m_dirtyText;
+    // UUID -> root UUID of the entity file that held it at the last successful
+    // load/save/delete. saveEntity() uses this to rewrite the old root file
+    // when a subtree is reparented; mutableProject() can therefore be edited
+    // freely before the next save.
+    QHash<Uuid, Uuid> m_entityRoots;
     // Paths touched since the last successful commit, with the bytes they had
     // before the first touch (empty when the file did not exist).
     QHash<QString, QByteArray> m_txnBefore;

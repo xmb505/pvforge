@@ -14,6 +14,7 @@ namespace {
 
 const QStringList kCreateKeys = {
     QStringLiteral("name"),      QStringLiteral("parentUuid"),
+    QStringLiteral("space"),     QStringLiteral("followParentRange"),
     QStringLiteral("start"),     QStringLiteral("end"),
     QStringLiteral("row"),       QStringLiteral("content"),
     QStringLiteral("transform"), QStringLiteral("hidden"),
@@ -256,8 +257,19 @@ Result createEntityInternal(Tx& tx, const QJsonObject& args,
         || !readBool(args, "locked", &entity.locked, &error)
         || !readBool(args, "inheritVisibility", &entity.inheritVisibility, &error)
         || !readBool(args, "visible", &entity.visible, &error)
-        || !readBool(args, "physicsInteract", &entity.physicsInteract, &error))
+        || !readBool(args, "physicsInteract", &entity.physicsInteract, &error)
+        || !readBool(args, "followParentRange", &entity.followParentRange,
+                     &error))
         return error;
+
+    QString spaceName = QStringLiteral("parent");
+    if (!readString(args, "space", &spaceName, &error))
+        return error;
+    const auto space = model::entitySpaceFromName(spaceName);
+    if (!space)
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("space 必须是 parent 或 canvas"));
+    entity.space = *space;
 
     const QJsonValue transformValue = args.value(QStringLiteral("transform"));
     if (!transformValue.isUndefined() && !transformValue.isNull())

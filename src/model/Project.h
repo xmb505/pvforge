@@ -87,4 +87,11 @@ std::optional<Project> projectFromJson(const QJsonObject& object,
 std::optional<Project> projectFromJson(const QJsonObject& object,
                                        QString* error = nullptr);
 
+// Builds the in-memory subtree rooted at `rootUuid` for writing
+// entities/<root-uuid>.json. Children are ordered by row, then start, then
+// UUID so repeated saves produce stable bytes. Fails when the UUID is missing,
+// is not a root, or the parent links form a cycle.
+bool buildEntityTree(const Project& project, const Uuid& rootUuid,
+                     EntityTreeNode* tree, QString* error = nullptr);
+
 } // namespace pvf::model

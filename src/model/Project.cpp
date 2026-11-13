@@ -320,6 +320,23 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
             return false;
         }
 
+        if (entity.followParentRange
+            && (entity.start != parent.value().start
+                || entity.end != parent.value().end))
+        {
+            detail::setError(
+                error,
+                QStringLiteral("实体 %1 的 followParentRange=true，但时间范围 "
+                               "[%2, %3) 不等于直接父实体 %4 的 [%5, %6)")
+                    .arg(entity.uuid)
+                    .arg(entity.start)
+                    .arg(entity.end)
+                    .arg(parent.value().uuid)
+                    .arg(parent.value().start)
+                    .arg(parent.value().end));
+            return false;
+        }
+
         parentIndex[i] = indexOf.value(&parent.value(), -1);
     }
 
@@ -390,6 +407,88 @@ bool validateProjectWithout(const Project& project, const QSet<Uuid>& removed,
                             QString* error)
 {
     return validateProjectCore(project, &removed, error);
+}
+
+bool buildEntityTree(const Project& project, const Uuid& rootUuid,
+                     EntityTreeNode* tree, QString* error)
+{
+    if (!tree)
+    {
+        detail::setError(error, QStringLiteral("实体树输出必须是有效指针"));
+        return false;
+    }
+
+    const auto root = project.entities.constFind(rootUuid);
+    if (root == project.entities.constEnd())
+    {
+        detail::setError(error, QStringLiteral("实体不存在：%1").arg(rootUuid));
+        return false;
+    }
+    if (!root.value().parentUuid.isEmpty())
+    {
+        detail::setError(
+            error,
+            QStringLiteral("实体 %1 不是根实体（parentUuid=%2），不能作为子树文件")
+                .arg(rootUuid, root.value().parentUuid));
+        return false;
+    }
+
+    QHash<Uuid, QVector<Uuid>> children;
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        if (!it.value().parentUuid.isEmpty())
+            children[it.value().parentUuid].append(it.key());
+    }
+
+    const auto orderChildren = [&project](QVector<Uuid>& ids) {
+        std::sort(ids.begin(), ids.end(), [&project](const Uuid& a, const Uuid& b) {
+            const Entity& left = project.entities.value(a);
+            const Entity& right = project.entities.value(b);
+            if (left.row != right.row)
+                return left.row < right.row;
+            if (left.start != right.start)
+                return left.start < right.start;
+            return left.uuid < right.uuid;
+        });
+    };
+    for (auto it = children.begin(); it != children.end(); ++it)
+        orderChildren(it.value());
+
+    QSet<Uuid> visiting;
+    std::function<bool(const Uuid&, EntityTreeNode&)> build =
+        [&](const Uuid& uuid, EntityTreeNode& node) -> bool {
+        if (visiting.contains(uuid))
+        {
+            detail::setError(
+                error, QStringLiteral("实体父子关系存在循环：%1").arg(uuid));
+            return false;
+        }
+        const auto it = project.entities.constFind(uuid);
+        if (it == project.entities.constEnd())
+        {
+            detail::setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+            return false;
+        }
+
+        visiting.insert(uuid);
+        node.entity = it.value();
+        const auto childIds = children.constFind(uuid);
+        if (childIds != children.constEnd())
+        {
+            for (const Uuid& childId : childIds.value())
+            {
+                EntityTreeNode child;
+                if (!build(childId, child))
+                    return false;
+                node.children.append(std::move(child));
+            }
+        }
+        visiting.remove(uuid);
+        return true;
+    };
+
+    return build(rootUuid, *tree);
 }
 
 QJsonObject toJson(const Project& project)

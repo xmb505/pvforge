@@ -1,5 +1,7 @@
 #include "store/Store.h"
 
+#include "store_tests.h"
+
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -104,52 +106,6 @@ struct PathGuard
     } while (false)
 
 } // namespace
-
-class StoreTests : public QObject
-{
-    Q_OBJECT
-
-private slots:
-    void createOpenRoundTrip();
-    void saveEntityReopen();
-    void saveProjectRoundTrip();
-    void deleteEntityFile();
-    void commitAndHistory();
-    void assetImportCommit();
-    void commitFailureReportsStderr();
-    void undoRedoRestoresText();
-    void undoProjectSettings();
-    void undoNewAndDeletedFiles();
-    void undoStackLimits();
-    void assetsSurviveUndo();
-    void corruptProjectJson();
-    void corruptEntityJson();
-    void nonGitDirectoryRejected();
-    void missingGitCreateFallsBack();
-    void createRejectsInvalidInput();
-    void cleanProjectHasNoDirtyText();
-    void dirtyTextDetectedOnOpen();
-    void commitRecoveredTextCreatesCommit();
-    void discardDirtyTextRestores();
-    void restoreCommitRewindsText();
-    void restoreCommitDeletesNewEntities();
-    void restoreCommitRejectsDirtyText();
-    void restoreCommitRejectsInvalidHash();
-    void restoreCommitClearsStacksAndKeepsAssets();
-    void restoreCommitRollsBackOnCommitFailure();
-    void createWithoutGit();
-    void openWithoutGitRepoAndGitRequested();
-    void enableGitLater();
-    void disableGitThenCommitStillUndoable();
-    void setGitEnabledReportsMissingGit();
-    void openRejectsFutureVersion();
-    void openRejectsUnmigratableVersion();
-    void openMigratesV1ProjectAndEntity();
-    void openRejectsFutureEntityVersion();
-    void openRejectsStaleEntityVersion();
-    void openStrictRequiredFields();
-    void unknownFieldsSurviveReopen();
-};
 
 void StoreTests::createOpenRoundTrip()
 {
@@ -343,15 +299,17 @@ void StoreTests::deleteEntityFile()
     const QString childPath =
         path + QStringLiteral("/entities/") + child.uuid + QStringLiteral(".json");
     QVERIFY(QFileInfo::exists(parentPath));
-    QVERIFY(QFileInfo::exists(childPath));
+    // A child lives inside its root's file, never in a file of its own.
+    QVERIFY(!QFileInfo::exists(childPath));
     QVERIFY2(store->commit(QStringLiteral("pvf: add entities"), &error),
              qPrintable(error));
 
+    // Deleting a parent removes the whole subtree from the model and the one
+    // root file.
     QVERIFY2(store->deleteEntity(parent.uuid, &error), qPrintable(error));
     QVERIFY(!QFileInfo::exists(parentPath));
-    QVERIFY(QFileInfo::exists(childPath));
     QVERIFY(!store->project().entities.contains(parent.uuid));
-    QVERIFY(store->project().entities.contains(child.uuid));
+    QVERIFY(!store->project().entities.contains(child.uuid));
 
     error.clear();
     QVERIFY(!store->deleteEntity(parent.uuid, &error));
@@ -1841,83 +1799,6 @@ void StoreTests::openRejectsUnmigratableVersion()
     QCOMPARE(readText(projectFile), text);
 }
 
-void StoreTests::openMigratesV1ProjectAndEntity()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    // The exact shape PVForge wrote before v2: project.json at version 1 and an
-    // entity file with neither its own format marker nor its own version.
-    model::Project project;
-    project.settings.name = QStringLiteral("v1 工程");
-
-    model::Entity entity = makeEntity(QStringLiteral("v1 实体"), 0, 30);
-    entity.transform.x = 12.5;
-    model::Keyframe key;
-    key.frame = 7;
-    key.value = 3.5;
-    entity.tracks.insert(QStringLiteral("x"), model::Track{{key}});
-
-    QJsonObject projectObject = model::toJson(project);
-    projectObject.insert(QStringLiteral("version"), 1);
-
-    QJsonObject entityObject = model::toJson(entity);
-    entityObject.remove(QStringLiteral("version"));
-    entityObject.remove(QStringLiteral("format"));
-
-    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
-    const QString entityFile = temp.filePath(QStringLiteral("entities/")
-                                             + entity.uuid
-                                             + QStringLiteral(".json"));
-    const QString projectText =
-        QString::fromUtf8(QJsonDocument(projectObject).toJson(QJsonDocument::Indented));
-    const QString entityText =
-        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
-    QVERIFY(writeText(projectFile, projectText));
-    QVERIFY(writeText(entityFile, entityText));
-
-    QString error;
-    auto opened = ProjectStore::open(temp.path(), &error, false);
-    QVERIFY2(opened.has_value(), qPrintable(error));
-    QCOMPARE(opened->project().settings.name, QStringLiteral("v1 工程"));
-
-    const auto it = opened->project().entities.constFind(entity.uuid);
-    QVERIFY(it != opened->project().entities.constEnd());
-    QCOMPARE(it->name, QStringLiteral("v1 实体"));
-    QCOMPARE(it->transform.x, 12.5);
-    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.size(), 1);
-    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.first().frame, 7);
-
-    // Opening never writes, so both v1 files stay byte-identical until a save.
-    QCOMPARE(readText(projectFile), projectText);
-    QCOMPARE(readText(entityFile), entityText);
-
-    // Saving writes the current version and the entity format marker.
-    QVERIFY2(opened->saveProject(&error), qPrintable(error));
-    QVERIFY2(opened->saveEntity(entity.uuid, &error), qPrintable(error));
-
-    const QJsonObject savedProject =
-        QJsonDocument::fromJson(readText(projectFile).toUtf8()).object();
-    QCOMPARE(savedProject.value(QStringLiteral("version")).toInt(),
-             model::kProjectFormatVersion);
-    const QJsonObject savedEntity =
-        QJsonDocument::fromJson(readText(entityFile).toUtf8()).object();
-    QCOMPARE(savedEntity.value(QStringLiteral("version")).toInt(),
-             model::kProjectFormatVersion);
-    QCOMPARE(savedEntity.value(QStringLiteral("format")).toString(),
-             QString::fromLatin1(model::kEntityFormat));
-
-    // The upgraded files reopen with the same data.
-    error.clear();
-    auto reopened = ProjectStore::open(temp.path(), &error, false);
-    QVERIFY2(reopened.has_value(), qPrintable(error));
-    const auto reopenedIt = reopened->project().entities.constFind(entity.uuid);
-    QVERIFY(reopenedIt != reopened->project().entities.constEnd());
-    QCOMPARE(reopenedIt->name, QStringLiteral("v1 实体"));
-    QCOMPARE(reopenedIt->transform.x, 12.5);
-    QCOMPARE(reopenedIt->tracks.value(QStringLiteral("x")).keys.first().value, 3.5);
-}
-
 void StoreTests::openRejectsFutureEntityVersion()
 {
     QTemporaryDir temp;
@@ -2088,5 +1969,3 @@ void StoreTests::unknownFieldsSurviveReopen()
 }
 
 QTEST_GUILESS_MAIN(StoreTests)
-
-#include "store_tests.moc"
