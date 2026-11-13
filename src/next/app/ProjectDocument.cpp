@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 
@@ -40,30 +41,37 @@ bool ensureHumanWrites(bool enabled, QString* error)
 }
 
 // Validates the project as it will exist after the write.  Upserts are already
-// present in the in-memory project; deletes are removed from a copy first.
+// present in the in-memory project; deletes are validated as absent without
+// copying the project first (model::validateProjectWithout treats them as
+// already erased).  A locked ancestor rejects the delete: every descendant of a
+// locked entity fails its own check, so the delete order cannot hide one.
 bool validateForWrite(const model::Project& project,
                       const QVector<Uuid>& upserts,
                       const QVector<Uuid>& deletes, QString* error)
 {
-    model::Project check = project;
     for (const Uuid& uuid : upserts)
     {
-        if (!check.entities.contains(uuid))
+        if (!project.entities.contains(uuid))
         {
             setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
             return false;
         }
     }
 
+    if (deletes.isEmpty())
+        return model::validateProject(project, error);
+
+    QSet<Uuid> removed;
+    removed.reserve(deletes.size());
     for (const Uuid& uuid : deletes)
     {
-        const auto it = check.entities.constFind(uuid);
-        if (it == check.entities.constEnd())
+        const auto it = project.entities.constFind(uuid);
+        if (it == project.entities.constEnd() || removed.contains(uuid))
         {
             setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
             return false;
         }
-        if (isEntityLocked(check, uuid))
+        if (isEntityLocked(project, uuid))
         {
             setError(error,
                      QStringLiteral("实体 %1 或其祖先已锁定，不能删除")
@@ -71,10 +79,10 @@ bool validateForWrite(const model::Project& project,
                                                         : it.value().name));
             return false;
         }
-        check.entities.remove(uuid);
+        removed.insert(uuid);
     }
 
-    return model::validateProject(check, error);
+    return model::validateProjectWithout(project, removed, error);
 }
 
 } // namespace

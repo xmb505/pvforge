@@ -5,6 +5,7 @@
 #include "Migrations.h"
 
 #include <QJsonObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -69,6 +70,13 @@ std::optional<ProjectSettings> projectSettingsFromJson(
 // Checks every entity, unique UUIDs, parent existence, parent/child time
 // ranges, parent cycles, marker frames and project settings.
 bool validateProject(const Project& project, QString* error = nullptr);
+
+// Same checks as validateProject(), but every entity in `removed` is treated as
+// already deleted: it is not validated itself and counts as absent for parent
+// and solver-target references. Callers that validate a delete batch can use
+// this instead of copying the project and erasing the entities from the copy.
+bool validateProjectWithout(const Project& project, const QSet<Uuid>& removed,
+                            QString* error = nullptr);
 
 // Writes format and the current kProjectFormatVersion. The caller migrates an
 // older document to kProjectFormatVersion before calling projectFromJson().

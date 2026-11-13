@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace pvf::model {
 
@@ -21,43 +22,75 @@ std::optional<double> evaluateTrack(const Track& track, int frame, bool step)
     return evaluateTrack(track, double(frame), step);
 }
 
-std::optional<double> evaluateTrack(const Track& track, double frame, bool step)
+namespace {
+
+// True when `keys` is already ordered by frame, which is the normal state of
+// an edited track (the timeline appends and inserts in order).
+bool isFrameOrdered(const QVector<Keyframe>& keys)
 {
-    if (track.keys.isEmpty())
-        return std::nullopt;
-
-    QVector<Keyframe> sorted = track.keys;
-    std::stable_sort(sorted.begin(), sorted.end(),
-                     [](const Keyframe& a, const Keyframe& b) {
-                         return a.frame < b.frame;
-                     });
-
-    // Step tracks only change on integer frames: a fractional frame takes the
-    // left value of the integer frame it sits in.
-    const double lookup = step ? std::floor(frame) : frame;
-
-    if (lookup <= sorted.first().frame)
-        return sorted.first().value;
-    if (lookup >= sorted.last().frame)
-        return sorted.last().value;
-
-    int index = 0;
-    for (int i = 0; i < sorted.size(); ++i)
+    for (int i = 1; i < keys.size(); ++i)
     {
-        if (sorted.at(i).frame <= lookup)
-            index = i;
+        if (keys.at(i).frame < keys.at(i - 1).frame)
+            return false;
+    }
+    return true;
+}
+
+// Positions of `keys` ordered by frame, for the rare unsorted track. Only ints
+// are sorted, so a badly ordered track never copies Keyframe (whose note and
+// extras are refcounted) and never moves them around. `stable_sort` keeps the
+// insertion order of keys that share a frame, matching the old sort-a-copy
+// behaviour exactly. Thread-local so the buffer is reused across calls and
+// every thread gets its own.
+const QVector<int>& frameOrder(const QVector<Keyframe>& keys)
+{
+    thread_local QVector<int> order;
+    order.resize(keys.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&keys](int a, int b) {
+        return keys.at(a).frame < keys.at(b).frame;
+    });
+    return order;
+}
+
+// Binary search shared by both orders: `at(i)` returns the i-th key in frame
+// order. Returns the value the linear scan used to return.
+template <typename At>
+double evaluateOrdered(const At& at, int count, double lookup, bool step)
+{
+    if (count == 1)
+        return at(0).value;
+
+    // Held constant before the first key and after the last key. A query that
+    // lands exactly on the first frame takes the first key's value even when
+    // several keys share that frame, which is what the old linear scan did.
+    if (lookup <= at(0).frame)
+        return at(0).value;
+    if (lookup >= at(count - 1).frame)
+        return at(count - 1).value;
+
+    // First key whose frame is greater than the query; everything before it
+    // holds the value at or before the query. Bounded by the checks above, so
+    // a finite query leaves `low` in 1 .. count-1; a NaN query keeps low = 1
+    // and interpolates from the first key, exactly like the old scan.
+    int low = 1;
+    int high = count;
+    while (low < high)
+    {
+        const int middle = low + (high - low) / 2;
+        if (at(middle).frame <= lookup)
+            low = middle + 1;
         else
-            break;
+            high = middle;
     }
 
-    const Keyframe& left = sorted.at(index);
+    const Keyframe& left = at(low - 1);
     if (left.frame == lookup)
         return left.value;
-
-    const Keyframe& right = sorted.at(index + 1);
     if (step)
         return left.value;
 
+    const Keyframe& right = at(low);
     const int span = right.frame - left.frame;
     if (span <= 0)
         return right.value;
@@ -65,6 +98,34 @@ std::optional<double> evaluateTrack(const Track& track, double frame, bool step)
     const double t = (lookup - left.frame) / double(span);
     return left.value + (right.value - left.value) * easedProgress(left.easing, t);
 }
+
+} // namespace
+
+std::optional<double> evaluateTrack(const Track& track, double frame, bool step)
+{
+    const QVector<Keyframe>& keys = track.keys;
+    if (keys.isEmpty())
+        return std::nullopt;
+
+    // Step tracks only change on integer frames: a fractional frame takes the
+    // left value of the integer frame it sits in.
+    const double lookup = step ? std::floor(frame) : frame;
+
+    if (isFrameOrdered(keys))
+    {
+        return evaluateOrdered(
+            [&keys](int index) -> const Keyframe& { return keys.at(index); },
+            keys.size(), lookup, step);
+    }
+
+    const QVector<int>& order = frameOrder(keys);
+    return evaluateOrdered(
+        [&keys, &order](int index) -> const Keyframe& {
+            return keys.at(order.at(index));
+        },
+        order.size(), lookup, step);
+}
+
 
 std::optional<double> Track::valueAt(int frame, bool step) const
 {

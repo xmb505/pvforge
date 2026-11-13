@@ -8,6 +8,7 @@
 #include <QSet>
 #include <algorithm>
 #include <functional>
+#include <utility>
 
 namespace pvf::model {
 
@@ -112,35 +113,40 @@ std::optional<ProjectSettings> projectSettingsFromJson(const QJsonObject& object
 
 namespace {
 
-bool validateSolverTargets(const Project& project, QString* error,
-                           QHash<Uuid, QSet<Uuid>>* edges)
+bool validateSolverTargets(const Project& project, const QSet<Uuid>* removed,
+                           QString* error, QHash<Uuid, QSet<Uuid>>* edges)
 {
     for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
     {
         const Entity& entity = it.value();
+        if (removed && removed->contains(entity.uuid))
+            continue;
+
         for (const SolverSegment& segment : entity.solvers)
         {
             if (segment.effect == SolverEffect::Spin)
                 continue;
 
-            const QString label =
-                QStringLiteral("实体 %1 的求解段 %2（%3）")
+            // Built on demand: a valid project never pays for the formatting.
+            const auto label = [&entity, &segment] {
+                return QStringLiteral("实体 %1 的求解段 %2（%3）")
                     .arg(entity.uuid, segment.id,
                          solverEffectName(segment.effect));
+            };
 
             const QVariant targetValue = segment.params.value(
                 QStringLiteral("targetUuid"));
             if (!targetValue.isValid())
             {
                 detail::setError(
-                    error, label + QStringLiteral("缺少 targetUuid"));
+                    error, label() + QStringLiteral("缺少 targetUuid"));
                 return false;
             }
             if (targetValue.typeId() != QMetaType::QString)
             {
                 detail::setError(
                     error,
-                    label + QStringLiteral("的 targetUuid 必须是字符串"));
+                    label() + QStringLiteral("的 targetUuid 必须是字符串"));
                 return false;
             }
 
@@ -149,23 +155,24 @@ bool validateSolverTargets(const Project& project, QString* error,
             {
                 detail::setError(
                     error,
-                    label + QStringLiteral("的 targetUuid 不能为空"));
+                    label() + QStringLiteral("的 targetUuid 不能为空"));
                 return false;
             }
             if (!isValidUuid(target))
             {
                 detail::setError(
                     error,
-                    label
+                    label()
                         + QStringLiteral("的 targetUuid 不是合法 UUID：%1")
                               .arg(target));
                 return false;
             }
-            if (!project.entities.contains(target))
+            if (!project.entities.contains(target)
+                || (removed && removed->contains(target)))
             {
                 detail::setError(
                     error,
-                    label
+                    label()
                         + QStringLiteral("的 targetUuid 指向的实体 %1 不存在")
                               .arg(target));
                 return false;
@@ -174,7 +181,7 @@ bool validateSolverTargets(const Project& project, QString* error,
             {
                 detail::setError(
                     error,
-                    label + QStringLiteral("的 targetUuid 不能指向实体自己"));
+                    label() + QStringLiteral("的 targetUuid 不能指向实体自己"));
                 return false;
             }
 
@@ -237,9 +244,8 @@ bool detectSolverTargetCycles(const QHash<Uuid, QSet<Uuid>>& edges,
     return true;
 }
 
-} // namespace
-
-bool validateProject(const Project& project, QString* error)
+bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
+                         QString* error)
 {
     if (project.settings.width <= 0 || project.settings.height <= 0)
     {
@@ -252,8 +258,16 @@ bool validateProject(const Project& project, QString* error)
         return false;
     }
 
+    // Entities are visited as index-addressed nodes from here on: UUID keys are
+    // 36-char strings, so hashing them per lookup dominated the validation of a
+    // project with a few hundred entities. The pointers stay valid because
+    // nothing writes to `project` in this function.
+    QVector<const Entity*> nodes;
+    nodes.reserve(project.entities.size());
     for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
     {
+        if (removed && removed->contains(it.key()))
+            continue;
         if (!validateEntity(it.value(), error))
             return false;
         if (it.key() != it.value().uuid)
@@ -264,16 +278,25 @@ bool validateProject(const Project& project, QString* error)
                     .arg(it.key(), it.value().uuid));
             return false;
         }
+        nodes.append(&it.value());
     }
 
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
+    QHash<const Entity*, int> indexOf;
+    indexOf.reserve(nodes.size());
+    for (int i = 0; i < nodes.size(); ++i)
+        indexOf.insert(nodes.at(i), i);
+
+    // -1 = root (or an unknown parent, which the cycle walk then ignores).
+    QVector<int> parentIndex(nodes.size(), -1);
+    for (int i = 0; i < nodes.size(); ++i)
     {
-        const Entity& entity = it.value();
+        const Entity& entity = *nodes.at(i);
         if (entity.parentUuid.isEmpty())
             continue;
 
         const auto parent = project.entities.constFind(entity.parentUuid);
-        if (parent == project.entities.constEnd())
+        if (parent == project.entities.constEnd()
+            || (removed && removed->contains(entity.parentUuid)))
         {
             detail::setError(
                 error,
@@ -296,36 +319,43 @@ bool validateProject(const Project& project, QString* error)
                     .arg(parent.value().end));
             return false;
         }
+
+        parentIndex[i] = indexOf.value(&parent.value(), -1);
     }
 
     // Walk every parent chain to reject cycles. Entities validated above make
-    // sure a non-empty parentUuid always resolves.
-    QSet<Uuid> resolved;
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
+    // sure a non-empty parentUuid always resolves. One colour array
+    // (1 = on the current chain, 2 = known to reach a root) instead of a QSet
+    // per entity: this runs on every edit. Each node is walked once.
+    QVector<char> walkState(nodes.size(), 0);
+    QVector<int> chain;
+    for (int start = 0; start < nodes.size(); ++start)
     {
-        QSet<Uuid> path;
-        Uuid current = it.key();
-        while (!current.isEmpty() && !resolved.contains(current))
+        if (walkState.at(start) == 2)
+            continue;
+
+        chain.clear();
+        int current = start;
+        while (current >= 0 && walkState.at(current) != 2)
         {
-            if (path.contains(current))
+            if (walkState.at(current) == 1)
             {
                 detail::setError(
                     error,
-                    QStringLiteral("实体父子关系存在循环：%1").arg(current));
+                    QStringLiteral("实体父子关系存在循环：%1")
+                        .arg(nodes.at(current)->uuid));
                 return false;
             }
-            path.insert(current);
-
-            const auto entity = project.entities.constFind(current);
-            if (entity == project.entities.constEnd())
-                break;
-            current = entity.value().parentUuid;
+            walkState[current] = 1;
+            chain.append(current);
+            current = parentIndex.at(current);
         }
-        resolved.unite(path);
+        for (const int node : std::as_const(chain))
+            walkState[node] = 2;
     }
 
     QHash<Uuid, QSet<Uuid>> solverEdges;
-    if (!validateSolverTargets(project, error, &solverEdges))
+    if (!validateSolverTargets(project, removed, error, &solverEdges))
         return false;
     if (!detectSolverTargetCycles(solverEdges, error))
         return false;
@@ -347,6 +377,19 @@ bool validateProject(const Project& project, QString* error)
     }
 
     return true;
+}
+
+} // namespace
+
+bool validateProject(const Project& project, QString* error)
+{
+    return validateProjectCore(project, nullptr, error);
+}
+
+bool validateProjectWithout(const Project& project, const QSet<Uuid>& removed,
+                            QString* error)
+{
+    return validateProjectCore(project, &removed, error);
 }
 
 QJsonObject toJson(const Project& project)

@@ -527,6 +527,85 @@ private slots:
         QVERIFY(document->project().entities.contains(child.uuid));
     }
 
+    void duplicateDeleteIsRejected()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/dup-delete.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity entity = makeEntity(QStringLiteral("唯一"), 0, 30);
+        document->mutableProject().entities.insert(entity.uuid, entity);
+        QVERIFY2(document->commitEntity(entity.uuid, QStringLiteral("pvf: create"),
+                                        &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // The second occurrence is already gone from the validated view, so it
+        // is rejected exactly like an unknown UUID and nothing is deleted.
+        error.clear();
+        QVERIFY(!document->deleteEntities({entity.uuid, entity.uuid},
+                                          QStringLiteral("pvf: delete twice"),
+                                          &error));
+        QVERIFY(error.contains(QStringLiteral("实体不存在")));
+        QVERIFY(document->project().entities.contains(entity.uuid));
+        QVERIFY(QFile::exists(entityPath(*document, entity.uuid)));
+
+        QVERIFY2(document->deleteEntities({entity.uuid},
+                                          QStringLiteral("pvf: delete"),
+                                          &error),
+                 qPrintable(error));
+        QVERIFY(!document->project().entities.contains(entity.uuid));
+    }
+
+    void deleteBatchRejectsDanglingChild()
+    {
+        // A delete batch and an edit of one entity both have to end up with a
+        // validated project; the delete-vs-copy path must reject the same
+        // dangling-parent case as the old copy-based check.
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/batch-delete.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity root = makeEntity(QStringLiteral("根"), 0, 120);
+        Entity middle = makeEntity(QStringLiteral("中"), 0, 100);
+        middle.parentUuid = root.uuid;
+        Entity leaf = makeEntity(QStringLiteral("叶"), 0, 60);
+        leaf.parentUuid = middle.uuid;
+        document->mutableProject().entities.insert(root.uuid, root);
+        document->mutableProject().entities.insert(middle.uuid, middle);
+        document->mutableProject().entities.insert(leaf.uuid, leaf);
+        QVERIFY2(document->commitEntities({root.uuid, middle.uuid, leaf.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // Middle without its leaf leaves the leaf dangling.
+        QVERIFY(!document->deleteEntities({middle.uuid},
+                                          QStringLiteral("pvf: orphan"),
+                                          &error));
+        QVERIFY(document->project().entities.contains(leaf.uuid));
+
+        // Deleting the subtree from the leaf upwards is accepted.
+        QVERIFY2(document->deleteEntities(
+                     {leaf.uuid, middle.uuid},
+                     QStringLiteral("pvf: delete subtree"), &error),
+                 qPrintable(error));
+        QVERIFY(!document->project().entities.contains(leaf.uuid));
+        QVERIFY(!document->project().entities.contains(middle.uuid));
+        QVERIFY(document->project().entities.contains(root.uuid));
+    }
+
     void commitFailureIsReportedThroughSignal()
     {
         QTemporaryDir temp;

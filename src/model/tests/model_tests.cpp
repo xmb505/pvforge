@@ -10,6 +10,7 @@
 #include <QSet>
 #include <QUuid>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -926,6 +927,61 @@ void testTrackEvaluation()
     CHECK(value.has_value() && nearly(*value, 50.0));
 }
 
+void testDuplicateFrameEvaluation()
+{
+    // Keys that share a frame are legal. The historic rules are: a query on the
+    // first frame takes the first of its duplicates, a query on the last frame
+    // takes the last one, and an interior query takes the last duplicate at or
+    // before it.
+    Track firstDuplicated;
+    firstDuplicated.keys = {keyAt(0, 1.0), keyAt(0, 2.0), keyAt(5, 9.0)};
+
+    auto value = firstDuplicated.valueAt(0);
+    CHECK(value.has_value() && nearly(*value, 1.0));
+    value = firstDuplicated.valueAt(1);
+    CHECK(value.has_value() && nearly(*value, 3.4));
+    value = firstDuplicated.valueAt(5);
+    CHECK(value.has_value() && nearly(*value, 9.0));
+
+    Track interiorDuplicated;
+    interiorDuplicated.keys = {keyAt(0, 0.0), keyAt(2, 10.0), keyAt(2, 20.0),
+                               keyAt(6, 60.0)};
+    value = interiorDuplicated.valueAt(2);
+    CHECK(value.has_value() && nearly(*value, 20.0));
+    value = interiorDuplicated.valueAt(1);
+    CHECK(value.has_value() && nearly(*value, 5.0));
+    value = interiorDuplicated.valueAt(4);
+    CHECK(value.has_value() && nearly(*value, 40.0));
+
+    Track lastDuplicated;
+    lastDuplicated.keys = {keyAt(0, 0.0), keyAt(5, 10.0), keyAt(5, 20.0)};
+    value = lastDuplicated.valueAt(5);
+    CHECK(value.has_value() && nearly(*value, 20.0));
+    value = lastDuplicated.valueAt(4);
+    CHECK(value.has_value() && nearly(*value, 8.0));
+
+    // Same rules once the track has to be ordered first. Ordering is stable, so
+    // the duplicates keep their insertion order: reversing the track swaps which
+    // duplicate is "first".
+    Track unsorted = firstDuplicated;
+    std::reverse(unsorted.keys.begin(), unsorted.keys.end());
+    value = unsorted.valueAt(0);
+    CHECK(value.has_value() && nearly(*value, 2.0));
+    value = unsorted.valueAt(1);
+    CHECK(value.has_value() && nearly(*value, 2.6));
+
+    // A single key is a constant track for every query, including fractional
+    // and step queries.
+    Track single;
+    single.keys = {keyAt(7, 42.0)};
+    value = single.valueAt(0);
+    CHECK(value.has_value() && nearly(*value, 42.0));
+    value = single.valueAt(7, true);
+    CHECK(value.has_value() && nearly(*value, 42.0));
+    value = evaluateTrack(single, 6.5);
+    CHECK(value.has_value() && nearly(*value, 42.0));
+}
+
 void testFractionalTrackEvaluation()
 {
     Track linear;
@@ -1487,6 +1543,75 @@ void testProjectValidation()
     bad.markers[0].frame = 0;
     bad.markers[0].id.clear();
     CHECK(!validateProject(bad, &error));
+}
+
+void testProjectValidationWithoutRemoval()
+{
+    // validateProjectWithout() has to decide exactly like validating a copy of
+    // the project with the removed entities erased. These cases mirror what
+    // ProjectDocument does for a delete batch.
+    Project project;
+    Entity parent = makeEntity(0, 100);
+    Entity child = makeEntity(0, 50);
+    child.parentUuid = parent.uuid;
+    Entity bystander = makeEntity(0, 100);
+    project.entities.insert(parent.uuid, parent);
+    project.entities.insert(child.uuid, child);
+    project.entities.insert(bystander.uuid, bystander);
+    CHECK(validateProject(project));
+
+    QString error;
+
+    // Erasing an unrelated entity keeps the project valid.
+    CHECK_DETAIL(validateProjectWithout(project, {bystander.uuid}, &error),
+                 error);
+
+    // Erasing a parent leaves its child dangling, exactly like the erased copy.
+    CHECK(!validateProjectWithout(project, {parent.uuid}, &error));
+    CHECK(error.contains(QStringLiteral("父实体")));
+
+    // Erasing the whole tree is fine.
+    CHECK_DETAIL(
+        validateProjectWithout(project, {parent.uuid, child.uuid}, &error),
+        error);
+
+    // A removed entity is not validated itself, even when it is broken: the
+    // copy-based check removed it before validating.
+    Project broken = project;
+    broken.entities[child.uuid].end = 101;
+    broken.entities[child.uuid].tracks.insert(QStringLiteral("x"),
+                                             Track{{keyAt(500, 1.0)}});
+    CHECK(!validateProject(broken, &error));
+    CHECK_DETAIL(validateProjectWithout(broken, {child.uuid}, &error), error);
+
+    // An index key that disagrees with the entity UUID is only an error while
+    // the entity stays in the project.
+    Project mismatched = project;
+    const Uuid otherKey = newUuid();
+    mismatched.entities.insert(otherKey, parent);
+    CHECK(!validateProject(mismatched, &error));
+    CHECK_DETAIL(validateProjectWithout(mismatched, {otherKey}, &error), error);
+
+    // A solver target that is being deleted counts as missing.
+    Project solved;
+    Entity source = makeEntity(0, 100);
+    Entity target = makeEntity(0, 100);
+    source.solvers = {makeTargetSolver(SolverEffect::Gravity, target.uuid)};
+    solved.entities.insert(source.uuid, source);
+    solved.entities.insert(target.uuid, target);
+    CHECK_DETAIL(validateProject(solved, &error), error);
+    CHECK(!validateProjectWithout(solved, {target.uuid}, &error));
+    CHECK(error.contains(QStringLiteral("targetUuid")));
+    CHECK_DETAIL(validateProjectWithout(solved, {source.uuid}, &error), error);
+
+    // Settings and markers are still validated against the removal set.
+    Project badFps = project;
+    badFps.settings.fps = 0;
+    CHECK(!validateProjectWithout(badFps, {bystander.uuid}, &error));
+
+    // An empty removal set is exactly validateProject().
+    CHECK_DETAIL(validateProjectWithout(project, {}, &error), error);
+    CHECK(!validateProjectWithout(broken, {}, &error));
 }
 
 void testInvalidJson()
@@ -2141,6 +2266,7 @@ const TestCase kTests[] = {
     {"component-json-roundtrip", testComponentJsonRoundTrip},
     {"project-json-roundtrip", testProjectJsonRoundTrip},
     {"track-evaluation", testTrackEvaluation},
+    {"track-evaluation-duplicates", testDuplicateFrameEvaluation},
     {"track-evaluation-fractional", testFractionalTrackEvaluation},
     {"easing-presets", testEasingPresets},
     {"easing-json", testEasingJson},
@@ -2149,6 +2275,7 @@ const TestCase kTests[] = {
     {"solver-validation", testSolverValidation},
     {"solver-targets", testSolverTargets},
     {"project-validation", testProjectValidation},
+    {"project-validation-without", testProjectValidationWithoutRemoval},
     {"invalid-json", testInvalidJson},
     {"defaults", testDefaults},
     {"children-and-root-sorting", testChildrenAndRootSorting},

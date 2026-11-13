@@ -25,8 +25,10 @@ struct Keyframe
     bool operator!=(const Keyframe& other) const { return !(*this == other); }
 };
 
-// Keyframes are stored in entity-relative frames. Evaluation sorts a copy, so
-// keys do not have to be kept in order while editing.
+// Keyframes are stored in entity-relative frames. Keys should be kept in frame
+// order while editing; evaluation takes a fast path when they are, and orders
+// positions (never copies) when they are not, so an unordered track is still
+// evaluated correctly.
 struct Track
 {
     QVector<Keyframe> keys;
