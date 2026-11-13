@@ -136,6 +136,10 @@ set(PVF_APP_SOURCES
     src/ui/WorkbenchPanelMedia.cpp
     src/ui/WorkbenchPanelPages.cpp
     src/ui/WorkbenchPanelPreview.cpp
+    src/ui/panels/PanelGeometry.cpp
+    src/ui/panels/PanelGeometry.h
+    src/ui/panels/WorkbenchPanelHost.cpp
+    src/ui/panels/WorkbenchPanelHost.h
 )
 
 add_library(pvf_app STATIC ${PVF_APP_SOURCES})
@@ -192,6 +196,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/AssetTests.cpp
         src/tests/McpTests.cpp
         src/tests/PerfTests.cpp
+        src/tests/PanelLayoutTests.cpp
         # Test-only helpers live in src/tests.
         src/tests/StdioBridgeTest.cpp
     )
