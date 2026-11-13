@@ -210,6 +210,7 @@ void MainWindow::showSessionMcpLog()
     arrangeMcpLog();
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void MainWindow::showMcpLogForTest()
 {
     showSessionMcpLog();
@@ -219,6 +220,7 @@ QString MainWindow::mcpStatusTextForTest() const
 {
     return m_mcpStatusButton ? m_mcpStatusButton->text() : QString();
 }
+#endif
 
 void MainWindow::wireSessionSettingsDialog(SettingsDialog* dialog)
 {
@@ -340,6 +342,7 @@ void MainWindow::openSessionSettings()
     m_sessionSettingsDialog = nullptr;
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 SettingsDialog* MainWindow::openSessionSettingsDialogForTest()
 {
     if (!m_session || !m_session->settingsStore())
@@ -360,6 +363,7 @@ SettingsDialog* MainWindow::openSessionSettingsDialogForTest()
     dialog->show();
     return dialog;
 }
+#endif
 
 void MainWindow::updateSessionSettingsDialogContext()
 {
@@ -401,7 +405,7 @@ void MainWindow::refreshSessionCacheStats()
         return;
 
     const QString workbenchRoot =
-        sessionCacheFolderPathForTest(QStringLiteral("workbench"));
+        sessionCacheFolderPath(QStringLiteral("workbench"));
     next::WorkbenchServices* workbench = m_session->workbench();
     const framecache::CacheUsage workbenchUsage =
         workbench ? workbench->cacheUsage()
@@ -412,7 +416,7 @@ void MainWindow::refreshSessionCacheStats()
         m_session->appSettings().workbenchCacheEnabled, workbenchUsage,
         workbenchRoot);
 
-    const QString htmlRoot = sessionCacheFolderPathForTest(QStringLiteral("html"));
+    const QString htmlRoot = sessionCacheFolderPath(QStringLiteral("html"));
     m_sessionSettingsDialog->setHtmlCacheStats(
         framecache::scanDirectory(htmlRoot, {QStringLiteral("webp")}),
         htmlRoot);
@@ -424,7 +428,7 @@ void MainWindow::clearSessionWorkbenchCache()
         return;
 
     const QString workbenchRoot =
-        sessionCacheFolderPathForTest(QStringLiteral("workbench"));
+        sessionCacheFolderPath(QStringLiteral("workbench"));
     next::WorkbenchServices* workbench = m_session->workbench();
     const framecache::ClearResult result =
         workbench ? workbench->clearAll()
@@ -464,7 +468,7 @@ void MainWindow::openSessionCacheFolder(const QString& subdirectory)
 {
     if (!m_session)
         return;
-    const QString path = sessionCacheFolderPathForTest(subdirectory);
+    const QString path = sessionCacheFolderPath(subdirectory);
     if (!QFileInfo::exists(path))
     {
         statusBar()->showMessage(
@@ -474,7 +478,7 @@ void MainWindow::openSessionCacheFolder(const QString& subdirectory)
     QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
-QString MainWindow::sessionCacheFolderPathForTest(
+QString MainWindow::sessionCacheFolderPath(
     const QString& subdirectory) const
 {
     if (!m_session)
@@ -484,6 +488,14 @@ QString MainWindow::sessionCacheFolderPathForTest(
         path = QDir(path).filePath(subdirectory);
     return QDir::cleanPath(path);
 }
+
+#ifdef PVFORGE_TEST_HOOKS
+QString MainWindow::sessionCacheFolderPathForTest(
+    const QString& subdirectory) const
+{
+    return sessionCacheFolderPath(subdirectory);
+}
+#endif
 
 void MainWindow::applySessionSettings(const next::AppSettings& settings)
 {
@@ -646,11 +658,13 @@ void MainWindow::restoreSessionCommit(const QString& hash)
             QStringLiteral("已恢复到 %1").arg(hash.left(7)));
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 bool MainWindow::restoreSessionCommitForTest(const QString& hash,
                                              QString* error)
 {
     return restoreSessionCommitInternal(hash, error);
 }
+#endif
 
 void MainWindow::showSessionOnboardingIfNeeded()
 {

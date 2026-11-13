@@ -380,8 +380,13 @@ void MediaServices::prefetchHtml(int frame, bool force)
         m_lastPrefetchFrame = -1;
     if (m_lastPrefetchFrame == frame)
         return;
+#ifdef PVFORGE_TEST_HOOKS
     if (!m_prefetchSink && !m_html->isRunning())
         return;
+#else
+    if (!m_html->isRunning())
+        return;
+#endif
 
     const QVector<html2::FrameRequest> requests =
         buildHtmlPrefetchRequests(frame);
@@ -391,10 +396,14 @@ void MediaServices::prefetchHtml(int frame, bool force)
     if (requests.isEmpty())
         return;
 
+#ifdef PVFORGE_TEST_HOOKS
     if (m_prefetchSink)
+    {
         m_prefetchSink(requests);
-    else
-        m_html->prefetch(requests);
+        return;
+    }
+#endif
+    m_html->prefetch(requests);
 }
 
 QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
@@ -649,12 +658,14 @@ video2::VideoSequenceService* MediaServices::sequenceService(
     return raw;
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 video2::VideoSequenceService* MediaServices::videoSequenceForTest(
     const AssetHash& hash) const
 {
     const auto it = m_sequences.find(hash);
     return it == m_sequences.end() ? nullptr : it->second.get();
 }
+#endif
 
 std::unique_ptr<video2::VideoFrames> MediaServices::makeVideoFrames() const
 {

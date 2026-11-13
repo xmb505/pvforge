@@ -24,6 +24,14 @@ option(PVFORGE_BUILD_SELF_TESTS
     "Build pvforge-tests, the executable that answers the --*-test switches"
     ${_pvf_self_tests_default})
 
+# `*ForTest` accessors are declared in production headers.  Compile them only
+# for test-enabled builds; the release preset turns BUILD_TESTING and
+# PVFORGE_BUILD_SELF_TESTS off, so the delivered binary carries no test hooks.
+# PVFORGE_SELF_TESTS is separate: only pvforge-tests dispatches `--*-test`.
+if(BUILD_TESTING OR PVFORGE_BUILD_SELF_TESTS)
+    add_compile_definitions(PVFORGE_TEST_HOOKS)
+endif()
+
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia Network)
 # The HTML/CDP renderer only needs QtCore. Prefer the Qt WebSockets module when

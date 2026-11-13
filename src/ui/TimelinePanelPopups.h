@@ -186,7 +186,7 @@ public:
             return;
         }
 
-        const int rows = std::max(1, m_panel->rowCountForTest());
+        const int rows = std::max(1, int(m_panel->rowIds().size()));
         int height = 30 + TimelinePanel::kRulerHeight
                      + rows * TimelinePanel::kRowHeight
                      + TimelinePanel::kScrollBarSize;

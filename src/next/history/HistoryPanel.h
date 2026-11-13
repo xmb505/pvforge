@@ -39,9 +39,11 @@ public:
     QString selectedHash() const;
     QString selectedMessage() const;
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test hooks.  selectRowForTest behaves like a mouse click on the row.
     int rowCountForTest() const;
     void selectRowForTest(int row);
+#endif
 
     QSize sizeHint() const override;
 

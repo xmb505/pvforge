@@ -34,6 +34,7 @@
 
 namespace pvf {
 
+#ifdef PVFORGE_TEST_HOOKS
 bool MainWindow::openSessionProjectForTest(const QString& path, QString* error)
 {
     const bool useGit = m_session ? m_session->appSettings().gitEnabled
@@ -59,6 +60,7 @@ bool MainWindow::openSessionProjectForTest(const QString& path, QString* error)
     close();
     return true;
 }
+#endif
 
 bool MainWindow::saveSessionProject()
 {
@@ -512,6 +514,7 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
         }));
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void MainWindow::cancelSessionExportForTest()
 {
     if (m_exportCancelled)
@@ -528,6 +531,7 @@ void MainWindow::startSessionExportForTest(
                        outputFps, resolutionScale, crf, encoder, preset,
                        overwrite);
 }
+#endif
 
 void MainWindow::replaceSessionAssetFromDialog(const QString& uuid)
 {
@@ -573,6 +577,7 @@ void MainWindow::replaceSessionAssetFromDialog(const QString& uuid)
         m_monitor->setProjectChanged();
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 bool MainWindow::replaceAssetForTest(const QString& uuid, const QString& hash,
                                      QString* error)
 {
@@ -584,5 +589,6 @@ bool MainWindow::replaceAssetForTest(const QString& uuid, const QString& hash,
     }
     return m_session->editActions()->replaceAsset(uuid, hash, error);
 }
+#endif
 
 } // namespace pvf

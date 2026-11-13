@@ -111,6 +111,8 @@ target_compile_features(pvf_next_services PUBLIC cxx_std_20)
 include(CTest)
 
 if(BUILD_TESTING)
+    # Standalone module builds do not see the top-level test-hook switch.
+    add_compile_definitions(PVFORGE_TEST_HOOKS)
     add_executable(pvf_next_document_tests tests/ProjectDocumentTests.cpp)
     target_link_libraries(pvf_next_document_tests PRIVATE pvf_next_document Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_document_tests)

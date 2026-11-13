@@ -33,6 +33,8 @@ target_compile_features(pvf_next_history PUBLIC cxx_std_20)
 include(CTest)
 
 if(BUILD_TESTING)
+    # Standalone module builds do not see the top-level test-hook switch.
+    add_compile_definitions(PVFORGE_TEST_HOOKS)
     add_executable(pvf_next_history_tests tests/HistoryPanelTest.cpp)
     target_link_libraries(pvf_next_history_tests PRIVATE
         pvf_next_history

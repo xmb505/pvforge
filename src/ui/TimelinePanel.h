@@ -82,10 +82,13 @@ public:
     // Track used by the next double-click key insertion.  Selecting a
     // keyframe diamond also adopts its track.
     void setSelectedTrack(const QString& track);
+#ifdef PVFORGE_TEST_HOOKS
     QString selectedTrackForTest() const { return m_selectedTrack; }
     bool splitAtPlayheadForTest() { return splitAtPlayhead(); }
+#endif
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
+#ifdef PVFORGE_TEST_HOOKS
     int horizontalScrollForTest() const { return m_scrollX; }
     void setHorizontalScrollForTest(int value)
     {
@@ -96,9 +99,11 @@ public:
     }
     int verticalScrollForTest() const { return m_scrollY; }
     bool verticalScrollVisibleForTest() const;
+#endif
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
+#ifdef PVFORGE_TEST_HOOKS
     int frameXForTest(double frame) const
     {
         return xFromFrame(int(std::lround(frame)));
@@ -118,9 +123,11 @@ public:
         return hitKeyframeRow(row, x, y);
     }
     int entitySelectionCountForTest() const { return int(m_entitySelection.size()); }
+#endif
 
     bool displayFrames() const { return m_displayFrames; }
     void setDisplayFrames(bool frames);
+#ifdef PVFORGE_TEST_HOOKS
     void setPixelsPerFrameForTest(double pixels);
     int rulerTickStepForTest() const;
     int rulerLabelStepForTest() const;
@@ -177,14 +184,18 @@ public:
     {
         return keyframeHasNote(id, frame);
     }
+#endif
 
     EntityId owner() const { return m_owner; }
+#ifdef PVFORGE_TEST_HOOKS
     bool playheadVisibleForTest() const
     {
         return m_owner < 0
                || (m_frame >= contentStart() && m_frame < contentEnd());
     }
+#endif
     QRect clipRectFor(EntityId id) const;
+#ifdef PVFORGE_TEST_HOOKS
     // Solver colour band inside the clip: start -> Result::stopFrame.
     QRect solverBandRectForTest(const Uuid& entityUuid,
                                 const Uuid& solverId) const;
@@ -194,15 +205,18 @@ public:
     // EditorSession's shared solver cache does not count).  Paint and playhead
     // ticks must not grow it.
     int solverBandSolveCountForTest() const { return m_solverBandSolveCount; }
+#endif
     // Opens (or raises) the private timeline for a clip and returns its panel.
     TimelinePanel* openPopup(EntityId ownerId);
     void closeAllPopups();
     void syncPopups();
     void removePopup(EntityId ownerId);
+#ifdef PVFORGE_TEST_HOOKS
     EntityId dropAssetForTest(const QMimeData& mime, int frame, int row = -1)
     {
         return dropAsset(mime, frame, row);
     }
+#endif
     // Popup keyframe selections are adopted by the main panel so the existing
     // Delete / easing actions see them.
     void adoptKeyframeSelection(const QVector<KeyframeSelection>& selection);
@@ -319,6 +333,7 @@ private:
     // Solver band stop frames are expensive to evaluate, so they are computed
     // once per model change and only read by paintEvent()/the test hooks.
     void rebuildSolverStopCache();
+    QRect solverBandRect(const Uuid& entityUuid, const Uuid& solverId) const;
 
     enum class DragMode
     {

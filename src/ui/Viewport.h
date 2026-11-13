@@ -68,20 +68,24 @@ public:
 
     // Renders the current frame at project resolution for tests/previews.
     QImage grabProjectFrame(const Uuid& cameraUuid = Uuid()) const;
+#ifdef PVFORGE_TEST_HOOKS
     QPointF projectToWidgetForTest(const QPointF& pos) const;
     QImage sessionImageForTest() const { return m_sessionImage; }
     // The solver trajectory and its initial-velocity handle live in the
     // properties panel's mini preview, not over the canvas.  This hook stays
     // so tests can assert the viewport overlay is really gone.
     bool sessionSolverPreviewVisibleForTest() const { return false; }
+#endif
 
     QToolButton* workbenchButton() const { return m_workbenchButton; }
 
     // Canvas pixels per screen pixel, used by the gizmo and tests.
     double currentScale() const { return viewScale(); }
 
+#ifdef PVFORGE_TEST_HOOKS
     QTransform worldToScreenForTest() const { return worldToScreenTransform(); }
     QPolygonF cameraFrameForTest() const { return sessionCameraPolygon(); }
+#endif
     void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }
 
@@ -95,6 +99,7 @@ public:
     void setEditingEnabled(bool on) { m_editingEnabled = on; }
     bool editingEnabled() const { return m_editingEnabled; }
 
+#ifdef PVFORGE_TEST_HOOKS
     // Session gizmo test hooks.
     gizmo::Transform gizmoTransformForTest(const Uuid& uuid) const;
     gizmo::Bounds gizmoBoundsForTest(const Uuid& uuid) const;
@@ -118,6 +123,7 @@ public:
         return m_sessionDragKind != SessionDragKind::None;
     }
     Uuid sessionDragUuidForTest() const { return m_sessionDragUuid; }
+#endif
 
 signals:
     void entitySelected(EntityId id);

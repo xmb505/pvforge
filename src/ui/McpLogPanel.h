@@ -48,10 +48,12 @@ public:
     void showFromMenu();
 
     bool isDetached() const { return m_detached; }
+#ifdef PVFORGE_TEST_HOOKS
     int entryCountForTest() const;
     QString entryTargetForTest(int row) const;
     QString entryDetailForTest(int row) const;
     void activateEntryForTest(int row);
+#endif
 
 signals:
     void entityActivated(EntityId id);

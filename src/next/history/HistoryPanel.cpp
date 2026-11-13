@@ -303,6 +303,7 @@ QString HistoryPanel::selectedMessage() const
     return item->data(0, kMessageRole).toString();
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 int HistoryPanel::rowCountForTest() const
 {
     return m_tree->topLevelItemCount();
@@ -317,6 +318,7 @@ void HistoryPanel::selectRowForTest(int row)
     item->setSelected(true);
     m_tree->scrollToItem(item);
 }
+#endif
 
 void HistoryPanel::updateButtons()
 {

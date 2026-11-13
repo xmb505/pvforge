@@ -54,8 +54,10 @@ public:
     // Session-mode refresh after an external (MCP) project change: re-reads
     // the wall summary and media choices from the document/assets.
     void refreshSession();
+#ifdef PVFORGE_TEST_HOOKS
     // Session-mode test hook: selects a stored asset in the media page.
     void selectSessionMediaForTest(const QString& hash) { selectSessionMedia(hash); }
+#endif
 
 signals:
     void created(EntityId id);

@@ -515,7 +515,7 @@ void testMissingImageCard()
 
     CHECK(countRedBorderPixels(image) > 20);
     CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
-    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+    CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
           == QStringLiteral("素材丢失"));
 }
 
@@ -548,7 +548,7 @@ void testMissingVideoAndHtmlCards()
 
         CHECK(countRedBorderPixels(image) > 20);
         CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
-        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+        CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
               == QStringLiteral("素材丢失"));
     }
 }
@@ -583,7 +583,7 @@ void testPresentAssetKeepsPendingPlaceholder()
         const QImage image =
             render2::renderFrame(project, store, options, world, cache);
 
-        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+        CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
               == QStringLiteral("视频"));
         CHECK(countRedBorderPixels(image) == 0);
         CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
@@ -604,7 +604,7 @@ void testPresentAssetKeepsPendingPlaceholder()
         const QImage image =
             render2::renderFrame(project, store, options, world, cache);
 
-        CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+        CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
               == QStringLiteral("HTML"));
         CHECK(countRedBorderPixels(image) == 0);
         CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
@@ -629,7 +629,7 @@ void testCorruptImageShowsMissingCard()
     const QImage image = render(project, store);
 
     CHECK(store.get(hash).has_value());
-    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+    CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
           == QStringLiteral("素材丢失"));
     CHECK(countRedBorderPixels(image) > 20);
     CHECK(hasBrightPixel(image, QRect(80, 40, 160, 100)));
@@ -692,7 +692,7 @@ void testReimportSameHashRestoresImage()
     const QImage offline = render(project, store);
     CHECK(!nearColor(offline.pixelColor(200, 150), QColor(0, 255, 0)));
     CHECK(countRedBorderPixels(offline) > 20);
-    CHECK(render2::placeholderLabelForTest(store, entity.content.asset)
+    CHECK(render2::assetPlaceholderLabel(store, entity.content.asset)
           == QStringLiteral("素材丢失"));
 
     const auto restored = store.importFile(path, &error);

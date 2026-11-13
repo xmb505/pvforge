@@ -71,7 +71,9 @@ public:
     // Playback freeze for the mini solver preview.  The panel connects this
     // to EditorSession::playback(); MainWindow may also forward it.
     void setPlaybackActive(bool active);
+#ifdef PVFORGE_TEST_HOOKS
     bool playbackActiveForTest() const { return m_playbackActive; }
+#endif
 
 signals:
     void valueEdited(EntityId id, const QString& prop, double value);

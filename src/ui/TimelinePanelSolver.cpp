@@ -44,19 +44,8 @@ void TimelinePanel::rebuildSolverStopCache()
     }
 }
 
-int TimelinePanel::solverBandStopFrameForTest(const Uuid& entityUuid,
-                                               const Uuid& solverId) const
-{
-    if (!m_session || entityUuid.isEmpty())
-        return -1;
-    if (!m_session->project().entities.contains(entityUuid))
-        return -1;
-    // Read-only: an empty cache means "unknown", never "solve now".
-    return m_solverStopFrames.value(solverCacheKey(entityUuid, solverId), -1);
-}
-
-QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
-                                           const Uuid& solverId) const
+QRect TimelinePanel::solverBandRect(const Uuid& entityUuid,
+                                    const Uuid& solverId) const
 {
     if (!m_session || entityUuid.isEmpty())
         return {};
@@ -106,5 +95,24 @@ QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
         return {};
     return QRect(left, clip.top() + 1, right - left, clip.height() - 2);
 }
+
+#ifdef PVFORGE_TEST_HOOKS
+int TimelinePanel::solverBandStopFrameForTest(const Uuid& entityUuid,
+                                               const Uuid& solverId) const
+{
+    if (!m_session || entityUuid.isEmpty())
+        return -1;
+    if (!m_session->project().entities.contains(entityUuid))
+        return -1;
+    // Read-only: an empty cache means "unknown", never "solve now".
+    return m_solverStopFrames.value(solverCacheKey(entityUuid, solverId), -1);
+}
+
+QRect TimelinePanel::solverBandRectForTest(const Uuid& entityUuid,
+                                           const Uuid& solverId) const
+{
+    return solverBandRect(entityUuid, solverId);
+}
+#endif
 
 } // namespace pvf

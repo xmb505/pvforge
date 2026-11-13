@@ -528,6 +528,7 @@ void McpLogPanel::updateButtons()
     m_resumeButton->setEnabled(m_aiStopped);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 int McpLogPanel::entryCountForTest() const
 {
     return m_tree->topLevelItemCount();
@@ -555,6 +556,7 @@ void McpLogPanel::activateEntryForTest(int row)
     m_tree->setCurrentItem(item);
     m_tree->scrollToItem(item);
 }
+#endif
 
 void McpLogPanel::closeEvent(QCloseEvent* event)
 {

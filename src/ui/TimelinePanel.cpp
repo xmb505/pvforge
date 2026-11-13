@@ -322,6 +322,7 @@ void TimelinePanel::setDisplayFrames(bool frames)
             popup->panel()->setDisplayFrames(frames);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void TimelinePanel::setPixelsPerFrameForTest(double pixels)
 {
     m_pixelsPerFrame = std::clamp(pixels, 0.25, 32.0);
@@ -329,6 +330,7 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     update();
     syncPopups();
 }
+#endif
 
 void TimelinePanel::setSelectedTrack(const QString& track)
 {

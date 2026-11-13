@@ -45,12 +45,14 @@ public:
     // Also invoked by the 清空 button.
     void clearLog();
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test hooks: index is the top-level row.  entryTargetForTest returns the
     // "参数" summary column, entryDetailForTest the collapsed full-detail row.
     int entryCountForTest() const;
     QString entryTargetForTest(int row) const;
     QString entryDetailForTest(int row) const;
     void activateEntryForTest(int row);
+#endif
 
     QSize sizeHint() const override;
 

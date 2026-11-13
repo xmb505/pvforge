@@ -63,17 +63,19 @@ public:
     bool isDetached() const { return m_detached; }
     bool isHighQuality() const { return m_highQuality; }
 
-    // Test hooks / programmatic trace import.
+    // Programmatic trace import.
     bool loadTraceVideo(const QString& path);
-    void clearTraceForTest() { clearTraceVideo(); }
     void setTraceOpacity(double opacity);
 
+#ifdef PVFORGE_TEST_HOOKS
+    void clearTraceForTest() { clearTraceVideo(); }
     // Session test hooks.
     QImage previewImageForTest() const { return m_sessionPreview; }
     QImage traceImageForTest() const { return m_traceImage; }
     double traceOpacityForTest() const { return m_traceOpacity; }
     QString traceErrorForTest() const { return m_traceError; }
     Uuid monitorCameraForTest() const;
+#endif
     bool sessionMode() const { return m_session != nullptr; }
 
 signals:

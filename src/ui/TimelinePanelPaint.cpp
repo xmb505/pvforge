@@ -317,8 +317,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             {
                 for (const model::SolverSegment& solver : modelIt->solvers)
                 {
-                    const QRect band =
-                        solverBandRectForTest(uuid, solver.id);
+                    const QRect band = solverBandRect(uuid, solver.id);
                     if (band.isEmpty())
                         continue;
                     QColor color(116, 206, 255);

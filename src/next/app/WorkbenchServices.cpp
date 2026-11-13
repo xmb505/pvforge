@@ -613,6 +613,7 @@ int WorkbenchServices::totalFrames() const
     return std::max(1, contentEnd());
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 QImage WorkbenchServices::lookupForTest(int frame, const Uuid& cameraUuid)
 {
     bool hit = false;
@@ -624,6 +625,7 @@ workbench::FrameMeta WorkbenchServices::buildMetaForTest(int frame)
 {
     return buildMeta(frame);
 }
+#endif
 
 void WorkbenchServices::tick()
 {
