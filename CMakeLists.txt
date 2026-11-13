@@ -111,6 +111,12 @@ set(PVF_APP_SOURCES
     src/next/properties/TextLayoutDialog.cpp
     src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
+    src/ui/AssetLibraryPanelHelpers.cpp
+    src/ui/AssetLibraryPanelImport.cpp
+    src/ui/AssetLibraryPanelInternal.h
+    src/ui/AssetLibraryPanelProgress.cpp
+    src/ui/AssetLibraryPanelSession.cpp
+    src/ui/AssetLibraryPanelThumbs.cpp
     src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp
     src/ui/EasingChooser.cpp
@@ -127,6 +133,9 @@ set(PVF_APP_SOURCES
     src/next/timeline/MarkerDialog.cpp
     src/next/timeline/MarkerDialog.h
     src/ui/WorkbenchPanel.cpp
+    src/ui/WorkbenchPanelMedia.cpp
+    src/ui/WorkbenchPanelPages.cpp
+    src/ui/WorkbenchPanelPreview.cpp
 )
 
 add_library(pvf_app STATIC ${PVF_APP_SOURCES})

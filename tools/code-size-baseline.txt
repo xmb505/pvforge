@@ -13,7 +13,6 @@ src/model/tests/model_tests.cpp	2306
 src/tests/TimelineTests.cpp	2188
 src/store/tests/store_tests.cpp	2092
 src/next/timeline/tests/timeline_tests.cpp	2014
-src/ui/AssetLibraryPanel.cpp	2000
 src/tests/SolverTests.cpp	1945
 src/tests/PropertiesTests.cpp	1884
 src/tests/ProfileFixtures.cpp	1854
