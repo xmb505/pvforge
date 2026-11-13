@@ -33,7 +33,11 @@ include(CTest)
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
-    add_executable(pvf_store_tests tests/store_tests.cpp)
+    add_executable(pvf_store_tests
+        tests/store_tests.cpp
+        tests/store_tree_tests.cpp
+        tests/store_tests.h
+    )
     target_link_libraries(pvf_store_tests PRIVATE pvf_store Qt6::Test)
 
     set(PVF_STORE_TEST_CASES
@@ -71,11 +75,15 @@ if(BUILD_TESTING)
         setGitEnabledReportsMissingGit
         openRejectsFutureVersion
         openRejectsUnmigratableVersion
-        openMigratesV1ProjectAndEntity
+        openRejectsLegacyFlatFormat
         openRejectsFutureEntityVersion
         openRejectsStaleEntityVersion
         openStrictRequiredFields
         unknownFieldsSurviveReopen
+        nestedEntityTreeRoundTrip
+        entityTreeRejectsInconsistentNesting
+        entityTreeRejectsDuplicateUuid
+        entityTreeRejectsRootFileNameMismatch
     )
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)

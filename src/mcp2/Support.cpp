@@ -144,8 +144,21 @@ Result Tx::finish(const QJsonObject& data, const QString& message)
         }
     };
 
-    QSet<Uuid> removedNow;
+    // Entity files hold a whole root subtree. Deleting every UUID in one tree
+    // would make the second call fail, so hand the store only the topmost
+    // deleted entities; it removes their descendants with the file rewrite.
+    QVector<Uuid> deleteRoots;
     for (const Uuid& uuid : deleted)
+    {
+        const auto it = backup.entities.constFind(uuid);
+        if (it == backup.entities.constEnd())
+            continue;
+        if (!it->parentUuid.isEmpty() && deleted.contains(it->parentUuid))
+            continue;
+        deleteRoots.append(uuid);
+    }
+    std::sort(deleteRoots.begin(), deleteRoots.end());
+    for (const Uuid& uuid : std::as_const(deleteRoots))
     {
         QString error;
         if (!store->deleteEntity(uuid, &error))
@@ -391,6 +404,8 @@ QJsonObject entityBrief(const model::Entity& entity)
     object.insert(QStringLiteral("row"), entity.row);
     object.insert(QStringLiteral("hidden"), entity.hidden);
     object.insert(QStringLiteral("locked"), entity.locked);
+    object.insert(QStringLiteral("space"), model::entitySpaceName(entity.space));
+    object.insert(QStringLiteral("followParentRange"), entity.followParentRange);
     object.insert(QStringLiteral("contentKind"), contentKindName(entity.content.kind));
     return object;
 }

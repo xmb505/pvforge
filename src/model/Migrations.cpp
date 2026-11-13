@@ -4,40 +4,12 @@
 
 namespace pvf::model::migrations {
 
-namespace {
-
-// True for an entity document (entities/<uuid>.json). project.json always
-// carries the project format marker, so a stray uuid in it never flips the
-// kind.
-bool isEntityDocument(const QJsonObject& document)
-{
-    if (document.value(QStringLiteral("format")).toString()
-        == QLatin1String(kProjectFormat))
-    {
-        return false;
-    }
-    return document.contains(QStringLiteral("uuid"));
-}
-
-// v1 entity files were anonymous: no "format", no "version". v2 makes every
-// text document self-describing, so the step adds the entity format marker;
-// upgrade() stamps the version itself. project.json is unchanged by this step.
-QJsonObject v1ToV2(const QJsonObject& document)
-{
-    QJsonObject result = document;
-    if (!result.contains(QStringLiteral("format")) && isEntityDocument(result))
-        result.insert(QStringLiteral("format"), QLatin1String(kEntityFormat));
-    return result;
-}
-
-} // namespace
-
 const QVector<Migration>& registry()
 {
-    // Oldest first. Every step must handle project.json and entities/*.json.
-    static const QVector<Migration> steps{
-        Migration{1, QStringLiteral("v1_to_v2"), v1ToV2},
-    };
+    // v3 is the first root-subtree format and old flat projects are not
+    // imported, so the production chain has no steps. The generic upgrade()
+    // machinery stays for tests and future versions.
+    static const QVector<Migration> steps;
     return steps;
 }
 

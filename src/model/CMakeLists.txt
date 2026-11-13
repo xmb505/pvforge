@@ -26,7 +26,10 @@ target_compile_features(pvf_model PUBLIC cxx_std_20)
 include(CTest)
 
 if(BUILD_TESTING)
-    add_executable(pvf_model_tests tests/model_tests.cpp)
+    add_executable(pvf_model_tests
+        tests/model_tests.cpp
+        tests/entity_tree_tests.cpp
+    )
     target_link_libraries(pvf_model_tests PRIVATE pvf_model)
     add_test(NAME pvf_model_tests COMMAND pvf_model_tests)
 endif()

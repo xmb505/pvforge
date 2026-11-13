@@ -16,6 +16,19 @@
 
 namespace pvf::model {
 
+// Where an entity's transform lives. Parent space follows the existing
+// behaviour (position/rotation/scale are relative to the parent); Canvas space
+// is relative to the canvas and does not inherit the parent transform. The
+// timeline range is still constrained by the parent in both spaces.
+enum class EntitySpace
+{
+    Parent,
+    Canvas,
+};
+
+QString entitySpaceName(EntitySpace space);
+std::optional<EntitySpace> entitySpaceFromName(const QString& name);
+
 struct SolverSegment
 {
     Uuid id;
@@ -36,6 +49,10 @@ struct Entity
     Uuid uuid;
     QString name;
     Uuid parentUuid; // empty = root
+    // True only on a child: the entity range must equal its direct parent's
+    // range. The parent itself is never followed through.
+    bool followParentRange = false;
+    EntitySpace space = EntitySpace::Parent;
     int start = 0;
     int end = 1;
     int row = 0;
@@ -54,6 +71,15 @@ struct Entity
 
     int duration() const { return end - start; }
     bool isRoot() const { return parentUuid.isEmpty(); }
+};
+
+// One root-subtree document: entities/<root-uuid>.json. Children are stored
+// recursively, but every child keeps its parentUuid so the nesting and the
+// flat model can be cross-checked.
+struct EntityTreeNode
+{
+    Entity entity;
+    QVector<EntityTreeNode> children;
 };
 
 // Keyframes must stay in 0 .. duration-1.
@@ -93,14 +119,37 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
                                             QString* error = nullptr);
 
 QJsonObject toJson(const Entity& entity);
-// Entity files carry their own "format" ("pvforge-entity") and "version"
-// (kProjectFormatVersion). ProjectStore migrates an older document with
-// migrations::upgrade() before calling this parser; a document from a newer
-// build is refused instead of being half-parsed.
+// Entity documents carry their own "format" ("pvforge-entity") and "version"
+// (kProjectFormatVersion). A document from an older flat layout or a newer
+// build is refused by ProjectStore instead of being half-parsed. Use
+// entityTreeFromJson() for a root-subtree file; this parser is for one entity
+// object and rejects non-empty "children" so nesting cannot be dropped.
 std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      const ParseOptions& options,
                                      QString* error = nullptr);
 std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      QString* error = nullptr);
+
+// Root-subtree document helpers. toJson() always writes a "children" array
+// (possibly empty); entityTreeFromJson() accepts a missing array as an empty
+// leaf for v3 documents written before the field existed in some fixtures.
+QJsonObject toJson(const EntityTreeNode& node);
+std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
+                                                 const ParseOptions& options,
+                                                 QString* error = nullptr);
+std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
+                                                 QString* error = nullptr);
+
+// Flattens one tree into `entities` and checks:
+// - the root parentUuid is empty; every child parentUuid equals its enclosing
+//   node
+// - UUIDs are unique within the tree
+// - every entity passes validateEntity()
+// - a child range is inside its direct parent's range
+// - followParentRange=true means the range equals the direct parent's range
+// Errors name the JSON-like path ($ / $.children[i]) and the entity UUID.
+bool flattenEntityTree(const EntityTreeNode& root,
+                       QHash<Uuid, Entity>* entities,
+                       QString* error = nullptr);
 
 } // namespace pvf::model

@@ -9,8 +9,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace pvf::model {
+
+QString entitySpaceName(EntitySpace space)
+{
+    return space == EntitySpace::Canvas ? QStringLiteral("canvas")
+                                        : QStringLiteral("parent");
+}
+
+std::optional<EntitySpace> entitySpaceFromName(const QString& name)
+{
+    if (name == QLatin1String("parent"))
+        return EntitySpace::Parent;
+    if (name == QLatin1String("canvas"))
+        return EntitySpace::Canvas;
+    return std::nullopt;
+}
 
 namespace {
 
@@ -158,6 +174,8 @@ QJsonObject toJson(const Entity& entity)
                   entity.parentUuid.isEmpty()
                       ? QJsonValue(QJsonValue::Null)
                       : QJsonValue(entity.parentUuid));
+    object.insert(QStringLiteral("space"), entitySpaceName(entity.space));
+    object.insert(QStringLiteral("followParentRange"), entity.followParentRange);
     object.insert(QStringLiteral("start"), entity.start);
     object.insert(QStringLiteral("end"), entity.end);
     object.insert(QStringLiteral("row"), entity.row);
@@ -194,6 +212,28 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
                                           options, error))
     {
         return std::nullopt;
+    }
+
+    // A flat parse must not silently drop a nested document. Store and any
+    // other subtree caller use entityTreeFromJson(), which owns the recursion.
+    const QJsonValue childrenValue =
+        object.value(QStringLiteral("children"));
+    if (!childrenValue.isUndefined() && !childrenValue.isNull())
+    {
+        if (!childrenValue.isArray())
+        {
+            detail::setError(error,
+                             detail::pathOf(options, QStringLiteral("children"))
+                                 + QStringLiteral(" 必须是数组"));
+            return std::nullopt;
+        }
+        if (!childrenValue.toArray().isEmpty())
+        {
+            detail::setError(
+                error,
+                QStringLiteral("实体文档包含非空 children，必须按根子树读取"));
+            return std::nullopt;
+        }
     }
 
     if (detail::hasField(object, QStringLiteral("format")))
@@ -234,6 +274,22 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
         detail::setError(error, QStringLiteral("parentUuid 必须是 UUID 字符串或 null"));
         return std::nullopt;
     }
+
+    const QString spaceName = detail::optionalString(
+        object, QStringLiteral("space"), QStringLiteral("parent"), options);
+    const auto space = entitySpaceFromName(spaceName);
+    if (!space)
+    {
+        detail::setError(
+            error,
+            QStringLiteral("实体 %1 的 space 必须是 parent 或 canvas（当前 %2）")
+                .arg(entity.uuid, spaceName));
+        return std::nullopt;
+    }
+    entity.space = *space;
+    entity.followParentRange = detail::optionalBool(
+        object, QStringLiteral("followParentRange"), entity.followParentRange,
+        options);
 
     entity.start = detail::optionalInt(
         object, QStringLiteral("start"), entity.start, options);
@@ -360,13 +416,15 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
     entity.extras = detail::extrasFrom(
         object, {QStringLiteral("format"), QStringLiteral("version"),
                  QStringLiteral("uuid"), QStringLiteral("name"),
-                 QStringLiteral("parentUuid"), QStringLiteral("start"),
+                 QStringLiteral("parentUuid"), QStringLiteral("space"),
+                 QStringLiteral("followParentRange"), QStringLiteral("start"),
                  QStringLiteral("end"), QStringLiteral("row"),
                  QStringLiteral("hidden"), QStringLiteral("locked"),
                  QStringLiteral("inheritVisibility"), QStringLiteral("visible"),
                  QStringLiteral("physicsInteract"),
                  QStringLiteral("transform"), QStringLiteral("keyframes"),
-                 QStringLiteral("solvers"), QStringLiteral("content")});
+                 QStringLiteral("solvers"), QStringLiteral("content"),
+                 QStringLiteral("children")});
 
     if (!validateEntity(entity, error))
         return std::nullopt;
@@ -376,6 +434,189 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
 std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
 {
     return entityFromJson(object, ParseOptions{}, error);
+}
+
+QJsonObject toJson(const EntityTreeNode& node)
+{
+    QJsonObject object = toJson(node.entity);
+    QJsonArray children;
+    for (const EntityTreeNode& child : node.children)
+        children.append(toJson(child));
+    object.insert(QStringLiteral("children"), children);
+    return object;
+}
+
+std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
+                                                 const ParseOptions& options,
+                                                 QString* error)
+{
+    QJsonObject entityObject = object;
+    const QJsonValue childrenValue =
+        entityObject.take(QStringLiteral("children"));
+
+    auto entity = entityFromJson(entityObject, options, error);
+    if (!entity)
+        return std::nullopt;
+
+    EntityTreeNode node;
+    node.entity = *entity;
+
+    if (childrenValue.isUndefined() || childrenValue.isNull())
+        return node;
+    if (!childrenValue.isArray())
+    {
+        detail::setError(error,
+                         detail::pathOf(options, QStringLiteral("children"))
+                             + QStringLiteral(" 必须是数组"));
+        return std::nullopt;
+    }
+
+    const QJsonArray children = childrenValue.toArray();
+    for (int i = 0; i < children.size(); ++i)
+    {
+        const QString path =
+            QStringLiteral("children[%1]").arg(i);
+        if (!children.at(i).isObject())
+        {
+            detail::setError(error, detail::pathOf(options, path)
+                                        + QStringLiteral(" 必须是对象"));
+            return std::nullopt;
+        }
+        ParseOptions childOptions = detail::childOptions(options, path);
+        auto child = entityTreeFromJson(children.at(i).toObject(), childOptions,
+                                        error);
+        if (!child)
+            return std::nullopt;
+        node.children.append(std::move(*child));
+    }
+    return node;
+}
+
+std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
+                                                 QString* error)
+{
+    return entityTreeFromJson(object, ParseOptions{}, error);
+}
+
+namespace {
+
+bool flattenNode(const EntityTreeNode& node, QHash<Uuid, Entity>* entities,
+                 const Uuid& expectedParent, const QString& path,
+                 QString* error)
+{
+    const Entity& entity = node.entity;
+    const QString label =
+        QStringLiteral("实体树节点 %1（UUID %2）").arg(path, entity.uuid);
+
+    if (expectedParent.isEmpty())
+    {
+        if (!entity.parentUuid.isEmpty())
+        {
+            detail::setError(
+                error,
+                label
+                    + QStringLiteral("是根节点，parentUuid 必须为空（当前 %1）")
+                          .arg(entity.parentUuid));
+            return false;
+        }
+    }
+    else if (entity.parentUuid != expectedParent)
+    {
+        detail::setError(
+            error,
+            label
+                + QStringLiteral("的 parentUuid（%1）与嵌套父级（%2）不一致")
+                      .arg(entity.parentUuid.isEmpty()
+                               ? QStringLiteral("空")
+                               : entity.parentUuid,
+                           expectedParent));
+        return false;
+    }
+
+    QString entityError;
+    if (!validateEntity(entity, &entityError))
+    {
+        detail::setError(error, label + QStringLiteral("无效：%1").arg(entityError));
+        return false;
+    }
+
+    if (!expectedParent.isEmpty())
+    {
+        const auto parent = entities->constFind(expectedParent);
+        if (parent == entities->constEnd())
+        {
+            detail::setError(error,
+                             label + QStringLiteral("的父实体 %1 不在同一棵树中")
+                                         .arg(expectedParent));
+            return false;
+        }
+
+        const Entity& parentEntity = parent.value();
+        if (entity.start < parentEntity.start || entity.end > parentEntity.end)
+        {
+            detail::setError(
+                error,
+                label
+                    + QStringLiteral("的时间范围 [%1, %2) 超出父实体 %3 的 "
+                                     "[%4, %5)")
+                          .arg(entity.start)
+                          .arg(entity.end)
+                          .arg(parentEntity.uuid)
+                          .arg(parentEntity.start)
+                          .arg(parentEntity.end));
+            return false;
+        }
+        if (entity.followParentRange
+            && (entity.start != parentEntity.start
+                || entity.end != parentEntity.end))
+        {
+            detail::setError(
+                error,
+                label
+                    + QStringLiteral("的 followParentRange=true，但时间范围 "
+                                     "[%1, %2) 不等于直接父实体 %3 的 "
+                                     "[%4, %5)")
+                          .arg(entity.start)
+                          .arg(entity.end)
+                          .arg(parentEntity.uuid)
+                          .arg(parentEntity.start)
+                          .arg(parentEntity.end));
+            return false;
+        }
+    }
+
+    if (entities->contains(entity.uuid))
+    {
+        detail::setError(
+            error, label + QStringLiteral("的 UUID 在实体树中重复"));
+        return false;
+    }
+    entities->insert(entity.uuid, entity);
+
+    for (int i = 0; i < node.children.size(); ++i)
+    {
+        const QString childPath =
+            QStringLiteral("%1.children[%2]").arg(path).arg(i);
+        if (!flattenNode(node.children.at(i), entities, entity.uuid, childPath,
+                         error))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool flattenEntityTree(const EntityTreeNode& root,
+                       QHash<Uuid, Entity>* entities, QString* error)
+{
+    if (!entities)
+    {
+        detail::setError(error, QStringLiteral("实体树输出必须是有效指针"));
+        return false;
+    }
+    return flattenNode(root, entities, Uuid(), QStringLiteral("$"), error);
 }
 
 bool validateTrack(const Track& track, int duration, const QString& trackName,
@@ -603,6 +844,14 @@ bool validateEntity(const Entity& entity, QString* error)
         detail::setError(
             error,
             QStringLiteral("实体 %1 的 row 不能小于 0").arg(entity.uuid));
+        return false;
+    }
+
+    if (entity.followParentRange && entity.parentUuid.isEmpty())
+    {
+        detail::setError(
+            error,
+            QStringLiteral("根实体 %1 不能设置 followParentRange").arg(entity.uuid));
         return false;
     }
 
