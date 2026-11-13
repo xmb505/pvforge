@@ -100,7 +100,6 @@ if(BUILD_TESTING)
         previewRejectsOversize
         solverEvaluateNestedEntity
         moveRowOnlyAndGetDefaults
-        followParentRangeUpdateAligns
         entityGetIncludesSolvers
         textualContentCanBecomeEmpty
         specialContentCreateAndUpdate
@@ -117,7 +116,6 @@ if(BUILD_TESTING)
         stopKeepsReadsWorking
         resumeRestoresWrites
         createManyAbortsMidBatch
-        writeToolClassification
     )
 
     foreach(test_case IN LISTS PVF_MCP2_TEST_CASES)

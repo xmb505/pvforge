@@ -2011,3 +2011,4 @@ int main(int argc, char* argv[])
     TimelineWidgetTest test;
     return QTest::qExec(&test, argc, argv);
 }
+#include "timeline_tests.moc"
