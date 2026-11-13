@@ -751,6 +751,7 @@ void McpLogPanel::activateItem(QTreeWidgetItem* item)
         emit frameRequested(frame);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 int McpLogPanel::entryCountForTest() const
 {
     return m_tree->topLevelItemCount();
@@ -778,5 +779,6 @@ void McpLogPanel::activateEntryForTest(int row)
     m_tree->setCurrentItem(item);
     activateItem(item);
 }
+#endif
 
 } // namespace pvf

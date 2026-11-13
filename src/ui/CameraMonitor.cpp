@@ -324,12 +324,14 @@ QImage CameraMonitor::ensureSessionPreview()
     return m_sessionPreview;
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 Uuid CameraMonitor::monitorCameraForTest() const
 {
     if (m_session)
         return m_session->activeCameraUuid();
     return Uuid();
 }
+#endif
 
 void CameraMonitor::updateButtons()
 {

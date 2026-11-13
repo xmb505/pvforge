@@ -4,6 +4,8 @@
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 
+#ifdef PVFORGE_TEST_HOOKS
+
 namespace pvf {
 
 // ---- session gizmo test hooks -------------------------------------------
@@ -113,3 +115,5 @@ double Viewport::snapAngleForTest(double degrees, bool force) const
 }
 
 } // namespace pvf
+
+#endif

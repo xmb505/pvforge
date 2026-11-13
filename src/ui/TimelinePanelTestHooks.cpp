@@ -7,6 +7,8 @@
 
 #include <algorithm>
 
+#ifdef PVFORGE_TEST_HOOKS
+
 namespace pvf {
 
 int TimelinePanel::rulerTickStepForTest() const
@@ -147,3 +149,5 @@ bool TimelinePanel::verticalScrollVisibleForTest() const
 }
 
 } // namespace pvf
+
+#endif

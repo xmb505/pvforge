@@ -196,10 +196,12 @@ QImage Viewport::grabProjectFrame(const Uuid& cameraUuid) const
         cameraUuid, 0, nullptr);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 QPointF Viewport::projectToWidgetForTest(const QPointF& pos) const
 {
     return sessionWorldToScreen().map(pos);
 }
+#endif
 
 const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
 {
