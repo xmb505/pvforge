@@ -845,6 +845,7 @@ void MainWindow::updateAutosaveTimer()
     m_autosaveTimer->stop();
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void MainWindow::autoSaveNowForTest()
 {
     autoSave();
@@ -854,6 +855,7 @@ void MainWindow::triggerSessionAutoSaveForTest()
 {
     sessionAutoSave();
 }
+#endif
 
 void MainWindow::sessionAutoSave()
 {
@@ -874,6 +876,7 @@ void MainWindow::sessionAutoSave()
     statusBar()->showMessage(QStringLiteral("已自动保存"), 3000);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 bool MainWindow::humanEditingEnabledForTest() const
 {
     return m_session ? m_session->humanEditingEnabled() : true;
@@ -893,6 +896,7 @@ int MainWindow::autosaveIntervalForTest() const
 {
     return m_autosaveTimer ? m_autosaveTimer->interval() : 0;
 }
+#endif
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {

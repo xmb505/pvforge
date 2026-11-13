@@ -43,6 +43,7 @@ public:
     // True only when the user confirmed replacing an existing file.
     bool overwriteExisting() const { return m_overwriteExisting; }
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test hooks: the modal prompts can be answered without a dialog.
     void setConfirmLargeExportForTest(bool skip) { m_skipLargeWarning = skip; }
     void setLargeExportDecisionForTest(bool confirm)
@@ -62,6 +63,7 @@ public:
     QComboBox* encoderComboBoxForTest() const { return m_encoder; }
     QComboBox* presetComboBoxForTest() const { return m_preset; }
     QPushButton* startButtonForTest() const { return m_start; }
+#endif
 
 public slots:
     void accept() override;

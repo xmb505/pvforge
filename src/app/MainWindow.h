@@ -87,6 +87,7 @@ public:
     explicit MainWindow(EditorSession* session, QWidget* parent = nullptr);
     ~MainWindow() override;
 
+#ifdef PVFORGE_TEST_HOOKS
     // P2a session shell: the window owns the session; tests read the Document
     // through this accessor instead of reaching into private members.
     EditorSession* editorSessionForTest() const { return m_session; }
@@ -94,10 +95,12 @@ public:
     AssetLibraryPanel* assetLibraryForTest() const { return m_library; }
     bool replaceAssetForTest(const QString& uuid, const QString& hash,
                              QString* error = nullptr);
+#endif
     EntityId importImageFile(const QString& path);
     void goToFrame(int frame) { setFrame(frame); }
     int currentFrame() const { return m_frame; }
     void togglePlayback();
+#ifdef PVFORGE_TEST_HOOKS
     void setSelectedEntityForTest(EntityId id) { setSelectedEntity(id); }
     void applyPivotForTest(EntityId id, double ax, double ay) { applyPivot(id, ax, ay); }
     void applyCameraForTest(EntityId id, double x, double y, double scale, double rotation)
@@ -186,6 +189,7 @@ public:
     bool removeAnnotationForTest(const QString& id);
     bool setKeyframeNoteForTest(EntityId id, double frame, const QString& note);
     EntityId createFolderForTest(EntityId parent = kInvalidEntity);
+#endif
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -279,6 +283,7 @@ private:
     void refreshSessionCacheStats();
     void clearSessionWorkbenchCache();
     void openSessionCacheFolder(const QString& subdirectory);
+    QString sessionCacheFolderPath(const QString& subdirectory = QString()) const;
     void refreshSessionHistory();
     void restoreSessionCommit(const QString& hash);
     bool restoreSessionCommitInternal(const QString& hash, QString* error);

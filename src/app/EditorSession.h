@@ -134,10 +134,12 @@ public:
     // projects so the next session can bind the same configured port.
     void stopMcpServer();
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test hooks: a temporary config file (usually with port 0) and a port
     // override keep the test process off the user's real endpoint file.
     static void setMcpConfigPathForTest(const QString& path);
     static void setMcpPortOverrideForTest(quint16 port);
+#endif
 
     // AI write lock.  While false every human write path (EditActions and
     // ProjectDocument) refuses with an error, and the shell disables its

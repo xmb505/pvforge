@@ -26,8 +26,10 @@ namespace {
 constexpr auto kRecentKey = "recentProjects";
 constexpr int kRecentLimit = 10;
 
+#ifdef PVFORGE_TEST_HOOKS
 QString g_mcpConfigPathForTest;
 std::optional<quint16> g_mcpPortOverrideForTest;
+#endif
 
 QString normalizedProjectDir(const QString& path)
 {
@@ -118,6 +120,7 @@ EditorSession::~EditorSession()
         m_media->stop();
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void EditorSession::setMcpConfigPathForTest(const QString& path)
 {
     g_mcpConfigPathForTest = path;
@@ -127,6 +130,7 @@ void EditorSession::setMcpPortOverrideForTest(quint16 port)
 {
     g_mcpPortOverrideForTest = port;
 }
+#endif
 
 void EditorSession::startMcpServer()
 {
@@ -165,16 +169,20 @@ void EditorSession::startMcpServer()
     });
 
     auto server = std::make_unique<mcp2::HttpServer>(m_mcpService.get());
+#ifdef PVFORGE_TEST_HOOKS
     if (!g_mcpConfigPathForTest.isEmpty())
     {
         server->setConfigFilePath(g_mcpConfigPathForTest);
         server->setEndpointFilePath(g_mcpConfigPathForTest
                                     + QStringLiteral(".endpoint.json"));
     }
+#endif
 
-    const quint16 requestedPort = g_mcpPortOverrideForTest
-                                      ? *g_mcpPortOverrideForTest
-                                      : m_appSettings.mcpPort;
+    quint16 requestedPort = m_appSettings.mcpPort;
+#ifdef PVFORGE_TEST_HOOKS
+    if (g_mcpPortOverrideForTest)
+        requestedPort = *g_mcpPortOverrideForTest;
+#endif
     QString error;
     const quint16 port = server->start(requestedPort, &error);
     m_mcpError = port == 0
