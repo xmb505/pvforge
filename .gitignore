@@ -14,3 +14,6 @@ compile_commands.json
 # Editors
 .idea/
 .vscode/
+
+# Private human notes: proxy credentials, local paths, throwaway accounts.
+docs/human/gitignore/
