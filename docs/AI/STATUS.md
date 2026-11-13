@@ -7,20 +7,21 @@
 | 指标 | 值 |
 | --- | --- |
 | 生成日期 | 2026-11-13 |
-| HEAD | `ed013df` |
+| HEAD | `4c06d78` |
 | `src/main.cpp` 行数 | 128 |
-| `src/tests` 行数 | 25624 |
-| 测试源码行数（含模块 tests） | 58641 |
-| 非测试源码行数 | 116551 |
-| `--*-test` 自检开关数 | 95 |
-| CTest 用例数 | 350 |
-| `dist/pvforge` 大小 | 6.4 MiB（6715992 字节） |
+| `src/tests` 行数 | 14935 |
+| 测试源码行数（含模块 tests） | 51607 |
+| 非测试源码行数 | 101412 |
+| `--*-test` 自检开关数 | 41 |
+| CTest 用例数 | 347 |
+| `dist/pvforge` 大小 | 6.4 MiB（6720184 字节） |
 | Release 动态库依赖数 | 175（ldd 动态库依赖） |
 <!-- metrics:end -->
 
 > 本文件的指标（HEAD、源码行数、测试数、二进制大小）见上方指标区块，由 `tools/doc-metrics.sh` 生成；正文不再手抄这些数字。  
 > **2026-11-10 方向修正**：交付壳是旧 UI（`src/app` + `src/ui`），新后端模块逐步接入旧壳；`src/next/app` / `pvforge-next` 只作参考，不交付。旧 app 不删除；产品名只有 `PVForge`。基线 tag：`legacy-ui-baseline`（`ba07a59`）。本文以下历史描述以本段为准。  
 > **2026-11-11 旧 UI 接入完成**：P1–P7 已合并；最终二进制 `dist/pvforge` 与 `dist/pvforge-mcp`（大小见顶部指标区块）。旧 UI 的时间轴/属性/视口/Gizmo/相机监视器/素材箱/MCP/设置/导出均已接新后端。  
+> **2026-11-13 旧模型已物理删除（issue #95）**：`PVFORGE_LEGACY_SHELL` 开关与全部 `#if` 分支移除；`core::Project`/`History`/`Commands`/`Camera`、`src/audio`、`src/render`、旧 `src/mcp` 服务、`src/html` 的 HtmlAsset/HtmlRenderer、`CurveEditor`/`WaveformView` 已删。时间轴只读 DTO 迁到 `src/ui/TimelineSnapshot.h`；`pvforge` 符号表里不再有 `pvf::Project`，只有 `pvf::model::Project`。旧模型的自检用例同步删除或迁到 `EditorSession`。
 > 设计主文档：`docs/AI/ENTITY_MODEL.md`  
 > 并行实现合同：`docs/AI/IMPLEMENTATION_CONTRACT.md`  
 > 整合计划：`docs/AI/INTEGRATION_PLAN.md`  

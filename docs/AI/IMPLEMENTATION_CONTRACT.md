@@ -23,7 +23,7 @@
 - 编辑代码必须用 OpenCode 自带工具（`read` / `grep` / `edit` / `write` / `glob`），不要用 shell 的 `sed` / `awk` / `grep` / `cat >` 改文件。
 - shell 只用于：`cmake`、编译、运行测试、创建临时目录。
 - 每个模块自带 `CMakeLists.txt`，能独立构建；不要依赖根工程。
-- 模块之间只通过 `src/common/Types.h` 和公开头文件交互。**旧壳隔离中**：交付头文件正在移除对旧 `core/Project.h` 的依赖（issue #95），尚未完成；在 #95 完成前，新模块**不要新增**对 `core/Project.h` 或旧 `core/**` 类型的依赖，也不要把它当成已清理干净。
+- 模块之间只通过 `src/common/Types.h` 和公开头文件交互。**旧壳已删除**：issue #95 已物理删除旧单文件 `.pvproj` 模型（`core::Project`、`src/core/{History,Commands,Camera}`、`src/audio`、`src/render`、旧 `src/mcp` 服务、`src/html` 的 HtmlAsset/HtmlRenderer、`CurveEditor`/`WaveformView`），交付头文件不再 include 旧 `core/Project.h`，也没有兼容层或 `#if` 墓碑。时间轴绘制用的只读 DTO 已迁到 `src/ui/TimelineSnapshot.h`。新代码**不得**重新引入 `core/Project.h` 或旧 `core/**` 模型类型。
 - 所有公开头文件放模块根目录，实现放 `.cpp`；测试放 `tests/`。
 - 代码风格跟现有仓库一致：4 空格、`namespace pvf`、Qt6、C++20。
 

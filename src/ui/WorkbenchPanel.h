@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/Project.h"
+#include "core/BrandWall.h"
+#include "core/EntityId.h"
 #include "core/TextStyle.h"
 #include "model/Content.h"
 #include "model/Entity.h"
@@ -21,7 +22,6 @@ class QStackedWidget;
 
 namespace pvf {
 
-class Project;
 class EditorSession;
 
 // Floating creation panel modelled after the Mine-imator workbench.
@@ -30,9 +30,6 @@ class WorkbenchPanel : public QFrame
     Q_OBJECT
 
 public:
-#if PVFORGE_LEGACY_SHELL
-    explicit WorkbenchPanel(Project* project, QWidget* parent = nullptr);
-#endif
     // Session mode: the special page creates model::BrandWallContent through
     // EditorSession. Other legacy creation pages are not shown yet.
     explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);
@@ -87,7 +84,6 @@ private:
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
 
-    Project* m_project = nullptr;
     EditorSession* m_session = nullptr;
     QWidget* m_ignoreWidget = nullptr;
     QListWidget* m_types = nullptr;

@@ -1,6 +1,6 @@
 #include "TimelineEditTests.h"
 
-#include "LegacyTestSupport.h"
+#include "TestApp.h"
 
 namespace {
 

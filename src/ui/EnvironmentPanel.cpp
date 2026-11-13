@@ -11,15 +11,6 @@
 
 namespace pvf {
 
-#if PVFORGE_LEGACY_SHELL
-EnvironmentPanel::EnvironmentPanel(Project* project, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
-{
-    buildUi();
-    refresh();
-}
-#endif
 
 EnvironmentPanel::EnvironmentPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -54,18 +45,10 @@ void EnvironmentPanel::buildUi()
 void EnvironmentPanel::refresh()
 {
     if (!m_session
-#if PVFORGE_LEGACY_SHELL
-        && !m_project
-#endif
     )
         return;
 
-#if PVFORGE_LEGACY_SHELL
-    const QString value = m_session ? m_session->settings().background
-                                    : m_project->background.name();
-#else
     const QString value = m_session->settings().background;
-#endif
     const QColor color(value);
     m_backgroundColor = color.isValid() ? color : QColor(0x10, 0x10, 0x14);
     setColorButton(m_backgroundColor);
@@ -83,9 +66,6 @@ void EnvironmentPanel::setColorButton(const QColor& color)
 void EnvironmentPanel::pickBackground()
 {
     if (!m_session
-#if PVFORGE_LEGACY_SHELL
-        && !m_project
-#endif
     )
         return;
 
@@ -104,10 +84,6 @@ void EnvironmentPanel::pickBackground()
     }
     else
     {
-#if PVFORGE_LEGACY_SHELL
-        m_project->background = color;
-        m_project->notifyChanged();
-#endif
     }
     emit changed();
 }

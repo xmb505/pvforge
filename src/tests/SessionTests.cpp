@@ -1,4 +1,4 @@
-#include "LegacyTestSupport.h"
+#include "TestApp.h"
 #include "TestRegistry.h"
 #include "app/TestMode.h"
 
@@ -6,46 +6,6 @@ namespace {
 
 int selfTest()
 {
-    pvf::Project project;
-
-    QImage img(64, 64, QImage::Format_ARGB32);
-    img.fill(Qt::red);
-    const QString path = QDir::tempPath() + QStringLiteral("/pvforge_selftest.png");
-    if (!img.save(path))
-    {
-        qCritical() << "self-test: failed to write" << path;
-        return 1;
-    }
-
-    pvf::Entity* e = project.addImage(path);
-    if (!e)
-    {
-        qCritical() << "self-test: addImage failed";
-        return 1;
-    }
-    const pvf::EntityId id = e->id;
-
-    project.setValue(id, QStringLiteral("x"), 0, 0, true);
-    project.setValue(id, QStringLiteral("x"), 30, 600, true);
-
-    const double mid = project.value(id, QStringLiteral("x"), 15);
-    if (std::abs(mid - 300.0) > 1e-6)
-    {
-        qCritical() << "self-test: interpolation expected 300, got" << mid;
-        return 1;
-    }
-    if (std::abs(project.value(id, QStringLiteral("x"), 0) - 0.0) > 1e-6
-        || std::abs(project.value(id, QStringLiteral("x"), 30) - 600.0) > 1e-6)
-    {
-        qCritical() << "self-test: keyframe endpoints wrong";
-        return 1;
-    }
-    if (std::abs(project.value(id, QStringLiteral("opacity"), 0) - 1.0) > 1e-6)
-    {
-        qCritical() << "self-test: opacity default wrong";
-        return 1;
-    }
-
     // Issue #96: test mode comes from exact registered switch names, not a
     // `-test` suffix. A project path that merely ends in `-test` must keep the
     // user's real QSettings/XDG config.
@@ -65,8 +25,7 @@ int selfTest()
         return 1;
     }
 
-    QFile::remove(path);
-    qInfo() << "self-test OK: keyframe interpolation x(15) =" << mid;
+    qInfo() << "self-test OK: test mode comes from exact switches";
     return 0;
 }
 
@@ -235,225 +194,32 @@ int sessionTest()
     return 0;
 }
 
-int saveTest()
-{
-    pvf::Project empty;
-    if (empty.timelineLength() != 0)
-    {
-        qCritical() << "save-test: empty project length should be 0, got"
-                    << empty.timelineLength();
-        return 1;
-    }
-    const QString imagePath = QDir::tempPath() + QStringLiteral("/pvforge_savetest.png");
-    const QString projectPath =
-        QDir::tempPath() + QStringLiteral("/pvforge_savetest.pvproj");
-
-    QImage img(32, 32, QImage::Format_ARGB32);
-    img.fill(Qt::cyan);
-    if (!img.save(imagePath))
-        return 1;
-
-    pvf::Project before;
-    before.name = QStringLiteral("往返测试");
-    before.author = QStringLiteral("tester");
-    before.width = 1280;
-    before.height = 720;
-    before.fps = 30;
-
-    pvf::Entity* image = before.addImage(imagePath);
-    if (!image)
-        return 1;
-    const pvf::EntityId imageId = image->id;
-    before.setValue(imageId, QStringLiteral("x"), 0, 0, true);
-    before.setValue(imageId, QStringLiteral("x"), 90, 600, true);
-
-    // Timeline spans the last keyframe (90), not a fixed project duration.
-    if (before.timelineLength() != 90)
-    {
-        qCritical() << "save-test: expected length 90, got" << before.timelineLength();
-        return 1;
-    }
-
-    QString error;
-    if (!before.save(projectPath, &error))
-    {
-        qCritical() << "save-test: save failed" << error;
-        return 1;
-    }
-
-    pvf::Project after;
-    if (!after.load(projectPath, &error))
-    {
-        qCritical() << "save-test: load failed" << error;
-        return 1;
-    }
-
-    if (after.name != before.name || after.fps != 30 || after.entities().size() != 1)
-    {
-        qCritical() << "save-test: metadata mismatch";
-        return 1;
-    }
-    if (after.width != 1280 || after.height != 720)
-    {
-        qCritical() << "save-test: resolution mismatch";
-        return 1;
-    }
-    if (after.templates().size() != 1)
-    {
-        qCritical() << "save-test: templates" << after.templates().size();
-        return 1;
-    }
-    if (after.entities().first().templateId != after.templates().first().id)
-    {
-        qCritical() << "save-test: template association lost";
-        return 1;
-    }
-    if (std::abs(after.value(imageId, QStringLiteral("x"), 45) - 300.0) > 1e-6)
-    {
-        qCritical() << "save-test: keyframe roundtrip mismatch";
-        return 1;
-    }
-    if (after.timelineLength() != 90)
-    {
-        qCritical() << "save-test: length after load" << after.timelineLength();
-        return 1;
-    }
-    if (after.entities().first().image.isNull())
-    {
-        qCritical() << "save-test: image not reloaded";
-        return 1;
-    }
-
-    QFile::remove(projectPath);
-    QFile::remove(imagePath);
-    qInfo() << "save-test OK: roundtrip length" << after.timelineLength();
-    return 0;
-}
-
-int autoSaveTest()
-{
-    const QString projectPath =
-        QDir::tempPath() + QStringLiteral("/pvforge_autosave_test.pvproj");
-    const QString imagePath =
-        QDir::tempPath() + QStringLiteral("/pvforge_autosave_test.png");
-    QImage img(64, 64, QImage::Format_ARGB32);
-    img.fill(Qt::magenta);
-    if (!img.save(imagePath))
-        return 1;
-
-    auto* project = new pvf::Project;
-    project->name = QStringLiteral("自动保存测试");
-    project->addImage(imagePath);
-    QString error;
-    if (!project->save(projectPath, &error))
-    {
-        qCritical() << "autosave-test: initial save failed" << error;
-        return 1;
-    }
-
-    int failures = 0;
-    if (!pvf::Settings::autosaveEnabled()
-        || pvf::Settings::autosaveMinutes() != 5)
-    {
-        qCritical() << "autosave-test: defaults are not enabled / 5 minutes"
-                    << pvf::Settings::autosaveEnabled()
-                    << pvf::Settings::autosaveMinutes();
-        ++failures;
-    }
-
-    pvf::MainWindow window(project);
-    window.resize(1200, 800);
-    window.show();
-    QApplication::processEvents();
-
-    if (!window.autosaveActiveForTest()
-        || window.autosaveIntervalForTest() != 5 * 60 * 1000)
-    {
-        qCritical() << "autosave-test: timer not running at five minutes"
-                    << window.autosaveActiveForTest()
-                    << window.autosaveIntervalForTest();
-        ++failures;
-    }
-
-    const int before = project->entities().size();
-    project->addText(QStringLiteral("自动保存"), QFont().family(), 64, Qt::white,
-                     int(Qt::AlignCenter));
-    if (!project->modified)
-    {
-        qCritical() << "autosave-test: edit did not mark the project modified";
-        ++failures;
-    }
-    window.autoSaveNowForTest();
-    if (project->modified)
-    {
-        qCritical() << "autosave-test: autosave did not clear the modified flag";
-        ++failures;
-    }
-
-    pvf::Project loaded;
-    if (!loaded.load(projectPath, &error))
-    {
-        qCritical() << "autosave-test: reload failed" << error;
-        ++failures;
-    }
-    else if (loaded.entities().size() != before + 1)
-    {
-        qCritical() << "autosave-test: autosaved entity missing"
-                    << loaded.entities().size() << before + 1;
-        ++failures;
-    }
-
-    pvf::Settings::setAutosaveEnabled(false);
-    window.reloadAutosaveSettingsForTest();
-    if (window.autosaveActiveForTest())
-    {
-        qCritical() << "autosave-test: timer still runs when disabled";
-        ++failures;
-    }
-    project->addText(QStringLiteral("不要保存"), QFont().family(), 64,
-                     Qt::white, int(Qt::AlignCenter));
-    window.autoSaveNowForTest();
-    if (!project->modified)
-    {
-        qCritical() << "autosave-test: disabled autosave still wrote the file";
-        ++failures;
-    }
-
-    pvf::Settings::setAutosaveEnabled(true);
-    pvf::Settings::setAutosaveMinutes(2);
-    window.reloadAutosaveSettingsForTest();
-    if (!window.autosaveActiveForTest()
-        || window.autosaveIntervalForTest() != 2 * 60 * 1000)
-    {
-        qCritical() << "autosave-test: interval setting not applied"
-                    << window.autosaveActiveForTest()
-                    << window.autosaveIntervalForTest();
-        ++failures;
-    }
-
-    QFile::remove(projectPath);
-    QFile::remove(imagePath);
-    qInfo() << "autosave-test failures" << failures;
-    return failures == 0 ? 0 : 1;
-}
-
 int welcomeTest(QApplication& app)
 {
-    const QString projectPath =
-        QDir::tempPath() + QStringLiteral("/pvforge_welcome_test.pvproj");
-
-    pvf::Project project;
-    project.name = QStringLiteral("欢迎页测试");
-    project.width = 1280;
-    project.height = 720;
-    project.fps = 30;
-    QString error;
-    if (!project.save(projectPath, &error))
+    QTemporaryDir temp;
+    if (!temp.isValid())
         return 1;
+    const QString projectPath =
+        QDir(temp.path()).filePath(QStringLiteral("pvforge_welcome_test.pvproj"));
 
-    QSettings settings;
-    const QVariant oldRecent = settings.value(QStringLiteral("recentProjects"));
-    settings.setValue(QStringLiteral("recentProjects"), QStringList{projectPath});
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("欢迎页测试");
+    settings.width = 1280;
+    settings.height = 720;
+    settings.fps = 30;
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectPath, settings, &error,
+                                                     false);
+    if (!session)
+    {
+        qCritical() << "welcome-test: create failed" << error;
+        return 1;
+    }
+    session->flush();
+
+    QSettings qsettings;
+    const QVariant oldRecent = qsettings.value(QStringLiteral("recentProjects"));
+    qsettings.setValue(QStringLiteral("recentProjects"), QStringList{projectPath});
 
     pvf::WelcomeWindow welcome;
     welcome.show();
@@ -465,7 +231,7 @@ int welcomeTest(QApplication& app)
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
 
-        QTimer::singleShot(300, dialog, [&app, dialog, projectPath, oldRecent] {
+        QTimer::singleShot(300, dialog, [&app, dialog, oldRecent] {
             dialog->grab().toImage().save(QStringLiteral("/tmp/pvforge_newproject.png"));
             qInfo() << "welcome-test OK";
 
@@ -474,7 +240,6 @@ int welcomeTest(QApplication& app)
                 settings.setValue(QStringLiteral("recentProjects"), oldRecent);
             else
                 settings.remove(QStringLiteral("recentProjects"));
-            QFile::remove(projectPath);
             app.exit(0);
         });
     });
@@ -853,85 +618,42 @@ int settingsTest(QApplication& app)
         return 1;
     }
 
-    auto* project = new pvf::Project;
-    pvf::MainWindow window(project);
-    window.resize(1200, 800);
-    window.show();
+    // Settings through the session shell: the window builds, the viewport
+    // stays editable and the settings dialog can be shown.
+    QTemporaryDir windowTemp;
+    if (!windowTemp.isValid())
+        return 1;
+    QString error;
+    auto settingsSession = pvf::EditorSession::createProject(
+        QDir(windowTemp.path()).filePath(QStringLiteral("settings.pvproj")),
+        pvf::model::ProjectSettings{}, &error, false);
+    if (!settingsSession)
+    {
+        qCritical() << "settings-test: session create failed" << error;
+        return 1;
+    }
+    auto* window = new pvf::MainWindow(settingsSession.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1200, 800);
+    window->show();
 
-    QTimer::singleShot(400, &window, [&app, &window, project, oldSnap, oldEdgeCentre] {
+    QTimer::singleShot(400, &app, [&app, window] {
         int failures = 0;
-        auto* viewport = window.findChild<pvf::Viewport*>();
+        auto* viewport = window->findChild<pvf::Viewport*>();
         if (!viewport)
         {
             qCritical() << "settings-test: viewport missing";
             app.exit(1);
             return;
         }
-
-        pvf::Entity* entity = project->addVector(0, 300, 200, Qt::red, Qt::white, 0);
-        const pvf::EntityId id = entity->id;
-        window.setSelectedEntityForTest(id);
-
-        const QPoint center = viewport->rect().center();
-        auto send = [&](QEvent::Type type, const QPoint& pos, Qt::MouseButton button,
-                        Qt::MouseButtons buttons) {
-            QMouseEvent event(type, QPointF(pos), QPointF(viewport->mapToGlobal(pos)), button,
-                              buttons, Qt::NoModifier);
-            QApplication::sendEvent(viewport, &event);
-        };
-        auto drag = [&](const QPoint& from, const QPoint& to) {
-            send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
-            send(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
-            send(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
-        };
-
-        // A larger snap distance grabs a 10px drag.
-        viewport->setSnapPixels(20);
-        drag(center + QPoint(40, 0), center + QPoint(50, 0));
-        if (std::abs(project->value(id, QStringLiteral("x"), 0)) > 1e-6)
+        if (!viewport->isEnabled())
         {
-            qCritical() << "settings-test: large snap did not stick";
+            qCritical() << "settings-test: viewport is disabled";
             ++failures;
         }
-
-        // A small snap distance ignores it.
-        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
-        viewport->setSnapPixels(2);
-        drag(center + QPoint(40, 0), center + QPoint(50, 0));
-        if (std::abs(project->value(id, QStringLiteral("x"), 0)) < 1.0)
-        {
-            qCritical() << "settings-test: small snap still stuck";
-            ++failures;
-        }
-
-        // Edge-to-centre snapping obeys the preference.
-        const double scale = viewport->currentScale();
-        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
-        viewport->setSnapPixels(20);
-        viewport->setEdgeCenterSnap(true);
-        const int edgeDx = int(std::lround(145.0 * scale));
-        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
-        if (std::abs(project->value(id, QStringLiteral("x"), 0) - 150.0) > 1e-6)
-        {
-            qCritical() << "settings-test: edge-centre snap on failed"
-                        << project->value(id, QStringLiteral("x"), 0);
-            ++failures;
-        }
-
-        project->setValue(id, QStringLiteral("x"), 0, 0.0, false);
-        viewport->setEdgeCenterSnap(false);
-        drag(center + QPoint(40, 0), center + QPoint(40 + edgeDx, 0));
-        if (std::abs(project->value(id, QStringLiteral("x"), 0) - 145.0) > 1.0)
-        {
-            qCritical() << "settings-test: edge-centre snap off failed"
-                        << project->value(id, QStringLiteral("x"), 0);
-            ++failures;
-        }
-        viewport->setEdgeCenterSnap(oldEdgeCentre);
-        viewport->setSnapPixels(oldSnap);
 
         // The settings dialog builds and can be shown.
-        pvf::SettingsDialog dialog(&window);
+        pvf::SettingsDialog dialog(window);
         dialog.show();
         QApplication::processEvents();
         dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_settings.png"));
@@ -1036,34 +758,32 @@ int checkpointTest()
         return 1;
     }
 
-    pvf::Project project;
-    project.name = QStringLiteral("检查点测试");
-    project.width = 640;
-    project.height = 360;
-    project.fps = 30;
-    pvf::Entity* entity = project.addImage(imagePath, QStringLiteral("still"));
-    if (!entity)
-    {
-        fail(QStringLiteral("could not add test entity"));
-        return 1;
-    }
-    const pvf::EntityId entityId = entity->id;
-    project.setValue(entityId, QStringLiteral("x"), 0, 0.0, true);
-    project.setValue(entityId, QStringLiteral("x"), 60, 100.0, true);
+    // CheckpointManager stores the project JSON payload and extracts the
+    // fields it lists (scenes, entity source references). The fixture mirrors
+    // those fields so the test stays independent of the editor model.
     QString error;
-    if (!project.addScene(QStringLiteral("Intro"), 0, 60, QColor(90, 170, 255),
-                          QString(), &error))
+    QByteArray json1 = QByteArrayLiteral("{\n"
+                                         "  \"version\": 4,\n"
+                                         "  \"name\": \"checkpoint fixture\",\n"
+                                         "  \"width\": 640,\n"
+                                         "  \"height\": 360,\n"
+                                         "  \"fps\": 30,\n"
+                                         "  \"scenes\": [{\"id\": \"intro\", \"name\": \"Intro\"}],\n"
+                                         "  \"entities\": [\n"
+                                         "    {\"id\": 1, \"type\": \"Image\", \"name\": \"still\", "
+                                         "\"sourcePath\": \"");
+    json1 += imagePath.toUtf8();
+    json1 += QByteArrayLiteral("\"}\n  ]\n}\n");
     {
-        fail(QStringLiteral("scene setup failed: %1").arg(error));
-        return 1;
-    }
-    if (!project.save(projectPath, &error))
-    {
-        fail(QStringLiteral("project save failed: %1").arg(error));
-        return 1;
+        QFile file(projectPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || file.write(json1) != json1.size())
+        {
+            fail(QStringLiteral("could not write the project fixture"));
+            return 1;
+        }
     }
 
-    const QByteArray json1 = readAll(projectPath);
     QJsonObject root1 = QJsonDocument::fromJson(json1).object();
     if (root1.isEmpty())
     {
@@ -1696,10 +1416,6 @@ void registerSessionTests(Registry& registry)
                  [](QApplication&) { return selfTest(); });
     registry.add(QStringLiteral("--session-test"),
                  [](QApplication&) { return sessionTest(); });
-    registry.add(QStringLiteral("--save-test"),
-                 [](QApplication&) { return saveTest(); });
-    registry.add(QStringLiteral("--autosave-test"),
-                 [](QApplication&) { return autoSaveTest(); });
     registry.add(QStringLiteral("--welcome-test"),
                  [](QApplication& app) { return welcomeTest(app); });
     registry.add(QStringLiteral("--settings-test"),

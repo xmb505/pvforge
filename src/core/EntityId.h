@@ -2,9 +2,9 @@
 
 // Entity identifiers and the two view sentinels the editor UI passes around.
 //
-// They used to live in core/Project.h.  The delivery shell (EditorSession) only
-// needs these aliases, so they get their own header and the retired Project
-// model can stay out of the delivery build.
+// The int entity id is only the display identity the timeline/viewport use to
+// talk to their panels; the model's identity is `model::Uuid`.  These aliases
+// live on their own so the delivery headers do not pull a project model in.
 namespace pvf {
 
 using EntityId = int;

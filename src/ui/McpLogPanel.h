@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/Project.h"
+#include "core/EntityId.h"
 
 #include <QWidget>
 
@@ -55,8 +55,7 @@ public:
 
 signals:
     void entityActivated(EntityId id);
-    // New-model tool calls carry UUIDs; the old int signal stays for the
-    // legacy core::Project shell.
+    // Tool calls that target an entity by UUID (the model's identity).
     void entityUuidActivated(const QString& uuid);
     void frameRequested(int frame);
     void stopAiRequested();

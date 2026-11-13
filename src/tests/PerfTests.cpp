@@ -1,4 +1,4 @@
-#include "LegacyTestSupport.h"
+#include "TestApp.h"
 #include "TestRegistry.h"
 
 namespace {
@@ -307,8 +307,22 @@ int perfMonitorTest(QApplication& app)
 
     // The View menu action opens and closes the same window without touching
     // the profiler.
-    auto* project = new pvf::Project;
-    pvf::MainWindow mainWindow(project);
+    QTemporaryDir perfTemp;
+    pvf::model::ProjectSettings perfSettings;
+    perfSettings.name = QStringLiteral("Perf");
+    perfSettings.width = 640;
+    perfSettings.height = 360;
+    perfSettings.fps = 30;
+    QString perfError;
+    auto perfSession = pvf::EditorSession::createProject(
+        QDir(perfTemp.path()).filePath(QStringLiteral("perf.pvproj")),
+        perfSettings, &perfError);
+    if (!perfSession)
+    {
+        qCritical() << "perf-monitor-test: session create failed" << perfError;
+        return 1;
+    }
+    pvf::MainWindow mainWindow(perfSession.release());
     mainWindow.show();
     QApplication::processEvents();
     auto* perfAction = mainWindow.findChild<QAction*>(

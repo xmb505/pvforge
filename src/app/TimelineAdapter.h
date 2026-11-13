@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ui/TimelineData.h"
 #include "model/Project.h"
+#include "ui/TimelineSnapshot.h"
 
 #include <QHash>
 
