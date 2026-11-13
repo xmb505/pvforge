@@ -4,7 +4,6 @@
 # 格式：路径<TAB>行数，表示该文件允许的最大行数；超过即 CI 判红。
 # 文件变小不会自动放宽：需要收紧时由人类明确要求后重新生成。
 # 不要手工抬高数字来让 CI 变绿——先拆文件。
-src/ui/PropertiesPanel.cpp	4605
 src/ui/TimelinePanel.cpp	4473
 src/mcp2/tests/mcp2_tests.cpp	3143
 src/ui/Viewport.cpp	2748
