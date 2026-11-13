@@ -129,7 +129,31 @@ set(PVF_APP_SOURCES
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp
     src/ui/TimelinePanel.cpp
+    src/ui/TimelinePanelInternal.h
+    src/ui/TimelinePanelSupport.cpp
+    src/ui/TimelinePanelLayout.cpp
+    src/ui/TimelinePanelPaint.cpp
+    src/ui/TimelinePanelMouse.cpp
+    src/ui/TimelinePanelInput.cpp
+    src/ui/TimelinePanelMenu.cpp
+    src/ui/TimelinePanelKeyframes.cpp
+    src/ui/TimelinePanelSessionDrag.cpp
+    src/ui/TimelinePanelLegacyDrag.cpp
+    src/ui/TimelinePanelMarkers.cpp
+    src/ui/TimelinePanelSolver.cpp
+    src/ui/TimelinePanelPopups.cpp
+    src/ui/TimelinePanelPopups.h
+    src/ui/TimelinePanelTestHooks.cpp
     src/ui/Viewport.cpp
+    src/ui/ViewportInternal.h
+    src/ui/ViewportSupport.cpp
+    src/ui/ViewportSession.cpp
+    src/ui/ViewportGizmo.cpp
+    src/ui/ViewportGizmoPaint.cpp
+    src/ui/ViewportSnap.cpp
+    src/ui/ViewportCamera.cpp
+    src/ui/ViewportSolverPreview.cpp
+    src/ui/ViewportTestHooks.cpp
     src/next/timeline/MarkerDialog.cpp
     src/next/timeline/MarkerDialog.h
     src/ui/WorkbenchPanel.cpp
