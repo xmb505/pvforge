@@ -3,11 +3,6 @@
 #include "common/Types.h"
 #include "core/EntityId.h"
 
-#if PVFORGE_LEGACY_SHELL
-#include "core/Project.h"
-#endif
-#include "html/HtmlAsset.h"
-
 #include <QColor>
 #include <QHash>
 #include <QJsonObject>
@@ -58,10 +53,6 @@ class PropertiesPanel : public QWidget
     Q_OBJECT
 
 public:
-#if PVFORGE_LEGACY_SHELL
-    // Legacy Project mode, kept for the old shell and its self-tests.
-    explicit PropertiesPanel(Project* project, QWidget* parent = nullptr);
-#endif
     // Session mode: reads model::Entity and writes through EditActions.
     explicit PropertiesPanel(EditorSession* session, QWidget* parent = nullptr);
 
@@ -113,14 +104,6 @@ private:
         QDoubleSpinBox* spin = nullptr;
         QToolButton* key = nullptr;
         double factor = 1.0;   // display value * factor = stored value
-    };
-
-    struct HtmlRow
-    {
-        QString prop;
-        QLabel* label = nullptr;
-        QDoubleSpinBox* spin = nullptr;
-        QToolButton* key = nullptr;
     };
 
     // One manifest variable row in session mode. Numeric variables get a spin
@@ -197,12 +180,8 @@ private:
     void buildLinesSection(QVBoxLayout* layout);
     void buildBrandWallSection(QVBoxLayout* layout);
     void buildHalftoneSection(QVBoxLayout* layout);
-    void buildHtmlSection(QVBoxLayout* layout);
     void buildSpecialSection(QVBoxLayout* layout);
     void buildSessionHtmlSection(QVBoxLayout* layout);
-    void rebuildHtmlRows(const html::HtmlAsset& asset);
-    void addHtmlVariableRow(QFormLayout* form, const html::HtmlComponent& component,
-                            const html::HtmlVariable& variable);
     void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
                     double hi, int decimals, double step);
     void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
@@ -272,9 +251,6 @@ private:
     void deleteSolver(const Uuid& solverId);
     void reportSessionError(const QString& message);
 
-#if PVFORGE_LEGACY_SHELL
-    Project* m_project = nullptr;
-#endif
     EditorSession* m_session = nullptr;
     bool m_sessionMode = false;
     Uuid m_sessionUuid;
@@ -306,21 +282,6 @@ private:
     CollapsibleSection* m_linesSection = nullptr;
     CollapsibleSection* m_wallSection = nullptr;
     CollapsibleSection* m_halftoneSection = nullptr;
-    CollapsibleSection* m_htmlSection = nullptr;
-    QLabel* m_htmlInfo = nullptr;
-    QLabel* m_htmlWarning = nullptr;
-    QWidget* m_htmlVariables = nullptr;
-    QVBoxLayout* m_htmlVariablesLayout = nullptr;
-    QPushButton* m_htmlReplace = nullptr;
-    QVector<HtmlRow> m_htmlRows;
-    QString m_htmlAssetPath;
-    EntityId m_htmlRowsEntity = kInvalidEntity;
-    QString m_htmlRowsStamp;
-    html::HtmlAsset m_htmlAssetCache;
-    QString m_htmlAssetCachePath;
-    QString m_htmlAssetCacheError;
-    QString m_htmlAssetCacheStamp;
-    bool m_htmlAssetCacheValid = false;
 
     // Session-mode special content and HTML manifest pages.
     CollapsibleSection* m_specialSection = nullptr;

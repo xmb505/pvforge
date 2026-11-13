@@ -13,15 +13,6 @@
 
 namespace pvf {
 
-#if PVFORGE_LEGACY_SHELL
-ProjectPropertiesPanel::ProjectPropertiesPanel(Project* project, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
-{
-    buildUi();
-    refresh();
-}
-#endif
 
 ProjectPropertiesPanel::ProjectPropertiesPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -91,41 +82,6 @@ void ProjectPropertiesPanel::buildUi()
 
     connect(m_name, &QLineEdit::textEdited, this,
             [this](const QString& text) { applyName(text); });
-#if PVFORGE_LEGACY_SHELL
-    connect(m_author, &QLineEdit::textEdited, this, [this](const QString& text) {
-        if (!m_project)
-            return;
-        m_project->author = text;
-        m_project->notifyChanged();
-    });
-    connect(m_description, &QPlainTextEdit::textChanged, this, [this] {
-        if (!m_project)
-            return;
-        m_project->description = m_description->toPlainText();
-        m_project->notifyChanged();
-    });
-    connect(m_width, &QSpinBox::valueChanged, this, [this](int value) {
-        if (!m_project)
-            return;
-        m_project->width = value;
-        m_project->notifyChanged();
-        emit settingsChanged();
-    });
-    connect(m_height, &QSpinBox::valueChanged, this, [this](int value) {
-        if (!m_project)
-            return;
-        m_project->height = value;
-        m_project->notifyChanged();
-        emit settingsChanged();
-    });
-    connect(m_fps, &QSpinBox::valueChanged, this, [this](int value) {
-        if (!m_project)
-            return;
-        m_project->fps = value;
-        m_project->notifyChanged();
-        emit settingsChanged();
-    });
-#endif
 }
 
 void ProjectPropertiesPanel::applyName(const QString& text)
@@ -136,54 +92,25 @@ void ProjectPropertiesPanel::applyName(const QString& text)
         // One commit per edit gesture; the store debounces the git commit.
         m_session->commitProject(QStringLiteral("pvf: 重命名工程"));
     }
-#if PVFORGE_LEGACY_SHELL
-    else if (m_project)
-    {
-        m_project->name = text;
-        m_project->notifyChanged();
-    }
-#endif
     emit settingsChanged();
 }
 
 void ProjectPropertiesPanel::refresh()
 {
     if (!m_session
-#if PVFORGE_LEGACY_SHELL
-        && !m_project
-#endif
     )
         return;
 
-#if PVFORGE_LEGACY_SHELL
-    const QString name = m_session ? m_session->settings().name : m_project->name;
-    const int width = m_session ? m_session->settings().width : m_project->width;
-    const int height = m_session ? m_session->settings().height : m_project->height;
-    const int fps = m_session ? m_session->settings().fps : m_project->fps;
-#else
     const QString name = m_session->settings().name;
     const int width = m_session->settings().width;
     const int height = m_session->settings().height;
     const int fps = m_session->settings().fps;
-#endif
 
     if (!m_name->hasFocus())
     {
         const QSignalBlocker blocker(m_name);
         m_name->setText(name);
     }
-#if PVFORGE_LEGACY_SHELL
-    if (m_project && !m_author->hasFocus())
-    {
-        const QSignalBlocker blocker(m_author);
-        m_author->setText(m_project->author);
-    }
-    if (m_project && !m_description->hasFocus())
-    {
-        const QSignalBlocker blocker(m_description);
-        m_description->setPlainText(m_project->description);
-    }
-#endif
     {
         const QSignalBlocker blocker(m_width);
         m_width->setValue(width);

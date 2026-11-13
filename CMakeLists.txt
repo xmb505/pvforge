@@ -33,27 +33,6 @@ option(PVFORGE_BUILD_REFERENCE
     "Build the src/next reference shell (NextWindow, ViewportWidget) and its tests"
     OFF)
 
-# The pre-EditorSession shell — core::Project, the Project* constructors of the
-# old panels, the FFmpeg scene renderer, the legacy MCP service and the HTML
-# layer widgets — is retired and has no users.  Release builds leave it out
-# completely; only MainWindow(EditorSession*) exists there.  Debug/self-test
-# builds keep compiling it so the remaining legacy tests still run.
-set(_pvf_legacy_shell_default OFF)
-if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(_pvf_legacy_shell_default ON)
-endif()
-option(PVFORGE_LEGACY_SHELL
-    "Build the retired Project-based shell (legacy panels, renderer, MCP service)"
-    ${_pvf_legacy_shell_default})
-
-# pvforge-tests still has cases that drive core::Project; keep them buildable
-# instead of silently dropping half of the suite.
-if(PVFORGE_BUILD_SELF_TESTS AND NOT PVFORGE_LEGACY_SHELL)
-    message(STATUS "pvforge-tests still covers core::Project; forcing PVFORGE_LEGACY_SHELL=ON")
-    set(PVFORGE_LEGACY_SHELL ON)
-endif()
-message(STATUS "Legacy Project shell (PVFORGE_LEGACY_SHELL): ${PVFORGE_LEGACY_SHELL}")
-
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Multimedia Network)
 # The HTML/CDP renderer only needs QtCore. Prefer the Qt WebSockets module when
 # its development package is present; otherwise WsClient implements the small
@@ -142,37 +121,12 @@ set(PVF_APP_SOURCES
     src/ui/WorkbenchPanel.cpp
 )
 
-# Retired shell: the old Project model and everything that only exists to drive
-# it.  None of it is reachable from the delivery entry point.
-if(PVFORGE_LEGACY_SHELL)
-    list(APPEND PVF_APP_SOURCES
-        src/core/Project.cpp
-        src/core/History.cpp
-        src/core/Commands.cpp
-        src/core/Camera.cpp
-        src/audio/AudioEngine.cpp
-        src/media/MediaImporter.cpp
-        src/media/VideoPlayer.cpp
-        src/mcp/McpServer.cpp
-        src/mcp/McpCommandService.cpp
-        src/render/SceneRenderer.cpp
-        src/render/CameraRenderer.cpp
-        src/html/HtmlAsset.cpp
-        src/html/HtmlRenderer.cpp
-        src/ui/CurveEditor.cpp
-        src/ui/WaveformView.cpp
-    )
-endif()
-
 add_library(pvf_app STATIC ${PVF_APP_SOURCES})
 
 target_compile_definitions(pvf_app PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
     PVFORGE_BUILD_TYPE="$<CONFIG>"
     PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
-)
-target_compile_definitions(pvf_app PUBLIC
-    PVFORGE_LEGACY_SHELL=$<BOOL:${PVFORGE_LEGACY_SHELL}>
 )
 
 add_dependencies(pvf_app pvforge-mcp)
@@ -208,9 +162,7 @@ pvf_add_lang_resources(pvforge)
 if(PVFORGE_BUILD_SELF_TESTS)
     set(PVF_TEST_SOURCES
         src/tests/TestSupport.cpp
-        src/tests/PropertiesSpecialTests.cpp
         src/tests/TimelineEditTests.cpp
-        src/tests/McpWriteTests.cpp
         src/tests/TestRegistry.cpp
         src/tests/SessionTests.cpp
         src/tests/PropertiesTests.cpp
@@ -219,16 +171,12 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/TimelineTests.cpp
         src/tests/ViewportCameraTests.cpp
         src/tests/EditorTests.cpp
-        src/tests/SceneTests.cpp
-        src/tests/WorkbenchTests.cpp
         src/tests/RenderMediaTests.cpp
         src/tests/AssetTests.cpp
         src/tests/McpTests.cpp
         src/tests/PerfTests.cpp
         # Test-only helpers that live next to the code they exercise.
         src/mcp/StdioBridgeTest.cpp
-        src/html/HtmlCaptureTest.cpp
-        src/html/HtmlLayerTest.cpp
     )
 
     add_executable(pvforge-tests src/main.cpp ${PVF_TEST_SOURCES})

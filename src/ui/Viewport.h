@@ -1,8 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
-#include "core/Camera.h"
-#include "core/Project.h"
+#include "core/EntityId.h"
 #include "gizmo/Gizmo.h"
 #include "model/Entity.h"
 #include "model/Project.h"
@@ -23,7 +22,6 @@ class QToolButton;
 
 namespace pvf {
 
-class Project;
 class EditorSession;
 namespace assets { class AssetStore; }
 
@@ -57,10 +55,8 @@ class Viewport : public QWidget
     Q_OBJECT
 
 public:
-    // Legacy shell constructor (old core::Project data source).
-    explicit Viewport(Project* project, QWidget* parent = nullptr);
-    // Delivery shell constructor: draws the new entity model through render2
-    // and the per-project MediaServices/WorkbenchServices.
+    // Draws the new entity model through render2 and the per-project
+    // MediaServices/WorkbenchServices.
     explicit Viewport(EditorSession* session, QWidget* parent = nullptr);
 
     void setCurrentFrame(int frame);
@@ -84,20 +80,8 @@ public:
     // Canvas pixels per screen pixel, used by the gizmo and tests.
     double currentScale() const { return viewScale(); }
 
-    void setSnapPixels(int pixels) { m_snapPixels = pixels; }
-    QTransform entityTransformForTest(EntityId id) const;
-    int gizmoModeForTest() const { return int(m_gizmoMode); }
-    QPointF entityPivotForTest(EntityId id) const;
-    QPointF comicTipForTest(EntityId id) const;
-    void setEdgeCenterSnap(bool on) { m_edgeCenterSnap = on; }
-
     QTransform worldToScreenForTest() const { return worldToScreenTransform(); }
-    EntityId hitTestForTest(const QPointF& pos) const
-    {
-        const Entity* entity = hitTest(pos);
-        return entity ? entity->id : kInvalidEntity;
-    }
-    QPolygonF cameraFrameForTest() const { return cameraScreenPolygon(); }
+    QPolygonF cameraFrameForTest() const { return sessionCameraPolygon(); }
     void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }
 
@@ -163,35 +147,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
-    // Widget wiring shared by the legacy and the session constructor.
     void initShell();
-
-    enum class GizmoMode
-    {
-        None,
-        Move,
-        AxisX,
-        AxisY,
-        Rotate,
-        Scale,
-        PivotFree,
-        PivotX,
-        PivotY,
-        ComicTip
-    };
-    enum class Handle
-    {
-        None,
-        TopLeft,
-        Top,
-        TopRight,
-        Right,
-        BottomRight,
-        Bottom,
-        BottomLeft,
-        Left,
-        ComicTip
-    };
 
     enum class CameraPart { None, Move, Corner0, Corner1, Corner2, Corner3, Rotate };
 
@@ -285,44 +241,6 @@ private:
     void applySessionCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers);
     void drawSessionCameraOverlay(QPainter& painter);
 
-    EntityId activeCameraEntity() const;
-    Camera::State cameraState(const Entity& e) const;
-    QPolygonF cameraScreenPolygon() const;
-    QPointF cameraScreenCenter() const;
-    QPointF cameraRotationHandle() const;
-    QRectF cameraTitleRect() const;
-    CameraPart cameraHitTest(const QPointF& pos) const;
-    bool handleCameraPress(QMouseEvent* event);
-    void applyCameraDrag(const QPointF& pos, Qt::KeyboardModifiers modifiers);
-    QPointF snapCameraCenter(const Camera::State& start, const QPointF& center,
-                             bool* snappedX, double* guideX, bool* snappedY,
-                             double* guideY) const;
-    void drawCameraOverlay(QPainter& painter);
-    QRectF entityLocalBounds(const Entity& e) const;
-    const Entity* hitTest(const QPointF& pos) const;
-    void drawEntity(QPainter& painter, const Entity& e, const QRectF& canvas, double scale);
-    QPointF entityScreenCenter(const Entity& e) const;
-    QPointF entityPivotScreen(const Entity& e) const;
-    QPointF comicTipScreenPos(const Entity& e) const;
-    QPointF screenToEntityLocal(const Entity& e, const QPointF& screenPos) const;
-    struct VisualBounds
-    {
-        double left = 0.0;
-        double right = 0.0;
-        double top = 0.0;
-        double bottom = 0.0;
-    };
-    VisualBounds visualBoundsOf(const Entity& e, double posX, double posY) const;
-    QTransform entityTransform(const Entity& e) const;
-    QTransform entityRotationTransform(const Entity& e) const;
-    bool gizmoHitTest(const QPointF& pos, GizmoMode* mode) const;
-    void drawGizmo(QPainter& painter, const Entity& e);
-    QPointF handleScreenPos(const Entity& e, Handle handle) const;
-    Handle hitHandle(const QPointF& pos) const;
-    void drawHandles(QPainter& painter, const Entity& e);
-    void applyHandleDrag(const QPointF& mousePos, bool uniform, bool snap);
-
-    Project* m_project = nullptr;
     EditorSession* m_session = nullptr;
     int m_frame = 0;
     EntityId m_selected = kInvalidEntity;
@@ -330,25 +248,8 @@ private:
     QPointF m_pan;
 
     bool m_dragging = false;
-    QPointF m_dragLast;
     EntityId m_dragEntity = kInvalidEntity;
     bool m_showCameraFrame = true;
-
-    GizmoMode m_gizmoMode = GizmoMode::None;
-    QPointF m_gizmoCenter;             // screen position of the gizmo
-    QPointF m_gizmoStartMouse;
-    double m_gizmoStartAngle = 0.0;
-    double m_gizmoStartRotation = 0.0;
-    double m_gizmoStartX = 0.0;
-    double m_gizmoStartY = 0.0;
-
-    Handle m_activeHandle = Handle::None;
-    double m_scaleStartX = 1.0;
-    double m_scaleStartY = 1.0;
-    double m_scaleStartPosX = 0.0;
-    double m_scaleStartPosY = 0.0;
-    int m_snapPixels = 6;
-    bool m_edgeCenterSnap = true;
     bool m_showGuideX = false;
     bool m_showGuideY = false;
     double m_guideX = 0.0;
@@ -358,9 +259,6 @@ private:
     QPointF m_panLast;
 
     CameraPart m_cameraPart = CameraPart::None;
-    Camera::State m_cameraStartState;
-    QPointF m_cameraStartMouse;
-    double m_cameraStartAngle = 0.0;
 
     QToolButton* m_workbenchButton = nullptr;
 

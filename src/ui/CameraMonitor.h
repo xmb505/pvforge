@@ -3,9 +3,6 @@
 #include "common/Types.h"
 #include "core/EntityId.h"
 
-#if PVFORGE_LEGACY_SHELL
-#include "core/Project.h"
-#endif
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -34,9 +31,7 @@ class QWidgetAction;
 
 namespace pvf {
 
-class Project;
 class EditorSession;
-class VideoPlayer;
 class VideoProxyGenerator;
 class Viewport;
 
@@ -52,9 +47,6 @@ class CameraMonitor : public QWidget
     Q_OBJECT
 
 public:
-#if PVFORGE_LEGACY_SHELL
-    CameraMonitor(Project* project, Viewport* viewport, QWidget* parent = nullptr);
-#endif
     // Session shell: renders the camera through render2 + MediaServices and
     // decodes the trace reference video through video2::VideoFrames.
     CameraMonitor(EditorSession* session, Viewport* viewport,
@@ -130,7 +122,6 @@ private:
     QImage renderSessionImage(const QSize& size) const;
     void updateTraceImageSession();
 
-    Project* m_project = nullptr;
     EditorSession* m_session = nullptr;
     Viewport* m_viewport = nullptr;
     QComboBox* m_cameraCombo = nullptr;
@@ -146,11 +137,6 @@ private:
     QAction* m_clearTraceAction = nullptr;
     QSlider* m_traceOpacitySlider = nullptr;
     QLabel* m_traceOpacityLabel = nullptr;
-#if PVFORGE_LEGACY_SHELL
-    std::unique_ptr<Project> m_traceProject;
-    std::unique_ptr<VideoPlayer> m_tracePlayer;
-    VideoProxyGenerator* m_traceProxy = nullptr;
-#endif
     QString m_tracePath;
     EntityId m_traceEntity = kInvalidEntity;
     QImage m_traceImage;

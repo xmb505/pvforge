@@ -1,8 +1,7 @@
 #pragma once
 
-#include "core/Project.h"
 #include "app/EditActions.h"
-#include "ui/TimelineData.h"
+#include "ui/TimelineSnapshot.h"
 
 #include <QHash>
 #include <QRect>
@@ -29,7 +28,6 @@ class QWheelEvent;
 
 namespace pvf {
 
-class Project;
 class EditorSession;
 class TimelineAdapter;
 
@@ -60,9 +58,6 @@ class TimelinePanel : public QWidget
     Q_OBJECT
 
 public:
-#if PVFORGE_LEGACY_SHELL
-    explicit TimelinePanel(Project* project, QWidget* parent = nullptr);
-#endif
     // Session-backed mode.  Painting, rows, scrolling and the private timeline
     // overlay are shared with the legacy mode; clip gestures commit through
     // EditorSession::editActions().
@@ -414,7 +409,6 @@ private:
     EntityId dropAsset(const QMimeData& mime, int frame, int row);
     EntityId dropSessionAsset(const QMimeData& mime, int frame, int row);
 
-    Project* m_project = nullptr;
     EditorSession* m_session = nullptr;   // session-backed main/popup panels
     TimelineAdapter* m_adapter = nullptr;
     std::unique_ptr<TimelineAdapter> m_ownedAdapter;

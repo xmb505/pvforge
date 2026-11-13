@@ -1,14 +1,11 @@
 #include "CameraMonitor.h"
 
 #include "app/EditorSession.h"
-#include "core/Camera.h"
 #include "core/Settings.h"
 #include "media/VideoDecoder.h"
-#include "media/VideoPlayer.h"
 #include "media/VideoProxy.h"
 #include "next/app/MediaServices.h"
 #include "next/app/ProjectDocument.h"
-#include "render/CameraRenderer.h"
 #include "render2/Render.h"
 #include "ui/Viewport.h"
 #include "video2/VideoFrames.h"
@@ -38,121 +35,6 @@
 
 namespace pvf {
 
-#if PVFORGE_LEGACY_SHELL
-CameraMonitor::CameraMonitor(Project* project, Viewport* viewport, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
-    , m_viewport(viewport)
-{
-    setObjectName(QStringLiteral("cameraMonitor"));
-    setMinimumSize(380, 150);
-    setFocusPolicy(Qt::NoFocus);
-    setWindowTitle(QStringLiteral("摄像机监视器"));
-
-    m_highQuality = Settings::monitorHighQuality();
-
-    m_cameraCombo = new QComboBox(this);
-    m_cameraCombo->setObjectName(QStringLiteral("monitorCameraCombo"));
-    m_cameraCombo->setFocusPolicy(Qt::NoFocus);
-    connect(m_cameraCombo, &QComboBox::currentIndexChanged, this, [this](int) {        if (!m_cameraCombo || m_cameraCombo->currentIndex() < 0)
-            return;
-        const int view = m_cameraCombo->currentData().toInt();
-        m_project->monitorView = view;
-        if (view >= 0)
-        {
-            const Entity* camera = m_project->entity(view);
-            if (camera && camera->isCamera()
-                && !m_project->isEffectivelyHidden(view))
-            {
-                m_project->activeCamera = view;
-                emit cameraActivated(view);
-            }
-        }
-        update();
-    });
-
-    m_qualityButton = new QToolButton(this);
-    m_qualityButton->setObjectName(QStringLiteral("monitorQualityButton"));
-    m_qualityButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_qualityButton->setFocusPolicy(Qt::NoFocus);
-    connect(m_qualityButton, &QToolButton::clicked, this, &CameraMonitor::toggleQuality);
-
-    m_fpsLabel = new QLabel(this);
-    m_fpsLabel->setObjectName(QStringLiteral("monitorFpsLabel"));
-    m_fpsLabel->setAlignment(Qt::AlignCenter);
-    m_fpsLabel->setToolTip(
-        QStringLiteral("项目帧率；播放时显示监视器实际刷新帧率"));
-    m_fpsLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    QFont fpsFont = m_fpsLabel->font();
-    fpsFont.setPointSizeF(std::max(7.0, fpsFont.pointSizeF() - 1.0));
-    m_fpsLabel->setFont(fpsFont);
-
-    m_fpsTimer = new QTimer(this);
-    m_fpsTimer->setInterval(1000);
-    connect(m_fpsTimer, &QTimer::timeout, this, [this] {
-        if (!m_playing)
-            return;
-        const qint64 elapsed = m_fpsClock.restart();
-        m_displayFps = elapsed > 0 ? int(std::lround(m_fpsFrames * 1000.0 / elapsed))
-                                   : 0;
-        m_fpsFrames = 0;
-        updateFpsLabel();
-    });
-
-    m_pinButton = new QToolButton(this);
-    m_pinButton->setObjectName(QStringLiteral("monitorPinButton"));
-    m_pinButton->setText(QStringLiteral("置顶"));
-    m_pinButton->setCheckable(true);
-    m_pinButton->setFocusPolicy(Qt::NoFocus);
-    m_pinButton->setChecked(Settings::monitorAlwaysOnTop());
-    connect(m_pinButton, &QToolButton::toggled, this, [this](bool on) {
-        Settings::setMonitorAlwaysOnTop(on);
-        applyAlwaysOnTop();
-    });
-
-    m_detachButton = new QToolButton(this);
-    m_detachButton->setObjectName(QStringLiteral("monitorDetachButton"));
-    m_detachButton->setFocusPolicy(Qt::NoFocus);
-    connect(m_detachButton, &QToolButton::clicked, this, [this] {
-        if (m_detached)
-            dockWindow();
-        else
-            detachWindow();
-    });
-
-    m_closeButton = new QToolButton(this);
-    m_closeButton->setObjectName(QStringLiteral("monitorCloseButton"));
-    m_closeButton->setText(QStringLiteral("×"));
-    m_closeButton->setFocusPolicy(Qt::NoFocus);
-    connect(m_closeButton, &QToolButton::clicked, this, [this] {
-        if (m_detached)
-        {
-            dockWindow();
-            return;
-        }
-        hide();
-        Settings::setMonitorVisible(false);
-        emit visibilityChanged(false);
-    });
-
-    m_traceButton = new QToolButton(this);
-    m_traceButton->setObjectName(QStringLiteral("monitorTraceButton"));
-    m_traceButton->setText(QStringLiteral("临摹"));
-    m_traceButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_traceButton->setFocusPolicy(Qt::NoFocus);
-    m_traceButton->setToolTip(QStringLiteral("临摹参考视频"));
-    buildTraceMenu();
-    connect(m_traceButton, &QToolButton::clicked, this, [this] {
-        m_traceMenu->exec(
-            m_traceButton->mapToGlobal(QPoint(0, m_traceButton->height())));
-    });
-
-    rebuildCameraCombo();
-    updateButtons();
-    updateFpsLabel();
-    resize(Settings::monitorDockGeometry().size());
-}
-#endif // PVFORGE_LEGACY_SHELL
 
 CameraMonitor::CameraMonitor(EditorSession* session, Viewport* viewport,
                              QWidget* parent)
@@ -344,23 +226,6 @@ void CameraMonitor::rebuildCameraCombo()
         rebuildSessionCameraCombo();
         return;
     }
-#if PVFORGE_LEGACY_SHELL
-    const QSignalBlocker blocker(m_cameraCombo);
-    m_cameraCombo->clear();
-    m_cameraCombo->addItem(QStringLiteral("工作摄像机"), kWorkCameraView);
-    m_cameraCombo->addItem(QStringLiteral("整画布"), kWholeCanvasView);
-    for (const Entity& entity : m_project->entities())
-        if (entity.isCamera() && !m_project->isEffectivelyHidden(entity.id))
-            m_cameraCombo->addItem(entity.name, entity.id);
-
-    int index = m_cameraCombo->findData(m_project->monitorView);
-    if (index < 0)
-    {
-        index = 0;
-        m_project->monitorView = kWorkCameraView;
-    }
-    m_cameraCombo->setCurrentIndex(index);
-#endif
 }
 
 void CameraMonitor::rebuildSessionCameraCombo()
@@ -488,11 +353,7 @@ void CameraMonitor::updateFpsLabel()
         return;
     const int projectFps = m_session
                                ? std::max(1, m_session->settings().fps)
-#if PVFORGE_LEGACY_SHELL
-                               : std::max(1, m_project->fps);
-#else
                                : 30;
-#endif
     const int shown = m_playing && m_displayFps > 0 ? m_displayFps : projectFps;
     m_fpsLabel->setText(QStringLiteral("%1 FPS").arg(shown));
     QPalette pal = m_fpsLabel->palette();
@@ -534,13 +395,6 @@ QRect CameraMonitor::fitRect() const
     if (m_session)
         aspect = m_session->settings().width
                  / double(std::max(1, m_session->settings().height));
-#if PVFORGE_LEGACY_SHELL
-    else if (m_project)
-        aspect = m_project->width / double(std::max(1, m_project->height));
-    if (!m_session && m_project && m_project->monitorView == kWorkCameraView
-        && m_viewport)
-        aspect = m_viewport->width() / double(std::max(1, m_viewport->height()));
-#endif
 
     int w = area.width();
     int h = int(std::lround(w / std::max(0.0001, aspect)));
@@ -645,49 +499,6 @@ void CameraMonitor::renderPreview(QPainter& painter)
         return;
     }
 
-#if PVFORGE_LEGACY_SHELL
-    const bool high = m_highQuality && !m_playing;
-    const int view = m_project->monitorView;
-
-    if (view == kWorkCameraView && m_viewport)
-    {
-        const QColor outside = m_viewport->palette().color(QPalette::Window);
-        CameraRenderer::renderWorkCamera(painter, *m_project, m_frame, target,
-                                         m_viewport->worldToScreenForTest(),
-                                         m_viewport->size(), outside, !high);
-        return;
-    }
-
-    Camera::State state;
-    if (view >= 0)
-    {
-        const Entity* camera = m_project->entity(view);
-        if (camera && camera->isCamera()
-            && !m_project->isEffectivelyHidden(camera->id))
-        {
-            state = Camera::state(*m_project, camera->id, m_frame);
-        }
-    }
-    if (state.size.isEmpty())
-    {
-        state.scale = 1.0;
-        state.rotation = 0.0;
-        state.center = QPointF();
-        state.size = QSizeF(m_project->width, m_project->height);
-    }
-
-    if (high)
-    {
-        const QImage image = CameraRenderer::renderCameraImage(
-            *m_project, m_frame, state, QSize(m_project->width, m_project->height), false);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.drawImage(target, image);
-    }
-    else
-    {
-        CameraRenderer::renderCamera(painter, *m_project, m_frame, target, state, true);
-    }
-#endif
 }
 
 
@@ -802,57 +613,10 @@ bool CameraMonitor::loadTraceVideo(const QString& path)
         return true;
     }
 
-#if PVFORGE_LEGACY_SHELL
-    QString error;
-    double duration = 0.0;
-    const QImage first = decodeVideoFirstFrame(path, &error, &duration);
-    if (first.isNull())
-        return false;
-
-    m_traceProject = std::make_unique<Project>();
-    m_traceProject->fps = std::max(1, m_project->fps);
-    m_traceProject->width = m_project->width;
-    m_traceProject->height = m_project->height;
-    Entity* entity =
-        m_traceProject->addVideo(path, first, duration, QStringLiteral("Trace"));
-    if (!entity)
-    {
-        m_traceProject.reset();
-        return false;
-    }
-
-    m_traceEntity = entity->id;
-    m_tracePath = path;
-    m_tracePlayer = std::make_unique<VideoPlayer>();
-    m_traceImage = first;
-
-    if (!m_traceProxy)
-    {
-        m_traceProxy = new VideoProxyGenerator(this);
-        connect(m_traceProxy, &VideoProxyGenerator::finished, this,
-                [this](const QString& source, bool success) {
-                    if (!success || source != m_tracePath || !m_tracePlayer)
-                        return;
-                    m_tracePlayer->clear();
-                    updateTraceImage();
-                    update();
-                });
-    }
-    m_traceProxy->ensure(path);
-
-    updateTraceImage();
-    updateTraceMenu();
-    update();
-    return true;
-#endif
 }
 
 void CameraMonitor::clearTraceVideo()
 {
-#if PVFORGE_LEGACY_SHELL
-    m_tracePlayer.reset();
-    m_traceProject.reset();
-#endif
     m_traceFrames.reset();
     m_tracePath.clear();
     m_traceEntity = kInvalidEntity;
@@ -869,19 +633,7 @@ void CameraMonitor::updateTraceImage()
         updateTraceImageSession();
         return;
     }
-#if PVFORGE_LEGACY_SHELL
-    if (!m_traceProject || !m_tracePlayer || m_traceEntity == kInvalidEntity)
-    {
-        m_traceImage = QImage();
-        return;
-    }
-    m_traceProject->fps = std::max(1, m_project->fps);
-    m_tracePlayer->update(*m_traceProject, m_frame);
-    const Entity* entity = m_traceProject->entity(m_traceEntity);
-    m_traceImage = entity ? entity->image : QImage();
-#else
     m_traceImage = QImage();
-#endif
 }
 
 void CameraMonitor::updateTraceImageSession()

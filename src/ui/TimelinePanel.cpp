@@ -243,29 +243,14 @@ const QPixmap& plusGlyphPixmap()
 class ClipPopup : public QWidget
 {
 public:
-#if PVFORGE_LEGACY_SHELL
-    ClipPopup(Project* project, EntityId ownerId, TimelinePanel* source)
-        : ClipPopup(project, nullptr, ownerId, source)
-    {
-    }
-#endif
 
     ClipPopup(EntityId ownerId, TimelinePanel* source, TimelineAdapter* adapter)
-#if PVFORGE_LEGACY_SHELL
-        : ClipPopup(nullptr, adapter, ownerId, source)
-#else
         : ClipPopup(adapter, ownerId, source)
-#endif
     {
     }
 
 private:
-#if PVFORGE_LEGACY_SHELL
-    ClipPopup(Project* project, TimelineAdapter* adapter, EntityId ownerId,
-              TimelinePanel* source)
-#else
     ClipPopup(TimelineAdapter* adapter, EntityId ownerId, TimelinePanel* source)
-#endif
         : QWidget(source->window())
         , m_ownerId(ownerId)
         , m_source(source)
@@ -323,11 +308,7 @@ private:
         layout->addWidget(header);
 
         m_panel = adapter ? new TimelinePanel(adapter, this)
-#if PVFORGE_LEGACY_SHELL
-                          : new TimelinePanel(project, this);
-#else
                           : nullptr;
-#endif
         m_panel->m_owner = ownerId;
         m_panel->m_popup = true;
         m_panel->m_sourcePanel = source;
@@ -473,28 +454,6 @@ private:
 
 // ---------------------------------------------------------------- panel
 
-#if PVFORGE_LEGACY_SHELL
-TimelinePanel::TimelinePanel(Project* project, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
-{
-    initPanel();
-    if (!m_project)
-        return;
-    connect(m_project, &Project::changed, this, [this] {
-        assignMissingRows();
-        if (m_selected != kInvalidEntity && !m_project->entity(m_selected))
-        {
-            m_selected = kInvalidEntity;
-            m_entitySelection.clear();
-        }
-        clampScroll();
-        syncPopups();
-        update();
-    });
-    assignMissingRows();
-}
-#endif
 
 TimelinePanel::TimelinePanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -626,19 +585,11 @@ const Entity* TimelinePanel::entityById(EntityId id) const
 {
     if (sessionMode())
         return findEntity(m_snapshot.entities, id);
-#if PVFORGE_LEGACY_SHELL
-    return m_project ? m_project->entity(id) : nullptr;
-#else
     return nullptr;
-#endif
 }
 
 int TimelinePanel::currentFps() const
 {
-#if PVFORGE_LEGACY_SHELL
-    if (m_project)
-        return std::max(1, m_project->fps);
-#endif
     return std::max(1, m_snapshot.fps);
 }
 
@@ -649,11 +600,7 @@ bool TimelinePanel::isEntityLocked(EntityId id) const
         const Entity* entity = entityById(id);
         return entity && entity->locked;
     }
-#if PVFORGE_LEGACY_SHELL
-    return m_project && id != kInvalidEntity && m_project->isEffectivelyLocked(id);
-#else
     return false;
-#endif
 }
 
 EntityId TimelinePanel::entityIdForUuid(const Uuid& uuid) const
@@ -818,52 +765,8 @@ int TimelinePanel::rowOfEntity(const Entity& entity) const
 void TimelinePanel::assignMissingRows()
 {
     if (sessionMode()
-#if PVFORGE_LEGACY_SHELL
-        || !m_project
-#endif
     )
         return;
-#if PVFORGE_LEGACY_SHELL
-    QVector<Entity>& entities = m_project->mutableEntities();
-    QSet<int> used;
-    for (const Entity& entity : entities)
-    {
-        if (entity.parent != m_owner)
-            continue;
-        const int row = rowOfEntity(entity);
-        if (row >= 0 && !used.contains(row))
-            used.insert(row);
-    }
-    int next = 0;
-    for (Entity& entity : entities)
-    {
-        if (entity.parent != m_owner)
-            continue;
-        int row = rowOfEntity(entity);
-        if (row >= 0 && used.contains(row))
-        {
-            // A row can already be owned by an earlier entity after a
-            // reparent; keep the first one and move this one out.
-            bool duplicate = false;
-            for (const Entity& other : entities)
-            {
-                if (&other == &entity)
-                    break;
-                if (other.parent == m_owner && rowOfEntity(other) == row)
-                {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!duplicate)
-                continue;
-        }
-        while (used.contains(next))
-            ++next;
-        entity.data[QStringLiteral("timelineRow")] = next;
-        used.insert(next);
-    }
-#endif
 }
 
 QVector<EntityId> TimelinePanel::rowIds() const
@@ -1002,21 +905,9 @@ void TimelinePanel::handleRowButton(int row, int index)
         return;
     }
 
-    if (!m_project)
-        return;
-    const EntityFlag flag =
-        index == 0 ? EntityFlag::Hidden : EntityFlag::Locked;
-    const bool oldValue = index == 0 ? entity->hidden : entity->locked;
-    if (index == 1 && !oldValue)
-    {
-        m_selectedKeyframes.erase(
-            std::remove_if(m_selectedKeyframes.begin(), m_selectedKeyframes.end(),
-                           [id](const KeyframeSelection& selection) {
-                               return selection.entity == id;
-                           }),
-            m_selectedKeyframes.end());
-    }
-    emit entityFlagChanged(id, flag, !oldValue);
+    emit entityFlagChanged(id, index == 0 ? EntityFlag::Hidden
+                                         : EntityFlag::Locked,
+                           !(index == 0 ? entity->hidden : entity->locked));
     update();
 }
 
@@ -1076,16 +967,8 @@ const QVector<Entity>& TimelinePanel::activeEntities() const
     static const QVector<Entity> empty;
     if (sessionMode())
         return m_snapshot.entities;
-#if PVFORGE_LEGACY_SHELL
-    if (!m_project)
-        return empty;
-    if (m_hasExternalPreview)
-        return m_externalPreview;
-    return m_dragging ? m_preview : m_project->entities();
-#else
     Q_UNUSED(empty);
     return m_snapshot.entities;
-#endif
 }
 
 const Entity* TimelinePanel::rangeOwner() const
@@ -1098,15 +981,8 @@ const Entity* TimelinePanel::rangeOwner() const
 Entity* TimelinePanel::activeEntity(EntityId id)
 {
     if (sessionMode()
-#if PVFORGE_LEGACY_SHELL
-        || !m_project
-#endif
     )
         return nullptr;
-#if PVFORGE_LEGACY_SHELL
-    if (!m_dragging)
-        return m_project->entity(id);
-#endif
     return findEntity(m_preview, id);
 }
 
@@ -1140,11 +1016,7 @@ int TimelinePanel::clipEndOf(const Entity& entity) const
         const double trimEnd =
             entity.data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
         const double fps = std::max(1,
-#if PVFORGE_LEGACY_SHELL
-                                    m_project ? m_project->fps : 30
-#else
                                     30
-#endif
         );
         const double frames =
             std::max(0.0, (media - trimStart - trimEnd) * fps);
@@ -1155,11 +1027,7 @@ int TimelinePanel::clipEndOf(const Entity& entity) const
         return stored;
     return std::max(start + 1,
                     std::max(180,
-#if PVFORGE_LEGACY_SHELL
-                             m_project ? m_project->timelineLength() : 180
-#else
                              180
-#endif
                              ));
 }
 
@@ -1175,10 +1043,6 @@ int TimelinePanel::contentEnd() const
     int end = 180;
     for (const Entity& entity : activeEntities())
         end = std::max(end, clipEndOf(entity));
-#if PVFORGE_LEGACY_SHELL
-    if (m_project)
-        end = std::max(end, m_project->timelineLength());
-#endif
     if (sessionMode())
         end = std::max(end, m_snapshot.contentEnd);
     return end;
@@ -1269,10 +1133,6 @@ int TimelinePanel::bodyBottom() const
 
 int TimelinePanel::timelineLength() const
 {
-#if PVFORGE_LEGACY_SHELL
-    if (m_project)
-        return std::max(1, m_project->timelineLength());
-#endif
     return std::max(1, contentEnd());
 }
 
@@ -1292,7 +1152,7 @@ int TimelinePanel::frameFromX(int x) const
 
 void TimelinePanel::clampScroll()
 {
-    if (!m_project && !sessionMode())
+    if (!sessionMode())
         return;
     const int visible = visibleWidth();
     const int tailPad = std::max(400, visible);
@@ -1371,11 +1231,7 @@ void TimelinePanel::stepFrame(int delta)
     }
 
     const int length = timelineLength();
-#if PVFORGE_LEGACY_SHELL
-    const bool loop = m_project ? m_project->loop : true;
-#else
     const bool loop = true;
-#endif
     if (delta > 0 && length > 0 && next >= length)
     {
         if (loop)
@@ -1407,11 +1263,6 @@ void TimelinePanel::stopHold()
 
 void TimelinePanel::beginDrag()
 {
-#if PVFORGE_LEGACY_SHELL
-    if (!m_project)
-        return;
-    m_before = m_project->entities();
-#endif
     m_preview = m_before;
     m_dragging = false;
     m_moved = false;
@@ -2394,11 +2245,7 @@ void TimelinePanel::setClipRange(Entity& entity, int start, int end)
         const double trimStart =
             entity.data.value(QStringLiteral("trimStart"), 0.0).toDouble();
         const double fps = std::max(1,
-#if PVFORGE_LEGACY_SHELL
-                                    m_project ? m_project->fps : 30
-#else
                                     30
-#endif
         );
         if (media > 0.0)
         {
@@ -2667,7 +2514,7 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
         updateSessionDragPreview(pos);
         return;
     }
-    if (!m_project || m_dragMode == DragMode::None)
+    if (m_dragMode == DragMode::None)
         return;
     if (!m_dragging)
     {
@@ -2736,7 +2583,7 @@ void TimelinePanel::updateDragPreview(const QPointF& pos)
 
 void TimelinePanel::autoScrollTick()
 {
-    if ((!m_project && !sessionMode()) || m_dragMode == DragMode::None)
+    if (!sessionMode() || m_dragMode == DragMode::None)
         return;
     if (m_dragMode == DragMode::Scrub)
     {
@@ -2828,7 +2675,7 @@ void TimelinePanel::drawAudioClip(QPainter& p, const Entity& entity,
 
 void TimelinePanel::paintEvent(QPaintEvent*)
 {
-    if (!m_project && !sessionMode())
+    if (!sessionMode())
         return;
     clampScroll();
 
@@ -2988,18 +2835,10 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         // enough; short clips fall back to the clip context menu.
         const bool hidden = sessionMode()
                                 ? entity->hidden
-#if PVFORGE_LEGACY_SHELL
-                                : m_project->isEffectivelyHidden(entity->id);
-#else
                                 : entity->hidden;
-#endif
         const bool locked = sessionMode()
                                 ? entity->locked
-#if PVFORGE_LEGACY_SHELL
-                                : m_project->isEffectivelyLocked(entity->id);
-#else
                                 : entity->locked;
-#endif
         const QRect clip = clipRect(*entity);
         if (clip.isEmpty())
             continue;
@@ -3274,7 +3113,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
 
 void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
-    if ((!m_project && !sessionMode()) || event->button() != Qt::LeftButton)
+    if (!sessionMode() || event->button() != Qt::LeftButton)
         return;
     setFocus(Qt::MouseFocusReason);
     if (m_popup)
@@ -3534,7 +3373,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
-    if (!m_project && !sessionMode())
+    if (!sessionMode())
         return;
     if (m_dragMode == DragMode::MoveMarker)
     {
@@ -3750,7 +3589,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
 
 void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if ((!m_project && !sessionMode()) || event->button() != Qt::LeftButton)
+    if (!sessionMode() || event->button() != Qt::LeftButton)
         return;
     if (event->position().y() < kRulerHeight)
         return;
@@ -3815,7 +3654,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 {
-    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
+    if (!sessionMode() || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -3828,7 +3667,7 @@ void TimelinePanel::dragEnterEvent(QDragEnterEvent* event)
 
 void TimelinePanel::dragMoveEvent(QDragMoveEvent* event)
 {
-    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
+    if (!sessionMode() || !hasAssetMime(event->mimeData()))
         return;
     m_dropActive = true;
     m_dropFrame = std::max(contentStart(),
@@ -3848,7 +3687,7 @@ void TimelinePanel::dragLeaveEvent(QDragLeaveEvent* event)
 
 void TimelinePanel::dropEvent(QDropEvent* event)
 {
-    if ((!m_project && !sessionMode()) || !hasAssetMime(event->mimeData()))
+    if (!sessionMode() || !hasAssetMime(event->mimeData()))
     {
         m_dropActive = false;
         update();
@@ -3907,125 +3746,12 @@ EntityId TimelinePanel::dropAsset(const QMimeData& mime, int frame, int row)
 {
     if (sessionMode())
         return dropSessionAsset(mime, frame, row);
-#if PVFORGE_LEGACY_SHELL
-    if (!m_project || !hasAssetMime(&mime))
-        return kInvalidEntity;
-
-    frame = std::max(contentStart(), frame);
-    if (m_owner >= 0)
-        frame = std::min(frame, contentEnd() - 1);
-
-    const bool html = mime.hasFormat(
-        QStringLiteral("application/x-pvforge-asset-html"));
-    const QVector<Entity> before = m_project->entities();
-    Entity* created = nullptr;
-    if (html)
-    {
-        created = m_project->addHtmlLayer(QString::fromUtf8(
-            mime.data(QStringLiteral("application/x-pvforge-asset-html"))));
-    }
-    else
-    {
-        const int index =
-            mime.data(QStringLiteral("application/x-pvforge-asset-template"))
-                .toInt();
-        const auto& templates = m_project->templates();
-        if (index >= 0 && index < templates.size())
-            created = m_project->createFromTemplate(templates[index]);
-    }
-    if (!created)
-        return kInvalidEntity;
-
-    const EntityId id = created->id;
-    if (m_owner != kInvalidEntity)
-        m_project->setEntityParent(id, m_owner);
-    Entity* entity = m_project->entity(id);
-    if (!entity)
-        return kInvalidEntity;
-
-    const int fps = std::max(1, m_project->fps);
-    int length = fps;
-    if (entity->isAudio())
-    {
-        const double duration =
-            entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
-        if (duration > 0.0)
-            length = std::max(1, int(std::ceil(duration * fps)));
-        entity->data[QStringLiteral("startFrame")] = frame;
-    }
-    else
-    {
-        if (entity->type == EntityType::Video)
-        {
-            const double duration =
-                entity->data.value(QStringLiteral("duration"), 0.0).toDouble();
-            if (duration > 0.0)
-                length = std::max(1, int(std::ceil(duration * fps)));
-        }
-        entity->data[QStringLiteral("clipStart")] = frame;
-        entity->data[QStringLiteral("clipEnd")] = frame + length;
-    }
-
-    // A video template also creates its paired audio; keep it on the same
-    // drop frame and in the same private timeline.
-    QVector<EntityId> pairedIds;
-    for (Entity& other : m_project->mutableEntities())
-    {
-        if (other.id == id)
-            continue;
-        if (other.data.value(QStringLiteral("pairedVideo")).toInt() == id)
-        {
-            other.data[QStringLiteral("startFrame")] = frame;
-            if (m_owner != kInvalidEntity)
-                other.parent = m_owner;
-            pairedIds.append(other.id);
-        }
-    }
-
-    QVector<Entity>& all = m_project->mutableEntities();
-    int maxRow = -1;
-    for (const Entity& other : all)
-        if (other.parent == m_owner)
-            maxRow = std::max(maxRow, rowOfEntity(other));
-    int targetRow = row >= 0 ? row : maxRow + 1;
-    targetRow = std::max(0, targetRow);
-
-    QSet<EntityId> createdIds;
-    createdIds.insert(id);
-    for (EntityId pairedId : pairedIds)
-        createdIds.insert(pairedId);
-    auto insertAtRow = [&](EntityId entityId, int desiredRow) {
-        Entity* target = m_project->entity(entityId);
-        if (!target)
-            return;
-        for (Entity& other : all)
-        {
-            if (createdIds.contains(other.id) || other.parent != m_owner)
-                continue;
-            const int otherRow = rowOfEntity(other);
-            if (otherRow >= desiredRow)
-                other.data[QStringLiteral("timelineRow")] = otherRow + 1;
-        }
-        target->data[QStringLiteral("timelineRow")] = desiredRow;
-    };
-    insertAtRow(id, targetRow);
-    for (int i = 0; i < pairedIds.size(); ++i)
-        insertAtRow(pairedIds[i], targetRow + 1 + i);
-
-    assignMissingRows();
-    m_project->notifyChanged();
-    selectEntity(id, true);
-    emit snapshotEditRequested(before, m_project->entities(),
-                               QStringLiteral("添加素材"));
-    return id;
-#else
     return kInvalidEntity;
-#endif
 }
 
 void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
 {
-    if (!m_project && !sessionMode())
+    if (!sessionMode())
         return;
 
     if (sessionMode() && event->pos().y() < kRulerHeight)
@@ -4093,18 +3819,10 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     QMenu menu(this);
     const bool hiddenNow = sessionMode()
                                ? entity->hidden
-#if PVFORGE_LEGACY_SHELL
-                               : m_project->isEffectivelyHidden(entity->id);
-#else
                                : entity->hidden;
-#endif
     const bool lockedNow = sessionMode()
                                ? entity->locked
-#if PVFORGE_LEGACY_SHELL
-                               : m_project->isEffectivelyLocked(entity->id);
-#else
                                : entity->locked;
-#endif
     QAction* toggleHidden = menu.addAction(hiddenNow
                                                ? QStringLiteral("显示片段")
                                                : QStringLiteral("隐藏片段"));
@@ -4186,11 +3904,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     {
         remove = menu.addAction(QStringLiteral("删除片段"));
         remove->setEnabled(
-#if PVFORGE_LEGACY_SHELL
-            !m_project->isEffectivelyLocked(id)
-#else
             true
-#endif
         );
     }
     QAction* chosen = menu.exec(event->globalPos());
@@ -4433,7 +4147,7 @@ bool TimelinePanel::eventFilter(QObject* watched, QEvent* event)
 
 TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
 {
-    if ((!m_project && !sessionMode()) || ownerId == kInvalidEntity
+    if (!sessionMode() || ownerId == kInvalidEntity
         || ownerId == m_owner)
         return nullptr;
     if (m_popups.contains(ownerId))
@@ -4454,11 +4168,7 @@ TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
     }
     auto* popup = sessionMode() && m_adapter
                       ? new ClipPopup(ownerId, this, m_adapter)
-#if PVFORGE_LEGACY_SHELL
-                      : new ClipPopup(m_project, ownerId, this);
-#else
                       : nullptr;
-#endif
     if (!popup)
         return nullptr;
     m_popups.insert(ownerId, popup);

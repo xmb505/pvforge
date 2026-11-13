@@ -19,9 +19,6 @@
 #include "next/app/ProjectDocument.h"
 #include "video2/VideoFrames.h"
 
-#if PVFORGE_LEGACY_SHELL
-#include "media/MediaImporter.h"
-#endif
 
 #include <QApplication>
 #include <QCheckBox>
@@ -74,14 +71,6 @@ QString assetTypeLabelForWorkbench(AssetType type)
 
 } // namespace
 
-#if PVFORGE_LEGACY_SHELL
-WorkbenchPanel::WorkbenchPanel(Project* project, QWidget* parent)
-    : QFrame(parent)
-    , m_project(project)
-{
-    buildUi();
-}
-#endif
 
 WorkbenchPanel::WorkbenchPanel(EditorSession* session, QWidget* parent)
     : QFrame(parent)
@@ -536,200 +525,7 @@ QWidget* WorkbenchPanel::buildSpecialPage()
     if (m_session)
         return buildSessionSpecialPage();
 
-#if PVFORGE_LEGACY_SHELL
-    auto* page = new QWidget(this);
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
-
-    m_wallParams.width = m_project->width;
-    m_wallParams.height = m_project->height;
-    m_wallParams.columns = 6;
-    m_wallParams.rows = 4;
-    m_wallParams.logoOpacity = 0.9;
-    m_wallParams.logos = QStringList{QString(), QString()};
-    m_wallParams.tileColors = QStringList{
-        QColor(210, 70, 160).name(QColor::HexArgb),
-        QColor(232, 232, 238).name(QColor::HexArgb)};
-
-    m_specialTypes = new QListWidget(page);
-    m_specialTypes->setObjectName(QStringLiteral("specialTypes"));
-    const QStringList names = {
-        QStringLiteral("放射状线条"),
-        QStringLiteral("快速流过"),
-        QStringLiteral("漫画点阵"),
-        QStringLiteral("品牌瓷砖墙"),
-    };
-    for (const QString& name : names)
-        m_specialTypes->addItem(name);
-    m_specialTypes->setMaximumHeight(100);
-    layout->addWidget(m_specialTypes);
-
-    m_specialPreview = new QLabel(page);
-    m_specialPreview->setObjectName(QStringLiteral("specialPreview"));
-    m_specialPreview->setAlignment(Qt::AlignCenter);
-    m_specialPreview->setMinimumHeight(150);
-    m_specialPreview->setFrameShape(QFrame::StyledPanel);
-    layout->addWidget(m_specialPreview);
-
-    m_specialForms = new QStackedWidget(page);
-
-    auto* radial = new QWidget(m_specialForms);
-    auto* radialForm = new QFormLayout(radial);
-    radialForm->setContentsMargins(0, 0, 0, 0);
-    radialForm->setVerticalSpacing(8);
-    m_radialCount = new QSpinBox(radial);
-    m_radialCount->setRange(4, 200);
-    m_radialCount->setValue(48);
-    radialForm->addRow(QStringLiteral("线条数"), m_radialCount);
-    m_radialThickness = new QDoubleSpinBox(radial);
-    m_radialThickness->setRange(1, 120);
-    m_radialThickness->setValue(18);
-    radialForm->addRow(QStringLiteral("线宽"), m_radialThickness);
-    m_radialFlicker = new QDoubleSpinBox(radial);
-    m_radialFlicker->setRange(0, 60);
-    m_radialFlicker->setValue(10);
-    m_radialFlicker->setSuffix(QStringLiteral(" Hz"));
-    m_radialFlicker->setToolTip(QStringLiteral("随机加粗每秒重掷几次"));
-    radialForm->addRow(QStringLiteral("随机速度"), m_radialFlicker);
-    m_radialColor = new QPushButton(radial);
-    setColorButton(m_radialColor, m_radialColorValue);
-    connect(m_radialColor, &QPushButton::clicked, this, [this] {
-        const QColor color = pickColor(m_radialColorValue, QStringLiteral("线条颜色"));
-        if (color.isValid())
-        {
-            m_radialColorValue = color;
-            setColorButton(m_radialColor, color);
-            updateSpecialPreview();
-        }
-    });
-    radialForm->addRow(QStringLiteral("颜色"), m_radialColor);
-    m_specialForms->addWidget(radial);
-
-    auto* flow = new QWidget(m_specialForms);
-    auto* flowForm = new QFormLayout(flow);
-    flowForm->setContentsMargins(0, 0, 0, 0);
-    flowForm->setVerticalSpacing(8);
-    m_flowCount = new QSpinBox(flow);
-    m_flowCount->setRange(2, 200);
-    m_flowCount->setValue(26);
-    flowForm->addRow(QStringLiteral("线条数"), m_flowCount);
-    m_flowSpeed = new QDoubleSpinBox(flow);
-    m_flowSpeed->setRange(0, 6000);
-    m_flowSpeed->setValue(900);
-    m_flowSpeed->setSuffix(QStringLiteral(" px/s"));
-    flowForm->addRow(QStringLiteral("速度"), m_flowSpeed);
-    m_flowAngle = new QDoubleSpinBox(flow);
-    m_flowAngle->setRange(-180, 180);
-    m_flowAngle->setValue(0);
-    m_flowAngle->setSuffix(QStringLiteral("°"));
-    flowForm->addRow(QStringLiteral("角度"), m_flowAngle);
-    m_flowColor = new QPushButton(flow);
-    setColorButton(m_flowColor, m_flowColorValue);
-    connect(m_flowColor, &QPushButton::clicked, this, [this] {
-        const QColor color = pickColor(m_flowColorValue, QStringLiteral("线条颜色"));
-        if (color.isValid())
-        {
-            m_flowColorValue = color;
-            setColorButton(m_flowColor, color);
-            updateSpecialPreview();
-        }
-    });
-    flowForm->addRow(QStringLiteral("颜色"), m_flowColor);
-    m_specialForms->addWidget(flow);
-
-    auto* halftone = new QWidget(m_specialForms);
-    auto* halftoneForm = new QFormLayout(halftone);
-    halftoneForm->setContentsMargins(0, 0, 0, 0);
-    halftoneForm->setVerticalSpacing(8);
-    m_halftoneArea = new QDoubleSpinBox(halftone);
-    m_halftoneArea->setRange(100, 4000);
-    m_halftoneArea->setDecimals(0);
-    m_halftoneArea->setSingleStep(50);
-    m_halftoneArea->setValue(900);
-    m_halftoneArea->setSuffix(QStringLiteral(" px"));
-    halftoneForm->addRow(QStringLiteral("范围"), m_halftoneArea);
-    m_halftoneSpacing = new QDoubleSpinBox(halftone);
-    m_halftoneSpacing->setRange(4, 200);
-    m_halftoneSpacing->setDecimals(1);
-    m_halftoneSpacing->setValue(18);
-    halftoneForm->addRow(QStringLiteral("点间距"), m_halftoneSpacing);
-    m_halftoneSize = new QDoubleSpinBox(halftone);
-    m_halftoneSize->setRange(0.5, 60);
-    m_halftoneSize->setDecimals(1);
-    m_halftoneSize->setValue(7);
-    halftoneForm->addRow(QStringLiteral("最大点径"), m_halftoneSize);
-    m_halftoneAngle = new QDoubleSpinBox(halftone);
-    m_halftoneAngle->setRange(-180, 180);
-    m_halftoneAngle->setValue(45);
-    m_halftoneAngle->setSuffix(QStringLiteral("°"));
-    halftoneForm->addRow(QStringLiteral("网格角度"), m_halftoneAngle);
-    m_halftoneGradient = new QDoubleSpinBox(halftone);
-    m_halftoneGradient->setRange(-180, 180);
-    m_halftoneGradient->setValue(90);
-    m_halftoneGradient->setSuffix(QStringLiteral("°"));
-    halftoneForm->addRow(QStringLiteral("渐隐角度"), m_halftoneGradient);
-    m_halftoneMin = new QDoubleSpinBox(halftone);
-    m_halftoneMin->setRange(0, 1);
-    m_halftoneMin->setDecimals(2);
-    m_halftoneMin->setSingleStep(0.05);
-    m_halftoneMin->setValue(0);
-    halftoneForm->addRow(QStringLiteral("最小点比例"), m_halftoneMin);
-    m_halftoneJitter = new QDoubleSpinBox(halftone);
-    m_halftoneJitter->setRange(0, 1);
-    m_halftoneJitter->setDecimals(2);
-    m_halftoneJitter->setSingleStep(0.05);
-    m_halftoneJitter->setValue(0.12);
-    halftoneForm->addRow(QStringLiteral("手绘抖动"), m_halftoneJitter);
-    m_halftoneColor = new QPushButton(halftone);
-    setColorButton(m_halftoneColor, m_halftoneColorValue);
-    connect(m_halftoneColor, &QPushButton::clicked, this, [this] {
-        const QColor color = pickColor(m_halftoneColorValue, QStringLiteral("点阵颜色"));
-        if (color.isValid())
-        {
-            m_halftoneColorValue = color;
-            setColorButton(m_halftoneColor, color);
-            updateSpecialPreview();
-        }
-    });
-    halftoneForm->addRow(QStringLiteral("颜色"), m_halftoneColor);
-    m_specialForms->addWidget(halftone);
-
-    auto* wall = new QWidget(m_specialForms);
-    auto* wallLayout = new QFormLayout(wall);
-    wallLayout->setContentsMargins(0, 0, 0, 0);
-    wallLayout->setVerticalSpacing(8);
-    m_wallSummary = new QLabel(wall);
-    m_wallSummary->setWordWrap(true);
-    wallLayout->addRow(m_wallSummary);
-    auto* editWall = new QPushButton(QStringLiteral("配置瓷砖墙…"), wall);
-    editWall->setObjectName(QStringLiteral("wallEditButton"));
-    connect(editWall, &QPushButton::clicked, this, [this] {
-        BrandWallDialog dialog(m_wallParams, m_wallImages, this);
-        if (dialog.exec() != QDialog::Accepted)
-            return;
-        m_wallParams = dialog.params();
-        m_wallImages = dialog.images();
-        updateWallSummary();
-        updateSpecialPreview();
-    });
-    wallLayout->addRow(editWall);
-    m_specialForms->addWidget(wall);
-
-    layout->addWidget(m_specialForms, 1);
-
-    connect(m_specialTypes, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (m_specialForms)
-            m_specialForms->setCurrentIndex(std::clamp(row, 0, 3));
-        updateSpecialPreview();
-    });
-
-    updateWallSummary();
-    m_specialTypes->setCurrentRow(0);
-    return page;
-#else
     return new QWidget(this);
-#endif
 }
 
 QWidget* WorkbenchPanel::buildSessionSpecialPage()
@@ -1079,61 +875,11 @@ void WorkbenchPanel::refreshMediaLibrary()
         return;
     }
 
-#if PVFORGE_LEGACY_SHELL
-    for (int i = 0; i < m_project->templateCount(); ++i)
-    {
-        const Template* tmpl = m_project->templateAt(i);
-        if (!tmpl
-            || (tmpl->type != EntityType::Image && tmpl->type != EntityType::Video
-                && tmpl->type != EntityType::Audio))
-            continue;
-
-        auto* item = new QListWidgetItem(tmpl->name, m_mediaLibrary);
-        item->setData(Qt::UserRole, i);
-        item->setToolTip(tmpl->path);
-        if (!tmpl->thumbnail.isNull())
-            item->setIcon(QIcon(QPixmap::fromImage(tmpl->thumbnail)
-                                    .scaled(40, 40, Qt::KeepAspectRatio,
-                                            Qt::SmoothTransformation)));
-    }
-#endif
 }
 
 void WorkbenchPanel::selectMedia(int templateIndex)
 {
-#if PVFORGE_LEGACY_SHELL
-    const Template* tmpl = m_project->templateAt(templateIndex);
-    if (!tmpl)
-        return;
-
-    m_mediaPath = tmpl->path;
-    m_mediaTemplateIndex = templateIndex;
-
-    if (!tmpl->thumbnail.isNull())
-        m_mediaPreview->setPixmap(QPixmap::fromImage(tmpl->thumbnail)
-                                      .scaled(300, 140, Qt::KeepAspectRatio,
-                                              Qt::SmoothTransformation));
-    else
-        m_mediaPreview->setText(QStringLiteral("无预览"));
-
-    QString typeName;
-    if (tmpl->type == EntityType::Video)
-        typeName = QStringLiteral("视频");
-    else if (tmpl->type == EntityType::Audio)
-        typeName = QStringLiteral("音频");
-    else
-        typeName = QStringLiteral("图片");
-    QString info = typeName + QStringLiteral(" · ") + tmpl->name;
-    if ((tmpl->type == EntityType::Video || tmpl->type == EntityType::Audio)
-        && tmpl->duration > 0.0)
-        info += QStringLiteral(" · %1 秒").arg(tmpl->duration, 0, 'f', 2);
-    info += QStringLiteral("\n") + tmpl->path;
-    m_mediaInfo->setText(info);
-
-    updateCreateState();
-#else
     Q_UNUSED(templateIndex);
-#endif
 }
 
 void WorkbenchPanel::selectSessionMedia(const QString& hash)
@@ -1233,44 +979,6 @@ void WorkbenchPanel::pickMedia()
         return;
     }
 
-#if PVFORGE_LEGACY_SHELL
-    auto* mainWindow = qobject_cast<MainWindow*>(window());
-    if (!mainWindow)
-        return;
-
-    mainWindow->importMediaFiles(
-        {path}, [this](const QVector<MediaImportResult>& results) {
-            if (results.isEmpty())
-                return;
-            const MediaImportResult& result = results.first();
-            if (!result.error.isEmpty() || result.importedPath.isEmpty())
-            {
-                QMessageBox::warning(this, QStringLiteral("无法导入"), result.error);
-                return;
-            }
-
-            if (!m_project->addImportedMedia(result))
-                return;
-
-            refreshMediaLibrary();
-            for (int i = 0; i < m_project->templateCount(); ++i)
-            {
-                const Template* tmpl = m_project->templateAt(i);
-                if (!tmpl || tmpl->path != result.importedPath)
-                    continue;
-                for (int row = 0; row < m_mediaLibrary->count(); ++row)
-                {
-                    if (m_mediaLibrary->item(row)->data(Qt::UserRole).toInt() == i)
-                    {
-                        m_mediaLibrary->setCurrentRow(row);
-                        break;
-                    }
-                }
-                selectMedia(i);
-                break;
-            }
-        });
-#endif
 }
 
 TextStyle WorkbenchPanel::currentTextStyle() const
@@ -1400,92 +1108,6 @@ void WorkbenchPanel::updateTextBoxPreview()
     m_textBoxPreview->setPixmap(QPixmap::fromImage(image));
 }
 
-#if PVFORGE_LEGACY_SHELL
-EntityId WorkbenchPanel::createSpecial()
-{
-    const int row = m_specialTypes ? m_specialTypes->currentRow() : 0;
-    Entity* entity = nullptr;
-
-    if (row == 0)
-    {
-        RadialParams params;
-        params.count = m_radialCount->value();
-        params.width = m_radialThickness->value();
-        params.flicker = m_radialFlicker->value();
-        params.color = m_radialColorValue;
-        QVariantMap data;
-        params.writeTo(data);
-        entity = m_project->addEntity(EntityType::RadialLines,
-                                      QStringLiteral("放射状线条"), data);
-    }
-    else if (row == 1)
-    {
-        FlowParams params;
-        params.count = m_flowCount->value();
-        params.speed = m_flowSpeed->value();
-        params.angle = m_flowAngle->value();
-        params.color = m_flowColorValue;
-        QVariantMap data;
-        params.writeTo(data);
-        entity = m_project->addEntity(EntityType::FlowLines,
-                                      QStringLiteral("快速流过"), data);
-    }
-    else if (row == 2)
-    {
-        HalftoneParams params;
-        params.area = m_halftoneArea->value();
-        params.spacing = m_halftoneSpacing->value();
-        params.dotSize = m_halftoneSize->value();
-        params.angle = m_halftoneAngle->value();
-        params.gradientAngle = m_halftoneGradient->value();
-        params.minRatio = m_halftoneMin->value();
-        params.jitter = m_halftoneJitter->value();
-        params.color = m_halftoneColorValue;
-        QVariantMap data;
-        params.writeTo(data);
-        entity = m_project->addEntity(EntityType::HalftoneDots,
-                                      QStringLiteral("漫画点阵"), data);
-    }
-    else
-    {
-        entity = m_project->addBrandWall(m_wallParams);
-    }
-    return entity ? entity->id : kInvalidEntity;
-}
-
-EntityId WorkbenchPanel::createTextBox()
-{
-    const int row = m_textBoxTypes ? m_textBoxTypes->currentRow() : 0;
-    int shape = m_textBoxShape ? m_textBoxShape->currentData().toInt() : 0;
-    if (row == 1)
-        shape = 1;
-    else if (row == 2)
-        shape = 3;
-
-    TextStyle style = m_comicStyle;
-    style.text = m_comicContent->text().isEmpty() ? QStringLiteral("台词")
-                                                   : m_comicContent->text();
-    style.fontFamily = QFont().family();
-    style.pixelSize = m_comicSize->value();
-    style.color = m_comicColorValue;
-    style.align = int(Qt::AlignCenter);
-
-    BubbleStyle bubble;
-    bubble.shape = shape;
-    bubble.tail = row == 0;
-    bubble.fill = m_comicFillValue;
-    bubble.stroke = m_comicStrokeValue;
-    bubble.strokeWidth = m_comicStrokeWidth ? m_comicStrokeWidth->value() : 6.0;
-
-    QVariantMap data;
-    style.writeTo(data);
-    bubble.writeTo(data);
-    if (Entity* entity = m_project->addEntity(EntityType::ComicText,
-                                              QStringLiteral("文本框"), data))
-        return entity->id;
-    return kInvalidEntity;
-}
-#endif
 
 void WorkbenchPanel::createSessionBrandWall()
 {
@@ -1715,76 +1337,6 @@ void WorkbenchPanel::createCurrent()
         createSessionCurrent();
         return;
     }
-#if PVFORGE_LEGACY_SHELL
-    const int page = m_pages->currentIndex();
-    EntityId id = kInvalidEntity;
-
-    if (page == 0)
-    {
-        if (m_mediaPath.isEmpty())
-            return;
-
-        if (const Template* tmpl = m_project->templateAt(m_mediaTemplateIndex))
-        {
-            if (Entity* e = m_project->createFromTemplate(*tmpl))
-                id = e->id;
-        }
-    }
-    else if (page == 1)
-    {
-        if (Entity* e = m_project->addText(currentTextStyle()))
-            id = e->id;
-    }
-    else if (page == 2)
-    {
-        id = createTextBox();
-    }
-    else if (page == 3)
-    {
-        const int shape = m_vectorShapes->currentItem()
-                              ? m_vectorShapes->currentItem()->data(Qt::UserRole).toInt()
-                              : 0;
-        Entity* e = m_project->addVector(shape, m_vectorWidth->value(),
-                                         m_vectorHeight->value(), m_fillValue,
-                                         m_strokeValue, m_vectorStrokeWidth->value());
-        if (e)
-        {
-            e->data[QStringLiteral("cornerRadius")] = m_vectorCorner->value();
-            e->data[QStringLiteral("sides")] = m_vectorSides->value();
-            e->data[QStringLiteral("innerRatio")] = m_vectorInner->value();
-            m_project->notifyChanged();
-            id = e->id;
-        }
-    }
-    else if (page == 5)
-    {
-        QString name = m_cameraName ? m_cameraName->text().trimmed() : QString();
-        if (name.isEmpty())
-        {
-            int count = 0;
-            for (const Entity& e : m_project->entities())
-                if (e.isCamera())
-                    ++count;
-            name = QStringLiteral("摄像机 %1").arg(count + 1);
-        }
-        if (Entity* e = m_project->addCamera(name))
-            id = e->id;
-    }
-    else if (page == 4)
-    {
-        id = createSpecial();
-    }
-
-    if (id == kInvalidEntity)
-    {
-        QMessageBox::warning(this, QStringLiteral("创建失败"),
-                             QStringLiteral("实体创建失败，请检查所选素材。"));
-        return;
-    }
-
-    emit created(id);
-    hidePanel();
-#endif
 }
 
 void WorkbenchPanel::setColorButton(QPushButton* button, const QColor& color)

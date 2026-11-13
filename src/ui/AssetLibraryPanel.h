@@ -3,9 +3,6 @@
 #include "common/Types.h"
 #include "core/EntityId.h"
 
-#if PVFORGE_LEGACY_SHELL
-#include "core/Project.h"
-#endif
 
 #include <QHash>
 #include <QPixmap>
@@ -44,10 +41,6 @@ class AssetLibraryPanel : public QWidget
     Q_OBJECT
 
 public:
-#if PVFORGE_LEGACY_SHELL
-    // Legacy Project mode, kept for the old shell and its self-tests.
-    explicit AssetLibraryPanel(Project* project, QWidget* parent = nullptr);
-#endif
     // Session mode: lists assets from EditorSession::assets(), imports through
     // the content-addressed store and drags application/x-pvforge-asset.
     explicit AssetLibraryPanel(EditorSession* session, QWidget* parent = nullptr);
@@ -63,15 +56,6 @@ public:
     bool compactMode() const { return m_compact; }
 
     // Library entries that can replace an entity of this media type.
-#if PVFORGE_LEGACY_SHELL
-    static QVector<int> mediaTemplateIndices(const Project& project, EntityType type);
-
-    // Opens a picker showing the library entries of one media type. The
-    // import button falls back to a file dialog with the given filter.
-    // Returns the chosen source path, or an empty string when cancelled.
-    static QString pickMedia(QWidget* parent, Project* project, EntityType type,
-                             const QString& filter);
-#endif
 
     // Session-mode picker: compatible assets from the store, plus an
     // "import new file" button. Returns the chosen hash or an empty string.
@@ -163,13 +147,6 @@ private:
     void createSelectedSession();
     void removeSelectedSession();
 
-#if PVFORGE_LEGACY_SHELL
-    QString selectedHtmlAsset() const;
-    void createSelected();
-    void removeSelected();
-    void importHtmlAsset();
-    Project* m_project = nullptr;
-#endif
 
     void buildSessionUi();
     void rebuildSessionEntries();

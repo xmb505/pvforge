@@ -55,48 +55,6 @@ namespace pvf {
 
 namespace {
 
-QString typeName(EntityType type)
-{
-    switch (type)
-    {
-    case EntityType::Image:
-        return QStringLiteral("图片");
-    case EntityType::Video:
-        return QStringLiteral("视频");
-    case EntityType::Text:
-        return QStringLiteral("文字");
-    case EntityType::Vector:
-        return QStringLiteral("矢量");
-    case EntityType::Camera:
-        return QStringLiteral("摄像机");
-    case EntityType::Audio:
-        return QStringLiteral("音频");
-    case EntityType::Folder:
-        return QStringLiteral("文件夹");
-    case EntityType::ComicText:
-        return QStringLiteral("漫画文本框");
-    case EntityType::RadialLines:
-        return QStringLiteral("放射状线条");
-    case EntityType::FlowLines:
-        return QStringLiteral("快速流过");
-    case EntityType::BrandWall:
-        return QStringLiteral("品牌瓷砖墙");
-    case EntityType::HalftoneDots:
-        return QStringLiteral("漫画点阵");
-    case EntityType::HtmlLayer:
-        return QStringLiteral("HTML 层");
-    }
-    return QString();
-}
-
-QString htmlFileStamp(const QString& path)
-{
-    const QFileInfo info(path);
-    return QStringLiteral("%1|%2")
-        .arg(info.size())
-        .arg(info.lastModified().toMSecsSinceEpoch());
-}
-
 QString contentKindLabel(ContentKind kind)
 {
     switch (kind)
@@ -992,15 +950,6 @@ void setSpinIfIdle(QSpinBox* spin, int value)
 
 } // namespace
 
-#if PVFORGE_LEGACY_SHELL
-PropertiesPanel::PropertiesPanel(Project* project, QWidget* parent)
-    : QWidget(parent)
-    , m_project(project)
-{
-    buildUi();
-    refresh();
-}
-#endif
 
 PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
@@ -1125,7 +1074,6 @@ void PropertiesPanel::buildUi()
     buildLinesSection(layout);
     buildBrandWallSection(layout);
     buildHalftoneSection(layout);
-    buildHtmlSection(layout);
     buildVectorSection(layout);
     buildMediaSection(layout);
     buildAudioSection(layout);
@@ -1138,65 +1086,11 @@ void PropertiesPanel::buildUi()
             sessionAddTransformKeys();
             return;
         }
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        const bool camera = entity && entity->isCamera();
-        for (const Row& r : m_rows)
-        {
-            if (camera && r.prop == QStringLiteral("opacity"))
-                continue;
-            m_project->setValue(m_entity, r.prop, m_frame,
-                                m_project->value(m_entity, r.prop, m_frame), true);
-        }
-        refresh();
-#endif
     });
 
     connect(m_easeButton, &QPushButton::clicked, this, [this] {
         if (m_sessionMode)
             return;
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        if (!entity || entity->locked)
-            return;
-
-        EasingSpec current;
-        bool found = false;
-        for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
-        {
-            for (const Keyframe& key : it->keys)
-            {
-                if (std::abs(key.frame - m_frame) < 1e-6)
-                {
-                    current = key.ease;
-                    found = true;
-                    break;
-                }
-            }
-            if (found)
-                break;
-        }
-        if (!found)
-            return;
-
-        const double previous = m_project->previousKeyframeFrame(m_entity, m_frame);
-        if (previous < 0.0)
-            return;
-        const int fps = std::max(1, m_project->fps);
-        const QString title = QStringLiteral("进入本帧：%1s → %2s")
-                                  .arg(previous / double(fps), 0, 'f', 2)
-                                  .arg(m_frame / double(fps), 0, 'f', 2);
-
-        EasingSpec chosen;
-        const QPoint anchor =
-            m_easeButton->mapToGlobal(QPoint(0, m_easeButton->height()));
-        if (EasingChooser::choose(this, current, anchor, &chosen, title))
-            emit keyframeEasingEdited(m_entity, m_frame, chosen);
-#endif
     });
 }
 
@@ -1659,23 +1553,6 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label, const QStr
             sessionToggleKey(prop);
             return;
         }
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        if (!entity || m_project->isEffectivelyLocked(m_entity))
-            return;
-        bool hasKey = false;
-        const auto track = entity->tracks.constFind(prop);
-        if (track != entity->tracks.constEnd())
-            for (const Keyframe& frame : track->keys)
-                if (std::abs(frame.frame - m_frame) < 1e-6)
-                {
-                    hasKey = true;
-                    break;
-                }
-        emit keyframeToggled(m_entity, prop, m_frame, hasKey);
-#endif
     });
     rowLayout->addWidget(key);
     auto* labelWidget = new QLabel(label, form->parentWidget());
@@ -1892,19 +1769,6 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
                 });
             return;
         }
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        if (!entity)
-            return;
-        TextLayoutDialog dialog(TextStyle::fromData(entity->data), this);
-        if (dialog.exec() != QDialog::Accepted)
-            return;
-        QVariantMap data;
-        dialog.style().writeTo(data);
-        emit dataEdited(m_entity, data);
-#endif
     });
     form->addRow(layoutButton);
 
@@ -2076,20 +1940,6 @@ void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
     auto* edit = new QPushButton(QStringLiteral("编辑瓷砖墙…"), content);
     edit->setObjectName(QStringLiteral("wallEditButton"));
     connect(edit, &QPushButton::clicked, this, [this] {
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        if (!entity || entity->type != EntityType::BrandWall)
-            return;
-        const BrandWallParams params = BrandWallParams::fromData(entity->data);
-        BrandWallDialog dialog(params, entity->wallLogos, this);
-        if (dialog.exec() != QDialog::Accepted)
-            return;
-        QVariantMap data;
-        dialog.params().writeTo(data);
-        emit dataEdited(m_entity, data);
-#endif
     });
     form->addRow(edit);
 
@@ -2123,50 +1973,6 @@ void PropertiesPanel::buildHalftoneSection(QVBoxLayout* layout)
         new CollapsibleSection(QStringLiteral("漫画点阵"), content, this);
     m_halftoneSection->setExpanded(true);
     layout->addWidget(m_halftoneSection);
-}
-
-void PropertiesPanel::buildHtmlSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* htmlLayout = new QVBoxLayout(content);
-    htmlLayout->setContentsMargins(10, 8, 10, 8);
-    htmlLayout->setSpacing(6);
-
-    m_htmlInfo = new QLabel(content);
-    m_htmlInfo->setWordWrap(true);
-    m_htmlInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_htmlInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_htmlInfo->setMinimumWidth(0);
-    htmlLayout->addWidget(m_htmlInfo);
-
-    m_htmlVariables = new QWidget(content);
-    m_htmlVariablesLayout = new QVBoxLayout(m_htmlVariables);
-    m_htmlVariablesLayout->setContentsMargins(0, 0, 0, 0);
-    m_htmlVariablesLayout->setSpacing(4);
-    htmlLayout->addWidget(m_htmlVariables);
-
-    m_htmlWarning = new QLabel(content);
-    m_htmlWarning->setObjectName(QStringLiteral("htmlWarning"));
-    m_htmlWarning->setWordWrap(true);
-    m_htmlWarning->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_htmlWarning->setMinimumWidth(0);
-    m_htmlWarning->setStyleSheet(QStringLiteral("color:#e0a050;"));
-    m_htmlWarning->hide();
-    htmlLayout->addWidget(m_htmlWarning);
-
-    m_htmlReplace = new QPushButton(QStringLiteral("整份替换 HTML 资产…"), content);
-    m_htmlReplace->setObjectName(QStringLiteral("htmlReplaceButton"));
-    m_htmlReplace->setToolTip(
-        QStringLiteral("换掉文档，按变量名保留同名 var.* 轨道，孤立轨会保留并标记"));
-    connect(m_htmlReplace, &QPushButton::clicked, this, [this] {
-        if (m_entity != kInvalidEntity)
-            emit replaceSourceRequested(m_entity);
-    });
-    htmlLayout->addWidget(m_htmlReplace);
-
-    m_htmlSection = new CollapsibleSection(QStringLiteral("HTML"), content, this);
-    m_htmlSection->setExpanded(true);
-    layout->addWidget(m_htmlSection);
 }
 
 void PropertiesPanel::buildSpecialSection(QVBoxLayout* layout)
@@ -2236,110 +2042,6 @@ void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
     m_sessionHtmlSection->setExpanded(true);
     layout->insertWidget(layout->count() - 1, m_sessionHtmlSection);
     m_sessionHtmlSection->hide();
-}
-
-void PropertiesPanel::rebuildHtmlRows(const html::HtmlAsset& asset)
-{
-    m_htmlRows.clear();
-    if (!m_htmlVariablesLayout)
-        return;
-
-    while (QLayoutItem* item = m_htmlVariablesLayout->takeAt(0))
-    {
-        if (QWidget* widget = item->widget())
-        {
-            widget->hide();
-            widget->deleteLater();
-        }
-        delete item;
-    }
-
-    for (const html::HtmlComponent& component : asset.components)
-    {
-        auto* header = new QLabel(
-            component.name.isEmpty() ? component.id : component.name, m_htmlVariables);
-        header->setToolTip(component.id);
-        QFont font = header->font();
-        font.setBold(true);
-        header->setFont(font);
-        m_htmlVariablesLayout->addWidget(header);
-
-        auto* form = new QFormLayout();
-        form->setContentsMargins(0, 0, 0, 4);
-        form->setVerticalSpacing(4);
-        for (const html::HtmlVariable& variable : component.variables)
-            addHtmlVariableRow(form, component, variable);
-        m_htmlVariablesLayout->addLayout(form);
-    }
-}
-
-void PropertiesPanel::addHtmlVariableRow(QFormLayout* form,
-                                         const html::HtmlComponent& component,
-                                         const html::HtmlVariable& variable)
-{
-    const QString prop =
-        QStringLiteral("var.") + component.id + QLatin1Char('.') + variable.name;
-    auto* rowWidget = new QWidget(m_htmlVariables);
-    auto* rowLayout = new QHBoxLayout(rowWidget);
-    rowLayout->setContentsMargins(0, 0, 0, 0);
-    rowLayout->setSpacing(4);
-
-    auto* spin = new QDoubleSpinBox(rowWidget);
-    spin->setObjectName(QStringLiteral("htmlVar_") + prop);
-    spin->setRange(variable.min, variable.max);
-    spin->setDecimals(variable.integer ? 0 : 3);
-    spin->setSingleStep(variable.integer
-                            ? 1.0
-                            : std::max(0.001, (variable.max - variable.min) / 100.0));
-    spin->setKeyboardTracking(false);
-    rowLayout->addWidget(spin, 1);
-
-    auto* key = new QToolButton(rowWidget);
-    key->setObjectName(QStringLiteral("htmlKey_") + prop);
-    key->setFixedSize(18, 18);
-    key->setAutoRaise(true);
-    key->setText(QStringLiteral("◇"));
-    key->setToolTip(QStringLiteral("在当前帧打关键帧"));
-    key->setCursor(Qt::PointingHandCursor);
-    connect(key, &QToolButton::clicked, this, [this, prop] {
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        const Entity* entity = m_project->entity(m_entity);
-        if (!entity || m_project->isEffectivelyLocked(m_entity))
-            return;
-        bool hasKey = false;
-        const auto track = entity->tracks.constFind(prop);
-        if (track != entity->tracks.constEnd())
-            for (const Keyframe& frame : track->keys)
-                if (std::abs(frame.frame - m_frame) < 1e-6)
-                {
-                    hasKey = true;
-                    break;
-                }
-        emit keyframeToggled(m_entity, prop, m_frame, hasKey);
-#endif
-    });
-    rowLayout->addWidget(key);
-
-    auto* labelWidget = new QLabel(variable.name, m_htmlVariables);
-    labelWidget->setToolTip(prop);
-    form->addRow(labelWidget, rowWidget);
-
-    connect(spin, &QDoubleSpinBox::valueChanged, this, [this, prop](double value) {
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity == kInvalidEntity)
-            return;
-        emit valueEdited(m_entity, prop, value);
-#endif
-    });
-
-    HtmlRow row;
-    row.prop = prop;
-    row.label = labelWidget;
-    row.spin = spin;
-    row.key = key;
-    m_htmlRows.append(row);
 }
 
 void PropertiesPanel::rebuildSessionHtmlRows(const QJsonObject& variables)
@@ -2809,9 +2511,6 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
         QStringLiteral("audioTrimStartFromPlayhead"),
         QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；后面的波形保持原位"),
         [this] {
-#if PVFORGE_LEGACY_SHELL
-            applyAudioTrimStart(m_frame);
-#endif
         });
 
     m_audioTrimEnd = new QDoubleSpinBox(content);
@@ -2827,9 +2526,6 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
         QStringLiteral("audioTrimEndFromPlayhead"),
         QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；前面的波形保持原位"),
         [this] {
-#if PVFORGE_LEGACY_SHELL
-            applyAudioTrimEnd(m_frame);
-#endif
         });
 
     m_audioVolume = new QSpinBox(content);
@@ -2913,16 +2609,7 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     form->addRow(hint);
 
     connect(m_usePivot, &QCheckBox::toggled, this, [this](bool on) {
-#if PVFORGE_LEGACY_SHELL
-        Entity* e = m_project->entity(m_entity);
-        if (!e)
-            return;
-        e->data[QStringLiteral("rotPointCustom")] = on;
-        m_project->notifyChanged();
-        refresh();
-#else
         Q_UNUSED(on);
-#endif
     });
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_sessionMode)
@@ -2930,11 +2617,6 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
             sessionSetTrackValue(QStringLiteral("pivotX"), value);
             return;
         }
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity != kInvalidEntity)
-            emit pivotEdited(m_entity, value,
-                             m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
-#endif
     });
     connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_sessionMode)
@@ -2942,12 +2624,6 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
             sessionSetTrackValue(QStringLiteral("pivotY"), value);
             return;
         }
-#if PVFORGE_LEGACY_SHELL
-        if (m_entity != kInvalidEntity)
-            emit pivotEdited(m_entity,
-                             m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame),
-                             value);
-#endif
     });
 
     m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
@@ -2962,86 +2638,10 @@ void PropertiesPanel::applyData(const QString& key, const QVariant& value)
         applySessionData(key, value);
         return;
     }
-#if PVFORGE_LEGACY_SHELL
-    Entity* e = m_project->entity(m_entity);
-    if (!e)
-        return;
-    e->data[key] = value;
-    m_project->modified = true;
-    m_project->notifyChanged();
-#else
     Q_UNUSED(key);
     Q_UNUSED(value);
-#endif
 }
 
-#if PVFORGE_LEGACY_SHELL
-void PropertiesPanel::applyAudioTrimStart(int playheadFrame)
-{
-    Entity* e = m_project->entity(m_entity);
-    if (!e)
-        return;
-    const double fps = std::max(1, m_project->fps);
-    const double startFrame =
-        e->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-    const double duration =
-        e->data.value(QStringLiteral("duration"), 0.0).toDouble();
-    const double trimStart =
-        e->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
-    const double trimEnd =
-        e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
-    const double audibleFrames =
-        std::max(0.0, (duration - trimStart - trimEnd) * fps);
-    if (audibleFrames <= 1e-9)
-        return;
-
-    // Trimming the left edge moves the clip start to the playhead while the
-    // rest of the waveform stays exactly where it was. Leave one frame.
-    const double deltaFrames =
-        std::clamp(playheadFrame - startFrame, 0.0,
-                   std::max(0.0, audibleFrames - 1.0));
-    if (deltaFrames <= 1e-9)
-        return;
-
-    QVariantMap data;
-    data.insert(QStringLiteral("startFrame"), startFrame + deltaFrames);
-    data.insert(QStringLiteral("trimStart"), trimStart + deltaFrames / fps);
-    emit dataEdited(m_entity, data);
-}
-
-void PropertiesPanel::applyAudioTrimEnd(int playheadFrame)
-{
-    Entity* e = m_project->entity(m_entity);
-    if (!e)
-        return;
-    const double fps = std::max(1, m_project->fps);
-    const double startFrame =
-        e->data.value(QStringLiteral("startFrame"), 0.0).toDouble();
-    const double duration =
-        e->data.value(QStringLiteral("duration"), 0.0).toDouble();
-    const double trimStart =
-        e->data.value(QStringLiteral("trimStart"), 0.0).toDouble();
-    const double trimEnd =
-        e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble();
-    const double audibleFrames =
-        std::max(0.0, (duration - trimStart - trimEnd) * fps);
-    if (audibleFrames <= 1.0)
-        return;
-
-    // The playhead is relative to the clip start; trimEnd counts from the end
-    // of the source, so trimStart has to be subtracted as well.
-    const double deltaFrames =
-        std::clamp(playheadFrame - startFrame, 1.0, audibleFrames);
-    const double value =
-        std::max(0.0, duration - trimStart - deltaFrames / fps);
-    if (std::abs(value - trimEnd) < 1e-9)
-        return;
-
-    QVariantMap data;
-    data.insert(QStringLiteral("trimEnd"), value);
-    emit dataEdited(m_entity, data);
-}
-#endif // PVFORGE_LEGACY_SHELL
 
 const model::Entity* PropertiesPanel::sessionEntity() const
 {
@@ -4650,7 +4250,7 @@ void PropertiesPanel::refreshSession()
         for (CollapsibleSection* section :
              {m_basicSection, m_transformSection, m_keySection, m_textSection,
               m_comicSection, m_linesSection, m_wallSection, m_halftoneSection,
-              m_htmlSection, m_specialSection, m_sessionHtmlSection,
+              m_specialSection, m_sessionHtmlSection,
               m_vectorSection, m_mediaSection, m_audioSection, m_pivotSection,
               m_cameraSection, m_solverSection})
         {
@@ -4690,7 +4290,6 @@ void PropertiesPanel::refreshSession()
     m_linesSection->hide();
     m_wallSection->hide();
     m_halftoneSection->hide();
-    m_htmlSection->hide();
     m_specialSection->setVisible(special);
     m_cameraSection->setVisible(camera);
     m_solverSection->show();
@@ -5001,580 +4600,6 @@ void PropertiesPanel::refresh()
         refreshSession();
         return;
     }
-#if PVFORGE_LEGACY_SHELL
-    const Entity* e = m_project->entity(m_entity);
-    const bool valid = e != nullptr;
-    const bool audio = valid && e->isAudio();
-
-    m_transformSection->setVisible(valid && !audio);
-    m_keySection->setVisible(valid && !audio);
-    const bool comic = valid && e->type == EntityType::ComicText;
-    const bool radial = valid && e->type == EntityType::RadialLines;
-    const bool flow = valid && e->type == EntityType::FlowLines;
-    const bool halftone = valid && e->type == EntityType::HalftoneDots;
-    const bool htmlLayer = valid && e->type == EntityType::HtmlLayer;
-    m_textSection->setVisible(valid && (e->type == EntityType::Text || comic));
-    m_comicSection->setVisible(comic);
-    m_linesSection->setVisible(radial || flow);
-    m_wallSection->setVisible(valid && e->type == EntityType::BrandWall);
-    m_halftoneSection->setVisible(halftone);
-    m_htmlSection->setVisible(htmlLayer);
-    if (valid && e->type == EntityType::BrandWall && m_wallInfo)
-    {
-        const BrandWallParams params = BrandWallParams::fromData(e->data);
-        m_wallInfo->setText(
-            QStringLiteral("%1 个 Logo · %2×%3 瓷砖 · 间距 %4 px")
-                .arg(params.logos.size())
-                .arg(params.columns)
-                .arg(params.rows)
-                .arg(int(params.gap)));
-    }
-    if (htmlLayer)
-    {
-        const QString assetPath = e->htmlAssetPath();
-        const QString assetStamp = htmlFileStamp(assetPath);
-        if (!m_htmlAssetCacheValid || m_htmlAssetCachePath != assetPath
-            || m_htmlAssetCacheStamp != assetStamp)
-        {
-            m_htmlAssetCachePath = assetPath;
-            m_htmlAssetCacheStamp = assetStamp;
-            m_htmlAssetCacheError.clear();
-            m_htmlAssetCache = html::HtmlAsset{};
-            if (!assetPath.isEmpty())
-                m_htmlAssetCache = html::HtmlAsset::parseFile(
-                    assetPath, &m_htmlAssetCacheError);
-            else
-                m_htmlAssetCacheError = QStringLiteral("没有 HTML 资产");
-            m_htmlAssetCacheValid = true;
-        }
-        const html::HtmlAsset& asset = m_htmlAssetCache;
-        const QString assetError = m_htmlAssetCacheError;
-
-        if (m_htmlRowsEntity != e->id || m_htmlAssetPath != assetPath
-            || m_htmlRowsStamp != assetStamp)
-        {
-            m_htmlRowsEntity = e->id;
-            m_htmlAssetPath = assetPath;
-            m_htmlRowsStamp = assetStamp;
-            rebuildHtmlRows(asset);
-        }
-
-        m_htmlInfo->setText(
-            QStringLiteral("%1\n逻辑尺寸 %2×%3 · %4")
-                .arg(assetError.isEmpty()
-                         ? QFileInfo(assetPath).fileName()
-                         : QStringLiteral("资产不可用：%1").arg(assetError))
-                .arg(e->htmlLogicalSize().width())
-                .arg(e->htmlLogicalSize().height())
-                .arg(e->htmlTimeDependent() ? QStringLiteral("时间相关")
-                                            : QStringLiteral("静态")));
-        m_htmlInfo->setToolTip(assetPath);
-
-        QStringList warnings;
-        if (!assetError.isEmpty())
-            warnings << assetError;
-        QSet<QString> declared;
-        QStringList missing;
-        for (const QString& key : asset.variableKeys())
-        {
-            const QString prop = QStringLiteral("var.") + key;
-            declared.insert(prop);
-            const auto track = e->tracks.constFind(prop);
-            const bool animated = track != e->tracks.constEnd()
-                                  && !track->isEmpty();
-            if (!e->values.contains(prop) && !animated)
-                missing << key;
-        }
-        if (!missing.isEmpty())
-            warnings << QStringLiteral("变量缺少当前值，使用清单默认值：%1")
-                            .arg(missing.join(QStringLiteral(", ")));
-        QStringList orphans;
-        for (auto it = e->tracks.constBegin(); it != e->tracks.constEnd(); ++it)
-        {
-            if (it.key().startsWith(QStringLiteral("var."))
-                && !declared.contains(it.key()) && !it->isEmpty())
-                orphans << it.key().mid(4);
-        }
-        for (auto it = e->values.constBegin(); it != e->values.constEnd(); ++it)
-        {
-            if (it.key().startsWith(QStringLiteral("var."))
-                && !declared.contains(it.key()) && !orphans.contains(it.key().mid(4)))
-                orphans << it.key().mid(4);
-        }
-        if (!orphans.isEmpty())
-            warnings << QStringLiteral("未使用的变量轨：%1")
-                            .arg(orphans.join(QStringLiteral(", ")));
-        m_htmlWarning->setText(warnings.join(QStringLiteral("\n")));
-        m_htmlWarning->setVisible(!warnings.isEmpty());
-        if (m_htmlReplace)
-            m_htmlReplace->setEnabled(!m_project->isEffectivelyLocked(e->id));
-    }
-    else if (m_htmlWarning)
-    {
-        m_htmlWarning->hide();
-    }
-    if (m_linesStack)
-        m_linesStack->setCurrentIndex(flow ? 1 : 0);
-    m_vectorSection->setVisible(valid && e->type == EntityType::Vector);
-    m_mediaSection->setVisible(valid
-                               && (e->type == EntityType::Image
-                                   || e->type == EntityType::Video
-                                   || e->type == EntityType::Audio));
-    m_audioSection->setVisible(audio);
-    m_pivotSection->setVisible(valid && !e->isCamera() && !audio);
-
-    const bool editable = valid && !m_project->isEffectivelyLocked(e->id);
-    const bool camera = valid && e->isCamera();
-    m_pivotSection->setEnabled(editable);
-    m_transformSection->setEnabled(editable);
-    m_keySection->setEnabled(editable);
-    m_textSection->setEnabled(editable);
-    m_comicSection->setEnabled(editable);
-    m_linesSection->setEnabled(editable);
-    m_wallSection->setEnabled(editable);
-    m_halftoneSection->setEnabled(editable);
-    m_htmlSection->setEnabled(editable);
-    m_vectorSection->setEnabled(editable);
-    m_audioSection->setEnabled(editable);
-    if (m_replaceSource)
-        m_replaceSource->setEnabled(editable);
-    m_keyButton->setEnabled(editable);
-
-    {
-        const QSignalBlocker blocker(m_parent);
-        m_parent->clear();
-        m_parent->addItem(QStringLiteral("工作台（世界坐标）"),
-                          int(kInvalidEntity));
-        if (valid && !audio)
-        {
-            for (int index : m_project->entityOrder())
-            {
-                const Entity& candidate = m_project->entities()[index];
-                if (candidate.id == e->id || candidate.isAudio())
-                    continue;
-                if (e->isCamera() && candidate.isCamera())
-                    continue;
-                if (m_project->isDescendantOf(candidate.id, e->id))
-                    continue;
-
-                int depth = 0;
-                QSet<EntityId> seen;
-                EntityId parentId = candidate.parent;
-                while (parentId != kInvalidEntity && !seen.contains(parentId)
-                       && depth < 32)
-                {
-                    seen.insert(parentId);
-                    const Entity* parent = m_project->entity(parentId);
-                    if (!parent)
-                        break;
-                    ++depth;
-                    parentId = parent->parent;
-                }
-                const QString prefix = QStringLiteral("  ").repeated(depth);
-                const QString typePrefix =
-                    candidate.isFolder() ? QStringLiteral("[文件夹] ")
-                    : candidate.isCamera() ? QStringLiteral("[摄像机] ")
-                                           : QString();
-                m_parent->addItem(prefix + typePrefix + candidate.name,
-                                  candidate.id);
-            }
-            const int parentIndex = m_parent->findData(e->parent);
-            m_parent->setCurrentIndex(parentIndex >= 0 ? parentIndex : 0);
-        }
-        m_parentRow->setVisible(valid && !audio);
-        if (m_parentLabel)
-            m_parentLabel->setVisible(valid && !audio);
-        m_parentRow->setEnabled(editable && !audio);
-    }
-
-    for (Row& r : m_rows)
-    {
-        const bool hiddenRow = camera
-                               && (r.prop == QStringLiteral("scaleY")
-                                   || r.prop == QStringLiteral("opacity"));
-        r.spin->setVisible(!hiddenRow);
-        r.label->setVisible(!hiddenRow);
-
-        const QSignalBlocker blocker(r.spin);
-        if (camera && r.prop == QStringLiteral("scaleX"))
-        {
-            r.label->setText(QStringLiteral("取景比例"));
-            r.spin->setRange(5.0, 100.0);
-            r.spin->setDecimals(1);
-            r.spin->setSingleStep(1.0);
-            r.spin->setSuffix(QStringLiteral("%"));
-            r.factor = 0.01;
-        }
-        else if (r.prop == QStringLiteral("scaleX"))
-        {
-            r.label->setText(r.baseLabel);
-            r.spin->setRange(-100.0, 100.0);
-            r.spin->setDecimals(3);
-            r.spin->setSingleStep(0.01);
-            r.spin->setSuffix(QString());
-            r.factor = 1.0;
-        }
-        r.spin->setEnabled(editable);
-    }
-
-    EasingSpec currentEase;
-    bool hasKeyframe = false;
-    if (valid)
-    {
-        for (auto it = e->tracks.constBegin(); it != e->tracks.constEnd(); ++it)
-        {
-            for (const Keyframe& key : it->keys)
-            {
-                if (std::abs(key.frame - m_frame) < 1e-6)
-                {
-                    currentEase = key.ease;
-                    hasKeyframe = true;
-                    break;
-                }
-            }
-            if (hasKeyframe)
-                break;
-        }
-    }
-    m_easeButton->setEnabled(editable && hasKeyframe);
-    m_easeButton->setText(hasKeyframe
-                              ? QStringLiteral("缓动：")
-                                    + easingDisplayName(currentEase.easing)
-                              : QStringLiteral("缓动（当前帧无关键帧）"));
-    if (hasKeyframe)
-    {
-        const double previous = m_project->previousKeyframeFrame(m_entity, m_frame);
-        if (previous >= 0.0)
-        {
-            const int fps = std::max(1, m_project->fps);
-            m_easeButton->setEnabled(editable);
-            m_easeButton->setText(
-                QStringLiteral("缓动 %1s → %2s：%3")
-                    .arg(previous / double(fps), 0, 'f', 2)
-                    .arg(m_frame / double(fps), 0, 'f', 2)
-                    .arg(easingDisplayName(currentEase.easing)));
-        }
-        else
-        {
-            m_easeButton->setEnabled(false);
-            m_easeButton->setText(QStringLiteral("缓动（首帧无进入段）"));
-        }
-    }
-
-    if (!valid)
-    {
-        m_title->setText(QStringLiteral("未选择对象"));
-        for (Row& r : m_rows)
-        {
-            const QSignalBlocker blocker(r.spin);
-            r.spin->setValue(0);
-        }
-        return;
-    }
-
-    m_title->setText(e->name + QStringLiteral(" · ") + typeName(e->type));
-
-    {
-        const QSignalBlocker blocker(m_usePivot);
-        m_usePivot->setChecked(e->rotPointCustom());
-    }
-    {
-        const QSignalBlocker blocker(m_pivotX);
-        m_pivotX->setValue(m_project->value(m_entity, QStringLiteral("rotPointX"), m_frame));
-    }
-    {
-        const QSignalBlocker blocker(m_pivotY);
-        m_pivotY->setValue(m_project->value(m_entity, QStringLiteral("rotPointY"), m_frame));
-    }
-    const bool pivotEnabled = e->rotPointCustom();
-    m_pivotX->setEnabled(editable && pivotEnabled);
-    m_pivotY->setEnabled(editable && pivotEnabled);
-
-    if (e->type == EntityType::Audio)
-    {
-        const double duration = e->data.value(QStringLiteral("duration"), 0.0).toDouble();
-        {
-            const QSignalBlocker blocker(m_audioStart);
-            m_audioStart->setValue(
-                int(std::lround(e->data.value(QStringLiteral("startFrame"), 0.0).toDouble())));
-        }
-        {
-            const QSignalBlocker blocker(m_audioTrimStart);
-            const QSignalBlocker blockerEnd(m_audioTrimEnd);
-            m_audioTrimStart->setRange(0.0, std::max(0.0, duration));
-            m_audioTrimEnd->setRange(0.0, std::max(0.0, duration));
-            m_audioTrimStart->setValue(
-                e->data.value(QStringLiteral("trimStart"), 0.0).toDouble());
-            m_audioTrimEnd->setValue(
-                e->data.value(QStringLiteral("trimEnd"), 0.0).toDouble());
-        }
-        {
-            const QSignalBlocker blocker(m_audioVolume);
-            m_audioVolume->setValue(int(
-                std::lround(e->data.value(QStringLiteral("volume"), 1.0).toDouble()
-                            * 100.0)));
-        }
-        {
-            const QSignalBlocker blockerIn(m_audioFadeIn);
-            const QSignalBlocker blockerOut(m_audioFadeOut);
-            m_audioFadeIn->setValue(
-                e->data.value(QStringLiteral("fadeIn"), 0.0).toDouble());
-            m_audioFadeOut->setValue(
-                e->data.value(QStringLiteral("fadeOut"), 0.0).toDouble());
-        }
-    }
-
-    for (Row& r : m_rows)
-    {
-        const QSignalBlocker blocker(r.spin);
-        r.spin->setValue(m_project->value(m_entity, r.prop, m_frame) / r.factor);
-        if (r.key)
-        {
-            bool hasKey = false;
-            const auto track = e->tracks.constFind(r.prop);
-            if (track != e->tracks.constEnd())
-                for (const Keyframe& key : track->keys)
-                    if (std::abs(key.frame - m_frame) < 1e-6)
-                    {
-                        hasKey = true;
-                        break;
-                    }
-            r.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
-            r.key->setToolTip(hasKey ? QStringLiteral("删除当前帧的关键帧")
-                                     : QStringLiteral("在当前帧打关键帧"));
-            r.key->setEnabled(editable);
-        }
-    }
-
-    for (HtmlRow& r : m_htmlRows)
-    {
-        const QSignalBlocker blocker(r.spin);
-        r.spin->setValue(m_project->value(m_entity, r.prop, m_frame));
-        r.spin->setEnabled(editable);
-        if (r.label)
-            r.label->setEnabled(editable);
-        bool hasKey = false;
-        const auto track = e->tracks.constFind(r.prop);
-        if (track != e->tracks.constEnd())
-            for (const Keyframe& key : track->keys)
-                if (std::abs(key.frame - m_frame) < 1e-6)
-                {
-                    hasKey = true;
-                    break;
-                }
-        r.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
-        r.key->setToolTip(hasKey ? QStringLiteral("删除当前帧的关键帧")
-                                 : QStringLiteral("在当前帧打关键帧"));
-        r.key->setEnabled(editable);
-    }
-
-    if (e->type == EntityType::Text || e->type == EntityType::ComicText)
-    {
-        if (!m_textContent->hasFocus())
-        {
-            const QSignalBlocker blocker(m_textContent);
-            m_textContent->setText(e->textContent());
-        }
-        if (!m_textFont->hasFocus())
-        {
-            const QSignalBlocker blocker(m_textFont);
-            m_textFont->setCurrentFont(QFont(e->fontFamily()));
-        }
-        {
-            const QSignalBlocker blocker(m_textSize);
-            m_textSize->setValue(e->fontSize());
-        }
-        m_textColorValue = e->textColor();
-        setColorButton(m_textColorButton, m_textColorValue);
-        {
-            const QSignalBlocker blocker(m_textStrokeWidth);
-            m_textStrokeWidth->setValue(
-                e->data.value(QStringLiteral("textStrokeWidth"), 0.0).toDouble());
-        }
-        const QColor stroke =
-            e->data.value(QStringLiteral("textStrokeColor")).value<QColor>();
-        m_textStrokeColorValue = stroke.isValid() ? stroke : QColor(Qt::black);
-        setColorButton(m_textStrokeColorButton, m_textStrokeColorValue);
-        {
-            const QSignalBlocker blocker(m_textDirection);
-            const bool vertical = e->data.value(QStringLiteral("vertical"), false).toBool();
-            const bool rtl = e->data.value(QStringLiteral("verticalRtl"), true).toBool();
-            m_textDirection->setCurrentIndex(vertical ? (rtl ? 1 : 2) : 0);
-        }
-        {
-            const QSignalBlocker blocker(m_textBold);
-            m_textBold->setChecked(e->data.value(QStringLiteral("bold"), false).toBool());
-        }
-        {
-            const QSignalBlocker blocker(m_textItalic);
-            m_textItalic->setChecked(
-                e->data.value(QStringLiteral("italic"), false).toBool());
-        }
-        {
-            const QSignalBlocker blocker(m_textUnderline);
-            m_textUnderline->setChecked(
-                e->data.value(QStringLiteral("underline"), false).toBool());
-        }
-        {
-            const QSignalBlocker blocker(m_textAlign);
-            int index = 0;
-            for (int i = 0; i < m_textAlign->count(); ++i)
-            {
-                if (m_textAlign->itemData(i).toInt() == e->textAlign())
-                {
-                    index = i;
-                    break;
-                }
-            }
-            m_textAlign->setCurrentIndex(index);
-        }
-    }
-    else if (comic)
-    {
-        const auto select = [](QComboBox* combo, int value) {
-            if (!combo)
-                return;
-            const QSignalBlocker blocker(combo);
-            for (int index = 0; index < combo->count(); ++index)
-            {
-                if (combo->itemData(index).toInt() == value)
-                {
-                    combo->setCurrentIndex(index);
-                    return;
-                }
-            }
-        };
-        select(m_comicShape, e->data.value(QStringLiteral("bubbleShape"), 0).toInt());
-        {
-            const QSignalBlocker blocker(m_comicTail);
-            m_comicTail->setChecked(
-                e->data.value(QStringLiteral("bubbleTail"), true).toBool());
-        }
-        const int shape = e->data.value(QStringLiteral("bubbleShape"), 0).toInt();
-        const bool tailOn = e->data.value(QStringLiteral("bubbleTail"), true).toBool()
-                            && shape != 3;
-        for (const DataRow& row : m_dataRows)
-        {
-            if ((row.key == QStringLiteral("bubbleTipX")
-                 || row.key == QStringLiteral("bubbleTipY"))
-                && row.spin)
-                row.spin->setEnabled(editable && tailOn);
-        }
-    }
-    else if (e->type == EntityType::Vector)
-    {
-        {
-            const QSignalBlocker blocker(m_vectorShape);
-            for (int i = 0; i < m_vectorShape->count(); ++i)
-            {
-                if (m_vectorShape->itemData(i).toInt() == e->vectorShape())
-                {
-                    m_vectorShape->setCurrentIndex(i);
-                    break;
-                }
-            }
-        }
-        {
-            const QSignalBlocker blocker(m_vectorCorner);
-            m_vectorCorner->setValue(e->cornerRadius());
-        }
-        {
-            const QSignalBlocker blocker(m_vectorSides);
-            m_vectorSides->setValue(e->vectorSides());
-        }
-        {
-            const QSignalBlocker blocker(m_vectorInner);
-            m_vectorInner->setValue(e->vectorInnerRatio());
-        }
-        const int shape = e->vectorShape();
-        m_vectorCorner->setEnabled(editable && shape == 3);
-        m_vectorSides->setEnabled(editable && (shape == 6 || shape == 7));
-        m_vectorInner->setEnabled(editable && shape == 6);
-        {
-            const QSignalBlocker blocker(m_vectorWidth);
-            m_vectorWidth->setValue(e->vectorWidth());
-        }
-        {
-            const QSignalBlocker blocker(m_vectorHeight);
-            m_vectorHeight->setValue(e->vectorHeight());
-        }
-        m_fillValue = e->fillColor();
-        setColorButton(m_fillButton, m_fillValue);
-        m_strokeValue = e->strokeColor();
-        setColorButton(m_strokeButton, m_strokeValue);
-        {
-            const QSignalBlocker blocker(m_strokeWidth);
-            m_strokeWidth->setValue(e->strokeWidth());
-        }
-    }
-    else
-    {
-        QString info = typeName(e->type);
-        int mediaWidth = e->image.width();
-        int mediaHeight = e->image.height();
-        if (e->type == EntityType::Video)
-        {
-            mediaWidth =
-                e->data.value(QStringLiteral("sourceWidth"), mediaWidth).toInt();
-            mediaHeight =
-                e->data.value(QStringLiteral("sourceHeight"), mediaHeight).toInt();
-        }
-        if (mediaWidth > 0 && mediaHeight > 0)
-            info += QStringLiteral(" · %1×%2").arg(mediaWidth).arg(mediaHeight);
-        if (e->type == EntityType::Audio)
-        {
-            const double duration =
-                e->data.value(QStringLiteral("duration"), 0.0).toDouble();
-            info += QStringLiteral(" · %1 秒").arg(duration, 0, 'f', 2);
-            if (e->audio)
-                info += QStringLiteral(" · 48 kHz stereo");
-            else
-                info += QStringLiteral(" · 解码失败或未解码");
-        }
-        if (!e->sourcePath.isEmpty())
-        {
-            QString shown = e->sourcePath;
-            constexpr int maxChars = 54;
-            if (shown.size() > maxChars)
-                shown = shown.left(8) + QStringLiteral("…") + shown.right(maxChars - 9);
-            info += QStringLiteral("\n") + shown;
-            m_mediaInfo->setToolTip(e->sourcePath);
-        }
-        else
-        {
-            m_mediaInfo->setToolTip(QString());
-        }
-        m_mediaInfo->setText(info);
-    }
-
-    // Tool specific data fields.
-    if (valid)
-    {
-        for (const DataRow& row : m_dataRows)
-        {
-            const QVariant value = e->data.value(row.key);
-            if (row.spin)
-            {
-                const QSignalBlocker blocker(row.spin);
-                row.spin->setValue(value.toDouble());
-            }
-            else if (row.count)
-            {
-                const QSignalBlocker blocker(row.count);
-                row.count->setValue(value.toInt());
-            }
-            else if (row.color)
-            {
-                const QColor color = value.value<QColor>();
-                if (color.isValid())
-                {
-                    m_dataColors.insert(row.key, color);
-                    setColorButton(row.color, color);
-                }
-            }
-        }
-    }
-#endif // PVFORGE_LEGACY_SHELL
 }
 
 } // namespace pvf

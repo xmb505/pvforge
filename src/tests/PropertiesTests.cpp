@@ -1,5 +1,4 @@
-#include "LegacyTestSupport.h"
-#include "PropertiesSpecialTests.h"
+#include "TestApp.h"
 #include "TestRegistry.h"
 
 namespace {
@@ -1880,8 +1879,6 @@ void registerPropertiesTests(Registry& registry)
                  [](QApplication& app) { return textLayoutTest(app); });
     registry.add(QStringLiteral("--brandwall-create-test"),
                  [](QApplication& app) { return brandWallCreateTest(app); });
-    registry.add(QStringLiteral("--special-test"),
-                 [](QApplication& app) { return runPropertiesSpecialTest(app); });
 }
 
 } // namespace pvf::tests

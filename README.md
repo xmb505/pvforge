@@ -45,7 +45,7 @@ cmake --build build
 
 产物是 `build/pvforge` 与 `build/pvforge-mcp`。`ctest` 需要 `BUILD_TESTING`，顶层默认开启。
 
-`PVFORGE_LEGACY_SHELL`（默认：Debug/测试 ON，Release OFF）控制是否编译已经退役的 `core::Project` 旧壳。Release 只保留 `MainWindow(EditorSession*)`、新实体模型与 render2/audio2/mcp2 后端；旧壳文件（`src/core/Project.cpp`、`src/render/`、`src/audio/AudioEngine.cpp`、`src/mcp/McpServer.cpp` 等）不会被编进交付版。`PVFORGE_BUILD_SELF_TESTS=ON` 会强制打开旧壳，因为部分自检仍直接驱动 `core::Project`。
+`pvforge` 只包含 `MainWindow(EditorSession*)` 交付壳、新实体模型与 render2/audio2/mcp2 后端。旧的单文件 `.pvproj` 模型（`core::Project`、`src/render/`、`src/audio/AudioEngine.cpp`、`src/mcp/McpServer.cpp` 等）已于 issue #95 物理删除，没有兼容层。
 
 ## 快速开始
 
