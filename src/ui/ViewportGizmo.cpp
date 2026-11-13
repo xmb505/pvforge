@@ -67,7 +67,8 @@ gizmo::Transform Viewport::sessionGizmoTransform(const model::Entity& entity) co
         anim::evaluateEntity(project, entity.uuid, playhead, world, cache);
 
     QTransform local = pose.world;
-    if (!entity.parentUuid.isEmpty()
+    if (entity.space != model::EntitySpace::Canvas
+        && !entity.parentUuid.isEmpty()
         && project.entities.contains(entity.parentUuid))
     {
         const anim::Pose parent = anim::evaluateEntity(
@@ -191,7 +192,8 @@ gizmo::Bounds Viewport::sessionGizmoBounds(const model::Entity& entity) const
 
 QTransform Viewport::sessionParentToWidget(const model::Entity& entity) const
 {
-    if (!m_session || entity.parentUuid.isEmpty())
+    if (!m_session || entity.space == model::EntitySpace::Canvas
+        || entity.parentUuid.isEmpty())
         return sessionWorldToScreen();
 
     const model::Project& project = m_session->project();

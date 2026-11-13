@@ -54,6 +54,16 @@ void checkNear(double actual, double expected, double epsilon,
           file, line);
 }
 
+bool transformNear(const QTransform& a, const QTransform& b, double epsilon)
+{
+    return nearly(a.m11(), b.m11(), epsilon)
+           && nearly(a.m12(), b.m12(), epsilon)
+           && nearly(a.m21(), b.m21(), epsilon)
+           && nearly(a.m22(), b.m22(), epsilon)
+           && nearly(a.dx(), b.dx(), epsilon)
+           && nearly(a.dy(), b.dy(), epsilon);
+}
+
 #define CHECK(condition) check((condition), #condition, QString(), __FILE__, __LINE__)
 #define CHECK_NEAR(actual, expected, epsilon) \
     checkNear((actual), (expected), (epsilon), #actual " ~= " #expected, __FILE__, __LINE__)
@@ -534,6 +544,177 @@ void testParentTransform()
     CHECK_NEAR(childPose.opacity, 0.25, 1e-9);
 }
 
+void testCanvasSpaceIgnoresParentTransform()
+{
+    Project project;
+
+    // The parent is animated in every transform component so a leaked parent
+    // matrix cannot accidentally agree with the canvas pose at frame 0 only.
+    Entity parent = makeEntity(QStringLiteral("canvas-parent"));
+    setTrack(parent, "x", {{0, 0.0}, {10, 100.0}});
+    setTrack(parent, "y", {{0, 0.0}, {10, 50.0}});
+    setTrack(parent, "rotation", {{0, 0.0}, {10, 90.0}});
+    setTrack(parent, "scaleX", {{0, 1.0}, {10, 2.0}});
+    setTrack(parent, "scaleY", {{0, 1.0}, {10, 3.0}});
+    parent.transform.opacity = 0.5;
+    addEntity(project, parent);
+
+    Entity canvasChild = makeEntity(QStringLiteral("canvas-child"));
+    canvasChild.parentUuid = parent.uuid;
+    canvasChild.space = EntitySpace::Canvas;
+    canvasChild.transform.x = 10.0;
+    canvasChild.transform.y = 20.0;
+    canvasChild.transform.rotation = 30.0;
+    canvasChild.transform.scaleX = 1.5;
+    canvasChild.transform.scaleY = 0.75;
+    canvasChild.transform.opacity = 0.5;
+    addEntity(project, canvasChild);
+
+    Entity parentChild = canvasChild;
+    parentChild.uuid = QStringLiteral("parent-child");
+    parentChild.space = EntitySpace::Parent;
+    addEntity(project, parentChild);
+
+    MockWorld world;
+    const double cos30 = std::cos(qDegreesToRadians(30.0));
+    const double sin30 = std::sin(qDegreesToRadians(30.0));
+
+    const auto canvasWorld = [&](int frame) {
+        return anim::evaluateEntity(project, canvasChild.uuid, frame, world).world;
+    };
+    const QTransform atStart = canvasWorld(0);
+    const QTransform atEnd = canvasWorld(10);
+
+    // Canvas entities are placed directly on the canvas: identical at both
+    // frames even though the parent moved/rotated/scaled between them.
+    for (const QTransform& pose : {atStart, atEnd})
+    {
+        const QPointF origin = pose.map(QPointF(0.0, 0.0));
+        const QPointF xUnit = pose.map(QPointF(1.0, 0.0));
+        const QPointF yUnit = pose.map(QPointF(0.0, 1.0));
+        CHECK_NEAR(origin.x(), 10.0, 1e-9);
+        CHECK_NEAR(origin.y(), 20.0, 1e-9);
+        CHECK_NEAR(xUnit.x() - origin.x(), 1.5 * cos30, 1e-9);
+        CHECK_NEAR(xUnit.y() - origin.y(), 1.5 * sin30, 1e-9);
+        CHECK_NEAR(yUnit.x() - origin.x(), -0.75 * sin30, 1e-9);
+        CHECK_NEAR(yUnit.y() - origin.y(), 0.75 * cos30, 1e-9);
+    }
+
+    // Opacity is not a transform: it still inherits from the parent.
+    CHECK_NEAR(anim::evaluateEntity(project, canvasChild.uuid, 10, world).opacity,
+               0.25, 1e-9);
+
+    // A parent-space sibling still follows the same parent.
+    const anim::Pose parentPose =
+        anim::evaluateEntity(project, parent.uuid, 10, world);
+    const QPointF expected =
+        parentPose.world.map(QPointF(10.0, 20.0));
+    const QPointF followed =
+        anim::evaluateEntity(project, parentChild.uuid, 10, world)
+            .world.map(QPointF(0.0, 0.0));
+    CHECK_NEAR(followed.x(), expected.x(), 1e-9);
+    CHECK_NEAR(followed.y(), expected.y(), 1e-9);
+    CHECK(!nearly(followed.x(), 10.0, 1e-6)
+          || !nearly(followed.y(), 20.0, 1e-6));
+}
+
+void testCanvasSpaceStillInheritsVisibility()
+{
+    Project project;
+
+    Entity parent = makeEntity(QStringLiteral("canvas-vis-parent"));
+    setTrack(parent, "visible", {{0, 1.0}, {10, 0.0}});
+    addEntity(project, parent);
+
+    Entity inheriting = makeEntity(QStringLiteral("canvas-vis-child"));
+    inheriting.parentUuid = parent.uuid;
+    inheriting.space = EntitySpace::Canvas;
+    addEntity(project, inheriting);
+
+    Entity independent = makeEntity(QStringLiteral("canvas-vis-independent"));
+    independent.parentUuid = parent.uuid;
+    independent.space = EntitySpace::Canvas;
+    independent.inheritVisibility = false;
+    addEntity(project, independent);
+
+    MockWorld world;
+    CHECK(anim::evaluateEntity(project, inheriting.uuid, 5, world).visible);
+    CHECK(!anim::evaluateEntity(project, inheriting.uuid, 10, world).visible);
+    CHECK(anim::evaluateEntity(project, independent.uuid, 10, world).visible);
+}
+
+void testCanvasSpaceStillObeysParentRange()
+{
+    Project project;
+    const Uuid parentUuid = newUuid();
+    Entity parent = makeEntity(parentUuid, 0, 10);
+    addEntity(project, parent);
+
+    const Uuid childUuid = newUuid();
+    Entity child = makeEntity(childUuid, 1, 12);
+    child.parentUuid = parentUuid;
+    child.space = EntitySpace::Canvas;
+    addEntity(project, child);
+
+    QString error;
+    CHECK(!validateProject(project, &error));
+    CHECK(error.contains(QStringLiteral("超出父实体")));
+
+    project.entities[childUuid].end = parent.end;
+    error.clear();
+    CHECK(validateProject(project, &error));
+}
+
+void testCanvasSpaceSolverUsesCanvasCoordinates()
+{
+    Project project;
+
+    // A strongly non-identity parent: leaking it into the solver would move or
+    // rotate the orbit centre and give a completely different sample.
+    Entity parent = makeEntity(QStringLiteral("canvas-solver-parent"), 0, 100);
+    parent.transform.x = 120.0;
+    parent.transform.y = -60.0;
+    parent.transform.rotation = 75.0;
+    parent.transform.scaleX = 1.8;
+    parent.transform.scaleY = 0.6;
+    addEntity(project, parent);
+
+    Entity ground = makeEntity(QStringLiteral("canvas-solver-ground"), 0, 100);
+    addEntity(project, ground);
+
+    Entity reference = makeEntity(QStringLiteral("solver-reference"), 0, 100);
+    setTrack(reference, "x", {{0, 0.0}});
+    setTrack(reference, "y", {{0, 0.0}});
+    reference.solvers.append(makeSegment(QStringLiteral("reference-orbit"),
+                                         SolverEffect::Orbit, 0, 20,
+                                         ground.uuid));
+    reference.solvers.last().params.insert(QStringLiteral("periodFrames"), 60.0);
+    addEntity(project, reference);
+
+    Entity canvasChild = reference;
+    canvasChild.uuid = QStringLiteral("canvas-solver-driven");
+    canvasChild.parentUuid = parent.uuid;
+    canvasChild.space = EntitySpace::Canvas;
+    addEntity(project, canvasChild);
+
+    MockWorld world;
+    world.poses.insert(ground.uuid,
+                       solver::Pose{QPointF(300.0, -400.0), 0.0});
+
+    anim::Cache referenceCache;
+    const anim::Pose referencePose = anim::evaluateEntity(
+        project, reference.uuid, 5, world, referenceCache);
+    anim::Cache canvasCache;
+    const anim::Pose canvasPose = anim::evaluateEntity(
+        project, canvasChild.uuid, 5, world, canvasCache);
+
+    // Same start pose, same target in project canvas space: the canvas child
+    // must produce the exact same solved pose as the parentless reference.
+    CHECK(transformNear(referencePose.world, canvasPose.world, 1e-9));
+    CHECK(!nearly(canvasPose.world.dx(), 0.0, 1e-6)
+          || !nearly(canvasPose.world.dy(), 0.0, 1e-6));
+}
+
 void testVisibilityAndOpacity()
 {
     Project project;
@@ -843,6 +1024,10 @@ int main(int argc, char** argv)
     testSegmentEndContinuity();
     testAutomaticStopAnchorsNextKey();
     testParentTransform();
+    testCanvasSpaceIgnoresParentTransform();
+    testCanvasSpaceStillInheritsVisibility();
+    testCanvasSpaceStillObeysParentRange();
+    testCanvasSpaceSolverUsesCanvasCoordinates();
     testVisibilityAndOpacity();
     testMissingParentAndCycles();
     testMissingTargetFallsBack();

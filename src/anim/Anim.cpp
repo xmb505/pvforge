@@ -118,7 +118,7 @@ LocalValues plainValues(const model::Entity& entity, double relativeFrame)
 // to the output image (content-local Y-down is flipped separately at paint
 // time).  Never bake a screen flip into this matrix.
 Pose composePose(const LocalValues& values, bool inheritVisibility,
-                 const Pose* parent)
+                 const Pose* parent, bool inheritTransform = true)
 {
     QTransform local;
     local.translate(values.x, values.y);
@@ -130,7 +130,12 @@ Pose composePose(const LocalValues& values, bool inheritVisibility,
     Pose pose;
     // QTransform's operator* applies the left operand first.  Hierarchy is
     // child-local -> parent, so the product must be local * parent.world.
-    pose.world = parent ? local * parent->world : local;
+    // Canvas-space entities keep the local matrix: the parent never moves
+    // them, but opacity/visibility still follow the normal inheritance rules.
+    if (parent && inheritTransform)
+        pose.world = local * parent->world;
+    else
+        pose.world = local;
     pose.opacity = parent ? parent->opacity * values.opacity : values.opacity;
     pose.visible = values.visible;
     if (parent && !parent->visible && inheritVisibility)
@@ -376,6 +381,13 @@ QVector<Uuid> SolverWorldAdapter::physicsEntities(int frame) const
 
 QTransform SolverWorldAdapter::parentWorldOf(int projectFrame) const
 {
+    // A canvas-space entity is solved in project canvas coordinates, so the
+    // target poses and shapes must not be pushed through the parent transform.
+    // Parent-space entities keep the historical behaviour: the solver works in
+    // the driven entity's parent space and startPoseAt() reads parent-local
+    // x/y/rotation.
+    if (m_driven.space == model::EntitySpace::Canvas)
+        return QTransform();
     return m_parentWorld(m_driven, projectFrame);
 }
 
@@ -458,7 +470,8 @@ Pose EvalContext::localPose(const model::Entity& entity, double projectFrame,
         entity.visible ? 1.0 : 0.0, true);
     values.visible = visibleValue != 0.0;
 
-    return composePose(values, entity.inheritVisibility, parent);
+    return composePose(values, entity.inheritVisibility, parent,
+                       entity.space != model::EntitySpace::Canvas);
 }
 
 double EvalContext::drivenValue(const model::Entity& entity,
