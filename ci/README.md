@@ -1,7 +1,6 @@
 # CI 与本地验证
 
-一套命令，CI（`.github/workflows/ci.yml`）和本地共用。构建系统本身的选项在顶层
-`CMakeLists.txt`，这里只负责依赖与调用方式。
+本地构建/测试命令在下面；**CI 目前只跑 `tools/check-code-size.sh`**，构建、测试、Release 都由本地手动执行。等流程想清楚后再把其它 job 加回来，避免先堆一套互相打架的 gate。
 
 ## 依赖
 
@@ -11,15 +10,12 @@ ci/install-deps.sh --qt 6.7.3   # 额外用 aqtinstall 装 Qt 到 build/qt/6.7.3
 ```
 
 aqt 的 Linux 桌面架构名随版本变化：**6.6 及更早是 `gcc_64`，6.7 起是
-`linux_gcc_64`**（`aqt list-qt linux desktop --arch <version>`）。脚本会自己查，
-CI 的 matrix 里两个版本各写各的架构。
+`linux_gcc_64`**（`aqt list-qt linux desktop --arch <version>`）。脚本会自己查。
 
 - **Ubuntu 24.04 自带的 Qt 是 6.4.2**（`qt6-base-dev`），低于 `CMakeLists.txt` 里的
   `find_package(Qt6 6.5 REQUIRED ...)`，直接 configure 会失败。本地必须用 aqt 装
   6.6.x/6.7.x（或发行版自带 ≥ 6.5 的 Qt，例如 26.04 的 6.10）。
-- CI 里 Qt 由 `jurplel/install-qt-action` 安装，脚本只装系统依赖，两边共用同一份 apt 列表。
-- FFmpeg：CI 用 Ubuntu 24.04 的 6.1 开发库（libavformat 60），发布包是 FFmpeg 8；
-  两者都在 `pkg_check_modules` 的同一套 API 上，但版本差异只在发布包里验证。
+- FFmpeg 版本差异（Ubuntu 24.04 的 6.1 vs 发布包 FFmpeg 8）需要本地另行验证。
 
 ## 构建与测试
 
@@ -81,14 +77,7 @@ bash tools/doc-metrics.sh --write   # 替换 STATUS.md 里的标记区块
 bash tools/doc-metrics.sh --check   # 与文档比对，不一致退出 1
 ```
 
-CI 的 `doc-metrics` job 只跑 `--check`，不需要 Qt/构建产物。规则：
-
-- 源码行数、`--*-test` 自检开关数是纯仓库指标，始终参与校验。
-- 日期 / HEAD 每次都变，`--check` 跳过。
-- CTest 用例数、`dist/pvforge` 大小、`ldd` 依赖数依赖本地构建；算不出来时
-  标成“未构建”/“缺失”，`--check` 跳过这些行，`--write` 保留文档旧值。所以
-  干净 checkout 也能运行，不会把已有数字覆盖成占位符。
-- 换了源码结构或加了自检后，本地跑一次 `--write` 并提交，CI 才会绿。
+CI 的 `doc-metrics` job 已移除；脚本只在本地用。需要时手动 `--write` 更新，不靠 CI 拦数字漂移。
 
 ## 代码体量
 
