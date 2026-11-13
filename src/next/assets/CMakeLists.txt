@@ -22,6 +22,9 @@ endif()
 add_library(pvf_next_assets STATIC
     AssetPanel.cpp
     AssetPanel.h
+    AssetPanelImport.cpp
+    AssetPanelInternal.h
+    AssetPanelProgress.cpp
 )
 
 target_include_directories(pvf_next_assets PUBLIC

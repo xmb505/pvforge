@@ -29,6 +29,13 @@ add_library(pvf_next_timeline STATIC
     MarkerDialog.h
     TimelineWidget.cpp
     TimelineWidget.h
+    TimelineWidgetAssets.cpp
+    TimelineWidgetInput.cpp
+    TimelineWidgetInternal.cpp
+    TimelineWidgetInternal.h
+    TimelineWidgetKeyframes.cpp
+    TimelineWidgetMarkers.cpp
+    TimelineWidgetPaint.cpp
 )
 
 # Range/split helpers shared by the new timeline, the properties panel and the

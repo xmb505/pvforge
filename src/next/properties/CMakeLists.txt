@@ -37,6 +37,12 @@ endif()
 add_library(pvf_next_properties STATIC
     PropertiesPanel.cpp
     PropertiesPanel.h
+    PropertiesPanelContent.cpp
+    PropertiesPanelHtml.cpp
+    PropertiesPanelInternal.cpp
+    PropertiesPanelInternal.h
+    PropertiesPanelKeyframes.cpp
+    PropertiesPanelSolver.cpp
     SolverPreviewWidget.cpp
     SolverPreviewWidget.h
     SpecialContentEditor.cpp
