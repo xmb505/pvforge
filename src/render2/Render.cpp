@@ -1037,7 +1037,7 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         {
             // The asset exists; the provider simply has no decoded frame yet.
             paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                             QStringLiteral("视频"));
+                             assetPlaceholderLabel(store, asset));
         }
         return;
     }
@@ -1066,7 +1066,7 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         {
             // Asset present but Chrome has not produced a frame yet.
             paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                             QStringLiteral("HTML"));
+                             assetPlaceholderLabel(store, asset));
         }
         return;
     }
@@ -1474,8 +1474,8 @@ QImage renderFrame(const model::Project& project,
     return image;
 }
 
-QString placeholderLabelForTest(const assets::AssetStore& store,
-                                const model::AssetContent& content)
+QString assetPlaceholderLabel(const assets::AssetStore& store,
+                              const model::AssetContent& content)
 {
     if (isAssetMissing(store, content))
         return QStringLiteral("素材丢失");
