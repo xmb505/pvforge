@@ -101,14 +101,11 @@ CI 的 `code-size` job 只做文本统计，不装 Qt、不构建，**阻塞合�
 
 ## 已知限制
 
-- CI 只跑 Linux x86_64 + offscreen；没有 GPU，像素/视频相关断言依赖软件光栅。
+- CI 目前只跑 `tools/check-code-size.sh`（文本统计），不装 Qt、不构建、不跑测试；
+  构建/测试/像素或视频相关断言都只在本地手动执行。
 - 没有任何 Qt WebSockets 模块，走内置 RFC 6455 客户端这条分支。
-- 没有 Chrome/Chromium，`html2` 的浏览器相关用例会自行 SKIP；HTML 图层回归只在
+- 没有 Chrome/Chromium 时，`html2` 的浏览器相关用例会自行 SKIP；HTML 图层回归只在
   装了浏览器的机器上有效。
-- 运行环境是 GitHub hosted runner（4 vCPU），全量构建 + 测试约 15–25 分钟。
-- 本机（Qt 6.10 + 软件光栅，`-j 8`）的 `html2.asyncRequestLowRes`、
-  `html2.lowResPreemption` 只在并行负载高时偶发失败，CI 用 `--repeat until-pass:2`
-  兜住，不排除。
 - 本机装 Qt 6.6/6.7 会卡在 aqtinstall 3.3.0 + Python 3.14 的下载校验
-  （同一份 7z 反复报 checksum 不符，直接 curl 同一 URL 的哈希是对的），
-  所以 6.6.3/6.7.3 的**编译**只在 CI 的 Ubuntu 24.04 + Python 3.12 环境里首次验证。
+  （同一份 7z 反复报 checksum 不符，直接 curl 同一 URL 的哈希是对的）。
+  默认用发行版自带 ≥ 6.5 的 Qt，或用 `--qt 6.7.3` 单独装到 `build/qt/`。
