@@ -1,15 +1,9 @@
-#include "next/app/NextWindow.h"
-
 #include "anim/Anim.h"
 #include "assets/AssetStore.h"
 #include "next/app/ProjectDocument.h"
-#include "next/app/WorkbenchPanel.h"
 #include "next/app/WorkbenchServices.h"
-#include "next/viewport/ViewportWidget.h"
 #include "workbench/MetaBuilder.h"
 
-#include <QAction>
-#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -19,9 +13,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLabel>
 #include <QPainter>
-#include <QPushButton>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QtTest>
@@ -295,22 +287,18 @@ private slots:
     void onDemandLookupStoresThenHitsAndEditMisses();
     void vectorFramesAreStoredAsQoi();
     void rasterAssetFramesUseWebp();
-    void scrubCachesOnlyVisitedFrames();
     void manualScanFillsCacheThenRescanHits();
     void cacheSurvivesReopen();
     void disabledCacheDoesNotLookupOrStore();
     void htmlMissIsNotCached();
-    void cameraSwitchRebuildsCachePerCamera();
     void clearAllRemovesEveryCameraDirectory();
     void playbackPausesAndResumesScan();
     void cacheToPlayheadLimitsRange();
-    void panelShowsStatsAndClears();
     void expandSettingChangesCacheKey();
     void expandedCanvasCachesOutsideEntity();
     void cameraCacheDoesNotExpand();
     void sharedSolverResultsSkipMetaSolves();
     void playbackRasterStoreIsQueued();
-    void playbackViewportQueuesRasterStore();
     void editDiscardsQueuedRasterStores();
     void shutdownDiscardsQueuedRasterStores();
     void writerThreadsRetuneWithoutDropping();
@@ -329,15 +317,16 @@ void WorkbenchIntegrationTest::openDoesNotScanOrCreateCache()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    QVERIFY(window.workbenchServicesForTest() != nullptr);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
 
-    // Opening only constructs the service.  No debounce, idle timer or
-    // document signal may scan; wait past the old 500 ms debounce.
+    // Constructing the service does not create the cache directory.  No
+    // debounce, idle timer or document signal may scan; wait past the old
+    // 500 ms debounce.
     QTest::qWait(1500);
-    QCOMPARE(window.workbenchStatsForTest().entries, 0);
-    QVERIFY(!window.prewarmProgressForTest().scanning);
-    QVERIFY(window.workbenchCacheDirForTest().isEmpty());
+    QCOMPARE(services.stats().entries, 0);
+    QVERIFY(!services.prewarmProgressForTest().scanning);
+    QVERIFY(services.cacheDirectory().isEmpty());
     QVERIFY(!QDir(projectDir + QStringLiteral("/.cache/workbench")).exists());
     QCOMPARE(webpCount(projectDir + QStringLiteral("/.cache/workbench")), 0);
 }
@@ -353,45 +342,44 @@ void WorkbenchIntegrationTest::onDemandLookupStoresThenHitsAndEditMisses()
     QVERIFY2(document != nullptr, qPrintable(error));
     const Uuid red = addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
 
     const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
     constexpr int frame = 5;
 
     // A lookup is the only entry point; a miss without a write leaves no
     // directory behind.
-    QVERIFY(window.lookupForTest(frame, Uuid()).isNull());
+    QVERIFY(services.lookupForTest(frame, Uuid()).isNull());
     QVERIFY(!QDir(cacheRoot).exists());
-    QCOMPARE(services->stats().entries, 0);
+    QCOMPARE(services.stats().entries, 0);
 
     // Simulate the viewport render that follows the miss, then store it.
     QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
     rendered.fill(QColor(255, 0, 0));
-    services->store(frame, Uuid(), rendered);
+    services.store(frame, Uuid(), rendered);
 
     QVERIFY(QDir(cacheRoot).exists());
-    QCOMPARE(services->stats().entries, 1);
-    QCOMPARE(services->stats().stores, quint64(1));
-    const QImage hit = window.lookupForTest(frame, Uuid());
+    QCOMPARE(services.stats().entries, 1);
+    QCOMPARE(services.stats().stores, quint64(1));
+    const QImage hit = services.lookupForTest(frame, Uuid());
     QVERIFY(!hit.isNull());
     QCOMPARE(hit.pixelColor(160, 90), QColor(255, 0, 0));
-    QCOMPARE(services->stats().hits, quint64(1));
+    QCOMPARE(services.stats().hits, quint64(1));
 
     // Committing an edit changes the frame meta: the same frame must miss.
-    QVERIFY(window.document()->project().entities.contains(red));
-    Entity moved = window.document()->project().entities.value(red);
+    QVERIFY(document->project().entities.contains(red));
+    Entity moved = document->project().entities.value(red);
     moved.transform.x = 10.0;
-    window.document()->mutableProject().entities.insert(red, moved);
-    QVERIFY2(window.document()->commitEntity(
+    document->mutableProject().entities.insert(red, moved);
+    QVERIFY2(document->commitEntity(
                  red, QStringLiteral("pvf: move red"), &error),
              qPrintable(error));
-    window.document()->flush(&error);
+    document->flush(&error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
 
-    QVERIFY(window.lookupForTest(frame, Uuid()).isNull());
-    QVERIFY(services->stats().misses >= 1);
+    QVERIFY(services.lookupForTest(frame, Uuid()).isNull());
+    QVERIFY(services.stats().misses >= 1);
 }
 
 void WorkbenchIntegrationTest::vectorFramesAreStoredAsQoi()
@@ -405,25 +393,24 @@ void WorkbenchIntegrationTest::vectorFramesAreStoredAsQoi()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
 
     QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
     rendered.fill(QColor(255, 0, 0));
-    services->store(5, Uuid(), rendered);
+    services.store(5, Uuid(), rendered);
 
     const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
-    QVERIFY(!services->cacheDirectory().isEmpty());
+    QVERIFY(!services.cacheDirectory().isEmpty());
     QVERIFY(QFileInfo::exists(
-        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
     QVERIFY(!QFileInfo::exists(
-        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.webp"))));
     QCOMPARE(qoiCount(cacheRoot), 1);
     QCOMPARE(webpCount(cacheRoot), 0);
 
     // The QOI path is lossless: the cached pixel is exactly the stored one.
-    const QImage hit = window.lookupForTest(5, Uuid());
+    const QImage hit = services.lookupForTest(5, Uuid());
     QVERIFY(!hit.isNull());
     QCOMPARE(hit.pixelColor(160, 90), QColor(255, 0, 0));
 }
@@ -449,78 +436,26 @@ void WorkbenchIntegrationTest::rasterAssetFramesUseWebp()
 
     addImageEntity(document.get(), stored->hash);
 
-    NextWindow window(std::move(document));
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
-    QVERIFY(services->buildMetaForTest(5).hasRaster);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
+    QVERIFY(services.buildMetaForTest(5).hasRaster);
 
     QImage rendered(320, 180, QImage::Format_ARGB32_Premultiplied);
     rendered.fill(QColor(0, 0, 255));
-    services->store(5, Uuid(), rendered);
+    services.store(5, Uuid(), rendered);
 
     const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
     QVERIFY(QFileInfo::exists(
-        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.webp"))));
     QVERIFY(!QFileInfo::exists(
-        QDir(services->cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
     QCOMPARE(webpCount(cacheRoot), 1);
     QCOMPARE(qoiCount(cacheRoot), 0);
 
-    const QImage hit = window.lookupForTest(5, Uuid());
+    const QImage hit = services.lookupForTest(5, Uuid());
     QVERIFY(!hit.isNull());
-    QCOMPARE(hit.size(), services->targetSize());
-    QCOMPARE(services->stats().entries, 1);
-}
-
-void WorkbenchIntegrationTest::scrubCachesOnlyVisitedFrames()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    QString error;
-    const QString projectDir = temp.path() + QStringLiteral("/scrub.pvproj");
-    auto document = createProject(projectDir, &error);
-    QVERIFY2(document != nullptr, qPrintable(error));
-    addRedRect(document.get());
-
-    NextWindow window(std::move(document));
-    window.resize(1280, 800);
-    window.show();
-    QTest::qWait(100);
-
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
-    const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
-    QVERIFY(QDir(cacheRoot).exists());
-
-    // Frame 0 was actually painted, so only it may be cached.
-    QCOMPARE(services->stats().entries, 1);
-    QVERIFY(!window.lookupForTest(0, Uuid()).isNull());
-    QVERIFY(window.lookupForTest(4, Uuid()).isNull());
-    QVERIFY(window.lookupForTest(5, Uuid()).isNull());
-    QVERIFY(window.lookupForTest(6, Uuid()).isNull());
-
-    // Scrub to frame 5 and paint it; no other frame is prefetched.
-    window.document()->setPlayhead(5);
-    window.viewportForTest()->refresh();
-    window.viewportForTest()->repaint();
-    QTest::qWait(100);
-    QVERIFY(!window.lookupForTest(5, Uuid()).isNull());
-    QVERIFY(window.lookupForTest(4, Uuid()).isNull());
-    QVERIFY(window.lookupForTest(6, Uuid()).isNull());
-    const int visited = services->stats().entries;
-
-    // Idle waiting must not fill anything else.
-    QTest::qWait(800);
-    QCOMPARE(services->stats().entries, visited);
-
-    // Returning to a visited frame is a hit.
-    const quint64 hitsBefore = services->stats().hits;
-    window.document()->setPlayhead(5);
-    window.viewportForTest()->refresh();
-    window.viewportForTest()->repaint();
-    QTest::qWait(100);
-    QVERIFY(services->stats().hits > hitsBefore);
+    QCOMPARE(hit.size(), services.targetSize());
+    QCOMPARE(services.stats().entries, 1);
 }
 
 void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
@@ -534,42 +469,38 @@ void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    QVERIFY(window.workbenchServicesForTest() != nullptr);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
 
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
-    const WorkbenchPrewarmProgress first = window.prewarmProgressForTest();
+    const WorkbenchPrewarmProgress first = services.prewarmProgressForTest();
     QCOMPARE(first.total, kLastFrame);
     QCOMPARE(first.done, kLastFrame);
     QCOMPARE(first.cached, kLastFrame);
     QCOMPARE(first.skipped, 0);
     QCOMPARE(first.failed, 0);
 
-    const workbench::CacheStats afterFirst = window.workbenchStatsForTest();
+    const workbench::CacheStats afterFirst = services.stats();
     QCOMPARE(afterFirst.entries, kLastFrame);
     QCOMPARE(afterFirst.stores, quint64(kLastFrame));
-    QVERIFY(!window.workbenchCacheDirForTest().isEmpty());
-    QVERIFY(QDir(window.workbenchCacheDirForTest()).exists());
+    QVERIFY(!services.cacheDirectory().isEmpty());
+    QVERIFY(QDir(services.cacheDirectory()).exists());
 
-    // The viewport grabs the project canvas live; the workbench cache holds
-    // the 50% expanded (320x180) image.
-    const QImage frame = window.viewportForTest()->grabFrame();
-    QCOMPARE(frame.size(), QSize(320, 180));
-    QVERIFY(isRed(frame.pixelColor(160, 90)));
-    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 50);
-    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(320, 180));
-    QVERIFY(isRed(window.lookupForTest(0, Uuid()).pixelColor(160, 90)));
+    // The workbench cache holds the 50% expanded (320x180) image.
+    QCOMPARE(services.expandPercent(), 50);
+    QCOMPARE(services.targetSize(), QSize(320, 180));
+    QVERIFY(isRed(services.lookupForTest(0, Uuid()).pixelColor(160, 90)));
 
     // Second pass: meta matches everywhere, nothing is rendered or written.
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
-    const WorkbenchPrewarmProgress second = window.prewarmProgressForTest();
+    const WorkbenchPrewarmProgress second = services.prewarmProgressForTest();
     QCOMPARE(second.hits, kLastFrame);
     QCOMPARE(second.cached, 0);
-    QCOMPARE(window.workbenchStatsForTest().stores, quint64(kLastFrame));
+    QCOMPARE(services.stats().stores, quint64(kLastFrame));
 }
 
 void WorkbenchIntegrationTest::cacheSurvivesReopen()
@@ -584,24 +515,27 @@ void WorkbenchIntegrationTest::cacheSurvivesReopen()
         QVERIFY2(document != nullptr, qPrintable(error));
         addRedRect(document.get());
 
-        NextWindow window(std::move(document));
-        window.startWorkbenchScanForTest();
-        QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning,
+        WorkbenchServices::Providers providers;
+        WorkbenchServices services(document.get(), AppSettings{}, Uuid(),
+                                   providers);
+        services.startScanNow();
+        QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning,
                                  15000);
-        QCOMPARE(window.prewarmProgressForTest().cached, kLastFrame);
+        QCOMPARE(services.prewarmProgressForTest().cached, kLastFrame);
     }
 
     auto reopened = ProjectDocument::open(path, &error, false);
     QVERIFY2(reopened != nullptr, qPrintable(error));
-    NextWindow window(std::move(reopened));
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(reopened.get(), AppSettings{}, Uuid(), providers);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
-    const WorkbenchPrewarmProgress progress = window.prewarmProgressForTest();
+    const WorkbenchPrewarmProgress progress = services.prewarmProgressForTest();
     QCOMPARE(progress.hits, kLastFrame);
     QCOMPARE(progress.cached, 0);
-    QCOMPARE(window.workbenchStatsForTest().entries, kLastFrame);
-    QVERIFY(!window.lookupForTest(5, Uuid()).isNull());
+    QCOMPARE(services.stats().entries, kLastFrame);
+    QVERIFY(!services.lookupForTest(5, Uuid()).isNull());
 }
 
 void WorkbenchIntegrationTest::disabledCacheDoesNotLookupOrStore()
@@ -615,21 +549,20 @@ void WorkbenchIntegrationTest::disabledCacheDoesNotLookupOrStore()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    AppSettings settings = window.settingsForTest();
+    AppSettings settings;
     settings.workbenchCacheEnabled = false;
-    window.setSettingsForTest(settings);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), settings, Uuid(), providers);
 
-    QVERIFY(window.workbenchServicesForTest() == nullptr);
-    window.startWorkbenchScanForTest(); // no service, must be a no-op
+    QVERIFY(!services.enabled());
+    QVERIFY(!services.cacheValid());
+    services.startScanNow(); // disabled service, must be a no-op
     QTest::qWait(300);
 
-    QCOMPARE(window.workbenchStatsForTest().entries, 0);
-    QVERIFY(window.lookupForTest(0, Uuid()).isNull());
+    QCOMPARE(services.stats().entries, 0);
+    QVERIFY(services.lookupForTest(0, Uuid()).isNull());
     QCOMPARE(webpCount(path + QStringLiteral("/.cache/workbench")), 0);
-
-    // The viewport still renders normally without the hooks.
-    QVERIFY(!window.viewportForTest()->grabFrame().isNull());
+    QVERIFY(QDir(path + QStringLiteral("/.cache/workbench")).exists() == false);
 }
 
 void WorkbenchIntegrationTest::htmlMissIsNotCached()
@@ -664,47 +597,6 @@ void WorkbenchIntegrationTest::htmlMissIsNotCached()
     QCOMPARE(services.stats().entries, 0);
 }
 
-void WorkbenchIntegrationTest::cameraSwitchRebuildsCachePerCamera()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    QString error;
-    auto document = createProject(temp.path() + QStringLiteral("/cam.pvproj"),
-                                  &error);
-    QVERIFY2(document != nullptr, qPrintable(error));
-    addRedRect(document.get());
-    const Uuid cameraUuid = addCamera(document.get());
-
-    NextWindow window(std::move(document));
-    QComboBox* combo = window.cameraComboBoxForTest();
-    QVERIFY(combo != nullptr);
-    QCOMPARE(combo->count(), 2);
-
-    combo->setCurrentIndex(1);
-    QCOMPARE(window.workbenchServicesForTest()->cameraUuid(), cameraUuid);
-    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 0);
-    QCOMPARE(window.workbenchServicesForTest()->transparentOutsideCanvas(),
-             false);
-    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(160, 90));
-    // Switching camera must not create or scan a cache by itself.
-    QVERIFY(window.workbenchCacheDirForTest().isEmpty());
-
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    QVERIFY(window.workbenchCacheDirForTest().contains(cameraUuid));
-    QCOMPARE(window.workbenchStatsForTest().entries, kLastFrame);
-    QVERIFY(!window.lookupForTest(0, cameraUuid).isNull());
-
-    // Back to the whole canvas: a fresh service and directory, and the camera
-    // uuid no longer matches.
-    combo->setCurrentIndex(0);
-    QVERIFY(window.workbenchServicesForTest()->cameraUuid().isEmpty());
-    QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 50);
-    QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(320, 180));
-    QVERIFY(window.lookupForTest(0, cameraUuid).isNull());
-}
-
 void WorkbenchIntegrationTest::clearAllRemovesEveryCameraDirectory()
 {
     QTemporaryDir temp;
@@ -717,37 +609,38 @@ void WorkbenchIntegrationTest::clearAllRemovesEveryCameraDirectory()
     addRedRect(document.get());
     const Uuid cameraUuid = addCamera(document.get());
 
-    NextWindow window(std::move(document));
+    WorkbenchServices::Providers providers;
+    QString canvasDir;
+    {
+        WorkbenchServices canvas(document.get(), AppSettings{}, Uuid(),
+                                 providers);
+        canvas.startScanNow();
+        QTRY_VERIFY_WITH_TIMEOUT(!canvas.prewarmProgressForTest().scanning,
+                                 15000);
+        canvasDir = canvas.cacheDirectory();
+        QVERIFY(!canvasDir.isEmpty());
+        QVERIFY(QFileInfo::exists(canvasDir));
+    }
 
-    // Fill the whole-canvas cache.
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    const QString canvasDir = window.workbenchCacheDirForTest();
-    QVERIFY(!canvasDir.isEmpty());
-    QVERIFY(QFileInfo::exists(canvasDir));
-
-    // Switch camera and fill a second directory under the same root.
-    QComboBox* combo = window.cameraComboBoxForTest();
-    QVERIFY(combo != nullptr);
-    combo->setCurrentIndex(combo->count() - 1);
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
-    QCOMPARE(services->cameraUuid(), cameraUuid);
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    const QString cameraDir = window.workbenchCacheDirForTest();
+    // A camera-specific service fills a second directory under the same root.
+    WorkbenchServices services(document.get(), AppSettings{}, cameraUuid,
+                               providers);
+    QCOMPARE(services.cameraUuid(), cameraUuid);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
+    const QString cameraDir = services.cacheDirectory();
     QVERIFY(!cameraDir.isEmpty());
     QVERIFY(cameraDir != canvasDir);
     QVERIFY(QFileInfo::exists(cameraDir));
 
-    const framecache::CacheUsage before = services->cacheUsage();
+    const framecache::CacheUsage before = services.cacheUsage();
     QVERIFY(before.frameCount > 0);
     QVERIFY(before.frameBytes > 0);
     QVERIFY(before.indexBytes > 0);
 
     // Clear from the camera service: the old whole-canvas directory must go
     // too, not just the service's current camera key.
-    const framecache::ClearResult result = services->clearAll();
+    const framecache::ClearResult result = services.clearAll();
     QVERIFY(result.ok);
     QVERIFY(result.failedPaths.isEmpty());
     QCOMPARE(result.removedFrames, before.frameCount);
@@ -756,15 +649,15 @@ void WorkbenchIntegrationTest::clearAllRemovesEveryCameraDirectory()
     QVERIFY(result.freedBytes > 0);
     QVERIFY(!QFileInfo::exists(canvasDir));
     QVERIFY(!QFileInfo::exists(cameraDir));
-    QCOMPARE(services->cacheUsage().frameCount, 0);
-    QCOMPARE(services->stats().entries, 0);
+    QCOMPARE(services.cacheUsage().frameCount, 0);
+    QCOMPARE(services.stats().entries, 0);
 
     // The service stays usable: the next store recreates the tree lazily.
     QImage rendered(160, 90, QImage::Format_ARGB32_Premultiplied);
     rendered.fill(QColor(255, 0, 0));
-    services->store(0, cameraUuid, rendered);
-    QVERIFY(!services->cacheDirectory().isEmpty());
-    QCOMPARE(services->stats().entries, 1);
+    services.store(0, cameraUuid, rendered);
+    QVERIFY(!services.cacheDirectory().isEmpty());
+    QCOMPARE(services.stats().entries, 1);
 }
 
 void WorkbenchIntegrationTest::playbackPausesAndResumesScan()
@@ -778,23 +671,24 @@ void WorkbenchIntegrationTest::playbackPausesAndResumesScan()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    window.startWorkbenchScanForTest();
-    QVERIFY(window.prewarmProgressForTest().scanning);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
+    services.startScanNow();
+    QVERIFY(services.prewarmProgressForTest().scanning);
 
-    window.togglePlaybackForTest();
-    QVERIFY(window.isPlayingForTest());
-    QVERIFY(window.prewarmProgressForTest().paused);
+    services.setPlaybackActive(true);
+    QVERIFY(services.playbackActive());
+    QVERIFY(services.prewarmProgressForTest().paused);
 
-    const int held = window.prewarmProgressForTest().done;
+    const int held = services.prewarmProgressForTest().done;
     QTest::qWait(150);
-    QCOMPARE(window.prewarmProgressForTest().done, held);
+    QCOMPARE(services.prewarmProgressForTest().done, held);
 
-    window.togglePlaybackForTest();
-    QVERIFY(!window.isPlayingForTest());
-    QVERIFY(!window.prewarmProgressForTest().paused);
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    QCOMPARE(window.workbenchStatsForTest().entries, kLastFrame);
+    services.setPlaybackActive(false);
+    QVERIFY(!services.playbackActive());
+    QVERIFY(!services.prewarmProgressForTest().paused);
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
+    QCOMPARE(services.stats().entries, kLastFrame);
 }
 
 void WorkbenchIntegrationTest::cacheToPlayheadLimitsRange()
@@ -808,52 +702,14 @@ void WorkbenchIntegrationTest::cacheToPlayheadLimitsRange()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    window.document()->setPlayhead(5);
-    QAction* action = window.cacheToPlayheadActionForTest();
-    QVERIFY(action != nullptr);
-    action->trigger();
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
+    document->setPlayhead(5);
+    services.startScanNow(0, document->playhead());
 
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    QCOMPARE(window.prewarmProgressForTest().total, 6);
-    QCOMPARE(window.workbenchStatsForTest().entries, 6);
-}
-
-void WorkbenchIntegrationTest::panelShowsStatsAndClears()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    QString error;
-    auto document = createProject(temp.path() + QStringLiteral("/panel.pvproj"),
-                                  &error);
-    QVERIFY2(document != nullptr, qPrintable(error));
-    addRedRect(document.get());
-
-    NextWindow window(std::move(document));
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-
-    WorkbenchPanel* panel = window.workbenchPanelForTest();
-    QVERIFY(panel != nullptr);
-    QCOMPARE(panel->servicesForTest(), window.workbenchServicesForTest());
-    panel->refreshForTest();
-    QVERIFY(panel->statusTextForTest().contains(QStringLiteral("比例 50%")));
-    QVERIFY(panel->statusTextForTest().contains(QStringLiteral("扩展 50%")));
-    QVERIFY(panel->statsTextForTest().contains(QStringLiteral("已缓存")));
-    QVERIFY(panel->statsTextForTest().contains(
-        QString::number(kLastFrame)));
-    QVERIFY(panel->rescanButtonForTest()->isEnabled());
-    QVERIFY(panel->clearButtonForTest()->isEnabled());
-
-    panel->clearButtonForTest()->click();
-    QCOMPARE(window.workbenchStatsForTest().entries, 0);
-    QVERIFY(panel->statsTextForTest().contains(QStringLiteral("已缓存 0")));
-
-    // The menu entries exist and are wired.
-    QVERIFY(window.cacheAllActionForTest() != nullptr);
-    QVERIFY(window.clearWorkbenchCacheActionForTest() != nullptr);
-    QVERIFY(window.workbenchPanelActionForTest() != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
+    QCOMPARE(services.prewarmProgressForTest().total, 6);
+    QCOMPARE(services.stats().entries, 6);
 }
 
 void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
@@ -867,31 +723,33 @@ void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
     QVERIFY2(document != nullptr, qPrintable(error));
     addRedRect(document.get());
 
-    NextWindow window(std::move(document));
-    WorkbenchServices* first = window.workbenchServicesForTest();
-    QVERIFY(first != nullptr);
-    QCOMPARE(first->expandPercent(), 50);
-    QCOMPARE(first->targetSize(), QSize(320, 180));
+    WorkbenchServices::Providers providers;
+    QString directory50;
+    {
+        WorkbenchServices first(document.get(), AppSettings{}, Uuid(),
+                                providers);
+        QCOMPARE(first.expandPercent(), 50);
+        QCOMPARE(first.targetSize(), QSize(320, 180));
 
-    // Creating the service does not create files; an on-demand store does.
-    QVERIFY(first->cacheDirectory().isEmpty());
+        // Creating the service does not create files; an on-demand store does.
+        QVERIFY(first.cacheDirectory().isEmpty());
+        QImage image(320, 180, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::red);
+        first.store(0, Uuid(), image);
+        directory50 = first.cacheDirectory();
+        QVERIFY(!directory50.isEmpty());
+    }
+
+    AppSettings settings;
+    settings.workbenchCacheExpandPercent = 25;
+    WorkbenchServices second(document.get(), settings, Uuid(), providers);
+    QCOMPARE(second.expandPercent(), 25);
+    QCOMPARE(second.targetSize(), QSize(240, 135));
     QImage image(320, 180, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::red);
-    first->store(0, Uuid(), image);
-    const QString directory50 = first->cacheDirectory();
-    QVERIFY(!directory50.isEmpty());
-
-    AppSettings settings = window.settingsForTest();
-    settings.workbenchCacheExpandPercent = 25;
-    window.setSettingsForTest(settings);
-
-    WorkbenchServices* second = window.workbenchServicesForTest();
-    QVERIFY(second != nullptr);
-    QCOMPARE(second->expandPercent(), 25);
-    QCOMPARE(second->targetSize(), QSize(240, 135));
-    second->store(0, Uuid(), image);
-    QVERIFY(!second->cacheDirectory().isEmpty());
-    QVERIFY(second->cacheDirectory() != directory50);
+    second.store(0, Uuid(), image);
+    QVERIFY(!second.cacheDirectory().isEmpty());
+    QVERIFY(second.cacheDirectory() != directory50);
 }
 
 void WorkbenchIntegrationTest::expandedCanvasCachesOutsideEntity()
@@ -907,11 +765,12 @@ void WorkbenchIntegrationTest::expandedCanvasCachesOutsideEntity()
     addRectAt(document.get(), -200.0, -120.0, 20.0, 20.0,
               QStringLiteral("#0000ff"));
 
-    NextWindow window(std::move(document));
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, Uuid(), providers);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
-    const QImage cached = window.lookupForTest(0, Uuid());
+    const QImage cached = services.lookupForTest(0, Uuid());
     QVERIFY(!cached.isNull());
     QCOMPARE(cached.size(), QSize(320, 180));
 
@@ -937,21 +796,17 @@ void WorkbenchIntegrationTest::cameraCacheDoesNotExpand()
     addRedRect(document.get());
     const Uuid cameraUuid = addCamera(document.get());
 
-    NextWindow window(std::move(document));
-    QComboBox* combo = window.cameraComboBoxForTest();
-    QVERIFY(combo != nullptr && combo->count() == 2);
-    combo->setCurrentIndex(1);
+    WorkbenchServices::Providers providers;
+    WorkbenchServices services(document.get(), AppSettings{}, cameraUuid,
+                               providers);
+    QCOMPARE(services.cameraUuid(), cameraUuid);
+    QCOMPARE(services.expandPercent(), 0);
+    QCOMPARE(services.transparentOutsideCanvas(), false);
+    QCOMPARE(services.targetSize(), QSize(160, 90));
 
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
-    QCOMPARE(services->cameraUuid(), cameraUuid);
-    QCOMPARE(services->expandPercent(), 0);
-    QCOMPARE(services->transparentOutsideCanvas(), false);
-    QCOMPARE(services->targetSize(), QSize(160, 90));
-
-    window.startWorkbenchScanForTest();
-    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
-    const QImage cached = window.lookupForTest(0, cameraUuid);
+    services.startScanNow();
+    QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
+    const QImage cached = services.lookupForTest(0, cameraUuid);
     QCOMPARE(cached.size(), QSize(160, 90));
     QVERIFY(isRed(cached.pixelColor(80, 45)));
     QCOMPARE(cached.pixelColor(0, 0).alpha(), 255);
@@ -1068,53 +923,6 @@ void WorkbenchIntegrationTest::playbackRasterStoreIsQueued()
     QVERIFY(services.workerEncodeMeanMs() > 0.0);
 
     services.setPlaybackActive(false);
-}
-
-void WorkbenchIntegrationTest::playbackViewportQueuesRasterStore()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    QString error;
-    auto document = createProject(temp.path() + QStringLiteral("/vpasync.pvproj"),
-                                  &error);
-    QVERIFY2(document != nullptr, qPrintable(error));
-    const AssetHash hash = importProfileImage(
-        document.get(), temp.path() + QStringLiteral("/photo.png"), &error);
-    QVERIFY2(!hash.isEmpty(), qPrintable(error));
-    addImageEntityRange(document.get(), hash, 400);
-
-    NextWindow window(std::move(document));
-    window.resize(1280, 800);
-    window.show();
-    QTest::qWait(100);
-
-    WorkbenchServices* services = window.workbenchServicesForTest();
-    QVERIFY(services != nullptr);
-    QVERIFY(services->buildMetaForTest(5).hasRaster);
-
-    window.document()->setPlayhead(5);
-    window.togglePlaybackForTest();
-    QVERIFY(window.isPlayingForTest());
-    QVERIFY(services->playbackActive());
-
-    const quint64 storesBefore = services->stats().stores;
-    const int pendingBefore = services->pendingStores();
-
-    // Paint one raster miss without pumping the event loop afterwards: the
-    // viewport must already have the picture and the store must be queued.
-    window.viewportForTest()->refresh();
-    window.viewportForTest()->repaint();
-    QVERIFY2(services->pendingStores() > pendingBefore,
-             "raster playback miss did not enter the writer queue");
-    QCOMPARE(services->stats().stores, storesBefore);
-
-    QVERIFY(services->waitForPendingStores(30000));
-    QVERIFY(!window.lookupForTest(5, Uuid()).isNull());
-    QVERIFY(services->asyncStoresWritten() > 0);
-
-    if (window.isPlayingForTest())
-        window.togglePlaybackForTest();
 }
 
 void WorkbenchIntegrationTest::editDiscardsQueuedRasterStores()

@@ -17,7 +17,7 @@
 | 渲染 | `src/render2/Render.cpp` | `paintContent`、`contentSize`、可动画字段（`animatedContent`） |
 | 工作台缓存 | `src/workbench/MetaBuilder.cpp` | `writeContent` 序列化**所有影响画面的字段**；否则改参数不会失效 |
 | Properties | `src/next/properties/PropertiesPanel.*` | 编辑区、范围校验、一次 `commitEntity` |
-| 创建入口 | `src/next/app/NextWindow.cpp` | 菜单/工具栏动作，默认 start/end/row |
+| 创建入口 | `src/ui/WorkbenchPanel.cpp`（实体库）、`src/next/timeline/TimelineWidget.cpp`（拖放） | 菜单/工具栏动作，默认 start/end/row |
 | MCP schema | `src/mcp2/SchemaTools.cpp`、`EntityTools.cpp` | 允许的 kind、字段、创建/更新校验 |
 | 测试 | model/render2/workbench/properties/mcp2 | JSON 往返、校验、像素/包围盒、meta 变化、UI 提交、MCP |
 

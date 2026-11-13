@@ -24,49 +24,9 @@ if(NOT TARGET pvf_next_assets)
                      ${CMAKE_CURRENT_BINARY_DIR}/assets_dep)
 endif()
 
-if(PVFORGE_BUILD_REFERENCE AND NOT TARGET pvf_next_viewport)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../viewport
-                     ${CMAKE_CURRENT_BINARY_DIR}/viewport_dep)
-endif()
-
-if(NOT TARGET pvf_next_properties)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../properties
-                     ${CMAKE_CURRENT_BINARY_DIR}/properties_dep)
-endif()
-
-if(NOT TARGET pvf_next_timeline)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../timeline
-                     ${CMAKE_CURRENT_BINARY_DIR}/timeline_dep)
-endif()
-
-if(NOT TARGET pvf_mcp2)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../mcp2
-                     ${CMAKE_CURRENT_BINARY_DIR}/mcp2_dep)
-endif()
-
-if(NOT TARGET pvf_export2)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../export2
-                     ${CMAKE_CURRENT_BINARY_DIR}/export2_dep)
-endif()
-
-if(NOT TARGET pvf_audio2)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../audio2
-                     ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
-endif()
-
 if(NOT TARGET pvf_next_settings)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../settings
                      ${CMAKE_CURRENT_BINARY_DIR}/settings_dep)
-endif()
-
-if(NOT TARGET pvf_next_mcp_log)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../mcp
-                     ${CMAKE_CURRENT_BINARY_DIR}/mcp_log_dep)
-endif()
-
-if(NOT TARGET pvf_next_history)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../history
-                     ${CMAKE_CURRENT_BINARY_DIR}/history_dep)
 endif()
 
 if(NOT TARGET pvf_html2)
@@ -79,6 +39,11 @@ if(NOT TARGET pvf_video2)
                      ${CMAKE_CURRENT_BINARY_DIR}/video2_dep)
 endif()
 
+if(NOT TARGET pvf_audio2)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../audio2
+                     ${CMAKE_CURRENT_BINARY_DIR}/audio2_dep)
+endif()
+
 if(NOT TARGET pvf_workbench)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../workbench
                      ${CMAKE_CURRENT_BINARY_DIR}/workbench_dep)
@@ -89,10 +54,9 @@ if(NOT TARGET pvf_perf)
                      ${CMAKE_CURRENT_BINARY_DIR}/perf_dep)
 endif()
 
-# Small document slice shared by the legacy delivery shell (P1) and the
-# reference-only NextWindow library.  Keeping it separate means the old
-# `pvforge` target can link the document/core/store without pulling in
-# NextWindow or any of the src/next UI panels.
+# Document slice shared by the legacy delivery shell (P1) and the services
+# below.  Keeping it separate means `pvforge` can link the document/core/store
+# without pulling in any src/next UI panel.
 add_library(pvf_next_document STATIC
     ProjectDocument.cpp
     ProjectDocument.h
@@ -110,6 +74,8 @@ target_link_libraries(pvf_next_document PUBLIC
 
 target_compile_features(pvf_next_document PUBLIC cxx_std_20)
 
+# Delivery services: media providers, playback watchdog and workbench cache
+# behind the legacy panels.  `pvforge` links these.
 add_library(pvf_next_services STATIC
     MediaServices.cpp
     MediaServices.h
@@ -142,100 +108,33 @@ target_link_libraries(pvf_next_services PUBLIC
 
 target_compile_features(pvf_next_services PUBLIC cxx_std_20)
 
-# Reference-only window shell.  The delivery `pvforge` target links only
-# pvf_next_document/pvf_next_services above; NextWindow and the panels that
-# implement it are not shipped.
-if(PVFORGE_BUILD_REFERENCE)
-    add_library(pvf_next_app STATIC
-        NextWindow.cpp
-        NextWindow.h
-        CameraMonitorWidget.cpp
-        CameraMonitorWidget.h
-        WorkbenchPanel.cpp
-        WorkbenchPanel.h
-        ExportDialog.cpp
-        ExportDialog.h
-    )
-
-    target_include_directories(pvf_next_app PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    )
-
-    target_link_libraries(pvf_next_app PUBLIC
-        pvf_next_services
-        pvf_next_document
-        pvf_next_core
-        pvf_store
-        pvf_next_assets
-        pvf_next_viewport
-        pvf_next_properties
-        pvf_next_timeline
-        pvf_render2
-        pvf_mcp2
-        pvf_export2
-        pvf_audio2
-        pvf_next_settings
-        pvf_next_mcp_log
-        pvf_next_history
-        pvf_html2
-        pvf_video2
-        pvf_workbench
-        Qt6::Core
-        Qt6::Widgets
-        Qt6::Concurrent
-    )
-
-    target_compile_features(pvf_next_app PUBLIC cxx_std_20)
-endif()
-
 include(CTest)
 
 if(BUILD_TESTING)
-    # ProjectDocument is a delivery library, so its tests do not need the
-    # reference shell.  Link the document slice directly instead of pvf_next_app
-    # so this coverage survives a default (reference-off) build.
     add_executable(pvf_next_document_tests tests/ProjectDocumentTests.cpp)
     target_link_libraries(pvf_next_document_tests PRIVATE pvf_next_document Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_document_tests)
     set_tests_properties(next.project_document PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
-    if(PVFORGE_BUILD_REFERENCE)
-        add_executable(pvf_next_window_tests tests/NextWindowTests.cpp)
-        target_link_libraries(pvf_next_window_tests PRIVATE pvf_next_app Qt6::Test)
-        target_compile_definitions(pvf_next_window_tests PRIVATE
-            PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-        add_test(NAME next.window_shell COMMAND pvf_next_window_tests)
-        set_tests_properties(next.window_shell PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+    add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
+    target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_services Qt6::Test)
+    add_test(NAME next.media_services COMMAND pvf_media_services_tests)
+    # Drives html2's HtmlFrameService, i.e. real Chrome/DevTools processes;
+    # share the lock with html2.* so a full `ctest -j4` does not race them.
+    set_tests_properties(next.media_services PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+        RESOURCE_LOCK pvforge_chrome)
 
-        add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
-        target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_app Qt6::Test)
-        add_test(NAME next.media_services COMMAND pvf_media_services_tests)
-        # Drives html2's HtmlFrameService, i.e. real Chrome/DevTools processes;
-        # share the lock with html2.* so a full `ctest -j4` does not race them.
-        set_tests_properties(next.media_services PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
-            RESOURCE_LOCK pvforge_chrome)
+    add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
+    target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_services Qt6::Test)
+    add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
+    set_tests_properties(next.playback_controller PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 
-        add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
-        target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_app Qt6::Test)
-        add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
-        set_tests_properties(next.playback_controller PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
-
-        add_executable(pvf_workbench_services_tests tests/WorkbenchIntegrationTests.cpp)
-        target_link_libraries(pvf_workbench_services_tests PRIVATE pvf_next_app Qt6::Test)
-        add_test(NAME next.workbench_integration COMMAND pvf_workbench_services_tests)
-        set_tests_properties(next.workbench_integration PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
-
-        add_executable(pvf_camera_monitor_tests tests/CameraMonitorTests.cpp)
-        target_link_libraries(pvf_camera_monitor_tests PRIVATE pvf_next_app Qt6::Test)
-        target_compile_definitions(pvf_camera_monitor_tests PRIVATE
-            PVF_NEXT_APP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-        add_test(NAME next.camera_monitor COMMAND pvf_camera_monitor_tests)
-        set_tests_properties(next.camera_monitor PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
-    endif()
+    add_executable(pvf_workbench_services_tests tests/WorkbenchIntegrationTests.cpp)
+    target_link_libraries(pvf_workbench_services_tests PRIVATE pvf_next_services Qt6::Test)
+    add_test(NAME next.workbench_integration COMMAND pvf_workbench_services_tests)
+    set_tests_properties(next.workbench_integration PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
 endif()

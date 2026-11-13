@@ -7,13 +7,13 @@
 | 指标 | 值 |
 | --- | --- |
 | 生成日期 | 2026-11-13 |
-| HEAD | `f5aac4f` |
+| HEAD | `ed013df` |
 | `src/main.cpp` 行数 | 128 |
 | `src/tests` 行数 | 25624 |
-| 测试源码行数（含模块 tests） | 63523 |
-| 非测试源码行数 | 124308 |
+| 测试源码行数（含模块 tests） | 58641 |
+| 非测试源码行数 | 116551 |
 | `--*-test` 自检开关数 | 95 |
-| CTest 用例数 | 353 |
+| CTest 用例数 | 350 |
 | `dist/pvforge` 大小 | 6.4 MiB（6715992 字节） |
 | Release 动态库依赖数 | 175（ldd 动态库依赖） |
 <!-- metrics:end -->
@@ -155,16 +155,15 @@
 | MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider/无 Git 只读 |
 | Workbench | `src/workbench` | 帧元信息/整帧 WebP/SQLite LRU/预渲染扫描 |
 | Next core | `src/next/core` | Document 接口 |
-| Next app | `src/next/app` | 主窗口/播放看门狗/媒体/导出/崩溃恢复/Git 引导+历史/工作台缓存/Debug（参考壳，不交付） |
+| Next app | `src/next/app` | 交付服务：ProjectDocument/媒体/播放看门狗/工作台缓存（参考壳 UI 已删除） |
 | Timeline | `src/next/timeline` | 行/裁剪/关键帧/浮层/标记 CRUD/音频峰值 |
 | Properties | `src/next/properties` | 属性/auto-key/求解段/HTML 变量/换素材/33 缓动 |
 | AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度/补抽 |
-| Viewport | `src/next/viewport` | 渲染/gizmo/provider/吸附/工作台命中 |
 | Settings | `src/next/settings` | 5 页 QSettings/Git 引导/工作台缓存 |
 | MCP log | `src/next/mcp` | 日志/急停/恢复 |
 | History | `src/next/history` | Git 历史列表/恢复到提交 |
 
-根 CMake 已包含全部新模块目标（`src/htmlcommon` 无独立目标，随 `html2`/交付目标编译）；`pvforge-next` 可链接，但只作参考，不是交付目标（2026-11-10 方向修正）。
+根 CMake 已包含全部新模块目标（`src/htmlcommon` 无独立目标，随 `html2`/交付目标编译）；`src/next/app` 只提供 `pvf_next_document`/`pvf_next_services`，参考壳 UI 与 `src/next/viewport` 已删除（2026-11-13，issue #77）。
 
 ### 3.1 端到端验收（2026-11-10）
 
@@ -227,7 +226,7 @@
 已知剩余：
 
 1. 旧栈更广清理（History/Commands/CheckpointManager、SceneRenderer/CameraRenderer、VideoPlayer/VideoProxy、HtmlRenderer/McpServer）未做，旧自测仍在用。
-2. `src/next/app` 参考壳内部仍有 `PVForge Next` 文案，但已无交付目标、不进入 `pvforge`。
+2. `src/next/app` 的参考壳 UI 已删除，只保留交付服务。
 3. `htmlCacheEnabled` / `videoProxyEnabled` 只持久化显示，底层关闭缓存入口未接。
 4. 真实人工验收：2x/HTML 高清/VAAPI/4x 8K 压力、打开文件夹按钮。
 5. 旧 `--timeline-frame-test`/`--timeline-interaction-test`/`--timeline-rowbuttons-test` 是基线既有失败，未修。

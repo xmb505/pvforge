@@ -552,8 +552,9 @@ QImage MediaServices::exportHtmlFrame(const Uuid& entityUuid,
     if (!asset)
         return {};
 
-    // The renderer/service is started lazily by finalFrame(); NextWindow
-    // normally pre-starts it on the main thread before launching the worker.
+    // The renderer/service is started lazily by finalFrame(); the export
+    // caller normally pre-starts it on the main thread before launching the
+    // worker.
     html2::FrameRequest request =
         makeHtmlRequest(*entity, *asset, projectFrame);
     request.size = outputSize;

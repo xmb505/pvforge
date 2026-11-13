@@ -20,15 +20,14 @@ aqt 的 Linux 桌面架构名随版本变化：**6.6 及更早是 `gcc_64`，6.7
 ## 构建与测试
 
 ```bash
-cmake --preset debug                  # build/debug，Debug + BUILD_TESTING/REFERENCE/SELF_TESTS=ON
+cmake --preset debug                  # build/debug，Debug + BUILD_TESTING/SELF_TESTS=ON
 cmake --build --preset debug -j 8
 ctest --preset debug                  # 已带 QT_QPA_PLATFORM=offscreen 与 --output-on-failure
 
-cmake --preset release                # build/release，Release，不构建测试/参考壳
+cmake --preset release                # build/release，Release，不构建测试
 cmake --build --preset release -j 8   # 产物 build/release/{pvforge,pvforge-mcp}
 
-cmake --preset tests                  # build-coord 风格：-O0 -g，全量测试（含参考壳）
-cmake --preset reference              # 只想构建参考壳时的 Debug preset
+cmake --preset tests                  # build-coord 风格：-O0 -g，全量测试
 ```
 
 自检参数（离屏）：
@@ -43,29 +42,20 @@ QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --settings-test
 
 ## 构建开关
 
-`CMakePresets.json` 是纯 JSON，不能写注释，所以记在这里。顶层 `CMakeLists.txt` 有三类目标：
+`CMakePresets.json` 是纯 JSON，不能写注释，所以记在这里。顶层 `CMakeLists.txt` 有两类目标：
 
 - **delivery**：`pvforge`、`pvforge-mcp`，以及它们实际链接的模块（含
   `pvf_next_document`、`pvf_next_services`、`pvf_next_properties` 的
   `SolverPreviewWidget` 等、`pvf_next_timeline` 的 `MarkerDialog` 等）。
-- **reference**：`src/next/app` 的 `NextWindow`（`pvf_next_app`）与
-  `src/next/viewport` 的 `ViewportWidget`（`pvf_next_viewport`）。参考壳只在
-  `PVFORGE_BUILD_REFERENCE=ON` 时参与构建。
-- **tests**：`pvf_*_tests` 可执行文件。参考壳测试同时受 `BUILD_TESTING` 与
-  `PVFORGE_BUILD_REFERENCE` 控制，其余测试只看 `BUILD_TESTING`。
+- **tests**：`pvf_*_tests` 可执行文件，只看 `BUILD_TESTING`。
 
 对应选项：
 
 - `PVFORGE_BUILD_SELF_TESTS`：把 `src/main.cpp` 里的 `--*-test` 自检开关编进/编出。
   Debug 默认 ON，Release 默认 OFF。
-- `PVFORGE_BUILD_REFERENCE`：是否构建 `src/next/app` 的参考壳、`src/next/viewport`
-  与它的窗口测试（`next.window_shell`、`next.media_services`、
-  `next.playback_controller`、`next.workbench_integration`、`next.camera_monitor`、
-  `viewport.tests`）。**默认 OFF**；Debug/开发测试需要这些用例时显式打开。
 
-两个选项正交。`debug` / `tests` / `reference` preset 都打开 reference 与 self-tests；
-`release` 全部关闭。不用 preset 时默认是 Release 语义的裁剪构建，只有显式传
-`-DPVFORGE_BUILD_REFERENCE=ON` 才会编参考壳。
+`debug` / `tests` preset 打开 self-tests；`release` 关闭。不用 preset 时默认是
+Release 语义的裁剪构建。
 
 ## 文档指标
 
@@ -115,13 +105,10 @@ CI 的 `code-size` job 只做文本统计，不装 Qt、不构建，**阻塞合�
 - 没有任何 Qt WebSockets 模块，走内置 RFC 6455 客户端这条分支。
 - 没有 Chrome/Chromium，`html2` 的浏览器相关用例会自行 SKIP；HTML 图层回归只在
   装了浏览器的机器上有效。
-- 运行环境是 GitHub hosted runner（4 vCPU），全量构建 + 323 个测试约 15–25 分钟。
-- 本机（Qt 6.10 + 软件光栅，`-j 8`）实测 323 个用例里稳定失败的是
-  `viewport.tests`、`next.media_services`、`next.camera_monitor`（像素取色 / 固定
-  MCP 端口 / entityCommits 计数），CI 里单独跑且 `continue-on-error`；
-  `html2.asyncRequestLowRes`、`html2.lowResPreemption` 只在并行负载高时偶发失败，
-  CI 用 `--repeat until-pass:2` 兜住，不排除。这三个用例正在被单独修，修好后把
-  workflow 里的 `KNOWN_FLAKY` 和各步骤的 `--exclude-regex`/`-R` 参数删掉即可收窄白名单。
+- 运行环境是 GitHub hosted runner（4 vCPU），全量构建 + 测试约 15–25 分钟。
+- 本机（Qt 6.10 + 软件光栅，`-j 8`）的 `html2.asyncRequestLowRes`、
+  `html2.lowResPreemption` 只在并行负载高时偶发失败，CI 用 `--repeat until-pass:2`
+  兜住，不排除。
 - 本机装 Qt 6.6/6.7 会卡在 aqtinstall 3.3.0 + Python 3.14 的下载校验
   （同一份 7z 反复报 checksum 不符，直接 curl 同一 URL 的哈希是对的），
   所以 6.6.3/6.7.3 的**编译**只在 CI 的 Ubuntu 24.04 + Python 3.12 环境里首次验证。
