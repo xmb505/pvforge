@@ -19,6 +19,9 @@ endif()
 
 add_library(pvf_store STATIC
     ProjectStore.cpp
+    ProjectStoreFiles.cpp
+    ProjectStoreGit.cpp
+    ProjectStoreSupport.h
 )
 
 target_include_directories(pvf_store PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

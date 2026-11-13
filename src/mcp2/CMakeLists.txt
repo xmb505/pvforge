@@ -33,7 +33,13 @@ add_library(pvf_mcp2 STATIC
     Service.cpp
     Support.cpp
     ProjectTools.cpp
-    EntityTools.cpp
+    EntityContentSupport.cpp
+    EntityCreateTools.cpp
+    EntityReadTools.cpp
+    EntityEditTools.cpp
+    EntityTrimTools.cpp
+    EntityDeleteTools.cpp
+    EntityToolsInternal.h
     KeyframeTools.cpp
     SolverTools.cpp
     PreviewTools.cpp
