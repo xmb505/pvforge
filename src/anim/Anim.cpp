@@ -709,7 +709,8 @@ QString solverResultKey(const model::Entity& entity,
     return entity.uuid + kKeySeparator + id + kKeySeparator
            + QString::number(segment.startFrame) + kKeySeparator
            + QString::number(segment.endFrame) + kKeySeparator
-           + QString::number(static_cast<int>(segment.effect));
+           + QString::number(static_cast<int>(segment.effect)) + kKeySeparator
+           + QString::number(static_cast<int>(entity.space));
 }
 
 int solverEvaluationCount()

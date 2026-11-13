@@ -187,6 +187,10 @@ public:
 private:
     QTransform parentWorldOf(int projectFrame) const
     {
+        // Canvas-space entities are drawn in project coordinates; the parent
+        // transform must not be applied to the solver preview either.
+        if (m_driven.space == model::EntitySpace::Canvas)
+            return QTransform();
         if (m_driven.parentUuid.isEmpty())
             return QTransform();
         if (!m_project.entities.contains(m_driven.parentUuid))
