@@ -52,7 +52,7 @@
 #include "ui/TextLayoutDialog.h"
 #include "ui/WorkbenchPanel.h"
 #include "media/VideoDecoder.h"
-#include "mcp/StdioBridgeTest.h"
+#include "tests/StdioBridgeTest.h"
 #include "ui/BezierEditorDialog.h"
 #include "ui/CameraMonitor.h"
 #include "ui/EasingPicker.h"
