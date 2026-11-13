@@ -1220,7 +1220,7 @@ int cacheMissProfileTest(QApplication& app)
     {
         qWarning() << "cache-miss-profile: user project not found, skipping"
                    << userSource;
-        return 0;
+        return 77;
     }
 
     QString error;
@@ -1229,13 +1229,13 @@ int cacheMissProfileTest(QApplication& app)
     if (!copyProfileProject(userSource, copy, &error))
     {
         qWarning() << "cache-miss-profile: copy failed:" << error;
-        return 0;
+        return 1;
     }
     auto session = pvf::EditorSession::openProject(copy, &error, false);
     if (!session)
     {
         qWarning() << "cache-miss-profile: open user copy failed:" << error;
-        return 0;
+        return 1;
     }
     const pvf::Uuid selected = session->project().entities.isEmpty()
                                    ? pvf::Uuid()

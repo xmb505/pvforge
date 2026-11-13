@@ -148,4 +148,10 @@ if(BUILD_TESTING)
         set_tests_properties(mcp2.${test_case} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endforeach()
+    # These two bind the real default port (47821). Share the lock with the
+    # pvf.* self-tests so parallel CTest runs do not steal it from each other.
+    set_tests_properties(
+        mcp2.httpDefaultConfigUsesFixedPort
+        mcp2.httpPortConflictFailsClearly
+        PROPERTIES RESOURCE_LOCK pvforge_mcp_port)
 endif()

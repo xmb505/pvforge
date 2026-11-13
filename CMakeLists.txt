@@ -226,10 +226,63 @@ if(PVFORGE_BUILD_SELF_TESTS)
     )
 
     add_executable(pvforge-tests src/main.cpp ${PVF_TEST_SOURCES})
-    target_compile_definitions(pvforge-tests PRIVATE PVFORGE_SELF_TESTS)
+    target_compile_definitions(pvforge-tests PRIVATE
+        PVFORGE_SELF_TESTS
+        PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
+    )
     target_include_directories(pvforge-tests PRIVATE src)
     target_link_libraries(pvforge-tests PRIVATE pvf_app)
     pvf_add_lang_resources(pvforge-tests)
+
+    # The 45 self-test switches stay a developer tool; only this curated set
+    # is part of `ctest`. It covers the shipping shell, project state, export
+    # dialog and MCP services without turning every profiling/demo switch into
+    # a blocking test. The full split lives in docs/AI/SELF_TESTS.md.
+    if(BUILD_TESTING)
+        set(PVF_SELF_TEST_CASES
+            self-test
+            session-test
+            settings-test
+            checkpoint-test
+            rename-test
+            panel-layout-test
+            export-dialog-test
+            properties-test
+            export-test
+            mcp-test
+            mcp-lock-test
+            mcp-bridge-test
+        )
+        foreach(case IN LISTS PVF_SELF_TEST_CASES)
+            add_test(NAME pvf.${case} COMMAND pvforge-tests --${case})
+            set_tests_properties(pvf.${case} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                TIMEOUT 300
+                SKIP_RETURN_CODE 77
+                LABELS "self-test"
+                # Several self-tests build a MainWindow, which starts the MCP
+                # server on the fixed 47821 port. Serialise them with the two
+                # mcp2 fixed-port tests instead of racing under ctest -j.
+                RESOURCE_LOCK pvforge_mcp_port
+            )
+        endforeach()
+
+        set(PVF_SELF_TEST_UI
+            session-test settings-test rename-test panel-layout-test
+            export-dialog-test properties-test
+        )
+        foreach(case IN LISTS PVF_SELF_TEST_UI)
+            set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
+        endforeach()
+        set(PVF_SELF_TEST_MCP mcp-test mcp-lock-test mcp-bridge-test)
+        foreach(case IN LISTS PVF_SELF_TEST_MCP)
+            set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;mcp")
+        endforeach()
+        set_tests_properties(pvf.export-test PROPERTIES
+            LABELS "self-test;media")
+        set_tests_properties(pvf.checkpoint-test PROPERTIES
+            LABELS "self-test;core")
+    endif()
 endif()
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)

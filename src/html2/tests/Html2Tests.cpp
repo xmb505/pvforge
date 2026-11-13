@@ -25,6 +25,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <cstdlib>
 #include <functional>
 
 namespace {
@@ -266,9 +267,17 @@ window.addEventListener("pvforgeframe", function () {
     return bundle;
 }
 
-bool chromeAvailable()
+// Cases that need a live browser call this first. Exit 77 is registered as
+// CTest SKIP_RETURN_CODE; returning 0 made the test look green while it had
+// exercised nothing.
+void requireChrome()
 {
-    return !pvf::html::HtmlBrowser::detectExecutable().isEmpty();
+    static const bool available =
+        !pvf::html::HtmlBrowser::detectExecutable().isEmpty();
+    if (available)
+        return;
+    QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
+    std::exit(77);
 }
 
 bool waitForFuture(QFuture<QImage>& future, int timeoutMs)
@@ -421,11 +430,7 @@ void serverServesAndRejects()
 
 void renderFrameColors()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -485,11 +490,7 @@ void renderFrameColors()
 
 void timeoutDoesNotHang()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -562,11 +563,7 @@ pvf::html2::FrameRequest lowResRequest(const QString& bundle, const QString& ass
 
 void frameCacheHits()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -622,11 +619,7 @@ void frameCacheHits()
 
 void staticFramesShareCache()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -672,11 +665,7 @@ void staticFramesShareCache()
 
 void prefetchFillsCache()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -748,11 +737,7 @@ void prefetchFillsCache()
 
 void finalFrameUncached()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -855,11 +840,7 @@ void frameKeyVaries()
 
 void asyncRequestLowRes()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -919,11 +900,7 @@ void asyncRequestLowRes()
 
 void lowResWaitTimeout()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -987,11 +964,7 @@ void lowResWaitTimeout()
 
 void lowResPreemption()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1067,11 +1040,7 @@ void lowResPreemption()
 
 void cancelPendingLowRes()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1190,11 +1159,7 @@ void finalFrameSizeLimits()
     CHECK(rendererError.contains(QStringLiteral("8192")));
     CHECK(!renderer.isRunning());
 
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QString startError;
     CHECK_DETAIL(service.start(&startError), startError);
@@ -1225,11 +1190,7 @@ void finalFrameSizeLimits()
 
 void finalRendererRestart()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1289,11 +1250,7 @@ void finalRendererRestart()
 // leaking them because they belong to a thread that is still busy.
 void finalRendererCrossThreadStop()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1367,11 +1324,7 @@ void finalRendererCrossThreadStop()
 
 void finalRendererRepeatedStartStop()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1433,11 +1386,7 @@ void finalRendererRepeatedStartStop()
 // alive until renderFrame() has returned.
 void finalRendererStopWhileRendering()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP: no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1490,11 +1439,7 @@ void finalRendererStopWhileRendering()
 
 void customCacheBudgets()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid());
@@ -1554,11 +1499,7 @@ void customCacheBudgets()
 
 void chromeExecutableOverride()
 {
-    if (!chromeAvailable())
-    {
-        QTextStream(stdout) << "SKIP (QSKIP): no Chromium-based browser found\n";
-        return;
-    }
+    requireChrome();
 
     const QString missing = QStringLiteral("/definitely/missing/pvf-chrome");
 

@@ -25,10 +25,10 @@ using namespace pvf::model;
 
 namespace {
 
-bool gitLfsAvailable()
+bool gitAvailable()
 {
     QProcess process;
-    process.start(QStringLiteral("git-lfs"), {QStringLiteral("version")});
+    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
     return process.waitForFinished(5000) && process.exitCode() == 0;
 }
 
@@ -137,8 +137,8 @@ private slots:
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -195,8 +195,8 @@ void MediaServicesTests::videoProviderMapsProjectFrames()
 
 void MediaServicesTests::videoProviderWithoutAssetIsEmpty()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -222,8 +222,8 @@ void MediaServicesTests::videoProviderWithoutAssetIsEmpty()
 
 void MediaServicesTests::exportVideoFrameUsesFullResolution()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -266,8 +266,8 @@ void MediaServicesTests::exportVideoFrameUsesFullResolution()
 
 void MediaServicesTests::htmlProviderRendersBundle()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
     if (!chromeAvailable())
         QSKIP("Chrome/Chromium is not installed");
 
@@ -311,8 +311,8 @@ void MediaServicesTests::htmlProviderRendersBundle()
 
 void MediaServicesTests::htmlPrefetchStopsAtVariableChange()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -360,8 +360,8 @@ void MediaServicesTests::htmlPrefetchStopsAtVariableChange()
 
 void MediaServicesTests::htmlPrefetchCapsAtSixtyFrames()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
@@ -405,8 +405,8 @@ void MediaServicesTests::htmlPrefetchCapsAtSixtyFrames()
 
 void MediaServicesTests::htmlPrefetchFillsCache()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
     if (!chromeAvailable())
         QSKIP("Chrome/Chromium is not installed");
 
@@ -443,8 +443,8 @@ void MediaServicesTests::htmlPrefetchFillsCache()
 
 void MediaServicesTests::exportHtmlFrameUsesRequestedSize()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
     if (!chromeAvailable())
         QSKIP("Chrome/Chromium is not installed");
 
@@ -488,8 +488,8 @@ void MediaServicesTests::exportHtmlFrameUsesRequestedSize()
 
 void MediaServicesTests::htmlScaleChangesRequestSize()
 {
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
     QTemporaryDir temp;
     QVERIFY(temp.isValid());

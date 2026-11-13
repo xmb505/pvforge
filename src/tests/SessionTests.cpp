@@ -1173,7 +1173,8 @@ int gitSessionTest(QApplication& app)
     {
         qInfo() << "git-test: git binary unavailable, skipping write/restore checks";
         qInfo() << "git-test failures" << failures;
-        return failures == 0 ? 0 : 1;
+        // Report the skip instead of a green run that exercised no git path.
+        return failures == 0 ? 77 : 1;
     }
 
     const auto prepareDirty = [&temp](const QString& name,

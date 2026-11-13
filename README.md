@@ -66,13 +66,14 @@ cmake --build build
 ## 测试
 
 ```bash
-QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --self-test
-QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --export-test
-QT_QPA_PLATFORM=offscreen ./build/pvforge-tests --mcp-test
-ctest --test-dir build --output-on-failure
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --self-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --export-test
+QT_QPA_PLATFORM=offscreen ./build/debug/pvforge-tests --mcp-test
+ctest --preset debug -L self-test       # CTest 里的自检子集
+ctest --preset debug -j8                # 全量测试
 ```
 
-`src/tests/` 里是按功能分组的离屏自检；自检只编进 `pvforge-tests`，Release 的 `pvforge` 不包含测试入口。完整清单以源码为准。
+`src/tests/` 里是按功能分组的离屏自检；自检只编进 `pvforge-tests`，Release 的 `pvforge` 不包含测试入口。CTest 只注册其中稳定、可隔离的一小批（清单见 `docs/AI/SELF_TESTS.md`），其余入口保留为手动工具。需要浏览器/ffmpeg/git 的用例用退出码 77 标记跳过，CTest 会显示 `Skipped` 而不是 `Passed`。
 
 文档里的指标（HEAD、源码行数、自检开关数、CTest 用例数、二进制大小）不手抄：
 

@@ -33,16 +33,11 @@ using namespace pvf;
 
 namespace {
 
-QString lfsBinDir()
+bool gitAvailable()
 {
-    return QStringLiteral("/tmp/opencode/gitlfs/root/usr/bin");
-}
-
-bool gitLfsAvailable()
-{
+    // Production only needs `git`; git-lfs is not a runtime dependency.
     QProcess process;
-    process.start(QStringLiteral("git"),
-                  {QStringLiteral("lfs"), QStringLiteral("version")});
+    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
     if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
         return false;
     return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
@@ -74,7 +69,7 @@ QByteArray compact(const QJsonObject& object)
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
 
-constexpr char kSkipMessage[] = "git/git-lfs 不可用，跳过依赖 git 的测试";
+constexpr char kSkipMessage[] = "git 不可用，跳过依赖 git 的测试";
 
 struct Fixture
 {
@@ -240,13 +235,7 @@ private slots:
 
 void HttpServerTests::initTestCase()
 {
-    const QFileInfo lfs(lfsBinDir());
-    if (lfs.isDir())
-    {
-        const QByteArray path = qgetenv("PATH");
-        qputenv("PATH", lfs.absoluteFilePath().toUtf8() + ':' + path);
-    }
-    if (!gitLfsAvailable())
+    if (!gitAvailable())
         QSKIP(kSkipMessage);
 }
 

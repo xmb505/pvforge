@@ -220,7 +220,9 @@ int exportTest(QApplication& app)
     if (ffprobe.isEmpty() || ffmpeg.isEmpty())
     {
         qInfo() << "export-test: ffmpeg/ffprobe missing, skipped";
-        return 0;
+        // CTest SKIP_RETURN_CODE; returning 0 would report a pass without
+        // exercising the export path.
+        return 77;
     }
 
     QTemporaryDir temp;
