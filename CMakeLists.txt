@@ -167,8 +167,8 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/AssetTests.cpp
         src/tests/McpTests.cpp
         src/tests/PerfTests.cpp
-        # Test-only helpers that live next to the code they exercise.
-        src/mcp/StdioBridgeTest.cpp
+        # Test-only helpers live in src/tests.
+        src/tests/StdioBridgeTest.cpp
     )
 
     add_executable(pvforge-tests src/main.cpp ${PVF_TEST_SOURCES})

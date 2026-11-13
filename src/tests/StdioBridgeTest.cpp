@@ -1,4 +1,4 @@
-#include "mcp/StdioBridgeTest.h"
+#include "tests/StdioBridgeTest.h"
 
 #include "mcp/StdioBridge.h"
 
