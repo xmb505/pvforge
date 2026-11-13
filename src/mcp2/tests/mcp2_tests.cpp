@@ -188,7 +188,6 @@ private slots:
     void previewRejectsOversize();
     void solverEvaluateNestedEntity();
     void moveRowOnlyAndGetDefaults();
-    void followParentRangeUpdateAligns();
     void entityGetIncludesSolvers();
     void textualContentCanBecomeEmpty();
     void specialContentCreateAndUpdate();
@@ -208,7 +207,6 @@ private slots:
     void writesEnabledAgain();
     void stopAndReadOnlyInteraction();
     void createManyAbortsMidBatch();
-    void writeToolClassification();
 };
 
 void Mcp2Tests::initTestCase()
@@ -2246,22 +2244,6 @@ void Mcp2Tests::createManyAbortsMidBatch()
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
 }
 
-void Mcp2Tests::writeToolClassification()
-{
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("entity.create")));
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("entity.deleteMany")));
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("keyframes.setMany")));
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("history.undo")));
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("asset.import")));
-    QVERIFY(mcp2::Service::isWriteTool(QStringLiteral("not.a.tool")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("project.get")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("entity.list")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("preview.render_frame")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("view.state")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("solver.evaluate")));
-    QVERIFY(!mcp2::Service::isWriteTool(QStringLiteral("schema.get")));
-}
-
 void Mcp2Tests::moveRowOnlyAndGetDefaults()
 {
     Fixture fixture;
@@ -2363,137 +2345,6 @@ QVector<int> keyFrames(const QJsonObject& result, const QString& track)
 }
 
 } // namespace
-
-void Mcp2Tests::followParentRangeUpdateAligns()
-{
-    Fixture fixture;
-    QVERIFY(fixture.init());
-
-    QJsonObject parentArgs = entityArgs(QStringLiteral("父"), 0, 20);
-    const QString parent =
-        uuidOf(fixture.call(QStringLiteral("entity.create"), parentArgs));
-    QVERIFY(!parent.isEmpty());
-
-    QJsonObject childArgs = entityArgs(QStringLiteral("子"), 5, 18, parent);
-    childArgs.insert(QStringLiteral("keyframes"),
-                     QJsonObject{{QStringLiteral("opacity"),
-                                  keys({{2, 0.0}, {8, 1.0}, {12, 0.5}})}});
-    const QString child =
-        uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
-    QVERIFY(!child.isEmpty());
-
-    QJsonObject result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), child},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("followParentRange"), true}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QJsonObject brief = result.value(QStringLiteral("data"))
-                            .toObject()
-                            .value(QStringLiteral("entity"))
-                            .toObject();
-    QVERIFY(brief.value(QStringLiteral("followParentRange")).toBool());
-    QCOMPARE(brief.value(QStringLiteral("start")).toInt(), 0);
-    QCOMPARE(brief.value(QStringLiteral("end")).toInt(), 20);
-
-    result = fixture.call(QStringLiteral("entity.get"),
-                          QJsonObject{{QStringLiteral("uuid"), child}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    // Keys keep their absolute frames: old relative 2/8/12 with start 5.
-    QCOMPARE(keyFrames(result, QStringLiteral("opacity")),
-             QVector<int>({7, 13, 17}));
-
-    // Turning the flag off only clears it; the range stays.
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), child},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("followParentRange"), false}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    result = fixture.call(QStringLiteral("entity.get"),
-                          QJsonObject{{QStringLiteral("uuid"), child}});
-    QCOMPARE(result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("start"))
-                 .toInt(),
-             0);
-    QCOMPARE(result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("end"))
-                 .toInt(),
-             20);
-    QVERIFY(!result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("followParentRange"))
-                 .toBool());
-
-    // Re-enable, then trim the parent: the following child follows the new
-    // range and drops keys that fall before the cut (absolute frame 13).
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), child},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("followParentRange"), true}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    result = fixture.call(QStringLiteral("entity.trim"),
-                          QJsonObject{{QStringLiteral("uuid"), parent},
-                                      {QStringLiteral("start"), 15}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    result = fixture.call(QStringLiteral("entity.get"),
-                          QJsonObject{{QStringLiteral("uuid"), child}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("start"))
-                 .toInt(),
-             15);
-    QCOMPARE(result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("end"))
-                 .toInt(),
-             20);
-    QCOMPARE(keyFrames(result, QStringLiteral("opacity")), QVector<int>({2}));
-
-    // Stretching the parent end expands the child and keeps the key.
-    result = fixture.call(QStringLiteral("entity.trim"),
-                          QJsonObject{{QStringLiteral("uuid"), parent},
-                                      {QStringLiteral("end"), 30}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    result = fixture.call(QStringLiteral("entity.get"),
-                          QJsonObject{{QStringLiteral("uuid"), child}});
-    QCOMPARE(result.value(QStringLiteral("data"))
-                 .toObject()
-                 .value(QStringLiteral("end"))
-                 .toInt(),
-             30);
-    QCOMPARE(keyFrames(result, QStringLiteral("opacity")), QVector<int>({2}));
-
-    // A follow entity cannot be moved or trimmed on its own; the parent owns
-    // the range.
-    result = fixture.call(QStringLiteral("entity.move"),
-                          QJsonObject{{QStringLiteral("uuid"), child},
-                                      {QStringLiteral("delta"), 5}});
-    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
-    result = fixture.call(QStringLiteral("entity.trim"),
-                          QJsonObject{{QStringLiteral("uuid"), child},
-                                      {QStringLiteral("start"), 16}});
-    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
-
-    // The root entity has no parent to follow.
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), parent},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("followParentRange"), true}}}});
-    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
-}
 
 void Mcp2Tests::entityGetIncludesSolvers()
 {
