@@ -76,13 +76,22 @@ set(PVF_APP_SOURCES
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
+    src/app/SettingsDialogAppPages.cpp
+    src/app/SettingsDialogLegacyPages.cpp
+    src/app/SettingsDialogSupport.h
     src/app/ExportDialog.cpp
     src/app/ExportProgressDialog.cpp
     src/app/MainWindow.cpp
+    src/app/MainWindowMenus.cpp
+    src/app/MainWindowMcp.cpp
+    src/app/MainWindowProjectActions.cpp
     src/app/EditorSession.cpp
     src/app/EditorSession.h
     src/app/EditActions.cpp
+    src/app/EditActionsContent.cpp
+    src/app/EditActionsKeyframes.cpp
     src/app/EditActions.h
+    src/app/EditActionsSupport.h
     src/app/TimelineAdapter.cpp
     src/app/TimelineAdapter.h
     src/app/WelcomeWindow.cpp
