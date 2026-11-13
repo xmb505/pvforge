@@ -49,6 +49,29 @@ int entityJsonInt(const QString& path, const QString& key)
         .toInt(-1);
 }
 
+QJsonObject findTreeNode(const QJsonObject& node, const Uuid& uuid)
+{
+    if (node.value(QStringLiteral("uuid")).toString() == uuid)
+        return node;
+    for (const QJsonValue& value : node.value(QStringLiteral("children")).toArray())
+    {
+        const QJsonObject found = findTreeNode(value.toObject(), uuid);
+        if (!found.isEmpty())
+            return found;
+    }
+    return {};
+}
+
+int treeEntityInt(const QString& path, const Uuid& uuid, const QString& key)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return -1;
+    return findTreeNode(QJsonDocument::fromJson(file.readAll()).object(), uuid)
+        .value(key)
+        .toInt(-1);
+}
+
 } // namespace
 
 class ProjectDocumentTests : public QObject
@@ -366,8 +389,8 @@ private slots:
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
 
-        const QString childPath = entityPath(*document, child.uuid);
-        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+        const QString rootPath = entityPath(*document, parent.uuid);
+        QCOMPARE(treeEntityInt(rootPath, child.uuid, QStringLiteral("end")), 30);
 
         document->mutableProject().entities[child.uuid].end = 90;
         error.clear();
@@ -375,11 +398,11 @@ private slots:
                                         QStringLiteral("pvf: break range"),
                                         &error));
         QVERIFY(!error.isEmpty());
-        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+        QCOMPARE(treeEntityInt(rootPath, child.uuid, QStringLiteral("end")), 30);
         QVERIFY(!document->hasPendingCommit());
     }
 
-    void deleteParentWithoutCascadeIsRejected()
+    void deleteParentCascadesSubtree()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
@@ -401,24 +424,15 @@ private slots:
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
 
-        const int historyBefore = document->store()->history(100).size();
-        error.clear();
-        QVERIFY(!document->deleteEntities({parent.uuid},
-                                          QStringLiteral("pvf: delete parent"),
-                                          &error));
-        QVERIFY(!error.isEmpty());
-        QVERIFY(document->project().entities.contains(parent.uuid));
-        QVERIFY(document->project().entities.contains(child.uuid));
-        QVERIFY(QFile::exists(entityPath(*document, parent.uuid)));
-        QVERIFY(QFile::exists(entityPath(*document, child.uuid)));
-        QCOMPARE(document->store()->history(100).size(), historyBefore);
+        const QString rootPath = entityPath(*document, parent.uuid);
+        QVERIFY(QFile::exists(rootPath));
 
         QVERIFY2(document->deleteEntities(
-                     {child.uuid, parent.uuid},
-                     QStringLiteral("pvf: delete subtree"), &error),
+                     {parent.uuid}, QStringLiteral("pvf: delete subtree"), &error),
                  qPrintable(error));
         QVERIFY(!document->project().entities.contains(parent.uuid));
         QVERIFY(!document->project().entities.contains(child.uuid));
+        QVERIFY(!QFile::exists(rootPath));
     }
 
     void commitChangesInvalidUpsertLeavesFilesUntouched()
@@ -443,8 +457,8 @@ private slots:
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
 
-        const QString childPath = entityPath(*document, child.uuid);
-        const QByteArray before = readBytes(childPath);
+        const QString rootPath = entityPath(*document, parent.uuid);
+        const QByteArray before = readBytes(rootPath);
         QVERIFY(!before.isEmpty());
 
         document->mutableProject().entities[child.uuid].end = 90;
@@ -455,8 +469,8 @@ private slots:
                                          QStringLiteral("pvf: break tree"),
                                          &error));
         QVERIFY(!error.isEmpty());
-        QCOMPARE(readBytes(childPath), before);
-        QCOMPARE(entityJsonInt(childPath, QStringLiteral("end")), 30);
+        QCOMPARE(readBytes(rootPath), before);
+        QCOMPARE(treeEntityInt(rootPath, child.uuid, QStringLiteral("end")), 30);
     }
 
     void commitProjectRejectsInconsistentTree()
@@ -487,8 +501,7 @@ private slots:
         QVERIFY(!before.isEmpty());
 
         // A caller that deletes only the parent leaves a dangling child.
-        QVERIFY2(document->store()->deleteEntity(parent.uuid, &error),
-                 qPrintable(error));
+        document->mutableProject().entities.remove(parent.uuid);
         error.clear();
         QVERIFY(!document->commitProject(QStringLiteral("pvf: delete parent"),
                                          &error));
@@ -545,13 +558,12 @@ private slots:
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
 
-        // The second occurrence is already gone from the validated view, so it
-        // is rejected exactly like an unknown UUID and nothing is deleted.
+        // The second occurrence is rejected and nothing is deleted.
         error.clear();
         QVERIFY(!document->deleteEntities({entity.uuid, entity.uuid},
                                           QStringLiteral("pvf: delete twice"),
                                           &error));
-        QVERIFY(error.contains(QStringLiteral("实体不存在")));
+        QVERIFY(!error.isEmpty());
         QVERIFY(document->project().entities.contains(entity.uuid));
         QVERIFY(QFile::exists(entityPath(*document, entity.uuid)));
 
@@ -590,16 +602,10 @@ private slots:
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
 
-        // Middle without its leaf leaves the leaf dangling.
-        QVERIFY(!document->deleteEntities({middle.uuid},
-                                          QStringLiteral("pvf: orphan"),
-                                          &error));
-        QVERIFY(document->project().entities.contains(leaf.uuid));
-
-        // Deleting the subtree from the leaf upwards is accepted.
-        QVERIFY2(document->deleteEntities(
-                     {leaf.uuid, middle.uuid},
-                     QStringLiteral("pvf: delete subtree"), &error),
+        // Deleting the middle folder removes its whole subtree in one go.
+        QVERIFY2(document->deleteEntities({middle.uuid},
+                                          QStringLiteral("pvf: delete subtree"),
+                                          &error),
                  qPrintable(error));
         QVERIFY(!document->project().entities.contains(leaf.uuid));
         QVERIFY(!document->project().entities.contains(middle.uuid));

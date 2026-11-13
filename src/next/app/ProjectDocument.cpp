@@ -11,6 +11,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <functional>
 
 namespace pvf::next {
 
@@ -223,15 +224,68 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
     Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
-    if (!validateForWrite(m_store->project(), {}, uuids, error))
-        return false;
+
+    const model::Project& project = m_store->project();
+    QSet<Uuid> requested;
     for (const Uuid& uuid : uuids)
     {
+        if (!project.entities.contains(uuid))
+        {
+            setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+            return false;
+        }
+        if (requested.contains(uuid))
+        {
+            setError(error, QStringLiteral("重复删除实体：%1").arg(uuid));
+            return false;
+        }
+        requested.insert(uuid);
+    }
+
+    // Deleting a folder entity removes its whole subtree.  Validate the
+    // expanded set once, but only ask the store to delete the top-most nodes:
+    // ProjectStore already removes descendants and their files.
+    QSet<Uuid> removed;
+    std::function<void(const Uuid&)> collect = [&](const Uuid& uuid) {
+        if (removed.contains(uuid))
+            return;
+        removed.insert(uuid);
+        for (const model::Entity& entity : project.entities)
+            if (entity.parentUuid == uuid)
+                collect(entity.uuid);
+    };
+    for (const Uuid& uuid : requested)
+        collect(uuid);
+
+    QVector<Uuid> validation;
+    validation.reserve(removed.size());
+    for (const Uuid& uuid : removed)
+        validation.append(uuid);
+    if (!validateForWrite(project, {}, validation, error))
+        return false;
+
+    for (const Uuid& uuid : requested)
+    {
+        bool hasRequestedAncestor = false;
+        Uuid parent = project.entities.value(uuid).parentUuid;
+        while (!parent.isEmpty())
+        {
+            if (requested.contains(parent))
+            {
+                hasRequestedAncestor = true;
+                break;
+            }
+            parent = project.entities.value(parent).parentUuid;
+        }
+        if (hasRequestedAncestor)
+            continue;
         if (!m_store->deleteEntity(uuid, error))
             return false;
+    }
+
+    for (const Uuid& uuid : removed)
         if (uuid == m_selection)
             m_selection.clear();
-    }
     scheduleCommit();
     emit changed();
     return true;
