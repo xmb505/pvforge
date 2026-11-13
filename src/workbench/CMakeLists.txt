@@ -83,6 +83,7 @@ if(BUILD_TESTING)
         cacheReadsLegacyWebp
         cacheSwitchesCodecWhenRasterChanges
         cachePerCameraDirectories
+        cacheUsageMatchesStats
     )
 
     foreach(test_case IN LISTS PVF_WORKBENCH_TEST_CASES)

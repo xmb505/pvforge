@@ -1,6 +1,7 @@
 #include "next/app/NextWindow.h"
 
 #include "export2/Export.h"
+#include "framecache/CacheUsage.h"
 #include "htmlcommon/HtmlBrowser.h"
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
@@ -34,7 +35,6 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDirIterator>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileDialog>
@@ -1230,12 +1230,16 @@ void NextWindow::buildUi()
                     m_workbenchAction->setChecked(visible);
                 }
             });
-    connect(m_workbenchPanel, &WorkbenchPanel::cacheCleared, this, [this] {
-        if (m_viewport)
-            m_viewport->refresh();
-        statusBar()->showMessage(tr("已清空工作台缓存"), 5000);
-        updateWorkbenchStatus();
-    });
+    connect(m_workbenchPanel, &WorkbenchPanel::cacheCleared, this,
+            [this](bool ok) {
+                if (m_viewport)
+                    m_viewport->refresh();
+                statusBar()->showMessage(
+                    ok ? tr("已清空工作台缓存")
+                       : tr("清空工作台缓存失败：仍有文件未能删除"),
+                    ok ? 5000 : 10000);
+                updateWorkbenchStatus();
+            });
 
     QMenu* cacheMenu = menuBar()->addMenu(tr("缓存(&C)"));
     m_cacheAllAction = new QAction(tr("缓存全部"), this);
@@ -1885,10 +1889,21 @@ void NextWindow::clearWorkbenchCache()
         statusBar()->showMessage(tr("工作台缓存未启用"), 4000);
         return;
     }
-    m_workbench->clearCache();
+    const framecache::ClearResult result = m_workbench->clearAll();
     if (m_viewport)
         m_viewport->refresh();
-    statusBar()->showMessage(tr("已清空工作台缓存"), 5000);
+    if (result.ok) {
+        statusBar()->showMessage(tr("已清空工作台缓存：%1 帧，释放 %2")
+                                     .arg(result.removedFrames)
+                                     .arg(formatBytes(result.freedBytes)),
+                                 5000);
+    } else {
+        statusBar()->showMessage(
+            tr("清空工作台缓存失败：%1 个文件未能删除，实际释放 %2")
+                .arg(result.failedPaths.size())
+                .arg(formatBytes(result.freedBytes)),
+            10000);
+    }
     updateWorkbenchStatus();
 }
 
@@ -3037,39 +3052,32 @@ void NextWindow::clearHtmlCache()
         targets.append(
             QDir(m_document->root()).filePath(QStringLiteral(".cache/html")));
 
-    int files = 0;
-    qint64 bytes = 0;
-    QStringList removed;
-    QStringList failed;
+    framecache::ClearResult total;
+    int touched = 0;
     for (const QString& path : targets) {
         if (!QFileInfo::exists(path))
             continue;
-
-        QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
-                        QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            it.next();
-            ++files;
-            bytes += it.fileInfo().size();
-        }
-
-        if (QDir(path).removeRecursively())
-            removed.append(QDir::toNativeSeparators(path));
-        else
-            failed.append(QDir::toNativeSeparators(path));
+        ++touched;
+        const framecache::ClearResult result = framecache::clearDirectory(
+            path, {QStringLiteral("webp")});
+        total.ok = total.ok && result.ok;
+        total.freedBytes += result.freedBytes;
+        total.removedFiles += result.removedFiles;
+        total.removedFrames += result.removedFrames;
+        total.failedPaths += result.failedPaths;
     }
 
     QString message;
-    if (removed.isEmpty() && failed.isEmpty()) {
+    if (touched == 0) {
         message = tr("没有可清理的 HTML 缓存");
+    } else if (total.ok) {
+        message = tr("已清理 HTML 缓存：%1 个文件，释放 %2")
+                      .arg(total.removedFiles)
+                      .arg(formatBytes(total.freedBytes));
     } else {
-        message = tr("已清理 HTML 缓存：%1 个文件，%2")
-                      .arg(files)
-                      .arg(formatBytes(bytes));
-        if (!failed.isEmpty())
-            message += tr("；%1 个目录清理失败：%2")
-                           .arg(failed.size())
-                           .arg(failed.join(QStringLiteral("、")));
+        message = tr("清理 HTML 缓存失败：%1 个文件未能删除，实际释放 %2")
+                      .arg(total.failedPaths.size())
+                      .arg(formatBytes(total.freedBytes));
     }
 
     statusBar()->showMessage(message, 10000);

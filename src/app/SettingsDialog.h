@@ -1,5 +1,6 @@
 #pragma once
 
+#include "framecache/CacheUsage.h"
 #include "next/settings/SettingsStore.h"
 
 #include <QDialog>
@@ -45,11 +46,14 @@ public:
     void setMcpStatus(bool running, quint16 port, const QString& token,
                       const QString& error, bool writesEnabled);
     void setGitInfo(const QString& repositoryPath, const QString& recentCommit);
-    // Cache occupancy is measured by the shell; the dialog only formats it.
-    // `directory` may be empty before the cache has written its first frame.
-    void setWorkbenchCacheStats(bool enabled, int entries, qint64 bytes,
+    // Cache occupancy is measured by the shell with framecache::scanDirectory;
+    // the dialog only formats it.  `directory` may be empty before the cache
+    // has written its first frame.
+    void setWorkbenchCacheStats(bool enabled,
+                                const framecache::CacheUsage& usage,
                                 const QString& directory);
-    void setHtmlCacheStats(int files, qint64 bytes, const QString& directory);
+    void setHtmlCacheStats(const framecache::CacheUsage& usage,
+                           const QString& directory);
     QString gitRepositoryPath() const { return m_appGitRepositoryValue; }
     QString gitRecentCommit() const { return m_appGitRecentValue; }
     void setEndpointPath(const QString& path);

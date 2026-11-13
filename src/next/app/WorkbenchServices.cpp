@@ -561,14 +561,25 @@ void WorkbenchServices::notifyHtmlFrameReady()
         m_tick.start();
 }
 
-void WorkbenchServices::clearCache()
+framecache::ClearResult WorkbenchServices::clearAll()
 {
     cancelScan();
     // Never let a queued playback frame repopulate the cache after the clear.
     discardPendingStores();
     invalidateMeta();
-    if (m_cache && m_cache->isValid())
-        m_cache->clear();
+    // Close the SQLite connection before removing the files it owns.  The next
+    // store recreates the directory and index lazily.
+    m_cache.reset();
+    if (m_cacheRoot.isEmpty())
+        return {};
+    return framecache::clearDirectory(
+        m_cacheRoot,
+        {QStringLiteral("webp"), QStringLiteral("qoi")});
+}
+
+framecache::ClearResult WorkbenchServices::clearCache()
+{
+    return clearAll();
 }
 
 void WorkbenchServices::setSolverResults(
@@ -586,6 +597,15 @@ workbench::CacheStats WorkbenchServices::stats() const
         stats.budgetBytes = m_options.diskBudgetBytes;
     stats.pendingStores = pendingStores();
     return stats;
+}
+
+framecache::CacheUsage WorkbenchServices::cacheUsage() const
+{
+    if (!m_enabled || m_cacheRoot.isEmpty())
+        return {};
+    return framecache::scanDirectory(
+        m_cacheRoot,
+        {QStringLiteral("webp"), QStringLiteral("qoi")});
 }
 
 int WorkbenchServices::totalFrames() const

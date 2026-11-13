@@ -1,4 +1,6 @@
+#include "framecache/CacheUsage.h"
 #include "framecache/ImageLru.h"
+#include "framecache/LegacyImport.h"
 #include "framecache/Store.h"
 
 #include <QDir>
@@ -189,6 +191,11 @@ private slots:
     void rejectsUnsafeKeys();
     void memoryLruOrderAndBudget();
     void memoryLruTagClear();
+    void usageSeparatesFramesFromIndex();
+    void clearReportsFreedBytes();
+    void clearReportsUndeletableFiles();
+    void budgetShrinkEvictsOldestFirst();
+    void budgetShrinkScansOnce();
 };
 
 void FrameCacheTest::schemaIsShared()
@@ -224,9 +231,13 @@ void FrameCacheTest::schemaMigratesWorkbenchLegacy()
     insertLegacyWorkbenchRow(directory, 7, meta, sha1, data.size(), 1234);
 
     {
-        Options options = optionsFor(directory.path(), 1024);
-        options.legacyTables = {QStringLiteral("frames")};
-        Store store(options);
+        // Store no longer knows historical layouts; the caller imports first.
+        const LegacyImportResult imported = importLegacyIndex(
+            directory.path(), {QStringLiteral("frames")});
+        QVERIFY2(imported.ok(), qPrintable(imported.error));
+        QCOMPARE(imported.records, 1);
+
+        Store store(optionsFor(directory.path(), 1024));
         QVERIFY2(store.isValid(), qPrintable(store.error()));
 
         const auto record = store.record(QStringLiteral("7"));
@@ -238,10 +249,15 @@ void FrameCacheTest::schemaMigratesWorkbenchLegacy()
         QCOMPARE(record->bytes, qint64(data.size()));
     }
 
-    // The legacy table is kept as a read-only backup, and the version stamp
+    // The legacy table is kept as a read-only backup, and the import marker
     // prevents a second import.
     QVERIFY(databaseTables(directory.path()).contains(QStringLiteral("frames")));
     QCOMPARE(databaseUserVersion(directory.path()), 3);
+
+    const LegacyImportResult again =
+        importLegacyIndex(directory.path(), {QStringLiteral("frames")});
+    QVERIFY2(again.ok(), qPrintable(again.error));
+    QCOMPARE(again.records, 0);
 }
 
 void FrameCacheTest::schemaMigratesHtmlcacheLegacy()
@@ -260,9 +276,11 @@ void FrameCacheTest::schemaMigratesHtmlcacheLegacy()
                         data.size(), 99, QStringLiteral("asset-a"));
 
     {
-        Options options = optionsFor(directory.path(), 1024);
-        options.legacyTables = {QStringLiteral("entries")};
-        Store store(options);
+        const LegacyImportResult imported = importLegacyIndex(
+            directory.path(), {QStringLiteral("entries")});
+        QVERIFY2(imported.ok(), qPrintable(imported.error));
+
+        Store store(optionsFor(directory.path(), 1024));
         QVERIFY2(store.isValid(), qPrintable(store.error()));
 
         const auto record = store.record(key);
@@ -498,6 +516,202 @@ void FrameCacheTest::memoryLruTagClear()
     QVERIFY(!lru.contains(QStringLiteral("a0")));
     QVERIFY(lru.contains(QStringLiteral("b0")));
     QCOMPARE(lru.bytes(), qint64(image.sizeInBytes()));
+}
+
+void FrameCacheTest::usageSeparatesFramesFromIndex()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("1.qoi")),
+              QByteArray(100, 'a'));
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("2.WEBP")),
+              QByteArray(200, 'b'));
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("index.sqlite")),
+              QByteArray(300, 'c'));
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("index.sqlite-wal")),
+              QByteArray(50, 'd'));
+
+    const CacheUsage usage = scanDirectory(directory.path());
+    QCOMPARE(usage.frameBytes, qint64(300));
+    QCOMPARE(usage.indexBytes, qint64(350));
+    QCOMPARE(usage.frameCount, 2);
+    QCOMPARE(usage.fileCount, 4);
+    QCOMPARE(usage.totalBytes(), qint64(650));
+
+    // The measurement is a pure scan: repeating it must give the same buckets.
+    const CacheUsage again = scanDirectory(directory.path());
+    QCOMPARE(again.frameBytes, usage.frameBytes);
+    QCOMPARE(again.indexBytes, usage.indexBytes);
+    QCOMPARE(again.frameCount, usage.frameCount);
+    QCOMPARE(again.fileCount, usage.fileCount);
+}
+
+void FrameCacheTest::clearReportsFreedBytes()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("7.qoi")),
+              QByteArray(120, 'a'));
+    const QString nested =
+        QDir(directory.path()).filePath(QStringLiteral("wb/cam"));
+    QVERIFY(QDir().mkpath(nested));
+    writeFile(QDir(nested).filePath(QStringLiteral("8.webp")),
+              QByteArray(80, 'b'));
+    writeFile(QDir(directory.path()).filePath(QStringLiteral("index.sqlite")),
+              QByteArray(40, 'c'));
+
+    const CacheUsage before = scanDirectory(directory.path());
+    const ClearResult result = clearDirectory(directory.path());
+
+    QVERIFY(result.ok);
+    QVERIFY(result.failedPaths.isEmpty());
+    QCOMPARE(result.before.frameBytes, before.frameBytes);
+    QCOMPARE(result.before.indexBytes, before.indexBytes);
+    QCOMPARE(result.after.totalBytes(), qint64(0));
+    QCOMPARE(result.freedBytes, before.totalBytes());
+    QCOMPARE(result.removedFrames, before.frameCount);
+    QCOMPARE(result.removedFiles, before.fileCount);
+    QVERIFY(!QDir(directory.path()).exists());
+}
+
+void FrameCacheTest::clearReportsUndeletableFiles()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString locked =
+        QDir(directory.path()).filePath(QStringLiteral("locked"));
+    QVERIFY(QDir().mkpath(locked));
+    writeFile(QDir(locked).filePath(QStringLiteral("5.webp")),
+              QByteArray(64, 'x'));
+
+    // A read-only directory cannot lose its files.  The guard restores write
+    // access before any assertion so a failure cannot leak into teardown.
+    const QFile::Permissions original = QFile::permissions(locked);
+    QVERIFY(QFile::setPermissions(locked, QFileDevice::ReadOwner
+                                             | QFileDevice::ExeOwner));
+    const ClearResult result = clearDirectory(directory.path());
+    QVERIFY(QFile::setPermissions(locked, original));
+
+    if (result.ok)
+        QSKIP("the test process may delete files in a read-only directory");
+    QCOMPARE(result.after.fileCount, 1);
+    QCOMPARE(result.after.frameCount, 1);
+    QCOMPARE(result.freedBytes, qint64(0));
+    QCOMPARE(result.removedFrames, 0);
+    QCOMPARE(result.failedPaths.size(), 1);
+    QVERIFY(!result.error.isEmpty());
+}
+
+void FrameCacheTest::budgetShrinkEvictsOldestFirst()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QByteArray data(100, 'x');
+    {
+        Store store(optionsFor(directory.path(), 1024 * 1024));
+        QVERIFY2(store.isValid(), qPrintable(store.error()));
+        for (const QString& key : {QStringLiteral("a"), QStringLiteral("b"),
+                                   QStringLiteral("c"), QStringLiteral("d")})
+        {
+            Record record;
+            record.key = key;
+            QVERIFY2(store.put(record, data), qPrintable(store.error()));
+        }
+    }
+
+    // Flatten the LRU clock: b/c/d share the oldest stamp, so the key is the
+    // only tie-break and the sweep must still be deterministic.
+    const QString connection =
+        QStringLiteral("pvf_framecache_flatten_%1")
+            .arg(quintptr(&directory), 0, 16);
+    {
+        QSqlDatabase db =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(
+            QDir(directory.path()).filePath(QStringLiteral("index.sqlite")));
+        QVERIFY2(db.open(), qPrintable(db.lastError().text()));
+        QSqlQuery query(db);
+        QVERIFY2(query.exec(QStringLiteral(
+                     "UPDATE frame_entries SET last_access = 100 "
+                     "WHERE key <> 'a'")),
+                 qPrintable(query.lastError().text()));
+        QVERIFY2(query.exec(QStringLiteral(
+                     "UPDATE frame_entries SET last_access = 200 "
+                     "WHERE key = 'a'")),
+                 qPrintable(query.lastError().text()));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+
+    Store store(optionsFor(directory.path(), 1024 * 1024));
+    QVERIFY2(store.isValid(), qPrintable(store.error()));
+    QCOMPARE(store.stats().entries, 4);
+    QCOMPARE(store.record(QStringLiteral("a"))->lastAccess, qint64(200));
+
+    // Keeping a single row evicts the tied trio in key order and spares "a".
+    store.setBudgetBytes(100);
+    QCOMPARE(store.stats().entries, 1);
+    QCOMPARE(store.stats().evictions, quint64(3));
+    QCOMPARE(store.stats().diskBytes, qint64(100));
+    QVERIFY(store.record(QStringLiteral("a")).has_value());
+    for (const QString& key :
+         {QStringLiteral("b"), QStringLiteral("c"), QStringLiteral("d")})
+        QVERIFY(!store.record(key).has_value());
+
+    // One ordered pass, not one full scan per victim.
+    QVERIFY(store.stats().evictionRowsVisited <= quint64(4));
+}
+
+void FrameCacheTest::budgetShrinkScansOnce()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    constexpr int kCount = 300;
+    constexpr int kKeep = 20;
+    const QByteArray data(16, 'x');
+
+    Store store(optionsFor(directory.path(), 1024 * 1024));
+    QVERIFY2(store.isValid(), qPrintable(store.error()));
+    for (int i = 0; i < kCount; ++i)
+    {
+        Record record;
+        record.key = QString::number(i);
+        QVERIFY2(store.put(record, data), qPrintable(store.error()));
+    }
+    QCOMPARE(store.stats().entries, kCount);
+
+    store.setBudgetBytes(data.size() * kKeep);
+    QCOMPARE(store.stats().entries, kKeep);
+    QCOMPARE(store.stats().diskBytes, qint64(data.size()) * kKeep);
+    QCOMPARE(store.stats().evictions, quint64(kCount - kKeep));
+
+    // The survivors are the newest frames, in insertion (= LRU) order.
+    QVERIFY(!store.record(QStringLiteral("0")).has_value());
+    for (int i = kCount - kKeep; i < kCount; ++i)
+        QVERIFY2(store.record(QString::number(i)).has_value(),
+                 qPrintable(QString::number(i)));
+
+    // A sweep visits each victim once.  The retired O(n²) loop visited
+    // entries * victims (here 300 * 280 = 84000).
+    QVERIFY(store.stats().evictionRowsVisited
+            <= quint64(kCount + kKeep));
+
+    // Evicted rows left the index too, not just the in-memory map.
+    {
+        Store reopened(optionsFor(directory.path(), 1024 * 1024));
+        QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
+        QCOMPARE(reopened.stats().entries, kKeep);
+        QVERIFY(!reopened.record(QStringLiteral("0")).has_value());
+        QVERIFY(!QFileInfo::exists(
+            QDir(directory.path()).filePath(QStringLiteral("0.webp"))));
+        QCOMPARE(reopened.record(QString::number(kCount - 1))->bytes,
+                 qint64(data.size()));
+    }
 }
 
 QTEST_MAIN(FrameCacheTest)

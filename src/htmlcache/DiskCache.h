@@ -32,7 +32,6 @@ public:
     qint64 maxBytes() const;
 
     QString directory() const;
-    QString indexBackend() const; // "SQLite"
     bool isReady() const;
     QString lastError() const;
     framecache::Stats stats() const;

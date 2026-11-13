@@ -35,8 +35,9 @@ public slots:
 
 signals:
     // Emitted after the clear button emptied the service cache, so the window
-    // can refresh the viewport and the status bar.
-    void cacheCleared();
+    // can refresh the viewport and the status bar.  `ok` is false while files
+    // are still on disk.
+    void cacheCleared(bool ok);
 
 private:
     WorkbenchServices* m_services = nullptr;

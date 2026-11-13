@@ -1,5 +1,6 @@
 #include "htmlcache/DiskCache.h"
 
+#include "framecache/LegacyImport.h"
 #include "framecache/Store.h"
 
 #include <QDebug>
@@ -39,12 +40,23 @@ DiskCache::DiskCache(QString directory, qint64 maxBytes)
     d->directory = QDir(directory).absolutePath();
     d->maxBytes = std::max<qint64>(0, maxBytes);
 
+    // Historical layouts: an "entries" table and, for the no-SQLite fallback
+    // build, an index.json sidecar.  Import them before the Store so its
+    // orphan sweep never treats an unindexed legacy frame as garbage.
+    const framecache::LegacyImportResult imported =
+        framecache::importLegacyIndex(
+            d->directory, {QStringLiteral("entries")},
+            QStringLiteral("index.json"));
+    if (!imported.ok())
+    {
+        d->lastError = imported.error;
+        return;
+    }
+
     framecache::Options options;
     options.directory = d->directory;
     options.budgetBytes = d->maxBytes;
     options.extensions = {QStringLiteral("webp")};
-    options.legacyTables = {QStringLiteral("entries")};
-    options.legacyJsonIndex = QStringLiteral("index.json");
     options.validate = [](const QString& path, const framecache::Record&) {
         QImageReader reader(path, QByteArrayLiteral("webp"));
         return reader.canRead();
@@ -168,11 +180,6 @@ qint64 DiskCache::maxBytes() const
 QString DiskCache::directory() const
 {
     return d->directory;
-}
-
-QString DiskCache::indexBackend() const
-{
-    return d->ready ? QStringLiteral("SQLite") : QString();
 }
 
 bool DiskCache::isReady() const

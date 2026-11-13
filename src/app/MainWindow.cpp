@@ -7,6 +7,7 @@
 #include "core/Lang.h"
 #include "core/PerfMonitor.h"
 #include "core/Settings.h"
+#include "framecache/CacheUsage.h"
 #include "htmlcommon/HtmlBrowser.h"
 #include "ExportDialog.h"
 #include "ExportProgressDialog.h"
@@ -59,7 +60,6 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDirIterator>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -97,37 +97,6 @@
 namespace pvf {
 
 namespace {
-
-struct CacheUsage
-{
-    int frames = 0;
-    qint64 bytes = 0;
-};
-
-// Counts files and bytes without constructing a cache service, so the settings
-// page can show a truthful occupancy before the first lookup opens the index.
-// Workbench directories contain SQLite/meta files too; only the frame images
-// count as frames while every file counts towards the disk number.
-CacheUsage scanCacheUsage(const QString& path, bool frameImagesOnly)
-{
-    CacheUsage usage;
-    if (!QFileInfo::exists(path))
-        return usage;
-    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext())
-    {
-        it.next();
-        usage.bytes += it.fileInfo().size();
-        if (!frameImagesOnly
-            || it.fileInfo().suffix().compare(QStringLiteral("qoi"),
-                                              Qt::CaseInsensitive) == 0
-            || it.fileInfo().suffix().compare(QStringLiteral("webp"),
-                                              Qt::CaseInsensitive) == 0)
-            ++usage.frames;
-    }
-    return usage;
-}
 
 #if PVFORGE_LEGACY_SHELL
 class SceneDialog : public QDialog
@@ -1962,26 +1931,34 @@ void MainWindow::wireSessionSettingsDialog(SettingsDialog* dialog)
             return;
         const QString path =
             QDir(m_session->root()).filePath(QStringLiteral(".cache/html"));
-        int files = 0;
-        qint64 bytes = 0;
-        if (QFileInfo::exists(path))
+        const framecache::ClearResult result = framecache::clearDirectory(
+            path, {QStringLiteral("webp")});
+        refreshSessionCacheStats();
+        if (!result.ok)
         {
-            QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
-                            QDirIterator::Subdirectories);
-            while (it.hasNext())
-            {
-                it.next();
-                ++files;
-                bytes += it.fileInfo().size();
-            }
-            QDir(path).removeRecursively();
+            const QString first = result.failedPaths.isEmpty()
+                                      ? QStringLiteral("（未知）")
+                                      : QDir::toNativeSeparators(
+                                            result.failedPaths.first());
+            statusBar()->showMessage(
+                QStringLiteral(
+                    "清理 HTML 缓存失败：%1 个文件未能删除（例：%2），实际释放 %3 MB")
+                    .arg(result.failedPaths.size())
+                    .arg(first)
+                    .arg(double(result.freedBytes) / (1024.0 * 1024.0), 0,
+                         'f', 1),
+                12000);
+            qWarning().noquote()
+                << QStringLiteral("html cache clear failed: %1")
+                       .arg(result.failedPaths.join(QStringLiteral(", ")));
+            return;
         }
         statusBar()->showMessage(
-            QStringLiteral("已清理 HTML 缓存：%1 个文件，%2 MB")
-                .arg(files)
-                .arg(bytes / (1024.0 * 1024.0), 0, 'f', 1),
+            QStringLiteral("已清理 HTML 缓存：%1 个文件，释放 %2 MB")
+                .arg(result.removedFiles)
+                .arg(double(result.freedBytes) / (1024.0 * 1024.0), 0, 'f',
+                     1),
             8000);
-        refreshSessionCacheStats();
     });
     connect(dialog, &SettingsDialog::clearWorkbenchCacheRequested, this,
             [this] { clearSessionWorkbenchCache(); });
@@ -2111,15 +2088,20 @@ void MainWindow::refreshSessionCacheStats()
 
     const QString workbenchRoot =
         sessionCacheFolderPathForTest(QStringLiteral("workbench"));
-    const CacheUsage workbench = scanCacheUsage(workbenchRoot, true);
+    next::WorkbenchServices* workbench = m_session->workbench();
+    const framecache::CacheUsage workbenchUsage =
+        workbench ? workbench->cacheUsage()
+                  : framecache::scanDirectory(
+                        workbenchRoot,
+                        {QStringLiteral("webp"), QStringLiteral("qoi")});
     m_sessionSettingsDialog->setWorkbenchCacheStats(
-        m_session->appSettings().workbenchCacheEnabled, workbench.frames,
-        workbench.bytes, workbenchRoot);
+        m_session->appSettings().workbenchCacheEnabled, workbenchUsage,
+        workbenchRoot);
 
     const QString htmlRoot = sessionCacheFolderPathForTest(QStringLiteral("html"));
-    const CacheUsage html = scanCacheUsage(htmlRoot, false);
-    m_sessionSettingsDialog->setHtmlCacheStats(html.frames, html.bytes,
-                                               htmlRoot);
+    m_sessionSettingsDialog->setHtmlCacheStats(
+        framecache::scanDirectory(htmlRoot, {QStringLiteral("webp")}),
+        htmlRoot);
 }
 
 void MainWindow::clearSessionWorkbenchCache()
@@ -2129,21 +2111,38 @@ void MainWindow::clearSessionWorkbenchCache()
 
     const QString workbenchRoot =
         sessionCacheFolderPathForTest(QStringLiteral("workbench"));
-    const CacheUsage before = scanCacheUsage(workbenchRoot, true);
     next::WorkbenchServices* workbench = m_session->workbench();
-    if (workbench && !workbench->cacheDirectory().isEmpty())
-        workbench->clearCache();
-    else
-        QDir(workbenchRoot).removeRecursively();
-    const CacheUsage after = scanCacheUsage(workbenchRoot, true);
+    const framecache::ClearResult result =
+        workbench ? workbench->clearAll()
+                  : framecache::clearDirectory(
+                        workbenchRoot,
+                        {QStringLiteral("webp"), QStringLiteral("qoi")});
     refreshSessionCacheStats();
 
-    const int frames = std::max(0, before.frames - after.frames);
-    const qint64 bytes = std::max<qint64>(0, before.bytes - after.bytes);
+    if (!result.ok)
+    {
+        const QString first = result.failedPaths.isEmpty()
+                                  ? QStringLiteral("（未知）")
+                                  : QDir::toNativeSeparators(
+                                        result.failedPaths.first());
+        statusBar()->showMessage(
+            QStringLiteral(
+                "清空工作台缓存失败：%1 个文件未能删除（例：%2），实际释放 %3 MB")
+                .arg(result.failedPaths.size())
+                .arg(first)
+                .arg(double(result.freedBytes) / (1024.0 * 1024.0), 0, 'f',
+                     1),
+            12000);
+        qWarning().noquote()
+            << QStringLiteral("workbench cache clear failed: %1")
+                   .arg(result.failedPaths.join(QStringLiteral(", ")));
+        return;
+    }
+
     statusBar()->showMessage(
         QStringLiteral("已清空工作台缓存：%1 帧，释放 %2 MB")
-            .arg(frames)
-            .arg(double(bytes) / (1024.0 * 1024.0), 0, 'f', 1),
+            .arg(result.removedFrames)
+            .arg(double(result.freedBytes) / (1024.0 * 1024.0), 0, 'f', 1),
         8000);
 }
 

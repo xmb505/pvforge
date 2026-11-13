@@ -1,13 +1,11 @@
 #include "framecache/Store.h"
 
+#include "framecache/Schema.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
 #include <QSaveFile>
 #include <QSet>
 #include <QSqlDatabase>
@@ -17,52 +15,15 @@
 #include <QVector>
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace pvf::framecache {
 namespace {
 
-constexpr int kSchemaVersion = 3;
-
 QString normalizeCodec(const QString& codec)
 {
     return codec == QLatin1String("qoi") ? QStringLiteral("qoi")
                                          : QStringLiteral("webp");
-}
-
-bool validTableName(const QString& table)
-{
-    if (table.isEmpty())
-        return false;
-    for (const QChar character : table)
-    {
-        if (!character.isLetterOrNumber() && character != QLatin1Char('_'))
-            return false;
-    }
-    return true;
-}
-
-QStringList tableColumns(const QSqlDatabase& database, const QString& table)
-{
-    QStringList columns;
-    QSqlQuery query(database);
-    if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(table)))
-        return columns;
-    while (query.next())
-        columns.append(query.value(1).toString());
-    return columns;
-}
-
-bool tableExists(const QSqlDatabase& database, const QString& table)
-{
-    QSqlQuery query(database);
-    query.prepare(QStringLiteral(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"));
-    query.addBindValue(table);
-    if (!query.exec() || !query.next())
-        return false;
-    return true;
 }
 
 } // namespace
@@ -136,192 +97,10 @@ struct Store::Impl
         query.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
         query.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
 
-        if (!query.exec(QStringLiteral(
-                "CREATE TABLE IF NOT EXISTS frame_entries ("
-                "key TEXT PRIMARY KEY, "
-                "file TEXT NOT NULL, "
-                "bytes INTEGER NOT NULL, "
-                "last_access INTEGER NOT NULL, "
-                "codec TEXT NOT NULL DEFAULT 'webp', "
-                "payload BLOB NOT NULL DEFAULT X'', "
-                "tag BLOB NOT NULL DEFAULT X'')")))
+        if (!ensureSchema(db, &error))
         {
-            fail(query.lastError().text());
+            fail(error);
             return false;
-        }
-
-        query.exec(QStringLiteral(
-            "CREATE INDEX IF NOT EXISTS frame_entries_access "
-            "ON frame_entries(last_access)"));
-
-        int version = 0;
-        if (query.exec(QStringLiteral("PRAGMA user_version")) && query.next())
-            version = query.value(0).toInt();
-
-        if (version < kSchemaVersion)
-        {
-            if (!migrateLegacy(db))
-            {
-                return false;
-            }
-            query.exec(
-                QStringLiteral("PRAGMA user_version=%1").arg(kSchemaVersion));
-        }
-        return true;
-    }
-
-    // Imports the two historical layouts into frame_entries.  The old tables
-    // stay untouched as a read-only backup; user_version prevents re-import.
-    bool migrateLegacy(const QSqlDatabase& db)
-    {
-        for (const QString& table : options.legacyTables)
-        {
-            if (!validTableName(table) || !tableExists(db, table))
-                continue;
-
-            const QStringList columns = tableColumns(db, table);
-            const bool workbench = columns.contains(QStringLiteral("frame"))
-                                   && columns.contains(QStringLiteral("meta"))
-                                   && columns.contains(QStringLiteral("sha1"));
-            const bool html = columns.contains(QStringLiteral("key"))
-                              && columns.contains(QStringLiteral("asset_hash"));
-            if (!workbench && !html)
-                continue;
-
-            QString select;
-            if (workbench)
-            {
-                const bool hasCodec = columns.contains(QStringLiteral("codec"));
-                select = QStringLiteral(
-                             "SELECT frame, meta, sha1, bytes, last_access%1 "
-                             "FROM %2")
-                             .arg(hasCodec ? QStringLiteral(", codec")
-                                           : QStringLiteral(""),
-                                  table);
-            }
-            else
-            {
-                select = QStringLiteral(
-                             "SELECT key, size, last_access, asset_hash "
-                             "FROM %1")
-                             .arg(table);
-            }
-
-            QSqlQuery query(db);
-            if (!query.exec(select))
-                return fail(query.lastError().text());
-
-            QVector<Record> imported;
-            while (query.next())
-            {
-                Record record;
-                if (workbench)
-                {
-                    record.key = QString::number(query.value(0).toInt());
-                    record.codec =
-                        normalizeCodec(query.value(5).toString());
-                    record.payload = query.value(1).toByteArray();
-                    record.tag = query.value(2).toByteArray();
-                    record.bytes = query.value(3).toLongLong();
-                    record.lastAccess = query.value(4).toLongLong();
-                }
-                else
-                {
-                    record.key = query.value(0).toString();
-                    record.codec = QStringLiteral("webp");
-                    record.bytes = query.value(1).toLongLong();
-                    record.lastAccess = query.value(2).toLongLong();
-                    record.payload = query.value(3).toString().toUtf8();
-                    record.tag = record.payload;
-                }
-                if (record.key.isEmpty() || !safeKey(record.key))
-                    continue;
-                record.file = fileFor(record.key, record.codec);
-                imported.append(record);
-            }
-
-            for (const Record& record : imported)
-            {
-                QSqlQuery insert(db);
-                insert.prepare(QStringLiteral(
-                    "INSERT OR IGNORE INTO frame_entries"
-                    "(key, file, bytes, last_access, codec, payload, tag) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?)"));
-                insert.addBindValue(record.key);
-                insert.addBindValue(record.file);
-                insert.addBindValue(record.bytes);
-                insert.addBindValue(record.lastAccess);
-                insert.addBindValue(record.codec);
-                insert.addBindValue(record.payload.isNull() ? QByteArray("")
-                                                            : record.payload);
-                insert.addBindValue(record.tag.isNull() ? QByteArray("")
-                                                        : record.tag);
-                if (!insert.exec())
-                    return fail(insert.lastError().text());
-            }
-        }
-        return importLegacyJson(db);
-    }
-
-    // htmlcache used a JSON sidecar when Qt SQL was unavailable.  Import it on
-    // first open so upgrading does not discard frames; a corrupt sidecar is
-    // ignored and the ordinary orphan sweep reclaims its files.
-    bool importLegacyJson(const QSqlDatabase& db)
-    {
-        if (options.legacyJsonIndex.isEmpty())
-            return true;
-
-        QFile file(QDir(directory).filePath(options.legacyJsonIndex));
-        if (!file.exists() || !file.open(QIODevice::ReadOnly))
-            return true;
-
-        QJsonParseError parseError;
-        const QJsonDocument document =
-            QJsonDocument::fromJson(file.readAll(), &parseError);
-        if (parseError.error != QJsonParseError::NoError
-            || !document.isObject())
-            return true;
-
-        const QJsonArray array =
-            document.object().value(QStringLiteral("entries")).toArray();
-        for (const QJsonValue& value : array)
-        {
-            if (!value.isObject())
-                continue;
-            const QJsonObject object = value.toObject();
-            const QString key = object.value(QStringLiteral("key")).toString();
-            if (!safeKey(key))
-                continue;
-
-            Record record;
-            record.key = key;
-            record.codec = QStringLiteral("webp");
-            record.file = fileFor(key, record.codec);
-            record.bytes = static_cast<qint64>(
-                object.value(QStringLiteral("size")).toDouble());
-            record.lastAccess = static_cast<qint64>(
-                object.value(QStringLiteral("lastAccess")).toDouble());
-            record.payload = object.value(QStringLiteral("assetHash"))
-                                 .toString()
-                                 .toUtf8();
-            record.tag = record.payload;
-
-            QSqlQuery insert(db);
-            insert.prepare(QStringLiteral(
-                "INSERT OR IGNORE INTO frame_entries"
-                "(key, file, bytes, last_access, codec, payload, tag) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?)"));
-            insert.addBindValue(record.key);
-            insert.addBindValue(record.file);
-            insert.addBindValue(record.bytes);
-            insert.addBindValue(record.lastAccess);
-            insert.addBindValue(record.codec);
-            insert.addBindValue(record.payload.isNull() ? QByteArray("")
-                                                        : record.payload);
-            insert.addBindValue(record.tag.isNull() ? QByteArray("")
-                                                    : record.tag);
-            if (!insert.exec())
-                return fail(insert.lastError().text());
         }
         return true;
     }
@@ -467,25 +246,54 @@ struct Store::Impl
         deleteRow(key);
     }
 
+    // One ordered index pass, oldest first, with the key as a deterministic
+    // tie-break.  Victims are collected until enough bytes are reclaimed and
+    // then removed together, instead of rescanning every record per eviction.
     void enforceBudget()
     {
-        while (diskBytes > budget && !records.isEmpty())
+        if (diskBytes <= budget || records.isEmpty())
+            return;
+
+        QSqlDatabase db = database();
+        QSqlQuery query(db);
+        if (!query.exec(QStringLiteral(
+                "SELECT key FROM frame_entries "
+                "ORDER BY last_access ASC, key ASC")))
         {
-            QString victim;
-            qint64 oldest = std::numeric_limits<qint64>::max();
-            for (auto it = records.cbegin(); it != records.cend(); ++it)
-            {
-                if (it->lastAccess < oldest
-                    || (it->lastAccess == oldest
-                        && (victim.isEmpty() || it.key() < victim)))
-                {
-                    oldest = it->lastAccess;
-                    victim = it.key();
-                }
-            }
-            if (victim.isEmpty())
-                break;
-            forget(victim, true);
+            fail(query.lastError().text());
+            return;
+        }
+
+        const qint64 needed = diskBytes - budget;
+        QStringList victims;
+        qint64 reclaimed = 0;
+        while (reclaimed < needed && query.next())
+        {
+            ++counters.evictionRowsVisited;
+            const QString key = query.value(0).toString();
+            const auto it = records.constFind(key);
+            if (it == records.constEnd())
+                continue;
+            victims.append(key);
+            reclaimed += it->bytes;
+        }
+        query.finish();
+
+        QSqlQuery deleteQuery(db);
+        deleteQuery.prepare(
+            QStringLiteral("DELETE FROM frame_entries WHERE key = ?"));
+        for (const QString& key : victims)
+        {
+            const auto it = records.find(key);
+            if (it == records.constEnd())
+                continue;
+            QFile::remove(pathFor(*it));
+            diskBytes = std::max<qint64>(0, diskBytes - it->bytes);
+            records.erase(it);
+            deleteQuery.bindValue(0, key);
+            if (!deleteQuery.exec())
+                fail(deleteQuery.lastError().text());
+            deleteQuery.finish();
             ++counters.evictions;
         }
     }

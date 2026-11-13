@@ -1,6 +1,7 @@
 #include "workbench/Cache.h"
 
 #include "framecache/ImageLru.h"
+#include "framecache/LegacyImport.h"
 #include "framecache/Store.h"
 #include "perf/FrameProfiler.h"
 #include "workbench/Qoi.h"
@@ -147,11 +148,21 @@ Cache::Cache(QString root, QString cameraKey, Options options, QObject* parent)
         return;
     }
 
+    // Pre-framecache caches kept their rows in a "frames" table.  Import them
+    // explicitly; a failed import must abort the open so the orphan sweep
+    // cannot delete frames whose metadata never made it into frame_entries.
+    const framecache::LegacyImportResult imported =
+        framecache::importLegacyIndex(d->directory, {QStringLiteral("frames")});
+    if (!imported.ok())
+    {
+        d->error = imported.error;
+        return;
+    }
+
     framecache::Options storeOptions;
     storeOptions.directory = d->directory;
     storeOptions.budgetBytes = options.diskBudgetBytes;
     storeOptions.extensions = {kWebpCodec, kQoiCodec};
-    storeOptions.legacyTables = {QStringLiteral("frames")};
 
     d->store = std::make_unique<framecache::Store>(std::move(storeOptions));
     if (!d->store->isValid())

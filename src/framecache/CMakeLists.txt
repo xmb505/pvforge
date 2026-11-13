@@ -15,7 +15,10 @@ include(CTest)
 # one decoded-image LRU.  The workbench and htmlcache facades inject their key
 # generation, codec choice and per-file validation.
 add_library(pvf_framecache STATIC
+    CacheUsage.cpp
     ImageLru.cpp
+    LegacyImport.cpp
+    Schema.cpp
     Store.cpp
 )
 target_include_directories(pvf_framecache PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -40,6 +43,11 @@ if(BUILD_TESTING)
         rejectsUnsafeKeys
         memoryLruOrderAndBudget
         memoryLruTagClear
+        usageSeparatesFramesFromIndex
+        clearReportsFreedBytes
+        clearReportsUndeletableFiles
+        budgetShrinkEvictsOldestFirst
+        budgetShrinkScansOnce
     )
 
     foreach(test_case IN LISTS PVF_FRAMECACHE_TEST_CASES)

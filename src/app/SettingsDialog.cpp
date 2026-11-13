@@ -817,9 +817,9 @@ void SettingsDialog::setGitInfo(const QString& repositoryPath,
                                                    : recentCommit);
 }
 
-void SettingsDialog::setWorkbenchCacheStats(bool enabled, int entries,
-                                            qint64 bytes,
-                                            const QString& directory)
+void SettingsDialog::setWorkbenchCacheStats(
+    bool enabled, const framecache::CacheUsage& usage,
+    const QString& directory)
 {
     if (!m_appWorkbenchCacheStats)
         return;
@@ -833,13 +833,14 @@ void SettingsDialog::setWorkbenchCacheStats(bool enabled, int entries,
                               ? QStringLiteral("（尚未写入）")
                               : directory;
     m_appWorkbenchCacheStats->setText(
-        QStringLiteral("帧数 %1 · %2 MB · %3")
-            .arg(entries)
-            .arg(double(bytes) / (1024.0 * 1024.0), 0, 'f', 1)
+        QStringLiteral("帧数 %1 · 帧 %2 MB · 索引 %3 MB · %4")
+            .arg(usage.frameCount)
+            .arg(double(usage.frameBytes) / (1024.0 * 1024.0), 0, 'f', 1)
+            .arg(double(usage.indexBytes) / (1024.0 * 1024.0), 0, 'f', 1)
             .arg(where));
 }
 
-void SettingsDialog::setHtmlCacheStats(int files, qint64 bytes,
+void SettingsDialog::setHtmlCacheStats(const framecache::CacheUsage& usage,
                                        const QString& directory)
 {
     if (!m_appHtmlCacheStats)
@@ -848,9 +849,10 @@ void SettingsDialog::setHtmlCacheStats(int files, qint64 bytes,
                               ? QStringLiteral("（尚未写入）")
                               : directory;
     m_appHtmlCacheStats->setText(
-        QStringLiteral("文件 %1 · %2 MB · %3")
-            .arg(files)
-            .arg(double(bytes) / (1024.0 * 1024.0), 0, 'f', 1)
+        QStringLiteral("文件 %1 · 帧 %2 MB · 索引 %3 MB · %4")
+            .arg(usage.fileCount)
+            .arg(double(usage.frameBytes) / (1024.0 * 1024.0), 0, 'f', 1)
+            .arg(double(usage.indexBytes) / (1024.0 * 1024.0), 0, 'f', 1)
             .arg(where));
 }
 

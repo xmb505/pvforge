@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/Types.h"
+#include "framecache/CacheUsage.h"
 #include "next/settings/SettingsStore.h"
 #include "render2/Render.h"
 #include "solver/Solver.h"
@@ -156,9 +157,14 @@ public:
     // a scan frame held waiting for HTML.
     void notifyHtmlFrameReady();
 
-    // Drops every cached frame of this camera.  Does not start a new scan;
-    // frames come back on demand.
-    void clearCache();
+    // Removes every cached frame of every camera and render signature under
+    // the cache root.  The SQLite index is closed first; the next store opens a
+    // fresh one.  The result reports what actually disappeared (re-scan after
+    // the delete), including failed paths.
+    framecache::ClearResult clearAll();
+
+    // Backwards-compatible name for the same whole-root operation.
+    framecache::ClearResult clearCache();
 
     // Borrowed solver-result map owned by EditorSession.  Frame-meta builds
     // and cache renders consult it before solving a segment, so an image-cache
@@ -169,6 +175,10 @@ public:
     void setSolverResults(QHash<QString, solver::Result>* results);
 
     workbench::CacheStats stats() const;
+    // Occupancy of the whole cache root (all cameras and signatures), measured
+    // by the shared framecache scanner.  Settings, status messages and the
+    // clear result all use this one definition of "cache usage".
+    framecache::CacheUsage cacheUsage() const;
     WorkbenchPrewarmProgress progress() const { return m_progress; }
     const workbench::Options& options() const { return m_options; }
 

@@ -443,7 +443,6 @@ void HtmlCacheTest::diskLegacyEntriesIndexMigrates()
     DiskCache cache(directory.path());
     QVERIFY2(cache.isReady(), qPrintable(cache.lastError()));
     QCOMPARE(cache.entryCount(), 1);
-    QCOMPARE(cache.indexBackend(), QStringLiteral("SQLite"));
 
     const std::optional<QImage> loaded = cache.get(key);
     QVERIFY(loaded.has_value());

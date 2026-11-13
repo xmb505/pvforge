@@ -1,4 +1,5 @@
 #include "workbench/Cache.h"
+#include "framecache/CacheUsage.h"
 #include "workbench/MetaBuilder.h"
 #include "workbench/Qoi.h"
 
@@ -147,6 +148,7 @@ private slots:
     void cacheReadsLegacyWebp();
     void cacheSwitchesCodecWhenRasterChanges();
     void cachePerCameraDirectories();
+    void cacheUsageMatchesStats();
 };
 
 void WorkbenchCacheTests::metaIsStable()
@@ -1624,6 +1626,52 @@ void WorkbenchCacheTests::cachePerCameraDirectories()
     bool hit = true;
     QVERIFY(cameraB.lookup(3, meta, &hit).isNull());
     QVERIFY(!hit);
+}
+
+void WorkbenchCacheTests::cacheUsageMatchesStats()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+
+    model::Project project;
+    model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
+    project.entities.insert(entity.uuid, entity);
+
+    const workbench::Options options = metaOptions(project);
+    const workbench::MetaBuilder builder(project, assets);
+    const QString cacheRoot = QDir(root.path()).filePath(QStringLiteral("cache"));
+
+    workbench::Cache cache(cacheRoot, QString(), options);
+    QVERIFY2(cache.isValid(), qPrintable(cache.error()));
+    QVERIFY(cache.store(1, builder.build(1, QString(), options),
+                        testImage(QSize(640, 360))));
+    QVERIFY(cache.store(2, builder.build(2, QString(), options),
+                        testImage(QSize(640, 360))));
+
+    const workbench::CacheStats stats = cache.stats();
+    const framecache::CacheUsage usage =
+        framecache::scanDirectory(cache.directory(),
+                                  {QStringLiteral("webp"), QStringLiteral("qoi")});
+
+    // The service stats only count indexed frame bytes; the shared scanner
+    // must not fold index.sqlite/WAL into that number.
+    QCOMPARE(usage.frameCount, stats.entries);
+    QCOMPARE(usage.frameCount, 2);
+    QCOMPARE(usage.frameBytes, stats.diskBytes);
+    QVERIFY(usage.frameBytes > 0);
+    QVERIFY(usage.indexBytes > 0);
+    QVERIFY(usage.fileCount >= 3); // two frames plus the SQLite index
+    QCOMPARE(usage.totalBytes(), usage.frameBytes + usage.indexBytes);
+
+    // A fresh scan of the same tree is identical.
+    const framecache::CacheUsage again =
+        framecache::scanDirectory(cache.directory(),
+                                  {QStringLiteral("webp"), QStringLiteral("qoi")});
+    QCOMPARE(again.frameBytes, usage.frameBytes);
+    QCOMPARE(again.indexBytes, usage.indexBytes);
+    QCOMPARE(again.frameCount, usage.frameCount);
+    QCOMPARE(again.fileCount, usage.fileCount);
 }
 
 QTEST_MAIN(WorkbenchCacheTests)

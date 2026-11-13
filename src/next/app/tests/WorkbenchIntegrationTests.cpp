@@ -301,6 +301,7 @@ private slots:
     void disabledCacheDoesNotLookupOrStore();
     void htmlMissIsNotCached();
     void cameraSwitchRebuildsCachePerCamera();
+    void clearAllRemovesEveryCameraDirectory();
     void playbackPausesAndResumesScan();
     void cacheToPlayheadLimitsRange();
     void panelShowsStatsAndClears();
@@ -702,6 +703,68 @@ void WorkbenchIntegrationTest::cameraSwitchRebuildsCachePerCamera()
     QCOMPARE(window.workbenchServicesForTest()->expandPercent(), 50);
     QCOMPARE(window.workbenchServicesForTest()->targetSize(), QSize(320, 180));
     QVERIFY(window.lookupForTest(0, cameraUuid).isNull());
+}
+
+void WorkbenchIntegrationTest::clearAllRemovesEveryCameraDirectory()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = createProject(temp.path() + QStringLiteral("/clear.pvproj"),
+                                  &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+    addRedRect(document.get());
+    const Uuid cameraUuid = addCamera(document.get());
+
+    NextWindow window(std::move(document));
+
+    // Fill the whole-canvas cache.
+    window.startWorkbenchScanForTest();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    const QString canvasDir = window.workbenchCacheDirForTest();
+    QVERIFY(!canvasDir.isEmpty());
+    QVERIFY(QFileInfo::exists(canvasDir));
+
+    // Switch camera and fill a second directory under the same root.
+    QComboBox* combo = window.cameraComboBoxForTest();
+    QVERIFY(combo != nullptr);
+    combo->setCurrentIndex(combo->count() - 1);
+    WorkbenchServices* services = window.workbenchServicesForTest();
+    QVERIFY(services != nullptr);
+    QCOMPARE(services->cameraUuid(), cameraUuid);
+    window.startWorkbenchScanForTest();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.prewarmProgressForTest().scanning, 15000);
+    const QString cameraDir = window.workbenchCacheDirForTest();
+    QVERIFY(!cameraDir.isEmpty());
+    QVERIFY(cameraDir != canvasDir);
+    QVERIFY(QFileInfo::exists(cameraDir));
+
+    const framecache::CacheUsage before = services->cacheUsage();
+    QVERIFY(before.frameCount > 0);
+    QVERIFY(before.frameBytes > 0);
+    QVERIFY(before.indexBytes > 0);
+
+    // Clear from the camera service: the old whole-canvas directory must go
+    // too, not just the service's current camera key.
+    const framecache::ClearResult result = services->clearAll();
+    QVERIFY(result.ok);
+    QVERIFY(result.failedPaths.isEmpty());
+    QCOMPARE(result.removedFrames, before.frameCount);
+    QCOMPARE(result.after.frameCount, 0);
+    QCOMPARE(result.after.totalBytes(), qint64(0));
+    QVERIFY(result.freedBytes > 0);
+    QVERIFY(!QFileInfo::exists(canvasDir));
+    QVERIFY(!QFileInfo::exists(cameraDir));
+    QCOMPARE(services->cacheUsage().frameCount, 0);
+    QCOMPARE(services->stats().entries, 0);
+
+    // The service stays usable: the next store recreates the tree lazily.
+    QImage rendered(160, 90, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(QColor(255, 0, 0));
+    services->store(0, cameraUuid, rendered);
+    QVERIFY(!services->cacheDirectory().isEmpty());
+    QCOMPARE(services->stats().entries, 1);
 }
 
 void WorkbenchIntegrationTest::playbackPausesAndResumesScan()

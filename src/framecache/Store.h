@@ -39,6 +39,10 @@ struct Stats
     quint64 misses = 0;
     quint64 stores = 0;
     quint64 evictions = 0;
+
+    // Rows visited by budget sweeps.  A sweep is one ordered index pass, so
+    // this grows with the number of victims, never with entries * victims.
+    quint64 evictionRowsVisited = 0;
 };
 
 struct Options
@@ -49,15 +53,6 @@ struct Options
     // Files considered part of this store, for orphan cleanup.  The default
     // matches the htmlcache layout; the workbench adds "qoi".
     QStringList extensions{QStringLiteral("webp")};
-
-    // Legacy index tables imported once when opening a pre-framecache database.
-    // The workbench passes {"frames"}, htmlcache {"entries"}.  The old table is
-    // left in place as a read-only backup.
-    QStringList legacyTables;
-
-    // Optional historical JSON index (htmlcache's no-SQLite fallback), imported
-    // once on the same first-open pass.  The file is left untouched.
-    QString legacyJsonIndex;
 
     // Optional per-file validation on load.  Returning false drops the row and
     // removes the file.  The workbench only checks existence/size; htmlcache
@@ -76,7 +71,11 @@ struct Options
 // Writes go through QSaveFile so a torn store never leaves a half-written
 // frame.  Loading drops rows whose file disappeared, repairs stale sizes and
 // file names, deletes unindexed files with a known extension, and enforces the
-// byte budget with a deterministic oldest-first LRU.
+// byte budget with a single ordered oldest-first LRU pass.
+//
+// Store deliberately knows nothing about historical layouts: callers that may
+// find a pre-framecache directory run importLegacyIndex() (LegacyImport.h)
+// before constructing the Store.
 //
 // Not thread-safe: QSqlDatabase connections belong to the thread that created
 // the Store.  The destructor closes and removes the connection.

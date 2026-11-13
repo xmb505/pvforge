@@ -53,9 +53,9 @@ WorkbenchPanel::WorkbenchPanel(QWidget* parent)
     connect(m_clear, &QPushButton::clicked, this, [this] {
         if (!m_services)
             return;
-        m_services->clearCache();
+        const framecache::ClearResult result = m_services->clearAll();
         refresh();
-        emit cacheCleared();
+        emit cacheCleared(result.ok);
     });
 
     auto* buttons = new QHBoxLayout;
