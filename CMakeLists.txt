@@ -97,6 +97,13 @@ set(PVF_APP_SOURCES
     src/app/WelcomeWindow.cpp
     src/app/NewProjectDialog.cpp
     src/ui/PropertiesPanel.cpp
+    src/ui/PropertiesPanelBuild.cpp
+    src/ui/PropertiesPanelContent.cpp
+    src/ui/PropertiesPanelHtml.cpp
+    src/ui/PropertiesPanelInternal.cpp
+    src/ui/PropertiesPanelInternal.h
+    src/ui/PropertiesPanelKeyframes.cpp
+    src/ui/PropertiesPanelSolver.cpp
     src/next/properties/SolverPreviewWidget.cpp
     src/next/properties/SolverPreviewWidget.h
     src/next/properties/SpecialContentEditor.cpp
