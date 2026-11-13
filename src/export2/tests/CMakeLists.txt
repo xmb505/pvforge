@@ -22,9 +22,9 @@ set(PVF_EXPORT2_TEST_CASES
     frameProviders
     noFrameProviderPlaceholder
     resolutionScale4
-    hiddenAudioMuted
+    hiddenAudioStillExported
     visibleTrackMutesRange
-    parentHiddenMutesChild
+    parentVisibilityMutesChild
     crfRange
     encoderSelection
     presetSelection
@@ -38,3 +38,10 @@ foreach(test_case IN LISTS PVF_EXPORT2_TEST_CASES)
     set_tests_properties(export2.${test_case} PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+add_executable(pvf_export2_hidden_tests HiddenExportTests.cpp)
+target_link_libraries(pvf_export2_hidden_tests PRIVATE
+    pvf_export2 Qt6::Gui PkgConfig::FFMPEG)
+add_test(NAME export2.hiddenVisibility COMMAND pvf_export2_hidden_tests)
+set_tests_properties(export2.hiddenVisibility PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

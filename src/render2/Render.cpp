@@ -1294,7 +1294,8 @@ QTransform cameraView(const model::Project& project, const Options& options,
 void drawChildren(QPainter& painter, const model::Project& project,
                   const assets::AssetStore& store, const Uuid& parentUuid,
                   double projectFrame, anim::World& world, anim::Cache& cache,
-                  QSet<Uuid>& visited, const Options& options)
+                  QSet<Uuid>& visited, const Options& options,
+                  bool parentEditorHidden = false)
 {
     const QVector<Uuid> children = model::childrenOf(project, parentUuid);
     for (const Uuid& uuid : children)
@@ -1308,11 +1309,17 @@ void drawChildren(QPainter& painter, const model::Project& project,
             continue;
 
         const model::Entity& entity = it.value();
+        // Editor-only visibility: a hidden parent also hides descendants that
+        // inherit visibility, mirroring the `visible` inheritance rule.
+        const bool editorHidden =
+            options.skipHidden
+            && (entity.hidden
+                || (parentEditorHidden && entity.inheritVisibility));
         if (activeAt(entity, projectFrame))
         {
             const anim::Pose pose = anim::evaluateEntity(
                 project, uuid, projectFrame, world, cache);
-            if (pose.visible && pose.opacity > 0.0)
+            if (pose.visible && pose.opacity > 0.0 && !editorHidden)
             {
                 painter.save();
                 painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
@@ -1328,7 +1335,7 @@ void drawChildren(QPainter& painter, const model::Project& project,
         }
 
         drawChildren(painter, project, store, uuid, projectFrame, world, cache,
-                     visited, options);
+                     visited, options, editorHidden);
     }
 }
 
@@ -1462,7 +1469,7 @@ QImage renderFrame(const model::Project& project,
 
     QSet<Uuid> visited;
     drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
-                 cache, visited, options);
+                 cache, visited, options, false);
     painter.end();
     return image;
 }

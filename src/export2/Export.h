@@ -64,9 +64,9 @@ using LegacyProgress = std::function<bool(int frame, int total)>;
 // Audio: every Asset entity with assetType Audio that overlaps the export
 // range and is visible during that overlap is decoded through FFmpeg,
 // resampled to 48 kHz stereo float and mixed additively.  Visibility follows
-// the Anim rule: `hidden`, the step-evaluated `visible` track and inherited
-// parent visibility; an entity hidden for the whole overlap is not decoded,
-// and invisible stretches of a partially visible entity stay silent.  The
+// the Anim rule: the step-evaluated `visible` track and inherited parent
+// visibility; editor-only `hidden` is ignored.  Invisible stretches of a
+// partially visible entity stay silent.  The
 // entity's immutable `content.asset.volume` is applied; a `volume` keyframe
 // track overrides it per decoded block.  The mix is encoded as AAC
 // (192 kbit/s) and muxed into the MP4 when at least one audio entity was

@@ -38,6 +38,12 @@ using FrameProvider = std::function<QImage(const Uuid& entityUuid,
 // worldRect is valid: the image starts fully transparent, the project canvas
 // is filled with the background and only entities are drawn outside it.
 // `projectFrame` is fractional during 2x/4x fps export sampling.
+//
+// `skipHidden` is for editor canvas previews only.  `hidden` is the workbench
+// visibility flag: it hides an entity (and inheriting descendants) from the
+// editor picture, but it must never affect export, camera-monitor or MCP
+// previews.  The default therefore ignores it and draws anything whose
+// `visible` track and inherited parent visibility are true.
 struct Options
 {
     double projectFrame = 0.0;
@@ -46,6 +52,7 @@ struct Options
     QColor background;
     QRectF worldRect;
     bool transparentOutsideCanvas = false;
+    bool skipHidden = false;
     FrameProvider videoFrame;
     FrameProvider htmlFrame;
 };

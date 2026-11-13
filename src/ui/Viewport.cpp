@@ -883,12 +883,12 @@ QImage Viewport::renderSessionFrame(const QSize& size, const Uuid& cameraUuid,
 {
     if (!m_session)
         return {};
-
     bool missing = false;
     render2::Options options;
     options.projectFrame = m_session->playhead();
     options.cameraUuid = cameraUuid;
     options.outputSize = size;
+    options.skipHidden = true; // workbench preview honours editor-only hidden
     if (cameraUuid.isEmpty() && expandPercent > 0)
     {
         // Canvas-centred expanded world rect, identical to the workbench

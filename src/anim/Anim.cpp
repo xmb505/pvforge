@@ -102,10 +102,12 @@ LocalValues plainValues(const model::Entity& entity, double relativeFrame)
     values.opacity = trackValue(entity, QStringLiteral("opacity"), relativeFrame,
                                 entity.transform.opacity);
 
+    // `hidden` is an editor-only flag: it affects the workbench canvas and the
+    // timeline, never rendering or export.  Only the visible track decides.
     const double visibleValue = trackValue(
         entity, QStringLiteral("visible"), relativeFrame,
         entity.visible ? 1.0 : 0.0, true);
-    values.visible = !entity.hidden && visibleValue != 0.0;
+    values.visible = visibleValue != 0.0;
     return values;
 }
 
@@ -454,7 +456,7 @@ Pose EvalContext::localPose(const model::Entity& entity, double projectFrame,
     const double visibleValue = trackValue(
         entity, QStringLiteral("visible"), relativeFrame,
         entity.visible ? 1.0 : 0.0, true);
-    values.visible = !entity.hidden && visibleValue != 0.0;
+    values.visible = visibleValue != 0.0;
 
     return composePose(values, entity.inheritVisibility, parent);
 }
