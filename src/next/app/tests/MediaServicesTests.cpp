@@ -3,9 +3,7 @@
 #include "assets/AssetStore.h"
 #include "htmlcommon/HtmlBrowser.h"
 #include "html2/HtmlFrameService.h"
-#include "next/app/NextWindow.h"
 #include "next/app/ProjectDocument.h"
-#include "next/viewport/ViewportWidget.h"
 #include "video2/VideoFrames.h"
 #include "video2/VideoSequenceService.h"
 
@@ -13,7 +11,6 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
-#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QStringList>
@@ -136,7 +133,6 @@ private slots:
     void htmlPrefetchFillsCache();
     void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
-    void switchingProjectsUsesNewAssets();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -518,60 +514,6 @@ void MediaServicesTests::htmlScaleChangesRequestSize()
     settings.htmlMaxWidth = 100;
     media.applySettings(settings);
     QCOMPARE(media.htmlRequestSizeForTest(), QSize(100, 56));
-}
-
-void MediaServicesTests::switchingProjectsUsesNewAssets()
-{
-    if (!gitLfsAvailable())
-        QSKIP("store creation is unavailable");
-
-    QTemporaryDir first;
-    QTemporaryDir second;
-    QVERIFY(first.isValid());
-    QVERIFY(second.isValid());
-
-    QString error;
-    auto firstDocument =
-        makeDocument(first.path() + QStringLiteral("/first.pvproj"), &error);
-    QVERIFY2(firstDocument != nullptr, qPrintable(error));
-    auto window = std::make_unique<NextWindow>(std::move(firstDocument));
-    QVERIFY(window->document() != nullptr);
-    QVERIFY(window->viewportForTest() != nullptr);
-    MediaServices* firstMedia = window->mediaServicesForTest();
-    QVERIFY(firstMedia != nullptr);
-    // Guards against a swapped-in instance reusing the freed address: the
-    // QObject is destroyed by setDocument(), so the guard must go null even
-    // when the allocator hands the new MediaServices the same address.
-    QPointer<MediaServices> firstMediaGuard(firstMedia);
-
-    auto secondDocument =
-        makeDocument(second.path() + QStringLiteral("/second.pvproj"), &error);
-    QVERIFY2(secondDocument != nullptr, qPrintable(error));
-
-    const QString source = makeVideo(second.path() + QStringLiteral("/clip.mp4"));
-    if (source.isEmpty())
-        QSKIP("ffmpeg is unavailable");
-    const auto stored = secondDocument->assets().importFile(source, &error);
-    QVERIFY2(stored.has_value(), qPrintable(error));
-    const Entity entity = makeAssetEntity(AssetType::Video, stored->hash, 0, 0);
-    secondDocument->mutableProject().entities.insert(entity.uuid, entity);
-
-    window->setDocument(std::move(secondDocument));
-    QVERIFY(window->document() != nullptr);
-    QVERIFY(window->document()->root().startsWith(second.path()));
-    QVERIFY(window->viewportForTest() != nullptr);
-
-    // The old instance must be gone (a pointer-only compare is unreliable:
-    // the allocator reuses the freed address for the new MediaServices).
-    QVERIFY(firstMediaGuard.isNull());
-    MediaServices* secondMedia = window->mediaServicesForTest();
-    QVERIFY(secondMedia != nullptr);
-    QCOMPARE(secondMedia->cacheRoot(),
-             second.path() + QStringLiteral("/second.pvproj/.cache"));
-    QVERIFY(!secondMedia->videoFrame(entity.uuid, 1.0).isNull());
-
-    // The viewport keeps rendering the new document without stale providers.
-    QVERIFY(!window->viewportForTest()->grabFrame().isNull());
 }
 
 QTEST_MAIN(MediaServicesTests)

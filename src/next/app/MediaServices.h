@@ -147,8 +147,8 @@ public:
     video2::VideoSequenceService* videoSequenceForTest(const AssetHash& hash) const;
 
 signals:
-    // A low-resolution frame finished rendering in the background.  The window
-    // connects this to ViewportWidget::refresh() with a queued connection.
+    // A low-resolution frame finished rendering in the background.  The
+    // viewport connects this to its repaint with a queued connection.
     void htmlFrameReady();
     // The HTML browsers could not be started; the message is for the status
     // bar / MCP log.  HTML frames stay empty until the project is reopened.

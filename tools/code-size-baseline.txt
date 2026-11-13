@@ -8,13 +8,11 @@ src/app/MainWindow.cpp	5773
 src/ui/PropertiesPanel.cpp	5580
 src/ui/TimelinePanel.cpp	4763
 src/ui/Viewport.cpp	4443
-src/next/app/NextWindow.cpp	4022
 src/next/properties/PropertiesPanel.cpp	3853
 src/tests/ViewportCameraTests.cpp	3824
 src/next/timeline/TimelineWidget.cpp	3293
 src/tests/TimelineTests.cpp	3190
 src/mcp2/tests/mcp2_tests.cpp	3143
 src/core/Project.cpp	2961
-src/next/app/tests/NextWindowTests.cpp	2836
 src/ui/AssetLibraryPanel.cpp	2746
 src/mcp2/EntityTools.cpp	2541

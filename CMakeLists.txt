@@ -24,15 +24,6 @@ option(PVFORGE_BUILD_SELF_TESTS
     "Build pvforge-tests, the executable that answers the --*-test switches"
     ${_pvf_self_tests_default})
 
-# The reference shell (src/next/app NextWindow + src/next/viewport) is a design
-# reference, not part of the delivered editor.  It stays off by default so the
-# delivery build only compiles pvforge/pvforge-mcp and the modules they link.
-# Developers who need the reference UI or its tests pass
-# -DPVFORGE_BUILD_REFERENCE=ON (the debug/tests presets do).
-option(PVFORGE_BUILD_REFERENCE
-    "Build the src/next reference shell (NextWindow, ViewportWidget) and its tests"
-    OFF)
-
 # The pre-EditorSession shell — core::Project, the Project* constructors of the
 # old panels, the FFmpeg scene renderer, the legacy MCP service and the HTML
 # layer widgets — is retired and has no users.  Release builds leave it out
@@ -242,7 +233,7 @@ install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
 
 # New entity model modules. The legacy pvforge target links only the small
 # document/core/store slice (pvf_next_document) plus the services and panels
-# it uses; the reference shell is not a delivery target.
+# it uses.
 add_subdirectory(src/model)
 add_subdirectory(src/perf)
 add_subdirectory(src/assets)
@@ -266,14 +257,8 @@ add_subdirectory(src/next/assets)
 add_subdirectory(src/next/mcp)
 add_subdirectory(src/next/timeline)
 add_subdirectory(src/next/properties)
-# The reference shell's viewport must be added before src/next/app so the app
-# subdirectory reuses the target instead of registering a duplicate.
-if(PVFORGE_BUILD_REFERENCE)
-    add_subdirectory(src/next/viewport)
-endif()
-# src/next/app also carries pvf_next_document/pvf_next_services, which the
-# delivery shell links.  The reference-only libraries and tests inside it are
-# guarded by PVFORGE_BUILD_REFERENCE.
+# src/next/app carries pvf_next_document/pvf_next_services, which the delivery
+# shell links.
 add_subdirectory(src/next/app)
 
 # P1/P2 delivery shell: link only the document slice and the shared entity
