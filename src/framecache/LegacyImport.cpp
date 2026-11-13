@@ -245,6 +245,15 @@ LegacyImportResult importLegacyIndex(const QString& directory,
         return result;
     }
 
+    // Store creates the directory too, but the import runs first: without this
+    // a fresh cacheRoot cannot even open index.sqlite.
+    if (!QDir().mkpath(directory))
+    {
+        result.error =
+            QStringLiteral("cannot create cache directory: %1").arg(directory);
+        return result;
+    }
+
     const QString connectionName =
         QStringLiteral("pvf_framecache_legacy_%1")
             .arg(reinterpret_cast<quintptr>(&result), 0, 16);
