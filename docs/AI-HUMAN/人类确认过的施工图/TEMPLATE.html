@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>施工图模板 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--panel2:#20242a;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);color:var(--text);
+    font:13px/1.7 "Noto Sans Mono CJK SC","Sarasa Mono SC","JetBrains Mono",monospace;
+    padding:28px;
+  }
+  .sheet{max-width:1040px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{
+    display:flex;align-items:flex-start;gap:16px;padding:18px 22px;
+    background:linear-gradient(180deg,#23282d,#1b1f23);border-bottom:1px solid var(--line2);
+  }
+  .head .mark{width:36px;height:36px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}
+  .head h1{font-size:20px;letter-spacing:1px;line-height:1.2}
+  .head .sub{color:var(--dim);font-size:11px;margin-top:4px;letter-spacing:1px}
+  .head .state{margin-left:auto;text-align:right}
+  .badge{display:inline-block;border:1px solid var(--line2);padding:2px 8px;font-size:10px;letter-spacing:1px;color:var(--dim)}
+  .badge.todo{border-color:#7a5500;color:var(--amber)}
+  .badge.ok{border-color:#2c6b43;color:var(--green)}
+  .meta{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border-bottom:1px solid var(--line)}
+  .meta div{padding:7px 14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+  .meta div:nth-child(even){border-right:0}
+  .meta b{color:#cfd6dd;font-weight:500}
+  .body{padding:18px 22px 24px}
+  section{margin-bottom:22px}
+  h2{font-size:12px;letter-spacing:2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:10px}
+  h2 .n{display:inline-block;min-width:22px;color:var(--faint);letter-spacing:0}
+  p,li{color:#c8d0d7}
+  ul{padding-left:20px}
+  li{margin:2px 0}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#ced5dc;font-weight:500;letter-spacing:1px}
+  code{background:#0c0e10;border:1px solid #22282d;padding:1px 5px;color:#e9c46a;font-size:12px}
+  pre{background:#0c0e10;border:1px solid #22282d;padding:12px 14px;overflow:auto;color:#cfd6dd;font-size:12px;line-height:1.6;margin:8px 0}
+  .hint{border-left:2px solid var(--line2);padding-left:10px;color:var(--faint);font-size:11px}
+  .check{color:var(--dim)}
+  .check input{accent-color:var(--amber);margin-right:6px}
+  .foot{display:flex;gap:12px;padding:10px 22px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:10px;letter-spacing:1px}
+  .foot .grow{flex:1}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <div>
+      <h1>［施工图标题］</h1>
+      <div class="sub">PVForge · 人类确认过的施工图</div>
+    </div>
+    <div class="state">
+      <span class="badge todo">待确认 / 已确认</span><br>
+      <span style="font-size:10px;color:var(--faint)">确认后才进入实现依据</span>
+    </div>
+  </header>
+
+  <div class="meta">
+    <div>状态：<b>待确认</b></div>
+    <div>确认日期：<b>YYYY-MM-DD</b></div>
+    <div>适用模块：<b><code>src/...</code></b></div>
+    <div>确认人：<b>人类</b></div>
+    <div>关联 issue：<b>#</b></div>
+    <div>施工图版本：<b>v0</b></div>
+  </div>
+
+  <div class="body">
+    <section>
+      <h2><span class="n">1</span>目标</h2>
+      <p>这个模块 / 功能到底解决什么问题。只写用户能感知的结果，不写实现方案。</p>
+    </section>
+
+    <section>
+      <h2><span class="n">2</span>非目标</h2>
+      <ul>
+        <li>明确不做什么，防止 AI 扩展范围。</li>
+        <li>明确本版不兼容的旧行为。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="n">3</span>术语</h2>
+      <table>
+        <thead><tr><th>术语</th><th>定义</th><th>代码对应</th></tr></thead>
+        <tbody>
+          <tr><td>舞台 Stage</td><td>整个合成窗口</td><td>—</td></tr>
+          <tr><td>工作台 Workbench</td><td>舞台内创建 / 导入面板</td><td><code>WorkbenchPanel</code></td></tr>
+          <tr><td></td><td></td><td></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2><span class="n">4</span>数据结构</h2>
+      <pre>StructName {
+    field: Type   // 含义、单位、约束
+}</pre>
+      <p class="hint">字段必须写清：单位（帧 / 像素 / 百分比）、默认值、合法范围、是否可为空、序列化名称。</p>
+    </section>
+
+    <section>
+      <h2><span class="n">5</span>用户流程 / 伪代码</h2>
+      <pre>1. 用户...
+2. 系统...
+3. 结果...</pre>
+      <p class="hint">先写人的动作，再写系统反应；不要先写类名和函数名。</p>
+    </section>
+
+    <section>
+      <h2><span class="n">6</span>UI 与交互</h2>
+      <table>
+        <thead><tr><th>项目</th><th>定义</th></tr></thead>
+        <tbody>
+          <tr><td>入口</td><td></td></tr>
+          <tr><td>默认布局</td><td></td></tr>
+          <tr><td>拖拽 / 快捷键</td><td></td></tr>
+          <tr><td>浮出 / 停靠</td><td></td></tr>
+          <tr><td>空状态 / 错误状态</td><td></td></tr>
+        </tbody>
+      </table>
+      <p class="hint">UI 施工图必须是 HTML；静态截图只能作为附件，不能替代可点击的 HTML。</p>
+    </section>
+
+    <section>
+      <h2><span class="n">7</span>边界与错误</h2>
+      <ul>
+        <li>空、零、负数、越界。</li>
+        <li>撤销 / 重做。</li>
+        <li>并发 / 取消 / 关闭。</li>
+        <li>数据损坏 / 版本不匹配。</li>
+        <li>错误码与用户可见文案。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="n">8</span>不变量</h2>
+      <ul>
+        <li>任何时刻都必须成立的条件。</li>
+        <li>违反时是崩溃、拒绝操作，还是自动修复。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="n">9</span>验收</h2>
+      <ul>
+        <li>可执行的测试名 / CTest 名称。</li>
+        <li>可观察的行为。</li>
+        <li>失败时用户看到什么。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="n">10</span>待确认问题</h2>
+      <ul class="check">
+        <li><input type="checkbox"> 待人类拍板的问题。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="n">11</span>变更记录</h2>
+      <table>
+        <thead><tr><th>日期</th><th>改动</th><th>确认人</th></tr></thead>
+        <tbody><tr><td></td><td></td><td></td></tr></tbody>
+      </table>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <span>docs/AI-HUMAN/人类确认过的施工图/</span>
+    <span class="grow"></span>
+    <span>HTML 施工图 · 未经人类确认不得标“已确认”</span>
+  </footer>
+</div>
+</body>
+</html>
