@@ -18,12 +18,12 @@
 
 ## 硬规则
 
-- 不改旧代码：`src/core/**`、`src/ui/**`、`src/app/**`、`src/mcp/**`、`src/render/**`、`src/html/**`、`src/media/**`、`src/main.cpp`、根 `CMakeLists.txt`。
+- 不改旧代码：`src/core/**`、`src/ui/**`、`src/app/**`、`src/mcp/**`、`src/render/**`、`src/html/**`、`src/media/**`、`src/main.cpp`、根 `CMakeLists.txt`。（`src/htmlcommon/**` 是 `html2` 与旧壳共用的 CDP/DOM 传输层，不属于旧壳禁令范围。）
 - 不 commit、不 push。
 - 编辑代码必须用 OpenCode 自带工具（`read` / `grep` / `edit` / `write` / `glob`），不要用 shell 的 `sed` / `awk` / `grep` / `cat >` 改文件。
 - shell 只用于：`cmake`、编译、运行测试、创建临时目录。
 - 每个模块自带 `CMakeLists.txt`，能独立构建；不要依赖根工程。
-- 模块之间只通过 `src/common/Types.h` 和公开头文件交互；不要 include 旧 `core/Project.h`。
+- 模块之间只通过 `src/common/Types.h` 和公开头文件交互。**旧壳隔离中**：交付头文件正在移除对旧 `core/Project.h` 的依赖（issue #95），尚未完成；在 #95 完成前，新模块**不要新增**对 `core/Project.h` 或旧 `core/**` 类型的依赖，也不要把它当成已清理干净。
 - 所有公开头文件放模块根目录，实现放 `.cpp`；测试放 `tests/`。
 - 代码风格跟现有仓库一致：4 空格、`namespace pvf`、Qt6、C++20。
 

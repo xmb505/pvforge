@@ -106,10 +106,12 @@ anim / render2 / html2 / video2 / audio2 / export2 / mcp2 / workbench
 | `core/Camera.*` | 相机取景框和监视器 | `anim` 的相机 pose + render2 的 cameraView | **退出数据路径**；取景框数学按新 `gizmo`/`anim` 重算 |
 | `core/History.*`、`core/Commands.*`、`core/CheckpointManager.*` | 旧 undo/场景 checkpoint | store 内存 undo + git commit + 历史面板 | **退出交付路径**；源码留到收尾 |
 | `core/Settings.*`、`core/Lang.*` | QSettings 包装、49 个 key 的语言包 | `next/settings` 的 `AppSettings`；`tr()` | **Settings 逐步并入 AppSettings；Lang 放弃** |
-| `html/HtmlAsset.*`、`html/HtmlRenderer.*`、`html/HtmlBrowser.*` | 按层 CDP、多 component 变量 | `html2` + `assets::PvhtmlManifest` + `MediaServices` | **退出交付路径**；`.pvhtml` 导入和变量从 asset metadata 读 |
+| `html/HtmlAsset.*`、`html/HtmlRenderer.*` | 按层 CDP、多 component 变量 | `html2` + `assets::PvhtmlManifest` + `MediaServices` | **退出交付路径**；`.pvhtml` 导入和变量从 asset metadata 读 |
 | `media/VideoPlayer.*`、`media/VideoProxy.*`、`media/MediaImporter.*` | 旧解码/代理/导入 | `video2` + `assets::AssetStore` + `MediaServices` | **退出交付路径** |
 | `render/SceneRenderer.*`、`render/CameraRenderer.*`、`render/VideoExporter.*` | 旧预览/相机/导出 | `render2`、`export2` | **退出交付路径** |
 | `mcp/McpServer.*`、`mcp/McpCommandService.*` | 旧工具集、场景授权、checkpoint | `mcp2` 46 工具、git 只读、急停、写锁 | **退出交付路径** |
+
+注：CDP/browser 传输层已从 `src/html/` 迁到 `src/htmlcommon/`（`CdpClient`/`CdpTransport`/`HtmlBrowser`），它是 `html2` 与交付壳共用的现役组件，不随 `src/html` 退出。
 
 ---
 

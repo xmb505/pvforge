@@ -58,7 +58,7 @@
 
 - 交付目标始终是旧壳 `pvforge`；`pvforge-next` 不改名替代，不删除 `src/app`、`src/ui`。
 - 旧面板按目录/功能逐个把内部实现换成新后端，布局、菜单、快捷键、浮动面板保留。
-- 保留 `src/html` 的 CDP/browser 实现给 `html2`（仍有效）。
+- 保留 `src/htmlcommon` 的 CDP/browser 实现（`CdpClient`/`CdpTransport`/`HtmlBrowser`）给 `html2`（仍有效）；`src/html` 只剩旧壳 HTML 资产/渲染实现。
 
 <details>
 <summary>2026-11-10 前的原计划（已取消，保留追溯）</summary>

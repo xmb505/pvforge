@@ -7,14 +7,14 @@
 | 指标 | 值 |
 | --- | --- |
 | 生成日期 | 2026-11-13 |
-| HEAD | `2421e88` |
+| HEAD | `bdf81a0` |
 | `src/main.cpp` 行数 | 128 |
-| `src/tests` 行数 | 25252 |
-| 测试源码行数（含模块 tests） | 62827 |
-| 非测试源码行数 | 123858 |
+| `src/tests` 行数 | 25279 |
+| 测试源码行数（含模块 tests） | 63056 |
+| 非测试源码行数 | 124278 |
 | `--*-test` 自检开关数 | 95 |
-| CTest 用例数 | 347 |
-| `dist/pvforge` 大小 | 6.4 MiB（6703808 字节） |
+| CTest 用例数 | 330 |
+| `dist/pvforge` 大小 | 6.4 MiB（6715992 字节） |
 | Release 动态库依赖数 | 175（ldd 动态库依赖） |
 <!-- metrics:end -->
 
@@ -31,7 +31,7 @@
 新模型不是旧工程的迁移，而是一套平行实现：
 
 - 旧 `pvforge` 目标就是交付壳，保留 `src/app` + `src/ui` 的布局、面板、快捷键和交互；新后端逐步接入。（2026-11-10 方向修正：原“作为参考”改为“交付壳”。）
-- `src/model`、`store`、`assets`、`solver`、`anim`、`render2`、`html2`、`video2`、`audio2`、`export2`、`mcp2` 是新后端；`pvforge-next` / `src/next/app` 只作行为参考，不交付、不改名替代。
+- `src/model`、`store`、`assets`、`solver`、`anim`、`render2`、`html2`、`htmlcommon`、`framecache`、`video2`、`audio2`、`export2`、`mcp2` 是新后端；`pvforge-next` / `src/next/app` 只作行为参考，不交付、不改名替代。
 - 旧工程 `.pvproj` 单文件不读取；新后端目标是 `.pvproj/` 目录。迁移期旧壳仍读写旧单文件，P1 后切换。
 - 旧场景/文件夹/clip/模板模型在新后端全部替换；迁移期旧壳界面暂保留这些旧结构，不因接后端提前删除。
 
@@ -134,33 +134,37 @@
 
 ## 3. 已实现模块
 
-| 模块 | 目录 | 状态 / 测试 |
-|---|---|---|
-| Model | `src/model` | JSON/校验/小数帧求值；14 组测试 |
-| Solver | `src/solver` | 重力/公转/自转/黑洞；10 测试 |
-| Assets | `src/assets` | sha256/素材库/WAV/.pvhtml/标签；17 CTest |
-| Gizmo | `src/gizmo` | 四角旋转/Office 缩放/中心四象限；10 组 265 断言 |
-| Store | `src/store` | 文本-only git（可关闭）、内存 undo、debounce、崩溃恢复、恢复到 commit；32 测试 |
-| Anim | `src/anim` | 普通/求解段/父子/可见性/小数帧；12 测试 |
-| Renderer2 | `src/render2` | 图/矢量/文字/相机/素材丢失卡片/provider；20 测试 |
-| Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率；11 CTest |
-| Audio2 | `src/audio2` | 混音 + QAudioSink 播放；8 测试 |
-| HTML cache | `src/htmlcache` | 内存 QImage LRU + 磁盘 WebP LRU；13 测试 |
-| HTML2 | `src/html2` | `.pvhtml` 本地服务器/Chrome/三浏览器/异步/8192 上限；16 测试 |
-| Video2 | `src/video2` | 取帧/代理/全量抽图/队列/设置；25 测试 |
-| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider/无 Git 只读；40 测试 |
-| Workbench | `src/workbench` | 帧元信息/整帧 WebP/SQLite LRU/预渲染扫描；22 测试 |
-| Next core | `src/next/core` | Document 接口 |
-| Next app | `src/next/app` | 主窗口/播放看门狗/媒体/导出/崩溃恢复/Git 引导+历史/工作台缓存/Debug；7 CTest |
-| Timeline | `src/next/timeline` | 行/裁剪/关键帧/浮层/标记 CRUD/音频峰值；36 测试 |
-| Properties | `src/next/properties` | 属性/auto-key/求解段/HTML 变量/换素材/33 缓动；35 测试 |
-| AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度/补抽；17 测试 |
-| Viewport | `src/next/viewport` | 渲染/gizmo/provider/吸附/工作台命中；23 测试 |
-| Settings | `src/next/settings` | 5 页 QSettings/Git 引导/工作台缓存；29 测试 |
-| MCP log | `src/next/mcp` | 日志/急停/恢复；15 测试 |
-| History | `src/next/history` | Git 历史列表/恢复到提交；10 测试 |
+测试数量**不在这里手写**：唯一来源是 CMake 注册的 CTest 用例（模块或根 `CMakeLists.txt`；`ctest --test-dir <build> -N` 查看），总数见顶部指标区块。下表只描述模块职责与状态。
 
-根 CMake 已包含全部新模块；`pvforge-next` 可链接，但只作参考，不是交付目标（2026-11-10 方向修正）。
+| 模块 | 目录 | 状态 / 职责 |
+|---|---|---|
+| Model | `src/model` | JSON/校验/小数帧求值 |
+| Solver | `src/solver` | 重力/公转/自转/黑洞 |
+| Assets | `src/assets` | sha256/素材库/WAV/.pvhtml/标签 |
+| Gizmo | `src/gizmo` | 四角旋转/Office 缩放/中心四象限 |
+| Store | `src/store` | 文本-only git（可关闭）、内存 undo、debounce、崩溃恢复、恢复到 commit |
+| Anim | `src/anim` | 普通/求解段/父子/可见性/小数帧 |
+| Renderer2 | `src/render2` | 图/矢量/文字/相机/素材丢失卡片/provider |
+| Export2 | `src/export2` | MP4 + AAC 音频、2x/4x fps、1x/2x/4x 分辨率 |
+| Audio2 | `src/audio2` | 混音 + QAudioSink 播放 |
+| Frame cache | `src/framecache` | 共用 SQLite 帧缓存 schema/目录 LRU/解码图 LRU；`workbench` 与 `htmlcache` 共用 |
+| HTML cache | `src/htmlcache` | 内存 QImage LRU + 磁盘 WebP LRU（帧缓存底层走 `src/framecache`） |
+| HTML common | `src/htmlcommon` | CDP 传输（pipe/WebSocket）/`CdpClient`/`HtmlBrowser`；无独立 CMake 目标，源码由 `html2` 与交付目标直接编译 |
+| HTML2 | `src/html2` | `.pvhtml` 本地服务器/Chrome/三浏览器/异步/8192 上限 |
+| Video2 | `src/video2` | 取帧/代理/全量抽图/队列/设置 |
+| MCP2 | `src/mcp2` | 46 工具/HTTP/急停/预览 provider/无 Git 只读 |
+| Workbench | `src/workbench` | 帧元信息/整帧 WebP/SQLite LRU/预渲染扫描 |
+| Next core | `src/next/core` | Document 接口 |
+| Next app | `src/next/app` | 主窗口/播放看门狗/媒体/导出/崩溃恢复/Git 引导+历史/工作台缓存/Debug（参考壳，不交付） |
+| Timeline | `src/next/timeline` | 行/裁剪/关键帧/浮层/标记 CRUD/音频峰值 |
+| Properties | `src/next/properties` | 属性/auto-key/求解段/HTML 变量/换素材/33 缓动 |
+| AssetPanel | `src/next/assets` | 列表/导入/标签/抽图进度/补抽 |
+| Viewport | `src/next/viewport` | 渲染/gizmo/provider/吸附/工作台命中 |
+| Settings | `src/next/settings` | 5 页 QSettings/Git 引导/工作台缓存 |
+| MCP log | `src/next/mcp` | 日志/急停/恢复 |
+| History | `src/next/history` | Git 历史列表/恢复到提交 |
+
+根 CMake 已包含全部新模块目标（`src/htmlcommon` 无独立目标，随 `html2`/交付目标编译）；`pvforge-next` 可链接，但只作参考，不是交付目标（2026-11-10 方向修正）。
 
 ### 3.1 端到端验收（2026-11-10）
 

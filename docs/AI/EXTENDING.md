@@ -95,4 +95,4 @@ ctest --test-dir build -R '<module>\.'
 - `workbench::MetaBuilder` 可继续加新元信息维度；缓存比较不做失效区间/分层。
 - MCP 工具表可继续加；写工具自动获得急停/只读/confirm 框架。
 - 设置页可继续加全局功能项；工程设置保持 fps/分辨率/背景/markers。
-- 旧 app 删除前，`src/core` 的 `TextBlock/TextStyle/VectorShape` 与 `src/html` 的 CDP/browser 是共享件，先迁移再删。
+- 旧 app 删除前，`src/core` 的 `TextBlock/TextStyle/VectorShape` 是共享件，先迁移再删；CDP/browser 传输层已在 `src/htmlcommon/`（`CdpClient`/`CdpTransport`/`HtmlBrowser`），不再属于 `src/html`。

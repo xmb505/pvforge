@@ -133,7 +133,7 @@ Store agent 必须写独立测试：临时目录建工程、保存/打开往返�
 - 可见性：`hidden`、`visible`、`inheritVisibility`。
 - 负 scale：所有实体，包括摄像机。
 - 素材缺失：棋盘格 + “素材缺失”。
-- HTML：复用现有 `src/html` CDP，但改为 `.pvhtml` 目录包 + 沙箱。
+- HTML：复用现有 `src/htmlcommon` CDP/browser 传输层，但改为 `.pvhtml` 目录包 + 沙箱。
 - 导出：选定摄像机 `[start,end)`；音频混合；MP4 管线复用。
 
 渲染 agent 先用固定测试工程对拍：普通实体、父子、求解段、负 scale、素材缺失。
