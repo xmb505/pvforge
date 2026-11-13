@@ -18,6 +18,11 @@ struct TimelineEditIds
     pvf::Uuid solverRoot;
     pvf::Uuid trashRoot;
     pvf::Uuid trashChild;
+    pvf::Uuid followParent;
+    pvf::Uuid followChild;
+    pvf::Uuid followPeer;
+    pvf::Uuid followGrand;
+    pvf::Uuid followTarget;
 };
 
 struct TimelineEditOps
@@ -47,6 +52,11 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
     const pvf::Uuid& solverRoot = ids.solverRoot;
     const pvf::Uuid& trashRoot = ids.trashRoot;
     const pvf::Uuid& trashChild = ids.trashChild;
+    const pvf::Uuid& followParent = ids.followParent;
+    const pvf::Uuid& followChild = ids.followChild;
+    const pvf::Uuid& followPeer = ids.followPeer;
+    const pvf::Uuid& followGrand = ids.followGrand;
+    const pvf::Uuid& followTarget = ids.followTarget;
     const auto& check = ops.check;
     const auto& flush = ops.flush;
     const auto& undo = ops.undo;
@@ -188,7 +198,173 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
                QStringLiteral("keepWorld outside the new parent should fail")))
         return 1;
 
+    // Parent-range following: enabling rewrites the child to the parent's
+    // range, rebases keys to keep absolute frames and cascades to following
+    // grandchildren.
+    auto keyFrames = [&](const pvf::Uuid& uuid, const QString& track) {
+        QVector<int> frames;
+        for (const auto& key : entity(uuid).tracks.value(track).keys)
+            frames.append(key.frame);
+        return frames;
+    };
+    auto expectFrames = [&](const QVector<int>& actual,
+                            const QVector<int>& expected,
+                            const QString& message) {
+        return check(actual == expected, message);
+    };
+
+    int followDepth = depth();
+    if (!check(actions->setFollowParentRange(followChild, true, &error),
+               QStringLiteral("enable follow failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followChild).start == 0
+                   && entity(followChild).end == 20
+                   && entity(followChild).followParentRange,
+               QStringLiteral("enable follow did not rewrite the child range")))
+        return 1;
+    if (!expectFrames(keyFrames(followChild, QStringLiteral("opacity")),
+                      {7, 13, 17},
+                      QStringLiteral("enable follow changed absolute key frames")))
+        return 1;
+    if (!check(entity(followGrand).start == 0
+                   && entity(followGrand).end == 20
+                   && entity(followGrand).followParentRange,
+               QStringLiteral("enable follow did not cascade to the grandchild")))
+        return 1;
+    if (!expectFrames(keyFrames(followGrand, QStringLiteral("opacity")), {5},
+                      QStringLiteral("grandchild key lost its absolute frame")))
+        return 1;
+    flush();
+    if (!check(depth() == followDepth + 1,
+               QStringLiteral("enable follow did not commit exactly once")))
+        return 1;
+    if (!undo())
+        return 1;
+    if (!check(entity(followChild).start == 5
+                   && entity(followChild).end == 18
+                   && !entity(followChild).followParentRange,
+               QStringLiteral("undo did not restore the follow state")))
+        return 1;
+
+    // Re-enable and move the parent: absolute keys move with the entity while
+    // relative frames stay put.
+    if (!check(actions->setFollowParentRange(followChild, true, &error),
+               QStringLiteral("re-enable follow failed: %1").arg(error)))
+        return 1;
+    flush();
+    if (!check(actions->moveClips({followParent}, 10, &error),
+               QStringLiteral("follow parent move failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followParent).start == 10
+                   && entity(followChild).start == 10
+                   && entity(followChild).end == 30,
+               QStringLiteral("parent move did not carry the following child")))
+        return 1;
+    if (!expectFrames(keyFrames(followChild, QStringLiteral("opacity")),
+                      {7, 13, 17},
+                      QStringLiteral("parent move changed relative key frames")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Parent trim start: the child follows the new range and keys before the
+    // cut disappear (the example's absolute frame 13 key).
+    if (!check(actions->trimClip(followParent, 15, 20, &error),
+               QStringLiteral("follow parent trim failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followChild).start == 15
+                   && entity(followChild).end == 20,
+               QStringLiteral("trim did not move the following child")))
+        return 1;
+    if (!expectFrames(keyFrames(followChild, QStringLiteral("opacity")), {2},
+                      QStringLiteral("trim did not drop the out-of-range keys")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Parent stretch end: the child expands and keeps every key.
+    if (!check(actions->trimClip(followParent, 0, 30, &error),
+               QStringLiteral("follow parent stretch failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followChild).end == 30,
+               QStringLiteral("stretch did not expand the following child")))
+        return 1;
+    if (!expectFrames(keyFrames(followChild, QStringLiteral("opacity")),
+                      {7, 13, 17},
+                      QStringLiteral("stretch dropped or moved keys")))
+        return 1;
+    if (!undo())
+        return 1;
+
+    // Multiple following children all take the same parent range; moving one
+    // on its own is rejected.
+    if (!check(actions->setFollowParentRange(followPeer, true, &error),
+               QStringLiteral("enable peer follow failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followPeer).start == entity(followParent).start
+                   && entity(followPeer).end == entity(followParent).end
+                   && entity(followChild).start == entity(followParent).start,
+               QStringLiteral("multiple following children disagree")))
+        return 1;
+    if (!undo())
+        return 1;
+    if (!check(!actions->moveClips({followChild}, 5, &error),
+               QStringLiteral("moving a following child alone should fail")))
+        return 1;
+    if (!check(!actions->trimClip(followChild, 1, 10, &error),
+               QStringLiteral("trimming a following child alone should fail")))
+        return 1;
+
+    // Reparent a following child: it immediately takes the new parent's range
+    // and keys are rebased to keep absolute frames.
+    if (!check(actions->reparent(followChild, followTarget, true, &error),
+               QStringLiteral("follow reparent failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(followChild).parentUuid == followTarget
+                   && entity(followChild).start == 5
+                   && entity(followChild).end == 25,
+               QStringLiteral("follow reparent did not take the new range")))
+        return 1;
+    if (!expectFrames(keyFrames(followChild, QStringLiteral("opacity")),
+                      {2, 8, 12},
+                      QStringLiteral("follow reparent did not rebase keys")))
+        return 1;
+    if (!check(entity(followGrand).start == 5
+                   && entity(followGrand).end == 25,
+               QStringLiteral("follow reparent did not cascade to the grandchild")))
+        return 1;
+    if (!undo())
+        return 1;
+    if (!check(entity(followChild).parentUuid == followParent
+                   && entity(followChild).start == 0
+                   && entity(followChild).end == 20,
+               QStringLiteral("follow reparent undo did not restore the tree")))
+        return 1;
+
+    // Turning follow off keeps the current range.
+    if (!check(actions->setFollowParentRange(followChild, false, &error),
+               QStringLiteral("disable follow failed: %1").arg(error)))
+        return 1;
+    if (!check(!entity(followChild).followParentRange
+                   && entity(followChild).start == 0
+                   && entity(followChild).end == 20,
+               QStringLiteral("disable follow changed the range")))
+        return 1;
+    if (!undo())
+        return 1;
+
     // Delete cascades and undo restores the subtree.
+    {
+        QString validation;
+        pvf::EditPlan delPlan;
+        QString delError;
+        const bool planOk = actions->planDelete({trashRoot}, &delPlan, &delError);
+        qCritical() << "DEBUG delete" << planOk << delError
+                    << delPlan.deletes.size() << "valid"
+                    << pvf::model::validateProject(session->project(),
+                                                  &validation)
+                    << validation << "depth" << depth();
+    }
     const int entityCount = session->project().entities.size();
     if (!check(actions->deleteEntities({trashRoot}, false, nullptr, &error),
                QStringLiteral("cascade delete failed: %1").arg(error)))
@@ -457,6 +633,61 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     timeline->closeAllPopups();
     QApplication::processEvents();
 
+    // Property panel follow checkbox: one toggle is one undo step, enabling
+    // takes the parent's range and disabling keeps the current range.
+    auto* properties = window->findChild<pvf::PropertiesPanel*>();
+    auto* followBox = properties
+                          ? properties->findChild<QCheckBox*>(
+                                QStringLiteral("entityFollowParentRange"))
+                          : nullptr;
+    if (!check(properties && followBox,
+               QStringLiteral("follow checkbox missing")))
+        return 1;
+    live->document()->setSelection(child);
+    QApplication::processEvents();
+    if (!check(followBox->isEnabled() && !followBox->isChecked(),
+               QStringLiteral("follow checkbox should start enabled and off")))
+        return 1;
+    panelDepth = live->document()->store()->undoDepth();
+    followBox->setChecked(true);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(entity(child).followParentRange
+                   && entity(child).start == entity(parent).start
+                   && entity(child).end == entity(parent).end,
+               QStringLiteral("follow checkbox did not adopt the parent range")))
+        return 1;
+    if (!check(live->document()->store()->undoDepth() == panelDepth + 1,
+               QStringLiteral("follow toggle did not create one undo step")))
+        return 1;
+    followBox->setChecked(false);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(!entity(child).followParentRange
+                   && entity(child).start == entity(parent).start
+                   && entity(child).end == entity(parent).end,
+               QStringLiteral("disabling follow should keep the current range")))
+        return 1;
+    if (!check(live->document()->store()->undoDepth() == panelDepth + 2,
+               QStringLiteral("disabling follow did not create one undo step")))
+        return 1;
+    if (!check(live->document()->undo(&error),
+               QStringLiteral("follow toggle undo failed: %1").arg(error))
+        || !check(live->document()->undo(&error),
+                  QStringLiteral("follow toggle undo failed: %1").arg(error)))
+        return 1;
+    if (!check(entity(child).start == 10 && entity(child).end == 40
+                   && !entity(child).followParentRange,
+               QStringLiteral("follow toggle undo did not restore the range")))
+        return 1;
+    live->document()->setSelection(parent);
+    QApplication::processEvents();
+    if (!check(!followBox->isEnabled(),
+               QStringLiteral("the follow checkbox must be disabled for roots")))
+        return 1;
+    live->document()->setSelection(pvf::Uuid());
+    QApplication::processEvents();
+
     // Dragging onto a folder clip asks world/local and commits the choice.
     const int reparentSourceRow = rowForName(QStringLiteral("世界位置"));
     const int reparentTargetRow = rowForName(QStringLiteral("目标父级"));
@@ -665,10 +896,32 @@ int runTimelineEditTest(QApplication& app)
     const pvf::Uuid trashChild =
         makeEntity(QStringLiteral("待删除子级"), 205, 210, 0, trashRoot);
 
+    const pvf::Uuid followParent =
+        makeEntity(QStringLiteral("跟随父级"), 0, 20, 9);
+    const pvf::Uuid followChild =
+        makeEntity(QStringLiteral("跟随子级"), 5, 18, 0, followParent);
+    const pvf::Uuid followPeer =
+        makeEntity(QStringLiteral("跟随同伴"), 5, 15, 1, followParent);
+    const pvf::Uuid followGrand =
+        makeEntity(QStringLiteral("跟随孙级"), 5, 18, 0, followChild);
+    project.entities[followGrand].followParentRange = true;
+    const pvf::Uuid followTarget =
+        makeEntity(QStringLiteral("新跟随父级"), 5, 25, 10);
+    pvf::model::Track followTrack;
+    followTrack.keys = {{2, 0.0, {}, {}}, {8, 1.0, {}, {}},
+                        {12, 0.5, {}, {}}};
+    project.entities[followChild].tracks.insert(QStringLiteral("opacity"),
+                                                followTrack);
+    pvf::model::Track followGrandTrack;
+    followGrandTrack.keys = {{0, 1.0, {}, {}}};
+    project.entities[followGrand].tracks.insert(QStringLiteral("opacity"),
+                                                followGrandTrack);
+
     const QVector<pvf::Uuid> all = {
         parent,      child,       audio,      video,      lockedRoot,
         lockedChild, target,      worldSource, localSource, solverRoot,
-        trashRoot,   trashChild};
+        trashRoot,   trashChild,  followParent, followChild, followPeer,
+        followGrand, followTarget};
     if (!document->commitEntities(all, QStringLiteral("p2b1 setup"), &error))
     {
         qCritical() << "timeline-edit-test: setup commit failed" << error;
@@ -698,10 +951,12 @@ int runTimelineEditTest(QApplication& app)
         return sessionPtr->project().entities.value(uuid);
     };
 
-    const TimelineEditIds ids{parent,      child,       audio,
-                              video,       lockedRoot,  lockedChild,
-                              target,      worldSource, localSource,
-                              solverRoot,  trashRoot,   trashChild};
+    const TimelineEditIds ids{parent,        child,       audio,
+                              video,         lockedRoot,  lockedChild,
+                              target,        worldSource, localSource,
+                              solverRoot,    trashRoot,   trashChild,
+                              followParent,  followChild, followPeer,
+                              followGrand,   followTarget};
     const TimelineEditOps ops{check, flush, undo, depth, entity};
     if (editModelChecks(session.get(), actions, ids, ops, error) != 0)
         return 1;

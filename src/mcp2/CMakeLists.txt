@@ -100,6 +100,7 @@ if(BUILD_TESTING)
         previewRejectsOversize
         solverEvaluateNestedEntity
         moveRowOnlyAndGetDefaults
+        followParentRangeUpdateAligns
         entityGetIncludesSolvers
         textualContentCanBecomeEmpty
         specialContentCreateAndUpdate

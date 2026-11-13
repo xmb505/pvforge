@@ -364,6 +364,7 @@ private:
     QCheckBox* m_basicVisible = nullptr;
     QCheckBox* m_basicInherit = nullptr;
     QCheckBox* m_basicPhysics = nullptr;
+    QCheckBox* m_basicFollow = nullptr;
 
     // Keyframe track rows (session only).  Easing is one control for the
     // merged keyframe group at the current frame, matching the legacy UI.

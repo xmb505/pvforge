@@ -120,6 +120,31 @@ Affine worldAffine(const model::Project& project, const Uuid& uuid, int frame)
     return result;
 }
 
+// Applies the model rule "followParentRange=true means range == direct
+// parent's range" to one entity.  The range change goes through the same trim
+// path as entity.trim, so keys/solvers are rebased to keep absolute frames,
+// out-of-range ones are dropped and sourceIn moves with the start.
+Result alignFollowingRange(Tx& tx, const Uuid& uuid)
+{
+    const model::Entity* entity = findEntity(tx.p(), uuid);
+    if (!entity || !entity->followParentRange)
+        return success();
+    if (entity->parentUuid.isEmpty())
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("根实体不能设置 followParentRange"));
+    const model::Entity* parent = findEntity(tx.p(), entity->parentUuid);
+    if (!parent)
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("父实体不存在：%1").arg(entity->parentUuid));
+    if (entity->start == parent->start && entity->end == parent->end)
+        return success();
+
+    const int newStart = parent->start;
+    const int newEnd = parent->end;
+    TrimSummary summary;
+    return trimEntityRange(tx, uuid, newStart, newEnd, &summary);
+}
+
 Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
                         QStringList* changed)
 {
@@ -434,6 +459,17 @@ Result entityUpdate(Tx& tx, const QJsonObject& args)
     if (!applied.ok)
         return applied;
 
+    if (changed.contains(QStringLiteral("followParentRange")))
+    {
+        Result aligned = alignFollowingRange(tx, uuid);
+        if (!aligned.ok)
+            return aligned;
+        entity = findEntity(tx.p(), uuid);
+        if (!entity)
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("跟随父区间后实体丢失"));
+    }
+
     if (!changed.isEmpty())
         tx.touch(uuid);
 
@@ -496,6 +532,15 @@ Result entityUpdateMany(Tx& tx, const QJsonObject& args)
         {
             applied.details.insert(QStringLiteral("index"), i);
             return applied;
+        }
+        if (changed.contains(QStringLiteral("followParentRange")))
+        {
+            Result aligned = alignFollowingRange(tx, uuid);
+            if (!aligned.ok)
+            {
+                aligned.details.insert(QStringLiteral("index"), i);
+                return aligned;
+            }
         }
         tx.touch(uuid);
 
@@ -560,6 +605,10 @@ Result entityMove(Tx& tx, const QJsonObject& args)
     if (newStart < 0)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("移动后 start 不能小于 0"));
+
+    if (entity->followParentRange && delta != 0)
+        return failure(QStringLiteral("conflict"),
+                       QStringLiteral("实体跟随父区间，不能单独移动；请移动它的父实体"));
 
     if (!entity->parentUuid.isEmpty())
     {
@@ -640,6 +689,7 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
                        QStringLiteral("实体不存在：%1").arg(uuid));
     if (!ensureUnlocked(tx.p(), uuid, &error))
         return error;
+    const bool followsParent = entity->followParentRange;
 
     model::Entity* parent = nullptr;
     if (!newParent.isEmpty())
@@ -661,7 +711,8 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
                            QStringLiteral("父子层级超过 %1 层").arg(kMaxDepth));
     }
 
-    if (parent && (entity->start < parent->start || entity->end > parent->end))
+    if (parent && !followsParent
+        && (entity->start < parent->start || entity->end > parent->end))
         return failure(QStringLiteral("conflict"),
                        QStringLiteral("实体范围超出新父实体范围"));
 
@@ -676,7 +727,9 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
     }
     else
     {
-        row = defaultRow(tx.p(), newParent, entity->start, entity->end);
+        const int rowStart = parent && followsParent ? parent->start : entity->start;
+        const int rowEnd = parent && followsParent ? parent->end : entity->end;
+        row = defaultRow(tx.p(), newParent, rowStart, rowEnd);
     }
 
     QSet<Uuid> moved{uuid};
@@ -761,7 +814,36 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
 
     entity->parentUuid = newParent;
     entity->row = row;
+    if (followsParent && newParent.isEmpty())
+        entity->followParentRange = false;
     tx.touch(uuid);
+
+    if (followsParent && !newParent.isEmpty())
+    {
+        const int parentStart = parent->start;
+        const int parentEnd = parent->end;
+        TrimSummary summary;
+        Result aligned =
+            trimEntityRange(tx, uuid, parentStart, parentEnd, &summary);
+        if (!aligned.ok)
+            return aligned;
+        if (!summary.deletedUuids.isEmpty() && !confirmed(args))
+        {
+            QJsonObject affected;
+            affected.insert(QStringLiteral("deletedUuids"),
+                            QJsonArray::fromStringList(summary.deletedUuids));
+            QJsonObject details;
+            details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
+            details.insert(QStringLiteral("affected"), affected);
+            return failure(
+                QStringLiteral("confirm_required"),
+                QStringLiteral("跟随新父区间会删除子实体，需要 confirm"), details);
+        }
+        entity = findEntity(tx.p(), uuid);
+        if (!entity)
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("跟随新父区间后实体丢失"));
+    }
 
     QJsonObject transform = model::toJson(entity->transform);
     QJsonObject data;

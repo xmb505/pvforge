@@ -431,6 +431,29 @@ void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
                 QStringLiteral("entityPhysicsInteract"),
                 &model::Entity::physicsInteract);
 
+    m_basicFollow = new QCheckBox(QStringLiteral("跟随父区间"), content);
+    m_basicFollow->setObjectName(QStringLiteral("entityFollowParentRange"));
+    m_basicFollow->setToolTip(
+        QStringLiteral("开启后，子实体的时间范围始终等于直接父实体；"
+                       "父实体移动或拉伸时子实体一起变化"));
+    connect(m_basicFollow, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_session || m_editing || m_sessionUuid.isEmpty())
+            return;
+        const model::Entity* entity = sessionEntity();
+        if (!entity || entity->followParentRange == on)
+            return;
+        m_editing = true;
+        QString error;
+        const bool ok =
+            m_session->editActions()->setFollowParentRange(m_sessionUuid, on,
+                                                           &error);
+        m_editing = false;
+        if (!ok)
+            reportSessionError(error);
+        refresh();
+    });
+    form->addRow(m_basicFollow);
+
     m_basicSection = new CollapsibleSection(QStringLiteral("实体"), content, this);
     m_basicSection->setExpanded(true);
     layout->insertWidget(1, m_basicSection);
