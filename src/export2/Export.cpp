@@ -110,9 +110,9 @@ double audioGainAt(const model::Entity& entity, int projectFrame)
     return std::min(gain, 4.0);
 }
 
-// Mirrors the Anim visibility rule: hidden always hides, the visible track is
-// step-evaluated, and a parent hiding its child is controlled by
-// inheritVisibility.
+// Mirrors the Anim visibility rule: the visible track is step-evaluated and a
+// parent hiding its child is controlled by inheritVisibility.  `hidden` is
+// editor-only and must not silence an exported track.
 bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
                      int projectFrame, QSet<Uuid>& visiting)
 {
@@ -125,19 +125,15 @@ bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
     visiting.insert(uuid);
     const model::Entity& entity = it.value();
 
-    bool visible = !entity.hidden;
-    if (visible)
+    double value = entity.visible ? 1.0 : 0.0;
+    const auto track = entity.tracks.constFind(QStringLiteral("visible"));
+    if (track != entity.tracks.constEnd())
     {
-        double value = entity.visible ? 1.0 : 0.0;
-        const auto track = entity.tracks.constFind(QStringLiteral("visible"));
-        if (track != entity.tracks.constEnd())
-        {
-            value = model::evaluateTrack(track.value(),
-                                         projectFrame - entity.start, true)
-                        .value_or(value);
-        }
-        visible = value != 0.0;
+        value = model::evaluateTrack(track.value(),
+                                     projectFrame - entity.start, true)
+                    .value_or(value);
     }
+    bool visible = value != 0.0;
 
     if (visible && !entity.parentUuid.isEmpty() && entity.inheritVisibility)
         visible = entityVisibleAt(project, entity.parentUuid, projectFrame,
@@ -155,9 +151,9 @@ bool entityVisibleAt(const model::Project& project, const model::Entity& entity,
 }
 
 // Visibility only changes on an integer frame that holds a `visible` key on
-// the entity or one of its ancestors (`hidden` is constant and the track is
-// step-evaluated), so sampling those breakpoints is enough to know whether the
-// entity is visible anywhere in [startFrame, endFrame).
+// the entity or one of its ancestors (the track is step-evaluated), so
+// sampling those breakpoints is enough to know whether the entity is visible
+// anywhere in [startFrame, endFrame).
 bool visibleAtAnyFrame(const model::Project& project,
                        const model::Entity& entity, int startFrame,
                        int endFrame)

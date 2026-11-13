@@ -438,31 +438,23 @@ void testHiddenAndInvisible()
     QTemporaryDir directory;
     assets::AssetStore store(directory.path());
 
-    {
-        Project project = makeProject(100, 100);
-        Entity entity = makeVector(QStringLiteral("hidden"), 100, 100, Qt::red);
-        entity.transform.x = 0.0;
-        entity.transform.y = 0.0;
-        entity.hidden = true;
-        add(project, entity);
+    // `hidden` is editor-only: the final renderer still draws the entity.
+    Project hiddenProject = makeProject(100, 100);
+    Entity hidden = makeVector(QStringLiteral("hidden"), 100, 100, Qt::red);
+    hidden.hidden = true;
+    add(hiddenProject, hidden);
+    CHECK(nearColor(render(hiddenProject, store).pixelColor(50, 50), Qt::red));
 
-        const QImage image = render(project, store);
-        CHECK(nearColor(image.pixelColor(50, 50),
-                        QColor(QStringLiteral("#101014"))));
-    }
-
-    {
-        Project project = makeProject(100, 100);
-        Entity entity = makeVector(QStringLiteral("invisible"), 100, 100, Qt::red);
-        entity.transform.x = 0.0;
-        entity.transform.y = 0.0;
-        entity.visible = false;
-        add(project, entity);
-
-        const QImage image = render(project, store);
-        CHECK(nearColor(image.pixelColor(50, 50),
-                        QColor(QStringLiteral("#101014"))));
-    }
+    // `visible` alone decides whether the final renderer draws it.
+    Project invisibleProject = makeProject(100, 100);
+    Entity invisible =
+        makeVector(QStringLiteral("invisible"), 100, 100, Qt::red);
+    invisible.hidden = true;
+    invisible.visible = false;
+    add(invisibleProject, invisible);
+    const QImage image = render(invisibleProject, store);
+    CHECK(nearColor(image.pixelColor(50, 50),
+                    QColor(QStringLiteral("#101014"))));
 }
 
 void testOpacityHalfBlend()

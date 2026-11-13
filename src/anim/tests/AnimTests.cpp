@@ -583,6 +583,11 @@ void testVisibilityAndOpacity()
     setTrack(stepVisible, "visible", {{0, 1.0}, {10, 0.0}});
     addEntity(project, stepVisible);
 
+    Entity hiddenStep = makeEntity(QStringLiteral("hidden-step-visible"));
+    hiddenStep.hidden = true;
+    setTrack(hiddenStep, "visible", {{0, 1.0}, {10, 0.0}});
+    addEntity(project, hiddenStep);
+
     Entity physics = makeEntity(QStringLiteral("physics"));
     setTrack(physics, "physicsInteract", {{0, 1.0}, {10, 0.0}});
     addEntity(project, physics);
@@ -604,13 +609,18 @@ void testVisibilityAndOpacity()
     CHECK(anim::evaluateEntity(project, independent.uuid, 10, world).visible);
     CHECK(!anim::evaluateEntity(project, parent.uuid, 10, world).visible);
 
-    CHECK(!anim::evaluateEntity(project, hiddenChild.uuid, 0, world).visible);
+    // `hidden` is editor-only and never enters the anim pose; only `visible`
+    // and inherited parent visibility do.
+    CHECK(anim::evaluateEntity(project, hiddenParent.uuid, 0, world).visible);
+    CHECK(anim::evaluateEntity(project, hiddenChild.uuid, 0, world).visible);
     CHECK(anim::evaluateEntity(project, independentHiddenChild.uuid, 0, world).visible);
-    CHECK(!anim::evaluateEntity(project, hiddenEntity.uuid, 0, world).visible);
+    CHECK(anim::evaluateEntity(project, hiddenEntity.uuid, 0, world).visible);
     CHECK(!anim::evaluateEntity(project, invisibleEntity.uuid, 0, world).visible);
 
     CHECK(anim::evaluateEntity(project, stepVisible.uuid, 9, world).visible);
     CHECK(!anim::evaluateEntity(project, stepVisible.uuid, 10, world).visible);
+    CHECK(anim::evaluateEntity(project, hiddenStep.uuid, 9, world).visible);
+    CHECK(!anim::evaluateEntity(project, hiddenStep.uuid, 10, world).visible);
     CHECK(anim::physicsInteractAt(project, physics.uuid, 9));
     CHECK(!anim::physicsInteractAt(project, physics.uuid, 10));
 }

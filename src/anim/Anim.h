@@ -18,6 +18,8 @@ struct Pose
 {
     QTransform world;
     double opacity = 1.0;
+    // Render visibility: the step-evaluated `visible` track plus inherited
+    // parent visibility.  `hidden` is editor-only and never enters this value.
     bool visible = true;
 };
 

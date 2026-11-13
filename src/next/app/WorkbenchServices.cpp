@@ -759,6 +759,9 @@ QImage WorkbenchServices::renderForCache(int frame, bool* htmlMissing,
     options.projectFrame = frame;
     options.cameraUuid = m_cameraUuid;
     options.outputSize = m_options.targetSize;
+    // Workbench cache: keep editor-hidden entities out of the cached picture.
+    // Export and the camera monitor deliberately do not set this.
+    options.skipHidden = true;
     if (m_options.expandPercent > 0 && m_cameraUuid.isEmpty()) {
         options.worldRect = workbench::renderRect(
             m_document->project(), m_options.expandPercent);

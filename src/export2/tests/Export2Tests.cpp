@@ -994,7 +994,7 @@ void testNoFrameProviderPlaceholder()
     CHECK(QFileInfo::exists(path));
 }
 
-void testHiddenAudioMuted()
+void testHiddenAudioStillExported()
 {
     QTemporaryDir directory;
     CHECK(directory.isValid());
@@ -1021,7 +1021,7 @@ void testHiddenAudioMuted()
     CHECK(result.framesWritten == 30);
 
     const QVector<float> samples = decodeMono(path);
-    CHECK(peakOf(samples) < 1e-4);
+    CHECK(peakOf(samples) > 0.05);
 }
 
 void testVisibleTrackMutesRange()
@@ -1062,7 +1062,7 @@ void testVisibleTrackMutesRange()
     CHECK(rmsBetween(samples, rate, 0.75, 0.95) > 0.05);  // frames 20..29
 }
 
-void testParentHiddenMutesChild()
+void testParentVisibilityMutesChild()
 {
     QTemporaryDir directory;
     CHECK(directory.isValid());
@@ -1081,7 +1081,7 @@ void testParentHiddenMutesChild()
     parent.content.vector.shape = 0;
     parent.content.vector.width = 10.0;
     parent.content.vector.height = 10.0;
-    parent.hidden = true;
+    parent.visible = false;
     project.entities.insert(parent.uuid, parent);
 
     Entity audio =
@@ -1097,8 +1097,7 @@ void testParentHiddenMutesChild()
     CHECK(inherited.framesWritten == 30);
     CHECK(peakOf(decodeMono(inheritedPath)) < 1e-4);
 
-    // Control: disabling inheritance keeps the child audible under a hidden
-    // parent, proving the parent chain caused the mute above.
+    // Control: no inheritance means the invisible parent cannot mute the child.
     audio.inheritVisibility = false;
     project.entities.insert(audio.uuid, audio);
     const QString independentPath =
@@ -1484,10 +1483,11 @@ int main(int argc, char** argv)
         {QStringLiteral("frameProviders"), testFrameProviders},
         {QStringLiteral("noFrameProviderPlaceholder"),
          testNoFrameProviderPlaceholder},
-        {QStringLiteral("hiddenAudioMuted"), testHiddenAudioMuted},
+        {QStringLiteral("hiddenAudioStillExported"),
+         testHiddenAudioStillExported},
         {QStringLiteral("visibleTrackMutesRange"), testVisibleTrackMutesRange},
-        {QStringLiteral("parentHiddenMutesChild"),
-         testParentHiddenMutesChild},
+        {QStringLiteral("parentVisibilityMutesChild"),
+         testParentVisibilityMutesChild},
         {QStringLiteral("crfRange"), testCrfRange},
         {QStringLiteral("encoderSelection"), testEncoderSelection},
         {QStringLiteral("presetSelection"), testPresetSelection},
