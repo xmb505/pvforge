@@ -4,15 +4,11 @@
 # 格式：路径<TAB>行数，表示该文件允许的最大行数；超过即 CI 判红。
 # 文件变小不会自动放宽：需要收紧时由人类明确要求后重新生成。
 # 不要手工抬高数字来让 CI 变绿——先拆文件。
-src/app/MainWindow.cpp	5773
-src/ui/PropertiesPanel.cpp	5580
-src/ui/TimelinePanel.cpp	4763
-src/ui/Viewport.cpp	4443
+src/ui/PropertiesPanel.cpp	4605
+src/ui/TimelinePanel.cpp	4473
 src/next/properties/PropertiesPanel.cpp	3853
-src/tests/ViewportCameraTests.cpp	3824
 src/next/timeline/TimelineWidget.cpp	3293
-src/tests/TimelineTests.cpp	3190
 src/mcp2/tests/mcp2_tests.cpp	3143
-src/core/Project.cpp	2961
-src/ui/AssetLibraryPanel.cpp	2746
+src/ui/Viewport.cpp	2748
+src/app/MainWindow.cpp	2563
 src/mcp2/EntityTools.cpp	2541
