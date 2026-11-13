@@ -410,10 +410,23 @@ void testHiddenAndInvisible()
 
     const audio2::MixOptions options = mixOptions(0, 30);
 
+    // `hidden` is editor-only: it never mutes audio.
     {
         Project project = makeProject();
         addAudioEntity(project, QStringLiteral("hidden"), asset->hash, 0, 30);
         project.entities[QStringLiteral("hidden")].hidden = true;
+        CHECK(!audio2::mixRange(project, store, options).isEmpty());
+    }
+
+    // `hidden` does not override an explicit visible=0.
+    {
+        Project project = makeProject();
+        addAudioEntity(project, QStringLiteral("hidden-invisible"),
+                       asset->hash, 0, 30);
+        model::Entity& entity =
+            project.entities[QStringLiteral("hidden-invisible")];
+        entity.hidden = true;
+        entity.visible = false;
         CHECK(audio2::mixRange(project, store, options).isEmpty());
     }
 
@@ -449,6 +462,12 @@ void testHiddenAndInvisible()
         addAudioEntity(project, QStringLiteral("child"), asset->hash, 0, 30);
         project.entities[QStringLiteral("child")].parentUuid =
             QStringLiteral("parent");
+
+        // A hidden parent does not mute an inheriting child.
+        CHECK(!audio2::mixRange(project, store, options).isEmpty());
+
+        // Parent visibility inheritance still applies to visible=0.
+        project.entities[QStringLiteral("parent")].visible = false;
         CHECK(audio2::mixRange(project, store, options).isEmpty());
 
         project.entities[QStringLiteral("child")].inheritVisibility = false;

@@ -40,9 +40,9 @@ QString audioContentFile(const assets::StoredAsset& asset)
     return asset.directory + QLatin1Char('/') + files.first();
 }
 
-// Mirrors the Anim visibility rule: hidden always hides, the visible track is
-// step-evaluated, and a parent hiding its child is controlled by
-// inheritVisibility.
+// Mirrors the Anim visibility rule: the visible track is step-evaluated and a
+// parent hiding its child is controlled by inheritVisibility.  `hidden` is
+// editor-only and must not mute preview or exported audio.
 bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
                      int projectFrame, QSet<Uuid>& visiting)
 {
@@ -55,19 +55,15 @@ bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
     visiting.insert(uuid);
     const model::Entity& entity = it.value();
 
-    bool visible = !entity.hidden;
-    if (visible)
+    double value = entity.visible ? 1.0 : 0.0;
+    const auto track = entity.tracks.constFind(QStringLiteral("visible"));
+    if (track != entity.tracks.constEnd())
     {
-        double value = entity.visible ? 1.0 : 0.0;
-        const auto track = entity.tracks.constFind(QStringLiteral("visible"));
-        if (track != entity.tracks.constEnd())
-        {
-            value = model::evaluateTrack(track.value(),
-                                         projectFrame - entity.start, true)
-                        .value_or(value);
-        }
-        visible = value != 0.0;
+        value = model::evaluateTrack(track.value(),
+                                     projectFrame - entity.start, true)
+                    .value_or(value);
     }
+    bool visible = value != 0.0;
 
     if (visible && !entity.parentUuid.isEmpty() && entity.inheritVisibility)
         visible = entityVisibleAt(project, entity.parentUuid, projectFrame,
