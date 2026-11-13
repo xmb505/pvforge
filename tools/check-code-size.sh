@@ -7,12 +7,14 @@
 #
 # 规则：
 #   1. src/main.cpp 是程序入口，只做装配，上限 300 行。硬规则，不登记 baseline。
-#   2. src/**/*.cpp、src/**/*.h（不含 build 目录）单文件超过 2500 行，必须登记在
-#      tools/code-size-baseline.txt，且不得超过登记值。新出现的 >2500 行文件直接判红。
-#      文件变小不判红；只有 --update-baseline 会把上限收紧（ratchet 只往下走）。
+#   2. src/**/*.cpp、src/**/*.h（不含 build 目录）单文件硬上限 1500 行。
+#      新出现的 >1500 行文件直接判红；已有的历史大文件登记在
+#      tools/code-size-baseline.txt，且不得超过登记值（ratchet 只往下走）。
+#      文件变小不判红；只有 --update-baseline 会把上限收紧。
 #
-# 为什么用 ratchet：仓库里已有 15 个历史大文件（最大 5774 行），一次性砍到 2500
-# 会让全仓库变红、逼人绕过门禁。baseline 把“现状”冻结成上限，只禁止继续变大。
+# 为什么用 ratchet：仓库里仍有一批历史大文件，一次性砍到 1500 会让全仓库变红、
+# 逼人绕过门禁。baseline 把“现存债务”冻结成上限，只禁止继续变大；deadline 前
+# 逐周用 --update-baseline 收紧，最终删除 baseline。
 #
 # 退出码：0 通过；1 违反规则或 baseline 格式损坏；2 参数错误。
 
@@ -24,7 +26,7 @@ cd "$ROOT"
 
 MAIN=src/main.cpp
 MAIN_LIMIT=300
-FILE_LIMIT=2500
+FILE_LIMIT=1500
 BASELINE=tools/code-size-baseline.txt
 MODE=check
 

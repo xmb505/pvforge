@@ -1,6 +1,6 @@
 # 代码体量 ratchet baseline：由 tools/check-code-size.sh --update-baseline 生成。
 #
-# 只登记当前超过 2500 行的 .cpp/.h（src/，不含 build）。
+# 只登记当前超过 1500 行的 .cpp/.h（src/，不含 build）。
 # 格式：路径<TAB>行数，表示该文件允许的最大行数；超过即 CI 判红。
 # 文件变小不会自动放宽：需要收紧时由人类明确要求后重新生成。
 # 不要手工抬高数字来让 CI 变绿——先拆文件。
@@ -12,3 +12,20 @@ src/mcp2/tests/mcp2_tests.cpp	3143
 src/ui/Viewport.cpp	2748
 src/app/MainWindow.cpp	2563
 src/mcp2/EntityTools.cpp	2541
+src/next/properties/tests/PropertiesPanelTest.cpp	2346
+src/model/tests/model_tests.cpp	2306
+src/tests/TimelineTests.cpp	2188
+src/store/tests/store_tests.cpp	2092
+src/app/EditActions.cpp	2067
+src/next/timeline/tests/timeline_tests.cpp	2014
+src/ui/AssetLibraryPanel.cpp	2000
+src/tests/SolverTests.cpp	1945
+src/tests/PropertiesTests.cpp	1884
+src/tests/ProfileFixtures.cpp	1854
+src/store/ProjectStore.cpp	1783
+src/html2/tests/Html2Tests.cpp	1688
+src/workbench/tests/WorkbenchCacheTests.cpp	1678
+src/render2/tests/Render2Tests.cpp	1661
+src/next/assets/AssetPanel.cpp	1556
+src/app/SettingsDialog.cpp	1545
+src/export2/tests/Export2Tests.cpp	1524
