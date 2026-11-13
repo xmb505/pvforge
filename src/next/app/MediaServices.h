@@ -100,6 +100,7 @@ public:
     // force is set (used after document edits).  No-op while the service is
     // stopped; callers should skip this during active playback.
     void prefetchHtml(int frame, bool force = false);
+#ifdef PVFORGE_TEST_HOOKS
     // Test hook replacing the cache browser submit with a capture sink.
     using HtmlPrefetchSink =
         std::function<void(const QVector<html2::FrameRequest>&)>;
@@ -107,6 +108,7 @@ public:
     {
         m_prefetchSink = std::move(sink);
     }
+#endif
     // Single-entity blocking render for MCP preview.render_frame; safe on the
     // UI thread because it never runs inside paintEvent().
     QImage htmlFrameBlocking(const Uuid& entityUuid, double projectFrame,
@@ -141,10 +143,12 @@ public:
     bool htmlStartFailed() const { return m_htmlStartFailed; }
     QString htmlError() const { return m_htmlError; }
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test accessors.
     QSize htmlRequestSizeForTest() const { return htmlRequestSize(); }
     html2::HtmlFrameService* htmlServiceForTest() const { return m_html.get(); }
     video2::VideoSequenceService* videoSequenceForTest(const AssetHash& hash) const;
+#endif
 
 signals:
     // A low-resolution frame finished rendering in the background.  The
@@ -183,7 +187,9 @@ private:
     std::unique_ptr<video2::VideoFrames> m_exportVideoFrames;
     std::map<AssetHash, std::unique_ptr<video2::VideoSequenceService>> m_sequences;
     std::unique_ptr<html2::HtmlFrameService> m_html;
+#ifdef PVFORGE_TEST_HOOKS
     HtmlPrefetchSink m_prefetchSink;
+#endif
     // Last frame passed to prefetchHtml(); avoids re-submitting the same batch
     // on every repaint.  force or a document edit resets it.
     int m_lastPrefetchFrame = -1;

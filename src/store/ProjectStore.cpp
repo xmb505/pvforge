@@ -987,6 +987,7 @@ bool ProjectStore::reload(QString* error)
     return true;
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 void ProjectStore::setUndoLimitsForTest(int maxEntries, qint64 maxBytes)
 {
     m_undoLimit = std::max(1, maxEntries);
@@ -994,6 +995,7 @@ void ProjectStore::setUndoLimitsForTest(int maxEntries, qint64 maxBytes)
     trimStack(m_undoStack);
     trimStack(m_redoStack);
 }
+#endif
 
 void ProjectStore::notePath(const QString& relativePath)
 {

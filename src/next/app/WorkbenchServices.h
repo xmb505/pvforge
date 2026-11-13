@@ -182,6 +182,7 @@ public:
     WorkbenchPrewarmProgress progress() const { return m_progress; }
     const workbench::Options& options() const { return m_options; }
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test accessors required by the shell tests.
     workbench::CacheStats workbenchStatsForTest() const { return stats(); }
     QString workbenchCacheDirForTest() const { return cacheDirectory(); }
@@ -190,6 +191,7 @@ public:
     // Builds the meta exactly as lookup()/store() do, without requiring an
     // existing cache directory.
     workbench::FrameMeta buildMetaForTest(int frame);
+#endif
 
 private:
     void tick();

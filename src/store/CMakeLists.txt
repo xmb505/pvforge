@@ -31,6 +31,8 @@ target_compile_features(pvf_store PUBLIC cxx_std_20)
 include(CTest)
 
 if(BUILD_TESTING)
+    # Standalone module builds do not see the top-level test-hook switch.
+    add_compile_definitions(PVFORGE_TEST_HOOKS)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
     add_executable(pvf_store_tests

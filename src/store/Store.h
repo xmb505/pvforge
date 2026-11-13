@@ -141,9 +141,11 @@ public:
     int undoDepth() const { return int(m_undoStack.size()); }
     int redoDepth() const { return int(m_redoStack.size()); }
 
+#ifdef PVFORGE_TEST_HOOKS
     // Test hook: shrink the default 200 entries / 512MB caps so eviction can
     // be exercised without hundreds of real commits.
     void setUndoLimitsForTest(int maxEntries, qint64 maxBytes);
+#endif
 
     assets::AssetStore& assets() { return *m_assets; }
     QString root() const { return m_root; }
