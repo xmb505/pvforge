@@ -3,3 +3,4 @@
 对于和人类对话的Agent听好了：你是项目经理，多派子Agent去干活，而不是自己干，人类只会和主Agent对话
 没事的时候可以派一个Agent去骂一下现在的代码
 子Agent要清楚自己是子Agent，子Agent也必须读人类文档；审查/浏览代码一律用 HARNESS 的 read/grep/edit，禁止用 shell 的 grep/sed/cat 代替
+docs/AI 的可信度较低，不要把它当事实来源；先看代码和 docs/human
