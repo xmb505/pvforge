@@ -12,8 +12,10 @@
 namespace pvf::anim {
 
 // Final pose of one entity at one project frame.  `world` maps the entity's
-// local content coordinates into project canvas coordinates and already
-// includes every parent transform.
+// local content coordinates into project canvas coordinates.  Parent-space
+// entities include every parent transform; entities with
+// model::EntitySpace::Canvas deliberately do not and are placed directly on
+// the canvas.
 struct Pose
 {
     QTransform world;
@@ -27,7 +29,8 @@ struct Pose
 // solver::World these callbacks always receive project frames, never entity or
 // segment relative frames.  Poses and shapes are in project canvas space; the
 // anim solver adapter converts them into the driven entity's parent space so
-// they share Segment::startPose's coordinate system.
+// they share Segment::startPose's coordinate system.  Canvas-space driven
+// entities are already in canvas coordinates, so their targets stay untouched.
 struct World
 {
     virtual ~World() = default;
