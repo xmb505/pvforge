@@ -150,7 +150,8 @@ void collectSubtreeOrder(const model::Project& project, const Uuid& uuid,
 
 bool trimNode(model::Project& project, const assets::AssetStore& assets,
               const Uuid& uuid, int newStart, int newEnd,
-              QVector<Uuid>& upserts, QVector<Uuid>& deletes, QString* error)
+              QVector<Uuid>& upserts, QVector<Uuid>& deletes, QString* error,
+              bool forceRange)
 {
     auto it = project.entities.find(uuid);
     if (it == project.entities.end())
@@ -179,7 +180,9 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
     }
 
     // The whole subtree is outside the new range: delete it explicitly.
-    if (oldStart >= newEnd || oldEnd <= newStart)
+    // A forced rebase (reparenting a following entity) instead moves the
+    // entity to the new range and keeps whatever keys/solvers still fit.
+    if (!forceRange && (oldStart >= newEnd || oldEnd <= newStart))
         return collectSubtreeDeletes(project, uuid, deletes, error);
 
     if (newStart == oldStart && newEnd == oldEnd)
@@ -248,7 +251,7 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
         else if (trimmedEnd)
             shifted.endFrame = newDuration - 1;
 
-        if (shifted.startFrame >= newDuration)
+        if (shifted.startFrame < 0 || shifted.startFrame >= newDuration)
             continue;
         if (shifted.endFrame != -1 && shifted.endFrame >= newDuration)
             shifted.endFrame = newDuration - 1;
@@ -318,8 +321,14 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
         if (childIt == project.entities.constEnd())
             continue;
 
-        const int childStart = std::max(childIt.value().start, newStart);
-        const int childEnd = std::min(childIt.value().end, newEnd);
+        // A following child always takes the parent's full range, never just
+        // the intersection: that is what makes a stretch propagate down the
+        // chain while ordinary children keep their absolute frames.
+        const bool childFollows = childIt.value().followParentRange;
+        const int childStart =
+            childFollows ? newStart : std::max(childIt.value().start, newStart);
+        const int childEnd =
+            childFollows ? newEnd : std::min(childIt.value().end, newEnd);
         if (childStart >= childEnd)
         {
             if (!collectSubtreeDeletes(project, child, deletes, error))
@@ -327,7 +336,7 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
             continue;
         }
         if (!trimNode(project, assets, child, childStart, childEnd, upserts,
-                      deletes, error))
+                      deletes, error, childFollows))
             return false;
     }
     return true;
@@ -350,7 +359,7 @@ bool applyEntityRange(const model::Project& project,
                       const assets::AssetStore& assets, const Uuid& uuid,
                       int newStart, int newEnd, model::Project* result,
                       QVector<Uuid>* upserts, QVector<Uuid>* deletes,
-                      QString* error)
+                      QString* error, bool allowDisjointRoot)
 {
     if (error)
         error->clear();
@@ -413,7 +422,7 @@ bool applyEntityRange(const model::Project& project,
     QVector<Uuid> localUpserts;
     QVector<Uuid> localDeletes;
     if (!trimNode(working, assets, uuid, newStart, newEnd, localUpserts,
-                  localDeletes, error))
+                  localDeletes, error, allowDisjointRoot))
         return false;
 
     for (const Uuid& deleted : localDeletes)
@@ -430,6 +439,84 @@ bool applyEntityRange(const model::Project& project,
     *result = std::move(working);
     *upserts = localUpserts;
     *deletes = localDeletes;
+    return true;
+}
+
+bool applyFollowParentRange(const model::Project& project,
+                            const assets::AssetStore& assets,
+                            const Uuid& uuid, bool follow,
+                            model::Project* result, QVector<Uuid>* upserts,
+                            QVector<Uuid>* deletes, QString* error)
+{
+    if (error)
+        error->clear();
+    if (!result || !upserts || !deletes)
+    {
+        setError(error, QStringLiteral("内部错误：跟随区间输出为空"));
+        return false;
+    }
+
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+    if (it.value().followParentRange == follow)
+    {
+        *result = project;
+        upserts->clear();
+        deletes->clear();
+        return true;
+    }
+
+    if (!follow)
+    {
+        model::Project working = project;
+        working.entities[uuid].followParentRange = false;
+        QString validationError;
+        if (!model::validateProject(working, &validationError))
+        {
+            setError(error, QStringLiteral("关闭跟随区间后工程校验失败：%1")
+                                .arg(validationError));
+            return false;
+        }
+        *result = std::move(working);
+        *upserts = {uuid};
+        deletes->clear();
+        return true;
+    }
+
+    if (it.value().parentUuid.isEmpty())
+    {
+        setError(error,
+                 QStringLiteral("根实体 %1 不能跟随父区间")
+                     .arg(displayName(it.value())));
+        return false;
+    }
+    const auto parent = project.entities.constFind(it.value().parentUuid);
+    if (parent == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体 %1 的父实体不存在")
+                            .arg(displayName(it.value())));
+        return false;
+    }
+
+    model::Project working = project;
+    working.entities[uuid].followParentRange = true;
+    QVector<Uuid> localUpserts;
+    QVector<Uuid> localDeletes;
+    if (!applyEntityRange(working, assets, uuid, parent.value().start,
+                          parent.value().end, result, &localUpserts,
+                          &localDeletes, error))
+        return false;
+
+    // The range may already equal the parent's, in which case the trim is a
+    // no-op but the flag itself still has to be written.
+    if (!localUpserts.contains(uuid))
+        localUpserts.prepend(uuid);
+    *upserts = std::move(localUpserts);
+    *deletes = std::move(localDeletes);
     return true;
 }
 

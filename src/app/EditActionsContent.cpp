@@ -6,6 +6,7 @@
 #include "model/Query.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/EntityLock.h"
+#include "next/timeline/EntityRange.h"
 #include "next/timeline/MarkerDialog.h"
 
 #include <QSet>
@@ -47,6 +48,7 @@ bool EditActions::updateEntity(const Uuid& uuid, const QString& message,
         return false;
     }
 
+    const bool wasFollowing = it.value().followParentRange;
     EditPlan plan;
     plan.project = project;
     model::Entity& entity = plan.project.entities[uuid];
@@ -56,14 +58,64 @@ bool EditActions::updateEntity(const Uuid& uuid, const QString& message,
         return false;
     }
 
+    if (entity.followParentRange)
+    {
+        if (entity.parentUuid.isEmpty())
+        {
+            setError(error,
+                     QStringLiteral("根实体 %1 不能跟随父区间")
+                         .arg(displayName(entity)));
+            return false;
+        }
+        const auto parent = plan.project.entities.constFind(entity.parentUuid);
+        if (parent == plan.project.entities.constEnd())
+        {
+            setError(error, QStringLiteral("实体 %1 的父实体不存在")
+                                .arg(displayName(entity)));
+            return false;
+        }
+        // Enabling follow, or any update that leaves a following entity with
+        // a range different from its parent, goes through the same rebase as
+        // a trim: keys/solvers keep their absolute frames and out-of-range
+        // items are dropped.  allowDisjointRoot keeps the entity even when
+        // the range jumps far away.
+        if (!wasFollowing || entity.start != parent.value().start
+            || entity.end != parent.value().end)
+        {
+            model::Project aligned;
+            QVector<Uuid> upserts;
+            QVector<Uuid> deletes;
+            if (!next::applyEntityRange(plan.project, m_session->assets(), uuid,
+                                        parent.value().start,
+                                        parent.value().end, &aligned, &upserts,
+                                        &deletes, error, true))
+                return false;
+            if (!upserts.contains(uuid))
+                upserts.prepend(uuid);
+            plan.project = std::move(aligned);
+            plan.upserts = std::move(upserts);
+            plan.deletes = std::move(deletes);
+        }
+        else
+        {
+            plan.upserts = {uuid};
+        }
+    }
+    else
+    {
+        plan.upserts = {uuid};
+    }
+
+    // Re-read after the optional rebase moved the project.
+    const auto alignedIt = plan.project.entities.constFind(uuid);
     QString validationError;
-    if (!model::validateEntity(entity, &validationError))
+    if (alignedIt == plan.project.entities.constEnd()
+        || !model::validateEntity(alignedIt.value(), &validationError))
     {
         setError(error, QStringLiteral("实体校验失败：%1").arg(validationError));
         return false;
     }
 
-    plan.upserts = {uuid};
     plan.message = message;
     return apply(plan, error);
 }
@@ -542,6 +594,64 @@ bool EditActions::moveMarker(const QString& id, int frame, QString* error)
     return false;
 }
 
+namespace {
+
+// ProjectDocument validates the whole tree and then saves every upsert before
+// deleting the removed entities.  A trim can therefore leave a to-be-deleted
+// sibling outside its parent's new range while the parent tree is written.
+// Normalise the doomed entities to their parent's range (and drop their tracks/
+// solvers) so the intermediate tree is valid; they are removed immediately
+// afterwards.  The final model/file state is exactly the plan's.
+void prepareDeletedForWrite(model::Project& live, const QVector<Uuid>& deletes)
+{
+    QSet<Uuid> deleting(deletes.begin(), deletes.end());
+    QSet<Uuid> done;
+    bool progress = true;
+    while (progress)
+    {
+        progress = false;
+        for (const Uuid& uuid : deletes)
+        {
+            if (done.contains(uuid))
+                continue;
+            auto it = live.entities.find(uuid);
+            if (it == live.entities.end())
+            {
+                done.insert(uuid);
+                continue;
+            }
+            const Uuid parent = it->parentUuid;
+            if (!parent.isEmpty() && deleting.contains(parent)
+                && !done.contains(parent))
+                continue; // parent first so the range chain stays valid
+
+            int start = 0;
+            int end = 1;
+            if (!parent.isEmpty())
+            {
+                const auto parentIt = live.entities.constFind(parent);
+                if (parentIt != live.entities.constEnd())
+                {
+                    start = parentIt->start;
+                    end = parentIt->end;
+                }
+            }
+            else
+            {
+                it->followParentRange = false;
+            }
+            it->start = start;
+            it->end = end;
+            it->tracks.clear();
+            it->solvers.clear();
+            done.insert(uuid);
+            progress = true;
+        }
+    }
+}
+
+} // namespace
+
 bool EditActions::apply(const EditPlan& plan, QString* error)
 {
     if (error)
@@ -595,6 +705,7 @@ bool EditActions::apply(const EditPlan& plan, QString* error)
     live = before;
     for (const Uuid& uuid : plan.upserts)
         live.entities.insert(uuid, plan.project.entities.value(uuid));
+    prepareDeletedForWrite(live, plan.deletes);
 
     const bool ok =
         plan.upserts.isEmpty()

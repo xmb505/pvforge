@@ -178,10 +178,16 @@ Result trimChildren(Tx& tx, const Uuid& parentUuid, int newStart, int newEnd,
         const model::Entity* child = findEntity(tx.p(), childId);
         if (!child)
             continue;
-        const int start = std::max(child->start, newStart);
-        const int end = std::min(child->end, newEnd);
+        const bool childFollows = child->followParentRange;
+        // Following children take the parent's full range, never just the
+        // intersection.  Forced recursion keeps them even when the parent
+        // jumped to a disjoint range.
+        const int start = childFollows ? newStart : std::max(child->start, newStart);
+        const int end = childFollows ? newEnd : std::min(child->end, newEnd);
         if (start >= end)
         {
+            if (childFollows)
+                continue; // a parent range is always valid; defensive only
             const QVector<Uuid> descendants = subtree(tx.p(), childId);
             stats->deletedUuids << childId;
             stats->deletedUuids += descendants;
@@ -349,6 +355,16 @@ Result entityTrim(Tx& tx, const QJsonObject& args)
     if (newEnd <= newStart)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("裁剪后 end 必须大于 start"));
+
+    if (entity->followParentRange)
+    {
+        const model::Entity* followParent = findEntity(tx.p(), entity->parentUuid);
+        if (!followParent || newStart != followParent->start
+            || newEnd != followParent->end)
+            return failure(
+                QStringLiteral("conflict"),
+                QStringLiteral("实体跟随父区间，不能单独裁剪；请调整父实体"));
+    }
 
     if (!entity->parentUuid.isEmpty())
     {

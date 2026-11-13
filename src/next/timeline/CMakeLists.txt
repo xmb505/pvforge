@@ -138,6 +138,11 @@ if(BUILD_TESTING)
         splitParentSplitsChildren
         splitVideoShiftsSourceIn
         splitRejectsBoundary
+        followParentRangeAlignsAndCascades
+        followParentTrimDropsKeys
+        followParentStretchKeepsKeys
+        followDisableKeepsRange
+        followReparentRebasesKeys
     )
 
     foreach(test_case IN LISTS PVF_TIMELINE_TEST_CASES)

@@ -120,6 +120,11 @@ public:
                    const QVector<Uuid>& siblingOrder, QString* error = nullptr);
     bool trimClip(const Uuid& uuid, int newStart, int newEnd,
                   QString* error = nullptr);
+    // Direct follow toggle: one validated commit, one undo step.  Enabling
+    // rewrites the range to the direct parent's range; disabling only clears
+    // the flag.
+    bool setFollowParentRange(const Uuid& uuid, bool follow,
+                              QString* error = nullptr);
     bool reparent(const Uuid& uuid, const Uuid& newParent, bool keepWorld,
                   QString* error = nullptr);
     // Cascades to the whole subtree.  confirm=true asks the user first.

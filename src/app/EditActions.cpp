@@ -51,6 +51,18 @@ bool EditActions::planMove(const QVector<Uuid>& roots, int deltaFrames,
     if (selected.isEmpty())
         return false;
 
+    for (const Uuid& root : selected)
+    {
+        const model::Entity& entity = project.entities[root];
+        if (entity.followParentRange && deltaFrames != 0)
+        {
+            setError(error,
+                     QStringLiteral("实体 %1 跟随父区间，不能单独移动；请移动它的父实体")
+                         .arg(displayName(entity)));
+            return false;
+        }
+    }
+
     QVector<Uuid> allNodes;
     QSet<Uuid> nodeSet;
     for (const Uuid& root : selected)
@@ -219,12 +231,27 @@ bool EditActions::planTrim(const Uuid& uuid, int newStart, int newEnd,
         return false;
     }
 
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(uuid);
+    if (it != project.entities.constEnd() && it.value().followParentRange)
+    {
+        const auto parent = project.entities.constFind(it.value().parentUuid);
+        if (parent == project.entities.constEnd()
+            || newStart != parent.value().start
+            || newEnd != parent.value().end)
+        {
+            setError(error,
+                     QStringLiteral("实体 %1 跟随父区间，不能单独裁剪；请调整父实体")
+                         .arg(displayName(it.value())));
+            return false;
+        }
+    }
+
     model::Project working;
     QVector<Uuid> upserts;
     QVector<Uuid> deletes;
-    if (!next::applyEntityRange(m_session->project(), m_session->assets(), uuid,
-                                newStart, newEnd, &working, &upserts, &deletes,
-                                error))
+    if (!next::applyEntityRange(project, m_session->assets(), uuid, newStart,
+                                newEnd, &working, &upserts, &deletes, error))
         return false;
 
     plan->project = std::move(working);
@@ -288,6 +315,42 @@ bool EditActions::planReparent(const Uuid& uuid, const Uuid& newParent,
         return false;
     }
 
+    int maxRow = -1;
+    for (const Uuid& sibling : model::childrenOf(project, newParent))
+    {
+        if (sibling == uuid)
+            continue;
+        maxRow = std::max(maxRow, project.entities.value(sibling).row);
+    }
+    const int targetRow = maxRow + 1;
+
+    // A following entity takes the new parent's range, not its old range
+    // shifted by keepWorld/keepLocal.  Keys and solver segments are rebased to
+    // keep absolute frames and anything outside the new range is dropped.
+    if (entity.followParentRange && !newParent.isEmpty())
+    {
+        const int parentNewStart = project.entities.value(newParent).start;
+        const int parentNewEnd = project.entities.value(newParent).end;
+        model::Project attached = project;
+        model::Entity& attachedEntity = attached.entities[uuid];
+        attachedEntity.parentUuid = newParent;
+        attachedEntity.row = targetRow;
+
+        model::Project rebased;
+        QVector<Uuid> upserts;
+        QVector<Uuid> deletes;
+        if (!next::applyEntityRange(attached, m_session->assets(), uuid,
+                                    parentNewStart, parentNewEnd, &rebased,
+                                    &upserts, &deletes, error, true))
+            return false;
+
+        plan->project = std::move(rebased);
+        plan->upserts = std::move(upserts);
+        plan->deletes = std::move(deletes);
+        plan->message = QStringLiteral("更改父级");
+        return true;
+    }
+
     const int oldParentStart = parentStart(project, entity);
     int newParentStart = 0;
     if (!newParent.isEmpty())
@@ -334,14 +397,11 @@ bool EditActions::planReparent(const Uuid& uuid, const Uuid& newParent,
 
     model::Entity& moved = working.entities[uuid];
     moved.parentUuid = newParent;
-    int maxRow = -1;
-    for (const Uuid& sibling : model::childrenOf(project, newParent))
-    {
-        if (sibling == uuid)
-            continue;
-        maxRow = std::max(maxRow, project.entities.value(sibling).row);
-    }
-    moved.row = maxRow + 1;
+    moved.row = targetRow;
+    // Becoming a root makes following impossible; keep the range that the
+    // normal keepWorld/keepLocal path produced and just clear the flag.
+    if (entity.followParentRange && newParent.isEmpty())
+        moved.followParentRange = false;
 
     QString validationError;
     if (!model::validateProject(working, &validationError))
@@ -554,6 +614,27 @@ bool EditActions::trimClip(const Uuid& uuid, int newStart, int newEnd,
     EditPlan plan;
     if (!planTrim(uuid, newStart, newEnd, &plan, error))
         return false;
+    return apply(plan, error);
+}
+
+bool EditActions::setFollowParentRange(const Uuid& uuid, bool follow,
+                                       QString* error)
+{
+    if (error)
+        error->clear();
+    if (!isValid())
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+
+    EditPlan plan;
+    if (!next::applyFollowParentRange(m_session->project(), m_session->assets(),
+                                      uuid, follow, &plan.project,
+                                      &plan.upserts, &plan.deletes, error))
+        return false;
+    plan.message = follow ? QStringLiteral("开启跟随父区间")
+                          : QStringLiteral("关闭跟随父区间");
     return apply(plan, error);
 }
 

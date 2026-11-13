@@ -393,15 +393,29 @@ void PropertiesPanel::refreshSession()
         const QSignalBlocker blocker(m_basicPhysics);
         m_basicPhysics->setChecked(entity->physicsInteract);
     }
+    {
+        const QSignalBlocker blocker(m_basicFollow);
+        m_basicFollow->setChecked(entity->followParentRange);
+    }
+    const bool hasParent = !entity->parentUuid.isEmpty();
     m_basicName->setEnabled(editable);
-    m_basicStart->setEnabled(editable);
-    m_basicEnd->setEnabled(editable);
+    // A following range is owned by the parent: editing start/end directly is
+    // either a no-op or an error, so keep the fields read-only until follow is
+    // switched off.
+    m_basicStart->setEnabled(editable && !entity->followParentRange);
+    m_basicEnd->setEnabled(editable && !entity->followParentRange);
     m_basicRow->setEnabled(editable);
     m_basicHidden->setEnabled(editable);
     m_basicLocked->setEnabled(true);
     m_basicVisible->setEnabled(editable);
     m_basicInherit->setEnabled(editable);
     m_basicPhysics->setEnabled(editable);
+    m_basicFollow->setEnabled(editable && hasParent);
+    m_basicFollow->setToolTip(
+        hasParent
+            ? QStringLiteral("开启后，子实体的时间范围始终等于直接父实体；"
+                             "父实体移动或拉伸时子实体一起变化")
+            : QStringLiteral("根实体没有父级，不能跟随父区间"));
 
     {
         const QSignalBlocker blocker(m_parent);
