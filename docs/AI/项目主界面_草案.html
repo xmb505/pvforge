@@ -471,7 +471,7 @@
   .tl-toolbar .info{color:var(--faint);font-size:10px;letter-spacing:1px;padding-right:4px}
   .tl-body{flex:1;display:flex;min-height:0}
   .tl-names{
-    width:186px;flex:0 0 186px;border-right:1px solid var(--line-2);
+    width:64px;flex:0 0 64px;border-right:1px solid var(--line-2);
     background:#181b1e;display:flex;flex-direction:column;min-height:0;
   }
   .tl-ruler-spacer{
@@ -480,17 +480,13 @@
     letter-spacing:1px;background:#1d2125;
   }
   .track-name{
-    height:27px;flex:0 0 27px;display:flex;align-items:center;gap:6px;padding:0 7px;
+    height:27px;flex:0 0 27px;display:flex;align-items:center;gap:5px;padding:0 6px;
     border-bottom:1px solid #22272b;color:#c2c9cf;font-size:10px;
   }
   .track-name:nth-child(even){background:#1a1e21}
   .track-name .ind{color:var(--faint);font-size:9px}
   .track-name .dotc{width:7px;height:7px;flex:0 0 7px}
-  .track-name .layer-tag{
-    margin-left:auto;color:var(--faint);font-size:8px;line-height:13px;
-    border:1px solid var(--line);padding:0 3px;letter-spacing:0;
-  }
-  .track-name .eye{margin-left:4px;color:var(--faint);font-size:10px}
+  .track-name .eye{margin-left:auto;color:var(--faint);font-size:10px}
   .track-name .eye.off{color:#4a525a}
   .track-name.add{
     color:var(--faint);font-size:9px;letter-spacing:1px;background:#16191c;
@@ -563,7 +559,7 @@
 
   /* ---------- private timeline ---------- */
   .private-timeline{
-    position:absolute;left:26.9%;width:26.1%;bottom:calc(100% + 8px);z-index:40;
+    position:absolute;left:13.6%;width:30.8%;bottom:129px;z-index:40;
     background:#1a1e21;border:1px solid var(--amber);
     box-shadow:0 18px 54px rgba(0,0,0,.7);
   }
@@ -591,10 +587,6 @@
   .pt-mode .m{padding:0 6px;color:var(--dim);font-size:9px;line-height:16px;white-space:nowrap}
   .pt-mode .m.on{background:var(--amber);color:#161000;font-weight:700}
   .pt-ruler{height:20px;display:flex;border-bottom:1px solid var(--line);background:#1d2125}
-  .pt-ruler .rn{
-    width:62px;flex:0 0 62px;border-right:1px solid var(--line-2);
-    display:flex;align-items:center;padding:0 5px;color:var(--faint);font-size:9px;
-  }
   .pt-ruler .lane{position:relative;flex:1;overflow:hidden}
   .pt-ruler .tick{position:absolute;top:0;bottom:0;width:1px;background:#343b41}
   .pt-ruler .tick.major{background:#4a525a}
@@ -604,21 +596,12 @@
   }
   .pt-ruler .lab.end{transform:translateX(calc(-100% - 3px))}
   .pt-row{height:22px;display:flex;border-bottom:1px solid #22272b;position:relative}
-  .pt-row .rn{
-    width:62px;flex:0 0 62px;border-right:1px solid var(--line);
-    display:flex;align-items:center;padding:0 5px;color:var(--dim);font-size:9px;
-    white-space:nowrap;overflow:hidden;
-  }
+  .pt-row.pos{background:rgba(67,209,122,.025)}
+  .pt-row.neg{background:rgba(255,93,93,.02)}
   .pt-row .lane{position:relative;flex:1}
   .pt-row .clip{top:3px;height:16px;font-size:8px;padding:0 3px}
   .pt-row .key{width:6px;height:6px}
-  .pt-row.pos .rn{color:#bfe6cf}
-  .pt-row.neg .rn{color:#c9b3b3}
   .pt-center{height:22px;display:flex;background:rgba(255,176,0,.07);border-top:1px solid var(--amber);border-bottom:1px solid var(--amber)}
-  .pt-center .rn{
-    width:62px;flex:0 0 62px;border-right:1px solid var(--amber-dim);
-    display:flex;align-items:center;padding:0 5px;color:var(--amber);font-size:9px;font-weight:700;
-  }
   .pt-center .lane{position:relative;flex:1;display:flex;align-items:center}
   .pt-center .lane::before{
     content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:var(--amber);
@@ -917,8 +900,8 @@
               <div class="inp">结束 120<span class="unit">帧</span></div>
             </div>
             <div class="row">
-              <label>轨道</label>
-              <div class="inp">轨道 3<span class="unit">行号</span></div>
+              <label>父级</label>
+              <div class="inp">舞台根<span class="unit">实体 / 舞台</span></div>
             </div>
             <div class="row">
               <label>私有</label>
@@ -1015,17 +998,17 @@
         <div class="tsep"></div>
         <button class="tb" title="添加图层">＋ 图层</button>
         <div class="sp"></div>
-        <span class="info">轨道 = 行号（图层） · 片段 = 实体 · 正向无限</span>
+        <span class="info">轨道 = 图层 · 片段 = 实体 · 正向无限</span>
       </div>
       <div class="tl-body">
         <div class="tl-names">
-          <div class="tl-ruler-spacer">轨道（行号）</div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--cyan)"></span>轨道 6<span class="layer-tag">#6</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--violet)"></span>轨道 5<span class="layer-tag">#5</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#9aa7b2"></span>轨道 4<span class="layer-tag">#4</span><span class="eye off">◌</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--green)"></span>轨道 3<span class="layer-tag">#3</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--blue)"></span>轨道 2<span class="layer-tag">#2</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#e07a5f"></span>轨道 1<span class="layer-tag">#1</span><span class="eye">◉</span></div>
+          <div class="tl-ruler-spacer">层级</div>
+          <div class="track-name"><span class="dotc" style="background:var(--cyan)"></span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="dotc" style="background:var(--violet)"></span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="dotc" style="background:#9aa7b2"></span><span class="eye off">◌</span></div>
+          <div class="track-name"><span class="dotc" style="background:var(--green)"></span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="dotc" style="background:var(--blue)"></span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="dotc" style="background:#e07a5f"></span><span class="eye">◉</span></div>
         </div>
         <div class="tl-tracks">
           <div class="ruler" id="ruler"></div>
@@ -1073,17 +1056,15 @@
           <div class="pt-mode"><span class="m on">相对</span><span class="m">绝对</span></div>
           <button class="pbtn x" title="关闭">×</button>
         </div>
-        <div class="pt-ruler"><span class="rn">帧</span><div class="lane" id="ptRuler"></div></div>
+        <div class="pt-ruler"><div class="lane" id="ptRuler"></div></div>
         <div class="pt-rows">
           <div class="pt-row pos">
-            <span class="rn">+2</span>
             <div class="lane">
               <div class="clip violet" style="left:30%;width:60%">高光 · 30–90</div>
               <span class="key violet" style="left:40%"></span>
             </div>
           </div>
           <div class="pt-row pos">
-            <span class="rn">+1</span>
             <div class="lane">
               <div class="clip green" style="left:0%;width:55%">头 · 0–55</div>
               <div class="clip green" style="left:65%;width:30%" title="表情 65–95">表情</div>
@@ -1092,24 +1073,21 @@
             </div>
           </div>
           <div class="pt-center">
-            <span class="rn">父</span>
             <div class="lane"><span class="lbl"><b>父实体 · 角色</b>（相对 0–100）</span></div>
           </div>
           <div class="pt-row neg">
-            <span class="rn">-1</span>
             <div class="lane">
               <div class="clip ghost" style="left:0%;width:100%;background:#343b42;border-color:#59626b;color:#c2c9cf">影子 · 0–100</div>
             </div>
           </div>
           <div class="pt-row neg">
-            <span class="rn">-2</span>
             <div class="lane">
               <div class="clip amber" style="left:10%;width:70%">背光 · 10–80</div>
             </div>
           </div>
         </div>
       </div>
-      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">轨道=行号 · 片段=实体</span></div>
+      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">轨道=图层 · 片段=实体</span></div>
     </div>
   </section>
 
