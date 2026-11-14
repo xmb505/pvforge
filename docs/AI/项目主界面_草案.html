@@ -563,7 +563,7 @@
 
   /* ---------- private timeline ---------- */
   .private-timeline{
-    position:absolute;left:26%;width:30%;bottom:calc(100% + 8px);z-index:40;
+    position:absolute;left:26.9%;width:26.1%;bottom:calc(100% + 8px);z-index:40;
     background:#1a1e21;border:1px solid var(--amber);
     box-shadow:0 18px 54px rgba(0,0,0,.7);
   }
@@ -602,6 +602,7 @@
     position:absolute;top:3px;color:var(--faint);font-size:8px;transform:translateX(3px);
     font-variant-numeric:tabular-nums;
   }
+  .pt-ruler .lab.end{transform:translateX(calc(-100% - 3px))}
   .pt-row{height:22px;display:flex;border-bottom:1px solid #22272b;position:relative}
   .pt-row .rn{
     width:62px;flex:0 0 62px;border-right:1px solid var(--line);
@@ -917,7 +918,7 @@
             </div>
             <div class="row">
               <label>轨道</label>
-              <div class="inp">L2 · 角色层<span class="unit">▾</span></div>
+              <div class="inp">轨道 3<span class="unit">行号</span></div>
             </div>
             <div class="row">
               <label>私有</label>
@@ -1014,17 +1015,17 @@
         <div class="tsep"></div>
         <button class="tb" title="添加图层">＋ 图层</button>
         <div class="sp"></div>
-        <span class="info">轨道 = 图层 · 片段 = 实体 · 正向无限</span>
+        <span class="info">轨道 = 行号（图层） · 片段 = 实体 · 正向无限</span>
       </div>
       <div class="tl-body">
         <div class="tl-names">
-          <div class="tl-ruler-spacer">图层 / 轨道</div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--cyan)"></span>摄像机层<span class="layer-tag">C1</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--violet)"></span>特效层<span class="layer-tag">L4</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#9aa7b2"></span>字幕层<span class="layer-tag">L3</span><span class="eye off">◌</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--green)"></span>角色层<span class="layer-tag">L2</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--blue)"></span>背景层<span class="layer-tag">L1</span><span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#e07a5f"></span>音频层<span class="layer-tag">A1</span><span class="eye">◉</span></div>
+          <div class="tl-ruler-spacer">轨道（行号）</div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--cyan)"></span>轨道 6<span class="layer-tag">#6</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--violet)"></span>轨道 5<span class="layer-tag">#5</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#9aa7b2"></span>轨道 4<span class="layer-tag">#4</span><span class="eye off">◌</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--green)"></span>轨道 3<span class="layer-tag">#3</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--blue)"></span>轨道 2<span class="layer-tag">#2</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#e07a5f"></span>轨道 1<span class="layer-tag">#1</span><span class="eye">◉</span></div>
         </div>
         <div class="tl-tracks">
           <div class="ruler" id="ruler"></div>
@@ -1070,23 +1071,22 @@
           <span class="name">私有时间线 · 角色</span>
           <span class="grow"></span>
           <div class="pt-mode"><span class="m on">相对</span><span class="m">绝对</span></div>
-          <button class="pbtn" title="浮出">⇱</button>
           <button class="pbtn x" title="关闭">×</button>
         </div>
         <div class="pt-ruler"><span class="rn">帧</span><div class="lane" id="ptRuler"></div></div>
         <div class="pt-rows">
           <div class="pt-row pos">
-            <span class="rn">+2 特效</span>
+            <span class="rn">+2</span>
             <div class="lane">
               <div class="clip violet" style="left:30%;width:60%">高光 · 30–90</div>
               <span class="key violet" style="left:40%"></span>
             </div>
           </div>
           <div class="pt-row pos">
-            <span class="rn">+1 头</span>
+            <span class="rn">+1</span>
             <div class="lane">
               <div class="clip green" style="left:0%;width:55%">头 · 0–55</div>
-              <div class="clip green" style="left:65%;width:30%">表情 · 65–95</div>
+              <div class="clip green" style="left:65%;width:30%" title="表情 65–95">表情</div>
               <span class="key" style="left:12%"></span>
               <span class="key" style="left:72%"></span>
             </div>
@@ -1096,20 +1096,20 @@
             <div class="lane"><span class="lbl"><b>父实体 · 角色</b>（相对 0–100）</span></div>
           </div>
           <div class="pt-row neg">
-            <span class="rn">-1 影子</span>
+            <span class="rn">-1</span>
             <div class="lane">
               <div class="clip ghost" style="left:0%;width:100%;background:#343b42;border-color:#59626b;color:#c2c9cf">影子 · 0–100</div>
             </div>
           </div>
           <div class="pt-row neg">
-            <span class="rn">-2 背光</span>
+            <span class="rn">-2</span>
             <div class="lane">
               <div class="clip amber" style="left:10%;width:70%">背光 · 10–80</div>
             </div>
           </div>
         </div>
       </div>
-      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">轨道=图层 · 片段=实体</span></div>
+      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">轨道=行号 · 片段=实体</span></div>
     </div>
   </section>
 
@@ -1141,7 +1141,7 @@
 ├─ <i>属性</i>         当前选中实体的参数
 ├─ <i>素材库</i>       图片 / 视频 / 音频 / SVG
 ├─ <i>时间轴</i>       轨道（图层）+ 片段（实体）
-│   ├─ 轨道            纯图层，不绑实体
+│   ├─ 轨道            只是行号/图层，不绑实体
 │   ├─ 片段            实体自己注册，占一行
 │   └─ 私有时间线      ± 轨道围绕父实体，可无限展开
 └─ <i>监视器</i>       摄像机输出预览</div>
@@ -1176,7 +1176,8 @@
       const major = f % 20 === 0;
       html += '<span class="tick' + (major ? ' major' : '') + '" style="left:' + left + '%"></span>';
       if (major) {
-        html += '<span class="lab" style="left:' + left + '%">' + f + '</span>';
+        const end = f === TOTAL ? ' end' : '';
+        html += '<span class="lab' + end + '" style="left:' + left + '%">' + f + '</span>';
       }
     }
     ruler.innerHTML = html;
