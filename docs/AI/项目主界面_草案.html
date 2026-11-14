@@ -486,8 +486,17 @@
   .track-name:nth-child(even){background:#1a1e21}
   .track-name .ind{color:var(--faint);font-size:9px}
   .track-name .dotc{width:7px;height:7px;flex:0 0 7px}
-  .track-name .eye{margin-left:auto;color:var(--faint);font-size:10px}
+  .track-name .layer-tag{
+    margin-left:auto;color:var(--faint);font-size:8px;line-height:13px;
+    border:1px solid var(--line);padding:0 3px;letter-spacing:0;
+  }
+  .track-name .eye{margin-left:4px;color:var(--faint);font-size:10px}
   .track-name .eye.off{color:#4a525a}
+  .track-name.add{
+    color:var(--faint);font-size:9px;letter-spacing:1px;background:#16191c;
+    border-bottom:1px dashed #2c3238;
+  }
+  .track-name.add:hover{color:var(--amber);background:#1d1a12}
   .tl-tracks{flex:1;position:relative;min-width:0;overflow:hidden;background:#141719}
   .ruler{
     height:24px;flex:0 0 24px;position:relative;border-bottom:1px solid var(--line);
@@ -517,6 +526,12 @@
     border-color:#3f7a63;color:#cfeee1;
   }
   .clip.ghost{opacity:.55}
+  .clip .plus{
+    width:13px;height:13px;border:1px solid currentColor;display:inline-flex;
+    align-items:center;justify-content:center;margin-right:5px;font-size:10px;
+    line-height:1;opacity:.85;flex:0 0 13px;
+  }
+  .clip.open{box-shadow:0 0 0 1px var(--amber);border-color:var(--amber)}
   .key{
     position:absolute;top:50%;width:7px;height:7px;background:#eef2f5;
     border:1px solid #0b0e10;transform:translate(-50%,-50%) rotate(45deg);
@@ -537,14 +552,81 @@
     font-size:8px;padding:0 3px;white-space:nowrap;
   }
   .region{
-    position:absolute;top:0;bottom:0;background:rgba(255,176,0,.05);
-    border-left:1px solid rgba(255,176,0,.35);border-right:1px solid rgba(255,176,0,.35);
-    left:0;width:30%;pointer-events:none;
+    position:absolute;top:0;bottom:0;background:rgba(255,176,0,.035);
+    border-left:1px solid rgba(255,176,0,.3);border-right:1px solid rgba(255,176,0,.3);
+    left:0;width:100%;pointer-events:none;
   }
   .region .lbl{
     position:absolute;top:2px;left:4px;color:var(--amber);font-size:8px;letter-spacing:1px;
     opacity:.8;
   }
+
+  /* ---------- private timeline ---------- */
+  .private-timeline{
+    position:absolute;left:26%;width:30%;bottom:calc(100% + 8px);z-index:40;
+    background:#1a1e21;border:1px solid var(--amber);
+    box-shadow:0 18px 54px rgba(0,0,0,.7);
+  }
+  .private-timeline::after{
+    content:"";position:absolute;left:50%;bottom:-7px;width:12px;height:12px;
+    transform:translateX(-50%) rotate(45deg);
+    background:#1a1e21;border-right:1px solid var(--amber);border-bottom:1px solid var(--amber);
+  }
+  .pt-head{
+    height:22px;display:flex;align-items:center;gap:6px;padding:0 5px;
+    background:linear-gradient(180deg,#2c2616,#211d12);
+    border-bottom:1px solid var(--amber-dim);
+    font-size:10px;letter-spacing:1px;color:#e7d9b3;
+  }
+  .pt-head .grip{color:var(--faint);flex:0 0 auto}
+  .pt-head .name{font-weight:600;color:var(--amber);white-space:nowrap;flex:0 0 auto}
+  .pt-head .grow{flex:1;min-width:4px}
+  .pt-head .pbtn{
+    width:18px;height:16px;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);border:1px solid transparent;font-size:11px;
+  }
+  .pt-head .pbtn:hover{color:var(--text);border-color:var(--line-2);background:var(--panel-3)}
+  .pt-head .pbtn.x:hover{color:#fff;background:#7a1f1f;border-color:#a33}
+  .pt-mode{display:flex;border:1px solid var(--amber-dim);flex:0 0 auto}
+  .pt-mode .m{padding:0 6px;color:var(--dim);font-size:9px;line-height:16px;white-space:nowrap}
+  .pt-mode .m.on{background:var(--amber);color:#161000;font-weight:700}
+  .pt-ruler{height:20px;display:flex;border-bottom:1px solid var(--line);background:#1d2125}
+  .pt-ruler .rn{
+    width:62px;flex:0 0 62px;border-right:1px solid var(--line-2);
+    display:flex;align-items:center;padding:0 5px;color:var(--faint);font-size:9px;
+  }
+  .pt-ruler .lane{position:relative;flex:1;overflow:hidden}
+  .pt-ruler .tick{position:absolute;top:0;bottom:0;width:1px;background:#343b41}
+  .pt-ruler .tick.major{background:#4a525a}
+  .pt-ruler .lab{
+    position:absolute;top:3px;color:var(--faint);font-size:8px;transform:translateX(3px);
+    font-variant-numeric:tabular-nums;
+  }
+  .pt-row{height:22px;display:flex;border-bottom:1px solid #22272b;position:relative}
+  .pt-row .rn{
+    width:62px;flex:0 0 62px;border-right:1px solid var(--line);
+    display:flex;align-items:center;padding:0 5px;color:var(--dim);font-size:9px;
+    white-space:nowrap;overflow:hidden;
+  }
+  .pt-row .lane{position:relative;flex:1}
+  .pt-row .clip{top:3px;height:16px;font-size:8px;padding:0 3px}
+  .pt-row .key{width:6px;height:6px}
+  .pt-row.pos .rn{color:#bfe6cf}
+  .pt-row.neg .rn{color:#c9b3b3}
+  .pt-center{height:22px;display:flex;background:rgba(255,176,0,.07);border-top:1px solid var(--amber);border-bottom:1px solid var(--amber)}
+  .pt-center .rn{
+    width:62px;flex:0 0 62px;border-right:1px solid var(--amber-dim);
+    display:flex;align-items:center;padding:0 5px;color:var(--amber);font-size:9px;font-weight:700;
+  }
+  .pt-center .lane{position:relative;flex:1;display:flex;align-items:center}
+  .pt-center .lane::before{
+    content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:var(--amber);
+  }
+  .pt-center .lbl{
+    position:relative;z-index:1;margin-left:6px;background:#1a1e21;padding:0 5px;
+    color:var(--amber);font-size:8px;letter-spacing:1px;
+  }
+  .pt-center .lbl b{color:#ffe9b0;font-weight:500}
 
   /* ---------- status ---------- */
   .statusbar{
@@ -766,10 +848,10 @@
             <label>父级</label>
             <div class="ctl">舞台根<span class="sub">▾</span></div>
           </div>
-          <div class="wb-check">
+          <div class="wb-check" style="opacity:.45">
             <span class="box"></span>
             <span>跟随父级区间</span>
-            <span style="color:#5b646d">（子区间 = 直接父区间）</span>
+            <span style="color:#5b646d">（根实体不可用）</span>
           </div>
           <div class="wb-hint">
             工作台是舞台里的一个面板，负责创建 / 导入 / 配置实体。
@@ -795,9 +877,9 @@
       </div>
       <div class="props">
         <div class="obj-head">
-          <div class="obj-icon">T</div>
-          <div class="obj-name">标题</div>
-          <div class="obj-type">文字</div>
+          <div class="obj-icon" style="color:var(--green);border-color:#3f6b4f;background:#203027">图</div>
+          <div class="obj-name">角色</div>
+          <div class="obj-type">图片</div>
         </div>
 
         <div class="sect">
@@ -826,18 +908,27 @@
         </div>
 
         <div class="sect">
-          <div class="sh"><span class="caret">▼</span> 时间轴 <span class="badge">0 – 300 帧</span></div>
+          <div class="sh"><span class="caret">▼</span> 时间轴 <span class="badge">20 – 120 帧</span></div>
           <div class="sb">
             <div class="row">
               <label>开始</label>
-              <div class="inp">0<span class="unit">帧</span></div>
-              <div class="inp">结束 300<span class="unit">帧</span></div>
+              <div class="inp">20<span class="unit">帧</span></div>
+              <div class="inp">结束 120<span class="unit">帧</span></div>
             </div>
-            <div class="checkrow" style="margin-left:0">
+            <div class="row">
+              <label>轨道</label>
+              <div class="inp">L2 · 角色层<span class="unit">▾</span></div>
+            </div>
+            <div class="row">
+              <label>私有</label>
+              <button class="mini-btn" style="flex:1;text-align:left">＋ 打开私有时间线</button>
+              <span class="note" style="margin:0;border:0;padding:0">± 轨道</span>
+            </div>
+            <div class="checkrow" style="margin-left:0;opacity:.45">
               <span class="box"></span><span>跟随父级区间</span>
-              <span class="note" style="margin:0 0 0 auto;border:0;padding:0">只跟直接父级</span>
+              <span class="note" style="margin:0 0 0 auto;border:0;padding:0">根实体不可用</span>
             </div>
-            <div class="note">开启后，移动 / 裁剪父级会同步子级区间；子级不能单独移动或裁剪。</div>
+            <div class="note">片段展开后，+1/+2 盖在父实体上，-1/-2 垫在父实体下；同轨不允许重叠。</div>
           </div>
         </div>
 
@@ -851,15 +942,15 @@
         </div>
 
         <div class="sect">
-          <div class="sh"><span class="caret">▼</span> 文字</div>
+          <div class="sh"><span class="caret">▼</span> 内容</div>
           <div class="sb">
-            <div class="row"><label>内容</label><div class="inp">实体 · 时间轴 · 求解</div></div>
-            <div class="row"><label>字体</label><div class="inp">思源黑体<span class="unit">▾</span></div><div class="inp w60">72 px</div></div>
-            <div class="row"><label>颜色</label><div class="inp"><span class="swatch" style="background:#f4f6f8"></span>&nbsp;#F4F6F8</div></div>
+            <div class="row"><label>素材</label><div class="inp">角色.png<span class="unit">▾</span></div></div>
+            <div class="row"><label>适配</label><div class="inp">包含<span class="unit">▾</span></div><div class="inp w60">100%</div></div>
+            <div class="row"><label>不透明度</label><div class="inp">100<span class="unit">%</span></div></div>
             <div class="row">
-              <label>排版</label>
-              <button class="mini-btn">换行 / 行距 / 字距…</button>
-              <button class="mini-btn" style="margin-left:auto">对齐</button>
+              <label>操作</label>
+              <button class="mini-btn">替换素材</button>
+              <button class="mini-btn" style="margin-left:auto">素材库中显示</button>
             </div>
           </div>
         </div>
@@ -920,39 +1011,29 @@
         <button class="tb" title="添加关键帧">◆</button>
         <button class="tb" title="贝塞尔">∿</button>
         <button class="tb" title="吸附" style="color:var(--amber)">⌁</button>
+        <div class="tsep"></div>
+        <button class="tb" title="添加图层">＋ 图层</button>
         <div class="sp"></div>
-        <span class="info">实体时间轴 · 0 – 300 帧</span>
+        <span class="info">轨道 = 图层 · 片段 = 实体 · 正向无限</span>
       </div>
       <div class="tl-body">
         <div class="tl-names">
-          <div class="tl-ruler-spacer">实体 / 轨道</div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--blue)"></span>背景<span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--amber)"></span>标题<span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--green)"></span>角色<span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--violet)"></span>粒子<span class="eye off">◌</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#e07a5f"></span>音频<span class="eye">◉</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#9aa7b2"></span>字幕<span class="eye off">◌</span></div>
-          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--cyan)"></span>摄像机 1<span class="eye">◉</span></div>
+          <div class="tl-ruler-spacer">图层 / 轨道</div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--cyan)"></span>摄像机层<span class="layer-tag">C1</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--violet)"></span>特效层<span class="layer-tag">L4</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#9aa7b2"></span>字幕层<span class="layer-tag">L3</span><span class="eye off">◌</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--green)"></span>角色层<span class="layer-tag">L2</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:var(--blue)"></span>背景层<span class="layer-tag">L1</span><span class="eye">◉</span></div>
+          <div class="track-name"><span class="ind">▾</span><span class="dotc" style="background:#e07a5f"></span>音频层<span class="layer-tag">A1</span><span class="eye">◉</span></div>
         </div>
         <div class="tl-tracks">
           <div class="ruler" id="ruler"></div>
           <div class="tracks">
-            <div class="region"><span class="lbl">播放区间</span></div>
+            <div class="region"><span class="lbl">工程区间 0–300 · 时间轴正向无限延伸</span></div>
             <div class="track-row">
-              <div class="clip blue" style="left:0%;width:100%">背景 · 0–300</div>
-            </div>
-            <div class="track-row">
-              <div class="clip amber" style="left:0%;width:30%">标题 · 0–90</div>
-              <span class="key amber" style="left:0%"></span>
-              <span class="key amber" style="left:10%"></span>
-              <span class="key amber" style="left:22%"></span>
-            </div>
-            <div class="track-row">
-              <div class="clip green" style="left:6.6%;width:60%">角色 · 20–200</div>
-              <span class="key" style="left:9%"></span>
-              <span class="key" style="left:26%"></span>
-              <span class="key" style="left:44%"></span>
-              <span class="key" style="left:62%"></span>
+              <div class="clip cyan" style="left:0%;width:100%">摄像机 1 · 0–300</div>
+              <span class="key cyan" style="left:0%"></span>
+              <span class="key cyan" style="left:15%"></span>
             </div>
             <div class="track-row">
               <div class="clip violet ghost" style="left:20%;width:33.3%">粒子 · 60–160</div>
@@ -960,15 +1041,20 @@
               <span class="key violet" style="left:41%"></span>
             </div>
             <div class="track-row">
-              <div class="clip audio" style="left:0%;width:100%">配乐.wav · 0–300</div>
-            </div>
-            <div class="track-row">
               <div class="clip ghost" style="left:8.3%;width:22%;background:#343b42;border-color:#59626b;color:#c2c9cf">字幕 01 · 25–91</div>
+              <div class="clip ghost" style="left:40%;width:20%;background:#343b42;border-color:#59626b;color:#c2c9cf">字幕 02 · 120–180</div>
             </div>
             <div class="track-row">
-              <div class="clip cyan" style="left:0%;width:100%">摄像机 1 · 0–300</div>
-              <span class="key cyan" style="left:0%"></span>
-              <span class="key cyan" style="left:15%"></span>
+              <div class="clip green open" style="left:6.6%;width:33.3%"><span class="plus">＋</span>角色 · 20–120</div>
+              <span class="key" style="left:9%"></span>
+              <span class="key" style="left:20%"></span>
+              <span class="key" style="left:30%"></span>
+            </div>
+            <div class="track-row">
+              <div class="clip blue" style="left:0%;width:100%">背景 · 0–300</div>
+            </div>
+            <div class="track-row">
+              <div class="clip audio" style="left:0%;width:100%">配乐.wav · 0–300</div>
             </div>
             <div class="playhead" style="left:15%">
               <span class="head"></span><span class="frame">45</span>
@@ -976,7 +1062,54 @@
           </div>
         </div>
       </div>
-      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">舞台内面板</span></div>
+
+      <!-- private timeline -->
+      <div class="private-timeline">
+        <div class="pt-head">
+          <span class="grip">⠿</span>
+          <span class="name">私有时间线 · 角色</span>
+          <span class="grow"></span>
+          <div class="pt-mode"><span class="m on">相对</span><span class="m">绝对</span></div>
+          <button class="pbtn" title="浮出">⇱</button>
+          <button class="pbtn x" title="关闭">×</button>
+        </div>
+        <div class="pt-ruler"><span class="rn">帧</span><div class="lane" id="ptRuler"></div></div>
+        <div class="pt-rows">
+          <div class="pt-row pos">
+            <span class="rn">+2 特效</span>
+            <div class="lane">
+              <div class="clip violet" style="left:30%;width:60%">高光 · 30–90</div>
+              <span class="key violet" style="left:40%"></span>
+            </div>
+          </div>
+          <div class="pt-row pos">
+            <span class="rn">+1 头</span>
+            <div class="lane">
+              <div class="clip green" style="left:0%;width:55%">头 · 0–55</div>
+              <div class="clip green" style="left:65%;width:30%">表情 · 65–95</div>
+              <span class="key" style="left:12%"></span>
+              <span class="key" style="left:72%"></span>
+            </div>
+          </div>
+          <div class="pt-center">
+            <span class="rn">父</span>
+            <div class="lane"><span class="lbl"><b>父实体 · 角色</b>（相对 0–100）</span></div>
+          </div>
+          <div class="pt-row neg">
+            <span class="rn">-1 影子</span>
+            <div class="lane">
+              <div class="clip ghost" style="left:0%;width:100%;background:#343b42;border-color:#59626b;color:#c2c9cf">影子 · 0–100</div>
+            </div>
+          </div>
+          <div class="pt-row neg">
+            <span class="rn">-2 背光</span>
+            <div class="lane">
+              <div class="clip amber" style="left:10%;width:70%">背光 · 10–80</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="anno-label" style="right:6px;top:4px">时间轴 <span class="s">轨道=图层 · 片段=实体</span></div>
     </div>
   </section>
 
@@ -984,7 +1117,7 @@
   <footer class="statusbar">
     <span class="st"><span class="led"></span>就绪</span>
     <span class="sep"></span>
-    <span class="st">选中 <b>文字「标题」</b></span>
+    <span class="st">选中 <b>图片「角色」</b></span>
     <span class="sep"></span>
     <span class="st">帧 <b>45</b> / 300 · <b>30</b> fps</span>
     <span class="grow"></span>
@@ -1007,7 +1140,10 @@
 ├─ <b>工作台</b>       创建 / 导入 / 配置实体的面板
 ├─ <i>属性</i>         当前选中实体的参数
 ├─ <i>素材库</i>       图片 / 视频 / 音频 / SVG
-├─ <i>时间轴</i>       实体区间、关键帧、求解段
+├─ <i>时间轴</i>       轨道（图层）+ 片段（实体）
+│   ├─ 轨道            纯图层，不绑实体
+│   ├─ 片段            实体自己注册，占一行
+│   └─ 私有时间线      ± 轨道围绕父实体，可无限展开
 └─ <i>监视器</i>       摄像机输出预览</div>
   <div class="foot">工作台浮出 / 停靠 = 舞台内面板行为，不是“打开另一个舞台”。<br>本页是施工图草案，人类确认后才进入 docs/AI-HUMAN。</div>
 </div>
@@ -1021,6 +1157,23 @@
     for (let f = 0; f <= TOTAL; f += 10) {
       const left = (f / TOTAL) * 100;
       const major = f % 30 === 0;
+      html += '<span class="tick' + (major ? ' major' : '') + '" style="left:' + left + '%"></span>';
+      if (major) {
+        html += '<span class="lab" style="left:' + left + '%">' + f + '</span>';
+      }
+    }
+    ruler.innerHTML = html;
+  })();
+
+  // Private timeline ruler: relative 0–100, tick every 10, label every 20.
+  (function () {
+    const ruler = document.getElementById('ptRuler');
+    if (!ruler) return;
+    const TOTAL = 100;
+    let html = '';
+    for (let f = 0; f <= TOTAL; f += 10) {
+      const left = (f / TOTAL) * 100;
+      const major = f % 20 === 0;
       html += '<span class="tick' + (major ? ' major' : '') + '" style="left:' + left + '%"></span>';
       if (major) {
         html += '<span class="lab" style="left:' + left + '%">' + f + '</span>';
