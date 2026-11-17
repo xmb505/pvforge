@@ -2,6 +2,8 @@
 #include "TestRegistry.h"
 #include "TimelineEditTests.h"
 
+#include <QDockWidget>
+
 namespace {
 
 int timelineTest(QApplication& app)
@@ -120,6 +122,26 @@ int timelineTest(QApplication& app)
     if (!timeline)
     {
         qCritical() << "timeline-test: no timeline panel";
+        return 1;
+    }
+    // The default dock split leaves the timeline shorter than three rows in an
+    // offscreen 1200x800 window, so row 2 sits under the 28 px ruler and a
+    // clip click there scrubs instead of selecting.  Give the timeline the
+    // height a real user would have before driving row gestures.
+    if (auto* stageDock =
+            window->findChild<QDockWidget*>(QStringLiteral("stageDock")))
+    {
+        if (auto* timelineDock =
+                window->findChild<QDockWidget*>(QStringLiteral("timelineDock")))
+            window->resizeDocks({stageDock, timelineDock}, {320, 560},
+                                Qt::Vertical);
+    }
+    QApplication::processEvents();
+    if (timeline->rowCenterYForTest(2) <= timeline->rulerHeightForTest())
+    {
+        qCritical() << "timeline-test: row 2 is under the ruler (y"
+                    << timeline->rowCenterYForTest(2) << "ruler"
+                    << timeline->rulerHeightForTest() << ")";
         return 1;
     }
     auto* sessionPtr = window->editorSessionForTest();
@@ -2023,132 +2045,6 @@ int timelineMarkerTest(QApplication& app)
     return 0;
 }
 
-int timelineEditE2eTest(QApplication& app, const QString& projectDir)
-{
-    QString error;
-    auto session = pvf::EditorSession::openProject(projectDir, &error);
-    if (!session)
-    {
-        qCritical() << "timeline-edit-e2e: open failed" << error;
-        return 1;
-    }
-    auto* document = session->document();
-    auto findUuid = [&](const QString& name) {
-        for (auto it = session->project().entities.constBegin();
-             it != session->project().entities.constEnd(); ++it)
-            if (it.value().name == name)
-                return it.key();
-        return pvf::Uuid();
-    };
-    const pvf::Uuid audio = findUuid(QStringLiteral("音频"));
-    const pvf::Uuid image = findUuid(QStringLiteral("图片"));
-    if (audio.isEmpty() || image.isEmpty())
-    {
-        qCritical() << "timeline-edit-e2e: audio/image entity missing";
-        return 1;
-    }
-    const int audioStartBefore = session->project().entities.value(audio).start;
-    const int audioEndBefore = session->project().entities.value(audio).end;
-    const int imageStartBefore = session->project().entities.value(image).start;
-    const int imageEndBefore = session->project().entities.value(image).end;
-
-    auto* window = new pvf::MainWindow(session.release());
-    window->setAttribute(Qt::WA_DeleteOnClose);
-    window->resize(1280, 820);
-    window->show();
-    QApplication::processEvents();
-    QApplication::processEvents();
-    auto* live = window->editorSessionForTest();
-    auto* timeline = window->findChild<pvf::TimelinePanel*>();
-    if (!live || !timeline)
-    {
-        qCritical() << "timeline-edit-e2e: window has no session timeline";
-        return 1;
-    }
-    auto rowForUuid = [&](const pvf::Uuid& uuid) {
-        return timeline->rowForEntityForTest(timeline->entityIdForUuid(uuid));
-    };
-    auto dragClip = [&](const pvf::Uuid& uuid, int grabFrame, int delta) {
-        const int row = rowForUuid(uuid);
-        if (row < 0)
-            return false;
-        const QPoint from(timeline->frameXForTest(grabFrame),
-                          timeline->rowCenterYForTest(row));
-        const QPoint to(timeline->frameXForTest(grabFrame + delta),
-                        timeline->rowCenterYForTest(row));
-        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
-                          QPointF(timeline->mapToGlobal(from)), Qt::LeftButton,
-                          Qt::LeftButton, Qt::NoModifier);
-        QMouseEvent move(QEvent::MouseMove, QPointF(to),
-                         QPointF(timeline->mapToGlobal(to)), Qt::NoButton,
-                         Qt::LeftButton, Qt::NoModifier);
-        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
-                            QPointF(timeline->mapToGlobal(to)),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-        QApplication::sendEvent(timeline, &press);
-        QApplication::sendEvent(timeline, &move);
-        QApplication::sendEvent(timeline, &release);
-        QApplication::processEvents();
-        return true;
-    };
-    if (!dragClip(audio, audioStartBefore + 10, 30)
-        || !dragClip(image, imageStartBefore + 10, 20))
-    {
-        qCritical() << "timeline-edit-e2e: drag failed";
-        return 1;
-    }
-    live->flush();
-
-    auto readRange = [&](const pvf::Uuid& uuid, int* start, int* end) {
-        QFile file(live->root() + QStringLiteral("/entities/") + uuid
-                   + QStringLiteral(".json"));
-        if (!file.open(QIODevice::ReadOnly))
-            return false;
-        const QJsonObject object =
-            QJsonDocument::fromJson(file.readAll()).object();
-        *start = object.value(QStringLiteral("start")).toInt();
-        *end = object.value(QStringLiteral("end")).toInt();
-        return true;
-    };
-    int audioStart = 0;
-    int audioEnd = 0;
-    int imageStart = 0;
-    int imageEnd = 0;
-    if (!readRange(audio, &audioStart, &audioEnd)
-        || !readRange(image, &imageStart, &imageEnd))
-    {
-        qCritical() << "timeline-edit-e2e: cannot read entity JSON";
-        return 1;
-    }
-    if (audioStart != audioStartBefore + 30
-        || audioEnd != audioEndBefore + 30
-        || imageStart != imageStartBefore + 20
-        || imageEnd != imageEndBefore + 20)
-    {
-        qCritical() << "timeline-edit-e2e: ranges wrong"
-                    << "audio" << audioStartBefore << audioEndBefore << "->"
-                    << audioStart << audioEnd << "image" << imageStartBefore
-                    << imageEndBefore << "->" << imageStart << imageEnd;
-        return 1;
-    }
-
-    QDir().mkpath(QStringLiteral("/tmp/opencode"));
-    if (!window->grab().save(
-            QStringLiteral("/tmp/opencode/pvforge-p2b1-edit.png")))
-    {
-        qCritical() << "timeline-edit-e2e: screenshot failed";
-        return 1;
-    }
-    qInfo() << "timeline-edit-e2e OK: audio"
-            << audioStartBefore << "->" << audioStart << " image"
-            << imageStartBefore << "->" << imageStart << projectDir;
-    window->close();
-    QApplication::processEvents();
-    Q_UNUSED(document);
-    Q_UNUSED(app);
-    return 0;
-}
-
 } // namespace
 
 namespace pvf::tests {
@@ -2173,15 +2069,7 @@ void registerTimelineTests(Registry& registry)
                  [](QApplication& app) { return timelineMarkerTest(app); });
     registry.add(QStringLiteral("--timeline-edit-e2e"),
                  [](QApplication& app) {
-                     const QStringList arguments = app.arguments();
-                     const int index = arguments.indexOf(
-                         QStringLiteral("--timeline-edit-e2e"));
-                     QString projectDir = QStringLiteral("/tmp/pvfe2e/proj");
-                     if (index >= 0 && index + 1 < arguments.size()
-                         && !arguments.at(index + 1)
-                                 .startsWith(QLatin1Char('-')))
-                         projectDir = arguments.at(index + 1);
-                     return timelineEditE2eTest(app, projectDir);
+                     return pvf::tests::runTimelineEditE2eTest(app);
                  });
 }
 

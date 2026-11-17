@@ -112,6 +112,7 @@ public:
     int rowCenterYForTest(int row) const { return rowTop(row) + rowHeight(row) / 2; }
     int rowTopForTest(int row) const { return rowTop(row); }
     int bodyBottomForTest() const { return bodyBottom(); }
+    int rulerHeightForTest() const { return kRulerHeight; }
     // Clip-first timeline: no name column, no timeline-side entity search.
     int nameColumnWidthForTest() const { return nameWidth(); }
     bool clipNameElidedForTest(EntityId id) const;

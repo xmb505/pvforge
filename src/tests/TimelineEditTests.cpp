@@ -2,6 +2,8 @@
 
 #include "TestApp.h"
 
+#include <QDockWidget>
+
 namespace {
 
 struct TimelineEditIds
@@ -354,17 +356,6 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
         return 1;
 
     // Delete cascades and undo restores the subtree.
-    {
-        QString validation;
-        pvf::EditPlan delPlan;
-        QString delError;
-        const bool planOk = actions->planDelete({trashRoot}, &delPlan, &delError);
-        qCritical() << "DEBUG delete" << planOk << delError
-                    << delPlan.deletes.size() << "valid"
-                    << pvf::model::validateProject(session->project(),
-                                                  &validation)
-                    << validation << "depth" << depth();
-    }
     const int entityCount = session->project().entities.size();
     if (!check(actions->deleteEntities({trashRoot}, false, nullptr, &error),
                QStringLiteral("cascade delete failed: %1").arg(error)))
@@ -407,6 +398,19 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     auto* timeline = window->findChild<pvf::TimelinePanel*>();
     if (!check(live && timeline, QStringLiteral("session window/timeline missing")))
         return 1;
+    // Same offscreen layout as --timeline-test: the default split leaves the
+    // timeline under three rows tall, which would put row 2 and the reparent
+    // rows under the ruler (a drag there means "above everything").  Resize
+    // the dock so every row this test drives is a real, clickable row.
+    if (auto* stageDock =
+            window->findChild<QDockWidget*>(QStringLiteral("stageDock")))
+    {
+        if (auto* timelineDock =
+                window->findChild<QDockWidget*>(QStringLiteral("timelineDock")))
+            window->resizeDocks({stageDock, timelineDock}, {320, 560},
+                                Qt::Vertical);
+    }
+    QApplication::processEvents();
     auto rowForName = [&](const QString& name) {
         for (int row = 0; row < timeline->entityRowCountForTest(); ++row)
             if (timeline->rowNameForTest(row) == name)
@@ -504,6 +508,14 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     if (!check(videoRow >= 0 && parentRow >= 0,
                QStringLiteral("row reorder rows missing")))
         return 1;
+    if (!check(timeline->rowCenterYForTest(videoRow)
+                       > timeline->rulerHeightForTest()
+                   && timeline->rowCenterYForTest(parentRow)
+                          > timeline->rulerHeightForTest(),
+               QStringLiteral("row drag target is under the ruler (%1/%2)")
+                   .arg(timeline->rowCenterYForTest(videoRow))
+                   .arg(timeline->rulerHeightForTest())))
+        return 1;
     panelDepth = live->document()->store()->undoDepth();
     changedSignals = 0;
     const QPoint rowFrom(timeline->frameXForTest(30),
@@ -560,7 +572,15 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     const int trimRow = rowForName(QStringLiteral("父级"));
     panelDepth = live->document()->store()->undoDepth();
     changedSignals = 0;
-    const QPoint trimFrom(timeline->frameXForTest(60),
+    // Grab the painted right edge (inside the clip rect).  frameXForTest(60)
+    // is the first pixel after the clip and hit-tests as an empty row, so it
+    // would start a box select instead of the trim gesture.
+    const QRect trimClipRect =
+        timeline->clipRectFor(timeline->entityIdForUuid(parent));
+    if (!check(!trimClipRect.isEmpty() && trimRow >= 0,
+               QStringLiteral("trim target clip missing")))
+        return 1;
+    const QPoint trimFrom(trimClipRect.right() - 1,
                           timeline->rowCenterYForTest(trimRow));
     const QPoint trimTo(timeline->frameXForTest(30),
                         timeline->rowCenterYForTest(trimRow));
@@ -870,6 +890,11 @@ int runTimelineEditTest(QApplication& app)
     childTrack.keys = {{0, 0.0, {}, {}}, {29, 1.0, {}, {}}};
     project.entities[child].tracks.insert(QStringLiteral("opacity"), childTrack);
 
+    // A grandchild under the child makes a parent trim drop a whole subtree
+    // while the parent itself stays in the same plan.
+    const pvf::Uuid childGrand =
+        makeEntity(QStringLiteral("子级孙层"), 15, 20, 0, child);
+
     const pvf::Uuid audio = makeAsset(QStringLiteral("音频"), 20, 50, 1,
                                       pvf::AssetType::Audio, audioHash, 0);
     const pvf::Uuid video = makeAsset(QStringLiteral("视频"), 0, 30, 2,
@@ -918,10 +943,10 @@ int runTimelineEditTest(QApplication& app)
                                                 followGrandTrack);
 
     const QVector<pvf::Uuid> all = {
-        parent,      child,       audio,      video,      lockedRoot,
-        lockedChild, target,      worldSource, localSource, solverRoot,
-        trashRoot,   trashChild,  followParent, followChild, followPeer,
-        followGrand, followTarget};
+        parent,      child,       childGrand,  audio,      video,
+        lockedRoot,  lockedChild, target,      worldSource, localSource,
+        solverRoot,  trashRoot,   trashChild,  followParent, followChild,
+        followPeer,  followGrand, followTarget};
     if (!document->commitEntities(all, QStringLiteral("p2b1 setup"), &error))
     {
         qCritical() << "timeline-edit-test: setup commit failed" << error;
@@ -951,6 +976,25 @@ int runTimelineEditTest(QApplication& app)
         return sessionPtr->project().entities.value(uuid);
     };
 
+    // Trimming a parent can keep the parent while dropping a whole child
+    // subtree.  The plan then has upserts plus a parent-and-child delete list;
+    // the document must delete the subtree once instead of failing on the
+    // child whose parent was already removed.
+    if (!check(actions->trimClip(parent, 45, 60, &error),
+               QStringLiteral("subtree trim failed: %1").arg(error)))
+        return 1;
+    if (!check(session->project().entities.contains(parent)
+                   && !session->project().entities.contains(child)
+                   && !session->project().entities.contains(childGrand),
+               QStringLiteral("subtree trim left the child subtree behind")))
+        return 1;
+    if (!undo())
+        return 1;
+    if (!check(entity(child).start == 10 && entity(child).end == 40
+                   && session->project().entities.contains(childGrand),
+               QStringLiteral("subtree trim undo did not restore the child")))
+        return 1;
+
     const TimelineEditIds ids{parent,        child,       audio,
                               video,         lockedRoot,  lockedChild,
                               target,        worldSource, localSource,
@@ -966,6 +1010,198 @@ int runTimelineEditTest(QApplication& app)
     qInfo() << "timeline-edit-test OK: subtree move, trim cascade/keys/sourceIn,"
                " solver pin, locks, row/trim/popup gestures, one gesture one"
                " undo, drag reparent world/local, cascade delete";
+    return 0;
+}
+
+int runTimelineEditE2eTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+    const QString projectDir = QDir(temp.path()).filePath(
+        QStringLiteral("timeline-edit-e2e.pvproj"));
+
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("时间轴编辑端到端");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    // Self-contained setup: create the project inside the temporary directory,
+    // commit two clips, flush them to disk and reopen the directory project.
+    // Nothing here depends on /tmp/pvfe2e or any user path.
+    QString error;
+    {
+        auto created =
+            pvf::EditorSession::createProject(projectDir, settings, &error);
+        if (!created)
+        {
+            qCritical() << "timeline-edit-e2e: create failed" << error;
+            return 1;
+        }
+        auto& project = created->mutableProject();
+        auto makeAsset = [&project](const QString& name, int start, int end,
+                                    int row, pvf::AssetType type,
+                                    const QString& hash) {
+            pvf::model::Entity entity;
+            entity.uuid = pvf::model::newUuid();
+            entity.name = name;
+            entity.start = start;
+            entity.end = end;
+            entity.row = row;
+            entity.content.kind = pvf::ContentKind::Asset;
+            entity.content.asset.type = type;
+            entity.content.asset.hash = hash;
+            project.entities.insert(entity.uuid, entity);
+            return entity.uuid;
+        };
+        const pvf::Uuid audio =
+            makeAsset(QStringLiteral("音频"), 20, 80, 1, pvf::AssetType::Audio,
+                      QString(64, QLatin1Char('d')));
+        const pvf::Uuid image =
+            makeAsset(QStringLiteral("图片"), 10, 50, 2, pvf::AssetType::Image,
+                      QString(64, QLatin1Char('e')));
+        if (!created->document()->commitEntities(
+                {audio, image}, QStringLiteral("e2e setup"), &error))
+        {
+            qCritical() << "timeline-edit-e2e: setup commit failed" << error;
+            return 1;
+        }
+        QString flushError;
+        created->flush(&flushError);
+        if (!flushError.isEmpty())
+        {
+            qCritical() << "timeline-edit-e2e: setup flush failed" << flushError;
+            return 1;
+        }
+    }
+    auto session = pvf::EditorSession::openProject(projectDir, &error);
+    if (!session)
+    {
+        qCritical() << "timeline-edit-e2e: open failed" << error;
+        return 1;
+    }
+    auto findUuid = [&](const QString& name) {
+        for (auto it = session->project().entities.constBegin();
+             it != session->project().entities.constEnd(); ++it)
+            if (it.value().name == name)
+                return it.key();
+        return pvf::Uuid();
+    };
+    const pvf::Uuid audio = findUuid(QStringLiteral("音频"));
+    const pvf::Uuid image = findUuid(QStringLiteral("图片"));
+    if (audio.isEmpty() || image.isEmpty())
+    {
+        qCritical() << "timeline-edit-e2e: audio/image entity missing";
+        return 1;
+    }
+    const int audioStartBefore = session->project().entities.value(audio).start;
+    const int audioEndBefore = session->project().entities.value(audio).end;
+    const int imageStartBefore = session->project().entities.value(image).start;
+    const int imageEndBefore = session->project().entities.value(image).end;
+
+    auto* window = new pvf::MainWindow(session.release());
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->resize(1280, 820);
+    window->show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    auto* live = window->editorSessionForTest();
+    auto* timeline = window->findChild<pvf::TimelinePanel*>();
+    if (!live || !timeline)
+    {
+        qCritical() << "timeline-edit-e2e: window has no session timeline";
+        return 1;
+    }
+    if (auto* stageDock =
+            window->findChild<QDockWidget*>(QStringLiteral("stageDock")))
+    {
+        if (auto* timelineDock =
+                window->findChild<QDockWidget*>(QStringLiteral("timelineDock")))
+            window->resizeDocks({stageDock, timelineDock}, {320, 520},
+                                Qt::Vertical);
+    }
+    QApplication::processEvents();
+    auto rowForUuid = [&](const pvf::Uuid& uuid) {
+        return timeline->rowForEntityForTest(timeline->entityIdForUuid(uuid));
+    };
+    auto dragClip = [&](const pvf::Uuid& uuid, int grabFrame, int delta) {
+        const int row = rowForUuid(uuid);
+        if (row < 0)
+            return false;
+        const QPoint from(timeline->frameXForTest(grabFrame),
+                          timeline->rowCenterYForTest(row));
+        const QPoint to(timeline->frameXForTest(grabFrame + delta),
+                        timeline->rowCenterYForTest(row));
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                          QPointF(timeline->mapToGlobal(from)), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to),
+                         QPointF(timeline->mapToGlobal(to)), Qt::NoButton,
+                         Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
+                            QPointF(timeline->mapToGlobal(to)),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &move);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+        return true;
+    };
+    if (!dragClip(audio, audioStartBefore + 10, 30)
+        || !dragClip(image, imageStartBefore + 10, 20))
+    {
+        qCritical() << "timeline-edit-e2e: drag failed";
+        return 1;
+    }
+    live->flush();
+
+    auto readRange = [&](const pvf::Uuid& uuid, int* start, int* end) {
+        QFile file(live->root() + QStringLiteral("/entities/") + uuid
+                   + QStringLiteral(".json"));
+        if (!file.open(QIODevice::ReadOnly))
+            return false;
+        const QJsonObject object =
+            QJsonDocument::fromJson(file.readAll()).object();
+        *start = object.value(QStringLiteral("start")).toInt();
+        *end = object.value(QStringLiteral("end")).toInt();
+        return true;
+    };
+    int audioStart = 0;
+    int audioEnd = 0;
+    int imageStart = 0;
+    int imageEnd = 0;
+    if (!readRange(audio, &audioStart, &audioEnd)
+        || !readRange(image, &imageStart, &imageEnd))
+    {
+        qCritical() << "timeline-edit-e2e: cannot read entity JSON";
+        return 1;
+    }
+    if (audioStart != audioStartBefore + 30
+        || audioEnd != audioEndBefore + 30
+        || imageStart != imageStartBefore + 20
+        || imageEnd != imageEndBefore + 20)
+    {
+        qCritical() << "timeline-edit-e2e: ranges wrong"
+                    << "audio" << audioStartBefore << audioEndBefore << "->"
+                    << audioStart << audioEnd << "image" << imageStartBefore
+                    << imageEndBefore << "->" << imageStart << imageEnd;
+        return 1;
+    }
+
+    const QString shot =
+        QDir(temp.path()).filePath(QStringLiteral("timeline-edit-e2e.png"));
+    if (!window->grab().save(shot))
+    {
+        qCritical() << "timeline-edit-e2e: screenshot failed" << shot;
+        return 1;
+    }
+    qInfo() << "timeline-edit-e2e OK: audio"
+            << audioStartBefore << "->" << audioStart << " image"
+            << imageStartBefore << "->" << imageStart << projectDir;
+    window->close();
+    QApplication::processEvents();
     return 0;
 }
 

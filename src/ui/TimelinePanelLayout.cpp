@@ -72,7 +72,14 @@ void TimelinePanel::popupTrackBounds(int* minNeg, int* maxPos) const
 {
     int minOccupiedNeg = 0;
     int maxOccupiedPos = -1;
-    for (const Entity& entity : activeEntities())
+    // During a session clip drag the preview already contains the new row.
+    // Resolve the tracks from the gesture-start snapshot so the blank target
+    // row cannot move under the pointer while the preview grows the popup.
+    const QVector<Entity>& entities =
+        sessionMode() && m_dragMode == DragMode::MoveClip
+            ? m_sessionBaseSnapshot.entities
+            : activeEntities();
+    for (const Entity& entity : entities)
     {
         if (entity.parent != m_owner)
             continue;

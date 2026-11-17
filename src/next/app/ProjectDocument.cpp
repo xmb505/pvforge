@@ -86,6 +86,39 @@ bool validateForWrite(const model::Project& project,
     return model::validateProjectWithout(project, removed, error);
 }
 
+// The store removes a whole subtree together with its top-most node.  Resolve
+// the top-most nodes against the project as it exists before any delete: once
+// a root is gone its descendants disappear from the live model, so a later
+// parent lookup would see an empty parentUuid and try to delete the same
+// subtree a second time (the delete then fails with 实体不存在).
+QVector<Uuid> topMostNodes(const model::Project& project,
+                           const QVector<Uuid>& nodes)
+{
+    QSet<Uuid> requested(nodes.begin(), nodes.end());
+    QVector<Uuid> roots;
+    roots.reserve(nodes.size());
+    for (const Uuid& uuid : nodes)
+    {
+        bool hasRequestedAncestor = false;
+        Uuid parent = project.entities.value(uuid).parentUuid;
+        while (!parent.isEmpty())
+        {
+            if (requested.contains(parent))
+            {
+                hasRequestedAncestor = true;
+                break;
+            }
+            const auto it = project.entities.constFind(parent);
+            if (it == project.entities.constEnd())
+                break;
+            parent = it->parentUuid;
+        }
+        if (!hasRequestedAncestor)
+            roots.append(uuid);
+    }
+    return roots;
+}
+
 } // namespace
 
 ProjectDocument::ProjectDocument(std::unique_ptr<store::ProjectStore> store,
@@ -264,21 +297,18 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
     if (!validateForWrite(project, {}, validation, error))
         return false;
 
+    // Resolve the top-most requested nodes before deleting anything: the store
+    // removes descendants with their root, so a live parent lookup after the
+    // first delete would see the descendant's parent link as empty and try to
+    // delete the same subtree twice.  QSet iteration order is unspecified,
+    // which is why that failure only showed up on some runs.
+    QVector<Uuid> requestedList;
+    requestedList.reserve(requested.size());
     for (const Uuid& uuid : requested)
+        requestedList.append(uuid);
+    const QVector<Uuid> roots = topMostNodes(project, requestedList);
+    for (const Uuid& uuid : roots)
     {
-        bool hasRequestedAncestor = false;
-        Uuid parent = project.entities.value(uuid).parentUuid;
-        while (!parent.isEmpty())
-        {
-            if (requested.contains(parent))
-            {
-                hasRequestedAncestor = true;
-                break;
-            }
-            parent = project.entities.value(parent).parentUuid;
-        }
-        if (hasRequestedAncestor)
-            continue;
         if (!m_store->deleteEntity(uuid, error))
             return false;
     }
@@ -306,13 +336,17 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
         if (!m_store->saveEntity(uuid, error))
             return false;
     }
-    for (const Uuid& uuid : deletes)
+    // One plan can carry a whole subtree in `deletes` (a trim can drop a
+    // parent and its children).  Delete only the top-most nodes: the store
+    // removes their descendants, and deleting the same subtree twice fails.
+    for (const Uuid& uuid : topMostNodes(m_store->project(), deletes))
     {
         if (!m_store->deleteEntity(uuid, error))
             return false;
-        if (uuid == m_selection)
-            m_selection.clear();
     }
+    if (!m_selection.isEmpty()
+        && !m_store->project().entities.contains(m_selection))
+        m_selection.clear();
     scheduleCommit();
     emit changed();
     return true;
