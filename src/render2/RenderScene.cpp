@@ -105,6 +105,44 @@ void drawChildren(QPainter& painter, const model::Project& project,
     }
 }
 
+QColor resolveBackground(const model::Project& project, const Options& options)
+{
+    QColor background = options.background;
+    if (!background.isValid())
+        background = QColor(project.settings.background);
+    if (!background.isValid())
+        background = QColor(0xFF, 0xFF, 0xFF);
+    return background;
+}
+
+QRectF projectCanvasRect(const model::Project& project)
+{
+    const double canvasWidth = double(std::max(1, project.settings.width));
+    const double canvasHeight = double(std::max(1, project.settings.height));
+    // World origin is the canvas centre; +Y is up.
+    return QRectF(-canvasWidth / 2.0, -canvasHeight / 2.0,
+                  canvasWidth, canvasHeight);
+}
+
+void paintScene(QPainter& painter, const QTransform& transform, bool combine,
+                const model::Project& project, const assets::AssetStore& assets,
+                const Options& options, anim::World& world, anim::Cache& cache,
+                const QColor& canvasBg)
+{
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setTransform(transform, combine);
+    if (canvasBg.isValid())
+        painter.fillRect(projectCanvasRect(project), canvasBg);
+
+    QSet<Uuid> visited;
+    drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
+                 cache, visited, options, false);
+    painter.restore();
+}
+
 } // namespace
 
 QImage renderFrame(const model::Project& project, const assets::AssetStore& assets,
@@ -116,25 +154,13 @@ QImage renderFrame(const model::Project& project, const assets::AssetStore& asse
         output = QSize(project.settings.width, project.settings.height);
     output = QSize(std::max(1, output.width()), std::max(1, output.height()));
 
-    QColor background = options.background;
-    if (!background.isValid())
-        background = QColor(project.settings.background);
-    if (!background.isValid())
-        background = Qt::black;
-
+    const QColor background = resolveBackground(project, options);
     const bool canvasMode = options.cameraUuid.isEmpty();
-    const double canvasWidth = double(std::max(1, project.settings.width));
-    const double canvasHeight = double(std::max(1, project.settings.height));
-    // World origin is the canvas centre; +Y is up.
-    const QRectF projectCanvas(-canvasWidth / 2.0, -canvasHeight / 2.0,
-                               canvasWidth, canvasHeight);
+    const QRectF projectCanvas = projectCanvasRect(project);
     const bool customWorld =
         canvasMode && options.worldRect.isValid()
         && options.worldRect.width() > 0.0 && options.worldRect.height() > 0.0;
     const QRectF worldRect = customWorld ? options.worldRect : projectCanvas;
-    // Only the expanded editor preview asks for a transparent surround.  The
-    // canvas itself keeps the project background so the cached image still
-    // carries the real picture inside the frame.
     const bool transparent =
         canvasMode && customWorld && options.transparentOutsideCanvas;
 
@@ -142,20 +168,11 @@ QImage renderFrame(const model::Project& project, const assets::AssetStore& asse
     image.fill(transparent ? QColor(Qt::transparent) : background);
 
     QPainter painter(&image);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
-
     const QTransform view =
         canvasMode ? detail::canvasView(output, worldRect)
                    : detail::cameraView(project, options, world, cache, output);
-    painter.setTransform(view);
-    if (transparent)
-        painter.fillRect(projectCanvas, background);
-
-    QSet<Uuid> visited;
-    drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
-                 cache, visited, options, false);
+    paintScene(painter, view, false, project, assets, options, world, cache,
+               transparent ? background : QColor());
     painter.end();
     return image;
 }
@@ -166,28 +183,8 @@ void renderToPainter(QPainter& painter, const QTransform& worldToScreen,
                      anim::World& world, anim::Cache& cache)
 {
     perf::Scope renderScope("场景直绘", perf::Category::Render2);
-    QColor background = options.background;
-    if (!background.isValid())
-        background = QColor(project.settings.background);
-    if (!background.isValid())
-        background = Qt::white;
-
-    const double canvasWidth = double(std::max(1, project.settings.width));
-    const double canvasHeight = double(std::max(1, project.settings.height));
-    const QRectF projectCanvas(-canvasWidth / 2.0, -canvasHeight / 2.0,
-                               canvasWidth, canvasHeight);
-
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
-    painter.setTransform(worldToScreen, true);
-    painter.fillRect(projectCanvas, background);
-
-    QSet<Uuid> visited;
-    drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
-                 cache, visited, options, false);
-    painter.restore();
+    paintScene(painter, worldToScreen, true, project, assets, options, world,
+               cache, resolveBackground(project, options));
 }
 
 } // namespace pvf::render2
