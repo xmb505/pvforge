@@ -146,7 +146,6 @@ set(PVF_APP_SOURCES
     src/ui/TimelinePanelMenu.cpp
     src/ui/TimelinePanelKeyframes.cpp
     src/ui/TimelinePanelSessionDrag.cpp
-    src/ui/TimelinePanelLegacyDrag.cpp
     src/ui/TimelinePanelMarkers.cpp
     src/ui/TimelinePanelSolver.cpp
     src/ui/TimelinePanelPopups.cpp

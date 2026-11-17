@@ -403,4 +403,54 @@ void TimelinePanel::cancelSessionDrag()
     syncPopups();
 }
 
+void TimelinePanel::updateDragPreview(const QPointF& pos)
+{
+    if (sessionMode())
+        updateSessionDragPreview(pos);
+}
+
+void TimelinePanel::autoScrollTick()
+{
+    if (!sessionMode() || m_dragMode == DragMode::None)
+        return;
+    if (m_dragMode == DragMode::Scrub)
+    {
+        const double rawX = m_lastDragPos.x();
+        const int contentRight = width() - kScrollBarSize;
+        int dx = 0;
+        if (rawX > contentRight - 12)
+            dx = 12;
+        else if (rawX < nameWidth() + 12)
+            dx = -12;
+        else
+            return;
+        m_scrollX = std::max(0, m_scrollX + dx);
+        clampScroll();
+        // Keep the playhead pinned to the visible edge while the view scrolls.
+        setScrubFrame(rawX);
+        syncPopups();
+        return;
+    }
+    if (!m_moved)
+        return;
+    const int contentRight = width() - kScrollBarSize;
+    int dx = 0;
+    int dy = 0;
+    if (m_lastDragPos.x() > contentRight - 24)
+        dx = 12;
+    else if (m_lastDragPos.x() < nameWidth() + 24)
+        dx = -12;
+    if (m_lastDragPos.y() > bodyBottom() - 20)
+        dy = -12;   // reveal lower rows: the bottom-anchored offset shrinks
+    else if (m_lastDragPos.y() < kRulerHeight + 20)
+        dy = 12;    // reveal higher rows
+    if (dx == 0 && dy == 0)
+        return;
+    m_scrollX = std::max(0, m_scrollX + dx);
+    m_scrollY = std::max(0, m_scrollY + dy);
+    // Update before clamping so a growing clip end can grow the scroll range.
+    updateDragPreview(m_lastDragPos);
+    clampScroll();
+}
+
 } // namespace pvf

@@ -127,6 +127,13 @@ GitHub Actions 目前只跑 `tools/check-code-size.sh`（`code-size` job）：�
 
 ## 参考与致谢
 
+### 协同作者（AI）
+
+- **Qwen Code**
+- **Gemini**
+- **Claude Code**
+- **DeepSeek**
+
 交互和工作流参考了这些软件（仓库不包含它们的代码或资产）：
 
 - [Mine-imator](https://www.mineimator.com/)：对象树、时间轴、关键帧、工作台、素材库、缓动曲线
