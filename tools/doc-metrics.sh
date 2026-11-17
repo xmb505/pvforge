@@ -108,9 +108,10 @@ build_rows() {
         -exec cat {} + | line_count)
     nontest_lines=$((all_lines - test_lines))
 
-    # --*-test 开关的唯一来源是 registry.add(QStringLiteral("--...-test"))。
+    # 自检开关的唯一来源是 registry.add(QStringLiteral("--..."))。并非所有
+    # 入口都以 -test 结尾（例如 --timeline-edit-e2e、--cache-miss-profile）。
     switches=$({ grep -rhoE --include='*.cpp' --include='*.h' \
-        'registry\.add\(QStringLiteral\("--[a-z0-9-]+-test"\)' src || true; } \
+        'registry\.add\(QStringLiteral\("--[a-z0-9-]+"\)' src || true; } \
         | sort -u | line_count)
 
     local ctest_value='未构建（无 build 目录，校验时跳过）'
@@ -155,7 +156,7 @@ build_rows() {
     add_row '`src/tests` 行数' "$tests_dir_lines"
     add_row '测试源码行数（含模块 tests）' "$test_lines"
     add_row '非测试源码行数' "$nontest_lines"
-    add_row '`--*-test` 自检开关数' "$switches"
+    add_row '自检开关数（含非 -test 后缀）' "$switches"
     add_row 'CTest 用例数' "$ctest_value"
     add_row '`dist/pvforge` 大小' "$size_value"
     add_row 'Release 动态库依赖数' "$deps_value"

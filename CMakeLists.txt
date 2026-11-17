@@ -239,21 +239,49 @@ if(PVFORGE_BUILD_SELF_TESTS)
     target_link_libraries(pvforge-tests PRIVATE pvf_app)
     pvf_add_lang_resources(pvforge-tests)
 
-    # The 45 self-test switches stay a developer tool; only this curated set
-    # is part of `ctest`. It covers the shipping shell, project state, export
-    # dialog and MCP services without turning every profiling/demo switch into
-    # a blocking test. The full split lives in docs/AI/SELF_TESTS.md.
+    # Every behavioural self-test switch is a CTest case (issue #110). Only
+    # the profiling/measurement switches stay manual: they print performance
+    # numbers instead of asserting behaviour, and their numbers vary with the
+    # machine. They are listed in docs/AI/SELF_TESTS.md.
     if(BUILD_TESTING)
         set(PVF_SELF_TEST_CASES
             self-test
             session-test
+            welcome-test
             settings-test
             checkpoint-test
+            git-test
             rename-test
             panel-layout-test
-            export-dialog-test
             properties-test
+            keyframe-easing-group-test
+            properties-special-test
+            html-vars-test
+            text-layout-test
+            brandwall-create-test
+            export-dialog-test
             export-test
+            assets-test
+            asset-import-test
+            asset-drag-test
+            asset-replace-test
+            workbench-assets-test
+            timeline-test
+            timeline-bottomup-test
+            timeline-ui-test
+            timeline-assets-test
+            timeline-edit-test
+            timeline-keys-test
+            timeline-split-test
+            timeline-marker-test
+            timeline-edit-e2e
+            solver-ui-test
+            solver-mini-preview-test
+            solver-preview-freeze-test
+            solver-convert-test
+            gizmo-test
+            inkscape-handles-test
+            camera-monitor-test
             mcp-test
             mcp-lock-test
             mcp-bridge-test
@@ -261,7 +289,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         foreach(case IN LISTS PVF_SELF_TEST_CASES)
             add_test(NAME pvf.${case} COMMAND pvforge-tests --${case})
             set_tests_properties(pvf.${case} PROPERTIES
-                ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
                 TIMEOUT 300
                 SKIP_RETURN_CODE 77
                 LABELS "self-test"
@@ -273,11 +301,26 @@ if(PVFORGE_BUILD_SELF_TESTS)
         endforeach()
 
         set(PVF_SELF_TEST_UI
-            session-test settings-test rename-test panel-layout-test
-            export-dialog-test properties-test
+            session-test welcome-test settings-test rename-test panel-layout-test
+            properties-test keyframe-easing-group-test properties-special-test
+            html-vars-test text-layout-test brandwall-create-test
+            export-dialog-test
+            assets-test asset-import-test asset-drag-test asset-replace-test
+            workbench-assets-test
+            timeline-test timeline-bottomup-test timeline-ui-test
+            timeline-assets-test timeline-edit-test timeline-keys-test
+            timeline-split-test timeline-marker-test timeline-edit-e2e
+            solver-ui-test solver-mini-preview-test solver-preview-freeze-test
+            gizmo-test inkscape-handles-test camera-monitor-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_UI)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
+        endforeach()
+        set(PVF_SELF_TEST_CORE
+            self-test checkpoint-test git-test solver-convert-test
+        )
+        foreach(case IN LISTS PVF_SELF_TEST_CORE)
+            set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;core")
         endforeach()
         set(PVF_SELF_TEST_MCP mcp-test mcp-lock-test mcp-bridge-test)
         foreach(case IN LISTS PVF_SELF_TEST_MCP)
@@ -285,8 +328,18 @@ if(PVFORGE_BUILD_SELF_TESTS)
         endforeach()
         set_tests_properties(pvf.export-test PROPERTIES
             LABELS "self-test;media")
-        set_tests_properties(pvf.checkpoint-test PROPERTIES
-            LABELS "self-test;core")
+        # Heavier cases (full window, media, end-to-end editing) carry the
+        # `slow` label so a quick `ctest -LE slow` stays possible.
+        set(PVF_SELF_TEST_SLOW
+            welcome-test git-test export-test assets-test
+            timeline-test timeline-edit-test timeline-edit-e2e
+            timeline-ui-test solver-ui-test camera-monitor-test
+        )
+        foreach(case IN LISTS PVF_SELF_TEST_SLOW)
+            set_property(TEST pvf.${case} APPEND PROPERTY LABELS slow)
+        endforeach()
+        set_tests_properties(pvf.timeline-edit-e2e pvf.export-test
+            PROPERTIES TIMEOUT 600)
     endif()
 endif()
 

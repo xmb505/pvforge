@@ -12,7 +12,7 @@
 | `src/tests` 行数 | 16517 |
 | 测试源码行数（含模块 tests） | 48953 |
 | 非测试源码行数 | 97174 |
-| `--*-test` 自检开关数 | 42 |
+| 自检开关数（含非 -test 后缀） | 45 |
 | CTest 用例数 | 368 |
 | `dist/pvforge` 大小 | 6.9 MiB（7228992 字节） |
 | Release 动态库依赖数 | 175（ldd 动态库依赖） |
@@ -222,7 +222,7 @@
 
 最终二进制：`dist/pvforge`（Release）、`dist/pvforge-mcp`；大小见顶部指标区块，启动说明 `dist/RUN.txt`。
 
-验收：`--self-test`、`--session-test`、`--viewport-test`、`--timeline-test`、`--properties-test`、`--assets-test`、`--mcp-test`、`--git-test`、`--export-test` 全部通过；`--open /tmp/pvfe2e/proj` 启动不崩；`ldd` 无缺失。
+验收（issue #110 起不再手抄开关清单）：`ctest --preset debug -L self-test` 全绿（40 个行为自检，5 个测量入口手动跑）；`ldd` 无缺失。CTest 是唯一验收口径，缺 ffmpeg/git/浏览器时以 `Skipped` 呈现，不算 `Passed`。
 
 已知剩余：
 

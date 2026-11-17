@@ -1,6 +1,6 @@
 # CI 与本地验证
 
-本地构建/测试命令在下面；**CI 目前只跑 `tools/check-code-size.sh`**，构建、测试、Release 都由本地手动执行。等流程想清楚后再把其它 job 加回来，避免先堆一套互相打架的 gate。
+CI 有两道 gate：代码体量 ratchet，以及 Debug 构建 + `ctest -L self-test`。Release 仍由本地手动执行。本地命令见下。
 
 ## 依赖
 

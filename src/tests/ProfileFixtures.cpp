@@ -1213,10 +1213,9 @@ int cacheMissProfileTest(QApplication& app)
         }
     }
 
-    // The user's reported project: copied so the profile never writes to it.
-    const QString userSource =
-        QStringLiteral("/home/xmb505/视频/PVForge/未命名项目1.pvproj");
-    if (!QFileInfo::exists(userSource))
+    // Optional real project from PVFORGE_PROFILE_PROJECT; copied, never written.
+    const QString userSource = qEnvironmentVariable("PVFORGE_PROFILE_PROJECT");
+    if (userSource.isEmpty() || !QFileInfo::exists(userSource))
     {
         qWarning() << "cache-miss-profile: user project not found, skipping"
                    << userSource;
@@ -1514,11 +1513,10 @@ QImage loadEncoderBenchPhoto()
 
 QImage grabEncoderBenchUserFrame(QTemporaryDir& temp, QString* error)
 {
-    const QString source =
-        QStringLiteral("/home/xmb505/视频/PVForge/未命名项目1.pvproj");
-    if (!QFileInfo::exists(source))
+    const QString source = qEnvironmentVariable("PVFORGE_PROFILE_PROJECT");
+    if (source.isEmpty() || !QFileInfo::exists(source))
     {
-        *error = QStringLiteral("user project not found: %1").arg(source);
+        *error = QStringLiteral("PVFORGE_PROFILE_PROJECT not set or missing");
         return {};
     }
 
