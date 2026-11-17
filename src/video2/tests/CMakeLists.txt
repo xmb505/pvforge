@@ -62,14 +62,14 @@ set(PVF_VIDEO2_QUEUE_TEST_CASES
 foreach(test_case IN LISTS PVF_VIDEO2_TEST_CASES)
     add_test(NAME video2.${test_case} COMMAND pvf_video2_tests ${test_case})
     set_tests_properties(video2.${test_case} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
 endforeach()
 
 foreach(test_case IN LISTS PVF_VIDEO2_SEQUENCE_TEST_CASES)
     add_test(NAME video2.sequence.${test_case}
              COMMAND pvf_video2_sequence_tests ${test_case})
     set_tests_properties(video2.sequence.${test_case} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
         TIMEOUT 120)
 endforeach()
 
@@ -77,6 +77,6 @@ foreach(test_case IN LISTS PVF_VIDEO2_QUEUE_TEST_CASES)
     add_test(NAME video2.queue.${test_case}
              COMMAND pvf_video2_queue_tests ${test_case})
     set_tests_properties(video2.queue.${test_case} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
         TIMEOUT 120)
 endforeach()

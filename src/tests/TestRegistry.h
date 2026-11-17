@@ -60,4 +60,8 @@ std::optional<int> dispatch(QApplication& app);
 // directory; the switch list here is the only definition of "test mode".
 bool isTestRun(const QStringList& arguments);
 
+// Raw argv overload for decisions that must happen before QApplication is
+// constructed (e.g. disabling the desktop input-method plugin).
+bool isTestRun(int argc, char* argv[]);
+
 } // namespace pvf::tests

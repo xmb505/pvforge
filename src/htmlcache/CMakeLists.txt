@@ -64,7 +64,7 @@ if(BUILD_TESTING)
     foreach(test_case IN LISTS PVF_HTMLCACHE_TEST_CASES)
         add_test(NAME htmlcache.${test_case} COMMAND pvf_htmlcache_tests ${test_case})
         set_tests_properties(htmlcache.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
             TIMEOUT 60
         )
     endforeach()

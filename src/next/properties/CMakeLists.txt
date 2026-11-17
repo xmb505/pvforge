@@ -78,7 +78,7 @@ if(BUILD_TESTING)
 
     add_test(NAME pvf_next_properties_tests COMMAND pvf_next_properties_tests)
     set_tests_properties(pvf_next_properties_tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
     )
 
     add_executable(pvf_next_solver_preview_tests tests/SolverPreviewWidgetTest.cpp)
@@ -89,6 +89,6 @@ if(BUILD_TESTING)
 
     add_test(NAME pvf_next_solver_preview_tests COMMAND pvf_next_solver_preview_tests)
     set_tests_properties(pvf_next_solver_preview_tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
     )
 endif()

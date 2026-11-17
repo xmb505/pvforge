@@ -8,4 +8,6 @@ target_link_libraries(pvf_solver_tests PRIVATE
 )
 
 add_test(NAME pvf_solver_tests COMMAND pvf_solver_tests)
+set_tests_properties(pvf_solver_tests PROPERTIES
+    ENVIRONMENT "QT_IM_MODULE=none")
 endif()

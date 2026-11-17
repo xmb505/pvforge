@@ -90,7 +90,7 @@ if(BUILD_TESTING)
         add_test(NAME workbench.${test_case}
                  COMMAND pvf_workbench_tests ${test_case})
         set_tests_properties(workbench.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
             TIMEOUT 120
         )
     endforeach()

@@ -32,4 +32,6 @@ if(BUILD_TESTING)
     )
     target_link_libraries(pvf_model_tests PRIVATE pvf_model)
     add_test(NAME pvf_model_tests COMMAND pvf_model_tests)
+    set_tests_properties(pvf_model_tests PROPERTIES
+        ENVIRONMENT "QT_IM_MODULE=none")
 endif()

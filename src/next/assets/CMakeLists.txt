@@ -49,6 +49,6 @@ if(BUILD_TESTING)
     )
     add_test(NAME pvf_next_assets.tests COMMAND pvf_next_assets_tests)
     set_tests_properties(pvf_next_assets.tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
     )
 endif()

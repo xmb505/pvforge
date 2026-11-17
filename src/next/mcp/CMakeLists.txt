@@ -37,6 +37,6 @@ if(BUILD_TESTING)
 
     add_test(NAME next.mcp_log COMMAND pvf_next_mcp_log_tests)
     set_tests_properties(next.mcp_log PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
     )
 endif()

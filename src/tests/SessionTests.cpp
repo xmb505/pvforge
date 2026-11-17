@@ -25,6 +25,20 @@ int selfTest()
         return 1;
     }
 
+    // Issue #111: test processes must not register an input context with the
+    // desktop IME. main() opts out before QApplication; assert the environment
+    // actually seen by the running process.
+    if (qEnvironmentVariable("QT_IM_MODULE") != QStringLiteral("none")
+        || qEnvironmentVariableIsSet("GTK_IM_MODULE")
+        || qEnvironmentVariableIsSet("XMODIFIERS"))
+    {
+        qCritical() << "self-test: test process still exposes the session IME"
+                    << qEnvironmentVariable("QT_IM_MODULE")
+                    << qEnvironmentVariable("GTK_IM_MODULE")
+                    << qEnvironmentVariable("XMODIFIERS");
+        return 1;
+    }
+
     qInfo() << "self-test OK: test mode comes from exact switches";
     return 0;
 }

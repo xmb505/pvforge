@@ -90,5 +90,7 @@ if(BUILD_TESTING)
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)
         add_test(NAME store.${test_case} COMMAND pvf_store_tests ${test_case})
+        set_tests_properties(store.${test_case} PROPERTIES
+            ENVIRONMENT "QT_IM_MODULE=none")
     endforeach()
 endif()

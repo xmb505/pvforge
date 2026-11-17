@@ -144,6 +144,6 @@ if(BUILD_TESTING)
         add_test(NAME timeline.${test_case}
                  COMMAND pvf_next_timeline_tests ${test_case})
         set_tests_properties(timeline.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
     endforeach()
 endif()

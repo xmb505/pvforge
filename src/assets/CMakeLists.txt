@@ -58,5 +58,7 @@ set(PVF_ASSET_TEST_CASES
 
 foreach(test_case IN LISTS PVF_ASSET_TEST_CASES)
     add_test(NAME assets.${test_case} COMMAND pvf_assets_tests ${test_case})
+    set_tests_properties(assets.${test_case} PROPERTIES
+        ENVIRONMENT "QT_IM_MODULE=none")
 endforeach()
 endif()

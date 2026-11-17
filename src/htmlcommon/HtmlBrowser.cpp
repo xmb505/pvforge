@@ -270,7 +270,11 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
          {QStringLiteral("HTTP_PROXY"), QStringLiteral("HTTPS_PROXY"),
           QStringLiteral("ALL_PROXY"), QStringLiteral("NO_PROXY"),
           QStringLiteral("http_proxy"), QStringLiteral("https_proxy"),
-          QStringLiteral("all_proxy"), QStringLiteral("no_proxy")})
+          QStringLiteral("all_proxy"), QStringLiteral("no_proxy"),
+          // We never want the browser to register with the session IME; it
+          // would steal fcitx focus from the user (issue #111).
+          QStringLiteral("QT_IM_MODULE"), QStringLiteral("GTK_IM_MODULE"),
+          QStringLiteral("XMODIFIERS")})
         environment.remove(key);
     m_process->setProcessEnvironment(environment);
 #ifdef Q_OS_UNIX

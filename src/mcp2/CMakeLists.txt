@@ -121,7 +121,7 @@ if(BUILD_TESTING)
     foreach(test_case IN LISTS PVF_MCP2_TEST_CASES)
         add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_tests ${test_case})
         set_tests_properties(mcp2.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
     endforeach()
 
     add_executable(pvf_mcp2_http_tests tests/http_server_tests.cpp)
@@ -146,7 +146,7 @@ if(BUILD_TESTING)
     foreach(test_case IN LISTS PVF_MCP2_HTTP_TEST_CASES)
         add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_http_tests ${test_case})
         set_tests_properties(mcp2.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
     endforeach()
     # These two bind the real default port (47821). Share the lock with the
     # pvf.* self-tests so parallel CTest runs do not steal it from each other.

@@ -22,9 +22,9 @@ set(PVF_AUDIO2_TEST_CASES
 foreach(test_case IN LISTS PVF_AUDIO2_TEST_CASES)
     add_test(NAME audio2.${test_case} COMMAND pvf_audio2_tests ${test_case})
     set_tests_properties(audio2.${test_case} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
 endforeach()
 
 # Guarantee that this test really runs without an audio output device.
 set_tests_properties(audio2.playbackNoDevice PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_RUNTIME_DIR=/nonexistent")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_RUNTIME_DIR=/nonexistent")

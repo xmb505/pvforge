@@ -38,7 +38,7 @@ set(PVF_HTML2_TEST_CASES
 foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)
     add_test(NAME html2.${test_case} COMMAND pvf_html2_tests ${test_case})
     set_tests_properties(html2.${test_case} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
         TIMEOUT 180
         SKIP_RETURN_CODE 77
         RESOURCE_LOCK pvforge_chrome)

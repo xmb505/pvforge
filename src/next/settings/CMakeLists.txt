@@ -42,6 +42,6 @@ if(BUILD_TESTING)
 
     add_test(NAME pvf_next_settings_tests COMMAND pvf_next_settings_tests)
     set_tests_properties(pvf_next_settings_tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
     )
 endif()

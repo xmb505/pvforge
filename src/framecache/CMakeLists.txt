@@ -54,7 +54,7 @@ if(BUILD_TESTING)
         add_test(NAME framecache.${test_case}
                  COMMAND pvf_framecache_tests ${test_case})
         set_tests_properties(framecache.${test_case} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
             TIMEOUT 60
         )
     endforeach()

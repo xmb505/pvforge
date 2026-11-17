@@ -22,4 +22,6 @@ if(BUILD_TESTING)
     add_executable(pvf_gizmo_tests tests/gizmo_tests.cpp)
     target_link_libraries(pvf_gizmo_tests PRIVATE pvf_gizmo)
     add_test(NAME pvf_gizmo_tests COMMAND pvf_gizmo_tests)
+    set_tests_properties(pvf_gizmo_tests PROPERTIES
+        ENVIRONMENT "QT_IM_MODULE=none")
 endif()

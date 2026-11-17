@@ -61,6 +61,15 @@ bool isTestRun(const QStringList& arguments)
     return false;
 }
 
+bool isTestRun(int argc, char* argv[])
+{
+    QStringList arguments;
+    arguments.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        arguments.append(QString::fromLocal8Bit(argv[i]));
+    return isTestRun(arguments);
+}
+
 std::optional<int> dispatch(QApplication& app)
 {
     Registry registry = buildRegistry();

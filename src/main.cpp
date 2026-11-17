@@ -25,6 +25,19 @@ int main(int argc, char* argv[])
     // avoids misleading driver warnings on machines without NVIDIA support.
     qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", QByteArray(","));
 
+#ifdef PVFORGE_SELF_TESTS
+    // Offscreen test windows still make Qt load the session's input-method
+    // plugin and send FocusIn to fcitx5, stealing the user's IME while tests
+    // run. Decide from raw argv before QApplication exists, then opt out of
+    // the platform input context entirely.
+    if (pvf::tests::isTestRun(argc, argv))
+    {
+        qputenv("QT_IM_MODULE", "none");
+        qunsetenv("GTK_IM_MODULE");
+        qunsetenv("XMODIFIERS");
+    }
+#endif
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("PVForge"));
     app.setApplicationDisplayName(QStringLiteral("PVForge"));

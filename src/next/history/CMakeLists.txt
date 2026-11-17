@@ -43,6 +43,6 @@ if(BUILD_TESTING)
 
     add_test(NAME next.history COMMAND pvf_next_history_tests)
     set_tests_properties(next.history PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
     )
 endif()
