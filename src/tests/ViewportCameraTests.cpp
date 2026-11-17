@@ -87,7 +87,9 @@ int sessionGizmoTest(QApplication& app)
     entity.content.kind = pvf::ContentKind::Vector;
     entity.content.vector.width = 200.0;
     entity.content.vector.height = 100.0;
-    entity.content.vector.fillColor = QStringLiteral("#ffffff");
+    // The canvas background is #FFFFFF (blueprint #6); a white box would move
+    // invisibly and make cache-image comparisons meaningless.
+    entity.content.vector.fillColor = QStringLiteral("#ff0000");
     // Model space is centred on the canvas origin with +Y up, so (0,0) is the
     // middle of the 640x360 canvas.
     entity.transform.x = 0.0;
@@ -407,7 +409,12 @@ int sessionGizmoTest(QApplication& app)
         ++failures;
     }
 
-    // 7) Workbench cache is bypassed while dragging and refreshed on release.
+    // 7) Playback's whole-frame cache path: a live gizmo drag bypasses both
+    //    lookup and store; once released, the committed meta misses and the
+    //    next cached-frame render refreshes the stored picture.  Paused stage
+    //    paints draw vector content natively (blueprint #6), so this drives
+    //    the same cache path a playback paint uses through the test hook
+    //    instead of expecting a paused repaint to seed the cache.
     auto* workbench = sessionPtr->workbench();
     if (!workbench)
     {
@@ -416,8 +423,12 @@ int sessionGizmoTest(QApplication& app)
     }
     else
     {
-        viewport->repaint();
-        QApplication::processEvents();
+        const QImage seeded = viewport->ensureSessionImageForTest();
+        if (seeded.isNull())
+        {
+            qCritical() << "gizmo-test: cache frame render is empty";
+            ++failures;
+        }
         bool hit = false;
         const QImage cachedBefore = workbench->lookup(0, pvf::Uuid(), &hit);
         if (!hit || cachedBefore.isNull())
@@ -426,24 +437,39 @@ int sessionGizmoTest(QApplication& app)
             ++failures;
         }
 
-        const int hitsBefore = workbench->stats().hits;
+        const pvf::workbench::CacheStats beforeDrag = workbench->stats();
         const QPointF cacheStart =
             viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveX);
         mouse.send(QEvent::MouseButtonPress, cacheStart, Qt::LeftButton,
                    Qt::LeftButton);
         mouse.send(QEvent::MouseMove, cacheStart + QPointF(60.0, 0.0),
                    Qt::NoButton, Qt::LeftButton);
-        viewport->repaint();
-        QApplication::processEvents();
-        if (workbench->stats().hits != hitsBefore)
+        const QImage liveFrame = viewport->ensureSessionImageForTest();
+        if (liveFrame.isNull())
+        {
+            qCritical() << "gizmo-test: live drag frame render is empty";
+            ++failures;
+        }
+        const pvf::workbench::CacheStats duringDrag = workbench->stats();
+        if (duringDrag.hits != beforeDrag.hits)
         {
             qCritical() << "gizmo-test: cache was used during a drag"
-                        << hitsBefore << workbench->stats().hits;
+                        << beforeDrag.hits << duringDrag.hits;
+            ++failures;
+        }
+        if (duringDrag.stores != beforeDrag.stores)
+        {
+            qCritical() << "gizmo-test: cache was written during a drag"
+                        << beforeDrag.stores << duringDrag.stores;
             ++failures;
         }
         mouse.send(QEvent::MouseButtonRelease, cacheStart + QPointF(60.0, 0.0),
                    Qt::LeftButton, Qt::NoButton);
         QApplication::processEvents();
+
+        // Release committed the edit, so the next cached-frame render must
+        // miss the old meta and store the refreshed picture.
+        viewport->ensureSessionImageForTest();
 
         bool updated = false;
         QImage cachedAfter;
@@ -464,7 +490,14 @@ int sessionGizmoTest(QApplication& app)
         }
         if (!updated)
         {
-            qCritical() << "gizmo-test: cache was not refreshed after release";
+            qCritical() << "gizmo-test: cache was not refreshed after release"
+                        << "x" << viewport->gizmoTransformForTest(uuid).x
+                        << "before" << cachedBefore.size() << cachedBefore.cacheKey()
+                        << "after" << cachedAfter.size() << cachedAfter.cacheKey()
+                        << "hits" << beforeDrag.hits << workbench->stats().hits
+                        << "misses" << beforeDrag.misses
+                        << workbench->stats().misses << "stores"
+                        << beforeDrag.stores << workbench->stats().stores;
             ++failures;
         }
     }

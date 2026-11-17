@@ -71,6 +71,10 @@ public:
 #ifdef PVFORGE_TEST_HOOKS
     QPointF projectToWidgetForTest(const QPointF& pos) const;
     QImage sessionImageForTest() const { return m_sessionImage; }
+    // Runs the whole-frame cache path exactly as a playback paint would.  The
+    // paused stage draws vector content natively and never calls this, so tests
+    // that cover lookup/store bypass use this hook instead of a paused repaint.
+    QImage ensureSessionImageForTest() { return ensureSessionImage(); }
     // The solver trajectory and its initial-velocity handle live in the
     // properties panel's mini preview, not over the canvas.  This hook stays
     // so tests can assert the viewport overlay is really gone.
