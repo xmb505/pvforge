@@ -44,7 +44,10 @@ void PropertiesPanel::buildUi()
 
     auto* transformContent = new QWidget(this);
     auto* transformForm = new QFormLayout(transformContent);
-    transformForm->setContentsMargins(10, 8, 10, 8);
+    // #50: keep the content pages on the first screen of an 800px window.
+    // The dock layout leaves the panel 421px high; 6px top/bottom padding
+    // keeps the text section's last row inside that viewport.
+    transformForm->setContentsMargins(10, 6, 10, 6);
     transformForm->setVerticalSpacing(6);
     m_parentRow = new QWidget(transformContent);
     auto* parentLayout = new QHBoxLayout(m_parentRow);
