@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>舞台、工作台与主界面 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--panel2:#20242a;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:20px}
+  .sheet{max-width:1120px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .frame{background:#0e1013;border:1px solid var(--line2);padding:10px}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>4. 舞台、工作台与 OBS 式可拆面板 UI 施工图</h1>
+    <span class="badge">已确认 · 2026-11-16</span>
+  </header>
+
+  <div class="body">
+    <h2>1. 主界面全局 UI 拓扑（OBS 可拆停靠 + MI 工作流）</h2>
+    <div class="frame">
+      <svg viewBox="0 0 1060 560" width="100%" style="display:block">
+        <!-- 顶栏 -->
+        <rect x="2" y="2" width="1056" height="30" fill="#1f2328" stroke="#343b42"/>
+        <text x="14" y="21" fill="#ffb000" font-size="11" font-weight="bold">PVForge</text>
+        <text x="86" y="21" fill="#cfd6dd" font-size="11">文件(已保存/未保存)   素材(打包)   视图[舞台/小监视器/MCP日志/Spark性能]   设置   导出</text>
+
+        <!-- 主体左+中：舞台窗口 (Stage) -->
+        <rect x="2" y="36" width="760" height="334" fill="#121418" stroke="#4cc9f0" stroke-width="1.5"/>
+        <!-- 舞台标题栏（OBS Dock 可拆出） -->
+        <rect x="2" y="36" width="760" height="24" fill="#1a242b" stroke="#343b42"/>
+        <text x="12" y="52" fill="#4cc9f0" font-size="11">舞台 (Stage) — 自由视口 [可 OBS 式拆出独立窗口]</text>
+        <rect x="720" y="40" width="36" height="16" fill="#20242a" stroke="#4a525a"/>
+        <text x="738" y="51" fill="#9aa3ac" font-size="9" text-anchor="middle">拆出</text>
+
+        <!-- 舞台画布外灰暗区 -->
+        <rect x="14" y="70" width="736" height="290" fill="#0d0f12" stroke="#22282d"/>
+        <!-- 摄像机取景框（框外暗、框内亮） -->
+        <rect x="132" y="88" width="460" height="254" fill="#181c22" stroke="#ffb000" stroke-dasharray="6,3"/>
+        <text x="140" y="103" fill="#ffb000" font-size="10">摄像机框 / 默认画布（框外灰暗，仅舞台可见）</text>
+
+        <!-- 中心坐标系 (0,0) -->
+        <line x1="362" y1="92" x2="362" y2="338" stroke="#2c333b" stroke-dasharray="3,3"/>
+        <line x1="136" y1="215" x2="588" y2="215" stroke="#2c333b" stroke-dasharray="3,3"/>
+        <text x="368" y="210" fill="#667079" font-size="9">(0,0)</text>
+
+        <!-- 选中实体 + 直角 Gizmo + 四角缩放/旋转 -->
+        <rect x="282" y="165" width="140" height="90" fill="#24303c" stroke="#4cc9f0"/>
+        <text x="352" y="214" fill="#e6e8ea" font-size="11" text-anchor="middle">选中实体</text>
+        <!-- 四角控制点 -->
+        <rect x="279" y="162" width="6" height="6" fill="#e6e8ea"/>
+        <rect x="419" y="162" width="6" height="6" fill="#e6e8ea"/>
+        <rect x="279" y="252" width="6" height="6" fill="#e6e8ea"/>
+        <rect x="419" y="252" width="6" height="6" fill="#e6e8ea"/>
+        <!-- 直角 Gizmo (MI风格) -->
+        <line x1="352" y1="210" x2="402" y2="210" stroke="#ff5d5d" stroke-width="2"/>
+        <line x1="352" y1="210" x2="352" y2="160" stroke="#43d17a" stroke-width="2"/>
+        <circle cx="352" cy="210" r="24" fill="none" stroke="#4cc9f0" stroke-width="1"/>
+
+        <!-- 舞台左上角：工作台按钮 + 弹出工具箱 -->
+        <rect x="14" y="68" width="84" height="26" rx="3" fill="#ffb000"/>
+        <text x="56" y="85" fill="#161000" font-size="11" font-weight="bold" text-anchor="middle">工作台 ▾</text>
+        <!-- 展开的创建菜单 -->
+        <rect x="14" y="96" width="128" height="162" fill="#1b1f24" stroke="#ffb000"/>
+        <text x="24" y="114" fill="#ffb000" font-size="10">创建实体 (MI 语义)</text>
+        <text x="24" y="134" fill="#cfd6dd" font-size="11">🖼 图片 / 🎬 视频</text>
+        <text x="24" y="154" fill="#cfd6dd" font-size="11">🔤 文字 / 📐 矢量</text>
+        <text x="24" y="174" fill="#cfd6dd" font-size="11">✨ 特殊 (气泡/放射线)</text>
+        <text x="24" y="194" fill="#cfd6dd" font-size="11">🌐 HTML 组件</text>
+        <text x="24" y="214" fill="#cfd6dd" font-size="11">📁 文件夹 (父级容器)</text>
+        <text x="24" y="234" fill="#cfd6dd" font-size="11">🎥 摄像机</text>
+        <text x="24" y="250" fill="#667079" font-size="9">新建即落当前播放帧</text>
+
+        <!-- 舞台右下角：小摄像机监视器（可拆浮窗） -->
+        <rect x="572" y="238" width="178" height="122" fill="#181b1e" stroke="#43d17a"/>
+        <rect x="572" y="238" width="178" height="20" fill="#1c2a22" stroke="#343b42"/>
+        <text x="580" y="252" fill="#43d17a" font-size="10">小监视器 [可拆 · 描红]</text>
+        <text x="661" y="305" fill="#9aa3ac" font-size="10" text-anchor="middle">纯成片画面 (无 Gizmo)</text>
+        <text x="661" y="322" fill="#667079" font-size="9" text-anchor="middle">FPS 显示 · 无局域网串流</text>
+
+        <!-- 右侧栏：MI 页签式属性面板 -->
+        <rect x="766" y="36" width="292" height="334" fill="#181b1e" stroke="#343b42"/>
+        <!-- 页签头 -->
+        <rect x="766" y="36" width="110" height="24" fill="#1f2328" stroke="#343b42"/>
+        <text x="821" y="52" fill="#9aa3ac" font-size="11" text-anchor="middle">项目属性</text>
+        <rect x="876" y="36" width="182" height="24" fill="#252b33" stroke="#ffb000"/>
+        <text x="967" y="52" fill="#ffb000" font-size="11" text-anchor="middle">实体属性 (选中才出现)</text>
+        <!-- 属性内容 -->
+        <text x="780" y="82" fill="#cfd6dd" font-size="11">名称 / UUID / 更换素材</text>
+        <text x="780" y="102" fill="#cfd6dd" font-size="11">父级 / 继承开关 (pos/rot/alpha)</text>
+        <text x="780" y="122" fill="#cfd6dd" font-size="11">自定义轴心开关 [仅移动轴心]</text>
+        <rect x="780" y="138" width="264" height="86" fill="#121518" stroke="#343b42"/>
+        <text x="790" y="156" fill="#4cc9f0" font-size="10">选中关键帧时：</text>
+        <text x="790" y="174" fill="#cfd6dd" font-size="10">• 整帧曲线模板 (线性/缓入缓出/弹跳)</text>
+        <text x="790" y="192" fill="#cfd6dd" font-size="10">• 转化为求解关键帧 + 轨迹小窗</text>
+        <text x="790" y="210" fill="#667079" font-size="10">• 注释关键帧 (给 AI 看)</text>
+        <rect x="780" y="236" width="264" height="120" fill="#121518" stroke="#343b42"/>
+        <text x="790" y="256" fill="#9aa3ac" font-size="10">可拆独立浮窗（视图菜单开关）：</text>
+        <text x="790" y="278" fill="#cfd6dd" font-size="10">□ MCP 操作日志窗</text>
+        <text x="790" y="298" fill="#cfd6dd" font-size="10">□ Spark 性能监视窗 (火焰图)</text>
+        <text x="790" y="318" fill="#667079" font-size="10">均支持 OBS 式停靠或拖至副屏</text>
+
+        <!-- 底部：素材箱 + 主时间轴 -->
+        <rect x="2" y="374" width="188" height="184" fill="#181b1e" stroke="#343b42"/>
+        <text x="12" y="394" fill="#ffb000" font-size="11">素材箱 (列表/图标)</text>
+        <text x="12" y="416" fill="#9aa3ac" font-size="10">+ 导入 / 悬停预览浮窗</text>
+        <text x="12" y="436" fill="#9aa3ac" font-size="10">直接拖入右侧时间轴</text>
+
+        <rect x="194" y="374" width="864" height="184" fill="#121518" stroke="#343b42"/>
+        <text x="206" y="394" fill="#4cc9f0" font-size="11">主时间轴（从下往上 · 正向无限 · 纯图层无行号）</text>
+        <rect x="240" y="470" width="240" height="32" fill="#28303a" stroke="#ffb000"/>
+        <text x="252" y="490" fill="#e6e8ea" font-size="11">片段 C [+] ← 点此弹出悬浮私有时间线</text>
+        <rect x="210" y="512" width="180" height="32" fill="#232830" stroke="#4a525a"/>
+        <text x="222" y="532" fill="#cfd6dd" font-size="11">片段 A (最底层)</text>
+      </svg>
+    </div>
+
+    <h2>2. 图层排序机（帧渲染绘制顺序）</h2>
+    <div class="frame">
+      <svg viewBox="0 0 980 86" width="100%" style="display:block">
+        <rect x="10" y="14" width="140" height="54" fill="#181b1e" stroke="#4a525a"/>
+        <text x="80" y="38" fill="#cfd6dd" font-size="11" text-anchor="middle">1. 片段 A</text>
+        <text x="80" y="56" fill="#667079" font-size="10" text-anchor="middle">主轴第1行(无子)</text>
+
+        <line x1="150" y1="41" x2="195" y2="41" stroke="#ffb000" stroke-width="1.5"/>
+        <polygon points="195,41 187,36 187,46" fill="#ffb000"/>
+
+        <rect x="195" y="14" width="180" height="54" fill="#1a2c38" stroke="#4cc9f0"/>
+        <text x="285" y="38" fill="#4cc9f0" font-size="11" text-anchor="middle">2. 子实体 B</text>
+        <text x="285" y="56" fill="#9aa3ac" font-size="10" text-anchor="middle">C 的私有 -1 轨(被遮挡)</text>
+
+        <line x1="375" y1="41" x2="420" y2="41" stroke="#ffb000" stroke-width="1.5"/>
+        <polygon points="420,41 412,36 412,46" fill="#ffb000"/>
+
+        <rect x="420" y="14" width="170" height="54" fill="#28303a" stroke="#ffb000"/>
+        <text x="505" y="38" fill="#ffb000" font-size="11" text-anchor="middle">3. 父实体 C</text>
+        <text x="505" y="56" fill="#9aa3ac" font-size="10" text-anchor="middle">主轴第2行(基准)</text>
+
+        <line x1="590" y1="41" x2="635" y2="41" stroke="#ffb000" stroke-width="1.5"/>
+        <polygon points="635,41 627,36 627,46" fill="#ffb000"/>
+
+        <rect x="635" y="14" width="180" height="54" fill="#1e3528" stroke="#43d17a"/>
+        <text x="725" y="38" fill="#43d17a" font-size="11" text-anchor="middle">4. 子实体 D</text>
+        <text x="725" y="56" fill="#9aa3ac" font-size="10" text-anchor="middle">C 的私有 +1 轨(最顶层)</text>
+
+        <text x="840" y="45" fill="#9aa3ac" font-size="11">→ 顺序：A → B → C → D</text>
+      </svg>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #4</span>
+    <span>2026-11-16 UI 图示化改版</span>
+  </footer>
+</div>
+</body>
+</html>

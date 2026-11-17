@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>性能与验收基线 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:20px}
+  .sheet{max-width:1080px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .grid{display:grid;grid-template-columns:1.15fr 0.85fr;gap:14px}
+  .box{background:#121518;border:1px solid var(--line);padding:12px}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>11. 性能与验收基线（Spark 火焰图监视窗 · CI 护栏）</h1>
+    <span class="badge">已确认 · 2026-11-17</span>
+  </header>
+
+  <div class="body">
+    <div class="grid">
+      <!-- 左：Spark 式性能监视窗 -->
+      <div class="box">
+        <h2>1. Spark 性能监视窗（高级菜单开启 · 可拆出）</h2>
+        <svg viewBox="0 0 500 240" width="100%" style="display:block">
+          <rect x="6" y="6" width="488" height="228" fill="#181b1e" stroke="#4cc9f0"/>
+          <rect x="6" y="6" width="488" height="24" fill="#1a242b" stroke="#343b42"/>
+          <text x="16" y="22" fill="#4cc9f0" font-size="10">Spark 性能监视器 [帧耗时: 4.8ms | 60.0 FPS | 滚动条]</text>
+
+          <!-- 火焰图条 -->
+          <rect x="18" y="42" width="464" height="24" fill="#2b2112" stroke="#ffb000"/>
+          <text x="26" y="58" fill="#ffb000" font-size="10">renderStageFrame()  4.8 ms (100%)</text>
+
+          <rect x="18" y="68" width="140" height="22" fill="#14221a" stroke="#43d17a"/>
+          <text x="24" y="83" fill="#43d17a" font-size="9">layerSort() 0.3ms</text>
+
+          <rect x="160" y="68" width="210" height="22" fill="#1a2c38" stroke="#4cc9f0"/>
+          <text x="168" y="83" fill="#4cc9f0" font-size="9">cacheLookup / blit() 1.2ms</text>
+
+          <rect x="372" y="68" width="110" height="22" fill="#2a1919" stroke="#ff5d5d"/>
+          <text x="378" y="83" fill="#ff5d5d" font-size="9">asyncQoiQueue 0.2ms</text>
+
+          <!-- 函数耗时列表 -->
+          <rect x="18" y="102" width="464" height="120" fill="#121518" stroke="#343b42"/>
+          <text x="28" y="122" fill="#cfd6dd" font-size="10">• 主题统一 + 竖向滚动条（解决此前无滚动条与主题割裂问题）</text>
+          <text x="28" y="142" fill="#cfd6dd" font-size="10">• 列出最近一帧所有关键函数耗时与系统资源参数</text>
+          <text x="28" y="162" fill="#43d17a" font-size="10">• 优化原则：新优化想法先写小 Demo 与旧实现 Benchmark 对比</text>
+          <text x="28" y="182" fill="#9aa3ac" font-size="10">• 透明度 = 0 直接跳过；点阵抖动 = 0 静态缓存；播放不刷物理预览</text>
+        </svg>
+      </div>
+
+      <!-- 右：工程与交付验收基线 -->
+      <div class="box">
+        <h2>2. 代码健康度与交付红线</h2>
+        <svg viewBox="0 0 380 240" width="100%" style="display:block">
+          <rect x="6" y="6" width="368" height="228" fill="#181b1e" stroke="#343b42"/>
+          <text x="18" y="30" fill="#ffb000" font-size="11">硬性验收门禁：</text>
+          <text x="18" y="56" fill="#e6e8ea" font-size="10">1. 单代码文件行数 ≤ 1500 行（CI 强制拦截）</text>
+          <text x="18" y="80" fill="#e6e8ea" font-size="10">2. 测试代码与交付二进制彻底隔离（Release 禁编入测试入口）</text>
+          <text x="18" y="104" fill="#e6e8ea" font-size="10">3. 单一数据模型（绝不新旧两套平行代码共存）</text>
+          <text x="18" y="128" fill="#e6e8ea" font-size="10">4. CI 禁止 --repeat until-pass 掩盖真实失败</text>
+          <text x="18" y="152" fill="#43d17a" font-size="10">5. 施工图与代码冲突时：施工图为目标，记录漂移并修代码</text>
+          <text x="18" y="196" fill="#667079" font-size="9">注：本仓库仍处于概念验证与重构对齐期，不建议外部使用</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #11</span>
+    <span>2026-11-17 人类对话对齐确认</span>
+  </footer>
+</div>
+</body>
+</html>

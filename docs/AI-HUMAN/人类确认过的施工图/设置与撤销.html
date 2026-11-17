@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置、撤销与自动保存 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:20px}
+  .sheet{max-width:1080px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .box{background:#121518;border:1px solid var(--line);padding:12px}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>10. 设置、撤销与自动保存（qBit 风格设置页 UI）</h1>
+    <span class="badge">已确认 · 2026-11-17</span>
+  </header>
+
+  <div class="body">
+    <h2>1. 首选项弹窗（借鉴 qBittorrent 左侧图标分类 + 右侧表单）</h2>
+    <div class="box">
+      <svg viewBox="0 0 980 320" width="100%" style="display:block">
+        <rect x="10" y="10" width="960" height="300" rx="4" fill="#181b1e" stroke="#4a525a"/>
+        <!-- 左侧导航 -->
+        <rect x="10" y="10" width="190" height="300" fill="#14171b" stroke="#343b42"/>
+        <text x="24" y="34" fill="#ffb000" font-size="11" font-weight="bold">首选项 (qBit 风格)</text>
+        <rect x="18" y="48" width="174" height="28" fill="#232830" stroke="#4cc9f0"/>
+        <text x="30" y="66" fill="#4cc9f0" font-size="11">⚙ 常规 / 语言 / 自动保存</text>
+        <text x="30" y="98" fill="#cfd6dd" font-size="11">🧲 吸附与 Gizmo 阈值</text>
+        <text x="30" y="128" fill="#cfd6dd" font-size="11">🎞 媒体解码与 HTML 清晰度</text>
+        <text x="30" y="158" fill="#cfd6dd" font-size="11">💾 缓存与画布外拓展</text>
+        <text x="30" y="188" fill="#cfd6dd" font-size="11">🔌 MCP 与 Git 安全</text>
+        <text x="30" y="218" fill="#cfd6dd" font-size="11">ℹ 关于 (硬件与解码器信息)</text>
+
+        <!-- 右侧配置区 -->
+        <text x="220" y="36" fill="#ffb000" font-size="12">核心设置项清单</text>
+        <rect x="220" y="48" width="730" height="114" fill="#121518" stroke="#343b42"/>
+        <text x="234" y="70" fill="#e6e8ea" font-size="11">• 吸附距离(px)：[ 8 px ]  ·  边缘与中心线吸附：[✓]  ·  边缘中点吸附：[ ] (默认关)</text>
+        <text x="234" y="92" fill="#e6e8ea" font-size="11">• 特殊角吸附：0° / 90° / 180° / 270° [✓默认开]  ·  30° / 45° [ ] (默认关) · Ctrl 临时禁用</text>
+        <text x="234" y="114" fill="#e6e8ea" font-size="11">• 舞台缓存画布外拓展：[ 50 % ]  ·  HTML 预览清晰度：[ 可调 ]  ·  视频解码：[ 硬解 / 软解 ]</text>
+        <text x="234" y="136" fill="#e6e8ea" font-size="11">• 自动保存间隔：[ 5 min ]  ·  关闭未保存提示：[✓]  ·  退出记录播放条位置：[✓]</text>
+
+        <!-- 撤销与关于 -->
+        <rect x="220" y="174" width="358" height="116" fill="#121518" stroke="#43d17a"/>
+        <text x="234" y="196" fill="#43d17a" font-size="11">撤销规则（反过程噪音）</text>
+        <text x="234" y="218" fill="#cfd6dd" font-size="10">• 拖动/缩放/旋转：鼠标放手才记 1 步</text>
+        <text x="234" y="238" fill="#cfd6dd" font-size="10">• 内存撤销作日常缓存</text>
+        <text x="234" y="258" fill="#cfd6dd" font-size="10">• 开启 Git 时由 commit 负责跨会话落盘</text>
+
+        <rect x="592" y="174" width="358" height="116" fill="#121518" stroke="#4cc9f0"/>
+        <text x="606" y="196" fill="#4cc9f0" font-size="11">关于页（实时硬件/后端状态）</text>
+        <text x="606" y="218" fill="#cfd6dd" font-size="10">• 显示当前实际生效的视频解码器（硬解/软解）</text>
+        <text x="606" y="238" fill="#cfd6dd" font-size="10">• 显示 Qt / FFmpeg / GPU / 浏览器内核版本</text>
+        <text x="606" y="258" fill="#9aa3ac" font-size="10">• 标题栏显示状态：未保存 / 已保存 (Word 风格)</text>
+      </svg>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #10</span>
+    <span>2026-11-17 人类对话对齐确认</span>
+  </footer>
+</div>
+</body>
+</html>

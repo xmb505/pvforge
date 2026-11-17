@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实体与时间轴 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--panel2:#20242a;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:22px}
+  .sheet{max-width:1100px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .ui-frame{background:#111316;border:1px solid var(--line2);padding:12px;position:relative}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--dim);margin-top:8px}
+  .dot{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>2. 实体与时间轴（主轴 + 悬浮私有时间线 UI 图）</h1>
+    <span class="badge">已确认 · 2026-11-16</span>
+  </header>
+
+  <div class="body">
+    <h2>1. 主时间轴 + 片段上方悬浮私有时间线（UI 布局示意图）</h2>
+    <div class="ui-frame">
+      <svg viewBox="0 0 1020 390" width="100%" style="display:block">
+        <!-- 左侧：素材箱（无行号栏） -->
+        <rect x="4" y="4" width="180" height="382" fill="#181b1e" stroke="#343b42"/>
+        <text x="14" y="24" fill="#ffb000" font-size="11">素材箱 (拖入生成片段)</text>
+        <rect x="14" y="36" width="160" height="28" fill="#20242a" stroke="#343b42"/>
+        <text x="22" y="54" fill="#cfd6dd" font-size="11">📁 图片 / bg.png</text>
+        <rect x="14" y="70" width="160" height="28" fill="#20242a" stroke="#343b42"/>
+        <text x="22" y="88" fill="#cfd6dd" font-size="11">🎬 视频 / pv.mp4</text>
+        <rect x="14" y="104" width="160" height="28" fill="#20242a" stroke="#343b42"/>
+        <text x="22" y="122" fill="#cfd6dd" font-size="11">🎵 音频 / bgm.flac</text>
+        <text x="14" y="372" fill="#667079" font-size="10">无行号列 · 纯图层轨</text>
+
+        <!-- 右侧：主时间轴区 -->
+        <rect x="190" y="4" width="826" height="382" fill="#121518" stroke="#343b42"/>
+        <!-- 刻度栏 -->
+        <rect x="190" y="4" width="826" height="28" fill="#1c2026" stroke="#343b42"/>
+        <text x="200" y="22" fill="#9aa3ac" font-size="10">0f</text>
+        <text x="350" y="22" fill="#9aa3ac" font-size="10">30f</text>
+        <text x="500" y="22" fill="#9aa3ac" font-size="10">60f</text>
+        <text x="650" y="22" fill="#9aa3ac" font-size="10">90f</text>
+        <text x="800" y="22" fill="#9aa3ac" font-size="10">120f</text>
+        <rect x="920" y="8" width="86" height="20" rx="2" fill="#20242a" stroke="#4a525a"/>
+        <text x="963" y="22" fill="#4cc9f0" font-size="10" text-anchor="middle">[帧 / 秒 切换]</text>
+
+        <!-- 主轴等高轨道（从下往上：第1~6行，行高固定，不被私有时间线顶宽） -->
+        <line x1="190" y1="90" x2="1016" y2="90" stroke="#22272d"/>
+        <line x1="190" y1="146" x2="1016" y2="146" stroke="#22272d"/>
+        <line x1="190" y1="202" x2="1016" y2="202" stroke="#22272d"/>
+        <line x1="190" y1="258" x2="1016" y2="258" stroke="#22272d"/>
+        <line x1="190" y1="312" x2="1016" y2="312" stroke="#262c33"/>
+        <line x1="190" y1="368" x2="1016" y2="368" stroke="#262c33"/>
+
+        <!-- 主轴高轨片段（演示：会被私有时间线浮窗直接盖住，行高不被撑开） -->
+        <rect x="230" y="156" width="160" height="36" rx="3" fill="#1c2128" stroke="#343b42" opacity="0.65"/>
+        <text x="240" y="178" fill="#667079" font-size="10">上层片段(被浮窗遮挡)</text>
+        <rect x="720" y="212" width="150" height="36" rx="3" fill="#1c2128" stroke="#343b42" opacity="0.85"/>
+        <text x="730" y="234" fill="#9aa3ac" font-size="10">片段 F(行高不变)</text>
+
+        <!-- 主轴第 2 行（从下往上第2层）：片段 C -->
+        <rect x="330" y="266" width="440" height="38" rx="3" fill="#28303a" stroke="#ffb000" stroke-width="1.5"/>
+        <text x="342" y="289" fill="#e6e8ea" font-size="12">片段 C（= 实体 C）</text>
+        <!-- 关键帧点（绝对帧号，随片段平移） -->
+        <polygon points="360,285 366,279 372,285 366,291" fill="#ffb000"/>
+        <polygon points="560,285 566,279 572,285 566,291" fill="#4cc9f0"/>
+        <!-- 片段右侧 + 按钮 -->
+        <rect x="742" y="274" width="20" height="20" rx="2" fill="#ffb000"/>
+        <text x="752" y="288" fill="#161000" font-size="14" font-weight="bold" text-anchor="middle">+</text>
+
+        <!-- 主轴第 1 行（最底层）：片段 A & 片段 E（同轨不重叠） -->
+        <rect x="200" y="322" width="210" height="38" rx="3" fill="#232830" stroke="#4a525a"/>
+        <text x="212" y="345" fill="#cfd6dd" font-size="11">片段 A [0f~42f]</text>
+        <rect x="520" y="322" width="240" height="38" rx="3" fill="#232830" stroke="#4a525a"/>
+        <text x="532" y="345" fill="#cfd6dd" font-size="11">片段 E [64f~112f]</text>
+
+        <!-- 私有时间线浮窗（直接覆盖遮挡在主时间轴上方，不撑高主轴行！） -->
+        <rect x="336" y="92" width="440" height="172" rx="3" fill="#0b0d10" opacity="0.7"/>
+        <rect x="330" y="86" width="440" height="172" rx="3" fill="#1a1e24" stroke="#ffb000" stroke-width="1.5"/>
+        <rect x="330" y="86" width="440" height="24" fill="#232830" stroke="#343b42"/>
+        <text x="340" y="102" fill="#ffb000" font-size="11">私有时间线浮窗（覆盖主轴上方 · 不撑开行高）</text>
+        <rect x="650" y="90" width="78" height="16" fill="#20242a" stroke="#4cc9f0"/>
+        <text x="689" y="101" fill="#4cc9f0" font-size="9" text-anchor="middle">绝对 / 相对</text>
+        <rect x="736" y="90" width="24" height="16" fill="#2b1a1a" stroke="#ff5d5d"/>
+        <text x="748" y="101" fill="#ff5d5d" font-size="10" text-anchor="middle">×</text>
+
+        <!-- 正轨道 (+1) -->
+        <text x="338" y="128" fill="#43d17a" font-size="10">+1 正轨道（盖在 C 上层）</text>
+        <rect x="380" y="134" width="220" height="26" rx="2" fill="#1e3528" stroke="#43d17a"/>
+        <text x="390" y="151" fill="#e6e8ea" font-size="11">子实体 D（跟父区间/可裁剪）</text>
+
+        <!-- 醒目分隔线：父实体所在基准 -->
+        <line x1="334" y1="174" x2="766" y2="174" stroke="#ffb000" stroke-width="2" stroke-dasharray="5,3"/>
+        <text x="550" y="170" fill="#ffb000" font-size="10" text-anchor="middle">─── 父实体 C 图层基准线 ───</text>
+
+        <!-- 负轨道 (-1) -->
+        <text x="338" y="192" fill="#4cc9f0" font-size="10">-1 负轨道（被 C 遮挡）</text>
+        <rect x="350" y="198" width="280" height="26" rx="2" fill="#1a2c38" stroke="#4cc9f0"/>
+        <text x="360" y="215" fill="#e6e8ea" font-size="11">子实体 B</text>
+        <text x="338" y="246" fill="#667079" font-size="10">无行号列 · 拖入正/负首尾自动增行 · 宽度对齐片段可见区</text>
+
+        <!-- 播放指针（蓝线+倒三角，拖出边界自动滚屏） -->
+        <polygon points="480,32 473,20 487,20" fill="#4cc9f0"/>
+        <line x1="480" y1="32" x2="480" y2="386" stroke="#4cc9f0" stroke-width="1.5"/>
+      </svg>
+    </div>
+
+    <div class="legend">
+      <span><i class="dot" style="background:#ffb000"></i>普通关键帧（绝对帧号，随片段整体平移，越界裁掉）</span>
+      <span><i class="dot" style="background:#4cc9f0"></i>播放指针（拖出视口自动滚屏，方向键逐帧/长按播放）</span>
+      <span>从下往上堆叠图层 · 同行可放多片段但不可重叠</span>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #2</span>
+    <span>2026-11-16 人类对话对齐确认</span>
+  </footer>
+</div>
+</body>
+</html>

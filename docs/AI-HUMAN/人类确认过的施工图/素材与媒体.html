@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>素材与媒体 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:20px}
+  .sheet{max-width:1100px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .box{background:#121518;border:1px solid var(--line);padding:12px;margin-bottom:12px}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>7. 素材与媒体（素材箱 UI · 视频音轨分离 · 丢素材占位）</h1>
+    <span class="badge">已确认 · 2026-11-17</span>
+  </header>
+
+  <div class="body">
+    <h2>1. 素材箱 UI 与悬停预览（紧邻时间轴左侧）</h2>
+    <div class="box">
+      <svg viewBox="0 0 1000 260" width="100%" style="display:block">
+        <!-- 素材箱面板 -->
+        <rect x="8" y="8" width="280" height="244" fill="#181b1e" stroke="#4cc9f0"/>
+        <rect x="8" y="8" width="280" height="26" fill="#1f252c" stroke="#343b42"/>
+        <text x="18" y="25" fill="#ffb000" font-size="11">素材箱</text>
+        <rect x="170" y="13" width="44" height="16" fill="#20242a" stroke="#4a525a"/>
+        <text x="192" y="24" fill="#cfd6dd" font-size="9" text-anchor="middle">+ 导入</text>
+        <rect x="220" y="13" width="60" height="16" fill="#20242a" stroke="#4a525a"/>
+        <text x="250" y="24" fill="#9aa3ac" font-size="9" text-anchor="middle">列表/图标</text>
+
+        <!-- 素材条目 -->
+        <rect x="18" y="44" width="260" height="32" fill="#20242a" stroke="#343b42"/>
+        <text x="26" y="64" fill="#cfd6dd" font-size="11">📁 角色立绘 / hero.png</text>
+        <rect x="18" y="82" width="260" height="32" fill="#242e38" stroke="#ffb000"/>
+        <text x="26" y="102" fill="#ffb000" font-size="11">🎬 pv_clip.mp4  [代理已就绪]</text>
+        <rect x="18" y="120" width="260" height="32" fill="#20242a" stroke="#343b42"/>
+        <text x="26" y="140" fill="#cfd6dd" font-size="11">🎵 bgm.flac  [波形]</text>
+        <rect x="18" y="158" width="260" height="32" fill="#2a1a1a" stroke="#ff5d5d"/>
+        <text x="26" y="178" fill="#ff5d5d" font-size="11">⚠ missing.png (文件丢失)</text>
+
+        <text x="18" y="216" fill="#9aa3ac" font-size="10">• 顶栏「素材 → 全部打包到项目」默认关</text>
+        <text x="18" y="234" fill="#667079" font-size="10">• 入库按内容哈希防重名 · 异步导入进度条</text>
+
+        <!-- 悬停预览浮窗 -->
+        <rect x="298" y="54" width="180" height="118" fill="#1b1f24" stroke="#ffb000"/>
+        <text x="388" y="74" fill="#ffb000" font-size="10" text-anchor="middle">悬停预览浮窗</text>
+        <rect x="312" y="84" width="152" height="62" fill="#0d1014" stroke="#343b42"/>
+        <text x="388" y="118" fill="#9aa3ac" font-size="10" text-anchor="middle">1920×1080 · 60fps · 12s</text>
+        <text x="388" y="162" fill="#43d17a" font-size="9" text-anchor="middle">拖入右侧时间轴生成片段</text>
+
+        <!-- 右侧：导入视频自动分离音轨示意图 -->
+        <rect x="500" y="8" width="492" height="244" fill="#14171b" stroke="#343b42"/>
+        <text x="514" y="28" fill="#4cc9f0" font-size="11">视频导入时间轴效果（自动分离画面 + 音轨波形）</text>
+
+        <!-- 视频片段 -->
+        <rect x="520" y="52" width="380" height="38" rx="3" fill="#24303c" stroke="#4cc9f0"/>
+        <text x="532" y="75" fill="#e6e8ea" font-size="11">🎬 pv_clip (画面片段 · 时长=视频真实时长)</text>
+        <text x="532" y="106" fill="#9aa3ac" font-size="10">日常拖动走低分代理预览版 · 导出切高清原片 · 到尾自动消失不留尾帧</text>
+
+        <!-- 音轨片段（波形直接画在 clip 上） -->
+        <rect x="520" y="122" width="380" height="44" rx="3" fill="#1c2a24" stroke="#43d17a"/>
+        <path d="M530 144 L545 130 L560 156 L575 134 L590 152 L605 128 L620 158 L635 138 L650 150 L665 132 L680 155 L700 140 L720 130 L740 156 L760 136 L780 150 L800 132 L820 154 L840 140 L870 144" fill="none" stroke="#43d17a" stroke-width="1.5"/>
+        <text x="532" y="136" fill="#43d17a" font-size="10">🎵 pv_clip (分离音轨 · 波形直接画在片段上)</text>
+        <text x="532" y="182" fill="#9aa3ac" font-size="10">支持对齐歌词 · 逐帧跳帧可出短音(scrubbing) · 裁剪首尾音频不跑偏</text>
+
+        <!-- 丢失素材占位 -->
+        <rect x="520" y="198" width="220" height="42" fill="#2a1515" stroke="#ff5d5d" stroke-dasharray="4,2"/>
+        <text x="630" y="223" fill="#ff5d5d" font-size="11" text-anchor="middle">舞台占位：[ 素材丢失 ]</text>
+        <text x="752" y="223" fill="#9aa3ac" font-size="10">不崩工程 · 可在属性栏更换素材</text>
+      </svg>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #7</span>
+    <span>2026-11-17 待人类看图拍板</span>
+  </footer>
+</div>
+</body>
+</html>

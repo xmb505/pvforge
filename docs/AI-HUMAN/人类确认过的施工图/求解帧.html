@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>求解帧 UI 施工图 · PVForge</title>
+<style>
+  :root{
+    --bg:#0f1114;--panel:#181b1e;--panel2:#20242a;--line:#343b42;--line2:#4a525a;
+    --text:#e6e8ea;--dim:#9aa3ac;--faint:#667079;--amber:#ffb000;--cyan:#4cc9f0;
+    --green:#43d17a;--red:#ff5d5d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:12px/1.5 "Noto Sans Mono CJK SC","JetBrains Mono",monospace;padding:22px}
+  .sheet{max-width:1040px;margin:0 auto;border:1px solid var(--line2);background:var(--panel)}
+  .head{display:flex;align-items:center;gap:14px;padding:12px 18px;background:#1f2328;border-bottom:1px solid var(--line2)}
+  .mark{width:30px;height:30px;background:var(--amber);color:#161000;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .head h1{font-size:17px}
+  .badge{margin-left:auto;border:1px solid #2c6b43;color:var(--green);padding:2px 8px;font-size:11px}
+  .body{padding:16px 18px}
+  h2{font-size:12px;letter-spacing:1.2px;color:var(--amber);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 10px}
+  .grid{display:grid;grid-template-columns:1.1fr 0.9fr;gap:14px}
+  .box{background:#121518;border:1px solid var(--line);padding:12px}
+  .foot{padding:8px 18px;border-top:1px solid var(--line2);background:#15181b;color:var(--faint);font-size:11px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="head">
+    <div class="mark">工</div>
+    <h1>3. 求解关键帧（物理轨迹预算 + 属性栏预览小窗）</h1>
+    <span class="badge">已确认 · 2026-11-16</span>
+  </header>
+
+  <div class="body">
+    <div class="grid">
+      <!-- 左：时间轴状态流 -->
+      <div class="box">
+        <h2>1. 时间轴求解段状态机</h2>
+        <svg viewBox="0 0 480 230" width="100%" style="display:block">
+          <!-- 片段条 -->
+          <rect x="16" y="34" width="448" height="44" rx="3" fill="#232830" stroke="#4a525a"/>
+          <text x="26" y="24" fill="#9aa3ac" font-size="10">片段 [0f ~ 180f]</text>
+
+          <!-- 普通关键帧 -->
+          <polygon points="48,56 56,48 64,56 56,64" fill="#ffb000"/>
+          <text x="56" y="96" fill="#ffb000" font-size="10" text-anchor="middle">普通关键帧</text>
+
+          <!-- 转为求解起点 -->
+          <polygon points="150,56 158,48 166,56 158,64" fill="#4cc9f0"/>
+          <text x="158" y="96" fill="#4cc9f0" font-size="10" text-anchor="middle">转为求解关键帧</text>
+
+          <!-- 求解区间高亮 -->
+          <rect x="166" y="42" width="184" height="28" fill="rgba(76,201,240,0.16)" stroke="#4cc9f0" stroke-dasharray="4,2"/>
+          <text x="258" y="60" fill="#4cc9f0" font-size="10" text-anchor="middle">一次性预算全帧参数</text>
+
+          <!-- 求解结束帧 -->
+          <polygon points="350,56 358,48 366,56 358,64" fill="#43d17a"/>
+          <text x="358" y="96" fill="#43d17a" font-size="10" text-anchor="middle">求解结束帧</text>
+          <text x="358" y="110" fill="#9aa3ac" font-size="9" text-anchor="middle">(取该帧瞬时算得坐标)</text>
+
+          <!-- 规则框 -->
+          <rect x="16" y="122" width="448" height="94" fill="#181b1e" stroke="#343b42"/>
+          <text x="28" y="144" fill="#e6e8ea" font-size="11">• 求解关键帧之后，只能创建「求解结束帧」</text>
+          <text x="28" y="166" fill="#e6e8ea" font-size="11">• 用户双击实体/片段，直接结束当前求解</text>
+          <text x="28" y="188" fill="#43d17a" font-size="11">• 调好参数后一次性算出后续每帧位置，播放零现算开销</text>
+          <text x="28" y="206" fill="#9aa3ac" font-size="10">• 播放时右侧预览小窗不同步刷新，保证 60FPS 流畅度</text>
+        </svg>
+      </div>
+
+      <!-- 右：属性面板预览小窗 -->
+      <div class="box">
+        <h2>2. 右侧属性页签 · 轨迹预览小窗</h2>
+        <svg viewBox="0 0 380 230" width="100%" style="display:block">
+          <rect x="8" y="6" width="364" height="218" fill="#181b1e" stroke="#343b42"/>
+          <text x="20" y="24" fill="#ffb000" font-size="11">求解类型：[ 黑洞引力 / 螺旋落圆心 ]</text>
+
+          <!-- 相对位置预览框 -->
+          <rect x="20" y="34" width="340" height="148" fill="#0d1014" stroke="#4a525a"/>
+          <!-- 目标圆心/黑洞点 -->
+          <circle cx="130" cy="100" r="7" fill="#ffb000"/>
+          <text x="130" y="120" fill="#ffb000" font-size="10" text-anchor="middle">目标点(黑洞/圆心)</text>
+
+          <!-- 螺旋/引力轨迹 -->
+          <path d="M 270 135 C 260 65, 160 45, 110 85 C 85 110, 120 135, 132 106" fill="none" stroke="#4cc9f0" stroke-width="1.5" stroke-dasharray="4,2"/>
+
+          <!-- 求解实体点（按真实相对方位） -->
+          <circle cx="270" cy="135" r="5" fill="#43d17a"/>
+          <text x="278" y="152" fill="#43d17a" font-size="10">求解实体(相对方位)</text>
+
+          <!-- 初始向量拖拽手柄 -->
+          <line x1="270" y1="135" x2="295" y2="75" stroke="#ff5d5d" stroke-width="2"/>
+          <polygon points="295,75 287,81 297,85" fill="#ff5d5d"/>
+          <text x="302" y="82" fill="#ff5d5d" font-size="10">拖手柄调初速度向量</text>
+
+          <text x="20" y="204" fill="#9aa3ac" font-size="10">可拖动预览窗口 · 螺旋模式终值必落圆心（含椭圆参数）</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>PVForge · 施工图 #3</span>
+    <span>2026-11-16 人类对话对齐确认</span>
+  </footer>
+</div>
+</body>
+</html>
