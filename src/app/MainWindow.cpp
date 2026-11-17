@@ -187,6 +187,9 @@ void MainWindow::buildSessionShell()
     m_timeline = new TimelinePanel(
         static_cast<EditorSession*>(m_session), this);
     m_timeline->setObjectName(QStringLiteral("timelinePanel"));
+    // The OBS-style dock replaced the legacy 220 px split; keep the timeline
+    // at its old working height instead of letting the title bar shrink it.
+    m_timeline->setMinimumHeight(220);
 
     auto* timelineAssets = new QSplitter(Qt::Horizontal, this);
     timelineAssets->setObjectName(QStringLiteral("timelineAssetSplit"));

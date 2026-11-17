@@ -182,9 +182,10 @@ int assetsTest(QApplication& app)
     check(sessionTimeline && sessionTimeline->height() >= 190
               && sessionTimeline->height() <= 260,
           QStringLiteral("timeline height is not about 220"));
+    // The session shell is dock-only (OBS-style): there is deliberately no
+    // central widget, so compare the bottom dock width with the whole window.
     check(sessionTimeline
-              && sessionTimeline->width()
-                     > window->centralWidget()->width() * 0.7,
+              && sessionTimeline->width() > window->width() * 0.7,
           QStringLiteral("timeline lost most of its width"));
     check(sessionViewport && sessionViewport->width() > 1000
               && sessionViewport->height() > 520,
