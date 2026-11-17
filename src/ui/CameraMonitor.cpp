@@ -29,6 +29,7 @@
 #include <QSlider>
 #include <QTimer>
 #include <QToolButton>
+#include <QWindow>
 #include <QWidgetAction>
 #include <algorithm>
 #include <cmath>
@@ -101,26 +102,13 @@ CameraMonitor::CameraMonitor(EditorSession* session, Viewport* viewport,
         applyAlwaysOnTop();
     });
 
-    m_detachButton = new QToolButton(this);
-    m_detachButton->setObjectName(QStringLiteral("monitorDetachButton"));
-    m_detachButton->setFocusPolicy(Qt::NoFocus);
-    connect(m_detachButton, &QToolButton::clicked, this, [this] {
-        if (m_detached)
-            dockWindow();
-        else
-            detachWindow();
-    });
-
     m_closeButton = new QToolButton(this);
     m_closeButton->setObjectName(QStringLiteral("monitorCloseButton"));
     m_closeButton->setText(QStringLiteral("×"));
     m_closeButton->setFocusPolicy(Qt::NoFocus);
     connect(m_closeButton, &QToolButton::clicked, this, [this] {
         if (m_detached)
-        {
             dockWindow();
-            return;
-        }
         hide();
         Settings::setMonitorVisible(false);
         emit visibilityChanged(false);
@@ -198,6 +186,8 @@ void CameraMonitor::setVisibleFromMenu(bool visible)
     Settings::setMonitorVisible(visible);
     if (visible)
     {
+        if (m_detached)
+            dockWindow();
         show();
         raise();
     }
@@ -340,10 +330,6 @@ void CameraMonitor::updateButtons()
     m_qualityButton->setToolTip(m_highQuality
                                     ? QStringLiteral("高质量：原图、项目分辨率；播放时降为草稿")
                                     : QStringLiteral("草稿：缩略图、监视器分辨率"));
-    m_detachButton->setText(m_detached ? QStringLiteral("停靠")
-                                       : QStringLiteral("弹出"));
-    m_detachButton->setToolTip(m_detached ? QStringLiteral("停靠回视口右下角")
-                                          : QStringLiteral("弹出为独立窗口"));
     m_pinButton->setVisible(m_detached);
     m_pinButton->setChecked(Settings::monitorAlwaysOnTop());
     m_pinButton->setToolTip(QStringLiteral("独立窗口总在最前"));
@@ -424,7 +410,6 @@ void CameraMonitor::layoutChildren()
     };
 
     place(m_closeButton, kButtonWidth);
-    place(m_detachButton, 40);
     if (m_detached)
         place(m_pinButton, 40);
     place(m_qualityButton, 54);
@@ -857,7 +842,28 @@ void CameraMonitor::mouseMoveEvent(QMouseEvent* event)
 
     if (m_dragging)
     {
-        const QPoint delta = event->globalPosition().toPoint() - m_pressGlobal;
+        const QPoint globalPos = event->globalPosition().toPoint();
+        if (!m_detached && m_viewport)
+        {
+            const QRect stageGlobal(m_viewport->mapToGlobal(QPoint(0, 0)),
+                                    m_viewport->size());
+            if (!stageGlobal.adjusted(-16, -16, 16, 16).contains(globalPos))
+            {
+                detachWindow();
+                move(globalPos - QPoint(width() / 2, 12));
+                if (windowHandle() && windowHandle()->startSystemMove())
+                {
+                    m_dragging = false;
+                }
+                else
+                {
+                    m_pressGlobal = globalPos;
+                    m_pressGeometry = geometry();
+                }
+                return;
+            }
+        }
+        const QPoint delta = globalPos - m_pressGlobal;
         if (m_detached)
             move(m_pressGeometry.topLeft() + delta);
         else
@@ -901,11 +907,7 @@ void CameraMonitor::mouseReleaseEvent(QMouseEvent* event)
 void CameraMonitor::closeEvent(QCloseEvent* event)
 {
     if (m_detached)
-    {
         dockWindow();
-        event->ignore();
-        return;
-    }
     hide();
     Settings::setMonitorVisible(false);
     emit visibilityChanged(false);

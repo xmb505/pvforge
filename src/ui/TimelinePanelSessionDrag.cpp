@@ -178,7 +178,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
 
 EntityId TimelinePanel::sessionBaseEntityAtRow(int row) const
 {
-    if (row < 0)
+    if (!isValidRow(row))
         return kInvalidEntity;
     for (const Entity& entity : m_sessionBaseSnapshot.entities)
     {
@@ -193,7 +193,7 @@ EntityId TimelinePanel::sessionBaseEntityAtRow(int row) const
 QRect TimelinePanel::sessionBaseClipRect(const Entity& entity) const
 {
     const int row = rowOfEntity(entity);
-    if (row < 0)
+    if (!isValidRow(row))
         return QRect();
     const int start = std::max(clipStartOf(entity), contentStart());
     const int end = std::min(clipEndOf(entity), contentEnd());

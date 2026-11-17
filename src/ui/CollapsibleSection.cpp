@@ -19,10 +19,13 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* content,
     m_header = new QToolButton(this);
     m_header->setCheckable(true);
     m_header->setChecked(true);
+    m_header->setAutoRaise(true);
+    m_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_header->setStyleSheet(QStringLiteral(
-        "QToolButton { text-align: left; padding: 6px 10px; font-weight: bold;"
-        " border: none; background: palette(button); }"));
+    m_header->setText(m_title);
+    QFont headerFont = m_header->font();
+    headerFont.setBold(true);
+    m_header->setFont(headerFont);
     layout->addWidget(m_header);
 
     content->setParent(this);
@@ -30,7 +33,7 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* content,
 
     auto* divider = new QFrame(this);
     divider->setFrameShape(QFrame::HLine);
-    divider->setFrameShadow(QFrame::Plain);
+    divider->setFrameShadow(QFrame::Sunken);
     layout->addWidget(divider);
 
     connect(m_header, &QToolButton::toggled, this, [this](bool) { applyState(); });
@@ -53,8 +56,8 @@ void CollapsibleSection::applyState()
 {
     const bool expanded = m_header->isChecked();
     m_content->setVisible(expanded);
-    m_header->setText((expanded ? QStringLiteral("▼  ") : QStringLiteral("▶  "))
-                      + m_title);
+    m_header->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+    m_header->setText(m_title);
 }
 
 } // namespace pvf

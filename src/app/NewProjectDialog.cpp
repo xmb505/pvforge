@@ -10,7 +10,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSize>
+#include <QSpinBox>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
@@ -73,11 +75,48 @@ NewProjectDialog::NewProjectDialog(QWidget* parent)
     m_resolution->addItem(QStringLiteral("1280 × 720 (HD)"), QSize(1280, 720));
     m_resolution->addItem(QStringLiteral("3840 × 2160 (4K)"), QSize(3840, 2160));
     m_resolution->addItem(QStringLiteral("1080 × 1920 (竖屏)"), QSize(1080, 1920));
-    const int defaultIndex =
-        m_resolution->findData(QSize(Settings::defaultWidth(), Settings::defaultHeight()));
-    if (defaultIndex >= 0)
-        m_resolution->setCurrentIndex(defaultIndex);
-    form->addRow(QStringLiteral("分辨率"), m_resolution);
+    m_resolution->addItem(QStringLiteral("自定义"), QSize());
+
+    m_width = new QSpinBox(this);
+    m_width->setRange(16, 8192);
+    m_width->setSuffix(QStringLiteral(" px"));
+    m_height = new QSpinBox(this);
+    m_height->setRange(16, 8192);
+    m_height->setSuffix(QStringLiteral(" px"));
+
+    const int initW = std::clamp(Settings::defaultWidth(), 16, 8192);
+    const int initH = std::clamp(Settings::defaultHeight(), 16, 8192);
+    m_width->setValue(initW);
+    m_height->setValue(initH);
+    const int defaultIndex = m_resolution->findData(QSize(initW, initH));
+    m_resolution->setCurrentIndex(defaultIndex >= 0 ? defaultIndex
+                                                    : m_resolution->count() - 1);
+
+    auto* resRow = new QHBoxLayout();
+    resRow->setSpacing(6);
+    resRow->addWidget(m_resolution, 1);
+    resRow->addWidget(m_width);
+    resRow->addWidget(new QLabel(QStringLiteral("×"), this));
+    resRow->addWidget(m_height);
+    form->addRow(QStringLiteral("舞台分辨率"), resRow);
+
+    connect(m_resolution, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        const QSize size = m_resolution->itemData(idx).toSize();
+        if (!size.isValid())
+            return;
+        const QSignalBlocker bw(m_width);
+        const QSignalBlocker bh(m_height);
+        m_width->setValue(size.width());
+        m_height->setValue(size.height());
+    });
+    auto syncPresetFromSpin = [this] {
+        const QSignalBlocker b(m_resolution);
+        const int idx =
+            m_resolution->findData(QSize(m_width->value(), m_height->value()));
+        m_resolution->setCurrentIndex(idx >= 0 ? idx : m_resolution->count() - 1);
+    };
+    connect(m_width, &QSpinBox::valueChanged, this, syncPresetFromSpin);
+    connect(m_height, &QSpinBox::valueChanged, this, syncPresetFromSpin);
 
     m_fps = new QComboBox(this);
     m_fps->addItem(QStringLiteral("24 fps"), 24);
@@ -145,12 +184,12 @@ QString NewProjectDialog::projectPath() const
 
 int NewProjectDialog::videoWidth() const
 {
-    return m_resolution->currentData().toSize().width();
+    return m_width->value();
 }
 
 int NewProjectDialog::videoHeight() const
 {
-    return m_resolution->currentData().toSize().height();
+    return m_height->value();
 }
 
 int NewProjectDialog::frameRate() const

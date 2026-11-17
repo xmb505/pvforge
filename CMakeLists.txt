@@ -170,8 +170,6 @@ set(PVF_APP_SOURCES
     src/ui/WorkbenchPanelPreview.cpp
     src/ui/panels/PanelGeometry.cpp
     src/ui/panels/PanelGeometry.h
-    src/ui/panels/WorkbenchPanelHost.cpp
-    src/ui/panels/WorkbenchPanelHost.h
 )
 
 add_library(pvf_app STATIC ${PVF_APP_SOURCES})

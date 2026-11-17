@@ -23,7 +23,6 @@
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
 #include "ui/panels/PanelGeometry.h"
-#include "ui/panels/WorkbenchPanelHost.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -59,19 +58,15 @@ void MainWindow::buildSessionShell()
 {
     resize(1440, 900);
     setMinimumSize(1000, 620);
+    setDockNestingEnabled(true);
+    setDockOptions(QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks
+                   | QMainWindow::AnimatedDocks);
 
-    // Top split keeps the legacy shell's arrangement: large central surface on
-    // the left, project properties on the right.  The asset bin and timeline
-    // sit below the editing surface (P5/P2).
-    auto* top = new QSplitter(Qt::Horizontal, this);
-    top->setObjectName(QStringLiteral("sessionTopSplit"));
-    top->setChildrenCollapsible(false);
-
-    // P3a: the old viewport widget is back, drawing the new entity model
-    // through render2.  The P1 read-only placeholder page is gone.
-    m_viewport = new Viewport(m_session, top);
+    // OBS-style dockable Stage (视口窗口), Properties, and Timeline+Assets.
+    m_viewport = new Viewport(m_session, this);
     m_viewport->setObjectName(QStringLiteral("viewport"));
-    m_viewport->setMinimumWidth(480);
+    m_viewport->setMinimumSize(320, 200);
+    m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     // P4b: the legacy workbench button keeps its place; session mode only
     // exposes the special page (brand wall creation through the new model).
@@ -80,13 +75,6 @@ void MainWindow::buildSessionShell()
         m_workbench = new WorkbenchPanel(m_session, m_viewport);
         m_workbench->setIgnoreMouseWidget(m_viewport->workbenchButton());
         m_workbench->hide();
-        m_workbenchHost = new WorkbenchPanelHost(
-            m_workbench, m_viewport, this,
-            [this] {
-                return m_viewport->workbenchButton()->geometry().bottomLeft()
-                       + QPoint(0, 8);
-            },
-            this);
         connect(m_viewport, &Viewport::workbenchRequested, this,
                 &MainWindow::toggleWorkbench);
         connect(m_workbench, &WorkbenchPanel::sessionCreated, this,
@@ -102,9 +90,10 @@ void MainWindow::buildSessionShell()
     // per-project media services.  It starts docked in the viewport corner.
     if (m_session)
     {
+        m_hadCamera = sessionHasCamera();
         m_monitor = new CameraMonitor(m_session, m_viewport, m_viewport);
         m_monitor->setFrame(m_session->playhead());
-        m_monitor->setVisible(Settings::monitorVisible());
+        m_monitor->setVisible(m_hadCamera && Settings::monitorVisible());
     }
 
     // P6: the old floating MCP log keeps its place beside the camera monitor.
@@ -176,14 +165,8 @@ void MainWindow::buildSessionShell()
         m_sessionEnvironment, projectContent);
     settingsSection->setExpanded(true);
     environmentSection->setExpanded(false);
-    auto* libraryMoved =
-        new QLabel(QStringLiteral("素材库已移至时间轴左侧"), projectContent);
-    libraryMoved->setObjectName(QStringLiteral("assetMovedLabel"));
-    libraryMoved->setContentsMargins(10, 8, 10, 8);
-    libraryMoved->setWordWrap(true);
     projectLayout->addWidget(settingsSection);
     projectLayout->addWidget(environmentSection);
-    projectLayout->addWidget(libraryMoved);
     projectLayout->addStretch(1);
     projectScroll->setWidget(projectContent);
 
@@ -191,38 +174,21 @@ void MainWindow::buildSessionShell()
     projectTabLayout->setContentsMargins(0, 0, 0, 0);
     projectTabLayout->addWidget(projectScroll);
 
+    m_objectTab->hide();
+
     m_rightTabs = new QTabWidget(this);
     m_rightTabs->setObjectName(QStringLiteral("rightTabs"));
-    m_rightTabs->setMinimumWidth(300);
-    m_rightTabs->setMaximumWidth(440);
+    m_rightTabs->setDocumentMode(true);
+    m_rightTabs->setMinimumWidth(280);
     m_rightTabs->addTab(projectTab,
                         Lang::t(QStringLiteral("panel.projectTab"),
                                 QStringLiteral("项目属性")));
-    m_rightTabs->addTab(m_objectTab, QStringLiteral("属性"));
-
-    top->addWidget(m_viewport);
-    top->addWidget(m_rightTabs);
-    top->setStretchFactor(0, 1);
-    top->setStretchFactor(1, 0);
-    top->setSizes({1100, 320});
-
-    auto* central = new QWidget(this);
-    auto* layout = new QVBoxLayout(central);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
-    // Legacy arrangement: the timeline sits below the editing surface, with
-    // the asset bin immediately to its left so assets can be dragged in.
-    auto* mainSplit = new QSplitter(Qt::Vertical, central);
-    mainSplit->setObjectName(QStringLiteral("sessionMainSplit"));
-    mainSplit->setChildrenCollapsible(false);
-    mainSplit->addWidget(top);
 
     m_timeline = new TimelinePanel(
-        static_cast<EditorSession*>(m_session), mainSplit);
+        static_cast<EditorSession*>(m_session), this);
     m_timeline->setObjectName(QStringLiteral("timelinePanel"));
 
-    auto* timelineAssets = new QSplitter(Qt::Horizontal, mainSplit);
+    auto* timelineAssets = new QSplitter(Qt::Horizontal, this);
     timelineAssets->setObjectName(QStringLiteral("timelineAssetSplit"));
     timelineAssets->setChildrenCollapsible(false);
     m_library->setObjectName(QStringLiteral("timelineAssetPanel"));
@@ -234,12 +200,33 @@ void MainWindow::buildSessionShell()
     timelineAssets->setStretchFactor(1, 1);
     timelineAssets->setSizes({180, 1000});
 
-    mainSplit->addWidget(timelineAssets);
-    mainSplit->setStretchFactor(0, 1);
-    mainSplit->setStretchFactor(1, 0);
-    mainSplit->setSizes({640, 220});
-    layout->addWidget(mainSplit);
-    setCentralWidget(central);
+    const auto dockFeatures = QDockWidget::DockWidgetClosable
+                              | QDockWidget::DockWidgetMovable
+                              | QDockWidget::DockWidgetFloatable;
+
+    m_stageDock = new QDockWidget(QStringLiteral("舞台"), this);
+    m_stageDock->setObjectName(QStringLiteral("stageDock"));
+    m_stageDock->setFeatures(dockFeatures);
+    m_stageDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    m_stageDock->setWidget(m_viewport);
+
+    m_propsDock = new QDockWidget(QStringLiteral("属性"), this);
+    m_propsDock->setObjectName(QStringLiteral("propsDock"));
+    m_propsDock->setFeatures(dockFeatures);
+    m_propsDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    m_propsDock->setWidget(m_rightTabs);
+
+    m_timelineDock = new QDockWidget(QStringLiteral("时间轴与素材箱"), this);
+    m_timelineDock->setObjectName(QStringLiteral("timelineDock"));
+    m_timelineDock->setFeatures(dockFeatures);
+    m_timelineDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    m_timelineDock->setWidget(timelineAssets);
+
+    addDockWidget(Qt::LeftDockWidgetArea, m_stageDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_propsDock);
+    addDockWidget(Qt::BottomDockWidgetArea, m_timelineDock);
+    resizeDocks({m_stageDock, m_propsDock}, {1100, 320}, Qt::Horizontal);
+    resizeDocks({m_stageDock, m_timelineDock}, {640, 200}, Qt::Vertical);
 
     m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("statusInfo"));
@@ -394,16 +381,32 @@ void MainWindow::buildSessionShell()
                 {
                     const int index = m_rightTabs->indexOf(m_objectTab);
                     const Uuid selectedUuid = m_session->document()->selection();
-                    const auto it =
-                        m_session->project().entities.constFind(selectedUuid);
-                    if (index >= 0)
-                        m_rightTabs->setTabText(
-                            index, it == m_session->project().entities.constEnd()
-                                       ? QStringLiteral("属性")
-                                       : it.value().name);
-                    m_rightTabs->setCurrentWidget(
-                        selectedUuid.isEmpty() ? m_rightTabs->widget(0)
-                                               : m_objectTab);
+                    if (selectedUuid.isEmpty())
+                    {
+                        if (index >= 0)
+                            m_rightTabs->removeTab(index);
+                        m_objectTab->hide();
+                        m_rightTabs->setCurrentIndex(0);
+                    }
+                    else
+                    {
+                        const auto it =
+                            m_session->project().entities.constFind(selectedUuid);
+                        const QString tabTitle =
+                            it == m_session->project().entities.constEnd()
+                                ? QStringLiteral("实体属性")
+                                : it.value().name;
+                        if (index < 0)
+                        {
+                            m_rightTabs->addTab(m_objectTab, tabTitle);
+                            m_objectTab->show();
+                        }
+                        else
+                        {
+                            m_rightTabs->setTabText(index, tabTitle);
+                        }
+                        m_rightTabs->setCurrentWidget(m_objectTab);
+                    }
                 }
             }
             // Selecting a camera makes it the framing camera and asks the
@@ -554,14 +557,35 @@ void MainWindow::buildSessionShell()
     updateSessionPlaybackUi();
     updateWindowTitle();
     showSessionOnboardingIfNeeded();
-    if (m_workbenchHost)
-        m_workbenchHost->restoreOnStartup();
+}
+
+bool MainWindow::sessionHasCamera() const
+{
+    if (!m_session)
+        return false;
+    const auto& entities = m_session->project().entities;
+    for (auto it = entities.constBegin(); it != entities.constEnd(); ++it)
+    {
+        if (it.value().content.kind == ContentKind::Camera)
+            return true;
+    }
+    return false;
 }
 
 void MainWindow::refreshSession()
 {
     if (!m_session)
         return;
+
+    const bool hasCamera = sessionHasCamera();
+    if (m_monitor)
+    {
+        if (!m_hadCamera && hasCamera)
+            m_monitor->setVisibleFromMenu(true);
+        else if (m_hadCamera && !hasCamera && m_monitor->isVisible())
+            m_monitor->setVisibleFromMenu(false);
+    }
+    m_hadCamera = hasCamera;
 
     if (m_sessionProps)
         m_sessionProps->refresh();
@@ -768,12 +792,6 @@ MainWindow::~MainWindow()
 
 void MainWindow::toggleWorkbench()
 {
-    if (m_workbenchHost)
-    {
-        m_workbenchHost->toggle();
-        return;
-    }
-
     if (!m_workbench || !m_viewport)
         return;
     if (m_workbench->isVisible())

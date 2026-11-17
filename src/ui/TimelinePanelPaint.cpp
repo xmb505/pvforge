@@ -245,59 +245,86 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     }
 
     const QVector<EntityId> rows = rowIds();
+    QVector<int> drawRows;
+    if (m_popup)
+    {
+        int minNeg = -1;
+        int maxPos = 0;
+        popupTrackBounds(&minNeg, &maxPos);
+        for (int r = minNeg; r <= maxPos; ++r)
+            drawRows.append(r);
+    }
+    else
+    {
+        for (int r = 0; r < rows.size(); ++r)
+            drawRows.append(r);
+    }
+
     p.save();
     p.setClipRect(QRect(0, kRulerHeight, right, bottom - kRulerHeight));
-    for (int row = 0; row < rows.size(); ++row)
+    bool hasAnyEntity = false;
+    for (int row : drawRows)
     {
         const int top = rowTop(row);
         if (top + kRowHeight < kRulerHeight || top > bottom)
             continue;
-        const Entity* entity = findEntity(activeEntities(), rows[row]);
+        const QVector<const Entity*> rowEntities = entitiesInRow(row);
+        if (!rowEntities.isEmpty())
+            hasAnyEntity = true;
         const QRect rowRect(0, top, right, kRowHeight);
-        const bool rowSelected =
-            entity
-            && (entity->id == m_selected
-                || m_entitySelection.contains(entity->id));
+        bool rowSelected = false;
+        for (const Entity* entity : rowEntities)
+        {
+            if (entity->id == m_selected || m_entitySelection.contains(entity->id))
+            {
+                rowSelected = true;
+                break;
+            }
+        }
         if (rowSelected)
             p.fillRect(rowRect, QColor(accent.red(), accent.green(),
                                        accent.blue(), 60));
-        else if (row % 2)
+        else if (std::abs(row) % 2)
             p.fillRect(rowRect, QColor(alt.red(), alt.green(), alt.blue(), 90));
         p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 70));
         p.drawLine(0, top + kRowHeight - 1, right, top + kRowHeight - 1);
-        if (!entity)
-            continue;
 
-        // Clip-first: the entity name is the clip name. Eye / lock / select
-        // keys stay available as small inline buttons when the clip is wide
-        // enough; short clips fall back to the clip context menu.
-        const bool hidden = entity->hidden;
-        const bool locked = entity->locked;
-        const QRect clip = clipRect(*entity);
-        if (clip.isEmpty())
-            continue;
-        const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
-        if (showButtons)
+        for (const Entity* entity : rowEntities)
         {
-            makeEyeIcon(hidden).paint(&p, rowButtonRect(row, 0));
-            makeLockIcon(locked).paint(&p, rowButtonRect(row, 1));
-            makeKeyframeIcon().paint(&p, rowButtonRect(row, 2));
-        }
-        QColor color = clipColor(entity->type);
-        const bool selected = rowSelected;
-        const int alpha = hidden ? 80 : (selected ? 230 : 200);
-        QColor fill = color;
-        fill.setAlpha(alpha);
-        p.setPen(QPen(color.darker(170), 1));
-        p.setBrush(fill);
-        // Flat, square corners: no gradient, rounding or white highlight.
-        p.drawRect(clip.adjusted(0, 0, -1, -1));
-        if (selected)
-        {
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(accent, 2));
-            p.drawRect(clip.adjusted(1, 1, -2, -2));
-        }
+            if (!entity)
+                continue;
+
+            // Clip-first: the entity name is the clip name. Eye / lock / select
+            // keys stay available as small inline buttons when the clip is wide
+            // enough; short clips fall back to the clip context menu.
+            const bool hidden = entity->hidden;
+            const bool locked = entity->locked;
+            const QRect clip = clipRect(*entity);
+            if (clip.isEmpty())
+                continue;
+            const bool selected =
+                entity->id == m_selected || m_entitySelection.contains(entity->id);
+            const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
+            if (showButtons)
+            {
+                makeEyeIcon(hidden).paint(&p, clipButtonRect(*entity, 0));
+                makeLockIcon(locked).paint(&p, clipButtonRect(*entity, 1));
+                makeKeyframeIcon().paint(&p, clipButtonRect(*entity, 2));
+            }
+            QColor color = clipColor(entity->type);
+            const int alpha = hidden ? 80 : (selected ? 230 : 200);
+            QColor fill = color;
+            fill.setAlpha(alpha);
+            p.setPen(QPen(color.darker(170), 1));
+            p.setBrush(fill);
+            // Flat, square corners: no gradient, rounding or white highlight.
+            p.drawRect(clip.adjusted(0, 0, -1, -1));
+            if (selected)
+            {
+                p.setBrush(Qt::NoBrush);
+                p.setPen(QPen(accent, 2));
+                p.drawRect(clip.adjusted(1, 1, -2, -2));
+            }
         if (sessionMode() && isEntityLocked(entity->id))
         {
             p.setBrush(Qt::NoBrush);
@@ -465,6 +492,25 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             }
             p.drawPolygon(diamond);
         }
+        }
+    }
+
+    if (m_popup)
+    {
+        const int divTop = popupDividerTop();
+        const int divMidY = divTop + kPopupDividerHeight / 2;
+        if (divTop + kPopupDividerHeight >= kRulerHeight && divTop <= bottom)
+        {
+            p.fillRect(QRect(0, divTop, right, kPopupDividerHeight),
+                       QColor(255, 176, 0, 22));
+            p.setPen(QPen(QColor(255, 176, 0, 210), 1.5, Qt::DashLine));
+            p.drawLine(0, divMidY, right, divMidY);
+            p.setFont(small);
+            p.setPen(QColor(255, 196, 64, 220));
+            p.drawText(QRect(8, divTop, std::max(0, right - 16), kPopupDividerHeight),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       QStringLiteral("▲ 正轨道(上层)  |  父实体基准  |  ▼ 负轨道(下层)"));
+        }
     }
 
     if (m_dragMode == DragMode::MoveClip && m_moved)
@@ -472,9 +518,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         // activeEntities() is the live preview in both modes, so the marker
         // tracks the row under the pointer while dragging.
         const Entity* dragged = findEntity(activeEntities(), m_dragEntity);
-        const QVector<EntityId> ids = rowIds();
-        const int row = dragged ? ids.indexOf(dragged->id) : -1;
-        if (row >= 0)
+        const int row = dragged ? rowOfEntity(*dragged) : kInvalidRow;
+        if (isValidRow(row))
         {
             const int y = rowTop(row);
             p.setPen(QPen(accent.lighter(130), 2));
@@ -482,9 +527,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
-    const bool noEntities =
-        std::none_of(rows.begin(), rows.end(),
-                     [](EntityId id) { return id != kInvalidEntity; });
+    const bool noEntities = !hasAnyEntity;
     if (noEntities)
     {
         p.setPen(dim);

@@ -56,7 +56,6 @@ class TimelinePanel;
 class VideoProxyGenerator;
 class Viewport;
 class WorkbenchPanel;
-class WorkbenchPanelHost;
 
 // Crash recovery choices for the session shell.  The store scans uncommitted
 // text when the project opens; the shell asks before touching anything.
@@ -122,7 +121,6 @@ public:
     TimelinePanel* timelineForTest() const { return m_timeline; }
     PropertiesPanel* propertiesForTest() const { return m_props; }
     WorkbenchPanel* workbenchForTest() const { return m_workbench; }
-    WorkbenchPanelHost* workbenchHostForTest() const { return m_workbenchHost; }
     next::HistoryPanel* historyPanelForTest() const { return m_sessionHistory; }
     SettingsDialog* openSessionSettingsDialogForTest();
     // Absolute `.cache` path (or one of its subdirectories) for the open
@@ -327,7 +325,6 @@ private:
     QScrollArea* m_objectTab = nullptr;
     TimelinePanel* m_timeline = nullptr;
     WorkbenchPanel* m_workbench = nullptr;
-    WorkbenchPanelHost* m_workbenchHost = nullptr;
     CameraMonitor* m_monitor = nullptr;
     McpLogPanel* m_mcpLog = nullptr;
     PerfMonitorWindow* m_perfWindow = nullptr;
@@ -338,10 +335,15 @@ private:
     QAction* m_mcpLogAction = nullptr;
     QAction* m_settingsAction = nullptr;
     QAction* m_historyAction = nullptr;
+    QDockWidget* m_stageDock = nullptr;
+    QDockWidget* m_propsDock = nullptr;
+    QDockWidget* m_timelineDock = nullptr;
     QDockWidget* m_sessionHistoryDock = nullptr;
     next::HistoryPanel* m_sessionHistory = nullptr;
     SettingsDialog* m_sessionSettingsDialog = nullptr;
     bool m_sessionAiStopped = false;
+    bool m_hadCamera = false;
+    bool sessionHasCamera() const;
     int m_sessionAiBusyWrites = 0;
     QHash<QString, int> m_sessionRunningWrites;
     QHash<QString, QString> m_sessionRunningToolArgs;

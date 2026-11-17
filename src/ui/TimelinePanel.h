@@ -103,6 +103,7 @@ public:
     int selectedKeyframeCount() const { return int(m_selectedKeyframes.size()); }
     QVector<KeyframeSelection> selectedKeyframes() const { return m_selectedKeyframes; }
     QRect rowButtonRect(int row, int index) const;
+    QRect clipButtonRect(const Entity& entity, int index) const;
 #ifdef PVFORGE_TEST_HOOKS
     int frameXForTest(double frame) const
     {
@@ -350,7 +351,11 @@ private:
 
     // Row and range helpers.
     QVector<EntityId> rowIds() const;
+    QVector<const Entity*> entitiesInRow(int row) const;
     EntityId entityAtRow(int row) const;
+    bool isValidRow(int row) const;
+    void popupTrackBounds(int* minNeg, int* maxPos) const;
+    int popupDividerTop() const;
     int rowAt(int y) const;
     int rowTop(int row) const;
     QString searchFilter() const;
@@ -501,6 +506,8 @@ private:
     // at zero so the existing coordinate helpers keep one shared origin.
     static constexpr int kNameWidth = 0;
     static constexpr int kRowHeight = 30;
+    static constexpr int kPopupDividerHeight = 14;
+    static constexpr int kInvalidRow = -1000000;
     static constexpr int kRulerHeight = 28;
     static constexpr int kScrollBarSize = 14;
     static constexpr int kPlusWidth = 30;

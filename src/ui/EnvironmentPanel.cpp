@@ -50,7 +50,7 @@ void EnvironmentPanel::refresh()
 
     const QString value = m_session->settings().background;
     const QColor color(value);
-    m_backgroundColor = color.isValid() ? color : QColor(0x10, 0x10, 0x14);
+    m_backgroundColor = color.isValid() ? color : QColor(0xFF, 0xFF, 0xFF);
     setColorButton(m_backgroundColor);
 }
 

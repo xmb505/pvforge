@@ -36,7 +36,7 @@ struct ProjectSettings
     int width = 1920;
     int height = 1080;
     int fps = 30;
-    QString background = QStringLiteral("#101014");
+    QString background = QStringLiteral("#FFFFFF");
     QJsonObject extras;
 };
 

@@ -5,6 +5,7 @@
 #include "assets/AssetStore.h"
 #include "core/PerfMonitor.h"
 #include "next/app/MediaServices.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
 #include "next/core/Document.h"
@@ -122,10 +123,14 @@ QImage Viewport::ensureSessionImage()
     if (!m_session)
         return {};
 
-    const QSize targetSize = size();
+    const int expand = sessionExpandPercent();
+    const qreal dpr = std::max<qreal>(1.0, devicePixelRatioF());
+    const QSizeF sceneSize = expand > 0 ? sessionSceneRect().size() : QSizeF(size());
+    const QSize targetSize(
+        std::clamp(int(std::lround(sceneSize.width() * dpr)), 1, 8192),
+        std::clamp(int(std::lround(sceneSize.height() * dpr)), 1, 8192));
     const int frame = m_session->playhead();
     const Uuid camera;
-    const int expand = sessionExpandPercent();
 
     if (m_sessionImageValid && m_sessionImageSize == targetSize
         && m_sessionImageFrame == frame && m_sessionImageCamera == camera
@@ -278,14 +283,48 @@ void Viewport::paintSession(QPainter& p)
 
     p.fillRect(canvas.translated(6, 6), QColor(0, 0, 0, 90));
 
-    const QImage image = ensureSessionImage();
+    bool presented = false;
+    const bool playing =
+        m_session && m_session->playback() && m_session->playback()->isPlaying();
+    if (playing)
+    {
+        const QImage image = ensureSessionImage();
 
-    perf::Scope paintScope("视口绘制", perf::Category::Paint);
-    QRectF target = rect();
-    if (expand > 0)
-        target = sessionSceneRect();
-    if (!image.isNull())
-        p.drawImage(target, image);
+        perf::Scope paintScope("视口绘制", perf::Category::Paint);
+        QRectF target = rect();
+        if (expand > 0)
+            target = sessionSceneRect();
+        if (!image.isNull())
+        {
+            p.save();
+            p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            p.drawImage(target, image);
+            p.restore();
+            presented = !m_sessionMediaMissing;
+        }
+    }
+    else if (m_session)
+    {
+        perf::Scope paintScope("视口直绘", perf::Category::Paint);
+        render2::Options options;
+        options.projectFrame = m_session->playhead();
+        options.skipHidden = true;
+        options.videoFrame = [this](const Uuid& uuid, double frame) {
+            return m_session->media()
+                       ? m_session->media()->videoFrame(uuid, frame)
+                       : QImage();
+        };
+        options.htmlFrame = [this](const Uuid& uuid, double frame) {
+            return m_session->media()
+                       ? m_session->media()->htmlFrame(uuid, frame)
+                       : QImage();
+        };
+        anim::Cache& cache = m_session->animCache();
+        render2::SceneWorld world(m_session->project(), m_session->assets(), &cache);
+        render2::renderToPainter(p, sessionWorldToScreen(), m_session->project(),
+                                 m_session->assets(), options, world, cache);
+        presented = true;
+    }
 
     p.setPen(QPen(QColor(70, 70, 80), 1));
     p.setBrush(Qt::NoBrush);
@@ -327,7 +366,7 @@ void Viewport::paintSession(QPainter& p)
     PerfMonitor::instance().recordScene(profile.nsecsElapsed() / 1e6);
     PerfMonitor::instance().recordViewport(profile.nsecsElapsed() / 1e6);
 
-    if (!image.isNull() && !m_sessionMediaMissing)
+    if (presented)
         emit framePresented(m_session->playhead());
 }
 

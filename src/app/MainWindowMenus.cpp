@@ -11,7 +11,6 @@
 #include "ui/PropertiesPanel.h"
 #include "ui/Viewport.h"
 #include "ui/WorkbenchPanel.h"
-#include "ui/panels/WorkbenchPanelHost.h"
 
 #include <QAction>
 #include <QDesktopServices>
@@ -243,16 +242,14 @@ void MainWindow::createSessionMenus()
         QKeySequence(QStringLiteral("Ctrl+Shift+W")));
     workbenchAction->setChecked(m_workbench && m_workbench->isVisible());
     connect(workbenchAction, &QAction::toggled, this, [this](bool on) {
-        if (!m_workbenchHost)
+        if (!m_workbench)
             return;
-        if (on)
-            m_workbenchHost->showPanel();
-        else
-            m_workbenchHost->hidePanel();
+        if (on != m_workbench->isVisible())
+            toggleWorkbench();
     });
-    if (m_workbenchHost)
+    if (m_workbench)
     {
-        connect(m_workbenchHost, &WorkbenchPanelHost::visibleChanged, this,
+        connect(m_workbench, &WorkbenchPanel::visibilityChanged, this,
                 [workbenchAction](bool visible) {
                     const QSignalBlocker blocker(workbenchAction);
                     workbenchAction->setChecked(visible);
@@ -260,41 +257,8 @@ void MainWindow::createSessionMenus()
     }
     addAction(workbenchAction);
     viewMenu->addAction(workbenchAction);
-
-    auto* workbenchFloatAction =
-        new QAction(QStringLiteral("浮出工作台"), this);
-    workbenchFloatAction->setObjectName(QStringLiteral("workbenchFloatAction"));
-    workbenchFloatAction->setCheckable(true);
-    workbenchFloatAction->setShortcut(
-        QKeySequence(QStringLiteral("Ctrl+Shift+D")));
-    workbenchFloatAction->setChecked(m_workbenchHost
-                                     && m_workbenchHost->isFloating());
-    workbenchFloatAction->setText(m_workbenchHost
-                                          && m_workbenchHost->isFloating()
-                                      ? QStringLiteral("停靠工作台")
-                                      : QStringLiteral("浮出工作台"));
-    connect(workbenchFloatAction, &QAction::toggled, this, [this](bool on) {
-        if (m_workbenchHost)
-            m_workbenchHost->setFloating(on);
-    });
-    if (m_workbenchHost)
-    {
-        connect(m_workbenchHost, &WorkbenchPanelHost::floatingChanged, this,
-                [workbenchFloatAction](bool floating) {
-                    const QSignalBlocker blocker(workbenchFloatAction);
-                    workbenchFloatAction->setChecked(floating);
-                    workbenchFloatAction->setText(
-                        floating ? QStringLiteral("停靠工作台")
-                                 : QStringLiteral("浮出工作台"));
-                });
-    }
-    addAction(workbenchFloatAction);
-    viewMenu->addAction(workbenchFloatAction);
     if (m_workbench)
-    {
         m_workbench->addAction(workbenchAction);
-        m_workbench->addAction(workbenchFloatAction);
-    }
 
     m_mcpLogAction = new QAction(QStringLiteral("MCP 日志"), this);
     m_mcpLogAction->setObjectName(QStringLiteral("mcpLogAction"));
@@ -326,6 +290,18 @@ void MainWindow::createSessionMenus()
 
     viewMenu->addAction(createPerfMonitorWindowAction());
 
+    if (m_stageDock || m_propsDock || m_timelineDock)
+    {
+        viewMenu->addSeparator();
+        if (m_stageDock)
+            viewMenu->addAction(m_stageDock->toggleViewAction());
+        if (m_propsDock)
+            viewMenu->addAction(m_propsDock->toggleViewAction());
+        if (m_timelineDock)
+            viewMenu->addAction(m_timelineDock->toggleViewAction());
+    }
+
+    viewMenu->addSeparator();
     viewMenu->addAction(m_fitAction);
 
     auto* helpMenu =

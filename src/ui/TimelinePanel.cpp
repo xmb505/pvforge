@@ -61,7 +61,7 @@ TimelinePanel::TimelinePanel(TimelineAdapter* adapter, QWidget* parent)
 
 void TimelinePanel::initPanel()
 {
-    setMinimumHeight(140);
+    setMinimumHeight(80);
     setFocusPolicy(Qt::ClickFocus);
     setMouseTracking(true);
     setAcceptDrops(true);

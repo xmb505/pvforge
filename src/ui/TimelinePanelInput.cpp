@@ -235,7 +235,7 @@ void TimelinePanel::dropEvent(QDropEvent* event)
     if (m_owner >= 0)
         frame = std::min(frame, contentEnd() - 1);
     int row = rowAt(int(std::lround(event->position().y())));
-    if (row < 0)
+    if (!isValidRow(row))
         row = dropRowForY(int(std::lround(event->position().y())));
     const EntityId id = dropAsset(*event->mimeData(), frame, row);
     m_dropActive = false;

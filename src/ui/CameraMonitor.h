@@ -130,7 +130,6 @@ private:
     QLabel* m_fpsLabel = nullptr;
     QToolButton* m_qualityButton = nullptr;
     QToolButton* m_pinButton = nullptr;
-    QToolButton* m_detachButton = nullptr;
     QToolButton* m_closeButton = nullptr;
     QToolButton* m_traceButton = nullptr;
 

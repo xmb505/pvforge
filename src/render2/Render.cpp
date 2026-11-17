@@ -1291,6 +1291,74 @@ QTransform cameraView(const model::Project& project, const Options& options,
     return canvasView(output, quad.boundingRect());
 }
 
+void drawEntitySubtree(QPainter& painter, const model::Project& project,
+                       const assets::AssetStore& store, const Uuid& uuid,
+                       double projectFrame, anim::World& world,
+                       anim::Cache& cache, QSet<Uuid>& visited,
+                       const Options& options, bool parentEditorHidden)
+{
+    if (visited.contains(uuid))
+        return;
+    visited.insert(uuid);
+
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+        return;
+
+    const model::Entity& entity = it.value();
+    // Editor-only visibility: a hidden parent also hides descendants that
+    // inherit visibility, mirroring the `visible` inheritance rule.
+    const bool editorHidden =
+        options.skipHidden
+        && (entity.hidden
+            || (parentEditorHidden && entity.inheritVisibility));
+
+    // Layer Sorter: negative-row children render behind the parent, then the
+    // parent itself, then non-negative-row children on top.
+    const QVector<Uuid> children = model::childrenOf(project, uuid);
+    QVector<Uuid> negChildren;
+    QVector<Uuid> posChildren;
+    for (const Uuid& childUuid : children)
+    {
+        const auto childIt = project.entities.constFind(childUuid);
+        if (childIt != project.entities.constEnd() && childIt->row < 0)
+            negChildren.append(childUuid);
+        else
+            posChildren.append(childUuid);
+    }
+
+    for (const Uuid& childUuid : negChildren)
+    {
+        drawEntitySubtree(painter, project, store, childUuid, projectFrame,
+                          world, cache, visited, options, editorHidden);
+    }
+
+    if (activeAt(entity, projectFrame))
+    {
+        const anim::Pose pose = anim::evaluateEntity(
+            project, uuid, projectFrame, world, cache);
+        if (pose.visible && pose.opacity > 0.0 && !editorHidden)
+        {
+            painter.save();
+            painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
+            painter.setTransform(pose.world, true);
+            // Content (Qt text, images, vector paths) is authored in
+            // local Y-down space; model space is Y-up.  Flip once here,
+            // around the content origin, so content is upright in model
+            // space.  The view transform already did world -> screen.
+            painter.scale(1.0, -1.0);
+            paintContent(painter, entity, store, options, projectFrame);
+            painter.restore();
+        }
+    }
+
+    for (const Uuid& childUuid : posChildren)
+    {
+        drawEntitySubtree(painter, project, store, childUuid, projectFrame,
+                          world, cache, visited, options, editorHidden);
+    }
+}
+
 void drawChildren(QPainter& painter, const model::Project& project,
                   const assets::AssetStore& store, const Uuid& parentUuid,
                   double projectFrame, anim::World& world, anim::Cache& cache,
@@ -1300,42 +1368,8 @@ void drawChildren(QPainter& painter, const model::Project& project,
     const QVector<Uuid> children = model::childrenOf(project, parentUuid);
     for (const Uuid& uuid : children)
     {
-        if (visited.contains(uuid))
-            continue;
-        visited.insert(uuid);
-
-        const auto it = project.entities.constFind(uuid);
-        if (it == project.entities.constEnd())
-            continue;
-
-        const model::Entity& entity = it.value();
-        // Editor-only visibility: a hidden parent also hides descendants that
-        // inherit visibility, mirroring the `visible` inheritance rule.
-        const bool editorHidden =
-            options.skipHidden
-            && (entity.hidden
-                || (parentEditorHidden && entity.inheritVisibility));
-        if (activeAt(entity, projectFrame))
-        {
-            const anim::Pose pose = anim::evaluateEntity(
-                project, uuid, projectFrame, world, cache);
-            if (pose.visible && pose.opacity > 0.0 && !editorHidden)
-            {
-                painter.save();
-                painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
-                painter.setTransform(pose.world, true);
-                // Content (Qt text, images, vector paths) is authored in
-                // local Y-down space; model space is Y-up.  Flip once here,
-                // around the content origin, so content is upright in model
-                // space.  The view transform already did world -> screen.
-                painter.scale(1.0, -1.0);
-                paintContent(painter, entity, store, options, projectFrame);
-                painter.restore();
-            }
-        }
-
-        drawChildren(painter, project, store, uuid, projectFrame, world, cache,
-                     visited, options, editorHidden);
+        drawEntitySubtree(painter, project, store, uuid, projectFrame, world,
+                          cache, visited, options, parentEditorHidden);
     }
 }
 
@@ -1472,6 +1506,36 @@ QImage renderFrame(const model::Project& project,
                  cache, visited, options, false);
     painter.end();
     return image;
+}
+
+void renderToPainter(QPainter& painter, const QTransform& worldToScreen,
+                     const model::Project& project,
+                     const assets::AssetStore& assets, const Options& options,
+                     anim::World& world, anim::Cache& cache)
+{
+    perf::Scope renderScope("场景直绘", perf::Category::Render2);
+    QColor background = options.background;
+    if (!background.isValid())
+        background = QColor(project.settings.background);
+    if (!background.isValid())
+        background = Qt::white;
+
+    const double canvasWidth = double(std::max(1, project.settings.width));
+    const double canvasHeight = double(std::max(1, project.settings.height));
+    const QRectF projectCanvas(-canvasWidth / 2.0, -canvasHeight / 2.0,
+                               canvasWidth, canvasHeight);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setTransform(worldToScreen, true);
+    painter.fillRect(projectCanvas, background);
+
+    QSet<Uuid> visited;
+    drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
+                 cache, visited, options, false);
+    painter.restore();
 }
 
 QString assetPlaceholderLabel(const assets::AssetStore& store,

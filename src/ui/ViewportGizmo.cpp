@@ -594,6 +594,7 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
     // fallback untouched outside the edited frame.
     m_sessionDragChanged =
         !transformsEqual(sessionGizmoTransform(entity), m_sessionDragTransform);
+    m_session->animCache().clear();
     invalidateSessionImage();
     update();
 }

@@ -61,10 +61,13 @@ void AssetLibraryPanel::setCompactMode(bool compact)
         m_info->setVisible(!compact);
     if (m_list)
     {
-        m_list->setMinimumHeight(compact ? 48 : 140);
-        m_list->setIconSize(compact ? QSize(30, 30) : QSize(40, 40));
+        m_list->setMinimumHeight(compact ? 24 : 140);
+        m_list->setIconSize(compact ? QSize(28, 28) : QSize(40, 40));
     }
     setMinimumWidth(compact ? 0 : minimumWidth());
+    setMinimumHeight(compact ? 60 : 0);
+    setSizePolicy(QSizePolicy::Preferred,
+                  compact ? QSizePolicy::Ignored : QSizePolicy::Preferred);
 }
 
 void AssetLibraryPanel::buildUi()

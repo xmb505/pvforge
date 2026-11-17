@@ -43,6 +43,63 @@ void TimelinePanel::assignMissingRows()
         return;
 }
 
+bool TimelinePanel::isValidRow(int row) const
+{
+    return m_popup ? row != kInvalidRow : row >= 0;
+}
+
+QVector<const Entity*> TimelinePanel::entitiesInRow(int row) const
+{
+    QVector<const Entity*> result;
+    if (!isValidRow(row))
+        return result;
+    for (const Entity& entity : activeEntities())
+    {
+        const bool dangling = entity.parent != kInvalidEntity
+                              && entityById(entity.parent) == nullptr;
+        if (entity.parent != m_owner
+            && !(m_owner == kInvalidEntity && dangling))
+            continue;
+        if (!rowMatchesFilter(entity))
+            continue;
+        if (rowOfEntity(entity) == row)
+            result.append(&entity);
+    }
+    return result;
+}
+
+void TimelinePanel::popupTrackBounds(int* minNeg, int* maxPos) const
+{
+    int minOccupiedNeg = 0;
+    int maxOccupiedPos = -1;
+    for (const Entity& entity : activeEntities())
+    {
+        if (entity.parent != m_owner)
+            continue;
+        const int r = rowOfEntity(entity);
+        if (r < 0)
+            minOccupiedNeg = std::min(minOccupiedNeg, r);
+        else
+            maxOccupiedPos = std::max(maxOccupiedPos, r);
+    }
+    // Always keep at least 1 negative track (-1) and 1 positive track (0 -> +1);
+    // auto-expand by 1 empty track whenever the outermost track is occupied.
+    const int neg = minOccupiedNeg < 0 ? minOccupiedNeg - 1 : -1;
+    const int pos = maxOccupiedPos >= 0 ? maxOccupiedPos + 1 : 0;
+    if (minNeg)
+        *minNeg = neg;
+    if (maxPos)
+        *maxPos = pos;
+}
+
+int TimelinePanel::popupDividerTop() const
+{
+    int minNeg = -1;
+    popupTrackBounds(&minNeg, nullptr);
+    const int negCount = -minNeg;
+    return bodyBottom() - negCount * kRowHeight + m_scrollY - kPopupDividerHeight;
+}
+
 QVector<EntityId> TimelinePanel::rowIds() const
 {
     QHash<int, EntityId> byRow;
@@ -59,7 +116,8 @@ QVector<EntityId> TimelinePanel::rowIds() const
         const int row = rowOfEntity(entity);
         if (row < 0)
             continue;
-        byRow.insert(row, entity.id);
+        if (!byRow.contains(row))
+            byRow.insert(row, entity.id);
         maxRow = std::max(maxRow, row);
     }
 
@@ -76,12 +134,23 @@ QVector<EntityId> TimelinePanel::rowIds() const
 
 EntityId TimelinePanel::entityAtRow(int row) const
 {
-    const QVector<EntityId> ids = rowIds();
-    return row >= 0 && row < ids.size() ? ids[row] : kInvalidEntity;
+    const QVector<const Entity*> list = entitiesInRow(row);
+    return list.isEmpty() ? kInvalidEntity : list.first()->id;
 }
 
 int TimelinePanel::rowTop(int row) const
 {
+    if (m_popup)
+    {
+        int minNeg = -1;
+        popupTrackBounds(&minNeg, nullptr);
+        if (row < 0)
+        {
+            const int negIndex = row - minNeg; // 0 = bottom-most, negCount-1 = -1
+            return bodyBottom() - (negIndex + 1) * kRowHeight + 1 + m_scrollY;
+        }
+        return popupDividerTop() - (row + 1) * kRowHeight + 1;
+    }
     // Bottom-up: row 0 sits on the body bottom, larger rows stack upwards.
     return bodyBottom() - (row + 1) * kRowHeight + 1 + m_scrollY;
 }
@@ -188,13 +257,50 @@ void TimelinePanel::handleRowButton(int row, int index)
 int TimelinePanel::rowAt(int y) const
 {
     if (y < kRulerHeight || y >= bodyBottom())
-        return -1;
+        return kInvalidRow;
+    if (m_popup)
+    {
+        int minNeg = -1;
+        int maxPos = 0;
+        popupTrackBounds(&minNeg, &maxPos);
+        const int divTop = popupDividerTop();
+        const int divBot = divTop + kPopupDividerHeight;
+        if (y >= divTop && y < divBot)
+            return kInvalidRow;
+        if (y < divTop)
+        {
+            const int row = (divTop - y) / kRowHeight;
+            return (row >= 0 && row <= maxPos) ? row : kInvalidRow;
+        }
+        const int negIndex = (bodyBottom() - y + m_scrollY) / kRowHeight;
+        const int row = minNeg + negIndex;
+        return (row >= minNeg && row <= -1) ? row : kInvalidRow;
+    }
     const int row = (bodyBottom() - y + m_scrollY) / kRowHeight;
-    return row >= 0 && row < rowIds().size() ? row : -1;
+    return row >= 0 && row < rowIds().size() ? row : kInvalidRow;
 }
 
 int TimelinePanel::dropRowForY(int y) const
 {
+    if (m_popup)
+    {
+        int minNeg = -1;
+        int maxPos = 0;
+        popupTrackBounds(&minNeg, &maxPos);
+        const int divMid = popupDividerTop() + kPopupDividerHeight / 2;
+        if (y < divMid)
+        {
+            if (y < kRulerHeight)
+                return maxPos;
+            const int divTop = popupDividerTop();
+            const int row = std::max(0, (divTop - y) / kRowHeight);
+            return std::min(row, maxPos);
+        }
+        if (y >= bodyBottom())
+            return minNeg;
+        const int negIndex = std::max(0, (bodyBottom() - y + m_scrollY) / kRowHeight);
+        return std::clamp(minNeg + negIndex, minNeg, -1);
+    }
     const int highest = highestRowForDrop();
     if (y < kRulerHeight)
         return highest + 1;
@@ -314,9 +420,13 @@ int TimelinePanel::contentEnd() const
 
 QRect TimelinePanel::clipRect(const Entity& entity) const
 {
-    const QVector<EntityId> ids = rowIds();
-    const int row = ids.indexOf(entity.id);
-    if (row < 0)
+    const bool dangling = entity.parent != kInvalidEntity
+                          && entityById(entity.parent) == nullptr;
+    if (entity.parent != m_owner
+        && !(m_owner == kInvalidEntity && dangling))
+        return QRect();
+    const int row = rowOfEntity(entity);
+    if (!isValidRow(row))
         return QRect();
     const int start = std::max(clipStartOf(entity), contentStart());
     const int end = std::min(clipEndOf(entity), contentEnd());
@@ -434,9 +544,17 @@ void TimelinePanel::clampScroll()
         m_hScroll->setVisible(true);
     }
 
-    const int rows = int(rowIds().size());
+    int totalContentHeight = int(rowIds().size()) * kRowHeight;
+    if (m_popup)
+    {
+        int minNeg = -1;
+        int maxPos = 0;
+        popupTrackBounds(&minNeg, &maxPos);
+        totalContentHeight =
+            ((-minNeg) + (maxPos + 1)) * kRowHeight + kPopupDividerHeight;
+    }
     const int bodyHeight = std::max(0, bodyBottom() - kRulerHeight);
-    const int maxY = std::max(0, rows * kRowHeight - bodyHeight);
+    const int maxY = std::max(0, totalContentHeight - bodyHeight);
     m_scrollY = std::clamp(m_scrollY, 0, maxY);
     if (m_vScroll)
     {
@@ -530,14 +648,11 @@ QRect TimelinePanel::markerRect(int index) const
     return QRect(x + 1, kRulerHeight - 14, markerWidth, 12);
 }
 
-QRect TimelinePanel::rowButtonRect(int row, int index) const
+QRect TimelinePanel::clipButtonRect(const Entity& entity, int index) const
 {
     if (index < 0 || index > 2)
         return QRect();
-    const Entity* entity = entityById(entityAtRow(row));
-    if (!entity)
-        return QRect();
-    const QRect clip = clipRect(*entity);
+    const QRect clip = clipRect(entity);
     if (clip.isEmpty())
         return QRect();
     // The old row buttons now live inside the clip's left edge.
@@ -546,25 +661,29 @@ QRect TimelinePanel::rowButtonRect(int row, int index) const
     return QRect(x, y, kButtonSize, kButtonSize);
 }
 
-int TimelinePanel::hitKeyframeRow(int row, int x, int y) const
+QRect TimelinePanel::rowButtonRect(int row, int index) const
 {
     const Entity* entity = entityById(entityAtRow(row));
-    if (!entity)
-        return -1;
-    // A keyframe hit must land on the diamond band, not only near its X.
-    // This stops right-clicking a clip body from opening keyframe actions.
-    const QRect clip = clipRect(*entity);
-    if (clip.isEmpty() || std::abs(y - clip.center().y()) > 9)
-        return -1;
+    return entity ? clipButtonRect(*entity, index) : QRect();
+}
+
+int TimelinePanel::hitKeyframeRow(int row, int x, int y) const
+{
     int best = -1;
     int bestDistance = 10;
-    for (int frame : keyframeFrames(*entity))
+    for (const Entity* entity : entitiesInRow(row))
     {
-        const int distance = std::abs(x - xFromFrame(frame));
-        if (distance <= bestDistance)
+        const QRect clip = clipRect(*entity);
+        if (clip.isEmpty() || std::abs(y - clip.center().y()) > 9)
+            continue;
+        for (int frame : keyframeFrames(*entity))
         {
-            bestDistance = distance;
-            best = frame;
+            const int distance = std::abs(x - xFromFrame(frame));
+            if (distance <= bestDistance)
+            {
+                bestDistance = distance;
+                best = frame;
+            }
         }
     }
     return best;
@@ -572,11 +691,13 @@ int TimelinePanel::hitKeyframeRow(int row, int x, int y) const
 
 EntityId TimelinePanel::hitClipRow(int row, int x) const
 {
-    const Entity* entity = entityById(entityAtRow(row));
-    if (!entity)
-        return kInvalidEntity;
-    const QRect clip = clipRect(*entity);
-    return clip.contains(x, clip.center().y()) ? entity->id : kInvalidEntity;
+    for (const Entity* entity : entitiesInRow(row))
+    {
+        const QRect clip = clipRect(*entity);
+        if (clip.contains(x, clip.center().y()))
+            return entity->id;
+    }
+    return kInvalidEntity;
 }
 
 } // namespace pvf

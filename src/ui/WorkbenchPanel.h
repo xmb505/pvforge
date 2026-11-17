@@ -63,7 +63,6 @@ signals:
     void created(EntityId id);
     void sessionCreated(const Uuid& uuid);
     // User intent from the built-in header.
-    void floatToggleRequested();
     void hideRequested();
     void dockRequested();
     void visibilityChanged(bool visible);
@@ -113,7 +112,6 @@ private:
     QWidget* m_ignoreWidget = nullptr;
     QWidget* m_header = nullptr;
     QLabel* m_title = nullptr;
-    QToolButton* m_floatButton = nullptr;
     QToolButton* m_closeButton = nullptr;
     QShortcut* m_escapeShortcut = nullptr;
     bool m_floating = false;

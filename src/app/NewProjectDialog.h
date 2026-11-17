@@ -6,6 +6,7 @@ class QComboBox;
 class QLineEdit;
 class QPushButton;
 class QLabel;
+class QSpinBox;
 
 namespace pvf {
 
@@ -30,6 +31,8 @@ private:
     QLineEdit* m_name = nullptr;
     QLineEdit* m_location = nullptr;
     QComboBox* m_resolution = nullptr;
+    QSpinBox* m_width = nullptr;
+    QSpinBox* m_height = nullptr;
     QComboBox* m_fps = nullptr;
     QLabel* m_targetHint = nullptr;
     QPushButton* m_create = nullptr;

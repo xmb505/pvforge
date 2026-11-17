@@ -186,9 +186,13 @@ public:
             return;
         }
 
-        const int rows = std::max(1, int(m_panel->rowIds().size()));
+        int minNeg = -1;
+        int maxPos = 0;
+        m_panel->popupTrackBounds(&minNeg, &maxPos);
+        const int rows = std::max(2, (-minNeg) + (maxPos + 1));
         int height = 30 + TimelinePanel::kRulerHeight
                      + rows * TimelinePanel::kRowHeight
+                     + TimelinePanel::kPopupDividerHeight
                      + TimelinePanel::kScrollBarSize;
         height = std::clamp(height, 140, 360);
         int y = m_source->mapTo(host, QPoint(0, clip.top())).y() - height - 6;

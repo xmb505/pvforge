@@ -31,7 +31,7 @@ private:
 
     EditorSession* m_session = nullptr;
     QPushButton* m_background = nullptr;
-    QColor m_backgroundColor{0x10, 0x10, 0x14};
+    QColor m_backgroundColor{0xFF, 0xFF, 0xFF};
 };
 
 } // namespace pvf

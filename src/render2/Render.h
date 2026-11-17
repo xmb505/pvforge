@@ -97,6 +97,13 @@ private:
 QImage renderFrame(const model::Project& project, const assets::AssetStore& assets,
                    const Options& options, anim::World& world, anim::Cache& cache);
 
+// Draws directly onto an existing QPainter using `worldToScreen` so vector
+// shapes and text stay sharp at any viewport zoom level.
+void renderToPainter(QPainter& painter, const QTransform& worldToScreen,
+                     const model::Project& project,
+                     const assets::AssetStore& assets, const Options& options,
+                     anim::World& world, anim::Cache& cache);
+
 // Label shown when an asset entity has no drawable picture, or "素材丢失"
 // when the asset metadata/content is gone.  An empty string means the image
 // asset is drawable.

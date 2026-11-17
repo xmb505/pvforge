@@ -74,17 +74,6 @@ QWidget* WorkbenchPanel::buildHeader()
     layout->addWidget(m_title);
     layout->addStretch(1);
 
-    m_floatButton = new QToolButton(header);
-    m_floatButton->setObjectName(QStringLiteral("workbenchFloatButton"));
-    m_floatButton->setAutoRaise(true);
-    m_floatButton->setFocusPolicy(Qt::NoFocus);
-    m_floatButton->setFixedHeight(18);
-    m_floatButton->setText(QStringLiteral("浮出"));
-    m_floatButton->setToolTip(QStringLiteral("浮出为独立窗口"));
-    connect(m_floatButton, &QToolButton::clicked, this,
-            &WorkbenchPanel::floatToggleRequested);
-    layout->addWidget(m_floatButton);
-
     m_closeButton = new QToolButton(header);
     m_closeButton->setObjectName(QStringLiteral("workbenchCloseButton"));
     m_closeButton->setAutoRaise(true);
@@ -277,17 +266,8 @@ void WorkbenchPanel::setFloatingChrome(bool floating)
         setGraphicsEffect(shadow);
     }
 
-    if (m_floatButton)
-    {
-        m_floatButton->setText(floating ? QStringLiteral("停靠")
-                                        : QStringLiteral("浮出"));
-        m_floatButton->setToolTip(floating
-                                      ? QStringLiteral("停靠回视口")
-                                      : QStringLiteral("浮出为独立窗口"));
-    }
     if (m_closeButton)
-        m_closeButton->setToolTip(floating ? QStringLiteral("隐藏工作台窗口")
-                                           : QStringLiteral("关闭工作台"));
+        m_closeButton->setToolTip(QStringLiteral("关闭工作台"));
     if (m_escapeShortcut)
         m_escapeShortcut->setEnabled(floating);
     if (floating)

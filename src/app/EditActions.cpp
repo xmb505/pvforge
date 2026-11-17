@@ -161,17 +161,22 @@ bool EditActions::planMove(const QVector<Uuid>& roots, int deltaFrames,
 bool EditActions::planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
                                 EditPlan* plan, QString* error) const
 {
-    if (row < 0)
-    {
-        setError(error, QStringLiteral("目标行不能小于 0"));
-        return false;
-    }
     // Reuse planMove for the time shift, the subtree and every lock/parent
     // check; only the row assignment differs.
     EditPlan moved;
     if (!planMove({uuid}, deltaFrames, {}, &moved, error))
         return false;
     const auto source = moved.project.entities.constFind(uuid);
+    if (source == moved.project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在"));
+        return false;
+    }
+    if (source->parentUuid.isEmpty() && row < 0)
+    {
+        setError(error, QStringLiteral("主时间轴目标行不能小于 0"));
+        return false;
+    }
     if (source == moved.project.entities.constEnd())
     {
         setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
