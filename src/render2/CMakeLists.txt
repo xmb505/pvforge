@@ -39,6 +39,7 @@ endif()
 # do not depend on core/Project.h.
 add_library(pvf_render2 STATIC
     Render.cpp
+    RenderScene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/VectorShape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/TextStyle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/TextBlock.cpp

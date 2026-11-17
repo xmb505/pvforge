@@ -43,7 +43,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     const int row = rowAt(int(pos.y()));
-    const EntityId id = entityAtRow(row);
+    const int pressX = int(std::lround(pos.x()));
+    const EntityId id = hitClipRow(row, pressX);
     const Entity* entity = entityById(id);
 
     // Inline clip buttons win over trim/keyframe gestures, but only where
@@ -52,14 +53,13 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     {
         for (int index = 0; index < 3; ++index)
         {
-            if (rowButtonRect(row, index).contains(pos.toPoint()))
+            if (clipButtonRect(*entity, index).contains(pos.toPoint()))
             {
                 handleRowButton(row, index);
                 return;
             }
         }
     }
-    const int pressX = int(std::lround(pos.x()));
     if (!entity)
     {
         m_dragMode = DragMode::PendingSelect;
@@ -156,7 +156,34 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         }
         if (clip.contains(pos.toPoint()))
         {
-            selectEntity(id, true);
+            const bool multiMod =
+                (event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
+                != 0;
+            if (multiMod)
+            {
+                if (m_entitySelection.contains(id))
+                {
+                    m_entitySelection.remove(id);
+                    if (m_selected == id)
+                        m_selected = m_entitySelection.isEmpty()
+                                         ? kInvalidEntity
+                                         : *m_entitySelection.constBegin();
+                    if (m_selected != kInvalidEntity)
+                        emit entitySelected(m_selected);
+                }
+                else
+                {
+                    if (m_selected != kInvalidEntity)
+                        m_entitySelection.insert(m_selected);
+                    m_entitySelection.insert(id);
+                    m_selected = id;
+                    emit entitySelected(id);
+                }
+                update();
+                return;
+            }
+            if (!m_entitySelection.contains(id))
+                selectEntity(id, true);
             m_selectedKeyframes.clear();
             emit keyframeSelectionChanged(m_selectedKeyframes);
             m_dragMode = DragMode::MoveClip;
@@ -219,14 +246,14 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
             return;
         }
         const int row = rowAt(int(event->position().y()));
-        const Entity* entity = entityById(entityAtRow(row));
+        const int x = int(std::lround(event->position().x()));
+        const Entity* entity = entityById(hitClipRow(row, x));
         m_hoverRow = row;
         m_hoverLeft = false;
         m_hoverRight = false;
         if (entity)
         {
             const QRect clip = clipRect(*entity);
-            const int x = int(std::lround(event->position().x()));
             const int startFrame = clipStartOf(*entity);
             const int endFrame = clipEndOf(*entity);
             setToolTip(QStringLiteral("%1\n%2–%3 帧 · 时长 %4 帧")

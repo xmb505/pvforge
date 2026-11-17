@@ -268,19 +268,33 @@ int TimelinePanel::promptReparentMode(const Uuid& target)
 
 void TimelinePanel::deleteSelectedEntities()
 {
-    if (!m_session || !m_session->editActions() || m_selected == kInvalidEntity)
+    if (!m_session || !m_session->editActions())
         return;
-    const Uuid uuid = uuidForEntityId(m_selected);
-    if (uuid.isEmpty())
+    QVector<Uuid> uuids;
+    for (EntityId id : m_entitySelection)
+    {
+        const Uuid uuid = uuidForEntityId(id);
+        if (!uuid.isEmpty() && !uuids.contains(uuid))
+            uuids.append(uuid);
+    }
+    if (uuids.isEmpty() && m_selected != kInvalidEntity)
+    {
+        const Uuid uuid = uuidForEntityId(m_selected);
+        if (!uuid.isEmpty())
+            uuids.append(uuid);
+    }
+    if (uuids.isEmpty())
         return;
     QString error;
-    if (!m_session->editActions()->deleteEntities({uuid}, true, this, &error))
+    if (!m_session->editActions()->deleteEntities(uuids, true, this, &error))
     {
         if (!error.isEmpty())
             emit editFailed(error);
         return;
     }
-    emit editCommitted(QStringLiteral("删除片段"));
+    emit editCommitted(uuids.size() > 1
+                           ? QStringLiteral("删除 %1 个片段").arg(uuids.size())
+                           : QStringLiteral("删除片段"));
 }
 
 void TimelinePanel::finishSessionDrag()
