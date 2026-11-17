@@ -68,6 +68,16 @@ void rulerSteps(double pixelsPerFrame, int* tickStep, int* labelStep)
         *tickStep = 50;
         *labelStep = 200;
     }
+    if (pixelsPerFrame < 0.15)
+    {
+        *tickStep = 100;
+        *labelStep = 500;
+    }
+    if (pixelsPerFrame < 0.05)
+    {
+        *tickStep = 500;
+        *labelStep = 2000;
+    }
 }
 
 SecondsGrid secondsGrid(int fps, double pixelsPerFrame)

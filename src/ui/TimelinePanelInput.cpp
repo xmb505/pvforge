@@ -44,7 +44,7 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
     if (event->modifiers() & Qt::ControlModifier)
     {
         const double old = m_pixelsPerFrame;
-        double next = std::clamp(old * std::pow(2.0, steps), 0.25, 32.0);
+        double next = std::clamp(old * std::pow(2.0, steps), 0.02, 32.0);
         if (next > 1.0)
             next = std::round(next);
         if (std::abs(next - old) < 1e-6)

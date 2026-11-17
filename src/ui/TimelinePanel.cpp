@@ -325,7 +325,7 @@ void TimelinePanel::setDisplayFrames(bool frames)
 #ifdef PVFORGE_TEST_HOOKS
 void TimelinePanel::setPixelsPerFrameForTest(double pixels)
 {
-    m_pixelsPerFrame = std::clamp(pixels, 0.25, 32.0);
+    m_pixelsPerFrame = std::clamp(pixels, 0.02, 32.0);
     clampScroll();
     update();
     syncPopups();
