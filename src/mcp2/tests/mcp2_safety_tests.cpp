@@ -37,6 +37,8 @@ struct Fixture
         }
         store = std::move(*created);
         service = std::make_unique<mcp2::Service>(&*store, &store->assets());
+        // These tests exercise data safety, not the human-confirmation dialog.
+        service->setExternalImportConfirmer([](const QString&) { return true; });
         return true;
     }
 
@@ -134,17 +136,15 @@ void Mcp2SafetyTests::commitFailureRollsBackCleanly()
     QVERIFY(!first.isEmpty());
     const int historyBefore = fixture.historySize();
 
-    const QString hookPath =
-        fixture.store->root() + QStringLiteral("/.git/hooks/pre-commit");
-    QFile hook(hookPath);
-    QVERIFY(hook.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    hook.write("#!/bin/sh\necho rollback-boom >&2\nexit 1\n");
-    hook.close();
-    QVERIFY(QFile::setPermissions(
-        hookPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                      | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                      | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                      | QFileDevice::ExeOther));
+    // A stale index.lock is an environmental commit failure that the
+    // hardened Git path cannot bypass. Project hooks are deliberately ignored
+    // now (issue #121), so they can no longer be used as the failure injection.
+    const QString lockPath =
+        fixture.store->root() + QStringLiteral("/.git/index.lock");
+    QFile lock(lockPath);
+    QVERIFY(lock.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    lock.write("lock");
+    lock.close();
 
     const QJsonObject result = fixture.call(
         QStringLiteral("entity.create"),
@@ -166,7 +166,7 @@ void Mcp2SafetyTests::commitFailureRollsBackCleanly()
             .entryList({QStringLiteral("*.json")}, QDir::Files);
     QCOMPARE(files.size(), 1);
 
-    QVERIFY(QFile::remove(hookPath));
+    QVERIFY(QFile::remove(lockPath));
     const QJsonObject retry = fixture.call(
         QStringLiteral("entity.create"),
         entityArgs(QStringLiteral("重试成功"), 0, 30));
@@ -208,8 +208,7 @@ void Mcp2SafetyTests::assetDeleteTrashesAndUndoRestores()
 
     const QJsonObject imported = fixture.call(
         QStringLiteral("asset.import"),
-        QJsonObject{{QStringLiteral("path"), imagePath},
-                    {QStringLiteral("confirm"), true}});
+        QJsonObject{{QStringLiteral("path"), imagePath}});
     QVERIFY2(imported.value(QStringLiteral("ok")).toBool(),
              qPrintable(errorCode(imported)));
     const QString hash = imported.value(QStringLiteral("data"))

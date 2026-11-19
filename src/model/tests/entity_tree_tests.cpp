@@ -375,6 +375,7 @@ void testSolverTargetChainDepthLimit()
     {
         Entity entity = makeEntity(0, 30);
         entity.uuid = ids.at(i);
+        entity.row = i; // unique layers: this test targets solver depth, not rows
         if (i + 1 < kNodes)
         {
             SolverSegment segment;

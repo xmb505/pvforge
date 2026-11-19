@@ -309,6 +309,7 @@ void StoreSafetyTests::crossRootWriteRollsBackOnFailure()
 
     model::Entity first = makeEntity(QStringLiteral("一"), 0, 100);
     model::Entity second = makeEntity(QStringLiteral("二"), 0, 100);
+    second.row = 1;
     model::Entity child = makeEntity(QStringLiteral("子"), 10, 20);
     child.parentUuid = first.uuid;
     store->mutableProject().entities.insert(first.uuid, first);
@@ -364,6 +365,7 @@ void StoreSafetyTests::killBetweenWritesRecoversOnOpen()
 
     model::Entity first = makeEntity(QStringLiteral("一"), 0, 100);
     model::Entity second = makeEntity(QStringLiteral("二"), 0, 100);
+    second.row = 1;
     model::Entity child = makeEntity(QStringLiteral("子"), 10, 20);
     child.parentUuid = first.uuid;
     store->mutableProject().entities.insert(first.uuid, first);
@@ -624,11 +626,17 @@ void StoreSafetyTests::failedCreateRemovesPartialProject()
     const QString fakeGit = temp.filePath(QStringLiteral("bin/git"));
     QVERIFY(writeText(fakeGit,
                       QStringLiteral("#!/bin/sh\n"
+                                     "root=.\n"
+                                     "prev=\n"
+                                     "for arg in \"$@\"; do\n"
+                                     "  [ \"$prev\" = \"-C\" ] && root=\"$arg\"\n"
+                                     "  prev=\"$arg\"\n"
+                                     "done\n"
                                      "case \"$*\" in\n"
                                      "  *--version*) echo 'git version 2.40.0'; exit 0;;\n"
-                                     "  *\" init\"*) mkdir -p .git; exit 0;;\n"
+                                     "  *init*) /bin/mkdir -p \"$root/.git\"; exit 0;;\n"
                                      "  *config*) exit 0;;\n"
-                                     "  *\"add\"*) exit 0;;\n"
+                                     "  *add*) exit 0;;\n"
                                      "  *commit*) echo 'boom' >&2; exit 1;;\n"
                                      "esac\n"
                                      "exit 1\n")));

@@ -205,7 +205,7 @@ std::optional<ProjectStore> ProjectStore::create(
         }
 
         if (!markGitRepository(root, error))
-            return std::nullopt;
+            return fail(error ? *error : QStringLiteral("无法标记 Git 仓库"));
 
         if (!ensureGitIdentity(root, error))
             return fail(error ? *error : QStringLiteral("无法配置 git 身份"));
@@ -809,7 +809,10 @@ bool ProjectStore::commit(const QString& message, QString* error)
     }
 
     if (!ensureTrustedGit(error))
+    {
+        markCommitFailure(error ? *error : QStringLiteral("Git 仓库不可用"));
         return false;
+    }
 
     // Git backs up text project data only. assets/, .cache/ and .trash/ are
     // local and ignored, so they are never staged here.
