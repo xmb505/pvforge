@@ -127,6 +127,46 @@ private slots:
         QVERIFY(document->project().entities.contains(entity.uuid));
     }
 
+    void writeLockRejectsEditsUntilReleased()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString projectDir = temp.path() + QStringLiteral("/locked.pvproj");
+
+        QString error;
+        auto document = ProjectDocument::create(projectDir, ProjectSettings(),
+                                                &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity entity = makeEntity(QStringLiteral("锁"), 0, 30);
+        document->mutableProject().entities.insert(entity.uuid, entity);
+        document->setWritesLocked(true);
+        QVERIFY(document->writesLocked());
+
+        error.clear();
+        QVERIFY(!document->commitEntity(entity.uuid, QStringLiteral("pvf: x"),
+                                        &error));
+        QVERIFY(error.contains(QStringLiteral("导出")));
+
+        error.clear();
+        QVERIFY(!document->commitChanges({entity.uuid}, {},
+                                         QStringLiteral("pvf: x"), &error));
+        QVERIFY(error.contains(QStringLiteral("导出")));
+
+        error.clear();
+        QVERIFY(!document->undo(&error));
+        QVERIFY(error.contains(QStringLiteral("导出")));
+
+        // The export finished: the same edit goes through.
+        document->setWritesLocked(false);
+        error.clear();
+        QVERIFY2(document->commitEntity(entity.uuid, QStringLiteral("pvf: x"),
+                                        &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+    }
+
     void playheadRestoredFromProjectState()
     {
         QTemporaryDir temp;

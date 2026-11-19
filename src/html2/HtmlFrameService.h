@@ -6,7 +6,9 @@
 #include <QFuture>
 #include <QImage>
 #include <QMutex>
+#include <QMutexLocker>
 #include <QObject>
+#include <QRecursiveMutex>
 #include <QSharedPointer>
 #include <QString>
 #include <QVector>
@@ -96,6 +98,15 @@ public:
     bool start(QString* error = nullptr);
     void stop();
     bool isRunning() const;
+
+    // Export-only instances skip the preview/prefetch browsers: finalFrame()
+    // starts just the final renderer, and no low-resolution cache is created.
+    // Must be set before the first frame request.
+    void setFinalOnly(bool finalOnly)
+    {
+        QMutexLocker locker(&m_lifecycleMutex);
+        m_finalOnly = finalOnly;
+    }
 
     // Low resolution, synchronous compatibility entry point. Internally it is
     // requestLowRes() plus an unbounded wait, so the caller blocks but the
@@ -188,6 +199,12 @@ private:
     QString m_chromeExecutable;
     QString m_chromeVersion;
     bool m_running = false;
+    bool m_finalOnly = false;
+    // Guards start()/stop()/isRunning() and the worker pointers.  Recursive
+    // because ensureStarted() checks isRunning() and then calls start().
+    // Export sessions may call finalFrame()/stopFinal() from their own thread
+    // while the UI stops the preview service (issue #126).
+    mutable QRecursiveMutex m_lifecycleMutex;
 
     // Worker threads, one owner each.  Declaration order is destruction
     // order (reverse): the cache/disk proxies below are declared after the

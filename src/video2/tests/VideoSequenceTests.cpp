@@ -77,6 +77,8 @@ private slots:
     void restartReadsDiskIndex();
     void missingWebpFallsBack();
     void smallDiskBudgetEvicts();
+    void singleWriterDemotesSecondWriter();
+    void readOnlyNeverWrites();
     void cancelMidwayKeepsProgress();
     void cancelFlagStops();
     void missingVideoFails();
@@ -311,9 +313,58 @@ void VideoSequenceTest::missingWebpFallsBack()
     QVERIFY(!service.hasFrame(0));
 }
 
-void VideoSequenceTest::smallDiskBudgetEvicts()
+// Issue #126: at most one writer per cache key; a second writer is demoted to
+// read-only instead of racing the index and the WebP files.
+void VideoSequenceTest::singleWriterDemotesSecondWriter()
 {
-    qint64 average = 0;
+    pvf::video2::VideoSequenceService writer(
+        options(QStringLiteral("single-writer"), m_testsrc));
+    QVERIFY(writer.canWrite());
+
+    pvf::video2::VideoSequenceService second(
+        options(QStringLiteral("single-writer"), m_testsrc));
+    QVERIFY(!second.canWrite());
+    QVERIFY(!second.extract());
+    QVERIFY(second.lastError().contains(QStringLiteral("只读")));
+
+    // The real writer still owns the cache.
+    QVERIFY(writer.extract());
+    QVERIFY(writer.hasFrame(0));
+}
+
+// Issue #126: a read-only instance (the preview path) never rewrites the index
+// or deletes frames another instance wrote.
+void VideoSequenceTest::readOnlyNeverWrites()
+{
+    pvf::video2::VideoSequenceService writer(
+        options(QStringLiteral("read-only"), m_testsrc));
+    QVERIFY(writer.extract());
+    const QString indexPath = writer.indexFilePath();
+    QFile index(indexPath);
+    QVERIFY(index.open(QIODevice::ReadOnly));
+    const QByteArray before = index.readAll();
+    index.close();
+    const int filesBefore = webpFiles(writer.cacheDirectory());
+    QVERIFY(filesBefore > 0);
+
+    pvf::video2::SequenceOptions readerOptions =
+        options(QStringLiteral("read-only"), m_testsrc);
+    readerOptions.readOnly = true;
+    pvf::video2::VideoSequenceService reader(readerOptions);
+    QVERIFY(!reader.canWrite());
+    QVERIFY(!reader.frame(0).isNull());
+    QVERIFY(!reader.frame(1).isNull());
+    QVERIFY(!reader.extract());
+
+    QFile after(indexPath);
+    QVERIFY(after.open(QIODevice::ReadOnly));
+    QCOMPARE(after.readAll(), before);
+    after.close();
+    QCOMPARE(webpFiles(writer.cacheDirectory()), filesBefore);
+}
+
+void VideoSequenceTest::smallDiskBudgetEvicts()
+{    qint64 average = 0;
     {
         pvf::video2::VideoSequenceService probe(
             options(QStringLiteral("budget-probe"), m_testsrc));
@@ -346,25 +397,30 @@ void VideoSequenceTest::smallDiskBudgetEvicts()
 
 void VideoSequenceTest::cancelMidwayKeepsProgress()
 {
-    pvf::video2::VideoSequenceService service(
-        options(QStringLiteral("cancel"), m_testsrc));
-    int lastDone = 0;
-    int lastTotal = 0;
-    const bool ok = service.extract(
-        [&](const pvf::video2::SequenceProgress& progress) {
-            lastDone = progress.done;
-            lastTotal = progress.total;
-            return progress.done < 10;
-        });
+    {
+        pvf::video2::VideoSequenceService service(
+            options(QStringLiteral("cancel"), m_testsrc));
+        int lastDone = 0;
+        int lastTotal = 0;
+        const bool ok = service.extract(
+            [&](const pvf::video2::SequenceProgress& progress) {
+                lastDone = progress.done;
+                lastTotal = progress.total;
+                return progress.done < 10;
+            });
 
-    QVERIFY(!ok);
-    QCOMPARE(lastDone, 10);
-    QCOMPARE(lastTotal, 60);
-    QVERIFY(QFileInfo(service.indexFilePath()).isFile());
-    QVERIFY(service.stats().uniqueImages >= 5);
+        QVERIFY(!ok);
+        QCOMPARE(lastDone, 10);
+        QCOMPARE(lastTotal, 60);
+        QVERIFY(QFileInfo(service.indexFilePath()).isFile());
+        QVERIFY(service.stats().uniqueImages >= 5);
+        // The single-writer lock is released when the service dies, so the
+        // restart below can own the cache again.
+    }
 
     pvf::video2::VideoSequenceService restarted(
         options(QStringLiteral("cancel"), m_testsrc));
+    QVERIFY(restarted.canWrite());
     QCOMPARE(restarted.totalFrames(), 60);
     QVERIFY(restarted.hasFrame(0));
     QVERIFY(!restarted.hasFrame(59));

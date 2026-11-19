@@ -6,6 +6,8 @@
 #include "ExportProgressDialog.h"
 #include "NewProjectDialog.h"
 #include "assets/AssetStore.h"
+#include "mcp2/HttpServer.h"
+#include "next/app/MediaExportSession.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
@@ -330,6 +332,8 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
     auto* media = m_session->media();
     if (media)
     {
+        // Pre-warm the preview service, not the export browsers: the export
+        // worker owns a private final-only service (see MediaExportSession).
         QString htmlError;
         media->start(&htmlError);
         if (!htmlError.isEmpty())
@@ -349,6 +353,11 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
         std::max(2, (project->settings.width * scale) & ~1),
         std::max(2, (project->settings.height * scale) & ~1));
 
+    // Immutable snapshot for the worker: it never reads the live Document or
+    // the preview media services (issue #126).
+    auto mediaSnapshot = std::make_shared<next::MediaExportSession>(
+        *project, *assets, m_session->appSettings(), exportSize);
+
     export2::Options options;
     options.outputPath = outputPath;
     options.cameraUuid = cameraUuid;
@@ -363,15 +372,13 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
     options.preset = preset;
     options.includeAudio = includeAudio;
     options.overwrite = overwrite;
-    options.videoFrame = [media](const Uuid& entityUuid, double projectFrame) {
-        return media ? media->exportVideoFrame(entityUuid, projectFrame)
-                     : QImage();
+    options.videoFrame = [mediaSnapshot](const Uuid& entityUuid,
+                                         double projectFrame) {
+        return mediaSnapshot->videoFrame(entityUuid, projectFrame);
     };
-    options.htmlFrame = [media, exportSize](const Uuid& entityUuid,
-                                            double projectFrame) {
-        return media ? media->exportHtmlFrame(entityUuid, projectFrame,
-                                              exportSize)
-                     : QImage();
+    options.htmlFrame = [mediaSnapshot](const Uuid& entityUuid,
+                                        double projectFrame) {
+        return mediaSnapshot->htmlFrame(entityUuid, projectFrame);
     };
 
     if (m_exportOptionsProbe)
@@ -433,6 +440,17 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
                 if (m_exportTimer == timer)
                     m_exportTimer = nullptr;
                 m_exportRunning = false;
+
+                // Release the export write lock; a human AI stop that predates
+                // the export stays in effect.
+                if (m_session->document())
+                    m_session->document()->setWritesLocked(false);
+                if (m_exportHoldsAiStop)
+                {
+                    m_exportHoldsAiStop = false;
+                    if (mcp2::HttpServer* server = m_session->mcpServer())
+                        server->resumeAi();
+                }
 
                 const export2::Result result = watcher->result();
                 progress->finish();
@@ -496,8 +514,22 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
     setHumanEditingEnabled(false);
     updateSessionActionStates();
 
+    // Freeze the live project for the duration of the export: human edits and
+    // undo/redo are rejected by the document, MCP write tools are paused.  A
+    // stop that the human set before the export is left untouched.
+    if (m_session->document())
+        m_session->document()->setWritesLocked(true);
+    if (mcp2::HttpServer* server = m_session->mcpServer())
+    {
+        if (!server->aiStopped())
+        {
+            m_exportHoldsAiStop = true;
+            server->stopAi();
+        }
+    }
+
     watcher->setFuture(QtConcurrent::run(
-        [project, assets, options, media, cancelled = m_exportCancelled,
+        [project, assets, options, mediaSnapshot, cancelled = m_exportCancelled,
          frame = m_exportFrame, total = m_exportTotal, eta = m_exportEta] {
             export2::Result result = export2::exportVideo(
                 *project, *assets, options,
@@ -508,10 +540,17 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
                     eta->store(seconds);
                     return !cancelled->load();
                 });
-            // The final HTML browser was created on this worker thread;
-            // release it here so it is never destroyed from the UI thread.
-            if (media)
-                media->stopExportHtml();
+            // Surface the decoder/HTML reason for a failed frame (the renderer
+            // only knows that a frame was missing).
+            if (!result.ok && result.error != QStringLiteral("cancelled"))
+            {
+                const QString detail = mediaSnapshot->lastError();
+                if (!detail.isEmpty() && !result.error.contains(detail))
+                    result.error += QStringLiteral("（%1）").arg(detail);
+            }
+            // Release the private export browser/decoder on the thread that
+            // created them.
+            mediaSnapshot->finish();
             return result;
         }));
 }

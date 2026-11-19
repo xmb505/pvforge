@@ -764,6 +764,7 @@ HtmlFrameService::~HtmlFrameService()
 
 bool HtmlFrameService::start(QString* error)
 {
+    QMutexLocker locker(&m_lifecycleMutex);
     if (isRunning())
     {
         if (error)
@@ -839,6 +840,7 @@ bool HtmlFrameService::start(QString* error)
 
 void HtmlFrameService::stop()
 {
+    QMutexLocker locker(&m_lifecycleMutex);
     if (m_frontendWorker)
     {
         m_frontendWorker->requestStop();
@@ -886,12 +888,21 @@ void HtmlFrameService::stop()
 
 bool HtmlFrameService::isRunning() const
 {
+    QMutexLocker locker(&m_lifecycleMutex);
     return m_running && m_frontendWorker && m_frontendWorker->isRunning() && m_cacheWorker
            && m_cacheWorker->isRunning();
 }
 
 bool HtmlFrameService::ensureStarted(QString* error)
 {
+    QMutexLocker locker(&m_lifecycleMutex);
+    if (m_finalOnly)
+    {
+        // Export-only service: finalFrame() starts the final renderer itself.
+        if (error)
+            error->clear();
+        return true;
+    }
     if (isRunning())
     {
         if (error)

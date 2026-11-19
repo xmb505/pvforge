@@ -14,7 +14,9 @@
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
 #include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +25,27 @@
 
 namespace pvf::video2 {
 namespace {
+
+// In-process single-writer registry.  QLockFile is the cross-process guard, but
+// it treats two instances in the same process as the same owner, so a second
+// writer in this process must be rejected here (issue #126).
+QMutex g_writerMutex;
+QSet<QString> g_writerDirectories;
+
+bool claimProcessWriter(const QString& directory)
+{
+    QMutexLocker locker(&g_writerMutex);
+    if (g_writerDirectories.contains(directory))
+        return false;
+    g_writerDirectories.insert(directory);
+    return true;
+}
+
+void releaseProcessWriter(const QString& directory)
+{
+    QMutexLocker locker(&g_writerMutex);
+    g_writerDirectories.remove(directory);
+}
 
 constexpr int kWebpQuality = 80;
 constexpr int kSaveEveryFrames = 30;
@@ -85,8 +108,7 @@ QImage decodeWebp(const QString& path)
 }
 
 bool writeFile(const QString& path, const QByteArray& data, QString* error)
-{
-    QSaveFile file(path);
+{    QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
     {
         if (error)
@@ -147,6 +169,25 @@ VideoSequenceService::VideoSequenceService(SequenceOptions options)
         return;
     }
 
+    // Single writer per cache key.  A second writer (another thread/process)
+    // is demoted to read-only instead of racing the index and the WebP files.
+    m_canWrite = !m_options.readOnly && claimProcessWriter(m_cacheDir);
+    if (m_canWrite)
+    {
+        auto lock = std::make_unique<QLockFile>(
+            QDir(m_cacheDir).filePath(QStringLiteral("index.lock")));
+        lock->setStaleLockTime(30000);
+        if (!lock->tryLock(0))
+        {
+            releaseProcessWriter(m_cacheDir);
+            m_canWrite = false;
+        }
+        else
+        {
+            m_writeLock = std::move(lock);
+        }
+    }
+
     m_ready = true;
     QString ignored;
     loadIndex(&ignored);
@@ -158,6 +199,8 @@ VideoSequenceService::~VideoSequenceService()
 {
     if (m_indexDirty)
         saveIndex(nullptr);
+    if (m_canWrite && !m_cacheDir.isEmpty())
+        releaseProcessWriter(m_cacheDir);
 }
 
 QString VideoSequenceService::webpPath(const AssetHash& hash) const
@@ -276,6 +319,12 @@ bool VideoSequenceService::saveIndex(QString* error)
             *error = m_setupError;
         return false;
     }
+    if (!m_canWrite)
+    {
+        // A read-only instance must not touch index.json.
+        m_indexDirty = false;
+        return true;
+    }
 
     QJsonObject frames;
     for (auto it = m_frames.constBegin(); it != m_frames.constEnd(); ++it)
@@ -319,7 +368,7 @@ bool VideoSequenceService::saveIndex(QString* error)
 
 void VideoSequenceService::removeAllFiles()
 {
-    if (m_cacheDir.isEmpty())
+    if (m_cacheDir.isEmpty() || !m_canWrite)
         return;
     QDir(m_cacheDir).removeRecursively();
     QDir().mkpath(m_cacheDir);
@@ -362,7 +411,10 @@ void VideoSequenceService::evict(const AssetHash& hash)
     if (it == m_images.end())
         return;
 
-    QFile::remove(webpPath(hash));
+    // Read-only instances drop their in-memory view but never delete a cache
+    // file the writer may still be using.
+    if (m_canWrite)
+        QFile::remove(webpPath(hash));
     m_memory.remove(hash);
     m_totalBytes = std::max<qint64>(0, m_totalBytes - it->size);
     m_images.erase(it);
@@ -374,7 +426,8 @@ void VideoSequenceService::evict(const AssetHash& hash)
         else
             ++frame;
     }
-    m_indexDirty = true;
+    if (m_canWrite)
+        m_indexDirty = true;
 }
 
 void VideoSequenceService::enforceDiskBudget()
@@ -405,6 +458,17 @@ bool VideoSequenceService::extract(
 {
     m_lastError.clear();
     m_cancelled.store(false);
+
+    if (!m_ready)
+    {
+        m_lastError = m_setupError;
+        return false;
+    }
+    if (!m_canWrite)
+    {
+        m_lastError = QStringLiteral("该缓存由另一个实例写入，当前实例只读");
+        return false;
+    }
 
     auto fail = [this](const QString& message) {
         if (m_ready)

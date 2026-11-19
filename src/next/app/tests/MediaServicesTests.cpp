@@ -3,6 +3,7 @@
 #include "assets/AssetStore.h"
 #include "htmlcommon/HtmlBrowser.h"
 #include "html2/HtmlFrameService.h"
+#include "next/app/MediaExportSession.h"
 #include "next/app/ProjectDocument.h"
 #include "video2/VideoFrames.h"
 #include "video2/VideoSequenceService.h"
@@ -133,6 +134,7 @@ private slots:
     void htmlPrefetchFillsCache();
     void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
+    void exportSnapshotSurvivesDocumentEdits();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -530,6 +532,44 @@ void MediaServicesTests::htmlScaleChangesRequestSize()
     settings.htmlMaxWidth = 100;
     media.applySettings(settings);
     QCOMPARE(media.htmlRequestSizeForTest(entity.uuid), QSize(100, 15));
+}
+
+void MediaServicesTests::exportSnapshotSurvivesDocumentEdits()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/snapshot.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString source = makeVideo(temp.path() + QStringLiteral("/clip.mp4"));
+    if (source.isEmpty())
+        QSKIP("ffmpeg is unavailable");
+    const auto stored = document->assets().importFile(source, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    const Entity entity =
+        makeAssetEntity(AssetType::Video, stored->hash, 10, 5);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    // The export worker gets an independent copy: dropping the entity and
+    // changing the canvas afterwards must not change its decoded frames
+    // (issue #126).
+    next::MediaExportSession session(document->project(), document->assets(),
+                                     AppSettings(), QSize(640, 360));
+    document->mutableProject().entities.clear();
+    document->mutableProject().settings.width = 32;
+
+    const QImage frame = session.videoFrame(entity.uuid, 12.5);
+    QVERIFY(!frame.isNull());
+    QCOMPARE(frame.size(), QSize(96, 54));
+    QVERIFY(session.videoFrame(QStringLiteral("gone"), 12.5).isNull());
+    session.finish();
 }
 
 QTEST_MAIN(MediaServicesTests)

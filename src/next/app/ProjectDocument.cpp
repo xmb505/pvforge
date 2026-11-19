@@ -41,6 +41,17 @@ bool ensureHumanWrites(bool enabled, QString* error)
     return false;
 }
 
+// Export read-only window (issue #126).  The export thread already works on its
+// own snapshot; this keeps the live project and its assets stable while the
+// MP4 is encoded.
+bool ensureNotExportLocked(bool locked, QString* error)
+{
+    if (!locked)
+        return true;
+    setError(error, QStringLiteral("导出进行中，工程暂时只读"));
+    return false;
+}
+
 // Validates the project as it will exist after the write.  Upserts are already
 // present in the in-memory project; deletes are validated as absent without
 // copying the project first (model::validateProjectWithout treats them as
@@ -222,7 +233,8 @@ bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
                                    QString* error)
 {
     Q_UNUSED(message);
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     if (!validateForWrite(m_store->project(), {uuid}, {}, error))
         return false;
@@ -237,7 +249,8 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     if (!validateForWrite(m_store->project(), uuids, {}, error))
         return false;
@@ -255,7 +268,8 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
                                      QString* error)
 {
     Q_UNUSED(message);
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
 
     const model::Project& project = m_store->project();
@@ -327,7 +341,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
                                     QString* error)
 {
     Q_UNUSED(message);
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     if (!validateForWrite(m_store->project(), upserts, deletes, error))
         return false;
@@ -355,7 +370,8 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
     Q_UNUSED(message);
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     if (!validateForWrite(m_store->project(), {}, {}, error))
         return false;
@@ -411,7 +427,8 @@ int ProjectDocument::humanCommitDelayMs() const
 
 bool ProjectDocument::undo(QString* error)
 {
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     // Do not flush the pending edit first: Ctrl+Z applies the last memory
     // snapshot and drops the debounce. If undo itself fails, keep the pending
@@ -439,7 +456,8 @@ bool ProjectDocument::undo(QString* error)
 
 bool ProjectDocument::redo(QString* error)
 {
-    if (!ensureHumanWrites(m_humanWritesEnabled, error))
+    if (!ensureNotExportLocked(m_writesLocked, error)
+        || !ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
     const bool wasPending = m_pendingCommit;
     m_commitTimer.stop();

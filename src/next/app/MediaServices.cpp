@@ -695,6 +695,9 @@ video2::VideoSequenceService* MediaServices::sequenceService(
                            : kDefaultVideoProxyWidth;
     options.diskBudgetBytes = kVideoDiskBudgetBytes;
     options.memoryEntries = m_settings.videoMemoryFrames;
+    // The viewport only consumes the sequence the extraction queue wrote; it
+    // must never race that single writer (issue #126).
+    options.readOnly = true;
 
     auto sequence = std::make_unique<video2::VideoSequenceService>(options);
     video2::VideoSequenceService* raw = sequence.get();

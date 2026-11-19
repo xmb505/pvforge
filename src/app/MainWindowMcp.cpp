@@ -129,16 +129,19 @@ void MainWindow::onSessionMcpToolFinished(const QString& name,
 void MainWindow::onSessionMcpStoppedChanged(bool stopped)
 {
     m_sessionAiStopped = stopped;
+    const bool exportHold = stopped && m_exportRunning && m_exportHoldsAiStop;
     if (m_mcpLog)
     {
         m_mcpLog->addSystemEvent(
-            stopped ? QStringLiteral("AI 已急停")
-                    : QStringLiteral("AI 写入已恢复"));
+            exportHold ? QStringLiteral("导出中：AI 写入已暂停")
+                       : (stopped ? QStringLiteral("AI 已急停")
+                                  : QStringLiteral("AI 写入已恢复")));
     }
     refreshSessionAiLock();
     statusBar()->showMessage(
-        stopped ? QStringLiteral("AI 已急停：写入暂停，直到点“恢复”")
-                : QStringLiteral("AI 写入已恢复"),
+        exportHold ? QStringLiteral("导出进行中：AI 写入已暂停，结束后自动恢复")
+                   : (stopped ? QStringLiteral("AI 已急停：写入暂停，直到点“恢复”")
+                              : QStringLiteral("AI 写入已恢复")),
         5000);
 }
 
