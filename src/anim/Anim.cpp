@@ -310,6 +310,9 @@ private:
                    const Pose* parent);
     double drivenValue(const model::Entity& entity, const QString& track,
                        double relativeFrame, double fallback);
+    // Solver-driven uniform scale at this frame (1 = unchanged).  Only the
+    // black hole's optional capture shrink produces a value below 1.
+    double drivenScale(const model::Entity& entity, double relativeFrame);
 
     const model::SolverSegment* activeSegment(const model::Entity& entity,
                                               double relativeFrame,
@@ -458,6 +461,12 @@ Pose EvalContext::localPose(const model::Entity& entity, double projectFrame,
                                entity.transform.scaleX);
     values.scaleY = trackValue(entity, QStringLiteral("scaleY"), relativeFrame,
                                entity.transform.scaleY);
+    // A black-hole capture shrink multiplies the authored scale instead of
+    // replacing it, so the entity keeps its own size when the option is off
+    // (issue #52).
+    const double solverScale = drivenScale(entity, relativeFrame);
+    values.scaleX *= solverScale;
+    values.scaleY *= solverScale;
     values.pivotX = trackValue(entity, QStringLiteral("pivotX"), relativeFrame,
                                entity.transform.pivotX);
     values.pivotY = trackValue(entity, QStringLiteral("pivotY"), relativeFrame,
@@ -505,6 +514,44 @@ double EvalContext::drivenValue(const model::Entity& entity,
     }
 
     return trackValue(entity, track, relativeFrame, fallback);
+}
+
+double EvalContext::drivenScale(const model::Entity& entity,
+                                double relativeFrame)
+{
+    // Only a black-hole segment with captureShrink changes the entity scale;
+    // every other effect leaves the authored scale untouched (issue #52).
+    const auto scaleOf = [this, &entity](
+                             const model::SolverSegment& segment,
+                             double frame) -> std::optional<double> {
+        if (segment.effect != SolverEffect::BlackHole)
+            return std::nullopt;
+        const auto sample = sampleAt(entity, segment, frame);
+        if (!sample || !std::isfinite(sample->pose.scale))
+            return std::nullopt;
+        return std::clamp(sample->pose.scale, 0.0, 1.0);
+    };
+
+    if (const model::SolverSegment* segment =
+            activeSegment(entity, relativeFrame, false))
+    {
+        if (const auto value = scaleOf(*segment, relativeFrame))
+            return *value;
+        return 1.0;
+    }
+    // After a capture the entity is gone: hold the end scale instead of
+    // snapping back to the authored size.
+    if (const model::SolverSegment* segment =
+            latestEndedSegment(entity, relativeFrame, false))
+    {
+        const int end = endFrameFor(entity, *segment);
+        if (end >= segment->startFrame)
+        {
+            if (const auto value = scaleOf(*segment, double(end)))
+                return *value;
+        }
+    }
+    return 1.0;
 }
 
 const model::SolverSegment* EvalContext::activeSegment(
@@ -654,6 +701,8 @@ std::optional<solver::Sample> EvalContext::sampleAt(
         left.pose.position + (right.pose.position - left.pose.position) * t;
     mixed.pose.rotation =
         left.pose.rotation + (right.pose.rotation - left.pose.rotation) * t;
+    mixed.pose.scale =
+        left.pose.scale + (right.pose.scale - left.pose.scale) * t;
     return mixed;
 }
 

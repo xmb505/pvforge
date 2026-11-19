@@ -1013,6 +1013,52 @@ void testBlackHoleCaptureStopsOnHorizon()
     }
 }
 
+void testBlackHoleCaptureScaleIsOptIn()
+{
+    MockWorld world;
+    world.poses.insert(QStringLiteral("hole"), Pose{QPointF(0.0, 0.0), 0.0});
+
+    Segment segment;
+    segment.effect = SolverEffect::BlackHole;
+    segment.entityUuid = QStringLiteral("ball");
+    segment.targetUuid = QStringLiteral("hole");
+    segment.startFrame = 0;
+    segment.endFrame = -1;
+    segment.startPose.position = QPointF(150.0, 0.0);
+    segment.params[QStringLiteral("mass")] = 5000.0;
+    segment.params[QStringLiteral("eventHorizonRadius")] = 20.0;
+    segment.params[QStringLiteral("objectRadius")] = 5.0;
+    segment.params[QStringLiteral("softening")] = 20.0;
+
+    // Default: capture stops the motion but never touches the entity scale
+    // (issue #52).
+    const Result plain = evaluateResult(segment, world, 120, 30);
+    CHECK(plain.reason == StopReason::Collision);
+    for (const Sample& sample : plain.samples)
+        CHECK_NEAR(sample.pose.scale, 1.0, 1e-12);
+
+    // Opt-in: the scale approaches 0 as the object reaches the horizon and is
+    // exactly 0 at the capture frame.
+    segment.params[QStringLiteral("captureShrink")] = true;
+    const Result shrinking = evaluateResult(segment, world, 120, 30);
+    CHECK(shrinking.reason == StopReason::Collision);
+    CHECK(shrinking.stopFrame == plain.stopFrame);
+    CHECK(!shrinking.samples.isEmpty());
+    CHECK_NEAR(shrinking.samples.first().pose.scale, 1.0, 0.05);
+    if (shrinking.stopFrame >= 0)
+        CHECK_NEAR(shrinking.samples.at(shrinking.stopFrame).pose.scale, 0.0,
+                   1e-9);
+    for (const Sample& sample : shrinking.samples)
+    {
+        CHECK(sample.pose.scale >= 0.0);
+        CHECK(sample.pose.scale <= 1.0);
+    }
+    // Monotonic shrink while falling in.
+    if (shrinking.samples.size() > 1)
+        CHECK(shrinking.samples.last().pose.scale
+              <= shrinking.samples.first().pose.scale);
+}
+
 void testEmptyAndSingleFrame()
 {
     MockWorld world;
@@ -1130,6 +1176,8 @@ int main()
         testAutomaticOrbitAndSpinRunToClipEnd);
     run("black hole capture stops on horizon",
         testBlackHoleCaptureStopsOnHorizon);
+    run("black hole capture scale is opt-in",
+        testBlackHoleCaptureScaleIsOptIn);
     run("empty and single frame", testEmptyAndSingleFrame);
 
     if (failures == 0)

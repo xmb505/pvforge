@@ -25,6 +25,7 @@ QPointF rotatePoint(const QPointF &point, double degrees);
 
 double paramNumber(const QVariantMap &params, const char *key, double fallback);
 int paramDirection(const QVariantMap &params, int fallback = 1);
+bool paramBool(const QVariantMap &params, const char *key, bool fallback);
 
 EvalOutcome staticSamples(const Segment &segment, const FrameRange &range);
 

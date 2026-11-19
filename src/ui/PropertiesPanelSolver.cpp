@@ -106,7 +106,8 @@ enum class ParamKind
 {
     Number,
     Uuid,
-    Direction
+    Direction,
+    Bool
 };
 
 struct ParamSpec
@@ -162,6 +163,17 @@ ParamSpec directionParam(bool ccwPositive = false)
     return spec;
 }
 
+ParamSpec boolParam(const QString& key, const QString& label,
+                    bool defaultValue = false)
+{
+    ParamSpec spec;
+    spec.key = key;
+    spec.label = label;
+    spec.kind = ParamKind::Bool;
+    spec.defaultValue = defaultValue ? 1.0 : 0.0;
+    return spec;
+}
+
 QVector<ParamSpec> solverParams(SolverEffect effect)
 {
     switch (effect)
@@ -214,6 +226,8 @@ QVector<ParamSpec> solverParams(SolverEffect effect)
                         0.0001, 1000000.0, 1.0, 1, QStringLiteral("px")),
             numberParam(QStringLiteral("maxSpeed"), QStringLiteral("最大速度"), 4000.0,
                         0.0001, 1000000.0, 100.0, 1, QStringLiteral("px/s")),
+            boolParam(QStringLiteral("captureShrink"),
+                      QStringLiteral("捕获时按距离缩小"), false),
         };
     case SolverEffect::Spiral:
         return {
@@ -796,6 +810,28 @@ void PropertiesPanel::rebuildSolverCards(
                                 });
                         });
             }
+            else if (spec.kind == ParamKind::Bool)
+            {
+                auto* check = new QCheckBox(card.box);
+                check->setObjectName(
+                    QStringLiteral("solverParam%1_%2").arg(index).arg(spec.key));
+                check->setChecked(spec.defaultValue != 0.0);
+                editor = check;
+                connect(check, &QCheckBox::toggled, this,
+                        [this, solverId, spec](bool checked) {
+                            if (m_editing)
+                                return;
+                            updateSolver(
+                                solverId,
+                                QStringLiteral("pvf: edit solver %1").arg(spec.key),
+                                [solverId, spec, checked](model::SolverSegment& s) {
+                                    if (s.id != solverId)
+                                        return false;
+                                    s.params.insert(spec.key, checked);
+                                    return true;
+                                });
+                        });
+            }
             else
             {
                 auto* spin = new QDoubleSpinBox(card.box);
@@ -935,6 +971,12 @@ void PropertiesPanel::fillSolverCard(SolverCard& card, const Uuid& entityUuid,
         {
             setSpinIfIdle(spin,
                           solver.params.value(spec.key, spec.defaultValue).toDouble());
+        }
+        else if (auto* check = qobject_cast<QCheckBox*>(editor))
+        {
+            const QSignalBlocker blocker(check);
+            check->setChecked(
+                solver.params.value(spec.key, spec.defaultValue != 0.0).toBool());
         }
     }
 }

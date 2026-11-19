@@ -45,6 +45,11 @@ EvalOutcome evaluateBlackHole(const Segment &segment, const World &world,
             0.0, paramNumber(segment.params, "maxSpeed", 4000.0));
     const double stopThreshold = std::max(
             0.0, paramNumber(segment.params, "stopThreshold", 0.0));
+    // Issue #52: capture must not resize the entity unless the user opts in.
+    // With the flag off the entity keeps its authored scale and simply stops at
+    // the capture point.
+    const bool captureShrink =
+            paramBool(segment.params, "captureShrink", false);
     // Once the object's surface touches the event horizon it is captured: the
     // motion stops instead of falling forever through the singularity.  The
     // horizon stays a soft core for the force field (softening), but it is a
@@ -157,6 +162,18 @@ EvalOutcome evaluateBlackHole(const Segment &segment, const World &world,
 
         Sample sample;
         sample.frame = frame;
+        if (captureShrink)
+        {
+            const QPointF centerAtFrame =
+                    world.poseOf(centerEntity, frame).position;
+            const QPointF delta = pose.position - centerAtFrame;
+            const double distance = std::hypot(delta.x(), delta.y());
+            // 1 outside twice the capture radius, fading linearly to exactly 0
+            // when the object's surface reaches the horizon.
+            pose.scale = captureRadius > 1e-9
+                    ? std::clamp(distance / captureRadius - 1.0, 0.0, 1.0)
+                    : 0.0;
+        }
         sample.pose = pose;
         sample.velocity = velocity;
         sample.collided = captured;
