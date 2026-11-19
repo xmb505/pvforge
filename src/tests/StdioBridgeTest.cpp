@@ -388,6 +388,21 @@ int mcpBridgeTest()
     failIf(!writeEndpointFile(endpointPath, fileJson, true),
            QStringLiteral("cannot restore endpoint file mode 0600"));
 
+    // lstat, not stat: a symlink in place of the endpoint could point at any
+    // 0600 file the user owns and feed the bridge attacker-chosen JSON.
+    const QString symlinkTarget = tempDir.filePath(QStringLiteral("endpoint-target.json"));
+    failIf(!writeEndpointFile(symlinkTarget, fileJson, true),
+           QStringLiteral("cannot write the endpoint symlink target"));
+    const QString symlinkPath = tempDir.filePath(QStringLiteral("endpoint-link.json"));
+    failIf(!QFile::link(symlinkTarget, symlinkPath),
+           QStringLiteral("cannot create the endpoint symlink"));
+    McpEndpoint symlinkEndpoint;
+    error.clear();
+    failIf(loadMcpEndpointFile(symlinkPath, &symlinkEndpoint, &error),
+           QStringLiteral("symlinked endpoint file was accepted"));
+    failIf(!error.contains(QStringLiteral("symbolic link")),
+           QStringLiteral("symlink error is unclear: %1").arg(error));
+
     error.clear();
     failIf(loadMcpEndpointFile(tempDir.filePath(QStringLiteral("missing.json")),
                                &insecureEndpoint, &error),

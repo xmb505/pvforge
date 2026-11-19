@@ -47,6 +47,8 @@ add_library(pvf_mcp2 STATIC
     SchemaTools.cpp
     HttpServer.h
     HttpServer.cpp
+    EndpointFile.h
+    EndpointFile.cpp
 )
 
 target_include_directories(pvf_mcp2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -102,6 +104,7 @@ if(BUILD_TESTING)
         viewStateReturnsInjected
         previewRenderFrameWritesPng
         previewRefusesUnapprovedBase64
+        previewTempFilesArePruned
         previewRejectsOversize
         solverEvaluateNestedEntity
         moveRowOnlyAndGetDefaults
@@ -128,6 +131,18 @@ if(BUILD_TESTING)
         set_tests_properties(mcp2.${test_case} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
     endforeach()
+
+    # All preview cases share the per-user preview directory; serialise them so
+    # the TTL/LRU assertions cannot race with another process pruning the same
+    # directory.
+    set_tests_properties(
+        mcp2.previewRenderFrameWritesPng
+        mcp2.previewRefusesUnapprovedBase64
+        mcp2.previewTempFilesArePruned
+        mcp2.previewRejectsOversize
+        mcp2.previewDocumentContract
+        mcp2.previewRateLimit
+        PROPERTIES RESOURCE_LOCK pvforge_preview_dir)
 
     add_executable(pvf_mcp2_http_tests tests/http_server_tests.cpp)
     target_link_libraries(pvf_mcp2_http_tests PRIVATE
@@ -159,9 +174,13 @@ if(BUILD_TESTING)
         httpToolsCallProjectGet
         httpSecurityAndLimits
         httpNotificationsAndErrors
-        httpCredentialsPersistAcrossRestart
+        httpCredentialsRotateAcrossRestart
         httpDefaultConfigUsesFixedPort
         httpPortConflictFailsClearly
+        httpRejectsSymlinkedConfig
+        httpCleansStaleEndpoint
+        httpFailedBindRemovesStaleEndpoint
+        httpFailedBindPreservesLiveEndpoint
         httpStopAiBlocksWrites
     )
 

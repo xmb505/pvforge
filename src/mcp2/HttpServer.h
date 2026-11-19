@@ -22,9 +22,17 @@ class Service;
 // peer, carry a loopback Host (and Origin when present), and present the
 // persistent Bearer token. CORS is never granted.
 //
-// Port and token live in a small persistent config file so restarting the
-// application keeps the same endpoint. The token is generated once (32 random
-// bytes, hex) and only changes through resetCredentials() or setToken().
+// A TCP socket cannot identify its peer's UID on Linux (SO_PEERCRED is
+// AF_UNIX-only and reports pid 0 for TCP), so the bearer token is the local
+// isolation boundary. Moving MCP to AF_UNIX + SO_PEERCRED would also require a
+// new stdio bridge transport; that is deliberately out of scope while the
+// token, loopback bind and Host/Origin checks are enforced.
+//
+// Port and token live in a small persistent config file. The token is rotated
+// on every successful start (so a credential cached from an earlier run stops
+// working) unless setToken() pinned an explicit one; the stdio bridge reads the
+// fresh token from the endpoint file. Every endpoint file also carries a
+// per-start nonce so shutdown only removes a file this run actually wrote.
 class HttpServer : public QObject
 {
     Q_OBJECT
@@ -41,8 +49,7 @@ public:
     QByteArray token() const { return m_token; }
 
     // Generates a new token, keeps the configured port, persists the config
-    // and refreshes the endpoint file when the server is running. This is the
-    // only way the token changes by itself.
+    // and refreshes the endpoint file when the server is running.
     void resetCredentials();
 
     // Binds 127.0.0.1. A non-zero port overrides the configured one for this
@@ -92,6 +99,10 @@ private:
     bool saveConfig(QString* error);
     bool writeEndpointFile(QString* error);
     void removeEndpointFile();
+    // Removes an endpoint file whose recorded pid is dead, belongs to another
+    // user, or is this process before this run wrote a nonce. Returns true when
+    // a stale file was removed; start() then rotates the bearer token.
+    bool cleanupStaleEndpointFile();
 
     bool isAllowedHost(const QByteArray& host) const;
     bool isAllowedOrigin(const QByteArray& origin) const;
@@ -110,6 +121,10 @@ private:
     QPointer<Service> m_service;
     QByteArray m_token;
     QByteArray m_sessionId;
+    QByteArray m_startNonce;
+    // setToken() means the caller owns the credential; a stale endpoint must
+    // not rotate it away under a running MCP client configuration.
+    bool m_tokenPinned = false;
     QString m_endpointFilePath;
     QString m_configFilePath;
     quint16 m_configuredPort = kDefaultPort;

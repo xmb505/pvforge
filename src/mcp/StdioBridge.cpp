@@ -149,7 +149,9 @@ bool loadMcpEndpointFile(const QString& path, McpEndpoint* endpoint, QString* er
 #if defined(Q_OS_UNIX)
     const QByteArray nativePath = QFile::encodeName(path);
     struct stat info;
-    if (::stat(nativePath.constData(), &info) != 0)
+    // lstat, not stat: a symlink in place of the endpoint could point at any
+    // 0600 file the user owns and feed the bridge attacker-chosen JSON.
+    if (::lstat(nativePath.constData(), &info) != 0)
     {
         *error = endpointFileError(
             path, QStringLiteral("cannot read endpoint file (%1); enable MCP in PVForge "
@@ -157,9 +159,19 @@ bool loadMcpEndpointFile(const QString& path, McpEndpoint* endpoint, QString* er
                       .arg(QString::fromLocal8Bit(std::strerror(errno))));
         return false;
     }
+    if (S_ISLNK(info.st_mode))
+    {
+        *error = endpointFileError(path, QStringLiteral("file is a symbolic link"));
+        return false;
+    }
     if (!S_ISREG(info.st_mode))
     {
         *error = endpointFileError(path, QStringLiteral("not a regular file"));
+        return false;
+    }
+    if (info.st_size > kMaxEndpointBytes)
+    {
+        *error = endpointFileError(path, QStringLiteral("file is larger than 64 KiB"));
         return false;
     }
     if ((info.st_mode & 0777) != 0600)

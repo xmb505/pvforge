@@ -12,6 +12,7 @@
 #include "store/Store.h"
 
 #include <QColor>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -241,4 +242,74 @@ void Mcp2Tests::previewRefusesUnapprovedBase64()
     QVERIFY(directoryMode & QFileDevice::ReadOwner);
     QVERIFY(directoryMode & QFileDevice::ExeOwner);
 #endif
+}
+
+void Mcp2Tests::previewTempFilesArePruned()
+{
+    SecurityFixture fixture;
+    QVERIFY(fixture.init());
+
+    QJsonObject result = fixture.call(
+        QStringLiteral("preview.render_frame"), QJsonObject{{QStringLiteral("frame"), 0}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString firstPath = result.value(QStringLiteral("data")).toObject()
+                                  .value(QStringLiteral("path")).toString();
+    const QDir directory = QFileInfo(firstPath).absoluteDir();
+    QVERIFY(directory.exists());
+
+    QImage pixel(2, 2, QImage::Format_ARGB32);
+    pixel.fill(Qt::black);
+
+    // Older than the one-hour TTL: must be deleted regardless of the count.
+    const QString expired = directory.filePath(
+        QStringLiteral("pvforge-preview-expired-") + model::newUuid()
+        + QStringLiteral(".png"));
+    QVERIFY(pixel.save(expired, "PNG"));
+    {
+        QFile file(expired);
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        QVERIFY(file.setFileTime(
+            QDateTime::currentDateTimeUtc().addSecs(-2 * 60 * 60),
+            QFileDevice::FileModificationTime));
+    }
+
+    // More files than the LRU cap (32). The first few are the oldest and must
+    // be dropped to keep the directory bounded.
+    QVector<QString> recent;
+    recent.reserve(40);
+    for (int i = 0; i < 40; ++i)
+    {
+        const QString path = directory.filePath(
+            QStringLiteral("pvforge-preview-lru-") + QString::number(i)
+            + QStringLiteral("-") + model::newUuid() + QStringLiteral(".png"));
+        QVERIFY(pixel.save(path, "PNG"));
+        // Distinct mtimes: filesystem timestamp granularity can otherwise make
+        // all 40 files tie and the "oldest" assertion non-deterministic.
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        QVERIFY(file.setFileTime(
+            QDateTime::currentDateTimeUtc().addSecs(-40 + i),
+            QFileDevice::FileModificationTime));
+        file.close();
+        recent.append(path);
+    }
+    const QString oldest = recent.first();
+    const QString newest = recent.last();
+
+    result = fixture.call(QStringLiteral("preview.render_frame"),
+                          QJsonObject{{QStringLiteral("frame"), 0}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    QVERIFY2(!QFileInfo::exists(expired), "preview files older than the TTL must be removed");
+    QVERIFY2(!QFileInfo::exists(oldest), "preview LRU must drop the oldest files");
+    QVERIFY2(QFileInfo::exists(newest), "preview LRU must keep the newest files");
+
+    const int remaining = directory.entryList({QStringLiteral("*.png")}, QDir::Files).size();
+    QVERIFY2(remaining <= 33,
+             qPrintable(QStringLiteral("preview directory grew to %1 files (cap 32 + 1 new)")
+                            .arg(remaining)));
+
+    for (const QString& path : recent)
+        QFile::remove(path);
+    QFile::remove(expired);
 }
