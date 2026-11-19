@@ -144,6 +144,11 @@ void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
     m_batchCheckpoint = std::move(checkpoint);
 }
 
+void Service::setExternalImportConfirmer(ExternalImportConfirmer confirmer)
+{
+    m_externalImportConfirmer = std::move(confirmer);
+}
+
 void Service::setClock(std::function<qint64()> clock)
 {
     m_clock = std::move(clock);
@@ -259,6 +264,7 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
         tx.writesEnabled = writesEnabled();
         tx.stopped = isStopped();
         tx.previewSlot = [this] { return takePreviewSlot(); };
+        tx.confirmExternalImport = m_externalImportConfirmer;
         tx.stopCheck = [this] {
             if (m_batchCheckpoint)
                 m_batchCheckpoint();

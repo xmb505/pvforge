@@ -9,9 +9,12 @@
 #include "next/app/WorkbenchServices.h"
 #include "render2/Render.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSettings>
 #include <QTimer>
 
@@ -28,6 +31,7 @@ constexpr int kRecentLimit = 10;
 #ifdef PVFORGE_TEST_HOOKS
 QString g_mcpConfigPathForTest;
 std::optional<quint16> g_mcpPortOverrideForTest;
+std::function<bool(const QString&)> g_externalImportConfirmerForTest;
 #endif
 
 QString normalizedProjectDir(const QString& path)
@@ -129,7 +133,40 @@ void EditorSession::setMcpPortOverrideForTest(quint16 port)
 {
     g_mcpPortOverrideForTest = port;
 }
+
+void EditorSession::setExternalImportConfirmerForTest(
+    std::function<bool(const QString&)> confirmer)
+{
+    g_externalImportConfirmerForTest = std::move(confirmer);
+}
 #endif
+
+bool EditorSession::confirmExternalImport(const QString& path)
+{
+#ifdef PVFORGE_TEST_HOOKS
+    if (g_externalImportConfirmerForTest)
+        return g_externalImportConfirmerForTest(path);
+#endif
+
+    // Headless runs (MCP-only tests, --shot) never get an implicit "yes".
+    if (!QApplication::instance())
+        return false;
+
+    QMessageBox box(
+        QMessageBox::Question, QStringLiteral("确认导入工程外素材"),
+        QStringLiteral("AI 请求把工程目录外的文件复制进素材库：\n\n%1\n\n"
+                       "只有在你确认该文件可以交给 AI 服务端读取时才允许。")
+            .arg(path),
+        QMessageBox::NoButton, nullptr);
+    QPushButton* allow =
+        box.addButton(QStringLiteral("允许导入"), QMessageBox::AcceptRole);
+    QPushButton* deny =
+        box.addButton(QStringLiteral("拒绝"), QMessageBox::RejectRole);
+    box.setDefaultButton(deny);
+    box.setEscapeButton(deny);
+    box.exec();
+    return box.clickedButton() == allow;
+}
 
 void EditorSession::startMcpServer()
 {
@@ -143,6 +180,9 @@ void EditorSession::startMcpServer()
     // Git is the write audit trail.  Without it the MCP surface stays readable
     // but every write tool is denied with permission_denied/git_disabled.
     m_mcpService->setWritesEnabled(m_document->store()->gitEnabled());
+    m_mcpService->setExternalImportConfirmer([this](const QString& path) {
+        return confirmExternalImport(path);
+    });
     m_mcpService->setViewStateProvider([this] {
         mcp2::ViewState state;
         if (m_document)

@@ -199,6 +199,30 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
     if (!readBool(args, "includeBase64", &includeBase64, &error))
         return error;
 
+    // Defense in depth for issue #123: base64 is the only channel that copies
+    // arbitrary user pixels into the AI response. A project whose metadata says
+    // an MCP import was never human-approved is not allowed to use it.
+    if (includeBase64)
+    {
+        for (const assets::StoredAsset& asset : tx.store->assets().listIncludingMissing())
+        {
+            const QJsonObject metadata = asset.metadata;
+            if (metadata.value(QStringLiteral("importedBy")).toString()
+                    != QLatin1String("mcp"))
+                continue;
+            if (metadata.value(QStringLiteral("humanApproved")).toBool())
+                continue;
+            QJsonObject details;
+            details.insert(QStringLiteral("assetHash"), asset.hash);
+            details.insert(QStringLiteral("reason"),
+                           QStringLiteral("unapproved_import"));
+            return failure(
+                QStringLiteral("permission_denied"),
+                QStringLiteral("存在未经人类确认导入的素材，禁止 base64 预览输出"),
+                details);
+        }
+    }
+
     if (tx.previewSlot && !tx.previewSlot())
     {
         QJsonObject details;

@@ -146,6 +146,10 @@ public:
     // override keep the test process off the user's real endpoint file.
     static void setMcpConfigPathForTest(const QString& path);
     static void setMcpPortOverrideForTest(quint16 port);
+    // Replaces the modal "allow external asset import?" dialog. An empty
+    // function restores the real dialog.
+    static void setExternalImportConfirmerForTest(
+        std::function<bool(const QString&)> confirmer);
 #endif
 
     // AI write lock.  While false every human write path (EditActions and
@@ -185,6 +189,8 @@ private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
     void startMcpServer();
+    // Blocks on the human confirmation dialog for an outside asset import.
+    bool confirmExternalImport(const QString& path);
     // Coalesces re-warm requests into one queued call; a request that arrives
     // while the precompute is queued or running is dropped.
     void scheduleSolverPrecompute();

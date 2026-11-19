@@ -67,7 +67,11 @@ include(CTest)
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
-    add_executable(pvf_mcp2_tests tests/mcp2_tests.cpp)
+    add_executable(pvf_mcp2_tests
+        tests/mcp2_tests.cpp
+        tests/mcp2_security_tests.cpp
+        tests/mcp2_tests.h
+    )
     target_link_libraries(pvf_mcp2_tests PRIVATE pvf_mcp2 Qt6::Test)
 
     set(PVF_MCP2_TEST_CASES
@@ -97,6 +101,7 @@ if(BUILD_TESTING)
         solverValidationRejects
         viewStateReturnsInjected
         previewRenderFrameWritesPng
+        previewRefusesUnapprovedBase64
         previewRejectsOversize
         solverEvaluateNestedEntity
         moveRowOnlyAndGetDefaults

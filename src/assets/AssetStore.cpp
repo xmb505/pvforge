@@ -316,6 +316,23 @@ bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString
     return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata, error);
 }
 
+bool AssetStore::markImportOrigin(const AssetHash& hash, const QString& origin,
+                                  bool humanApproved, QString* error)
+{
+    const auto asset = getByHash(hash);
+    if (!asset)
+    {
+        setError(error, QStringLiteral("素材不存在或内容缺失: %1").arg(hash));
+        return false;
+    }
+
+    QJsonObject metadata = asset->metadata;
+    metadata.insert(QStringLiteral("importedBy"), origin);
+    metadata.insert(QStringLiteral("humanApproved"), humanApproved);
+    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata,
+                     error);
+}
+
 bool AssetStore::remove(const AssetHash& hash, QString* error)
 {
     if (!isValidHash(hash))

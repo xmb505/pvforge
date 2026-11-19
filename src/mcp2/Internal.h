@@ -42,6 +42,10 @@ struct Tx
     // HTML and video layers match the viewport instead of render2 placeholders.
     std::function<QImage(const Uuid&, double)> videoFrameProvider;
     std::function<QImage(const Uuid&, double)> htmlFrameProvider;
+    // Set by Service::execute. Called only for a file/directory outside the
+    // project; it must block until the human confirms or denies. Empty means
+    // "no human available" and the import is refused.
+    std::function<bool(const QString&)> confirmExternalImport;
 
     // Set by Service::execute. Batch loops call stopRequested(tx) between
     // items; a landing human stop drops the whole transaction.
