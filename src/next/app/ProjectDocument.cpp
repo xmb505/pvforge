@@ -19,7 +19,6 @@ namespace {
 
 constexpr int kHumanCommitDelayMs = 1000;
 constexpr char kHumanCommitMessage[] = "pvf: human edit";
-
 QString playheadStatePath(const QString& root)
 {
     return QDir(root).filePath(QStringLiteral(".pvforge/playhead.json"));
@@ -38,6 +37,17 @@ bool ensureHumanWrites(bool enabled, QString* error)
     if (enabled)
         return true;
     setError(error, QStringLiteral("AI 正在修改工程，请稍后再编辑，或先按“急停”"));
+    return false;
+}
+
+// A project that opened read-only (quarantined files, failed reload) must not
+// accept panel edits: writing now would silently drop the data that could not
+// be loaded.
+bool ensureWritable(const store::ProjectStore& store, QString* error)
+{
+    if (!store.readOnly())
+        return true;
+    setError(error, QStringLiteral("工程以只读方式打开：%1").arg(store.readOnlyReason()));
     return false;
 }
 
@@ -221,14 +231,15 @@ void ProjectDocument::setSelection(const Uuid& uuid)
 bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
                                    QString* error)
 {
-    Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
+    if (!ensureWritable(*m_store, error))
         return false;
     if (!validateForWrite(m_store->project(), {uuid}, {}, error))
         return false;
     if (!m_store->saveEntity(uuid, error))
         return false;
-    scheduleCommit();
+    scheduleCommit(message);
     emit changed();
     return true;
 }
@@ -236,8 +247,9 @@ bool ProjectDocument::commitEntity(const Uuid& uuid, const QString& message,
 bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& message,
                                      QString* error)
 {
-    Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
+    if (!ensureWritable(*m_store, error))
         return false;
     if (!validateForWrite(m_store->project(), uuids, {}, error))
         return false;
@@ -246,7 +258,7 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
         if (!m_store->saveEntity(uuid, error))
             return false;
     }
-    scheduleCommit();
+    scheduleCommit(message);
     emit changed();
     return true;
 }
@@ -254,8 +266,9 @@ bool ProjectDocument::commitEntities(const QVector<Uuid>& uuids, const QString& 
 bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& message,
                                      QString* error)
 {
-    Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
+    if (!ensureWritable(*m_store, error))
         return false;
 
     const model::Project& project = m_store->project();
@@ -316,7 +329,7 @@ bool ProjectDocument::deleteEntities(const QVector<Uuid>& uuids, const QString& 
     for (const Uuid& uuid : removed)
         if (uuid == m_selection)
             m_selection.clear();
-    scheduleCommit();
+    scheduleCommit(message);
     emit changed();
     return true;
 }
@@ -326,8 +339,9 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
                                     const QString& message,
                                     QString* error)
 {
-    Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
+    if (!ensureWritable(*m_store, error))
         return false;
     if (!validateForWrite(m_store->project(), upserts, deletes, error))
         return false;
@@ -347,21 +361,22 @@ bool ProjectDocument::commitChanges(const QVector<Uuid>& upserts,
     if (!m_selection.isEmpty()
         && !m_store->project().entities.contains(m_selection))
         m_selection.clear();
-    scheduleCommit();
+    scheduleCommit(message);
     emit changed();
     return true;
 }
 
 bool ProjectDocument::commitProject(const QString& message, QString* error)
 {
-    Q_UNUSED(message);
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
+        return false;
+    if (!ensureWritable(*m_store, error))
         return false;
     if (!validateForWrite(m_store->project(), {}, {}, error))
         return false;
     if (!m_store->saveProject(error))
         return false;
-    scheduleCommit();
+    scheduleCommit(message);
     emit changed();
     return true;
 }
@@ -373,8 +388,13 @@ void ProjectDocument::flush(QString* error)
 
     m_commitTimer.stop();
 
+    // A read-only project never wrote anything; flush has nothing to commit.
+    const QString message = m_pendingMessage.isEmpty()
+                                ? QString::fromLatin1(kHumanCommitMessage)
+                                : m_pendingMessage;
+
     QString commitError;
-    if (!m_store->commit(QString::fromLatin1(kHumanCommitMessage), &commitError))
+    if (!m_store->commit(message, &commitError))
     {
         if (error)
             *error = commitError;
@@ -382,6 +402,7 @@ void ProjectDocument::flush(QString* error)
         return;
     }
 
+    m_pendingMessage.clear();
     if (m_pendingCommit)
     {
         m_pendingCommit = false;
@@ -413,25 +434,26 @@ bool ProjectDocument::undo(QString* error)
 {
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
-    // Do not flush the pending edit first: Ctrl+Z applies the last memory
-    // snapshot and drops the debounce. If undo itself fails, keep the pending
-    // edit alive so it can still reach git later.
-    const bool wasPending = m_pendingCommit;
-    m_commitTimer.stop();
-    m_pendingCommit = false;
-
-    if (!m_store->undo(error))
-    {
-        if (wasPending)
-        {
-            m_pendingCommit = true;
-            m_commitTimer.start();
-        }
+    if (!ensureWritable(*m_store, error))
         return false;
+
+    // Materialize the debounced edit first: it becomes the newest undo layer,
+    // so Ctrl+Z within the debounce window undoes exactly the current edit
+    // instead of jumping over it to an older snapshot.
+    if (m_pendingCommit)
+    {
+        QString flushError;
+        flush(&flushError);
+        if (!flushError.isEmpty())
+        {
+            setError(error,
+                     QStringLiteral("撤销前提交当前编辑失败：%1").arg(flushError));
+            return false;
+        }
     }
 
-    if (wasPending)
-        emit pendingCommitChanged(false);
+    if (!m_store->undo(error))
+        return false;
 
     reloadAfterHistory(error);
     return true;
@@ -441,34 +463,44 @@ bool ProjectDocument::redo(QString* error)
 {
     if (!ensureHumanWrites(m_humanWritesEnabled, error))
         return false;
-    const bool wasPending = m_pendingCommit;
-    m_commitTimer.stop();
-    m_pendingCommit = false;
-
-    if (!m_store->redo(error))
-    {
-        if (wasPending)
-        {
-            m_pendingCommit = true;
-            m_commitTimer.start();
-        }
+    if (!ensureWritable(*m_store, error))
         return false;
+
+    if (m_pendingCommit)
+    {
+        QString flushError;
+        flush(&flushError);
+        if (!flushError.isEmpty())
+        {
+            setError(error,
+                     QStringLiteral("重做前提交当前编辑失败：%1").arg(flushError));
+            return false;
+        }
     }
 
-    if (wasPending)
-        emit pendingCommitChanged(false);
+    if (!m_store->redo(error))
+        return false;
 
     reloadAfterHistory(error);
     return true;
 }
 
-void ProjectDocument::scheduleCommit()
+void ProjectDocument::scheduleCommit(const QString& message)
 {
     m_commitTimer.start();
     if (!m_pendingCommit)
     {
         m_pendingCommit = true;
+        m_pendingMessage = message.trimmed().isEmpty()
+                               ? QString::fromLatin1(kHumanCommitMessage)
+                               : message;
         emit pendingCommitChanged(true);
+    }
+    else if (!message.trimmed().isEmpty())
+    {
+        // Coalesced edits share one commit; the newest message describes the
+        // gesture that is still in flight.
+        m_pendingMessage = message;
     }
 }
 
@@ -554,6 +586,21 @@ bool ProjectDocument::notifyExternalChange(QString* error)
         m_selection = selection;
     else
         m_selection.clear();
+
+    if (!reloaded)
+    {
+        // Continuing with the old in-memory model would let the next human
+        // save overwrite the AI's on-disk result. Refuse writes until the
+        // project is reopened and loaded from disk again.
+        const QString reason =
+            QStringLiteral("重新加载工程失败：%1。为避免旧内存覆盖磁盘，"
+                           "工程已切换为只读，请重新打开工程。")
+                .arg(error && !error->isEmpty() ? *error
+                                                : QStringLiteral("未知错误"));
+        m_store->setReadOnly(reason);
+        if (error)
+            *error = reason;
+    }
 
     // Refresh even when the reload failed: the service may have partially
     // written assets or text and the panels must not keep the old picture.

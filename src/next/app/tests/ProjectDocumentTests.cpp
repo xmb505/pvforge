@@ -242,8 +242,10 @@ private slots:
         QCOMPARE(document->store()->history(100).size(), before);
         QTest::qWait(700);
         QCOMPARE(document->store()->history(100).size(), before + 1);
+        // The caller's message is the real commit message, not a generic
+        // "human edit" placeholder.
         QCOMPARE(document->store()->history(1).first().message,
-                 QStringLiteral("pvf: human edit"));
+                 QStringLiteral("pvf: create ball"));
         QVERIFY(!document->hasPendingCommit());
     }
 
@@ -336,35 +338,49 @@ private slots:
         QCOMPARE(changedSpy.count(), 2);
     }
 
-    void undoDropsPendingDebounce()
+    void undoFlushesPendingEditAsFirstLayer()
     {
         QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
         auto document = ProjectDocument::create(
-            temp.path() + QStringLiteral("/drop.pvproj"), ProjectSettings(), &error);
+            temp.path() + QStringLiteral("/flush-undo.pvproj"),
+            ProjectSettings(), &error);
         QVERIFY2(document != nullptr, qPrintable(error));
 
         Entity entity = makeEntity(QStringLiteral("v1"), 0, 30);
         document->mutableProject().entities.insert(entity.uuid, entity);
-        QVERIFY2(document->commitEntity(entity.uuid, QStringLiteral("pvf: create"), &error),
+        QVERIFY2(document->commitEntity(entity.uuid,
+                                        QStringLiteral("pvf: create v1"), &error),
                  qPrintable(error));
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
         const int commits = document->store()->history(100).size();
 
-        // A newer edit is still inside the debounce window when undo arrives.
-        document->mutableProject().entities[entity.uuid].name = QStringLiteral("v2");
-        QVERIFY2(document->commitEntity(entity.uuid, QStringLiteral("pvf: rename"), &error),
+        // The rename is still inside the debounce window when undo arrives.
+        document->mutableProject().entities[entity.uuid].name =
+            QStringLiteral("v2");
+        QVERIFY2(document->commitEntity(entity.uuid,
+                                        QStringLiteral("pvf: rename v2"),
+                                        &error),
                  qPrintable(error));
         QVERIFY(document->hasPendingCommit());
 
         QVERIFY2(document->undo(&error), qPrintable(error));
         QVERIFY(!document->hasPendingCommit());
-        QVERIFY(!document->project().entities.contains(entity.uuid));
+        // Only the rename is undone; the entity itself survives.
+        QVERIFY(document->project().entities.contains(entity.uuid));
+        QCOMPARE(document->project().entities.value(entity.uuid).name,
+                 QStringLiteral("v1"));
+        // The pending edit reached git as its own commit before undoing.
+        QCOMPARE(document->store()->history(100).size(), commits + 1);
+        QCOMPARE(document->store()->history(1).first().message,
+                 QStringLiteral("pvf: rename v2"));
 
-        QTest::qWait(1300);
-        QCOMPARE(document->store()->history(100).size(), commits);
+        QVERIFY2(document->redo(&error), qPrintable(error));
+        QCOMPARE(document->project().entities.value(entity.uuid).name,
+                 QStringLiteral("v2"));
+        QCOMPARE(document->store()->history(100).size(), commits + 1);
     }
 
     void invalidChildRangeRejectedWithoutWrite()
@@ -610,6 +626,95 @@ private slots:
         QVERIFY(!document->project().entities.contains(leaf.uuid));
         QVERIFY(!document->project().entities.contains(middle.uuid));
         QVERIFY(document->project().entities.contains(root.uuid));
+    }
+
+    void failedReloadSwitchesToReadOnly()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/readonly.pvproj"),
+            ProjectSettings(), &error, false);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity entity = makeEntity(QStringLiteral("球"), 0, 30);
+        document->mutableProject().entities.insert(entity.uuid, entity);
+        QVERIFY2(document->commitEntity(entity.uuid,
+                                        QStringLiteral("pvf: create"), &error),
+                 qPrintable(error));
+        document->flush(&error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+
+        // Simulate a write that landed on disk but cannot be reloaded.
+        const QString projectPath =
+            document->root() + QStringLiteral("/project.json");
+        const QString backup = projectPath + QStringLiteral(".bak");
+        QVERIFY(QFile::rename(projectPath, backup));
+
+        error.clear();
+        QVERIFY(!document->notifyExternalChange(&error));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(document->store()->readOnly());
+        QVERIFY2(document->store()->readOnlyReason().contains(
+                     QStringLiteral("只读")),
+                 qPrintable(document->store()->readOnlyReason()));
+
+        // Continuing with the old memory would overwrite the disk state, so
+        // every write entry point refuses.
+        document->mutableProject().entities[entity.uuid].name =
+            QStringLiteral("不应写入");
+        error.clear();
+        QVERIFY(!document->commitEntity(entity.uuid,
+                                        QStringLiteral("pvf: should fail"),
+                                        &error));
+        QVERIFY2(error.contains(QStringLiteral("只读")), qPrintable(error));
+
+        QVERIFY(QFile::rename(backup, projectPath));
+    }
+
+    void commitFailurePersistsRecoveryHint()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        const QString projectDir =
+            temp.path() + QStringLiteral("/hint.pvproj");
+        {
+            auto document = ProjectDocument::create(projectDir, ProjectSettings(),
+                                                    &error);
+            QVERIFY2(document != nullptr, qPrintable(error));
+
+            QDir directory(document->root());
+            QVERIFY(directory.rename(QStringLiteral(".git"),
+                                     QStringLiteral(".git-disabled")));
+
+            Entity entity = makeEntity(QStringLiteral("失败"), 0, 30);
+            document->mutableProject().entities.insert(entity.uuid, entity);
+            QVERIFY2(document->commitEntity(entity.uuid,
+                                            QStringLiteral("pvf: create"),
+                                            &error),
+                     qPrintable(error));
+            error.clear();
+            document->flush(&error);
+            QVERIFY(!error.isEmpty());
+            QVERIFY(!document->store()->previousCommitFailure().isEmpty());
+        }
+
+        // Still no .git: the destructor's last flush fails again and keeps the
+        // hint. Restore the repository afterwards and reopen.
+        QDir directory(projectDir);
+        QVERIFY(directory.rename(QStringLiteral(".git-disabled"),
+                                 QStringLiteral(".git")));
+
+        // The marker survives the session so the next open can tell a failed
+        // git commit apart from an abnormal exit.
+        auto reopened = ProjectDocument::open(projectDir, &error);
+        QVERIFY2(reopened != nullptr, qPrintable(error));
+        QVERIFY(!reopened->store()->previousCommitFailure().isEmpty());
+        QVERIFY2(reopened->store()->previousCommitFailure().contains(
+                     QStringLiteral("git")),
+                 qPrintable(reopened->store()->previousCommitFailure()));
     }
 
     void commitFailureIsReportedThroughSignal()

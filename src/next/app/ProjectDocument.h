@@ -95,12 +95,13 @@ private:
     explicit ProjectDocument(std::unique_ptr<store::ProjectStore> store,
                              QObject* parent = nullptr);
 
-    void scheduleCommit();
+    void scheduleCommit(const QString& message);
     int contentEnd() const;
 
     std::unique_ptr<store::ProjectStore> m_store;
     QTimer m_commitTimer;
     bool m_pendingCommit = false;
+    QString m_pendingMessage;
     bool m_humanWritesEnabled = true;
     int m_playhead = 0;
     Uuid m_selection;
