@@ -1309,7 +1309,7 @@ int gitSessionTest(QApplication& app)
             return 1;
         auto session = pvf::openSessionProjectWithRecovery(
             dir, true,
-            [](const QVector<pvf::store::DirtyText>&) {
+            [](const QVector<pvf::store::DirtyText>&, const QString&) {
                 return pvf::SessionCrashRecoveryChoice::Restore;
             },
             nullptr, &error);
@@ -1330,7 +1330,7 @@ int gitSessionTest(QApplication& app)
             return 1;
         auto session = pvf::openSessionProjectWithRecovery(
             dir, true,
-            [](const QVector<pvf::store::DirtyText>&) {
+            [](const QVector<pvf::store::DirtyText>&, const QString&) {
                 return pvf::SessionCrashRecoveryChoice::Discard;
             },
             nullptr, &error);
@@ -1354,7 +1354,7 @@ int gitSessionTest(QApplication& app)
             return 1;
         auto session = pvf::openSessionProjectWithRecovery(
             dir, true,
-            [](const QVector<pvf::store::DirtyText>&) {
+            [](const QVector<pvf::store::DirtyText>&, const QString&) {
                 return pvf::SessionCrashRecoveryChoice::Commit;
             },
             nullptr, &error);
@@ -1381,12 +1381,58 @@ int gitSessionTest(QApplication& app)
         error.clear();
         auto session = pvf::openSessionProjectWithRecovery(
             dir, true,
-            [](const QVector<pvf::store::DirtyText>&) {
+            [](const QVector<pvf::store::DirtyText>&, const QString&) {
                 return pvf::SessionCrashRecoveryChoice::Cancel;
             },
             nullptr, &error);
         check(!session && error.isEmpty(),
               QStringLiteral("cancel did not abort cleanly"));
+    }
+
+    // `--open` parity: the CLI entry point reads the persisted Git setting and
+    // runs the same crash-recovery flow as the GUI.
+    {
+        QString error;
+        const QString dir = prepareDirty(
+            QStringLiteral("cli-open"), QStringLiteral("CLI 头"),
+            QStringLiteral("CLI 脏"), &error);
+        if (!check(!dir.isEmpty(),
+                   QStringLiteral("prepare CLI open failed: %1").arg(error)))
+            return 1;
+
+        pvf::next::SettingsStore settingsStore;
+        const pvf::next::AppSettings previous = settingsStore.load();
+        pvf::next::AppSettings enabled = previous;
+        enabled.gitEnabled = true;
+        settingsStore.save(enabled);
+
+        bool handlerCalled = false;
+        auto session = pvf::openSessionProjectFromCli(
+            dir,
+            [&](const QVector<pvf::store::DirtyText>& dirty,
+                const QString& commitFailure) {
+                handlerCalled = true;
+                check(!dirty.isEmpty(),
+                      QStringLiteral("CLI open did not scan dirty text"));
+                check(commitFailure.isEmpty(),
+                      QStringLiteral("CLI open reported a bogus commit failure"));
+                return pvf::SessionCrashRecoveryChoice::Restore;
+            },
+            &error);
+        const bool gitEnabled =
+            session && session->document()->store()->gitEnabled();
+        const bool dirtySeen =
+            session && !session->document()->store()->dirtyText().isEmpty();
+        settingsStore.save(previous);
+
+        check(handlerCalled,
+              QStringLiteral("CLI open bypassed the recovery handler"));
+        check(session != nullptr,
+              QStringLiteral("CLI open failed: %1").arg(error));
+        check(gitEnabled,
+              QStringLiteral("CLI open ignored SettingsStore gitEnabled"));
+        check(dirtySeen,
+              QStringLiteral("CLI open ignored uncommitted text"));
     }
 
     // History panel says "Git 未启用" without a repository.

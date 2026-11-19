@@ -30,6 +30,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <optional>
 
 namespace pvf {
@@ -189,13 +190,15 @@ bool AssetLibraryPanel::setAssetTags(const AssetHash& hash,
 
 bool AssetLibraryPanel::deleteAsset(const AssetHash& hash, QString* error)
 {
-    if (!m_session)
+    if (!m_session || !m_session->document())
         return false;
     QString name = assetlibdetail::shortHash(hash);
     if (const auto asset = m_session->assets().getIncludingMissing(hash))
         name = asset->name;
     QString storeError;
-    if (!m_session->assets().remove(hash, &storeError))
+    // Move the directory to <project>/.trash/<hash> instead of deleting it:
+    // the move is recorded in the document undo stack and Ctrl+Z restores it.
+    if (!m_session->document()->store()->trashAsset(hash, &storeError))
     {
         if (error)
             *error = storeError;
@@ -206,7 +209,8 @@ bool AssetLibraryPanel::deleteAsset(const AssetHash& hash, QString* error)
         QStringLiteral("pvf: delete asset \"%1\"").arg(name), nullptr);
     refresh();
     emit assetsChanged();
-    setStatus(QStringLiteral("已删除素材 \"%1\"；场景实体保留并显示素材缺失")
+    setStatus(QStringLiteral("已删除素材 \"%1\" 并移入回收站；"
+                             "按 Ctrl+Z 可恢复")
                   .arg(name));
     return true;
 }
@@ -357,12 +361,32 @@ void AssetLibraryPanel::deleteSessionSelected()
     const auto asset = m_session ? m_session->assets().get(hash) : std::nullopt;
     const QString name =
         asset ? asset->name : assetlibdetail::shortHash(hash);
-    const int refs = referenceCount(hash);
-    QString text = QStringLiteral("确定删除素材 \"%1\"？").arg(name);
-    if (refs > 0)
-        text += QStringLiteral("\n\n%1 个实体正在引用它。删除后实体会显示“素材缺失”，"
-                               "重新导入相同内容即可恢复。")
-                    .arg(refs);
+    QString text = QStringLiteral("确定删除素材 \"%1\"？\n\n"
+                                  "素材会移入工程回收站，按 Ctrl+Z 可以恢复。")
+                       .arg(name);
+    if (m_session && m_session->document())
+    {
+        const QStringList uuids = m_session->document()
+                                      ->store()
+                                      ->entitiesReferencingAsset(hash);
+        if (!uuids.isEmpty())
+        {
+            QStringList labels;
+            const int shown = std::min<int>(uuids.size(), 10);
+            for (int i = 0; i < shown; ++i)
+            {
+                const QString entityName =
+                    m_session->project().entities.value(uuids.at(i)).name;
+                labels << (entityName.isEmpty() ? uuids.at(i) : entityName);
+            }
+            if (uuids.size() > shown)
+                labels << QStringLiteral("…等 %1 个实体").arg(uuids.size());
+            text += QStringLiteral("\n\n%1 个实体正在引用它，删除后这些实体会显示"
+                                   "“素材缺失”：\n%2")
+                        .arg(uuids.size())
+                        .arg(labels.join(QStringLiteral("、")));
+        }
+    }
     if (QMessageBox::question(this, QStringLiteral("删除素材"), text,
                               QMessageBox::Yes | QMessageBox::No,
                               QMessageBox::No)
