@@ -60,6 +60,13 @@ public:
     void setHumanWritesEnabled(bool enabled) { m_humanWritesEnabled = enabled; }
     bool humanWritesEnabled() const { return m_humanWritesEnabled; }
 
+    // Export lock.  While an export runs the export thread owns a read-only
+    // snapshot; human edits, undo/redo and MCP-driven store writes must not
+    // change the live project (issue #126).  Every write entry point below
+    // rejects with "导出进行中，工程暂时只读".
+    void setWritesLocked(bool locked) { m_writesLocked = locked; }
+    bool writesLocked() const { return m_writesLocked; }
+
     void flush(QString* error = nullptr) override;
     bool hasPendingCommit() const override;
 
@@ -103,6 +110,7 @@ private:
     bool m_pendingCommit = false;
     QString m_pendingMessage;
     bool m_humanWritesEnabled = true;
+    bool m_writesLocked = false;
     int m_playhead = 0;
     Uuid m_selection;
 };

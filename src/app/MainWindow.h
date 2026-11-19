@@ -383,6 +383,10 @@ private:
     std::shared_ptr<std::atomic_int> m_exportTotal;
     std::shared_ptr<std::atomic<double>> m_exportEta;
     bool m_exportRunning = false;
+    // True while the export itself called HttpServer::stopAi().  The stop is
+    // released after the worker finishes; a human stop that existed before the
+    // export is never resumed automatically (issue #126).
+    bool m_exportHoldsAiStop = false;
     bool m_suppressExportCompletionDialog = false;
     std::function<void(const export2::Options&)> m_exportOptionsProbe;
     std::function<void(bool, const QString&)> m_exportFinishedHandler;

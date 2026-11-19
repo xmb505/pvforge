@@ -291,13 +291,18 @@ QVector<Uuid> EditActions::addAssetEntities(const AssetHash& hash, int startFram
     if (asset->type == AssetType::Video && !audioHash.isEmpty()
         && m_session->assets().get(audioHash))
     {
+        // The split-out track is a child of the video with followParentRange
+        // enabled: moving/trimming/deleting the picture moves the sound with it
+        // (issue #128).  Users can still turn the follow flag off or reparent
+        // the audio when they want independent timing.
         model::Entity audio;
         audio.uuid = model::newUuid();
         audio.name = name + QStringLiteral(" 音频");
-        audio.parentUuid = parent;
+        audio.parentUuid = main.uuid;
+        audio.followParentRange = true;
         audio.start = start;
         audio.end = end;
-        audio.row = model::nextAutoRow(plan.project, parent, start, end);
+        audio.row = 0;
         audio.content.kind = ContentKind::Asset;
         audio.content.asset.hash = audioHash;
         audio.content.asset.type = AssetType::Audio;
@@ -527,7 +532,7 @@ bool EditActions::groupIntoFolder(const QVector<Uuid>& roots, Uuid* folder,
 }
 
 bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
-                               QString* error)
+                               QString* error, bool syncChildAudio)
 {
     if (error)
         error->clear();
@@ -606,6 +611,23 @@ bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
         duration = std::max(1, fps);
     const int newEnd = entity.start + duration;
 
+    // The split-out audio track of a video is a following child (issue #128).
+    // It is updated together with its picture, or removed when the new video
+    // has no audio stream.
+    const model::Entity* audioChild = nullptr;
+    for (auto child = project.entities.constBegin();
+         child != project.entities.constEnd(); ++child)
+    {
+        if (child.value().parentUuid != uuid)
+            continue;
+        if (child.value().content.kind == ContentKind::Asset
+            && child.value().content.asset.type == AssetType::Audio)
+        {
+            audioChild = &child.value();
+            break;
+        }
+    }
+
     if (needsTrim)
     {
         for (auto child = project.entities.constBegin();
@@ -613,7 +635,9 @@ bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
         {
             if (child.value().parentUuid != uuid)
                 continue;
-            if (child.value().end > newEnd)
+            if (audioChild && child.value().uuid == audioChild->uuid)
+                continue;
+            if (!child.value().followParentRange && child.value().end > newEnd)
             {
                 setError(error,
                          QStringLiteral("换素材会裁剪子实体 %1，请先裁剪子实体")
@@ -623,48 +647,81 @@ bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
         }
     }
 
+    EditPlan plan;
+    // Install the new asset (and clamped sourceIn) before the range edit: the
+    // material-duration check inside applyEntityRange must use the new asset,
+    // not the one being replaced.
+    plan.project = project;
+    {
+        model::Entity& swapped = plan.project.entities[uuid];
+        swapped.content.kind = ContentKind::Asset;
+        swapped.content.asset.hash = stored->hash;
+        swapped.content.asset.type = stored->type;
+        swapped.content.asset.sourceIn = sourceIn;
+    }
+    if (needsTrim)
+    {
+        // Trimming the picture must also rewrite a following audio child so the
+        // whole subtree keeps valid ranges and keyframes.
+        model::Project trimmed;
+        if (!next::applyEntityRange(plan.project, m_session->assets(), uuid,
+                                    entity.start, newEnd, &trimmed,
+                                    &plan.upserts, &plan.deletes, error, true))
+            return false;
+        plan.project = std::move(trimmed);
+    }
+    else
+    {
+        plan.upserts = {uuid};
+    }
+    if (!plan.project.entities.contains(uuid))
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+
     const assets::StoredAsset asset = *stored;
-    return updateEntity(
-        uuid,
+    model::Entity& target = plan.project.entities[uuid];
+    target.content.kind = ContentKind::Asset;
+    target.content.asset.hash = asset.hash;
+    target.content.asset.type = asset.type;
+    target.content.asset.sourceIn = sourceIn;
+    target.end = target.start + duration;
+
+    if (audioChild)
+    {
+        const Uuid audioUuid = audioChild->uuid;
+        const QString newAudioHash =
+            asset.metadata.value(QStringLiteral("audioHash")).toString();
+        const bool audioAvailable = !newAudioHash.isEmpty()
+                                    && m_session->assets().get(newAudioHash);
+        if (syncChildAudio && !audioAvailable)
+        {
+            if (!plan.deletes.contains(audioUuid))
+                plan.deletes.append(audioUuid);
+            plan.upserts.removeAll(audioUuid);
+        }
+        else if (syncChildAudio && plan.project.entities.contains(audioUuid))
+        {
+            model::Entity& audio = plan.project.entities[audioUuid];
+            audio.content.asset.hash = newAudioHash;
+            audio.content.asset.type = AssetType::Audio;
+            if (!plan.upserts.contains(audioUuid))
+                plan.upserts.append(audioUuid);
+        }
+    }
+
+    QString validationError;
+    if (!model::validateEntity(target, &validationError))
+    {
+        setError(error, QStringLiteral("实体校验失败：%1").arg(validationError));
+        return false;
+    }
+
+    plan.message =
         QStringLiteral("pvf: assign asset \"%1\" to \"%2\"")
-            .arg(asset.name, displayName(entity)),
-        [asset, sourceIn, needsTrim, duration](model::Entity& target) {
-            if (needsTrim)
-            {
-                target.end = target.start + duration;
-                for (auto track = target.tracks.begin();
-                     track != target.tracks.end();)
-                {
-                    QVector<model::Keyframe>& keys = track.value().keys;
-                    keys.erase(std::remove_if(
-                                   keys.begin(), keys.end(),
-                                   [duration](const model::Keyframe& key) {
-                                       return key.frame >= duration;
-                                   }),
-                               keys.end());
-                    if (keys.isEmpty())
-                        track = target.tracks.erase(track);
-                    else
-                        ++track;
-                }
-                QVector<model::SolverSegment> solvers;
-                for (model::SolverSegment& solver : target.solvers)
-                {
-                    if (solver.startFrame >= duration)
-                        continue;
-                    if (solver.endFrame != -1 && solver.endFrame >= duration)
-                        solver.endFrame = duration - 1;
-                    solvers.append(solver);
-                }
-                target.solvers = solvers;
-            }
-            target.content.kind = ContentKind::Asset;
-            target.content.asset.hash = asset.hash;
-            target.content.asset.type = asset.type;
-            target.content.asset.sourceIn = sourceIn;
-            return true;
-        },
-        error);
+            .arg(asset.name, displayName(entity));
+    return apply(plan, error);
 }
 
 namespace {

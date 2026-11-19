@@ -46,6 +46,8 @@ set(PVF_VIDEO2_SEQUENCE_TEST_CASES
     restartReadsDiskIndex
     missingWebpFallsBack
     smallDiskBudgetEvicts
+    singleWriterDemotesSecondWriter
+    readOnlyNeverWrites
     cancelMidwayKeepsProgress
     cancelFlagStops
     missingVideoFails

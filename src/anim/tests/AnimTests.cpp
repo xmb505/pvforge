@@ -233,9 +233,55 @@ void testGravitySegment()
     CHECK_NEAR(frame1.y(), expected, 1e-9);
 }
 
-void testSpinSegment()
+// Issue #52: the black hole only resizes the entity when the user opts in.
+void testBlackHoleCaptureScale()
 {
     Project project;
+    Entity entity = makeEntity(QStringLiteral("ball"), 0, 120);
+    entity.transform.x = 150.0;
+    entity.transform.y = 0.0;
+    entity.transform.scaleX = 2.0;
+    entity.transform.scaleY = 2.0;
+    setTrack(entity, "x", {{0, 150.0}});
+    setTrack(entity, "y", {{0, 0.0}});
+
+    SolverSegment segment = makeSegment(
+        QStringLiteral("seg-hole"), SolverEffect::BlackHole, 0, -1,
+        QStringLiteral("hole"));
+    segment.params.insert(QStringLiteral("mass"), 5000.0);
+    segment.params.insert(QStringLiteral("eventHorizonRadius"), 20.0);
+    segment.params.insert(QStringLiteral("objectRadius"), 5.0);
+    segment.params.insert(QStringLiteral("softening"), 20.0);
+    entity.solvers.append(segment);
+    addEntity(project, entity);
+    addEntity(project, makeEntity(QStringLiteral("hole")));
+
+    MockWorld world;
+    world.poses.insert(QStringLiteral("hole"),
+                       solver::Pose{QPointF(0.0, 0.0), 0.0});
+
+    const auto scaleAt = [&](int frame) {
+        return anim::evaluateEntity(project, entity.uuid, frame, world)
+            .world.m11();
+    };
+
+    // Default: the entity stops at the capture point with its own size.
+    CHECK_NEAR(scaleAt(1), 2.0, 1e-9);
+    CHECK_NEAR(scaleAt(119), 2.0, 1e-9);
+
+    // Opt-in: the same entity shrinks to zero and stays swallowed.
+    entity.solvers[0].params.insert(QStringLiteral("captureShrink"), true);
+    project.entities[entity.uuid] = entity;
+    CHECK_NEAR(scaleAt(0), 2.0, 1e-6);
+    double smallest = 2.0;
+    for (int frame = 0; frame < 120; ++frame)
+        smallest = std::min(smallest, scaleAt(frame));
+    CHECK(smallest < 2.0);
+    CHECK_NEAR(scaleAt(119), 0.0, 1e-9);
+}
+
+void testSpinSegment()
+{    Project project;
     Entity entity = makeEntity(QStringLiteral("spin"), 0, 100);
     setTrack(entity, "rotation", {{0, 10.0}, {20, 100.0}});
     SolverSegment segment = makeSegment(
@@ -1018,6 +1064,7 @@ int main(int argc, char** argv)
     testFractionalTracks();
     testPivotFormula();
     testGravitySegment();
+    testBlackHoleCaptureScale();
     testSpinSegment();
     testFractionalSolverSegment();
     testOrbitSegmentMiddle();

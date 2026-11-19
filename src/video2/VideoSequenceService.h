@@ -6,10 +6,12 @@
 #include <QCache>
 #include <QHash>
 #include <QImage>
+#include <QLockFile>
 #include <QString>
 
 #include <atomic>
 #include <functional>
+#include <memory>
 
 namespace pvf::video2 {
 
@@ -22,6 +24,11 @@ struct SequenceOptions
     int maxWidth = 960;
     qint64 diskBudgetBytes = 2LL * 1024 * 1024 * 1024;
     int memoryEntries = 64;
+    // Read-only open (used by the preview/proxy path, which only consumes
+    // frames the extraction queue wrote).  A read-only instance never creates,
+    // rewrites or deletes cache files.  Only one writer may own a cache key at
+    // a time: a second writer is demoted to read-only through index.lock.
+    bool readOnly = false;
 };
 
 struct SequenceProgress
@@ -75,6 +82,8 @@ public:
     int totalFrames() const;
     QString cacheDirectory() const;
     QString indexFilePath() const;
+    // True when this instance owns the single-writer cache lock.
+    bool canWrite() const { return m_canWrite; }
 
     // Last error reported by extract()/frame().
     QString lastError() const;
@@ -121,6 +130,11 @@ private:
     QString m_lastError;
 
     Stats m_stats;
+    // Single-writer guard for one cache key.  The writer holds index.lock for
+    // the instance lifetime; a read-only instance (or a demoted second writer)
+    // never creates, rewrites or deletes cache files.
+    std::unique_ptr<QLockFile> m_writeLock;
+    bool m_canWrite = false;
 };
 
 } // namespace pvf::video2

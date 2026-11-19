@@ -43,3 +43,21 @@ foreach(test_case IN LISTS PVF_HTML2_TEST_CASES)
         SKIP_RETURN_CODE 77
         RESOURCE_LOCK pvforge_chrome)
 endforeach()
+
+add_executable(pvf_html2_concurrency_tests
+    HtmlConcurrencyTests.cpp
+)
+
+find_package(Qt6 REQUIRED COMPONENTS Test)
+
+target_link_libraries(pvf_html2_concurrency_tests PRIVATE
+    pvf_html2
+    Qt6::Gui
+    Qt6::Test
+)
+
+add_test(NAME html2.concurrency
+         COMMAND pvf_html2_concurrency_tests)
+set_tests_properties(html2.concurrency PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
+    TIMEOUT 120)

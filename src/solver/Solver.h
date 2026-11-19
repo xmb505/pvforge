@@ -18,6 +18,10 @@ struct Pose
 {
     QPointF position;
     double rotation = 0.0;
+    // Uniform scale factor applied on top of the entity's own scale.  The
+    // solver normally leaves it at 1; the black hole's optional capture shrink
+    // fades it to 0 near the event horizon (issue #52).
+    double scale = 1.0;
 };
 
 // Read-only view of the project at a given frame.  Poses and shapes must share
@@ -138,7 +142,10 @@ struct Result
 //              eventHorizonRadius (capture radius, default 80), objectRadius
 //              (default 40), softening (px, default 60), maxSpeed (px/s,
 //              default 4000, 0 = unlimited), stopThreshold (px/s, default 0 =
-//              disabled).  Center is targetUuid.  Crossing
+//              disabled), captureShrink (bool, default false: keep the
+//              entity's size at capture; true: scale it linearly from 1 at
+//              twice the capture radius to 0 when the object reaches the
+//              horizon).  Center is targetUuid.  Crossing
 //              eventHorizonRadius + objectRadius stops the motion (capture).
 //   Spiral:    turns (total revolutions, default 3), aspect (minor/major,
 //              0.01..1, default 1), angle (ellipse rotation in degrees,

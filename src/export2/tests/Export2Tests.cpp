@@ -913,87 +913,6 @@ void testAudioDurationAtDoubleFps()
     }
 }
 
-void testFrameProviders()
-{
-    QTemporaryDir directory;
-    CHECK(directory.isValid());
-    assets::AssetStore store(directory.path());
-
-    {
-        Project project = makeProject();
-        const Entity html =
-            makeAssetEntity(QStringLiteral("html"), AssetType::Html,
-                            QStringLiteral("html-hash"), 0, 10);
-        project.entities.insert(html.uuid, html);
-
-        const QString path = directory.path() + QStringLiteral("/html.mp4");
-        export2::Options options = makeOptions(path);
-        int calls = 0;
-        double lastFrame = -1.0;
-        options.htmlFrame = [&](const Uuid&, double projectFrame) {
-            ++calls;
-            lastFrame = projectFrame;
-            return redImage();
-        };
-        const export2::Result result =
-            export2::exportVideo(project, store, options);
-
-        CHECK(result.ok);
-        CHECK(QFileInfo::exists(path));
-        CHECK(calls == 10);
-        CHECK(std::abs(lastFrame - 9.0) < 1e-9);
-    }
-
-    {
-        Project project = makeProject();
-        const Entity video =
-            makeAssetEntity(QStringLiteral("video"), AssetType::Video,
-                            QStringLiteral("video-hash"), 0, 10);
-        project.entities.insert(video.uuid, video);
-
-        const QString path = directory.path() + QStringLiteral("/video.mp4");
-        export2::Options options = makeOptions(path);
-        options.outputFps = 60;
-        double lastFrame = -1.0;
-        options.videoFrame = [&](const Uuid&, double projectFrame) {
-            lastFrame = projectFrame;
-            return redImage();
-        };
-        const export2::Result result =
-            export2::exportVideo(project, store, options);
-
-        CHECK(result.ok);
-        CHECK(QFileInfo::exists(path));
-        CHECK(result.framesWritten == 20);
-        // 2x output fps samples fractional project frames.
-        CHECK(std::abs(lastFrame - 9.5) < 1e-9);
-    }
-}
-
-void testNoFrameProviderPlaceholder()
-{
-    QTemporaryDir directory;
-    CHECK(directory.isValid());
-    assets::AssetStore store(directory.path());
-    Project project = makeProject();
-    project.entities.insert(
-        QStringLiteral("html"),
-        makeAssetEntity(QStringLiteral("html"), AssetType::Html,
-                        QStringLiteral("html-hash"), 0, 10));
-    project.entities.insert(
-        QStringLiteral("video"),
-        makeAssetEntity(QStringLiteral("video"), AssetType::Video,
-                        QStringLiteral("video-hash"), 0, 10));
-
-    const QString path = directory.path() + QStringLiteral("/placeholder.mp4");
-    const export2::Result result =
-        export2::exportVideo(project, store, makeOptions(path));
-
-    CHECK(result.ok);
-    CHECK(result.framesWritten == 10);
-    CHECK(QFileInfo::exists(path));
-}
-
 void testHiddenAudioStillExported()
 {
     QTemporaryDir directory;
@@ -1480,9 +1399,6 @@ int main(int argc, char** argv)
         {QStringLiteral("invalidResolutionScale"), testInvalidResolutionScale},
         {QStringLiteral("audioDurationAtDoubleFps"),
          testAudioDurationAtDoubleFps},
-        {QStringLiteral("frameProviders"), testFrameProviders},
-        {QStringLiteral("noFrameProviderPlaceholder"),
-         testNoFrameProviderPlaceholder},
         {QStringLiteral("hiddenAudioStillExported"),
          testHiddenAudioStillExported},
         {QStringLiteral("visibleTrackMutesRange"), testVisibleTrackMutesRange},

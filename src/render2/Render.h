@@ -55,6 +55,12 @@ struct Options
     bool skipHidden = false;
     FrameProvider videoFrame;
     FrameProvider htmlFrame;
+    // Called whenever a visual asset entity cannot be drawn: the asset is
+    // missing/unreadable, or a video/HTML provider returned no frame.  Previews
+    // leave it empty and keep the placeholder card.  export2 installs a sink
+    // and fails the export instead of burning a "素材丢失" card into the MP4
+    // (issue #129).
+    std::function<void(const QString&)> contentIssue;
 };
 
 // Content of an entity at a project frame with its numeric content tracks

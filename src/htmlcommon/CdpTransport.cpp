@@ -39,23 +39,25 @@ private:
     WsClient* m_ws = nullptr;
 };
 
-// UI-thread-only hand-off. HtmlBrowser owns the child side of the pipes and
-// gives the parent ends here just before CdpClient is constructed.
+// Per-thread hand-off.  HtmlBrowser starts Chrome and creates CdpClient on the
+// same thread; the final export renderer lives on its own thread, so a
+// process-global slot would let two browsers steal each other's descriptors
+// (issue #126).
 struct PendingPipe
 {
     int readFd = -1;
     int writeFd = -1;
 };
 
-PendingPipe g_pendingPipe;
+thread_local PendingPipe t_pendingPipe;
 
 bool takePendingCdpPipe(int* readFd, int* writeFd)
 {
-    if (g_pendingPipe.readFd < 0 || g_pendingPipe.writeFd < 0)
+    if (t_pendingPipe.readFd < 0 || t_pendingPipe.writeFd < 0)
         return false;
-    *readFd = g_pendingPipe.readFd;
-    *writeFd = g_pendingPipe.writeFd;
-    g_pendingPipe = PendingPipe{};
+    *readFd = t_pendingPipe.readFd;
+    *writeFd = t_pendingPipe.writeFd;
+    t_pendingPipe = PendingPipe{};
     return true;
 }
 
@@ -69,26 +71,26 @@ bool setPendingCdpPipe(int readFd, int writeFd, QString* error)
             *error = QStringLiteral("invalid CDP pipe descriptors");
         return false;
     }
-    if (g_pendingPipe.readFd >= 0 || g_pendingPipe.writeFd >= 0)
+    if (t_pendingPipe.readFd >= 0 || t_pendingPipe.writeFd >= 0)
     {
         if (error)
             *error = QStringLiteral("a CDP pipe hand-off is already pending");
         return false;
     }
-    g_pendingPipe.readFd = readFd;
-    g_pendingPipe.writeFd = writeFd;
+    t_pendingPipe.readFd = readFd;
+    t_pendingPipe.writeFd = writeFd;
     return true;
 }
 
 void discardPendingCdpPipe()
 {
 #ifdef Q_OS_UNIX
-    if (g_pendingPipe.readFd >= 0)
-        ::close(g_pendingPipe.readFd);
-    if (g_pendingPipe.writeFd >= 0)
-        ::close(g_pendingPipe.writeFd);
+    if (t_pendingPipe.readFd >= 0)
+        ::close(t_pendingPipe.readFd);
+    if (t_pendingPipe.writeFd >= 0)
+        ::close(t_pendingPipe.writeFd);
 #endif
-    g_pendingPipe = PendingPipe{};
+    t_pendingPipe = PendingPipe{};
 }
 
 CdpTransport* createLoopbackCdpTransport(QObject* parent)

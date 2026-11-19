@@ -187,6 +187,18 @@ Result parseDirection(const QJsonObject& params)
     return success();
 }
 
+Result parseBoolParam(const QJsonObject& params, const char* key)
+{
+    const QJsonValue value = params.value(QLatin1String(key));
+    if (value.isUndefined() || value.isNull())
+        return success();
+    if (!value.isBool())
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("params.%1 必须是布尔值")
+                           .arg(QLatin1String(key)));
+    return success();
+}
+
 bool isKnownParam(SolverEffect effect, const QString& key)
 {
     switch (effect)
@@ -214,7 +226,8 @@ bool isKnownParam(SolverEffect effect, const QString& key)
                || key == QLatin1String("eventHorizonRadius")
                || key == QLatin1String("objectRadius")
                || key == QLatin1String("softening")
-               || key == QLatin1String("maxSpeed");
+               || key == QLatin1String("maxSpeed")
+               || key == QLatin1String("captureShrink");
     case SolverEffect::Spiral:
         return key == QLatin1String("targetUuid")
                || key == QLatin1String("turns")
@@ -303,7 +316,8 @@ Result validateSolverParams(const model::Project& project,
                     .ok
             || !(result = parseNumericParam(params, "maxSpeed", 0, 1000000,
                                             false, true))
-                    .ok)
+                    .ok
+            || !(result = parseBoolParam(params, "captureShrink")).ok)
             return result;
         break;
     case SolverEffect::Spiral:

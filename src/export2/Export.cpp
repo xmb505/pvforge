@@ -312,6 +312,12 @@ bool mixAudioEntity(const model::Project& project,
     const int64_t destinationStart =
         std::max<int64_t>(0, llround((overlapStart - exportStart)
                                      * samplesPerFrame));
+    // The clip ends at entity.end: samples past the overlap must never reach
+    // the mix even when the decoded source is longer (issue #128).
+    const int64_t destinationEnd = std::min<int64_t>(
+        mixFrames,
+        std::max<int64_t>(0, llround(double(overlapEnd - exportStart)
+                                     * samplesPerFrame)));
     const int64_t sourceFrame = content.sourceIn + (overlapStart - entity.start);
     const int64_t sourceStart =
         std::max<int64_t>(0, llround(sourceFrame * samplesPerFrame));
@@ -321,8 +327,8 @@ bool mixAudioEntity(const model::Project& project,
     auto mixConverted = [&](const float* data, int count) {
         const int64_t firstOutput =
             destinationStart + decodedSamples - sourceStart;
-        const int64_t firstFrameSample =
-            std::clamp<int64_t>(firstOutput, 0, std::max<int64_t>(0, mixFrames - 1));
+        const int64_t firstFrameSample = std::clamp<int64_t>(
+            firstOutput, 0, std::max<int64_t>(0, destinationEnd - 1));
         const int gainFrame =
             exportStart + int(firstFrameSample * fps / kAudioSampleRate);
         // Gain keeps its existing per-decoded-block sampling; visibility is
@@ -336,7 +342,7 @@ bool mixAudioEntity(const model::Project& project,
         {
             const int64_t output =
                 destinationStart + decodedSamples + i - sourceStart;
-            if (output < 0 || output >= mixFrames)
+            if (output < 0 || output >= destinationEnd)
                 continue;
             const int projectFrame =
                 exportStart + int(output * fps / kAudioSampleRate);
@@ -354,7 +360,8 @@ bool mixAudioEntity(const model::Project& project,
 
         decodedSamples += count;
         if (decodedSamples >= sourceStart
-            && destinationStart + (decodedSamples - sourceStart) >= mixFrames)
+            && destinationStart + (decodedSamples - sourceStart)
+                   >= destinationEnd)
             enough = true;
     };
 
@@ -1083,6 +1090,14 @@ Result exportVideo(const model::Project& project,
     renderOptions.background = background;
     renderOptions.videoFrame = options.videoFrame;
     renderOptions.htmlFrame = options.htmlFrame;
+    // Placeholder cards are preview-only (issue #129).  Any entity that cannot
+    // produce real content makes the export fail instead of silently encoding
+    // a "素材丢失" card into the MP4.
+    QStringList contentIssues;
+    renderOptions.contentIssue = [&contentIssues](const QString& message) {
+        if (contentIssues.size() < 4 && !contentIssues.contains(message))
+            contentIssues.append(message);
+    };
 
     const QPoint contentOffset((outputSize.width() - contentSize.width()) / 2,
                                (outputSize.height() - contentSize.height()) / 2);
@@ -1097,8 +1112,14 @@ Result exportVideo(const model::Project& project,
     {
         // Time sampling: output frame -> project frame (fractional at 2x/4x).
         renderOptions.projectFrame = start + frameIndex * projectFrameStep;
+        contentIssues.clear();
         QImage rendered = render2::renderFrame(project, assets, renderOptions,
                                                world, cache);
+        if (!contentIssues.isEmpty())
+            return fail(QStringLiteral("第 %1 帧缺少可导出内容：%2")
+                            .arg(QString::number(renderOptions.projectFrame,
+                                                 'g', 10),
+                                 contentIssues.join(QStringLiteral("；"))));
         if (rendered.isNull())
             return fail(QStringLiteral("渲染第 %1 帧失败")
                             .arg(renderOptions.projectFrame));

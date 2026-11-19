@@ -63,7 +63,9 @@ using LegacyProgress = std::function<bool(int frame, int total)>;
 //
 // Audio: every Asset entity with assetType Audio that overlaps the export
 // range and is visible during that overlap is decoded through FFmpeg,
-// resampled to 48 kHz stereo float and mixed additively.  Visibility follows
+// resampled to 48 kHz stereo float and mixed additively.  Each entity is
+// truncated at its own `end` (destinationEnd), so trimming a clip in the
+// timeline also silences the rendered mix past that point.  Visibility follows
 // the Anim rule: the step-evaluated `visible` track and inherited parent
 // visibility; editor-only `hidden` is ignored.  Invisible stretches of a
 // partially visible entity stay silent.  The
@@ -107,8 +109,10 @@ struct Result
     bool ok = false;
     QString error;
     int framesWritten = 0;
-    // Non-fatal audio problems (missing asset, undecodable file, no AAC
-    // encoder, ...).  The export still succeeds and falls back to silence.
+    // Non-fatal problems (missing/undecodable audio asset, no AAC encoder,
+    // ...).  The export still succeeds and falls back to silence.  Visual
+    // content problems (missing image/video/HTML asset, a decode or HTML
+    // timeout) are fatal and reported through `error`, never as warnings.
     QStringList warnings;
 };
 

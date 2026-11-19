@@ -202,6 +202,32 @@ QRectF centeredRect(const QSize& size)
     return centeredRect(QSizeF(size));
 }
 
+// Model-space rectangle of a visual asset entity.  A decoded video/HTML frame
+// is only a texture: its pixel size depends on the preview proxy (960 px) or
+// the export resolution and must never define the entity's world rectangle.
+// The asset metadata (original width/height; HTML logicalSize) is the single
+// source of truth, so painting, contentSize(), the selection box and the
+// collision shape all share one rectangle.
+QRectF assetBounds(const assets::AssetStore& store,
+                   const model::AssetContent& content)
+{
+    return centeredRect(placeholderSize(store, content));
+}
+
+// Export diagnostics (issue #129): record that this entity produced no
+// drawable content instead of silently painting the preview placeholder.
+void noteContentIssue(const Options& options, const model::Entity& entity,
+                      const QString& kind, double projectFrame)
+{
+    if (!options.contentIssue)
+        return;
+    const QString name = entity.name.isEmpty() ? entity.uuid : entity.name;
+    options.contentIssue(
+        QStringLiteral("%1实体 \"%2\" 在第 %3 帧没有画面")
+            .arg(kind, name)
+            .arg(QString::number(projectFrame, 'g', 10)));
+}
+
 void paintCheckerboard(QPainter& painter, const QRectF& rect,
                        const QColor& base = QColor(64, 64, 64),
                        const QColor& alternate = QColor(96, 96, 96),
@@ -1003,6 +1029,8 @@ void paintContent(QPainter& painter, const model::Entity& entity,
         {
             // Missing metadata and unreadable files both count as offline: the
             // entity keeps existing, but there is nothing usable to draw.
+            noteContentIssue(options, entity, QStringLiteral("图片"),
+                             projectFrame);
             paintMissingAssetCard(painter,
                                   centeredRect(placeholderSize(store, asset)),
                                   asset);
@@ -1020,24 +1048,27 @@ void paintContent(QPainter& painter, const model::Entity& entity,
                 : QImage();
         if (isAssetMissing(store, asset))
         {
-            paintMissingAssetCard(painter,
-                                  centeredRect(placeholderSize(store, asset)),
-                                  asset);
+            noteContentIssue(options, entity, QStringLiteral("视频"),
+                             projectFrame);
+            paintMissingAssetCard(painter, assetBounds(store, asset), asset);
             return;
         }
 
+        // The proxy decoder returns 960 px frames while an export decodes the
+        // original size; scaling the texture into the metadata rectangle keeps
+        // both compositions identical.
+        const QRectF bounds = assetBounds(store, asset);
         if (!frame.isNull())
         {
-            const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
-                                frame.width(), frame.height());
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             painter.drawImage(bounds, frame);
         }
         else
         {
             // The asset exists; the provider simply has no decoded frame yet.
-            paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                             assetPlaceholderLabel(store, asset));
+            noteContentIssue(options, entity, QStringLiteral("视频"),
+                             projectFrame);
+            paintPlaceholder(painter, bounds, assetPlaceholderLabel(store, asset));
         }
         return;
     }
@@ -1049,24 +1080,24 @@ void paintContent(QPainter& painter, const model::Entity& entity,
                 : QImage();
         if (isAssetMissing(store, asset))
         {
-            paintMissingAssetCard(painter,
-                                  centeredRect(placeholderSize(store, asset)),
-                                  asset);
+            noteContentIssue(options, entity, QStringLiteral("HTML"),
+                             projectFrame);
+            paintMissingAssetCard(painter, assetBounds(store, asset), asset);
             return;
         }
 
+        const QRectF bounds = assetBounds(store, asset);
         if (!frame.isNull())
         {
-            const QRectF bounds(-frame.width() / 2.0, -frame.height() / 2.0,
-                                frame.width(), frame.height());
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             painter.drawImage(bounds, frame);
         }
         else
         {
             // Asset present but Chrome has not produced a frame yet.
-            paintPlaceholder(painter, centeredRect(placeholderSize(store, asset)),
-                             assetPlaceholderLabel(store, asset));
+            noteContentIssue(options, entity, QStringLiteral("HTML"),
+                             projectFrame);
+            paintPlaceholder(painter, bounds, assetPlaceholderLabel(store, asset));
         }
         return;
     }

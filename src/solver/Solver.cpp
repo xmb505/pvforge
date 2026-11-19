@@ -135,6 +135,24 @@ double paramNumber(const QVariantMap &params, const char *key, double fallback)
     return ok ? value : fallback;
 }
 
+bool paramBool(const QVariantMap &params, const char *key, bool fallback)
+{
+    const auto it = params.constFind(QString::fromLatin1(key));
+    if (it == params.constEnd() || !it->isValid())
+        return fallback;
+    if (it->typeId() == QMetaType::QString)
+    {
+        const QString text = it->toString().trimmed().toLower();
+        if (text == QStringLiteral("true") || text == QStringLiteral("1")
+            || text == QStringLiteral("yes"))
+            return true;
+        if (text == QStringLiteral("false") || text == QStringLiteral("0")
+            || text == QStringLiteral("no"))
+            return false;
+    }
+    return it->toBool();
+}
+
 int paramDirection(const QVariantMap &params, int fallback)
 {
     const auto it = params.constFind(QStringLiteral("direction"));

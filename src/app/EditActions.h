@@ -174,8 +174,12 @@ public:
     // accept any group and camera/generated content reject asset replacement.
     // Timed assets clamp sourceIn and trim the entity end (dropping keys past
     // the new duration); children that would fall outside are rejected.
+    // A video's split-out audio child is updated in the same commit: its hash
+    // follows the new video's embedded audio (removed when the new video is
+    // silent) unless syncChildAudio is false, in which case only its range
+    // follows the new duration.
     bool replaceAsset(const Uuid& uuid, const AssetHash& hash,
-                      QString* error = nullptr);
+                      QString* error = nullptr, bool syncChildAudio = true);
 
     // Batch clip helpers used by the timeline multi-selection.  Each one
     // commits exactly one plan.  duplicateEntities clones the selected

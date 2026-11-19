@@ -74,6 +74,8 @@ target_compile_features(pvf_next_document PUBLIC cxx_std_20)
 add_library(pvf_next_services STATIC
     MediaServices.cpp
     MediaServices.h
+    MediaExportSession.cpp
+    MediaExportSession.h
     WorkbenchServices.cpp
     WorkbenchServices.h
     PlaybackController.cpp
