@@ -70,7 +70,14 @@ QString defaultConfigPath()
 
 QString defaultEndpointPath()
 {
+#if defined(Q_OS_MACOS)
+    // Keep this identical to defaultMcpEndpointPath() in src/mcp/StdioBridge.cpp;
+    // a different directory made the bridge unable to find the GUI endpoint.
+    return QDir::homePath()
+           + QStringLiteral("/Library/Application Support/PVForge/mcp-endpoint.json");
+#else
     return configDirectory() + QStringLiteral("/mcp-endpoint.json");
+#endif
 }
 
 QFileDevice::Permissions privateFilePermissions()

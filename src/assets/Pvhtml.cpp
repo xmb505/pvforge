@@ -255,6 +255,11 @@ bool readManifest(const QString& bundleRoot, PvhtmlManifest* manifest, QString* 
         setError(error, QStringLiteral("无法读取 %1: %2").arg(manifestPath, file.errorString()));
         return false;
     }
+    if (file.size() > 1024 * 1024)
+    {
+        setError(error, QStringLiteral("pvhtml.json 超过 1MB 上限: %1").arg(manifestPath));
+        return false;
+    }
 
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
