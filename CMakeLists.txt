@@ -79,12 +79,10 @@ set(PVF_APP_SOURCES
     src/media/VideoProxy.cpp
     src/media/AudioDecoder.cpp
     src/media/DecoderInfo.cpp
-    src/mcp/StdioBridge.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
     src/app/SettingsDialogAppPages.cpp
-    src/app/SettingsDialogLegacyPages.cpp
     src/app/SettingsDialogSupport.h
     src/app/ExportDialog.cpp
     src/app/ExportProgressDialog.cpp
@@ -175,10 +173,7 @@ add_library(pvf_app STATIC ${PVF_APP_SOURCES})
 target_compile_definitions(pvf_app PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
     PVFORGE_BUILD_TYPE="$<CONFIG>"
-    PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
 )
-
-add_dependencies(pvf_app pvforge-mcp)
 
 target_include_directories(pvf_app PUBLIC src)
 target_link_libraries(pvf_app PUBLIC
@@ -225,8 +220,10 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/McpTests.cpp
         src/tests/PerfTests.cpp
         src/tests/PanelLayoutTests.cpp
-        # Test-only helpers live in src/tests.
+        # Test-only helpers live in src/tests.  The stdio bridge is not part of
+        # the GUI: only the pvforge-mcp CLI and its test link it.
         src/tests/StdioBridgeTest.cpp
+        src/mcp/StdioBridge.cpp
     )
 
     add_executable(pvforge-tests src/main.cpp ${PVF_TEST_SOURCES})

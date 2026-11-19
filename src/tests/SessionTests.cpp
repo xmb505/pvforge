@@ -296,7 +296,7 @@ int settingsTest(QApplication& app)
 
         auto* live = window->editorSessionForTest();
         auto* dialog = window->openSessionSettingsDialogForTest();
-        if (!live || !dialog || !dialog->appSettingsMode())
+        if (!live || !dialog)
         {
             qCritical() << "settings-test: session settings dialog missing";
             return 1;
@@ -504,6 +504,21 @@ int settingsTest(QApplication& app)
                QStringLiteral("workbench stats were not refreshed: %1")
                    .arg(workbenchStats->text()));
 
+        // The About page is the same widget Help -> About opens.
+        dialog->showAboutPage();
+        QApplication::processEvents();
+        auto* about =
+            dialog->findChild<QPlainTextEdit*>(QStringLiteral("aboutText"));
+        const QString aboutInfo = about ? about->toPlainText() : QString();
+        expect(about && aboutInfo.contains(QStringLiteral("处理器"))
+                   && aboutInfo.contains(QStringLiteral("FFmpeg"))
+                   && aboutInfo.contains(QStringLiteral("Qt "))
+                   && aboutInfo.contains(QStringLiteral("PVForge")),
+               QStringLiteral("about page incomplete"));
+        expect(dialog->findChild<QPushButton*>(QStringLiteral("aboutCopy"))
+                   != nullptr,
+               QStringLiteral("about copy button missing"));
+
         dialog->reject();
         window->close();
         QApplication::processEvents();
@@ -546,71 +561,6 @@ int settingsTest(QApplication& app)
         return 1;
     }
 
-    {
-        pvf::SettingsDialog dialog;
-        dialog.show();
-        QApplication::processEvents();
-        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings.png"));
-
-        auto* autosave = dialog.findChild<QCheckBox*>(QStringLiteral("autosaveEnabled"));
-        auto* autosaveMinutes =
-            dialog.findChild<QSpinBox*>(QStringLiteral("autosaveMinutes"));
-        if (!autosave || !autosave->isChecked() || !autosaveMinutes
-            || autosaveMinutes->value() != 5)
-        {
-            qCritical() << "settings-test: autosave default is not on / 5 minutes"
-                        << (autosave ? autosave->isChecked() : false)
-                        << (autosaveMinutes ? autosaveMinutes->value() : -1);
-            return 1;
-        }
-
-        auto* categories =
-            dialog.findChild<QListWidget*>(QStringLiteral("settingsCategories"));
-        if (categories)
-            categories->setCurrentRow(5);
-        QApplication::processEvents();
-        auto* videoValue =
-            dialog.findChild<QLabel*>(QStringLiteral("decoderVideoValue"));
-        auto* modeValue =
-            dialog.findChild<QLabel*>(QStringLiteral("decoderModeValue"));
-        if (!videoValue || !videoValue->text().contains(QStringLiteral("软件解码"))
-            || videoValue->width() < 120 || !modeValue
-            || !modeValue->text().contains(QStringLiteral("软件解码")))
-        {
-            qCritical() << "settings-test: decoder value not visible"
-                        << (videoValue ? videoValue->text() : QString())
-                        << (videoValue ? videoValue->width() : -1);
-            return 1;
-        }
-        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings_decode.png"));
-
-        dialog.showAboutPage();
-        QApplication::processEvents();
-        auto* about = dialog.findChild<QPlainTextEdit*>(QStringLiteral("aboutText"));
-        const QString text = about ? about->toPlainText() : QString();
-        if (!about || !text.contains(QStringLiteral("处理器"))
-            || !text.contains(QStringLiteral("FFmpeg"))
-            || !text.contains(QStringLiteral("Qt "))
-            || !text.contains(QStringLiteral("PVForge")))
-        {
-            qCritical() << "settings-test: about page incomplete";
-            return 1;
-        }
-        auto* copy = dialog.findChild<QPushButton*>(QStringLiteral("aboutCopy"));
-        if (!copy)
-        {
-            qCritical() << "settings-test: about copy button missing";
-            return 1;
-        }
-        if (!categories || !categories->currentItem()
-            || categories->currentItem()->text() != QStringLiteral("关于"))
-        {
-            qCritical() << "settings-test: about category not selected";
-            return 1;
-        }
-        dialog.grab().toImage().save(QStringLiteral("/tmp/pvf_settings_about.png"));
-        dialog.close();
-    }
     pvf::Settings::setEdgeCenterSnap(true);
     if (!pvf::Settings::edgeCenterSnap())
     {
@@ -665,12 +615,6 @@ int settingsTest(QApplication& app)
             qCritical() << "settings-test: viewport is disabled";
             ++failures;
         }
-
-        // The settings dialog builds and can be shown.
-        pvf::SettingsDialog dialog(window);
-        dialog.show();
-        QApplication::processEvents();
-        dialog.grab().toImage().save(QStringLiteral("/tmp/pvforge_settings.png"));
 
         qInfo() << "settings-test failures" << failures;
         app.exit(failures == 0 ? 0 : 1);

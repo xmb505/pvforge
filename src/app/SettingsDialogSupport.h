@@ -16,10 +16,6 @@
 namespace pvf {
 namespace settings_detail {
 
-#ifndef PVFORGE_MCP_BINARY
-#define PVFORGE_MCP_BINARY "pvforge-mcp"
-#endif
-
 inline QIcon themeIcon(const QStringList& names)
 {
     for (const QString& name : names)
