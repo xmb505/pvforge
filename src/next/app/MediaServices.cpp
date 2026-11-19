@@ -121,7 +121,7 @@ void MediaServices::stop()
     m_sequences.clear();
     if (m_videoFrames)
         m_videoFrames->clear();
-    m_exportVideoFrames.reset();
+    m_exportDecoders.clear();
     if (m_html)
         m_html->stop();
     m_htmlInFlight = false;
@@ -535,13 +535,15 @@ QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
     if (path.isEmpty())
         return {};
 
-    if (!m_exportVideoFrames)
+    if (m_exportDecoders.find(asset->hash) == m_exportDecoders.end())
     {
-        // One full-resolution decoder for the export worker.  It stays open and
-        // decodes sequentially; the tiny memory cache only covers repeated
-        // requests for the same timestamp (issue #131).
-        m_exportVideoFrames = std::make_unique<video2::VideoFrames>(0, 2);
+        // One sequential decoder per video asset: an export that interleaves
+        // two clips keeps both files open and decodes each strictly forward
+        // instead of re-opening/seeking per frame (issue #131).
+        m_exportDecoders.emplace(
+            asset->hash, std::make_unique<video2::VideoFrames>(0, 2));
     }
+    video2::VideoFrames& decoder = *m_exportDecoders.at(asset->hash);
 
     video2::Request request;
     request.path = path;
@@ -554,7 +556,7 @@ QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
     request.proxy = false;
 
     QString error;
-    const QImage image = m_exportVideoFrames->frame(request, &error);
+    const QImage image = decoder.frame(request, &error);
     if (!error.isEmpty())
         qWarning().noquote() << "export video frame failed:" << error;
     return image;

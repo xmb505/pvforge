@@ -103,13 +103,15 @@ QImage MediaExportSession::videoFrame(const Uuid& entityUuid,
     if (path.isEmpty())
         return {};
 
-    if (!m_videoFrames)
+    if (m_exportDecoders.find(asset->hash) == m_exportDecoders.end())
     {
-        // Full-resolution decoder reserved for this export.  It keeps the file
-        // open and decodes sequentially, so a long export does not re-open and
-        // seek per frame (issue #131).
-        m_videoFrames = std::make_unique<video2::VideoFrames>(0, 2);
+        // One sequential decoder per video asset: an export that interleaves
+        // two clips keeps both files open and decodes each strictly forward
+        // instead of re-opening/seeking per frame (issue #131).
+        m_exportDecoders.emplace(
+            asset->hash, std::make_unique<video2::VideoFrames>(0, 2));
     }
+    video2::VideoFrames& decoder = *m_exportDecoders.at(asset->hash);
 
     video2::Request request;
     request.path = path;
@@ -122,7 +124,7 @@ QImage MediaExportSession::videoFrame(const Uuid& entityUuid,
     request.proxy = false;
 
     QString error;
-    const QImage image = m_videoFrames->frame(request, &error);
+    const QImage image = decoder.frame(request, &error);
     if (image.isNull())
         noteError(error);
     return image;
@@ -209,7 +211,7 @@ QImage MediaExportSession::htmlFrame(const Uuid& entityUuid,
 void MediaExportSession::finish()
 {
     m_html.reset();
-    m_videoFrames.reset();
+    m_exportDecoders.clear();
 }
 
 } // namespace pvf::next

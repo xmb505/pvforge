@@ -9,6 +9,7 @@
 #include <QSize>
 #include <QString>
 
+#include <map>
 #include <memory>
 
 namespace pvf::html2 {
@@ -71,8 +72,9 @@ private:
     QString m_cacheRoot;
     QSize m_exportPixelSize;
 
-    std::unique_ptr<video2::VideoFrames> m_videoFrames;
     std::unique_ptr<html2::HtmlFrameService> m_html;
+    // One sequential decoder per video asset (export worker only).
+    std::map<AssetHash, std::unique_ptr<video2::VideoFrames>> m_exportDecoders;
     QString m_lastError;
 };
 
