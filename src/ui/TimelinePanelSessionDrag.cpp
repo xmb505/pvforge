@@ -565,6 +565,29 @@ void TimelinePanel::finishSessionDrag()
                 m_selectedKeyframes = moved;
                 emit keyframeSelectionChanged(m_selectedKeyframes);
             }
+            else if (mode == DragMode::TrimStart
+                     || mode == DragMode::TrimEnd)
+            {
+                // Trimming keeps the absolute frame of surviving keys but
+                // drops the ones the cut removed; the selection must follow.
+                QVector<KeyframeSelection> kept;
+                for (const KeyframeSelection& selection : m_selectedKeyframes)
+                {
+                    const Uuid keyUuid = uuidForEntityId(selection.entity);
+                    const auto it =
+                        m_sessionPlan.project.entities.constFind(keyUuid);
+                    if (it == m_sessionPlan.project.entities.constEnd())
+                        continue;
+                    if (selection.frame >= it->start
+                        && selection.frame < it->end)
+                        kept.append(selection);
+                }
+                if (kept.size() != m_selectedKeyframes.size())
+                {
+                    m_selectedKeyframes = kept;
+                    emit keyframeSelectionChanged(m_selectedKeyframes);
+                }
+            }
             emit editCommitted(m_sessionPlan.message);
         }
     }
