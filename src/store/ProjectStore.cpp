@@ -2,9 +2,17 @@
 
 #include "store/ProjectStoreSupport.h"
 
+#include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLockFile>
+#include <QMutex>
+#include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 #include <utility>
@@ -19,11 +27,13 @@ using namespace detail;
 namespace {
 
 constexpr char kInitMessage[] = "pvf: init project";
+constexpr char kCommitFailureMarker[] = ".pvforge/commit-failed.json";
 
 const char kGitIgnore[] = R"(# PVForge versions text project data only; media and caches stay local.
 assets/
 .cache/
 .pvforge/
+.trash/
 
 # Temporary preview and export files.
 *.tmp
@@ -63,18 +73,62 @@ QVector<Uuid> collectSubtree(const model::Project& project, const Uuid& uuid)
 
 } // namespace
 
-ProjectStore::ProjectStore(QString root, model::Project project)
+ProjectStore::ProjectStore(QString root, model::Project project,
+                           std::shared_ptr<detail::ProjectLock> lock)
     : m_root(std::move(root))
     , m_project(std::move(project))
+    , m_lock(std::move(lock))
 {
     m_assets.emplace(m_root);
     rebuildEntityRootIndex();
+    refreshDigests();
 }
 
 bool ProjectStore::gitBinaryAvailable(QString* version)
 {
     return gitVersion(version);
 }
+
+bool ProjectStore::ensureWritable(QString* error) const
+{
+    if (!readOnly())
+        return true;
+    setError(error,
+             QStringLiteral("工程以只读方式打开：%1").arg(m_readOnlyReason));
+    return false;
+}
+
+void ProjectStore::setReadOnly(const QString& reason)
+{
+    if (!reason.isEmpty())
+        m_readOnlyReason = reason;
+}
+
+namespace {
+
+// Removes everything this create() call wrote. The directory was empty (or
+// absent) before, so removing exactly these entries is safe and lets the user
+// retry after a failure instead of hitting "directory is not empty".
+void cleanupCreatedProject(const QString& root)
+{
+    const QStringList entries = {
+        QStringLiteral("project.json"), QStringLiteral(".gitignore"),
+        QStringLiteral("entities"),     QStringLiteral("assets"),
+        QStringLiteral(".git"),         QStringLiteral(".pvforge"),
+        QStringLiteral(".trash"),
+    };
+    for (const QString& entry : entries)
+    {
+        const QString path = absolutePath(root, entry);
+        const QFileInfo info(path);
+        if (info.isDir())
+            QDir(path).removeRecursively();
+        else if (info.exists())
+            QFile::remove(path);
+    }
+}
+
+} // namespace
 
 std::optional<ProjectStore> ProjectStore::create(
     const QString& projectDir, const model::ProjectSettings& settings,
@@ -98,7 +152,8 @@ std::optional<ProjectStore> ProjectStore::create(
     const QString root =
         QDir::cleanPath(QFileInfo(projectDir).absoluteFilePath());
     const QFileInfo info(root);
-    if (info.exists())
+    const bool existedBefore = info.exists();
+    if (existedBefore)
     {
         if (!info.isDir())
         {
@@ -115,12 +170,19 @@ std::optional<ProjectStore> ProjectStore::create(
         }
     }
 
+    const auto fail = [&](const QString& message) -> std::optional<ProjectStore> {
+        setError(error, message);
+        cleanupCreatedProject(root);
+        if (!existedBefore)
+            QDir().rmdir(root);
+        return std::nullopt;
+    };
+
     QDir directory;
     if (!directory.mkpath(root) || !directory.mkpath(absolutePath(root, QStringLiteral("entities")))
         || !directory.mkpath(absolutePath(root, QStringLiteral("assets"))))
     {
-        setError(error, QStringLiteral("无法创建工程目录：%1").arg(root));
-        return std::nullopt;
+        return fail(QStringLiteral("无法创建工程目录：%1").arg(root));
     }
 
     if (!writeJsonObject(absolutePath(root, QStringLiteral("project.json")),
@@ -128,7 +190,8 @@ std::optional<ProjectStore> ProjectStore::create(
         || !writeTextFile(absolutePath(root, QStringLiteral(".gitignore")),
                           QString::fromLatin1(kGitIgnore), error))
     {
-        return std::nullopt;
+        const QString message = error ? *error : QStringLiteral("无法写入初始文件");
+        return fail(message);
     }
 
     if (useRepo)
@@ -137,24 +200,20 @@ std::optional<ProjectStore> ProjectStore::create(
             runGit(root, {QStringLiteral("init")});
         if (init.exitCode != 0)
         {
-            setError(error,
-                     QStringLiteral("git init 失败：%1")
-                         .arg(processFailure(init)));
-            return std::nullopt;
+            return fail(QStringLiteral("git init 失败：%1")
+                            .arg(processFailure(init)));
         }
 
         if (!ensureGitIdentity(root, error))
-            return std::nullopt;
+            return fail(error ? *error : QStringLiteral("无法配置 git 身份"));
 
         const ProcessResult add = runGit(
             root, {QStringLiteral("add"), QStringLiteral("--"),
                    QStringLiteral(".gitignore"), QStringLiteral("project.json")});
         if (add.exitCode != 0)
         {
-            setError(error,
-                     QStringLiteral("git add 初始文件失败：%1")
-                         .arg(processFailure(add)));
-            return std::nullopt;
+            return fail(QStringLiteral("git add 初始文件失败：%1")
+                            .arg(processFailure(add)));
         }
 
         QString ignoredHash;
@@ -163,11 +222,15 @@ std::optional<ProjectStore> ProjectStore::create(
                 {QStringLiteral(".gitignore"), QStringLiteral("project.json")},
                 &ignoredHash, error))
         {
-            return std::nullopt;
+            return fail(error ? *error : QStringLiteral("git 初始提交失败"));
         }
     }
 
-    ProjectStore store(root, std::move(initialProject));
+    auto lock = acquireProjectLock(root, error);
+    if (!lock)
+        return fail(error ? *error : QStringLiteral("无法锁定工程目录"));
+
+    ProjectStore store(root, std::move(initialProject), std::move(lock));
     store.m_gitEnabled = useRepo;
     return std::move(store);
 }
@@ -190,6 +253,20 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
         return std::nullopt;
     }
 
+    auto lock = acquireProjectLock(root, error);
+    if (!lock)
+        return std::nullopt;
+
+    // Finish any save a previous session started but did not complete before
+    // reading the model: the journal contains fully staged bytes.
+    QString recoveryError;
+    if (!recoverPendingTransactions(root, &recoveryError))
+    {
+        setError(error,
+                 QStringLiteral("无法恢复未完成的保存：%1").arg(recoveryError));
+        return std::nullopt;
+    }
+
     // Missing git or a missing repository is not an error: the project opens
     // as a plain text store. Only explicit useGit=false skips the probe.
     const bool useRepo =
@@ -198,24 +275,68 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
         && QFileInfo::exists(absolutePath(root, QStringLiteral(".git")));
 
     model::Project project;
-    if (!loadProjectData(root, &project, error))
+    LoadReport report;
+    QString loadError;
+    if (!loadProjectData(root, &project, &loadError, &report))
+    {
+        setError(error, loadError);
         return std::nullopt;
+    }
 
     // The in-memory undo/redo history starts empty after opening a project;
     // across sessions git history is the cold backup.
-    ProjectStore store(root, std::move(project));
+    ProjectStore store(root, std::move(project), std::move(lock));
     store.m_gitEnabled = useRepo;
+    for (const QuarantinedPath& item : report.quarantined)
+        store.m_quarantined.append(QuarantinedFile{item.path, item.reason});
+    if (!store.m_quarantined.isEmpty())
+    {
+        QStringList names;
+        for (int i = 0; i < store.m_quarantined.size() && i < 5; ++i)
+            names << QFileInfo(store.m_quarantined.at(i).path).fileName();
+        if (store.m_quarantined.size() > names.size())
+            names << QStringLiteral("…");
+        store.m_readOnlyReason =
+            QStringLiteral("打开时隔离了 %1 个损坏或重复的实体文件（%2），"
+                           "为避免覆盖未加载的数据，工程以只读方式打开。")
+                .arg(store.m_quarantined.size())
+                .arg(names.join(QStringLiteral("、")));
+    }
 
     // Scan once so the caller can offer recover/discard. A transient git
     // failure (for example a stale index.lock) must not block opening; the
     // caller can rescan with dirtyTextFiles().
     if (store.m_gitEnabled)
+    {
+        // Commit failures from a missing identity are confusing; fill in the
+        // project-local identity while opening, like create()/setGitEnabled().
+        QString identityError;
+        ensureGitIdentity(root, &identityError);
         store.refreshDirtyText();
-    return std::move(store);
+    }
+
+    // A failed git commit from the previous session is a different state from
+    // an abnormal exit; the recovery dialog reports it separately.
+    const QString markerPath =
+        absolutePath(root, QString::fromLatin1(kCommitFailureMarker));
+    if (QFileInfo::exists(markerPath))
+    {
+        QJsonObject marker;
+        QString markerError;
+        if (readJsonObject(markerPath, &marker, &markerError))
+            store.m_previousCommitFailure =
+                marker.value(QStringLiteral("message")).toString();
+        if (store.m_previousCommitFailure.isEmpty())
+            store.m_previousCommitFailure = QStringLiteral("上次关闭时提交失败");
+    }
+    return store;
 }
 
 bool ProjectStore::setGitEnabled(bool enabled, QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
+
     if (!enabled)
     {
         m_gitEnabled = false;
@@ -330,11 +451,14 @@ void ProjectStore::rebuildEntityRootIndex()
     }
 }
 
-bool ProjectStore::writeEntityTree(const Uuid& rootUuid, QString* error)
+namespace {
+
+bool buildEntityTreeBytes(const model::Project& project, const Uuid& rootUuid,
+                          QByteArray* bytes, QString* error)
 {
     model::EntityTreeNode tree;
     QString buildError;
-    if (!model::buildEntityTree(m_project, rootUuid, &tree, &buildError))
+    if (!model::buildEntityTree(project, rootUuid, &tree, &buildError))
     {
         setError(error, buildError);
         return false;
@@ -350,30 +474,20 @@ bool ProjectStore::writeEntityTree(const Uuid& rootUuid, QString* error)
         return false;
     }
 
-    const QString relativePath = entityRelativePath(rootUuid);
-    notePath(relativePath);
-    return writeJsonObject(absolutePath(m_root, relativePath),
-                           model::toJson(tree), error);
-}
-
-bool ProjectStore::removeEntityTreeFile(const Uuid& rootUuid, QString* error)
-{
-    const QString relativePath = entityRelativePath(rootUuid);
-    const QString path = absolutePath(m_root, relativePath);
-    notePath(relativePath);
-
-    QFile file(path);
-    if (file.exists() && !file.remove())
-    {
-        setError(error,
-                 QStringLiteral("无法删除 %1：%2").arg(path, file.errorString()));
-        return false;
-    }
+    QByteArray encoded =
+        QJsonDocument(model::toJson(tree)).toJson(QJsonDocument::Indented);
+    if (!encoded.endsWith('\n'))
+        encoded.append('\n');
+    *bytes = encoded;
     return true;
 }
 
+} // namespace
+
 bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
     const auto it = m_project.entities.constFind(uuid);
     if (it == m_project.entities.constEnd())
     {
@@ -393,12 +507,15 @@ bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
         return false;
     const Uuid oldRoot = m_entityRoots.value(uuid);
 
-    if (!writeEntityTree(newRoot, error))
+    QByteArray newRootBytes;
+    if (!buildEntityTreeBytes(m_project, newRoot, &newRootBytes, error))
         return false;
 
     // A reparent can move this entity (or its whole subtree) between files.
-    // Rewrite the previous root file so no stale copy of the entity survives,
-    // and drop it when that root no longer exists in the model.
+    // Write the new root first and remove the old one last, and do both in one
+    // transaction so a failure cannot leave the same UUID in two files.
+    QVector<TransactionOp> ops;
+    ops.append(TransactionOp{entityRelativePath(newRoot), newRootBytes, false});
     if (!oldRoot.isEmpty() && oldRoot != newRoot)
     {
         const bool oldRootStillRoot =
@@ -406,14 +523,21 @@ bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
             && entityRootOf(oldRoot) == oldRoot;
         if (oldRootStillRoot)
         {
-            if (!writeEntityTree(oldRoot, error))
+            QByteArray oldRootBytes;
+            if (!buildEntityTreeBytes(m_project, oldRoot, &oldRootBytes, error))
                 return false;
+            ops.append(
+                TransactionOp{entityRelativePath(oldRoot), oldRootBytes, false});
         }
-        else if (!removeEntityTreeFile(oldRoot, error))
+        else
         {
-            return false;
+            ops.append(TransactionOp{entityRelativePath(oldRoot), QByteArray(),
+                                     true});
         }
     }
+
+    if (!writeTrackedFiles(ops, error))
+        return false;
 
     rebuildEntityRootIndex();
     return true;
@@ -421,6 +545,9 @@ bool ProjectStore::saveEntity(const Uuid& uuid, QString* error)
 
 bool ProjectStore::saveProject(QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
+
     // Validate settings and markers without requiring the entity tree to be
     // consistent; the entity files are written separately.
     model::Project check;
@@ -429,14 +556,19 @@ bool ProjectStore::saveProject(QString* error)
     if (!model::validateProject(check, error))
         return false;
 
-    const QString relativePath = QStringLiteral("project.json");
-    notePath(relativePath);
-    return writeJsonObject(absolutePath(m_root, relativePath),
-                           model::toJson(m_project), error);
+    QByteArray bytes = QJsonDocument(model::toJson(m_project))
+                           .toJson(QJsonDocument::Indented);
+    if (!bytes.endsWith('\n'))
+        bytes.append('\n');
+    return writeTrackedFiles(
+        {TransactionOp{QStringLiteral("project.json"), bytes, false}}, error);
 }
 
 bool ProjectStore::deleteEntity(const Uuid& uuid, QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
+
     if (!model::isValidUuid(uuid))
     {
         setError(error, QStringLiteral("实体 UUID 格式非法：%1").arg(uuid));
@@ -458,13 +590,24 @@ bool ProjectStore::deleteEntity(const Uuid& uuid, QString* error)
     for (const Uuid& id : ids)
         removed.insert(id, m_project.entities.take(id));
 
-    bool written = true;
+    QVector<TransactionOp> ops;
     if (uuid == root)
-        written = removeEntityTreeFile(root, error);
+    {
+        ops.append(TransactionOp{entityRelativePath(root), QByteArray(), true});
+    }
     else if (m_project.entities.contains(root))
-        written = writeEntityTree(root, error);
+    {
+        QByteArray rootBytes;
+        if (!buildEntityTreeBytes(m_project, root, &rootBytes, error))
+        {
+            for (auto it = removed.constBegin(); it != removed.constEnd(); ++it)
+                m_project.entities.insert(it.key(), it.value());
+            return false;
+        }
+        ops.append(TransactionOp{entityRelativePath(root), rootBytes, false});
+    }
 
-    if (!written)
+    if (!writeTrackedFiles(ops, error))
     {
         for (auto it = removed.constBegin(); it != removed.constEnd(); ++it)
             m_project.entities.insert(it.key(), it.value());
@@ -475,6 +618,134 @@ bool ProjectStore::deleteEntity(const Uuid& uuid, QString* error)
     return true;
 }
 
+bool ProjectStore::writeTrackedFiles(const QVector<TransactionOp>& ops,
+                                     QString* error)
+{
+    if (ops.isEmpty())
+        return true;
+    if (!ensureWritable(error))
+        return false;
+    if (!verifyDigests(ops, error))
+        return false;
+
+    QVector<QPair<QString, QByteArray>> before;
+    before.reserve(ops.size());
+    for (const TransactionOp& op : ops)
+    {
+        QByteArray bytes;
+        bool existed = false;
+        if (!readFileBytes(absolutePath(m_root, op.relativePath), &bytes,
+                           &existed, error))
+        {
+            return false;
+        }
+        before.append({op.relativePath, existed ? bytes : QByteArray()});
+    }
+
+    int writeFailure = -1;
+    int crashAfter = -1;
+#ifdef PVFORGE_TEST_HOOKS
+    writeFailure = m_writeFailureForTest;
+    crashAfter = m_crashAfterApplyForTest;
+    if (m_writeFailureForTest >= 0)
+        m_writeFailureForTest = -1;
+    if (m_crashAfterApplyForTest >= 0)
+        m_crashAfterApplyForTest = -1;
+#endif
+
+    if (!applyFileTransaction(m_root, ops, error, writeFailure, crashAfter))
+        return false;
+
+    m_pendingHumanEdit = true;
+    for (const auto& item : std::as_const(before))
+    {
+        if (!m_txnBefore.contains(item.first))
+            m_txnBefore.insert(item.first, item.second);
+        m_txnPaths.insert(item.first);
+    }
+    for (const TransactionOp& op : ops)
+    {
+        if (op.remove)
+        {
+            m_digests.insert(op.relativePath, QString());
+        }
+        else
+        {
+            m_digests.insert(op.relativePath, fileDigest(op.bytes));
+        }
+    }
+    return true;
+}
+
+void ProjectStore::refreshDigests()
+{
+    m_digests.clear();
+    const auto record = [this](const QString& relativePath) {
+        QByteArray bytes;
+        bool existed = false;
+        if (readFileBytes(absolutePath(m_root, relativePath), &bytes, &existed,
+                          nullptr))
+        {
+            m_digests.insert(relativePath,
+                             existed ? fileDigest(bytes) : QString());
+        }
+    };
+    record(QStringLiteral("project.json"));
+    const QDir entities(absolutePath(m_root, QStringLiteral("entities")));
+    for (const QFileInfo& fileInfo :
+         entities.entryInfoList({QStringLiteral("*.json")}, QDir::Files,
+                                QDir::Name))
+    {
+        record(QStringLiteral("entities/") + fileInfo.fileName());
+    }
+}
+
+bool ProjectStore::verifyDigests(const QVector<TransactionOp>& ops,
+                                 QString* error) const
+{
+    QStringList checked;
+    for (const TransactionOp& op : ops)
+    {
+        if (checked.contains(op.relativePath))
+            continue;
+        checked << op.relativePath;
+
+        QByteArray bytes;
+        bool existed = false;
+        if (!readFileBytes(absolutePath(m_root, op.relativePath), &bytes,
+                           &existed, error))
+        {
+            return false;
+        }
+        const QString digest = existed ? fileDigest(bytes) : QString();
+        const auto known = m_digests.constFind(op.relativePath);
+        if (known == m_digests.constEnd())
+        {
+            // The store did not have this path in its snapshot. A file that
+            // appeared underneath it was created by another program; a missing
+            // path is simply a new entity.
+            if (existed)
+            {
+                setError(error,
+                         QStringLiteral("工程文件被外部程序修改：%1。"
+                                        "请重新打开工程后再保存，避免覆盖外部改动。")
+                             .arg(op.relativePath));
+                return false;
+            }
+            continue;
+        }
+        if (known.value() != digest)
+        {
+            setError(error,
+                     QStringLiteral("工程文件被外部程序修改：%1。"
+                                    "请重新打开工程后再保存，避免覆盖外部改动。")
+                         .arg(op.relativePath));
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ProjectStore::commit(const QString& message, QString* error)
 {
     const QString normalized = normalizedMessage(message);
@@ -482,12 +753,13 @@ bool ProjectStore::commit(const QString& message, QString* error)
     // Without git the commit is purely an in-memory undo step.
     if (!m_gitEnabled)
     {
-        recordTxnUndo(normalized);
+        if (!recordTxnUndo(normalized, error))
+            return false;
         clearDirty();
         return true;
     }
 
-    // Git backs up text project data only. assets/ and .cache/ are local and
+    // Git backs up text project data only. assets/ and .trash/ are local and
     // ignored, so they are never staged here.
     QStringList candidates = m_txnPaths.values();
     std::sort(candidates.begin(), candidates.end());
@@ -504,6 +776,11 @@ bool ProjectStore::commit(const QString& message, QString* error)
 
     if (addPaths.isEmpty())
     {
+        // An asset deletion has no text path to commit, but it still has to be
+        // undoable. recordTxnUndo() drops empty text entries and keeps the
+        // asset move.
+        if (!recordTxnUndo(normalized, error))
+            return false;
         clearDirty();
         return true;
     }
@@ -514,8 +791,10 @@ bool ProjectStore::commit(const QString& message, QString* error)
     const ProcessResult add = runGit(m_root, addArguments);
     if (add.exitCode != 0)
     {
-        setError(error,
-                 QStringLiteral("git add 失败：%1").arg(processFailure(add)));
+        const QString failure =
+            QStringLiteral("git add 失败：%1").arg(processFailure(add));
+        setError(error, failure);
+        markCommitFailure(failure);
         return false;
     }
 
@@ -526,14 +805,18 @@ bool ProjectStore::commit(const QString& message, QString* error)
     const ProcessResult diff = runGit(m_root, diffArguments);
     if (diff.exitCode != 0)
     {
-        setError(error,
-                 QStringLiteral("git diff 失败：%1").arg(processFailure(diff)));
+        const QString failure =
+            QStringLiteral("git diff 失败：%1").arg(processFailure(diff));
+        setError(error, failure);
+        markCommitFailure(failure);
         return false;
     }
 
     const QStringList staged = splitNul(diff.out);
     if (staged.isEmpty())
     {
+        if (!recordTxnUndo(normalized, error))
+            return false;
         clearDirty();
         return true;
     }
@@ -542,81 +825,18 @@ bool ProjectStore::commit(const QString& message, QString* error)
     // commit, and leaves them staged in the index.
     QString hash;
     if (!commitOnlyPaths(m_root, normalized, staged, &hash, error))
+    {
+        markCommitFailure(error ? *error : QStringLiteral("git commit 失败"));
         return false;
+    }
 
     // The cold backup now exists; remember exactly what it changed so undo
     // can restore it without touching git.
-    recordTxnUndo(normalized);
+    if (!recordTxnUndo(normalized, error))
+        return false;
 
     clearDirty();
-    return true;
-}
-
-bool ProjectStore::undo(QString* error)
-{
-    if (m_undoStack.isEmpty())
-    {
-        setError(error, QStringLiteral("没有可撤销的操作"));
-        return false;
-    }
-
-    UndoEntry entry = m_undoStack.takeLast();
-    if (!applySnapshot(entry.before, error))
-    {
-        m_undoStack.append(std::move(entry));
-        return false;
-    }
-
-    if (!reload(error))
-    {
-        // Best effort: put the previous state back so the stack and the disk
-        // stay consistent even though the reload failed.
-        QString ignored;
-        applySnapshot(entry.after, &ignored);
-        reload(&ignored);
-        m_undoStack.append(std::move(entry));
-        return false;
-    }
-
-    // The restored state is on disk but not committed. Track it so the next
-    // human save/flush writes it to git as the cold backup.
-    for (auto it = entry.before.constBegin(); it != entry.before.constEnd(); ++it)
-        notePath(it.key());
-
-    m_redoStack.append(std::move(entry));
-    trimStack(m_redoStack);
-    return true;
-}
-
-bool ProjectStore::redo(QString* error)
-{
-    if (m_redoStack.isEmpty())
-    {
-        setError(error, QStringLiteral("没有可重做的操作"));
-        return false;
-    }
-
-    UndoEntry entry = m_redoStack.takeLast();
-    if (!applySnapshot(entry.after, error))
-    {
-        m_redoStack.append(std::move(entry));
-        return false;
-    }
-
-    if (!reload(error))
-    {
-        QString ignored;
-        applySnapshot(entry.before, &ignored);
-        reload(&ignored);
-        m_redoStack.append(std::move(entry));
-        return false;
-    }
-
-    for (auto it = entry.after.constBegin(); it != entry.after.constEnd(); ++it)
-        notePath(it.key());
-
-    m_undoStack.append(std::move(entry));
-    trimStack(m_undoStack);
+    clearCommitFailure();
     return true;
 }
 
@@ -672,6 +892,8 @@ QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
 
 bool ProjectStore::restoreCommit(const QString& hash, QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
     if (!m_gitEnabled)
     {
         setError(error, QStringLiteral("Git 未启用"));
@@ -763,9 +985,12 @@ bool ProjectStore::restoreCommit(const QString& hash, QString* error)
     QString reloadError;
     if (!reload(&reloadError))
     {
-        setError(error,
-                 QStringLiteral("恢复已提交（%1），但重新加载工程失败：%2")
-                     .arg(newHash.left(7), reloadError));
+        const QString reason =
+            QStringLiteral("恢复已提交（%1），但重新加载工程失败：%2。"
+                           "工程已切换为只读，请重新打开。")
+                .arg(newHash.left(7), reloadError);
+        setReadOnly(reason);
+        setError(error, reason);
         return false;
     }
     return true;
@@ -806,6 +1031,8 @@ QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const
 
 bool ProjectStore::commitRecoveredText(QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
     if (!m_gitEnabled)
     {
         setError(error, QStringLiteral("Git 未启用"));
@@ -830,6 +1057,7 @@ bool ProjectStore::commitRecoveredText(QString* error)
     if (paths.isEmpty())
     {
         m_dirtyText.clear();
+        clearCommitFailure();
         return true;
     }
 
@@ -850,15 +1078,19 @@ bool ProjectStore::commitRecoveredText(QString* error)
     if (!commitOnlyPaths(m_root, QStringLiteral("pvf: recover"), paths, &hash,
                          error))
     {
+        markCommitFailure(error ? *error : QStringLiteral("恢复提交失败"));
         return false;
     }
 
     m_dirtyText.clear();
+    clearCommitFailure();
     return true;
 }
 
 bool ProjectStore::discardDirtyText(QString* error)
 {
+    if (!ensureWritable(error))
+        return false;
     if (!m_gitEnabled)
     {
         setError(error, QStringLiteral("Git 未启用"));
@@ -955,6 +1187,8 @@ bool ProjectStore::discardDirtyText(QString* error)
 
     clearDirty();
     m_dirtyText.clear();
+    clearCommitFailure();
+    refreshDigests();
     return true;
 }
 
@@ -982,110 +1216,38 @@ bool ProjectStore::reload(QString* error)
 
     m_project = std::move(project);
     rebuildEntityRootIndex();
+    refreshDigests();
     clearDirty();
     refreshDirtyText();
     return true;
 }
 
-#ifdef PVFORGE_TEST_HOOKS
-void ProjectStore::setUndoLimitsForTest(int maxEntries, qint64 maxBytes)
+bool ProjectStore::markCommitFailure(const QString& message)
 {
-    m_undoLimit = std::max(1, maxEntries);
-    m_undoByteLimit = std::max<qint64>(1, maxBytes);
-    trimStack(m_undoStack);
-    trimStack(m_redoStack);
-}
-#endif
-
-void ProjectStore::notePath(const QString& relativePath)
-{
-    if (m_txnBefore.contains(relativePath))
-        return;
-    m_txnBefore.insert(relativePath,
-                       readFileBytes(absolutePath(m_root, relativePath)));
-    m_txnPaths.insert(relativePath);
+    m_previousCommitFailure = message;
+    const QString path =
+        absolutePath(m_root, QString::fromLatin1(kCommitFailureMarker));
+    QJsonObject marker;
+    marker.insert(QStringLiteral("message"), message);
+    marker.insert(QStringLiteral("time"),
+                  QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    QString error;
+    return writeJsonObject(path, marker, &error);
 }
 
-void ProjectStore::recordTxnUndo(const QString& message)
+void ProjectStore::clearCommitFailure()
 {
-    QStringList candidates = m_txnPaths.values();
-    std::sort(candidates.begin(), candidates.end());
-
-    UndoEntry entry;
-    entry.message = message;
-    for (const QString& relativePath : std::as_const(candidates))
-    {
-        const QByteArray before = m_txnBefore.value(relativePath);
-        const QByteArray after =
-            readFileBytes(absolutePath(m_root, relativePath));
-        if (before == after)
-            continue;
-        entry.before.insert(relativePath, before);
-        entry.after.insert(relativePath, after);
-    }
-    if (!entry.before.isEmpty())
-        pushUndo(std::move(entry));
-}
-
-void ProjectStore::pushUndo(UndoEntry entry)
-{
-    m_undoStack.append(std::move(entry));
-    m_redoStack.clear();
-    trimStack(m_undoStack);
-}
-
-void ProjectStore::trimStack(QVector<UndoEntry>& stack)
-{
-    const auto cost = [](const UndoEntry& entry) {
-        qint64 bytes = 0;
-        for (const QByteArray& before : entry.before)
-            bytes += before.size();
-        for (const QByteArray& after : entry.after)
-            bytes += after.size();
-        return bytes;
-    };
-
-    qint64 total = 0;
-    for (const UndoEntry& entry : std::as_const(stack))
-        total += cost(entry);
-
-    while (!stack.isEmpty()
-           && (stack.size() > m_undoLimit || total > m_undoByteLimit))
-    {
-        total -= cost(stack.first());
-        stack.removeFirst();
-    }
-}
-
-bool ProjectStore::applySnapshot(const QHash<QString, QByteArray>& snapshot,
-                                 QString* error)
-{
-    for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it)
-    {
-        const QString path = absolutePath(m_root, it.key());
-        if (it.value().isEmpty())
-        {
-            QFile file(path);
-            if (file.exists() && !file.remove())
-            {
-                setError(error,
-                         QStringLiteral("无法删除 %1：%2")
-                             .arg(path, file.errorString()));
-                return false;
-            }
-            continue;
-        }
-
-        if (!writeBytesFile(path, it.value(), error))
-            return false;
-    }
-    return true;
+    QFile::remove(absolutePath(m_root, QString::fromLatin1(kCommitFailureMarker)));
+    m_previousCommitFailure.clear();
 }
 
 void ProjectStore::clearDirty()
 {
     m_txnPaths.clear();
     m_txnBefore.clear();
+    m_txnAssets.clear();
+    m_txnAssetBefore.clear();
+    m_pendingHumanEdit = false;
 }
 
 } // namespace pvf::store

@@ -64,6 +64,31 @@ QString entityFile(const QString& root, const Uuid& uuid)
     return root + QStringLiteral("/entities/") + uuid + QStringLiteral(".json");
 }
 
+// Opens a project that is expected to quarantine an entity file. Assertions
+// stay in the test body (QVERIFY cannot be used inside a value-returning
+// helper).
+struct QuarantineCheck
+{
+    bool opened = false;
+    bool readOnly = false;
+    int count = 0;
+    QString reason;
+};
+
+QuarantineCheck openQuarantined(const QString& rootPath, QString* error)
+{
+    QuarantineCheck check;
+    auto opened = ProjectStore::open(rootPath, error, false);
+    check.opened = opened.has_value();
+    if (!opened)
+        return check;
+    check.readOnly = opened->readOnly();
+    check.count = opened->quarantinedFiles().size();
+    if (check.count > 0)
+        check.reason = opened->quarantinedFiles().first().reason;
+    return check;
+}
+
 bool writeTree(const QString& root, const model::EntityTreeNode& tree)
 {
     return writeText(entityFile(root, tree.entity.uuid),
@@ -177,9 +202,14 @@ void StoreTests::entityTreeRejectsInconsistentNesting()
     tree.children[0].entity.parentUuid = model::newUuid();
     QVERIFY(writeTree(rootPath, tree));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(child.uuid), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("parentUuid")), qPrintable(error));
+    const QuarantineCheck parentCheck = openQuarantined(rootPath, &error);
+    QVERIFY2(parentCheck.opened, qPrintable(error));
+    QVERIFY(parentCheck.readOnly);
+    QCOMPARE(parentCheck.count, 1);
+    QVERIFY2(parentCheck.reason.contains(child.uuid),
+             qPrintable(parentCheck.reason));
+    QVERIFY2(parentCheck.reason.contains(QStringLiteral("parentUuid")),
+             qPrintable(parentCheck.reason));
 
     // A child range outside the parent is refused.
     tree.children[0].entity.parentUuid = root.uuid;
@@ -187,16 +217,25 @@ void StoreTests::entityTreeRejectsInconsistentNesting()
     tree.children[0].entity.end = 110;
     QVERIFY(writeTree(rootPath, tree));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(child.uuid), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("超出父实体")), qPrintable(error));
+    const QuarantineCheck rangeCheck = openQuarantined(rootPath, &error);
+    QVERIFY2(rangeCheck.opened, qPrintable(error));
+    QVERIFY(rangeCheck.readOnly);
+    QCOMPARE(rangeCheck.count, 1);
+    QVERIFY2(rangeCheck.reason.contains(child.uuid),
+             qPrintable(rangeCheck.reason));
+    QVERIFY2(rangeCheck.reason.contains(QStringLiteral("超出父实体")),
+             qPrintable(rangeCheck.reason));
 
     // Canvas space does not relax the timeline constraint.
     tree.children[0].entity.space = model::EntitySpace::Canvas;
     QVERIFY(writeTree(rootPath, tree));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(QStringLiteral("超出父实体")), qPrintable(error));
+    const QuarantineCheck canvasCheck = openQuarantined(rootPath, &error);
+    QVERIFY2(canvasCheck.opened, qPrintable(error));
+    QVERIFY(canvasCheck.readOnly);
+    QCOMPARE(canvasCheck.count, 1);
+    QVERIFY2(canvasCheck.reason.contains(QStringLiteral("超出父实体")),
+             qPrintable(canvasCheck.reason));
 
     // followParentRange=true requires range equality with the direct parent.
     tree.children[0].entity.start = 20;
@@ -204,17 +243,24 @@ void StoreTests::entityTreeRejectsInconsistentNesting()
     tree.children[0].entity.followParentRange = true;
     QVERIFY(writeTree(rootPath, tree));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(QStringLiteral("followParentRange")),
-             qPrintable(error));
+    const QuarantineCheck followCheck = openQuarantined(rootPath, &error);
+    QVERIFY2(followCheck.opened, qPrintable(error));
+    QVERIFY(followCheck.readOnly);
+    QCOMPARE(followCheck.count, 1);
+    QVERIFY2(followCheck.reason.contains(QStringLiteral("followParentRange")),
+             qPrintable(followCheck.reason));
 
     // A root can never follow a parent.
     tree.children[0].entity.followParentRange = false;
     tree.entity.followParentRange = true;
     QVERIFY(writeTree(rootPath, tree));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(QStringLiteral("根实体")), qPrintable(error));
+    const QuarantineCheck rootCheck = openQuarantined(rootPath, &error);
+    QVERIFY2(rootCheck.opened, qPrintable(error));
+    QVERIFY(rootCheck.readOnly);
+    QCOMPARE(rootCheck.count, 1);
+    QVERIFY2(rootCheck.reason.contains(QStringLiteral("根实体")),
+             qPrintable(rootCheck.reason));
 }
 
 void StoreTests::entityTreeRejectsDuplicateUuid()
@@ -234,9 +280,13 @@ void StoreTests::entityTreeRejectsDuplicateUuid()
 
     QVERIFY(writeTree(rootPath, node(root, {node(duplicate)})));
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(root.uuid), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("重复")), qPrintable(error));
+    auto opened = ProjectStore::open(rootPath, &error, false);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(opened->readOnly());
+    QCOMPARE(opened->quarantinedFiles().size(), 1);
+    const QString reason = opened->quarantinedFiles().first().reason;
+    QVERIFY2(reason.contains(root.uuid), qPrintable(reason));
+    QVERIFY2(reason.contains(QStringLiteral("重复")), qPrintable(reason));
 }
 
 void StoreTests::entityTreeRejectsRootFileNameMismatch()
@@ -258,10 +308,14 @@ void StoreTests::entityTreeRejectsRootFileNameMismatch()
                                             .toJson(QJsonDocument::Indented))));
 
     error.clear();
-    QVERIFY(!ProjectStore::open(rootPath, &error, false));
-    QVERIFY2(error.contains(root.uuid), qPrintable(error));
-    QVERIFY2(error.contains(wrongFileName), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("文件名")), qPrintable(error));
+    auto opened = ProjectStore::open(rootPath, &error, false);
+    QVERIFY2(opened.has_value(), qPrintable(error));
+    QVERIFY(opened->readOnly());
+    QCOMPARE(opened->quarantinedFiles().size(), 1);
+    const QString reason = opened->quarantinedFiles().first().reason;
+    QVERIFY2(reason.contains(root.uuid), qPrintable(reason));
+    QVERIFY2(reason.contains(wrongFileName), qPrintable(reason));
+    QVERIFY2(reason.contains(QStringLiteral("文件名")), qPrintable(reason));
 }
 
 void StoreTests::openRejectsLegacyFlatFormat()
