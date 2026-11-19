@@ -537,16 +537,18 @@ QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
 
     if (!m_exportVideoFrames)
     {
-        // A couple of entries are enough: 2x/4x output fps samples the same
-        // project frame several times in a row.  Full-resolution images are
-        // large, so keep this cache tiny.
+        // One full-resolution decoder for the export worker.  It stays open and
+        // decodes sequentially; the tiny memory cache only covers repeated
+        // requests for the same timestamp (issue #131).
         m_exportVideoFrames = std::make_unique<video2::VideoFrames>(0, 2);
     }
 
-    const int localFrame = floorFrame(projectFrame - entity->start);
     video2::Request request;
     request.path = path;
-    request.sourceFrame = entity->content.asset.sourceIn + localFrame;
+    // Keep the fractional project frame so 2x/4x export samples the source
+    // between project frames instead of repeating floor()ed ones.
+    request.sourceFrame =
+        entity->content.asset.sourceIn + (projectFrame - entity->start);
     request.fps = projectFps();
     request.size = QSize();
     request.proxy = false;

@@ -16,13 +16,18 @@ extern "C" {
 namespace pvf::video2 {
 namespace {
 
+// How far forward the decoder may walk from the last displayed frame before a
+// fresh seek is cheaper than decoding the gap.
+constexpr double kMaxForwardGapSeconds = 2.0;
+
 struct Input
 {
     AVFormatContext* format = nullptr;
     AVCodecContext* codec = nullptr;
     AVPacket* packet = nullptr;
-    AVFrame* frame = nullptr;
-    AVFrame* candidate = nullptr;
+    AVFrame* frame = nullptr;    // scratch frame used while draining
+    AVFrame* displayed = nullptr; // last frame with timestamp <= target
+    AVFrame* pending = nullptr;   // first frame with timestamp > target
     SwsContext* sws = nullptr;
 
     int streamIndex = -1;
@@ -37,8 +42,10 @@ struct Input
         if (sws)
             sws_freeContext(sws);
         sws = nullptr;
-        if (candidate)
-            av_frame_free(&candidate);
+        if (pending)
+            av_frame_free(&pending);
+        if (displayed)
+            av_frame_free(&displayed);
         if (frame)
             av_frame_free(&frame);
         if (packet)
@@ -111,8 +118,9 @@ bool openInput(Input& input, const QString& path, QString* error)
 
     input.packet = av_packet_alloc();
     input.frame = av_frame_alloc();
-    input.candidate = av_frame_alloc();
-    if (!input.packet || !input.frame || !input.candidate)
+    input.displayed = av_frame_alloc();
+    input.pending = av_frame_alloc();
+    if (!input.packet || !input.frame || !input.displayed || !input.pending)
     {
         fail(input, error, QStringLiteral("内存不足"));
         return false;
@@ -127,6 +135,29 @@ int64_t timestampOf(const AVFrame* frame)
     if (timestamp == AV_NOPTS_VALUE)
         timestamp = frame->pts;
     return timestamp;
+}
+
+// YUV -> RGB matrix for the source.  Unspecified streams follow the SD/HD
+// convention FFmpeg itself uses, so phone footage tagged BT.709 does not get
+// the BT.601 matrix (issue #131).
+int sourceColorspace(const AVFrame* frame)
+{
+    switch (frame->colorspace)
+    {
+    case AVCOL_SPC_BT709:
+        return SWS_CS_ITU709;
+    case AVCOL_SPC_BT470BG:
+    case AVCOL_SPC_SMPTE170M:
+        return SWS_CS_ITU601;
+    case AVCOL_SPC_BT2020_NCL:
+    case AVCOL_SPC_BT2020_CL:
+        return SWS_CS_BT2020;
+    case AVCOL_SPC_SMPTE240M:
+        return SWS_CS_SMPTE240M;
+    default:
+        break;
+    }
+    return frame->height >= 720 ? SWS_CS_ITU709 : SWS_CS_ITU601;
 }
 
 QImage convert(const AVFrame* frame, const Request& request, int proxyMaxWidth,
@@ -169,6 +200,17 @@ QImage convert(const AVFrame* frame, const Request& request, int proxyMaxWidth,
         return QImage();
     }
 
+    // Colour conversion follows the stream's own matrix and range: full-range
+    // phone footage stays full-range instead of washing out, and BT.709 HD
+    // stays BT.709.  RGBA output is full range.
+    const int colorspace = sourceColorspace(frame);
+    const int* sourceTable = sws_getCoefficients(colorspace);
+    const int* targetTable = sws_getCoefficients(SWS_CS_ITU709);
+    const int sourceRange =
+        frame->color_range == AVCOL_RANGE_JPEG ? 1 : 0;
+    sws_setColorspaceDetails(sws, sourceTable, sourceRange, targetTable, 1, 0,
+                             1 << 16, 1 << 16);
+
     QImage image(dstWidth, dstHeight, QImage::Format_RGBA8888);
     if (image.isNull())
     {
@@ -194,151 +236,62 @@ QImage convert(const AVFrame* frame, const Request& request, int proxyMaxWidth,
     return image;
 }
 
-QImage decode(const Request& request, int proxyMaxWidth, QString* error)
-{
-    if (request.fps <= 0)
-    {
-        if (error)
-            *error = QStringLiteral("帧率必须大于 0");
-        return QImage();
-    }
-    if (request.path.isEmpty() || !QFileInfo(request.path).isFile())
-    {
-        if (error)
-            *error = QStringLiteral("视频文件不存在");
-        return QImage();
-    }
-
-    Input input;
-    if (!openInput(input, request.path, error))
-        return QImage();
-
-    const int sourceFrame = std::max(0, request.sourceFrame);
-    // Round down: the frame displayed at the requested time is the last frame
-    // whose timestamp is <= that time. Rounding up could skip a keyframe and
-    // select the following frame when the project fps exceeds the video fps.
-    const int64_t targetTimestamp =
-        av_rescale_q_rnd(sourceFrame, AVRational{1, request.fps}, input.timeBase,
-                         AV_ROUND_DOWN)
-        + input.startTime;
-
-    // Seeking is only needed when the target is past the first timestamp;
-    // some containers reject a seek to the very start.
-    if (targetTimestamp > input.startTime)
-    {
-        if (av_seek_frame(input.format, input.streamIndex, targetTimestamp,
-                          AVSEEK_FLAG_BACKWARD)
-            < 0)
-        {
-            fail(input, error, QStringLiteral("无法定位视频帧"));
-            return QImage();
-        }
-        avcodec_flush_buffers(input.codec);
-    }
-
-    bool haveCandidate = false;
-    bool done = false;
-    bool inputDone = false;
-    int64_t lastTimestamp = AV_NOPTS_VALUE;
-    const int64_t fallbackStep = std::max<int64_t>(
-        1, av_rescale_q(int64_t(input.frameDuration * 1000000.0),
-                        AVRational{1, 1000000}, input.timeBase));
-
-    auto accept = [&](AVFrame* frame) {
-        int64_t timestamp = timestampOf(frame);
-        if (timestamp == AV_NOPTS_VALUE)
-        {
-            // Streams without timestamps are rare; assume one frame follows
-            // the previous one so the loop still terminates.
-            timestamp = lastTimestamp == AV_NOPTS_VALUE
-                            ? targetTimestamp
-                            : lastTimestamp + fallbackStep;
-        }
-        lastTimestamp = timestamp;
-
-        if (timestamp > targetTimestamp && haveCandidate)
-        {
-            done = true;
-            return;
-        }
-
-        av_frame_unref(input.candidate);
-        if (av_frame_ref(input.candidate, frame) < 0)
-        {
-            haveCandidate = false;
-            done = true;
-            return;
-        }
-        haveCandidate = true;
-        if (timestamp > targetTimestamp)
-            done = true;
-    };
-
-    // Seek lands on the previous keyframe; decode forward until the frame
-    // displayed at the requested time has been reached.
-    while (!done)
-    {
-        const int received = avcodec_receive_frame(input.codec, input.frame);
-        if (received == 0)
-        {
-            accept(input.frame);
-            av_frame_unref(input.frame);
-            continue;
-        }
-
-        if (received != AVERROR(EAGAIN))
-            break; // end of stream or decoder error
-
-        if (inputDone)
-            break;
-
-        while (!inputDone)
-        {
-            const int read = av_read_frame(input.format, input.packet);
-            if (read < 0)
-            {
-                avcodec_send_packet(input.codec, nullptr);
-                inputDone = true;
-                break;
-            }
-            if (input.packet->stream_index != input.streamIndex)
-            {
-                av_packet_unref(input.packet);
-                continue;
-            }
-
-            const int sent =
-                avcodec_send_packet(input.codec, input.packet);
-            av_packet_unref(input.packet);
-            if (sent == AVERROR(EAGAIN))
-                break; // drain the decoder before feeding again
-            break;     // packet accepted or corrupt: move on
-        }
-    }
-
-    if (!haveCandidate)
-    {
-        if (error)
-            *error = QStringLiteral("未能解码出视频帧");
-        return QImage();
-    }
-
-    return convert(input.candidate, request, proxyMaxWidth, error);
-}
-
 } // namespace
+
+// One open container/decoder that survives between requests.  `displayed`
+// holds the frame at or before the last requested time and `pending` the first
+// frame after it, so consecutive requests decode strictly forward.
+struct VideoFrames::Decoder
+{
+    Input input;
+    QString path;
+    int fps = 0;
+    bool eof = false;
+    bool haveDisplayed = false;
+    bool havePending = false;
+    int64_t displayedTimestamp = 0;
+    int64_t pendingTimestamp = 0;
+    int64_t lastTimestamp = 0;
+    bool started = false;
+
+    bool isOpenFor(const QString& otherPath, int otherFps) const
+    {
+        return input.format != nullptr && path == otherPath && fps == otherFps;
+    }
+
+    void reset()
+    {
+        input.close();
+        path.clear();
+        fps = 0;
+        eof = false;
+        haveDisplayed = false;
+        havePending = false;
+        displayedTimestamp = 0;
+        pendingTimestamp = 0;
+        lastTimestamp = 0;
+    }
+
+    double secondsOf(int64_t timestamp) const
+    {
+        return (timestamp - input.startTime) * av_q2d(input.timeBase);
+    }
+};
 
 VideoFrames::VideoFrames(int proxyMaxWidth, int memoryEntries)
     : m_proxyMaxWidth(proxyMaxWidth > 0 ? proxyMaxWidth : 960)
+    , m_decoder(std::make_unique<Decoder>())
 {
     m_cache.setMaxCost(std::max(0, memoryEntries));
 }
+
+VideoFrames::~VideoFrames() = default;
 
 QString VideoFrames::cacheKey(const Request& request) const
 {
     return QStringList{
         request.path,
-        QString::number(request.sourceFrame),
+        QString::number(request.sourceFrame, 'g', 17),
         QString::number(request.fps),
         QString::number(request.size.width()),
         QString::number(request.size.height()),
@@ -359,16 +312,209 @@ QImage VideoFrames::frame(const Request& request, QString* error)
     }
 
     ++m_stats.misses;
-    ++m_stats.decodes;
 
-    QString message;
-    const QImage image = decode(request, m_proxyMaxWidth, &message);
-    if (image.isNull())
+    if (request.fps <= 0)
     {
         if (error)
-            *error = message;
+            *error = QStringLiteral("帧率必须大于 0");
         return QImage();
     }
+    if (request.path.isEmpty() || !QFileInfo(request.path).isFile())
+    {
+        if (error)
+            *error = QStringLiteral("视频文件不存在");
+        return QImage();
+    }
+
+    Decoder& decoder = *m_decoder;
+    if (!decoder.isOpenFor(request.path, request.fps))
+    {
+        decoder.reset();
+        if (!openInput(decoder.input, request.path, error))
+            return QImage();
+        decoder.path = request.path;
+        decoder.fps = request.fps;
+        ++m_stats.opens;
+    }
+    Input& input = decoder.input;
+
+    // Target timestamp in the stream time base.  The fractional part is kept:
+    // 2x/4x export sampling asks for times between project frames (issue #131).
+    const double sourceFrame = std::max(0.0, request.sourceFrame);
+    const int64_t targetTimestamp =
+        av_rescale_q_rnd(int64_t(std::llround(sourceFrame * 1000000.0)),
+                         AVRational{1, request.fps * 1000000},
+                         input.timeBase, AV_ROUND_DOWN)
+        + input.startTime;
+
+    // Pending is the first frame after the previous target; it may already be
+    // the answer for this one.
+    if (decoder.havePending && decoder.pendingTimestamp <= targetTimestamp)
+    {
+        av_frame_unref(input.displayed);
+        if (av_frame_ref(input.displayed, input.pending) == 0)
+        {
+            decoder.haveDisplayed = true;
+            decoder.displayedTimestamp = decoder.pendingTimestamp;
+        }
+        decoder.havePending = false;
+    }
+
+    const double targetSeconds =
+        sourceFrame / double(request.fps);
+    const bool needSeek =
+        !decoder.haveDisplayed
+        || targetSeconds < decoder.secondsOf(decoder.displayedTimestamp)
+        || targetSeconds - decoder.secondsOf(decoder.displayedTimestamp)
+               > kMaxForwardGapSeconds;
+
+    if (needSeek)
+    {
+        decoder.haveDisplayed = false;
+        decoder.havePending = false;
+        decoder.eof = false;
+        const bool atStart = targetTimestamp <= input.startTime;
+        if (!atStart)
+        {
+            if (av_seek_frame(input.format, input.streamIndex, targetTimestamp,
+                              AVSEEK_FLAG_BACKWARD) < 0)
+            {
+                fail(input, error, QStringLiteral("无法定位视频帧"));
+                decoder.reset();
+                return QImage();
+            }
+            ++m_stats.seeks;
+            avcodec_flush_buffers(input.codec);
+        }
+        else if (decoder.started)
+        {
+            // Rewind to the first frame after a forward walk.  Some containers
+            // reject a seek to time 0, so a failed rewind re-opens the file.
+            if (av_seek_frame(input.format, input.streamIndex, input.startTime,
+                              AVSEEK_FLAG_BACKWARD)
+                < 0)
+            {
+                const QString path = decoder.path;
+                const int fps = decoder.fps;
+                decoder.reset();
+                QString reopenError;
+                if (!openInput(decoder.input, path, &reopenError))
+                {
+                    if (error)
+                        *error = reopenError;
+                    return QImage();
+                }
+                decoder.path = path;
+                decoder.fps = fps;
+                ++m_stats.opens;
+            }
+            else
+            {
+                ++m_stats.seeks;
+                avcodec_flush_buffers(input.codec);
+            }
+        }
+        decoder.started = false;
+    }
+
+    const int64_t fallbackStep = std::max<int64_t>(
+        1, av_rescale_q(int64_t(input.frameDuration * 1000000.0),
+                        AVRational{1, 1000000}, input.timeBase));
+
+    int64_t timestamp = AV_NOPTS_VALUE;
+    auto assign = [&](AVFrame* target, AVFrame* source, int64_t ts) {
+        av_frame_unref(target);
+        if (av_frame_ref(target, source) < 0)
+            return false;
+        if (target == input.displayed)
+        {
+            decoder.haveDisplayed = true;
+            decoder.displayedTimestamp = ts;
+        }
+        else
+        {
+            decoder.havePending = true;
+            decoder.pendingTimestamp = ts;
+        }
+        return true;
+    };
+
+    auto accept = [&](AVFrame* frame) {
+        int64_t frameTimestamp = timestampOf(frame);
+        if (frameTimestamp == AV_NOPTS_VALUE)
+        {
+            frameTimestamp = timestamp == AV_NOPTS_VALUE
+                                 ? targetTimestamp
+                                 : timestamp + fallbackStep;
+        }
+        timestamp = frameTimestamp;
+        decoder.lastTimestamp = frameTimestamp;
+        decoder.started = true;
+
+        if (frameTimestamp > targetTimestamp)
+        {
+            // Keep the first frame past the target for the next request.
+            if (!assign(input.pending, frame, frameTimestamp))
+                decoder.havePending = false;
+            return true; // stop decoding
+        }
+        if (!assign(input.displayed, frame, frameTimestamp))
+            decoder.haveDisplayed = false;
+        return false;
+    };
+
+    while (!decoder.havePending && !decoder.eof)
+    {
+        const int received = avcodec_receive_frame(input.codec, input.frame);
+        if (received == 0)
+        {
+            const bool done = accept(input.frame);
+            av_frame_unref(input.frame);
+            if (done)
+                break;
+            continue;
+        }
+
+        if (received != AVERROR(EAGAIN))
+        {
+            decoder.eof = true;
+            break;
+        }
+
+        while (true)
+        {
+            const int read = av_read_frame(input.format, input.packet);
+            if (read < 0)
+            {
+                avcodec_send_packet(input.codec, nullptr);
+                decoder.eof = true;
+                break;
+            }
+            if (input.packet->stream_index != input.streamIndex)
+            {
+                av_packet_unref(input.packet);
+                continue;
+            }
+
+            const int sent = avcodec_send_packet(input.codec, input.packet);
+            av_packet_unref(input.packet);
+            if (sent == AVERROR(EAGAIN))
+                break; // drain the decoder before feeding again
+            break;     // packet accepted or corrupt: move on
+        }
+    }
+
+    if (!decoder.haveDisplayed)
+    {
+        if (error)
+            *error = QStringLiteral("未能解码出视频帧");
+        return QImage();
+    }
+
+    ++m_stats.decodes;
+    const QImage image = convert(input.displayed, request, m_proxyMaxWidth, error);
+    if (image.isNull())
+        return QImage();
 
     if (m_cache.maxCost() > 0)
         m_cache.insert(key, new QImage(image));
@@ -378,6 +524,8 @@ QImage VideoFrames::frame(const Request& request, QString* error)
 void VideoFrames::clear()
 {
     m_cache.clear();
+    if (m_decoder)
+        m_decoder->reset();
     m_stats = Stats();
 }
 

@@ -38,6 +38,8 @@ endif()
 # Text and vector drawing comes from the standalone core content helpers.  They
 # do not depend on core/Project.h.
 add_library(pvf_render2 STATIC
+    ImageCache.cpp
+    ImageCache.h
     Render.cpp
     RenderScene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/VectorShape.cpp

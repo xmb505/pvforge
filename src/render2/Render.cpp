@@ -4,6 +4,7 @@
 #include "core/TextStyle.h"
 #include "core/VectorShape.h"
 #include "perf/FrameProfiler.h"
+#include "render2/ImageCache.h"
 
 #include <QBrush>
 #include <QDir>
@@ -135,44 +136,6 @@ QSize metadataSize(const assets::StoredAsset& asset)
     if (width > 0 && height > 0)
         return QSize(width, height);
     return {};
-}
-
-QString contentFile(const assets::StoredAsset& asset)
-{
-    const QStringList files = QDir(asset.directory).entryList(
-        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
-    if (files.isEmpty())
-        return {};
-    return asset.directory + QLatin1Char('/') + files.first();
-}
-
-struct Picture
-{
-    QImage image;
-    QSize size;
-
-    bool isValid() const { return !image.isNull(); }
-};
-
-Picture loadPicture(const assets::AssetStore& store, const AssetHash& hash)
-{
-    const auto stored = store.get(hash);
-    if (!stored)
-        return {};
-
-    const QString path = contentFile(*stored);
-    if (path.isEmpty())
-        return {};
-
-    Picture picture;
-    picture.image = QImage(path);
-    if (picture.image.isNull())
-        return {};
-
-    picture.size = metadataSize(*stored);
-    if (picture.size.isEmpty())
-        picture.size = picture.image.size();
-    return picture;
 }
 
 QSize placeholderSize(const assets::AssetStore& store,

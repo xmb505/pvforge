@@ -15,6 +15,7 @@
 #include <QJsonParseError>
 #include <QMimeDatabase>
 #include <QMimeType>
+#include <QMutexLocker>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QTemporaryDir>
@@ -163,9 +164,23 @@ QString contentPath(const StoredAsset& asset)
 
 } // namespace
 
+struct AssetStore::MetadataCache
+{
+    struct Entry
+    {
+        qint64 size = -1;
+        qint64 modifiedMs = 0;
+        std::optional<QJsonObject> metadata;
+    };
+
+    QMutex mutex;
+    QHash<QString, Entry> entries;
+};
+
 AssetStore::AssetStore(QString projectRoot)
     : m_root(QDir(projectRoot).absolutePath())
     , m_assetsDir(m_root + QStringLiteral("/assets"))
+    , m_metadataCache(std::make_shared<MetadataCache>())
 {
 }
 
@@ -174,6 +189,43 @@ std::optional<StoredAsset> AssetStore::get(const AssetHash& hash) const
     if (!isValidHash(hash))
         return std::nullopt;
     return getByHash(hash, true);
+}
+
+std::optional<QJsonObject> AssetStore::readMetadata(
+    const QString& directory) const
+{
+    const QString path = directory + QStringLiteral("/asset.json");
+    const QFileInfo info(path);
+    const qint64 size = info.size();
+    const qint64 modifiedMs = info.lastModified().toMSecsSinceEpoch();
+    {
+        QMutexLocker locker(&m_metadataCache->mutex);
+        const auto cached = m_metadataCache->entries.constFind(path);
+        if (cached != m_metadataCache->entries.constEnd() && cached->size == size
+            && cached->modifiedMs == modifiedMs)
+            return cached->metadata;
+    }
+
+    const std::optional<QJsonObject> metadata = readJson(path);
+    {
+        QMutexLocker locker(&m_metadataCache->mutex);
+        if (m_metadataCache->entries.size() > 4096)
+            m_metadataCache->entries.clear();
+        m_metadataCache->entries.insert(
+            path, MetadataCache::Entry{size, modifiedMs, metadata});
+    }
+    return metadata;
+}
+
+bool AssetStore::writeMetadata(const QString& directory,
+                               const QJsonObject& object, QString* error)
+{
+    const QString path = directory + QStringLiteral("/asset.json");
+    if (!writeJson(path, object, error))
+        return false;
+    QMutexLocker locker(&m_metadataCache->mutex);
+    m_metadataCache->entries.remove(path);
+    return true;
 }
 
 std::optional<StoredAsset> AssetStore::getIncludingMissing(const AssetHash& hash) const
@@ -195,7 +247,7 @@ std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash,
     if (canonicalInside(m_root, directory).isEmpty())
         return std::nullopt;
 
-    const auto metadata = readJson(directory + QStringLiteral("/asset.json"));
+    const auto metadata = readMetadata(directory);
     if (!metadata)
         return std::nullopt;
 
@@ -325,8 +377,7 @@ bool AssetStore::rename(const AssetHash& hash, const QString& name, QString* err
 
     QJsonObject metadata = asset->metadata;
     metadata.insert(QStringLiteral("name"), trimmed);
-    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata,
-                     error);
+    return writeMetadata(asset->directory, metadata, error);
 }
 
 bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString* error)
@@ -371,7 +422,7 @@ bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString
 
     QJsonObject metadata = asset->metadata;
     metadata.insert(QStringLiteral("tags"), QJsonArray::fromStringList(normalized));
-    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata, error);
+    return writeMetadata(asset->directory, metadata, error);
 }
 
 bool AssetStore::markImportOrigin(const AssetHash& hash, const QString& origin,
@@ -387,8 +438,7 @@ bool AssetStore::markImportOrigin(const AssetHash& hash, const QString& origin,
     QJsonObject metadata = asset->metadata;
     metadata.insert(QStringLiteral("importedBy"), origin);
     metadata.insert(QStringLiteral("humanApproved"), humanApproved);
-    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata,
-                     error);
+    return writeMetadata(asset->directory, metadata, error);
 }
 
 bool AssetStore::remove(const AssetHash& hash, QString* error)
@@ -561,7 +611,7 @@ std::optional<StoredAsset> AssetStore::importFileImpl(const QString& path,
         setError(error, QStringLiteral("无法复制素材文件: %1").arg(path));
         return std::nullopt;
     }
-    if (!writeJson(temporary.path() + QStringLiteral("/asset.json"), metadata, error))
+    if (!writeMetadata(temporary.path(), metadata, error))
         return std::nullopt;
 
     const QString finalDirectory = m_assetsDir + QLatin1Char('/') + hash;
@@ -598,8 +648,7 @@ std::optional<StoredAsset> AssetStore::importFileImpl(const QString& path,
             setError(error, QStringLiteral("无法恢复素材内容: %1").arg(finalDirectory));
             return std::nullopt;
         }
-        if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), repaired,
-                       error))
+        if (!writeMetadata(finalDirectory, repaired, error))
             return std::nullopt;
         return getByHash(hash);
     }
@@ -684,7 +733,7 @@ std::optional<StoredAsset> AssetStore::ensureAudio(const StoredAsset& video,
     QJsonObject metadata = video.metadata;
     metadata.insert(QStringLiteral("audioHash"), audio->hash);
     QString writeError;
-    if (!writeJson(video.directory + QStringLiteral("/asset.json"), metadata, &writeError))
+    if (!writeMetadata(video.directory, metadata, &writeError))
     {
         setError(error, writeError);
         return std::nullopt;
@@ -777,8 +826,7 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
             setError(error, QStringLiteral("无法恢复 HTML 素材: %1").arg(finalDirectory));
             return std::nullopt;
         }
-        if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), metadata,
-                       error))
+        if (!writeMetadata(finalDirectory, metadata, error))
             return std::nullopt;
         return getByHash(hash);
     }
@@ -794,7 +842,7 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
         return std::nullopt;
     }
 
-    if (!writeJson(finalDirectory + QStringLiteral("/asset.json"), metadata, error))
+    if (!writeMetadata(finalDirectory, metadata, error))
     {
         QDir(finalDirectory).removeRecursively();
         return std::nullopt;

@@ -747,6 +747,13 @@ Result exportVideo(const model::Project& project,
     codecContext->framerate = AVRational{outputFps, 1};
     codecContext->gop_size = std::max(1, outputFps * 2);
     codecContext->max_b_frames = 0;
+    // H.264 HD is BT.709, TV range.  Tagging the stream (and converting with the
+    // same matrix below) keeps the file from being reinterpreted as BT.601,
+    // which made exports look different from the preview (issue #131).
+    codecContext->colorspace = AVCOL_SPC_BT709;
+    codecContext->color_primaries = AVCOL_PRI_BT709;
+    codecContext->color_trc = AVCOL_TRC_BT709;
+    codecContext->color_range = AVCOL_RANGE_MPEG;
     if (format->oformat->flags & AVFMT_GLOBALHEADER)
         codecContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
@@ -959,6 +966,11 @@ Result exportVideo(const model::Project& project,
     if (!sws)
         return fail(QStringLiteral("无法创建色彩转换上下文"));
     const auto swsGuard = qScopeGuard([&] { sws_freeContext(sws); });
+    // Qt renders in full-range RGBA; the encoded stream is BT.709 TV range.
+    // Without these details sws defaults RGB->YUV to BT.601 for SD/HD alike.
+    sws_setColorspaceDetails(
+        sws, sws_getCoefficients(SWS_CS_ITU709), 1,
+        sws_getCoefficients(SWS_CS_ITU709), 0, 0, 1 << 16, 1 << 16);
 
     AVFrame* frame = av_frame_alloc();
     if (!frame)
@@ -967,6 +979,10 @@ Result exportVideo(const model::Project& project,
     frame->format = stagingFormat;
     frame->width = outputSize.width();
     frame->height = outputSize.height();
+    frame->colorspace = AVCOL_SPC_BT709;
+    frame->color_primaries = AVCOL_PRI_BT709;
+    frame->color_trc = AVCOL_TRC_BT709;
+    frame->color_range = AVCOL_RANGE_MPEG;
     status = av_frame_get_buffer(frame, 32);
     if (status < 0)
         return fail(QStringLiteral("无法分配视频帧：%1")
@@ -1082,7 +1098,10 @@ Result exportVideo(const model::Project& project,
     };
 
     render2::SceneWorld world(project, assets);
-    anim::Cache cache;
+    // Export-local solver store: each physics segment is solved once for the
+    // whole export.  Poses get a fresh cache per frame so a long export never
+    // accumulates every sampled pose (#131/#132).
+    QHash<QString, solver::Result> solverResults;
     QImage canvas(outputSize, QImage::Format_ARGB32_Premultiplied);
     render2::Options renderOptions;
     renderOptions.cameraUuid = options.cameraUuid;
@@ -1113,8 +1132,10 @@ Result exportVideo(const model::Project& project,
         // Time sampling: output frame -> project frame (fractional at 2x/4x).
         renderOptions.projectFrame = start + frameIndex * projectFrameStep;
         contentIssues.clear();
+        anim::Cache frameCache;
+        frameCache.sharedSolverResults = &solverResults;
         QImage rendered = render2::renderFrame(project, assets, renderOptions,
-                                               world, cache);
+                                               world, frameCache);
         if (!contentIssues.isEmpty())
             return fail(QStringLiteral("第 %1 帧缺少可导出内容：%2")
                             .arg(QString::number(renderOptions.projectFrame,

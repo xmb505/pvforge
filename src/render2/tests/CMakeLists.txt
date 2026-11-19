@@ -67,3 +67,9 @@ target_link_libraries(pvf_render2_canvas_tests PRIVATE pvf_render2 Qt6::Gui)
 add_test(NAME render2.canvasSpace COMMAND pvf_render2_canvas_tests)
 set_tests_properties(render2.canvasSpace PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+
+add_executable(pvf_render2_cache_tests ImageCacheTests.cpp)
+target_link_libraries(pvf_render2_cache_tests PRIVATE pvf_render2 Qt6::Gui)
+add_test(NAME render2.imageCache COMMAND pvf_render2_cache_tests)
+set_tests_properties(render2.imageCache PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
