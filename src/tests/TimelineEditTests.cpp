@@ -25,6 +25,7 @@ struct TimelineEditIds
     pvf::Uuid followPeer;
     pvf::Uuid followGrand;
     pvf::Uuid followTarget;
+    pvf::Uuid negativeChild;
 };
 
 struct TimelineEditOps
@@ -686,6 +687,33 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     if (!check(popup && popup->entityRowCountForTest() == 1,
                QStringLiteral("private timeline did not open for editing")))
         return 1;
+    // Negative tracks are real hit targets, not just decoration.
+    const pvf::EntityId negativeId =
+        popup->entityIdForUuid(ids.negativeChild);
+    const QRect negativeClip = popup->clipRectFor(negativeId);
+    if (!check(negativeId != pvf::kInvalidEntity
+                   && popup->rowForEntityForTest(negativeId) == -1
+                   && !negativeClip.isEmpty(),
+               QStringLiteral("negative track clip is not rendered")))
+        return 1;
+    {
+        const QPoint center = negativeClip.center();
+        QMouseEvent negativePress(QEvent::MouseButtonPress, QPointF(center),
+                                  QPointF(popup->mapToGlobal(center)),
+                                  Qt::LeftButton, Qt::LeftButton,
+                                  Qt::NoModifier);
+        QMouseEvent negativeRelease(QEvent::MouseButtonRelease, QPointF(center),
+                                    QPointF(popup->mapToGlobal(center)),
+                                    Qt::LeftButton, Qt::NoButton,
+                                    Qt::NoModifier);
+        QApplication::sendEvent(popup, &negativePress);
+        QApplication::sendEvent(popup, &negativeRelease);
+        QApplication::processEvents();
+    }
+    if (!check(popup->entitySelectionCountForTest() == 1
+                   && live->document()->selection() == ids.negativeChild,
+               QStringLiteral("negative track click did not select the clip")))
+        return 1;
     panelDepth = live->document()->store()->undoDepth();
     changedSignals = 0;
     const QPoint popupFrom(popup->frameXForTest(20),
@@ -1009,6 +1037,8 @@ int runTimelineEditTest(QApplication& app)
     // while the parent itself stays in the same plan.
     const pvf::Uuid childGrand =
         makeEntity(QStringLiteral("子级孙层"), 15, 20, 0, child);
+    const pvf::Uuid negativeChild =
+        makeEntity(QStringLiteral("负轨子级"), 12, 18, -1, parent);
 
     const pvf::Uuid audio = makeAsset(QStringLiteral("音频"), 20, 50, 1,
                                       pvf::AssetType::Audio, audioHash, 0);
@@ -1060,7 +1090,7 @@ int runTimelineEditTest(QApplication& app)
         parent,      child,       childGrand,  audio,      video,
         lockedRoot,  lockedChild, target,      worldSource, localSource,
         solverRoot,  trashRoot,   trashChild,  followParent, followChild,
-        followPeer,  followGrand, followTarget};
+        followPeer,  followGrand, followTarget, negativeChild};
     if (!document->commitEntities(all, QStringLiteral("p2b1 setup"), &error))
     {
         qCritical() << "timeline-edit-test: setup commit failed" << error;
@@ -1122,7 +1152,7 @@ int runTimelineEditTest(QApplication& app)
                               target,        worldSource, localSource,
                               solverRoot,    trashRoot,   trashChild,
                               followParent,  followChild, followPeer,
-                              followGrand,   followTarget};
+                              followGrand,   followTarget, negativeChild};
     const TimelineEditOps ops{check, flush, undo, depth, entity};
     if (editModelChecks(session.get(), actions, ids, ops, error) != 0)
         return 1;
