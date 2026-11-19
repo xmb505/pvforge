@@ -16,9 +16,10 @@ namespace html {
 // UTF-8 JSON followed by one NUL byte. No TCP port is opened, so other local
 // processes cannot reach /json or the DevTools socket.
 //
-// The loopback WebSocket backend remains only as a debugging fallback
-// (`PVFORGE_CDP_TRANSPORT=ws`). It still never passes `--remote-allow-origins`
-// and only accepts 127.0.0.1 endpoints.
+// The loopback WebSocket backend remains only for platforms where the pipe is
+// unavailable. It still never passes --remote-allow-origins and only accepts
+// 127.0.0.1 endpoints, but a loopback DevTools port has no per-client
+// authentication, so it is not used on Unix where the pipe works.
 //
 // CdpClient constructs its own transport, so HtmlBrowser publishes the parent
 // ends of the child's fd 3/4 through setPendingCdpPipe() immediately before
