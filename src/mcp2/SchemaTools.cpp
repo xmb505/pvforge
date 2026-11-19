@@ -736,7 +736,8 @@ QJsonObject listTools()
                       {QStringLiteral("tags"), prop(QStringLiteral("array"), QString())}},
                      {QStringLiteral("hash"), QStringLiteral("tags")})));
     tools.append(toolSchema(
-        QStringLiteral("asset.delete"), QStringLiteral("删除素材，必须 confirm"),
+        QStringLiteral("asset.delete"),
+        QStringLiteral("删除素材（移入工程回收站，可撤销），必须 confirm"),
         objectSchema({{QStringLiteral("hash"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}},
                      {QStringLiteral("hash"), QStringLiteral("confirm")})));

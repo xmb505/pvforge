@@ -3,14 +3,24 @@
 #include "mcp2/Internal.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
 
 #include <exception>
+#include <memory>
 #include <utility>
 
 namespace pvf::mcp2 {
+
+namespace {
+
+// Must stay below HttpServer's client-visible 20 s request timeout: a request
+// that the client considers timed out must not still write to disk.
+constexpr qint64 kToolDeadlineMs = 15 * 1000;
+
+} // namespace
 
 QJsonObject Result::toJson() const
 {
@@ -261,6 +271,13 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
             if (m_batchCheckpoint)
                 m_batchCheckpoint();
             return isStopped();
+        };
+        // Keep the tool deadline below the HTTP client's 20 s timeout so a
+        // timed-out request has not written anything yet.
+        auto deadline = std::make_shared<QElapsedTimer>();
+        deadline->start();
+        tx.deadlineCheck = [deadline] {
+            return deadline->elapsed() > kToolDeadlineMs;
         };
         return entry->handler(tx, args).toJson();
     }

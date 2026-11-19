@@ -31,6 +31,9 @@ struct Tx
     QSet<Uuid> dirty;
     QSet<Uuid> deleted;
     bool projectDirty = false;
+    // Asset hashes that lived in .trash when the tool started. A failed or
+    // interrupted tool puts them back before returning to the human.
+    QSet<QString> assetTrashBefore;
     // Snapshot of Service::writesEnabled()/isStopped(); read-only tools report
     // the real permission state instead of pretending writes are available.
     bool writesEnabled = true;
@@ -47,11 +50,21 @@ struct Tx
     // items; a landing human stop drops the whole transaction.
     std::function<bool()> stopCheck;
 
+    // Set by Service::execute. True once the request has exceeded its tool
+    // deadline; finish() then refuses to write so a timed-out request can
+    // never produce an uncertain on-disk result.
+    std::function<bool()> deadlineCheck;
+
     model::Project& p() { return project; }
     const model::Project& p() const { return project; }
     void touch(const Uuid& uuid) { dirty.insert(uuid); }
     void drop(const Uuid& uuid);
     void touchProject() { projectDirty = true; }
+
+    // Puts the files, the asset trash and the in-memory model back to the
+    // transaction's starting state. Every write error is reported instead of
+    // being swallowed. Asset moves are restored even when no entity changed.
+    bool restore(QString* error = nullptr);
 
     // Validates, writes the touched files, commits once and returns the success
     // envelope. A validation failure returns invalid_argument without writing.
