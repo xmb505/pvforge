@@ -558,6 +558,15 @@ bool recoverPendingTransactions(const QString& root, QString* error)
     return true;
 }
 
+bool hasPendingTransaction(const QString& root)
+{
+    const QDir base(
+        absolutePath(root, QString::fromLatin1(kTransactionDirectory)));
+    return !base
+                .entryList({QStringLiteral("txn-*")}, QDir::Dirs, QDir::Name)
+                .isEmpty();
+}
+
 namespace {
 
 // One text document (project.json or entities/<uuid>.json): read its version,

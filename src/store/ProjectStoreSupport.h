@@ -119,6 +119,11 @@ bool applyFileTransaction(const QString& root, const QVector<TransactionOp>& ops
 // Applies every journal left by an interrupted transaction and removes it.
 bool recoverPendingTransactions(const QString& root, QString* error);
 
+// True when a transaction directory is still present after a failed apply.
+// The store switches to read-only then: the next open() finishes the journal,
+// but continuing to write now could build on a half-applied tree.
+bool hasPendingTransaction(const QString& root);
+
 struct QuarantinedPath
 {
     QString path;

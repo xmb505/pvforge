@@ -201,7 +201,15 @@ bool ProjectStore::applySnapshot(const QHash<QString, QByteArray>& snapshot,
         if (!verifyDigests(ops, error))
             return false;
         if (!applyFileTransaction(m_root, ops, error))
+        {
+            if (hasPendingTransaction(m_root))
+            {
+                setReadOnly(QStringLiteral(
+                    "撤销时保存事务未完成，已留下可恢复日志。"
+                    "请重新打开工程，程序会自动完成或回滚这次保存。"));
+            }
             return false;
+        }
         for (const TransactionOp& op : std::as_const(ops))
         {
             m_digests.insert(op.relativePath,

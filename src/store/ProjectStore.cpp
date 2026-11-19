@@ -654,7 +654,15 @@ bool ProjectStore::writeTrackedFiles(const QVector<TransactionOp>& ops,
 #endif
 
     if (!applyFileTransaction(m_root, ops, error, writeFailure, crashAfter))
+    {
+        if (hasPendingTransaction(m_root))
+        {
+            setReadOnly(QStringLiteral(
+                "保存事务未完成，已留下可恢复日志。请重新打开工程，"
+                "程序会自动完成或回滚这次保存。"));
+        }
         return false;
+    }
 
     m_pendingHumanEdit = true;
     for (const auto& item : std::as_const(before))
