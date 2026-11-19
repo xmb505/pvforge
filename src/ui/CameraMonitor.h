@@ -32,7 +32,6 @@ class QWidgetAction;
 namespace pvf {
 
 class EditorSession;
-class VideoProxyGenerator;
 class Viewport;
 
 namespace video2 {

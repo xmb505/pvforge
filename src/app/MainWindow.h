@@ -52,7 +52,6 @@ class ProjectPropertiesPanel;
 class PropertiesPanel;
 class SettingsDialog;
 class TimelinePanel;
-class VideoProxyGenerator;
 class Viewport;
 class WorkbenchPanel;
 

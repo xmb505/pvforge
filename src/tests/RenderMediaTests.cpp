@@ -1,5 +1,6 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
+#include "video2/VideoFrames.h"
 
 namespace {
 
@@ -563,7 +564,9 @@ int exportTest(QApplication& app)
 
     // Progress dialog: frame/percent/ETA text, preview and cancel signal.
     QString decodeError;
-    const QImage firstFrame = pvf::decodeVideoFirstFrame(firstPath, &decodeError);
+    pvf::video2::VideoFrames frames;
+    const QImage firstFrame =
+        frames.frame({firstPath, 0, live->project().settings.fps}, &decodeError);
     check(!firstFrame.isNull(), QStringLiteral("cannot decode first frame: %1").arg(decodeError));
     {
         pvf::ExportProgressDialog progressDialog;

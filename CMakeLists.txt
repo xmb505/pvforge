@@ -75,9 +75,6 @@ set(PVF_APP_SOURCES
     src/core/BrandWall.cpp
     src/core/VectorShape.cpp
     src/core/Easing.cpp
-    src/media/VideoDecoder.cpp
-    src/media/VideoProxy.cpp
-    src/media/AudioDecoder.cpp
     src/media/DecoderInfo.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
@@ -124,8 +121,6 @@ set(PVF_APP_SOURCES
     src/ui/AssetLibraryPanelThumbs.cpp
     src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp
-    src/ui/EasingChooser.cpp
-    src/ui/EasingPicker.cpp
     src/ui/McpLogPanel.cpp
     src/ui/PerfMonitorWindow.cpp
     src/ui/TextLayoutDialog.cpp
