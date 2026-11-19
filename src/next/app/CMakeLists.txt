@@ -19,11 +19,6 @@ if(NOT TARGET pvf_store)
                      ${CMAKE_CURRENT_BINARY_DIR}/store_dep)
 endif()
 
-if(NOT TARGET pvf_next_assets)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../assets
-                     ${CMAKE_CURRENT_BINARY_DIR}/assets_dep)
-endif()
-
 if(NOT TARGET pvf_next_settings)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../settings
                      ${CMAKE_CURRENT_BINARY_DIR}/settings_dep)
@@ -93,7 +88,6 @@ target_link_libraries(pvf_next_services PUBLIC
     pvf_next_document
     pvf_next_core
     pvf_store
-    pvf_next_assets
     pvf_render2
     pvf_next_settings
     pvf_html2

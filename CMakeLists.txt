@@ -367,8 +367,6 @@ add_subdirectory(src/mcp2)
 add_subdirectory(src/next/core)
 add_subdirectory(src/next/settings)
 add_subdirectory(src/next/history)
-add_subdirectory(src/next/assets)
-add_subdirectory(src/next/mcp)
 add_subdirectory(src/next/timeline)
 add_subdirectory(src/next/properties)
 # src/next/app carries pvf_next_document/pvf_next_services, which the delivery
@@ -378,4 +376,4 @@ add_subdirectory(src/next/app)
 # P1/P2 delivery shell: link only the document slice and the shared entity
 # range helpers.
 target_link_libraries(pvf_app PUBLIC pvf_next_document pvf_next_services
-    pvf_mcp2 pvf_entity_range pvf_next_mcp_log pvf_next_history pvf_export2)
+    pvf_mcp2 pvf_entity_range pvf_next_history pvf_export2)

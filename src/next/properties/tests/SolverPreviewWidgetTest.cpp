@@ -1,4 +1,3 @@
-#include "next/properties/PropertiesPanel.h"
 #include "next/properties/SolverPreviewWidget.h"
 
 #include <QDoubleSpinBox>
@@ -188,7 +187,6 @@ private slots:
     void orbitAndBlackHolePreviewSmoke();
     void spiralPreviewShowsPathAndTargetWithoutArrow();
     void spinPreviewDoesNotCrash();
-    void propertiesPanelEmbedsPreview();
 };
 
 void SolverPreviewWidgetTest::gravityPreviewShowsPathTargetStartAndArrow()
@@ -470,34 +468,6 @@ void SolverPreviewWidgetTest::spinPreviewDoesNotCrash()
     QVERIFY(!later.isNull());
     QVERIFY(later != first);
     QVERIFY(!preview.grab().toImage().isNull());
-}
-
-void SolverPreviewWidgetTest::propertiesPanelEmbedsPreview()
-{
-    FakeDocument document;
-    const GravityScene scene = makeGravityScene(document);
-
-    PropertiesPanel panel(&document);
-    document.setSelection(scene.ball);
-
-    auto* card = panel.findChild<QGroupBox*>(QStringLiteral("solverCard0"));
-    auto* preview =
-        panel.findChild<SolverPreviewWidget*>(QStringLiteral("solverPreview0"));
-    QVERIFY(card);
-    QVERIFY(preview);
-    QVERIFY(preview->height() >= 180);
-    QCOMPARE(preview->entityUuid(), scene.ball);
-    QCOMPARE(preview->solverId(), scene.solverId);
-    QCOMPARE(preview->errorText(), QString());
-    QVERIFY(preview->sampleCount() > 0);
-
-    const QPointF arrowBefore = preview->arrowTip();
-    auto* velocityX =
-        panel.findChild<QDoubleSpinBox*>(QStringLiteral("solverVelocityX0"));
-    QVERIFY(velocityX);
-    velocityX->setValue(620.0);
-    QVERIFY(QMetaObject::invokeMethod(velocityX, "editingFinished"));
-    QVERIFY(preview->arrowTip() != arrowBefore);
 }
 
 QTEST_MAIN(SolverPreviewWidgetTest)

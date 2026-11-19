@@ -35,14 +35,6 @@ if(NOT TARGET pvf_next_timeline)
 endif()
 
 add_library(pvf_next_properties STATIC
-    PropertiesPanel.cpp
-    PropertiesPanel.h
-    PropertiesPanelContent.cpp
-    PropertiesPanelHtml.cpp
-    PropertiesPanelInternal.cpp
-    PropertiesPanelInternal.h
-    PropertiesPanelKeyframes.cpp
-    PropertiesPanelSolver.cpp
     SolverPreviewWidget.cpp
     SolverPreviewWidget.h
     SpecialContentEditor.cpp
@@ -62,7 +54,6 @@ target_link_libraries(pvf_next_properties PUBLIC
     pvf_anim
     pvf_render2
     Qt6::Widgets
-    Qt6::Test
 )
 
 target_compile_features(pvf_next_properties PUBLIC cxx_std_20)
@@ -70,17 +61,6 @@ target_compile_features(pvf_next_properties PUBLIC cxx_std_20)
 include(CTest)
 
 if(BUILD_TESTING)
-    add_executable(pvf_next_properties_tests tests/PropertiesPanelTest.cpp)
-    target_link_libraries(pvf_next_properties_tests PRIVATE
-        pvf_next_properties
-        Qt6::Test
-    )
-
-    add_test(NAME pvf_next_properties_tests COMMAND pvf_next_properties_tests)
-    set_tests_properties(pvf_next_properties_tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
-    )
-
     add_executable(pvf_next_solver_preview_tests tests/SolverPreviewWidgetTest.cpp)
     target_link_libraries(pvf_next_solver_preview_tests PRIVATE
         pvf_next_properties
