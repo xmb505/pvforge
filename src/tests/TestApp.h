@@ -39,7 +39,6 @@
 #include "next/properties/SolverPreviewWidget.h"
 #include "next/settings/SettingsStore.h"
 #include "workbench/Qoi.h"
-#include "core/CheckpointManager.h"
 #include "core/ComicBox.h"
 #include "core/PerfMonitor.h"
 #include "perf/FrameProfiler.h"

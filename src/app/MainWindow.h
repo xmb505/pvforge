@@ -43,7 +43,6 @@ class HistoryPanel;
 
 class AssetLibraryPanel;
 class CameraMonitor;
-class CheckpointManager;
 class EditorSession;
 class EnvironmentPanel;
 class ExportProgressDialog;
@@ -217,15 +216,10 @@ private:
                                    bool remove);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
-    void ensureProxies();
     void onPlayTick();
     void updateStatus();
     void updateMcpStatus();
     void arrangeMcpLog();
-    void wireMcpDialog(SettingsDialog* dialog);
-    bool armMcpWrites(QString* error = nullptr);
-    void disarmMcpWrites();
-    void stopMcpWrites();
     void toggleWorkbench();
     void deleteSelectedEntity();
     void onUndo();
@@ -348,11 +342,6 @@ private:
     QHash<QString, int> m_sessionRunningWrites;
     QHash<QString, QString> m_sessionRunningToolArgs;
     SessionCrashRecoveryHandler m_crashRecoveryHandler;
-    // Created only while a human has armed writes for one scene. Global
-    // objects (active camera, audio, root-level logos) stay locked because
-    // McpCommandService::allowGlobal() is false by default; a future UI can
-    // call setAllowGlobal(true) after a separate human confirmation.
-    std::unique_ptr<CheckpointManager> m_mcpCheckpoints;
 
     QTimer* m_playTimer = nullptr;
     QTimer* m_scrubTimer = nullptr;
@@ -364,7 +353,6 @@ private:
     QLabel* m_perfLabel = nullptr;
     QToolButton* m_mcpStatusButton = nullptr;
     QString m_mcpLastError;
-    QString m_mcpCheckpointId;
     QTimer* m_perfTimer = nullptr;
     QAction* m_perfAction = nullptr;
     QProgressBar* m_importProgress = nullptr;

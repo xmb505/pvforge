@@ -65,7 +65,6 @@ target_link_libraries(pvforge-mcp PRIVATE Qt6::Core Qt6::Network)
 # so `pvforge` and `pvforge-tests` share one compilation of the application
 # sources instead of building them twice.
 set(PVF_APP_SOURCES
-    src/core/CheckpointManager.cpp
     src/core/PerfMonitor.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
@@ -249,7 +248,6 @@ if(PVFORGE_BUILD_SELF_TESTS)
             session-test
             welcome-test
             settings-test
-            checkpoint-test
             git-test
             rename-test
             panel-layout-test
@@ -317,7 +315,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
         endforeach()
         set(PVF_SELF_TEST_CORE
-            self-test checkpoint-test git-test solver-convert-test
+            self-test git-test solver-convert-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_CORE)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;core")
