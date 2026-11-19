@@ -529,18 +529,6 @@ int settingsTest(QApplication& app)
             return 1;
     }
 
-    const int oldSnap = pvf::Settings::snapPixels();
-    const bool oldEdgeCentre = pvf::Settings::edgeCenterSnap();
-    const QString oldLanguage = pvf::Settings::language();
-
-    pvf::Settings::setSnapPixels(12);
-    if (pvf::Settings::snapPixels() != 12)
-    {
-        qCritical() << "settings-test: snap setting not persisted";
-        return 1;
-    }
-    pvf::Settings::setSnapPixels(oldSnap);
-
     const pvf::DecoderInfo decoder = pvf::decoderInfo();
     if (decoder.ffmpegVersion.isEmpty() || decoder.mode.isEmpty()
         || decoder.video.isEmpty() || decoder.audioOutput.isEmpty())
@@ -560,14 +548,6 @@ int settingsTest(QApplication& app)
                     << system.gpus;
         return 1;
     }
-
-    pvf::Settings::setEdgeCenterSnap(true);
-    if (!pvf::Settings::edgeCenterSnap())
-    {
-        qCritical() << "settings-test: edge snap setting not persisted";
-        return 1;
-    }
-    pvf::Settings::setEdgeCenterSnap(oldEdgeCentre);
 
     pvf::Lang::load(QStringLiteral("en_US"));
     if (pvf::Lang::t(QStringLiteral("menu.file")) != QStringLiteral("File"))

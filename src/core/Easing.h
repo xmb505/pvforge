@@ -67,13 +67,4 @@ struct EasingSpec
 QString easingName(Easing easing);
 Easing easingFromName(const QString& name);
 
-// Friendly label for menus/buttons, e.g. "缓入 · 柔和".
-QString easingDisplayName(Easing easing);
-
-// Evaluates the eased progress for t in [0,1]. Bezier uses the four handles.
-double applyEasing(const EasingSpec& spec, double t);
-
-// Raw parametric cubic bezier y for the x position t.
-double bezierValue(double inX, double inY, double outX, double outY, double t);
-
 } // namespace pvf
