@@ -17,6 +17,9 @@ set(PVF_AUDIO2_TEST_CASES
     hiddenAndInvisible
     playbackNoAudio
     playbackNoDevice
+    streamLongRange
+    streamSeekOnlyMixesFromPosition
+    streamSampleExactAndBounded
     peaks
 )
 

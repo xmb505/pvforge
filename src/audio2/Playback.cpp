@@ -1,5 +1,7 @@
 #include "Audio2.h"
 
+#include "AudioStream.h"
+
 #include "assets/Assets.h"
 #include "model/Model.h"
 
@@ -17,21 +19,6 @@ namespace {
 
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 2;
-
-QByteArray toInt16Pcm(const QByteArray& pcm)
-{
-    const auto* source = reinterpret_cast<const float*>(pcm.constData());
-    const int count = pcm.size() / int(sizeof(float));
-    QByteArray converted;
-    converted.resize(count * int(sizeof(qint16)));
-    auto* target = reinterpret_cast<qint16*>(converted.data());
-    for (int i = 0; i < count; ++i)
-    {
-        target[i] = qint16(std::lround(
-            std::clamp(source[i], -1.0f, 1.0f) * 32767.0f));
-    }
-    return converted;
-}
 
 } // namespace
 
@@ -53,6 +40,7 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
     stop();
     m_startFrame = startFrame;
     m_endFrame = endFrame;
+    m_fps = std::max(1, fps);
 
     const auto fail = [error](const QString& message) {
         if (error)
@@ -65,17 +53,19 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
     if (endFrame <= startFrame)
         return fail(QStringLiteral("播放范围为空"));
 
-    MixOptions options;
-    options.startFrame = startFrame;
-    options.endFrame = endFrame;
-    options.fps = fps;
-    options.sampleRate = kSampleRate;
-    options.channels = kChannels;
-
-    QStringList warnings;
-    m_pcm = mixRange(m_project, m_assets, options, &warnings);
-    if (m_pcm.isEmpty())
-        return fail(QStringLiteral("所选范围内没有可播放的音频"));
+    // Snapshot on the UI thread: the mixer copies the project and resolves the
+    // content files once, so the audio thread never races document edits and
+    // never mixes more than the current chunk (issue #143).
+    QStringList captureWarnings;
+    AudioSnapshot snapshot = captureAudioSnapshot(m_project, m_assets, startFrame,
+                                                  endFrame, m_fps,
+                                                  &captureWarnings);
+    if (snapshot.contentPaths.isEmpty())
+    {
+        return fail(captureWarnings.isEmpty()
+                        ? QStringLiteral("所选范围内没有可播放的音频")
+                        : captureWarnings.join(QStringLiteral("；")));
+    }
 
     const QAudioDevice device = QMediaDevices::defaultAudioOutput();
     if (device.isNull())
@@ -85,13 +75,11 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
     format.setSampleRate(kSampleRate);
     format.setChannelCount(kChannels);
     format.setSampleFormat(QAudioFormat::Float);
-    QByteArray playbackPcm = m_pcm;
     if (!device.isFormatSupported(format))
     {
         format.setSampleFormat(QAudioFormat::Int16);
         if (!device.isFormatSupported(format))
             return fail(QStringLiteral("音频输出设备不支持 48 kHz 双声道格式"));
-        playbackPcm = toInt16Pcm(m_pcm);
     }
 
     if (m_sink)
@@ -101,6 +89,9 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
         m_sink = nullptr;
     }
 
+    m_stream = new AudioStream(std::move(snapshot), format.sampleFormat(), this);
+    m_stream->open(QIODevice::ReadOnly);
+
     m_sink = new QAudioSink(device, format, this);
     connect(m_sink, &QAudioSink::stateChanged, this,
             [this](QAudio::State state) {
@@ -108,16 +99,17 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
                     m_playing = false;
             });
 
-    m_buffer.close();
-    m_buffer.setData(playbackPcm);
-    m_buffer.open(QIODevice::ReadOnly);
-    m_sink->start(&m_buffer);
+    m_sink->start(m_stream);
     if (m_sink->error() != QAudio::NoError)
     {
+        const QStringList warnings = m_stream->warnings();
+        Q_UNUSED(warnings);
         m_sink->stop();
         delete m_sink;
         m_sink = nullptr;
-        m_buffer.close();
+        m_stream->cancel();
+        delete m_stream;
+        m_stream = nullptr;
         return fail(QStringLiteral("音频输出启动失败"));
     }
 
@@ -133,7 +125,12 @@ void Playback::stop()
         delete m_sink;
         m_sink = nullptr;
     }
-    m_buffer.close();
+    if (m_stream)
+    {
+        m_stream->cancel();
+        delete m_stream;
+        m_stream = nullptr;
+    }
     m_playing = false;
 }
 
@@ -150,6 +147,19 @@ int Playback::startFrame() const
 int Playback::endFrame() const
 {
     return m_endFrame;
+}
+
+int Playback::positionFrame() const
+{
+    if (!m_sink || !m_playing)
+        return -1;
+    // processedUSecs counts audio the device actually consumed, so the clock
+    // stays honest even when the sink buffered ahead.
+    const qint64 playedUs = m_sink->processedUSecs();
+    if (playedUs < 0)
+        return -1;
+    return m_startFrame
+           + int((playedUs * qint64(m_fps)) / 1000000LL);
 }
 
 } // namespace pvf::audio2
