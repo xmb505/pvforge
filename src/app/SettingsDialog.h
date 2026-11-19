@@ -91,7 +91,6 @@ private:
     QCheckBox* m_appSnapAngle30 = nullptr;
     QCheckBox* m_appSnapAngle45 = nullptr;
     QCheckBox* m_appSnapAngle90 = nullptr;
-    QCheckBox* m_appHtmlCacheEnabled = nullptr;
     QSpinBox* m_appHtmlMemoryMb = nullptr;
     QSpinBox* m_appHtmlDiskGb = nullptr;
     QComboBox* m_appHtmlScale = nullptr;
@@ -103,7 +102,6 @@ private:
     QPushButton* m_appClearHtmlCache = nullptr;
     QLabel* m_appHtmlCacheStats = nullptr;
     QPushButton* m_appOpenHtmlCacheFolder = nullptr;
-    QCheckBox* m_appVideoProxyEnabled = nullptr;
     QComboBox* m_appVideoProxyWidth = nullptr;
     QComboBox* m_appVideoMemoryFrames = nullptr;
     QCheckBox* m_appWorkbenchEnabled = nullptr;

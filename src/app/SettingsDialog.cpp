@@ -218,7 +218,6 @@ next::AppSettings SettingsDialog::appSettings() const
     if (m_appSnapAngle90->isChecked())
         settings.snapAngles << 90.0 << 270.0;
 
-    settings.htmlCacheEnabled = m_appHtmlCacheEnabled->isChecked();
     settings.htmlMemoryBytes = qint64(m_appHtmlMemoryMb->value()) * 1024 * 1024;
     settings.htmlDiskBytes = qint64(m_appHtmlDiskGb->value()) * 1024 * 1024 * 1024;
     settings.htmlScale = m_appHtmlScale->currentData().toDouble();
@@ -226,7 +225,6 @@ next::AppSettings SettingsDialog::appSettings() const
     settings.watchdogMs = m_appWatchdogMs->value();
     settings.chromeExecutable = m_appChromeExecutable->text().trimmed();
 
-    settings.videoProxyEnabled = m_appVideoProxyEnabled->isChecked();
     settings.videoProxyWidth = m_appVideoProxyWidth->currentData().toInt();
     settings.videoMemoryFrames = m_appVideoMemoryFrames->currentData().toInt();
 
@@ -263,7 +261,6 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
     m_appSnapAngle45->setChecked(hasAngle(45.0));
     m_appSnapAngle90->setChecked(hasAngle(90.0) || hasAngle(270.0));
 
-    m_appHtmlCacheEnabled->setChecked(value.htmlCacheEnabled);
     m_appHtmlMemoryMb->setValue(int(value.htmlMemoryBytes / (1024 * 1024)));
     m_appHtmlDiskGb->setValue(int(value.htmlDiskBytes / (1024 * 1024 * 1024)));
     const int htmlScale = m_appHtmlScale->findData(value.htmlScale);
@@ -273,7 +270,6 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
     m_appWatchdogMs->setValue(value.watchdogMs);
     m_appChromeExecutable->setText(value.chromeExecutable);
 
-    m_appVideoProxyEnabled->setChecked(value.videoProxyEnabled);
     const int proxyWidth = m_appVideoProxyWidth->findData(value.videoProxyWidth);
     if (proxyWidth >= 0)
         m_appVideoProxyWidth->setCurrentIndex(proxyWidth);
