@@ -203,6 +203,11 @@ private slots:
     void symlinkedAssetDirectoryRejected();
     void symlinkedContentRejected();
     void symlinkedAssetsRootRejected();
+    void symlinkedAssetMetadataRejected();
+    void oversizedAssetMetadataRejected();
+    void pvhtmlRejectsSymlinkedManifest();
+    void pvhtmlRejectsOversizedManifest();
+    void protocolWhitelistBlocksNestedProtocols();
 };
 
 void AssetsTest::sha256KnownFile()
@@ -877,6 +882,122 @@ void AssetsTest::symlinkedAssetsRootRejected()
     QVERIFY(!imported.has_value());
     QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
     QVERIFY(QDir(outside).isEmpty());
+}
+
+void AssetsTest::symlinkedAssetMetadataRejected()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString root = temp.filePath(QStringLiteral("Demo.pvproj"));
+    QVERIFY(QDir().mkpath(root));
+    pvf::assets::AssetStore store(root);
+
+    const QString source = temp.filePath(QStringLiteral("pic.png"));
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::darkGreen);
+    QVERIFY(image.save(source));
+    QString error;
+    const auto imported = store.importFile(source, &error);
+    QVERIFY2(imported.has_value(), qPrintable(error));
+
+    // asset.json is project data; a symlink could point at any local JSON file
+    // and smuggle it into asset metadata.
+    const QString metadata = imported->directory + QStringLiteral("/asset.json");
+    const QString outside = temp.filePath(QStringLiteral("outside-asset.json"));
+    QVERIFY(QFile::rename(metadata, outside));
+    QVERIFY(QFile::link(outside, metadata));
+
+    QVERIFY(!store.get(imported->hash).has_value());
+    QVERIFY(!store.getIncludingMissing(imported->hash).has_value());
+    QVERIFY(store.list().isEmpty());
+}
+
+void AssetsTest::oversizedAssetMetadataRejected()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString root = temp.filePath(QStringLiteral("Demo.pvproj"));
+    QVERIFY(QDir().mkpath(root));
+    pvf::assets::AssetStore store(root);
+
+    const QString source = temp.filePath(QStringLiteral("pic.png"));
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::darkBlue);
+    QVERIFY(image.save(source));
+    QString error;
+    const auto imported = store.importFile(source, &error);
+    QVERIFY2(imported.has_value(), qPrintable(error));
+
+    // 1 MiB + 1 sparse metadata file: rejected before parsing.
+    QFile metadata(imported->directory + QStringLiteral("/asset.json"));
+    QVERIFY(metadata.open(QIODevice::WriteOnly));
+    QVERIFY(metadata.resize(1024LL * 1024LL + 1));
+    metadata.close();
+
+    QVERIFY(!store.get(imported->hash).has_value());
+    QVERIFY(store.list().isEmpty());
+}
+
+void AssetsTest::pvhtmlRejectsSymlinkedManifest()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString bundle = temp.filePath(QStringLiteral("bundle"));
+    QVERIFY(QDir().mkpath(bundle));
+    QVERIFY(writeText(bundle + QStringLiteral("/index.html"),
+                      QByteArrayLiteral("<!doctype html><title>x</title>")));
+
+    const QString outside = temp.filePath(QStringLiteral("outside-pvhtml.json"));
+    QVERIFY(writeJsonObject(outside,
+                            QJsonObject{{QStringLiteral("entry"),
+                                         QStringLiteral("index.html")}}));
+    QVERIFY(QFile::link(outside, bundle + QStringLiteral("/pvhtml.json")));
+
+    pvf::assets::PvhtmlManifest manifest;
+    QString error;
+    QVERIFY(!pvf::assets::importPvhtml(bundle, temp.filePath(QStringLiteral("dest")),
+                                       &manifest, &error));
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+}
+
+void AssetsTest::pvhtmlRejectsOversizedManifest()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString bundle = temp.filePath(QStringLiteral("bundle"));
+    QVERIFY(QDir().mkpath(bundle));
+    QVERIFY(writeText(bundle + QStringLiteral("/index.html"),
+                      QByteArrayLiteral("<!doctype html><title>x</title>")));
+    QVERIFY(writeBytes(bundle + QStringLiteral("/pvhtml.json"),
+                       QByteArray(1024 * 1024 + 1, ' ')));
+
+    pvf::assets::PvhtmlManifest manifest;
+    QString error;
+    QVERIFY(!pvf::assets::importPvhtml(bundle, temp.filePath(QStringLiteral("dest")),
+                                       &manifest, &error));
+    QVERIFY2(error.contains(QStringLiteral("1MB")), qPrintable(error));
+}
+
+void AssetsTest::protocolWhitelistBlocksNestedProtocols()
+{
+#ifdef Q_OS_WIN
+    QSKIP("concat protocol paths are POSIX-specific");
+#endif
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString first = temp.filePath(QStringLiteral("first.wav"));
+    const QString second = temp.filePath(QStringLiteral("second.wav"));
+    QVERIFY(writeWav(first, 0.2, 8000, 1));
+    QVERIFY(writeWav(second, 0.2, 8000, 1));
+
+    // Without protocol_whitelist=file FFmpeg would happily follow the concat
+    // protocol; the project-controlled path must not select it.
+    QString error;
+    const auto result = pvf::assets::probe(
+        QStringLiteral("concat:") + first + QLatin1Char('|') + second,
+        pvf::AssetType::Audio, &error);
+    QCOMPARE(result.durationSeconds, 0.0);
+    QVERIFY(!error.isEmpty());
 }
 
 int main(int argc, char** argv)

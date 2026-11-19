@@ -243,10 +243,21 @@ bool readManifest(const QString& bundleRoot, PvhtmlManifest* manifest, QString* 
 {
     PvhtmlManifest result;
     const QString manifestPath = bundleRoot + QStringLiteral("/pvhtml.json");
-    if (!QFileInfo::exists(manifestPath))
+    const QFileInfo manifestInfo(manifestPath);
+    if (manifestInfo.isSymLink())
+    {
+        setError(error, QStringLiteral("pvhtml.json 不能是符号链接: %1").arg(manifestPath));
+        return false;
+    }
+    if (!manifestInfo.exists())
     {
         *manifest = result;
         return true;
+    }
+    if (!manifestInfo.isFile())
+    {
+        setError(error, QStringLiteral("pvhtml.json 不是普通文件: %1").arg(manifestPath));
+        return false;
     }
 
     QFile file(manifestPath);

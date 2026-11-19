@@ -5,6 +5,7 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/dict.h>
 #include <libavutil/error.h>
 }
 
@@ -51,13 +52,20 @@ Probe probeAv(const QString& path, AssetType type, QString* error)
     FormatGuard format;
     const QByteArray utf8 = path.toUtf8();
 
-    int status = avformat_open_input(&format.context, utf8.constData(), nullptr, nullptr);
-    if (status < 0)
+    // The media path is project-controlled. A playlist or demuxer must not be
+    // able to make FFmpeg open http/tcp/concat/... URLs; only regular local
+    // files are allowed.
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    const int openStatus =
+        avformat_open_input(&format.context, utf8.constData(), nullptr, &options);
+    av_dict_free(&options);
+    if (openStatus < 0)
     {
-        setError(error, QStringLiteral("无法打开媒体文件: %1").arg(ffmpegError(status)));
+        setError(error, QStringLiteral("无法打开媒体文件: %1").arg(ffmpegError(openStatus)));
         return result;
     }
-    status = avformat_find_stream_info(format.context, nullptr);
+    int status = avformat_find_stream_info(format.context, nullptr);
     if (status < 0)
     {
         setError(error, QStringLiteral("无法读取媒体信息: %1").arg(ffmpegError(status)));
