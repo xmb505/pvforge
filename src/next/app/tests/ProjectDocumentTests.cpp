@@ -197,6 +197,7 @@ private slots:
 
         Entity keep = makeEntity(QStringLiteral("keep"), 0, 30);
         Entity drop = makeEntity(QStringLiteral("drop"), 0, 30);
+        drop.row = 1;
         document->mutableProject().entities.insert(keep.uuid, keep);
         document->mutableProject().entities.insert(drop.uuid, drop);
         QVERIFY2(document->commitEntities({keep.uuid, drop.uuid},
@@ -509,9 +510,41 @@ private slots:
         QCOMPARE(readBytes(projectPath), before);
     }
 
-    void deleteChildOfLockedParentIsRejected()
+    void commitChildOfLockedParentIsRejected()
     {
         QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        QString error;
+        auto document = ProjectDocument::create(
+            temp.path() + QStringLiteral("/locked-upsert.pvproj"),
+            ProjectSettings(), &error);
+        QVERIFY2(document != nullptr, qPrintable(error));
+
+        Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
+        Entity child = makeEntity(QStringLiteral("子"), 0, 30);
+        child.parentUuid = parent.uuid;
+        document->mutableProject().entities.insert(parent.uuid, parent);
+        document->mutableProject().entities.insert(child.uuid, child);
+        QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
+                                          QStringLiteral("pvf: create tree"),
+                                          &error),
+                 qPrintable(error));
+        document->mutableProject().entities[parent.uuid].locked = true;
+        QVERIFY2(document->commitEntity(parent.uuid,
+                                        QStringLiteral("pvf: lock parent"),
+                                        &error),
+                 qPrintable(error));
+
+        document->mutableProject().entities[child.uuid].name = QStringLiteral("改名");
+        error.clear();
+        QVERIFY(!document->commitEntity(child.uuid,
+                                        QStringLiteral("pvf: rename child"),
+                                        &error));
+        QVERIFY(error.contains(QStringLiteral("锁定")));
+    }
+
+    void deleteChildOfLockedParentIsRejected()
+    {        QTemporaryDir temp;
         QVERIFY(temp.isValid());
         QString error;
         auto document = ProjectDocument::create(
@@ -520,7 +553,6 @@ private slots:
         QVERIFY2(document != nullptr, qPrintable(error));
 
         Entity parent = makeEntity(QStringLiteral("父"), 0, 60);
-        parent.locked = true;
         Entity child = makeEntity(QStringLiteral("子"), 0, 30);
         child.parentUuid = parent.uuid;
         document->mutableProject().entities.insert(parent.uuid, parent);
@@ -528,6 +560,13 @@ private slots:
         QVERIFY2(document->commitEntities({parent.uuid, child.uuid},
                                           QStringLiteral("pvf: create tree"),
                                           &error),
+                 qPrintable(error));
+        // Locking the parent after the tree exists exercises the same guard
+        // without using an ancestor-locked upsert to create the tree.
+        document->mutableProject().entities[parent.uuid].locked = true;
+        QVERIFY2(document->commitEntity(parent.uuid,
+                                        QStringLiteral("pvf: lock parent"),
+                                        &error),
                  qPrintable(error));
         document->flush(&error);
         QVERIFY2(error.isEmpty(), qPrintable(error));

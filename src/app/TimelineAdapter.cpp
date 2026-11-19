@@ -2,8 +2,10 @@
 
 #include "EditorSession.h"
 #include "assets/AssetStore.h"
+#include "audio2/Peaks.h"
 #include "model/Query.h"
 
+#include <QDir>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -88,6 +90,15 @@ bool parentLocked(const model::Project& project, const model::Entity& entity)
         parent = it->parentUuid;
     }
     return false;
+}
+
+QString audioContentFile(const assets::StoredAsset& asset)
+{
+    const QStringList files = QDir(asset.directory).entryList(
+        {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
+    if (files.isEmpty())
+        return {};
+    return asset.directory + QLatin1Char('/') + files.first();
 }
 
 } // namespace
@@ -197,6 +208,36 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
                 data.insert(QStringLiteral("assetName"), stored->name);
                 data.insert(QStringLiteral("assetDurationSeconds"), seconds);
                 data.insert(QStringLiteral("assetDurationFrames"), frames);
+
+                if (asset.type == AssetType::Audio)
+                {
+                    const int fps = std::max(1, project.settings.fps);
+                    const double trimStart = double(asset.sourceIn) / fps;
+                    const int clipFrames = std::max(0, source.end - source.start);
+                    const int left = frames > 0
+                                         ? std::max(0, frames - asset.sourceIn
+                                                            - clipFrames)
+                                         : 0;
+                    data.insert(QStringLiteral("trimStart"), trimStart);
+                    data.insert(QStringLiteral("trimEnd"), double(left) / fps);
+
+                    auto cached = m_audioPeaks.constFind(asset.hash);
+                    if (cached == m_audioPeaks.constEnd())
+                    {
+                        auto clip = std::make_shared<AudioClip>();
+                        clip->duration = seconds;
+                        const QString path = audioContentFile(*stored);
+                        if (!path.isEmpty() && seconds > 0.0)
+                        {
+                            const int buckets = std::clamp(
+                                int(std::lround(seconds * 1000.0)), 1, 600000);
+                            clip->peaks =
+                                audio2::audioPeaks(path, buckets, nullptr);
+                        }
+                        cached = m_audioPeaks.insert(asset.hash, clip);
+                    }
+                    view.audio = cached.value();
+                }
             }
         }
         view.data = data;

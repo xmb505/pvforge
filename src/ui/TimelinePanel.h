@@ -18,6 +18,8 @@ class QDragMoveEvent;
 class QDragLeaveEvent;
 class QDropEvent;
 class QFocusEvent;
+class QHideEvent;
+class QShowEvent;
 class QMimeData;
 class QMouseEvent;
 class QPainter;
@@ -64,6 +66,10 @@ public:
     explicit TimelinePanel(EditorSession* session, QWidget* parent = nullptr);
     ~TimelinePanel() override;
 
+    // One threshold for painting, hit-testing and the private timeline that
+    // floats above the clip: below this a "+" would be a dead target.
+    static constexpr int kPlusMinClipWidth = 84;
+
     // Legacy query kept for the UI self-tests; session-backed panels are
     // editable through EditActions.
     bool readOnly() const { return false; }
@@ -76,6 +82,9 @@ public:
 
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
+    // Window-level Delete: keyframes first, then clips.  MainWindow forwards
+    // the key when no text editor has focus.
+    void requestDeleteSelection();
     void setEditMode(EditMode mode);
     EditMode editMode() const { return m_editMode; }
 
@@ -195,6 +204,14 @@ public:
         return m_owner < 0
                || (m_frame >= contentStart() && m_frame < contentEnd());
     }
+    int displayFrameForTest(int frame) const { return displayFrame(frame); }
+    bool relativeTimeForTest() const { return m_relativeTime; }
+    void setRelativeTimeForTest(bool relative)
+    {
+        m_relativeTime = relative;
+        update();
+    }
+    double pixelsPerFrameForTest() const { return m_pixelsPerFrame; }
 #endif
     QRect clipRectFor(EntityId id) const;
 #ifdef PVFORGE_TEST_HOOKS
@@ -217,6 +234,18 @@ public:
     EntityId dropAssetForTest(const QMimeData& mime, int frame, int row = -1)
     {
         return dropAsset(mime, frame, row);
+    }
+    int audioPeakCountForTest(EntityId id) const
+    {
+        const Entity* entity = entityById(id);
+        return entity && entity->audio ? int(entity->audio->peaks.size()) : 0;
+    }
+    double clipTrimStartForTest(EntityId id) const
+    {
+        const Entity* entity = entityById(id);
+        return entity ? entity->data.value(QStringLiteral("trimStart"), 0.0)
+                            .toDouble()
+                      : 0.0;
     }
 #endif
     // Popup keyframe selections are adopted by the main panel so the existing
@@ -281,6 +310,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -303,6 +334,11 @@ private:
     QRect sessionBaseClipRect(const Entity& entity) const;
     int promptReparentMode(const Uuid& target);
     void deleteSelectedEntities();
+    void copySelectedClips();
+    void pasteClips();
+    void duplicateSelectedClips();
+    void groupSelectedClips();
+    QVector<Uuid> selectedUuids() const;
 
     // Session-backed keyframe editing.  Frames passed in are absolute project
     // frames; the model stores entity-relative ones.
@@ -375,6 +411,10 @@ private:
     void moveEntityToRow(QVector<Entity>& entities, EntityId id, int targetRow);
     int contentStart() const;
     int contentEnd() const;
+    // Converts an absolute project frame to the number the ruler shows.
+    // Private timelines in relative mode label their own 0..duration window;
+    // every other panel keeps global project frames.
+    int displayFrame(int frame) const;
     const Entity* rangeOwner() const;
     int clipStartOf(const Entity& entity) const;
     int clipEndOf(const Entity& entity) const;
@@ -446,12 +486,14 @@ private:
     QString m_dragKeyTrack;
     QVector<TrackKey> m_keyClipboard;
     Uuid m_keyClipboardEntity;
+    QVector<model::Entity> m_clipClipboard;
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;
     int m_markerDragFrame = 0;
 
     DragMode m_dragMode = DragMode::None;
     EntityId m_dragEntity = kInvalidEntity;
+    QVector<Uuid> m_dragRoots;
     int m_dragRow = -1;
     int m_dragStartFrame = 0;
     int m_dragStartRow = -1;

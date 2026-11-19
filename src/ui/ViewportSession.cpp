@@ -4,11 +4,13 @@
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
 #include "core/PerfMonitor.h"
+#include "model/Query.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/app/WorkbenchServices.h"
 #include "next/core/Document.h"
+#include "next/core/EntityLock.h"
 #include "perf/FrameProfiler.h"
 #include "render2/Render.h"
 #include "workbench/MetaBuilder.h"
@@ -208,6 +210,62 @@ QPointF Viewport::projectToWidgetForTest(const QPointF& pos) const
 }
 #endif
 
+namespace {
+
+bool pickableContent(const model::Entity& entity)
+{
+    if (entity.content.kind == ContentKind::Camera
+        || entity.content.kind == ContentKind::Empty)
+        return false;
+    if (entity.content.kind == ContentKind::Asset
+        && entity.content.asset.type == AssetType::Audio)
+        return false;
+    return true;
+}
+
+// Mirrors render2::RenderScene's layer walk: negative-row children first, then
+// the entity, then non-negative children.  Picking walks this order backwards
+// so the top-most painted entity is the first hit, including hidden parents
+// that take their inheriting descendants with them.
+void collectPickOrder(const model::Project& project, const Uuid& parentUuid,
+                      int frame, bool parentHidden,
+                      QVector<const model::Entity*>& order)
+{
+    const auto it = project.entities.constFind(parentUuid);
+    bool editorHidden = parentHidden;
+    if (it != project.entities.constEnd())
+        editorHidden = it->hidden
+                       || (parentHidden && it->inheritVisibility);
+
+    const QVector<Uuid> children = model::childrenOf(project, parentUuid);
+    QVector<Uuid> negative;
+    QVector<Uuid> positive;
+    for (const Uuid& uuid : children)
+    {
+        const auto childIt = project.entities.constFind(uuid);
+        if (childIt == project.entities.constEnd())
+            continue;
+        (childIt->row < 0 ? negative : positive).append(uuid);
+    }
+
+    for (const Uuid& uuid : negative)
+        collectPickOrder(project, uuid, frame, editorHidden, order);
+
+    if (it != project.entities.constEnd())
+    {
+        const model::Entity& entity = it.value();
+        if (!editorHidden && entity.visible && frame >= entity.start
+            && frame < entity.end && pickableContent(entity)
+            && !next::isEntityLocked(project, entity.uuid))
+            order.append(&entity);
+    }
+
+    for (const Uuid& uuid : positive)
+        collectPickOrder(project, uuid, frame, editorHidden, order);
+}
+
+} // namespace
+
 const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
 {
     if (!m_session)
@@ -217,33 +275,15 @@ const model::Entity* Viewport::hitTestSession(const QPointF& pos) const
     const int frame = m_session->playhead();
     const QPointF projectPos = sessionScreenToProject(pos);
 
-    QVector<const model::Entity*> candidates;
-    candidates.reserve(project.entities.size());
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
-         ++it)
-    {
-        const model::Entity& entity = it.value();
-        if (entity.hidden || entity.locked || !entity.visible)
-            continue;
-        if (entity.content.kind == ContentKind::Camera
-            || entity.content.kind == ContentKind::Empty)
-            continue;
-        if (entity.content.kind == ContentKind::Asset
-            && entity.content.asset.type == AssetType::Audio)
-            continue;
-        if (frame < entity.start || frame >= entity.end)
-            continue;
-        candidates.append(&entity);
-    }
-    std::sort(candidates.begin(), candidates.end(),
-              [](const model::Entity* a, const model::Entity* b) {
-                  return a->row > b->row;
-              });
+    QVector<const model::Entity*> order;
+    order.reserve(project.entities.size());
+    collectPickOrder(project, Uuid(), frame, false, order);
 
     anim::Cache& cache = m_session->animCache();
     render2::SceneWorld world(project, m_session->assets(), &cache);
-    for (const model::Entity* entity : candidates)
+    for (int i = order.size() - 1; i >= 0; --i)
     {
+        const model::Entity* entity = order.at(i);
         const QPainterPath shape = world.shapeOf(entity->uuid, frame);
         if (!shape.isEmpty() && shape.contains(projectPos))
             return entity;
@@ -264,7 +304,8 @@ void Viewport::drawSessionSelection(QPainter& painter)
     const auto it = project.entities.constFind(selected);
     if (it == project.entities.constEnd())
         return;
-    if (it->locked || it->content.kind == ContentKind::Camera)
+    if (next::isEntityLocked(project, selected)
+        || it->content.kind == ContentKind::Camera)
         return;
 
     drawSessionGizmo(painter);

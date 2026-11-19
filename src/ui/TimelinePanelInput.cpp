@@ -1,5 +1,7 @@
 #include "TimelinePanel.h"
 
+#include "ui/TimelinePanelPopups.h"
+
 #include "app/EditorSession.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
@@ -9,9 +11,11 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFocusEvent>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QScrollBar>
 #include <QToolButton>
 #include <QWheelEvent>
@@ -98,20 +102,28 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     if (event->key() == Qt::Key_Delete
         || event->key() == Qt::Key_Backspace)
     {
-        if (!m_selectedKeyframes.isEmpty())
-            deleteSelectedKeyframes();
-        else if (m_selected != kInvalidEntity)
-            deleteSelectedEntities();
+        requestDeleteSelection();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_C)
     {
-        copySelectedKeyframes();
+        if (!m_selectedKeyframes.isEmpty())
+            copySelectedKeyframes();
+        else
+            copySelectedClips();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_V)
     {
-        pasteKeyframes();
+        if (!m_keyClipboard.isEmpty())
+            pasteKeyframes();
+        else
+            pasteClips();
+        return;
+    }
+    if (plain == Qt::ControlModifier && event->key() == Qt::Key_D)
+    {
+        duplicateSelectedClips();
         return;
     }
     if (plain == Qt::NoModifier && event->key() == Qt::Key_S)
@@ -144,6 +156,22 @@ void TimelinePanel::focusOutEvent(QFocusEvent* event)
     // A key release can be lost when the focus moves mid-hold.
     stopHold();
     QWidget::focusOutEvent(event);
+}
+
+void TimelinePanel::hideEvent(QHideEvent* event)
+{
+    // Private timelines float over the main window, not inside this widget, so
+    // hiding the timeline dock must explicitly take them down with it.
+    for (ClipPopup* popup : m_popups)
+        if (popup)
+            popup->hide();
+    QWidget::hideEvent(event);
+}
+
+void TimelinePanel::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    syncPopups();
 }
 
 void TimelinePanel::resizeEvent(QResizeEvent* event)

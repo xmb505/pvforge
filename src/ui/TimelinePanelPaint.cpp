@@ -179,7 +179,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const int firstLabel =
             ((leftFrame + labelStep - 1) / labelStep) * labelStep;
         for (int frame = firstLabel; frame <= lastFrame; frame += labelStep)
-            drawLabel(frame, QString::number(frame), text);
+            drawLabel(frame, QString::number(displayFrame(frame)), text);
     }
     else
     {
@@ -210,7 +210,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
              frame += grid.labelFrames)
         {
             drawTick(frame, 10, text);
-            const double seconds = frame / double(fps);
+            const double seconds = displayFrame(frame) / double(fps);
             const bool whole = std::abs(seconds - std::round(seconds)) < 1e-9;
             const QString label =
                 (whole ? QString::number(int(std::round(seconds)))

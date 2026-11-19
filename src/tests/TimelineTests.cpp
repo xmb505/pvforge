@@ -4,6 +4,8 @@
 
 #include <QDockWidget>
 
+#include <cmath>
+
 namespace {
 
 int timelineTest(QApplication& app)
@@ -81,6 +83,25 @@ int timelineTest(QApplication& app)
     child.row = 0;
     child.content.kind = pvf::ContentKind::Text;
     project.entities.insert(child.uuid, child);
+
+    // Nine more nested clips: private timelines must keep opening past the old
+    // hard-coded eight-level cap.
+    QVector<pvf::Uuid> deepChain;
+    pvf::Uuid deepParent = child.uuid;
+    for (int depth = 0; depth < 9; ++depth)
+    {
+        pvf::model::Entity deep;
+        deep.uuid = pvf::model::newUuid();
+        deep.name = QStringLiteral("深层%1").arg(depth + 1);
+        deep.parentUuid = deepParent;
+        deep.start = 10;
+        deep.end = 40;
+        deep.row = 0;
+        deep.content.kind = pvf::ContentKind::Empty;
+        project.entities.insert(deep.uuid, deep);
+        deepChain.append(deep.uuid);
+        deepParent = deep.uuid;
+    }
 
     // Keyframes are stored relative to entity.start and must be shown at
     // absolute frames by the read-only adapter.
@@ -286,6 +307,89 @@ int timelineTest(QApplication& app)
                     << popup->entityRowCountForTest()
                     << popup->rowNameForTest(0) << popup->rowDepthForTest(0)
                     << popup->rowStartForTest(0) << popup->rowEndForTest(0);
+        return 1;
+    }
+
+    // Relative time only renumbers the ruler: a 10..50 owner window shows 0..40
+    // while the playhead and keys keep absolute project frames.
+    auto* vectorPopup = timeline->openPopup(timeline->entityIdForUuid(vector));
+    QApplication::processEvents();
+    if (!vectorPopup || !vectorPopup->relativeTimeForTest()
+        || vectorPopup->displayFrameForTest(10) != 0
+        || vectorPopup->displayFrameForTest(50) != 40
+        || vectorPopup->displayFrameForTest(20) != 10)
+    {
+        qCritical() << "timeline-test: relative ruler is not zero-based"
+                    << (vectorPopup != nullptr)
+                    << (vectorPopup ? vectorPopup->relativeTimeForTest() : false)
+                    << (vectorPopup ? vectorPopup->displayFrameForTest(10) : -1)
+                    << (vectorPopup ? vectorPopup->displayFrameForTest(20) : -1);
+        return 1;
+    }
+    vectorPopup->setRelativeTimeForTest(false);
+    if (vectorPopup->displayFrameForTest(10) != 10
+        || vectorPopup->displayFrameForTest(20) != 20)
+    {
+        qCritical() << "timeline-test: absolute ruler lost global frames"
+                    << vectorPopup->displayFrameForTest(10)
+                    << vectorPopup->displayFrameForTest(20);
+        return 1;
+    }
+    timeline->removePopup(timeline->entityIdForUuid(vector));
+    vectorPopup->window()->deleteLater();
+    QApplication::processEvents();
+
+    // Deep nesting: every level gets its own private timeline; the ninth
+    // nested clip used to stop dead at the old eight-level cap.
+    pvf::TimelinePanel* deepPanel =
+        popup->openPopup(timeline->entityIdForUuid(child.uuid));
+    for (const pvf::Uuid& uuid : deepChain)
+    {
+        if (!deepPanel)
+            break;
+        deepPanel = deepPanel->openPopup(timeline->entityIdForUuid(uuid));
+    }
+    if (!deepPanel)
+    {
+        qCritical() << "timeline-test: deep private timeline chain stopped";
+        return 1;
+    }
+    timeline->closeAllPopups();
+    QApplication::processEvents();
+    popup = timeline->openPopup(timeline->entityIdForUuid(title));
+    QApplication::processEvents();
+    if (!popup)
+    {
+        qCritical() << "timeline-test: private timeline reopen failed";
+        return 1;
+    }
+
+    // Zooming the main axis or refreshing the document must not reset the
+    // private timeline's own zoom/scroll.
+    popup->setPixelsPerFrameForTest(12.0);
+    timeline->setPixelsPerFrameForTest(3.0);
+    timeline->refreshFromSession();
+    QApplication::processEvents();
+    if (std::abs(popup->pixelsPerFrameForTest() - 12.0) > 1e-6)
+    {
+        qCritical() << "timeline-test: main axis reset the popup zoom"
+                    << popup->pixelsPerFrameForTest();
+        return 1;
+    }
+
+    // Hiding the timeline dock hides the floating private timeline as well.
+    timeline->hide();
+    QApplication::processEvents();
+    if (popup->isVisible())
+    {
+        qCritical() << "timeline-test: dock hide left the popup visible";
+        return 1;
+    }
+    timeline->show();
+    QApplication::processEvents();
+    if (!popup->isVisible())
+    {
+        qCritical() << "timeline-test: dock show did not restore the popup";
         return 1;
     }
     timeline->closeAllPopups();
@@ -531,18 +635,8 @@ int timelineBottomUpTest(QApplication& app)
     dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
     const QPoint previewBottom(timeline->frameXForTest(30),
-                               timeline->rowCenterYForTest(0));
+                               timeline->rowCenterYForTest(3));
     sendDrag(dragFrom, previewBottom);
-    expect(rowFor(middle) == 0,
-           QStringLiteral("drag preview did not follow the pointer to row 0 (%1)")
-               .arg(rowFor(middle)));
-    dragTo = QPoint(timeline->frameXForTest(30),
-                    timeline->rowCenterYForTest(3));
-    QMouseEvent previewMove(QEvent::MouseMove, QPointF(dragTo),
-                            QPointF(timeline->mapToGlobal(dragTo)), Qt::NoButton,
-                            Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &previewMove);
-    QApplication::processEvents();
     expect(rowFor(middle) == 3,
            QStringLiteral("drag preview did not follow the pointer to row 3 (%1)")
                .arg(rowFor(middle)));
@@ -561,7 +655,8 @@ int timelineBottomUpTest(QApplication& app)
     expect(changedSignals == 0 && depthNow() == depthAtDragStart,
            QStringLiteral("Esc created a commit"));
 
-    // 4. Dropping on an occupied clip lands on that row and swaps slots.
+    // 4. Tracks are layers, not slots.  Dropping an overlapping clip on an
+    // occupied row is rejected with no commit: the occupant never gets moved.
     depthBefore = depthNow();
     changedSignals = 0;
     dragFrom = QPoint(timeline->frameXForTest(30),
@@ -570,14 +665,30 @@ int timelineBottomUpTest(QApplication& app)
                     timeline->rowCenterYForTest(2));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
+    expect(changedSignals == 0 && depthNow() == depthBefore,
+           QStringLiteral("overlapping row drop committed"));
+    expect(rowFor(middle) == 1 && rowFor(top) == 2,
+           QStringLiteral("overlapping row drop moved a clip (%1/%2)")
+               .arg(rowFor(middle))
+               .arg(rowFor(top)));
+
+    // 4b. Two clips may share one row when their time ranges do not overlap.
+    depthBefore = depthNow();
+    changedSignals = 0;
+    dragFrom = QPoint(timeline->frameXForTest(30),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(70),
+                    timeline->rowCenterYForTest(2));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
     expect(changedSignals == 1 && depthNow() == depthBefore + 1,
-           QStringLiteral("occupied-slot drop did not commit once"));
-    expect(rowFor(middle) == 2 && rowFor(top) == 1 && rowFor(bottom) == 0,
-           QStringLiteral("occupied-slot drop did not swap rows (%1/%2)")
+           QStringLiteral("non-overlapping shared-row drop did not commit once"));
+    expect(rowFor(middle) == 2 && rowFor(top) == 2,
+           QStringLiteral("clips did not share one track (%1/%2)")
                .arg(rowFor(middle))
                .arg(rowFor(top)));
     expect(undo() && rowFor(middle) == 1 && rowFor(top) == 2,
-           QStringLiteral("undo did not restore swapped rows"));
+           QStringLiteral("undo did not restore the shared-row drop"));
 
     // 4b. A blank gap row is a valid target and stays a gap for the others.
     depthBefore = depthNow();

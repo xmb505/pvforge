@@ -169,7 +169,7 @@ bool EditActions::planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
     const auto source = moved.project.entities.constFind(uuid);
     if (source == moved.project.entities.constEnd())
     {
-        setError(error, QStringLiteral("实体不存在"));
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
         return false;
     }
     if (source->parentUuid.isEmpty() && row < 0)
@@ -177,50 +177,28 @@ bool EditActions::planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
         setError(error, QStringLiteral("主时间轴目标行不能小于 0"));
         return false;
     }
-    if (source == moved.project.entities.constEnd())
-    {
-        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
-        return false;
-    }
 
-    const Uuid parentUuid = source.value().parentUuid;
     const int oldRow = source.value().row;
-    QString occupant;
+    // Tracks are layers, not fixed slots.  Writing the target row directly is
+    // the whole edit; an occupant sharing the row is only a conflict when its
+    // time range overlaps, and the project validator below reports that with
+    // both UUIDs instead of silently swapping layers.
+    model::Entity& target = moved.project.entities[uuid];
+    target.row = row;
     if (oldRow != row)
-    {
-        for (auto it = moved.project.entities.constBegin();
-             it != moved.project.entities.constEnd(); ++it)
-        {
-            if (it.key() == uuid || it.value().parentUuid != parentUuid)
-                continue;
-            if (it.value().row == row)
-            {
-                occupant = it.key();
-                break;
-            }
-        }
-    }
-
-    QSet<Uuid> upsertSet(moved.upserts.begin(), moved.upserts.end());
-    auto upsert = [&moved, &upsertSet](const Uuid& value) {
-        if (!upsertSet.contains(value))
-        {
-            upsertSet.insert(value);
-            moved.upserts.append(value);
-        }
-    };
-    if (!occupant.isEmpty())
-    {
-        // Fixed slots: the occupant moves into the slot the drag vacated.
-        moved.project.entities[occupant].row = oldRow;
-        upsert(occupant);
-    }
-    if (oldRow != row)
-        upsert(uuid);
-    moved.project.entities[uuid].row = row;
+        moved.upserts.append(uuid);
     moved.message = (deltaFrames == 0 && oldRow != row)
                         ? QStringLiteral("调整片段行")
                         : QStringLiteral("移动片段");
+
+    QString validationError;
+    if (!model::validateProject(moved.project, &validationError))
+    {
+        setError(error, QStringLiteral("移动后工程校验失败：%1")
+                            .arg(validationError));
+        return false;
+    }
+
     *plan = std::move(moved);
     return true;
 }

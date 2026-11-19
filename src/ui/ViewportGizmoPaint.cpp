@@ -5,6 +5,7 @@
 #include "app/EditorSession.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
+#include "next/core/EntityLock.h"
 
 #include <QCursor>
 #include <QPainter>
@@ -143,7 +144,8 @@ void Viewport::drawSessionGizmo(QPainter& painter)
         return;
     const Uuid selected = m_session->document()->selection();
     const auto it = m_session->project().entities.constFind(selected);
-    if (it == m_session->project().entities.constEnd() || it->locked
+    if (it == m_session->project().entities.constEnd()
+        || next::isEntityLocked(m_session->project(), selected)
         || it->content.kind == ContentKind::Camera)
         return;
 

@@ -81,13 +81,14 @@ QString projectPath(QTemporaryDir& temp)
 }
 
 model::Entity makeEntity(const QString& name = QStringLiteral("实体"),
-                         int start = 0, int end = 30)
+                         int start = 0, int end = 30, int row = 0)
 {
     model::Entity entity;
     entity.uuid = model::newUuid();
     entity.name = name;
     entity.start = start;
     entity.end = end;
+    entity.row = row;
     return entity;
 }
 
@@ -1011,7 +1012,7 @@ void StoreTests::commitRecoveredTextCreatesCommit()
     QVERIFY(writeText(trackedPath,
                       readText(trackedPath) + QStringLiteral("\n")));
 
-    model::Entity added = makeEntity(QStringLiteral("崩溃时新增"));
+    model::Entity added = makeEntity(QStringLiteral("崩溃时新增"), 0, 30, 1);
     const QString addedRelative =
         QStringLiteral("entities/") + added.uuid + QStringLiteral(".json");
     const QString addedPath = path + QLatin1Char('/') + addedRelative;
@@ -1061,9 +1062,9 @@ void StoreTests::discardDirtyTextRestores()
     auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
     QVERIFY2(store.has_value(), qPrintable(error));
 
-    model::Entity kept = makeEntity(QStringLiteral("保留甲"));
-    model::Entity removed = makeEntity(QStringLiteral("删除乙"));
-    model::Entity staged = makeEntity(QStringLiteral("暂存丙"));
+    model::Entity kept = makeEntity(QStringLiteral("保留甲"), 0, 30, 0);
+    model::Entity removed = makeEntity(QStringLiteral("删除乙"), 0, 30, 1);
+    model::Entity staged = makeEntity(QStringLiteral("暂存丙"), 0, 30, 2);
     store->mutableProject().entities.insert(kept.uuid, kept);
     store->mutableProject().entities.insert(removed.uuid, removed);
     store->mutableProject().entities.insert(staged.uuid, staged);
@@ -1096,7 +1097,7 @@ void StoreTests::discardDirtyTextRestores()
              0);
 
     // An untracked entity written just before the crash.
-    model::Entity untracked = makeEntity(QStringLiteral("新增丁"));
+    model::Entity untracked = makeEntity(QStringLiteral("新增丁"), 0, 30, 3);
     const QString untrackedPath = entityPath(untracked);
     QVERIFY(writeText(untrackedPath,
                       QString::fromUtf8(
@@ -1967,5 +1968,4 @@ void StoreTests::unknownFieldsSurviveReopen()
                 .entities.value(entity.uuid)
                 .extras.contains(QStringLiteral("futureEntityField")));
 }
-
 QTEST_GUILESS_MAIN(StoreTests)

@@ -137,6 +137,7 @@ private:
                 &TimelinePanel::editFailed);
 
         syncGeometry();
+        alignViewToSource();
     }
 
 public:
@@ -150,7 +151,6 @@ public:
             return;
         }
 
-        m_panel->m_pixelsPerFrame = m_source->m_pixelsPerFrame;
         if (m_source->sessionMode())
         {
             m_panel->setReadOnlySnapshot(m_source->m_snapshot);
@@ -180,7 +180,7 @@ public:
             std::min(m_source->mapTo(host, QPoint(clip.right() + 1, 0)).x(),
                      sourceRight);
         const int width = right - left;
-        if (width < 90)
+        if (width < TimelinePanel::kPlusMinClipWidth)
         {
             hide();
             return;
@@ -201,11 +201,22 @@ public:
         y = std::clamp(y, 0, std::max(0, host->height() - height));
 
         setGeometry(left, y, width, height);
-        m_panel->m_pixelsPerFrame = m_source->m_pixelsPerFrame;
-        // If the parent clip starts left of the visible main timeline, the
-        // popup's left edge is clamped to the viewport. Scroll the popup to
-        // the global frame under that edge so rulers, clips and playhead line
-        // up with the main timeline instead of restarting at the clip start.
+        show();
+        raise();
+        m_panel->update();
+    }
+
+    // Runs only when the popup opens.  Later refreshes must not drag the
+    // private timeline's zoom or horizontal scroll back to the main axis.
+    void alignViewToSource()
+    {
+        const QRect clip = m_source->clipRectFor(m_ownerId);
+        if (clip.isEmpty() || m_source->window() == nullptr)
+            return;
+        QWidget* host = window();
+        const int left = m_source->mapTo(host, QPoint(std::max(0, clip.left()),
+                                                      clip.top()))
+                             .x();
         const int sourceX =
             m_source->mapFrom(host,
                               QPoint(left + m_panel->nameWidth(), clip.top()))
@@ -217,8 +228,6 @@ public:
                                 - contentStart)
                                * m_panel->m_pixelsPerFrame)));
         m_panel->clampScroll();
-        show();
-        raise();
         m_panel->update();
     }
 

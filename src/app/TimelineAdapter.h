@@ -4,6 +4,7 @@
 #include "ui/TimelineSnapshot.h"
 
 #include <QHash>
+#include <memory>
 
 namespace pvf {
 
@@ -38,6 +39,9 @@ private:
     TimelineSnapshot m_snapshot;
     QHash<Uuid, int> m_idByUuid;
     QHash<int, Uuid> m_uuidById;
+    // Decoded waveform peaks per asset hash.  Decoding is expensive, so a
+    // refresh must not re-read every audio file.
+    QHash<QString, std::shared_ptr<AudioClip>> m_audioPeaks;
     int m_nextId = 1;
 };
 

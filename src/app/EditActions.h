@@ -23,6 +23,9 @@ struct EditPlan
     QVector<Uuid> upserts;
     QVector<Uuid> deletes;
     QString message;
+    // Effective frame delta for keyframe plans after boundary clamping.  The
+    // timeline uses it to remap the selected diamonds after a drag.
+    int frameDelta = 0;
     // True when the plan rewrites project.json (markers) instead of entity
     // files.  Marker gestures and entity gestures never mix in one plan.
     bool projectChanged = false;
@@ -66,9 +69,9 @@ public:
                   const QVector<Uuid>& siblingOrder, EditPlan* plan,
                   QString* error = nullptr) const;
     // Moves one root in time and pins it to the model row under the pointer.
-    // Blank rows are valid and stay blank: other siblings keep their rows, so
-    // row slots never compact.  Dropping on an occupied slot swaps the two
-    // clips, which keeps the dragged clip exactly on the dropped row.
+    // A track is a layer, not a fixed slot: several clips may share a row when
+    // their [start, end) ranges do not overlap.  Dropping on an overlapping
+    // clip is rejected by validation instead of silently swapping rows.
     bool planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
                        EditPlan* plan, QString* error = nullptr) const;
     bool planTrim(const Uuid& uuid, int newStart, int newEnd, EditPlan* plan,
@@ -158,8 +161,9 @@ public:
                        QString* error = nullptr);
 
     // Creates the visual entity for a stored asset at startFrame and, for a
-    // video with a split audio track, its independent WAV audio entity.  row
-    // < 0 picks the model's auto row; an empty parent creates roots.  Both
+    // video with a split audio track, its independent WAV audio entity.  For a
+    // root insertion row < 0 picks the model's auto row; inside a private
+    // timeline a negative row is a real track.  An empty parent creates roots.  Both
     // entities are written in one commit and the new UUIDs are returned.
     QVector<Uuid> addAssetEntities(const AssetHash& hash, int startFrame,
                                    int row, const Uuid& parent = Uuid(),
@@ -172,6 +176,20 @@ public:
     // the new duration); children that would fall outside are rejected.
     bool replaceAsset(const Uuid& uuid, const AssetHash& hash,
                       QString* error = nullptr);
+
+    // Batch clip helpers used by the timeline multi-selection.  Each one
+    // commits exactly one plan.  duplicateEntities clones the selected
+    // subtrees under newParent (empty = keep the original parent);
+    // pasteEntities clones a clipboard captured by the panel; groupIntoFolder
+    // creates one empty folder around two or more siblings.
+    QVector<Uuid> duplicateEntities(const QVector<Uuid>& roots, int deltaFrames,
+                                    const Uuid& newParent,
+                                    QString* error = nullptr);
+    QVector<Uuid> pasteEntities(const QVector<model::Entity>& clipboard,
+                                const Uuid& parent, int deltaFrames,
+                                QString* error = nullptr);
+    bool groupIntoFolder(const QVector<Uuid>& roots, Uuid* folder,
+                         QString* error = nullptr);
 
     // Writes a plan into the document and commits upserts/deletes once.
     // On failure the in-memory project is restored and no undo step exists.

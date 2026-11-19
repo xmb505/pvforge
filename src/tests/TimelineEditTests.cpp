@@ -25,6 +25,7 @@ struct TimelineEditIds
     pvf::Uuid followPeer;
     pvf::Uuid followGrand;
     pvf::Uuid followTarget;
+    pvf::Uuid negativeChild;
 };
 
 struct TimelineEditOps
@@ -371,6 +372,52 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
                QStringLiteral("undo did not restore the deleted child")))
         return 1;
 
+    // Batch clip helpers from the multi-selection UI: duplicate, paste and
+    // group each produce one undoable commit and never touch the source clip.
+    const int beforeDuplicate = session->project().entities.size();
+    const QVector<pvf::Uuid> duplicated =
+        actions->duplicateEntities({video}, 0, pvf::Uuid(), &error);
+    if (!check(duplicated.size() == 1
+                   && session->project().entities.contains(duplicated.first())
+                   && entity(duplicated.first()).start == entity(video).start
+                   && entity(duplicated.first()).end == entity(video).end
+                   && session->project().entities.size() == beforeDuplicate + 1,
+               QStringLiteral("duplicateEntities failed: %1").arg(error)))
+        return 1;
+    if (!undo()
+        || !check(!session->project().entities.contains(duplicated.first()),
+                  QStringLiteral("duplicate undo left the copy")))
+        return 1;
+
+    QVector<pvf::model::Entity> clipboard;
+    clipboard.append(entity(video));
+    const QVector<pvf::Uuid> pasted =
+        actions->pasteEntities(clipboard, pvf::Uuid(), 100, &error);
+    if (!check(pasted.size() == 1 && session->project().entities.contains(pasted.first())
+                   && entity(pasted.first()).start == entity(video).start + 100,
+               QStringLiteral("pasteEntities failed: %1").arg(error)))
+        return 1;
+    if (!undo())
+        return 1;
+
+    pvf::Uuid folder;
+    if (!check(actions->groupIntoFolder({audio, video}, &folder, &error),
+               QStringLiteral("groupIntoFolder failed: %1").arg(error)))
+        return 1;
+    if (!check(!folder.isEmpty()
+                   && entity(audio).parentUuid == folder
+                   && entity(video).parentUuid == folder
+                   && entity(folder).start == std::min(entity(audio).start,
+                                                       entity(video).start)
+                   && entity(folder).end == std::max(entity(audio).end,
+                                                     entity(video).end),
+               QStringLiteral("group did not wrap both clips")))
+        return 1;
+    if (!undo() || !check(entity(audio).parentUuid.isEmpty()
+                              && entity(video).parentUuid.isEmpty(),
+                          QStringLiteral("group undo did not restore parents")))
+        return 1;
+
     return 0;
 }
 
@@ -501,8 +548,8 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
                   QStringLiteral("Esc did not restore the drag preview")))
         return 1;
 
-    // Vertical drag between occupied rows; the row change is part of the same
-    // single commit and swaps the two row slots.
+    // Vertical drag between occupied rows.  Tracks are layers: an overlapping
+    // drop is rejected without moving either clip.
     const int videoRow = rowForName(QStringLiteral("视频"));
     const int parentRow = rowForName(QStringLiteral("父级"));
     if (!check(videoRow >= 0 && parentRow >= 0,
@@ -536,36 +583,57 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     QApplication::sendEvent(timeline, &rowRelease);
     QApplication::processEvents();
     live->flush();
-    // Row slots are fixed: dropping on the video clip swaps the two slots, so
-    // the dragged clip lands exactly on the row under the pointer.
+    if (!check(changedSignals == 0,
+               QStringLiteral("overlapping row drag emitted %1 changed signals")
+                   .arg(changedSignals))
+        || !check(live->document()->store()->undoDepth() == panelDepth,
+                  QStringLiteral("overlapping row drag created an undo step"))
+        || !check(entity(parent).row == parentRow && entity(video).row == videoRow,
+                  QStringLiteral("overlapping row drag moved a clip (%1/%2)")
+                      .arg(entity(parent).row)
+                      .arg(entity(video).row)))
+        return 1;
+
+    // The same drop succeeds once the ranges no longer overlap: drag the
+    // parent 60 frames right on the video's row.
+    panelDepth = live->document()->store()->undoDepth();
+    changedSignals = 0;
+    const QPoint sharedFrom(timeline->frameXForTest(30),
+                            timeline->rowCenterYForTest(parentRow));
+    const QPoint sharedTo(timeline->frameXForTest(90),
+                          timeline->rowCenterYForTest(videoRow));
+    QMouseEvent sharedPress(QEvent::MouseButtonPress, QPointF(sharedFrom),
+                            QPointF(timeline->mapToGlobal(sharedFrom)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent sharedMove(QEvent::MouseMove, QPointF(sharedTo),
+                           QPointF(timeline->mapToGlobal(sharedTo)), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent sharedRelease(QEvent::MouseButtonRelease, QPointF(sharedTo),
+                              QPointF(timeline->mapToGlobal(sharedTo)),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &sharedPress);
+    QApplication::sendEvent(timeline, &sharedMove);
+    QApplication::sendEvent(timeline, &sharedRelease);
+    QApplication::processEvents();
+    live->flush();
     if (!check(changedSignals == 1,
-               QStringLiteral("row drag emitted %1 changed signals")
+               QStringLiteral("shared-row drag emitted %1 changed signals")
                    .arg(changedSignals))
         || !check(live->document()->store()->undoDepth() == panelDepth + 1,
-                  QStringLiteral("row drag did not create one undo step"))
-        || !check(timeline->rowForEntityForTest(
-                      timeline->entityIdForUuid(parent))
-                      == videoRow,
-                  QStringLiteral("row drag did not land on the dropped row (row %1, expected %2; model %3; rows %4/%5/%6)")
-                      .arg(timeline->rowForEntityForTest(
-                          timeline->entityIdForUuid(parent)))
-                      .arg(videoRow)
+                  QStringLiteral("shared-row drag did not create one undo step"))
+        || !check(entity(parent).row == videoRow && entity(video).row == videoRow,
+                  QStringLiteral("shared-row drag did not share the track (%1/%2)")
                       .arg(entity(parent).row)
-                      .arg(timeline->rowNameForTest(0))
-                      .arg(timeline->rowNameForTest(1))
-                      .arg(timeline->rowNameForTest(2)))
-        || !check(timeline->rowForEntityForTest(
-                      timeline->entityIdForUuid(video))
-                      == parentRow,
-                  QStringLiteral("row drag did not move the occupant to the vacated row")))
+                      .arg(entity(video).row))
+        || !check(entity(parent).start == 60,
+                  QStringLiteral("shared-row drag did not shift time (%1)")
+                      .arg(entity(parent).start)))
         return 1;
     if (!check(live->document()->undo(&error),
-               QStringLiteral("row drag undo failed: %1").arg(error)))
+               QStringLiteral("shared-row drag undo failed: %1").arg(error)))
         return 1;
-    if (!check(timeline->rowForEntityForTest(
-                   timeline->entityIdForUuid(parent))
-                   == parentRow,
-               QStringLiteral("row drag undo did not restore rows")))
+    if (!check(entity(parent).row == parentRow && entity(parent).start == 0,
+               QStringLiteral("shared-row undo did not restore the row")))
         return 1;
 
     // Right-edge drag trims the parent and clips the child in one commit.
@@ -618,6 +686,33 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     QApplication::processEvents();
     if (!check(popup && popup->entityRowCountForTest() == 1,
                QStringLiteral("private timeline did not open for editing")))
+        return 1;
+    // Negative tracks are real hit targets, not just decoration.
+    const pvf::EntityId negativeId =
+        popup->entityIdForUuid(ids.negativeChild);
+    const QRect negativeClip = popup->clipRectFor(negativeId);
+    if (!check(negativeId != pvf::kInvalidEntity
+                   && popup->rowForEntityForTest(negativeId) == -1
+                   && !negativeClip.isEmpty(),
+               QStringLiteral("negative track clip is not rendered")))
+        return 1;
+    {
+        const QPoint center = negativeClip.center();
+        QMouseEvent negativePress(QEvent::MouseButtonPress, QPointF(center),
+                                  QPointF(popup->mapToGlobal(center)),
+                                  Qt::LeftButton, Qt::LeftButton,
+                                  Qt::NoModifier);
+        QMouseEvent negativeRelease(QEvent::MouseButtonRelease, QPointF(center),
+                                    QPointF(popup->mapToGlobal(center)),
+                                    Qt::LeftButton, Qt::NoButton,
+                                    Qt::NoModifier);
+        QApplication::sendEvent(popup, &negativePress);
+        QApplication::sendEvent(popup, &negativeRelease);
+        QApplication::processEvents();
+    }
+    if (!check(popup->entitySelectionCountForTest() == 1
+                   && live->document()->selection() == ids.negativeChild,
+               QStringLiteral("negative track click did not select the clip")))
         return 1;
     panelDepth = live->document()->store()->undoDepth();
     changedSignals = 0;
@@ -704,6 +799,54 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     QApplication::processEvents();
     if (!check(!followBox->isEnabled(),
                QStringLiteral("the follow checkbox must be disabled for roots")))
+        return 1;
+    live->document()->setSelection(pvf::Uuid());
+    QApplication::processEvents();
+
+    // Box select in clip mode selects whole clips, and Ctrl-click adds a clip
+    // without the document selection sync collapsing the set.
+    const int selectionAudioRow = rowForName(QStringLiteral("音频"));
+    const int selectionVideoRow = rowForName(QStringLiteral("视频"));
+    if (!check(selectionAudioRow >= 0 && selectionVideoRow >= 0,
+               QStringLiteral("multi-select rows missing")))
+        return 1;
+    const QPoint boxStart(timeline->frameXForTest(80),
+                          timeline->rowCenterYForTest(selectionVideoRow));
+    const QPoint boxEnd(timeline->frameXForTest(20),
+                        timeline->rowCenterYForTest(selectionAudioRow));
+    QMouseEvent boxPress(QEvent::MouseButtonPress, QPointF(boxStart),
+                         QPointF(timeline->mapToGlobal(boxStart)),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent boxMove(QEvent::MouseMove, QPointF(boxEnd),
+                        QPointF(timeline->mapToGlobal(boxEnd)), Qt::NoButton,
+                        Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent boxRelease(QEvent::MouseButtonRelease, QPointF(boxEnd),
+                           QPointF(timeline->mapToGlobal(boxEnd)),
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &boxPress);
+    QApplication::sendEvent(timeline, &boxMove);
+    QApplication::sendEvent(timeline, &boxRelease);
+    QApplication::processEvents();
+    if (!check(timeline->entitySelectionCountForTest() == 2,
+               QStringLiteral("box select selected %1 clips")
+                   .arg(timeline->entitySelectionCountForTest())))
+        return 1;
+
+    const int selectionParentRow = rowForName(QStringLiteral("父级"));
+    const QPoint ctrlPoint(timeline->frameXForTest(30),
+                           timeline->rowCenterYForTest(selectionParentRow));
+    QMouseEvent ctrlPress(QEvent::MouseButtonPress, QPointF(ctrlPoint),
+                          QPointF(timeline->mapToGlobal(ctrlPoint)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    QMouseEvent ctrlRelease(QEvent::MouseButtonRelease, QPointF(ctrlPoint),
+                            QPointF(timeline->mapToGlobal(ctrlPoint)),
+                            Qt::LeftButton, Qt::NoButton, Qt::ControlModifier);
+    QApplication::sendEvent(timeline, &ctrlPress);
+    QApplication::sendEvent(timeline, &ctrlRelease);
+    QApplication::processEvents();
+    if (!check(timeline->entitySelectionCountForTest() == 3,
+               QStringLiteral("Ctrl-click left %1 selected clips")
+                   .arg(timeline->entitySelectionCountForTest())))
         return 1;
     live->document()->setSelection(pvf::Uuid());
     QApplication::processEvents();
@@ -894,13 +1037,14 @@ int runTimelineEditTest(QApplication& app)
     // while the parent itself stays in the same plan.
     const pvf::Uuid childGrand =
         makeEntity(QStringLiteral("子级孙层"), 15, 20, 0, child);
+    const pvf::Uuid negativeChild =
+        makeEntity(QStringLiteral("负轨子级"), 12, 18, -1, parent);
 
     const pvf::Uuid audio = makeAsset(QStringLiteral("音频"), 20, 50, 1,
                                       pvf::AssetType::Audio, audioHash, 0);
     const pvf::Uuid video = makeAsset(QStringLiteral("视频"), 0, 30, 2,
                                       pvf::AssetType::Video, videoHash, 5);
     const pvf::Uuid lockedRoot = makeEntity(QStringLiteral("锁定父级"), 0, 60, 3);
-    project.entities[lockedRoot].locked = true;
     const pvf::Uuid lockedChild =
         makeEntity(QStringLiteral("锁定子级"), 10, 20, 0, lockedRoot);
     const pvf::Uuid target = makeEntity(QStringLiteral("目标父级"), 100, 200, 4);
@@ -946,10 +1090,18 @@ int runTimelineEditTest(QApplication& app)
         parent,      child,       childGrand,  audio,      video,
         lockedRoot,  lockedChild, target,      worldSource, localSource,
         solverRoot,  trashRoot,   trashChild,  followParent, followChild,
-        followPeer,  followGrand, followTarget};
+        followPeer,  followGrand, followTarget, negativeChild};
     if (!document->commitEntities(all, QStringLiteral("p2b1 setup"), &error))
     {
         qCritical() << "timeline-edit-test: setup commit failed" << error;
+        return 1;
+    }
+    // Lock the parent only after the tree exists: an ancestor-locked upsert is
+    // rejected on purpose, which is exactly the guard the checks below cover.
+    project.entities[lockedRoot].locked = true;
+    if (!document->commitEntity(lockedRoot, QStringLiteral("p2b1 lock"), &error))
+    {
+        qCritical() << "timeline-edit-test: lock commit failed" << error;
         return 1;
     }
     session->flush();
@@ -1000,7 +1152,7 @@ int runTimelineEditTest(QApplication& app)
                               target,        worldSource, localSource,
                               solverRoot,    trashRoot,   trashChild,
                               followParent,  followChild, followPeer,
-                              followGrand,   followTarget};
+                              followGrand,   followTarget, negativeChild};
     const TimelineEditOps ops{check, flush, undo, depth, entity};
     if (editModelChecks(session.get(), actions, ids, ops, error) != 0)
         return 1;

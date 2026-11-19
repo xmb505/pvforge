@@ -304,6 +304,53 @@ void testVolumeHalf()
     CHECK(difference < 1.0e-6);
 }
 
+void testAudioFade()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    QString error;
+    const auto asset = store.importFile(
+        writeWav(directory.path() + QStringLiteral("/flat.wav"), kSampleRate,
+                 kSampleRate, [](int) { return 0.5; }),
+        &error);
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    addAudioEntity(project, QStringLiteral("tone"), asset->hash, 0, 30);
+    Entity& entity = project.entities[QStringLiteral("tone")];
+    entity.content.asset.fadeIn = 0.25;   // 7.5 frames at 30 fps
+    entity.content.asset.fadeOut = 0.25;
+
+    const QByteArray pcm =
+        audio2::mixRange(project, store, mixOptions(0, 30));
+    CHECK(!pcm.isEmpty());
+    if (pcm.isEmpty())
+        return;
+    const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+    const int samplesPerFrame = kSampleRate / 30;
+    const auto peakAt = [&](int frame) {
+        double value = 0.0;
+        const int first = frame * samplesPerFrame * kChannels;
+        const int last = std::min(first + samplesPerFrame * kChannels,
+                                  int(pcm.size() / int(sizeof(float))));
+        for (int i = first; i < last; ++i)
+            value = std::max(value, std::abs(double(samples[i])));
+        return value;
+    };
+
+    // Fade-in starts at silence and reaches full level after 7.5 frames; the
+    // fade-out mirrors it over the last 7.5 frames.
+    CHECK(peakAt(0) < 0.02);
+    CHECK(peakAt(15) > 0.4);
+    CHECK(peakAt(1) < peakAt(6));
+    CHECK(peakAt(6) < peakAt(15));
+    CHECK(peakAt(28) < peakAt(15));
+}
+
 void testSourceOffset()
 {
     QTemporaryDir directory;
@@ -623,6 +670,11 @@ int main(int argc, char** argv)
     {
         known = true;
         testVolumeHalf();
+    }
+    if (run("audioFade"))
+    {
+        known = true;
+        testAudioFade();
     }
     if (run("sourceOffset"))
     {

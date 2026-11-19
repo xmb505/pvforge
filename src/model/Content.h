@@ -68,6 +68,9 @@ struct AssetContent
     AssetType type = AssetType::Image;
     int sourceIn = 0;
     double volume = 1.0;
+    // Audio-only envelope in seconds.  Fades are clipped to the entity range.
+    double fadeIn = 0.0;
+    double fadeOut = 0.0;
 };
 
 // A comic balloon with text.  The balloon body is an explicit box; the text

@@ -173,6 +173,7 @@ void MainWindow::createSessionMenus()
 
     auto* stepBackAction = new QAction(QStringLiteral("上一帧"), this);
     stepBackAction->setShortcut(QKeySequence(Qt::Key_Left));
+    stepBackAction->setShortcutContext(Qt::WidgetShortcut);
     connect(stepBackAction, &QAction::triggered, this, [this] {
         if (m_session)
             sessionGoToFrame(std::max(0, m_session->playhead() - 1));
@@ -182,6 +183,7 @@ void MainWindow::createSessionMenus()
 
     auto* stepForwardAction = new QAction(QStringLiteral("下一帧"), this);
     stepForwardAction->setShortcut(QKeySequence(Qt::Key_Right));
+    stepForwardAction->setShortcutContext(Qt::WidgetShortcut);
     connect(stepForwardAction, &QAction::triggered, this, [this] {
         if (m_session)
             sessionGoToFrame(m_session->playhead() + 1);

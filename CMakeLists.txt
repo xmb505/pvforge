@@ -370,4 +370,4 @@ add_subdirectory(src/next/app)
 # P1/P2 delivery shell: link only the document slice and the shared entity
 # range helpers.
 target_link_libraries(pvf_app PUBLIC pvf_next_document pvf_next_services
-    pvf_mcp2 pvf_entity_range pvf_next_history pvf_export2)
+    pvf_mcp2 pvf_entity_range pvf_next_history pvf_export2 pvf_audio2)

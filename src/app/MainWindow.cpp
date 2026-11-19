@@ -24,19 +24,25 @@
 #include "ui/panels/PanelGeometry.h"
 
 #include <QAction>
+#include <QAbstractSpinBox>
+#include <QApplication>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QFrame>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPalette>
+#include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -828,7 +834,32 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
 {
     if (m_session)
     {
-        // P2a has no session-level delete; the timeline is read-only.
+        QWidget* focus = QApplication::focusWidget();
+        const bool textEditing =
+            qobject_cast<QLineEdit*>(focus) || qobject_cast<QTextEdit*>(focus)
+            || qobject_cast<QPlainTextEdit*>(focus)
+            || qobject_cast<QAbstractSpinBox*>(focus)
+            || qobject_cast<QComboBox*>(focus);
+        if (!textEditing && !(event->modifiers() & ~Qt::KeypadModifier))
+        {
+            if (event->key() == Qt::Key_Delete
+                || event->key() == Qt::Key_Backspace)
+            {
+                if (m_timeline)
+                {
+                    m_timeline->requestDeleteSelection();
+                    event->accept();
+                    return;
+                }
+            }
+            if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
+            {
+                const int direction = event->key() == Qt::Key_Right ? 1 : -1;
+                sessionGoToFrame(std::max(0, m_session->playhead() + direction));
+                event->accept();
+                return;
+            }
+        }
         QMainWindow::keyPressEvent(event);
         return;
     }

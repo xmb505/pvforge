@@ -254,6 +254,107 @@ void testProjectFollowValidation()
     CHECK_DETAIL(error.contains(QStringLiteral("根实体")), error);
 }
 
+void testTrackRowsAndOverlap()
+{
+    QString error;
+
+    // Root timelines are one-sided: negative rows are invalid.
+    Entity root = makeEntity(0, 100);
+    root.row = -1;
+    CHECK(!validateEntity(root, &error));
+    CHECK_DETAIL(error.contains(QStringLiteral("根实体")), error);
+
+    Project project;
+    project.entities.insert(root.uuid, root);
+    error.clear();
+    CHECK(!validateProject(project, &error));
+    CHECK_DETAIL(error.contains(QStringLiteral("根实体")), error);
+
+    // Private timelines have negative tracks below the parent clip.
+    root.row = 0;
+    Entity child = makeEntity(0, 50);
+    child.parentUuid = root.uuid;
+    child.row = -1;
+    CHECK_DETAIL(validateEntity(child, &error), error);
+
+    project.entities.clear();
+    project.entities.insert(root.uuid, root);
+    project.entities.insert(child.uuid, child);
+    error.clear();
+    CHECK_DETAIL(validateProject(project, &error), error);
+
+    // A track is a layer: non-overlapping clips may share (parent, row).
+    Entity later = makeEntity(60, 80);
+    later.parentUuid = root.uuid;
+    later.row = -1;
+    project.entities.insert(later.uuid, later);
+    error.clear();
+    CHECK_DETAIL(validateProject(project, &error), error);
+
+    // An overlap on the same track is rejected and names both clips.
+    Entity overlapping = makeEntity(50, 70);
+    overlapping.parentUuid = root.uuid;
+    overlapping.row = -1;
+    project.entities.insert(overlapping.uuid, overlapping);
+    error.clear();
+    CHECK(!validateProject(project, &error));
+    CHECK_DETAIL(error.contains(overlapping.uuid), error);
+    CHECK_DETAIL(error.contains(later.uuid)
+                     || error.contains(child.uuid), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("-1")), error);
+
+    // Overlap on different tracks is fine.
+    overlapping.row = 1;
+    project.entities[overlapping.uuid].row = 1;
+    error.clear();
+    CHECK_DETAIL(validateProject(project, &error), error);
+
+    // The same rule applies to roots on row 0.
+    Entity firstRoot = makeEntity(0, 40);
+    Entity secondRoot = makeEntity(20, 60);
+    secondRoot.row = 0;
+    Project roots;
+    roots.entities.insert(firstRoot.uuid, firstRoot);
+    roots.entities.insert(secondRoot.uuid, secondRoot);
+    error.clear();
+    CHECK(!validateProject(roots, &error));
+    CHECK_DETAIL(error.contains(firstRoot.uuid), error);
+    CHECK_DETAIL(error.contains(secondRoot.uuid), error);
+}
+
+void testAudioFadeJsonAndValidation()
+{
+    Entity entity = makeEntity(0, 30);
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.hash = QString(64, QLatin1Char('a'));
+    entity.content.asset.type = AssetType::Audio;
+    entity.content.asset.fadeIn = 0.75;
+    entity.content.asset.fadeOut = 1.5;
+    CHECK(validateEntity(entity));
+
+    const QJsonObject json = toJson(entity);
+    const QJsonObject content =
+        json.value(QStringLiteral("content")).toObject();
+    CHECK(content.value(QStringLiteral("fadeIn")).toDouble() == 0.75);
+    CHECK(content.value(QStringLiteral("fadeOut")).toDouble() == 1.5);
+
+    QString error;
+    const auto parsed = entityFromJson(json, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+    {
+        CHECK(parsed->content.asset.fadeIn == 0.75);
+        CHECK(parsed->content.asset.fadeOut == 1.5);
+    }
+
+    Entity bad = entity;
+    bad.content.asset.fadeIn = -1.0;
+    CHECK(!validateEntity(bad, &error));
+    bad.content.asset.fadeIn = 0.0;
+    bad.content.asset.fadeOut = std::nan("");
+    CHECK(!validateEntity(bad, &error));
+}
+
 } // namespace
 
 void runEntityTreeTests(int* checks, int* failures)
@@ -265,6 +366,8 @@ void runEntityTreeTests(int* checks, int* failures)
     testNestedTreeJsonRoundTrip();
     testTreeRejectsInconsistentNesting();
     testProjectFollowValidation();
+    testTrackRowsAndOverlap();
+    testAudioFadeJsonAndValidation();
 
     if (checks)
         *checks += gChecks;

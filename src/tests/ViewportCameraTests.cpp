@@ -1071,6 +1071,7 @@ int cameraMonitorTest(QApplication& app)
         shape.name = QStringLiteral("红色方块");
         shape.start = 0;
         shape.end = 60;
+        shape.row = 0;
         shape.content.kind = pvf::ContentKind::Vector;
         shape.content.vector.width = 260.0;
         shape.content.vector.height = 160.0;
@@ -1087,6 +1088,7 @@ int cameraMonitorTest(QApplication& app)
             camera.name = QStringLiteral("主摄像机");
             camera.start = 0;
             camera.end = 60;
+            camera.row = 1;
             camera.content.kind = pvf::ContentKind::Camera;
             camera.transform.x = 0.0;
             camera.transform.y = 0.0;

@@ -104,6 +104,7 @@ QVector<KeyRef> TimelinePanel::selectedKeyRefs() const
     if (!sessionMode() || !m_session)
         return result;
     const model::Project& project = m_session->project();
+    QSet<QString> seen;
     for (const KeyframeSelection& selection : m_selectedKeyframes)
     {
         const Uuid uuid = uuidForEntityId(selection.entity);
@@ -114,6 +115,13 @@ QVector<KeyRef> TimelinePanel::selectedKeyRefs() const
         ref.entity = uuid;
         ref.track = selection.track;
         ref.frame = int(std::lround(selection.frame)) - it.value().start;
+        // Merged diamonds and a later single-track pick can address the same
+        // (track, frame); a duplicate ref writes two keys on one frame.
+        const QString key = ref.entity + QLatin1Char('\n') + ref.track
+                            + QLatin1Char('\n') + QString::number(ref.frame);
+        if (seen.contains(key))
+            continue;
+        seen.insert(key);
         result.append(ref);
     }
     return result;

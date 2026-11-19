@@ -10,6 +10,7 @@ target_link_libraries(pvf_audio2_tests PRIVATE
 set(PVF_AUDIO2_TEST_CASES
     mixTwoTones
     volumeHalf
+    audioFade
     sourceOffset
     shortAudioPadding
     noAudio

@@ -384,7 +384,9 @@ void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
 
     m_basicRow = new QSpinBox(content);
     m_basicRow->setObjectName(QStringLiteral("entityRow"));
-    m_basicRow->setRange(0, 1000000);
+    // Private timelines grow negative tracks; the minimum is tightened to 0 in
+    // refreshSession() for root entities.
+    m_basicRow->setRange(-1000000, 1000000);
     m_basicRow->setKeyboardTracking(false);
     connect(m_basicRow, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [this](int value) {

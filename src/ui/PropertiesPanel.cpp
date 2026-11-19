@@ -344,7 +344,8 @@ void PropertiesPanel::refreshSession()
     m_textSection->setVisible(text);
     m_vectorSection->setVisible(vector);
     m_mediaSection->setVisible(asset);
-    m_audioSection->hide();
+    m_audioSection->setVisible(audio);
+    m_audioSection->setEnabled(editable);
     m_comicSection->hide();
     m_linesSection->hide();
     m_wallSection->hide();
@@ -372,6 +373,7 @@ void PropertiesPanel::refreshSession()
     }
     setSpinIfIdle(m_basicStart, entity->start);
     setSpinIfIdle(m_basicEnd, entity->end);
+    m_basicRow->setMinimum(entity->parentUuid.isEmpty() ? 0 : -1000000);
     setSpinIfIdle(m_basicRow, entity->row);
     {
         const QSignalBlocker blocker(m_basicHidden);
@@ -404,6 +406,9 @@ void PropertiesPanel::refreshSession()
     // switched off.
     m_basicStart->setEnabled(editable && !entity->followParentRange);
     m_basicEnd->setEnabled(editable && !entity->followParentRange);
+    // Only the root timeline is one-sided; private timelines have negative
+    // tracks and the spin box must accept them.
+    m_basicRow->setMinimum(hasParent ? -1000000 : 0);
     m_basicRow->setEnabled(editable);
     m_basicHidden->setEnabled(editable);
     m_basicLocked->setEnabled(true);
@@ -416,6 +421,49 @@ void PropertiesPanel::refreshSession()
             ? QStringLiteral("开启后，子实体的时间范围始终等于直接父实体；"
                              "父实体移动或拉伸时子实体一起变化")
             : QStringLiteral("根实体没有父级，不能跟随父区间"));
+
+    if (audio)
+    {
+        const int fps = std::max(1, m_session->project().settings.fps);
+        const model::AssetContent& assetContent = entity->content.asset;
+        int durationFrames = 0;
+        const auto stored =
+            m_session->assets().getIncludingMissing(assetContent.hash);
+        if (stored)
+            durationFrames = stored->metadata
+                                 .value(QStringLiteral("durationFrames"))
+                                 .toInt(0);
+        const double trimStart = double(assetContent.sourceIn) / fps;
+        const double clipSeconds = double(entity->end - entity->start) / fps;
+        const double mediaSeconds =
+            durationFrames > 0 ? double(durationFrames) / fps : clipSeconds;
+        const double trimEnd =
+            std::max(0.0, mediaSeconds - trimStart - clipSeconds);
+        const double maximum = std::max(36000.0, mediaSeconds);
+
+        auto setAudioSpin = [](auto* spin, double value, double hi) {
+            const QSignalBlocker blocker(spin);
+            spin->setMaximum(hi);
+            spin->setValue(value);
+        };
+        setAudioSpin(m_audioStart, double(entity->start), 1000000.0);
+        setAudioSpin(m_audioTrimStart, trimStart, maximum);
+        setAudioSpin(m_audioTrimEnd, trimEnd, maximum);
+        {
+            const QSignalBlocker blocker(m_audioVolume);
+            m_audioVolume->setValue(int(std::lround(assetContent.volume
+                                                    * 100.0)));
+        }
+        setAudioSpin(m_audioFadeIn, assetContent.fadeIn, maximum);
+        setAudioSpin(m_audioFadeOut, assetContent.fadeOut, maximum);
+        const bool lockedRange = !editable || entity->followParentRange;
+        m_audioStart->setEnabled(!lockedRange);
+        m_audioTrimStart->setEnabled(!lockedRange);
+        m_audioTrimEnd->setEnabled(!lockedRange);
+        m_audioVolume->setEnabled(editable);
+        m_audioFadeIn->setEnabled(editable);
+        m_audioFadeOut->setEnabled(editable);
+    }
 
     {
         const QSignalBlocker blocker(m_parent);

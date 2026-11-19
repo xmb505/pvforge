@@ -1,3 +1,4 @@
+#include "ui/TimelinePanel.h"
 #include "ui/TimelinePanelInternal.h"
 
 #include <QIcon>
@@ -113,7 +114,7 @@ QRect plusButtonRect(const QRect& clip, int visibleRight)
 {
     const int left = std::max(0, clip.left());
     const int right = std::min(clip.right(), visibleRight);
-    if (right - left < 84)
+    if (right - left < TimelinePanel::kPlusMinClipWidth)
         return QRect();
     return QRect(right - 22, clip.top() + (clip.height() - 16) / 2, 16, 16);
 }

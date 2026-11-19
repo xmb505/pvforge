@@ -19,8 +19,8 @@ TimelinePanel* TimelinePanel::openPopup(EntityId ownerId)
     const Entity* entity = entityById(ownerId);
     if (!entity)
         return nullptr;
-    if (depthOf(ownerId) >= 8)
-        return nullptr;
+    // Nesting is bounded by the model's acyclic parent chain, not by an
+    // arbitrary depth cap; the viewport selection walk guards cycles itself.
     if (clipRectFor(ownerId).isEmpty())
     {
         ensureFrameVisible(clipStartOf(*entity));
