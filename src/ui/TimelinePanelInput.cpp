@@ -1,5 +1,7 @@
 #include "TimelinePanel.h"
 
+#include "ui/TimelinePanelPopups.h"
+
 #include "app/EditorSession.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
@@ -9,9 +11,11 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFocusEvent>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QScrollBar>
 #include <QToolButton>
 #include <QWheelEvent>
@@ -144,6 +148,22 @@ void TimelinePanel::focusOutEvent(QFocusEvent* event)
     // A key release can be lost when the focus moves mid-hold.
     stopHold();
     QWidget::focusOutEvent(event);
+}
+
+void TimelinePanel::hideEvent(QHideEvent* event)
+{
+    // Private timelines float over the main window, not inside this widget, so
+    // hiding the timeline dock must explicitly take them down with it.
+    for (ClipPopup* popup : m_popups)
+        if (popup)
+            popup->hide();
+    QWidget::hideEvent(event);
+}
+
+void TimelinePanel::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    syncPopups();
 }
 
 void TimelinePanel::resizeEvent(QResizeEvent* event)

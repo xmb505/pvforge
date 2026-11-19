@@ -4,6 +4,8 @@
 
 #include <QDockWidget>
 
+#include <cmath>
+
 namespace {
 
 int timelineTest(QApplication& app)
@@ -81,6 +83,25 @@ int timelineTest(QApplication& app)
     child.row = 0;
     child.content.kind = pvf::ContentKind::Text;
     project.entities.insert(child.uuid, child);
+
+    // Nine more nested clips: private timelines must keep opening past the old
+    // hard-coded eight-level cap.
+    QVector<pvf::Uuid> deepChain;
+    pvf::Uuid deepParent = child.uuid;
+    for (int depth = 0; depth < 9; ++depth)
+    {
+        pvf::model::Entity deep;
+        deep.uuid = pvf::model::newUuid();
+        deep.name = QStringLiteral("深层%1").arg(depth + 1);
+        deep.parentUuid = deepParent;
+        deep.start = 10;
+        deep.end = 40;
+        deep.row = 0;
+        deep.content.kind = pvf::ContentKind::Empty;
+        project.entities.insert(deep.uuid, deep);
+        deepChain.append(deep.uuid);
+        deepParent = deep.uuid;
+    }
 
     // Keyframes are stored relative to entity.start and must be shown at
     // absolute frames by the read-only adapter.
@@ -286,6 +307,89 @@ int timelineTest(QApplication& app)
                     << popup->entityRowCountForTest()
                     << popup->rowNameForTest(0) << popup->rowDepthForTest(0)
                     << popup->rowStartForTest(0) << popup->rowEndForTest(0);
+        return 1;
+    }
+
+    // Relative time only renumbers the ruler: a 10..50 owner window shows 0..40
+    // while the playhead and keys keep absolute project frames.
+    auto* vectorPopup = timeline->openPopup(timeline->entityIdForUuid(vector));
+    QApplication::processEvents();
+    if (!vectorPopup || !vectorPopup->relativeTimeForTest()
+        || vectorPopup->displayFrameForTest(10) != 0
+        || vectorPopup->displayFrameForTest(50) != 40
+        || vectorPopup->displayFrameForTest(20) != 10)
+    {
+        qCritical() << "timeline-test: relative ruler is not zero-based"
+                    << (vectorPopup != nullptr)
+                    << (vectorPopup ? vectorPopup->relativeTimeForTest() : false)
+                    << (vectorPopup ? vectorPopup->displayFrameForTest(10) : -1)
+                    << (vectorPopup ? vectorPopup->displayFrameForTest(20) : -1);
+        return 1;
+    }
+    vectorPopup->setRelativeTimeForTest(false);
+    if (vectorPopup->displayFrameForTest(10) != 10
+        || vectorPopup->displayFrameForTest(20) != 20)
+    {
+        qCritical() << "timeline-test: absolute ruler lost global frames"
+                    << vectorPopup->displayFrameForTest(10)
+                    << vectorPopup->displayFrameForTest(20);
+        return 1;
+    }
+    timeline->removePopup(timeline->entityIdForUuid(vector));
+    vectorPopup->window()->deleteLater();
+    QApplication::processEvents();
+
+    // Deep nesting: every level gets its own private timeline; the ninth
+    // nested clip used to stop dead at the old eight-level cap.
+    pvf::TimelinePanel* deepPanel =
+        popup->openPopup(timeline->entityIdForUuid(child.uuid));
+    for (const pvf::Uuid& uuid : deepChain)
+    {
+        if (!deepPanel)
+            break;
+        deepPanel = deepPanel->openPopup(timeline->entityIdForUuid(uuid));
+    }
+    if (!deepPanel)
+    {
+        qCritical() << "timeline-test: deep private timeline chain stopped";
+        return 1;
+    }
+    timeline->closeAllPopups();
+    QApplication::processEvents();
+    popup = timeline->openPopup(timeline->entityIdForUuid(title));
+    QApplication::processEvents();
+    if (!popup)
+    {
+        qCritical() << "timeline-test: private timeline reopen failed";
+        return 1;
+    }
+
+    // Zooming the main axis or refreshing the document must not reset the
+    // private timeline's own zoom/scroll.
+    popup->setPixelsPerFrameForTest(12.0);
+    timeline->setPixelsPerFrameForTest(3.0);
+    timeline->refreshFromSession();
+    QApplication::processEvents();
+    if (std::abs(popup->pixelsPerFrameForTest() - 12.0) > 1e-6)
+    {
+        qCritical() << "timeline-test: main axis reset the popup zoom"
+                    << popup->pixelsPerFrameForTest();
+        return 1;
+    }
+
+    // Hiding the timeline dock hides the floating private timeline as well.
+    timeline->hide();
+    QApplication::processEvents();
+    if (popup->isVisible())
+    {
+        qCritical() << "timeline-test: dock hide left the popup visible";
+        return 1;
+    }
+    timeline->show();
+    QApplication::processEvents();
+    if (!popup->isVisible())
+    {
+        qCritical() << "timeline-test: dock show did not restore the popup";
         return 1;
     }
     timeline->closeAllPopups();

@@ -349,6 +349,16 @@ int TimelinePanel::contentStart() const
     return ownerEntity ? clipStartOf(*ownerEntity) : 0;
 }
 
+int TimelinePanel::displayFrame(int frame) const
+{
+    // Only a private timeline in relative mode renumbers its window.  The
+    // playhead, clips and keyframes all keep absolute project frames; this
+    // helper is read by the ruler painter alone.
+    if (m_popup && m_relativeTime)
+        return frame - contentStart();
+    return frame;
+}
+
 const QVector<Entity>& TimelinePanel::activeEntities() const
 {
     return m_snapshot.entities;

@@ -18,6 +18,8 @@ class QDragMoveEvent;
 class QDragLeaveEvent;
 class QDropEvent;
 class QFocusEvent;
+class QHideEvent;
+class QShowEvent;
 class QMimeData;
 class QMouseEvent;
 class QPainter;
@@ -63,6 +65,10 @@ public:
     // EditorSession::editActions().
     explicit TimelinePanel(EditorSession* session, QWidget* parent = nullptr);
     ~TimelinePanel() override;
+
+    // One threshold for painting, hit-testing and the private timeline that
+    // floats above the clip: below this a "+" would be a dead target.
+    static constexpr int kPlusMinClipWidth = 84;
 
     // Legacy query kept for the UI self-tests; session-backed panels are
     // editable through EditActions.
@@ -195,6 +201,14 @@ public:
         return m_owner < 0
                || (m_frame >= contentStart() && m_frame < contentEnd());
     }
+    int displayFrameForTest(int frame) const { return displayFrame(frame); }
+    bool relativeTimeForTest() const { return m_relativeTime; }
+    void setRelativeTimeForTest(bool relative)
+    {
+        m_relativeTime = relative;
+        update();
+    }
+    double pixelsPerFrameForTest() const { return m_pixelsPerFrame; }
 #endif
     QRect clipRectFor(EntityId id) const;
 #ifdef PVFORGE_TEST_HOOKS
@@ -281,6 +295,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void leaveEvent(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -375,6 +391,10 @@ private:
     void moveEntityToRow(QVector<Entity>& entities, EntityId id, int targetRow);
     int contentStart() const;
     int contentEnd() const;
+    // Converts an absolute project frame to the number the ruler shows.
+    // Private timelines in relative mode label their own 0..duration window;
+    // every other panel keeps global project frames.
+    int displayFrame(int frame) const;
     const Entity* rangeOwner() const;
     int clipStartOf(const Entity& entity) const;
     int clipEndOf(const Entity& entity) const;
