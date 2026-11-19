@@ -1,6 +1,8 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
 
+#include <QDoubleSpinBox>
+
 namespace {
 
 int exportDialogTest(QApplication& app)
@@ -312,6 +314,7 @@ int exportTest(QApplication& app)
     audio.content.kind = pvf::ContentKind::Asset;
     audio.content.asset.type = pvf::AssetType::Audio;
     audio.content.asset.hash = imported->hash;
+    audio.content.asset.sourceIn = 3;
     project.entities.insert(audio.uuid, audio);
 
     const QVector<pvf::Uuid> setup = {camera.uuid, vector.uuid, audio.uuid};
@@ -336,6 +339,62 @@ int exportTest(QApplication& app)
         return 1;
     }
     window->setSuppressExportCompletionDialogForTest(true);
+
+    // Audio workflow: the delivery timeline must decode peaks and expose the
+    // source offset used for trimming, instead of painting a dashed line.
+    auto* exportTimeline = window->timelineForTest();
+    const pvf::EntityId audioId =
+        exportTimeline ? exportTimeline->entityIdForUuid(audio.uuid)
+                       : pvf::kInvalidEntity;
+    const double expectedTrimStart =
+        3.0 / std::max(1, live->project().settings.fps);
+    if (!exportTimeline || audioId < 0
+        || exportTimeline->audioPeakCountForTest(audioId) <= 0
+        || std::abs(exportTimeline->clipTrimStartForTest(audioId)
+                    - expectedTrimStart)
+               > 1e-6)
+    {
+        qCritical() << "export-test: audio waveform/trimStart missing"
+                    << (exportTimeline != nullptr) << audioId
+                    << (exportTimeline
+                            ? exportTimeline->audioPeakCountForTest(audioId)
+                            : -1)
+                    << (exportTimeline
+                            ? exportTimeline->clipTrimStartForTest(audioId)
+                            : -1.0);
+        return 1;
+    }
+
+    // Audio edits live in the properties panel: selecting the audio clip must
+    // reveal the trim/fade controls with the model values.
+    if (live->document())
+        live->document()->setSelection(audio.uuid);
+    QApplication::processEvents();
+    auto* fadeSpin = window->findChild<QDoubleSpinBox*>(
+        QStringLiteral("audioFadeIn"));
+    auto* trimSpin = window->findChild<QDoubleSpinBox*>(
+        QStringLiteral("audioTrimStart"));
+    if (!fadeSpin || !trimSpin || !fadeSpin->isVisible()
+        || std::abs(trimSpin->value() - expectedTrimStart) > 1e-6)
+    {
+        qCritical() << "export-test: audio trim/fade controls missing"
+                    << (fadeSpin != nullptr) << (trimSpin != nullptr)
+                    << (trimSpin ? trimSpin->value() : -1.0)
+                    << expectedTrimStart;
+        return 1;
+    }
+    fadeSpin->setValue(0.5);
+    QApplication::processEvents();
+    if (std::abs(live->project().entities.value(audio.uuid)
+                     .content.asset.fadeIn
+                 - 0.5)
+        > 1e-6)
+    {
+        qCritical() << "export-test: fade-in edit was dropped";
+        return 1;
+    }
+    fadeSpin->setValue(0.0);
+    QApplication::processEvents();
 
     const QString firstPath =
         QDir(temp.path()).filePath(QStringLiteral("first.mp4"));

@@ -483,6 +483,8 @@ QJsonObject toJson(const Content& content)
                       assetTypeName(content.asset.type));
         object.insert(QStringLiteral("sourceIn"), content.asset.sourceIn);
         object.insert(QStringLiteral("volume"), content.asset.volume);
+        object.insert(QStringLiteral("fadeIn"), content.asset.fadeIn);
+        object.insert(QStringLiteral("fadeOut"), content.asset.fadeOut);
         break;
     case ContentKind::ComicText:
         object.insert(QStringLiteral("comicText"),
@@ -579,6 +581,10 @@ std::optional<Content> contentFromJson(const QJsonObject& object,
             object, QStringLiteral("sourceIn"), content.asset.sourceIn);
         content.asset.volume = detail::jsonDouble(
             object, QStringLiteral("volume"), content.asset.volume);
+        content.asset.fadeIn = detail::jsonDouble(
+            object, QStringLiteral("fadeIn"), content.asset.fadeIn);
+        content.asset.fadeOut = detail::jsonDouble(
+            object, QStringLiteral("fadeOut"), content.asset.fadeOut);
         break;
     }
     case ContentKind::ComicText:
@@ -654,7 +660,8 @@ std::optional<Content> contentFromJson(const QJsonObject& object,
         break;
     case ContentKind::Asset:
         knownKeys << QStringLiteral("assetHash") << QStringLiteral("assetType")
-                  << QStringLiteral("sourceIn") << QStringLiteral("volume");
+                  << QStringLiteral("sourceIn") << QStringLiteral("volume")
+                  << QStringLiteral("fadeIn") << QStringLiteral("fadeOut");
         break;
     case ContentKind::ComicText:
         knownKeys << QStringLiteral("comicText");
@@ -698,6 +705,17 @@ bool validateContent(const Content& content, QString* error)
         if (content.asset.hash.isEmpty())
         {
             detail::setError(error, QStringLiteral("素材内容缺少 assetHash"));
+            return false;
+        }
+        if (!std::isfinite(content.asset.fadeIn)
+            || !std::isfinite(content.asset.fadeOut)
+            || content.asset.fadeIn < 0.0 || content.asset.fadeOut < 0.0
+            || content.asset.fadeIn > 36000.0
+            || content.asset.fadeOut > 36000.0)
+        {
+            detail::setError(
+                error,
+                QStringLiteral("音频淡入/淡出必须是 0..36000 秒之间的有限值"));
             return false;
         }
         return true;

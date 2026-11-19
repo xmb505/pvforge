@@ -322,6 +322,39 @@ void testTrackRowsAndOverlap()
     CHECK_DETAIL(error.contains(secondRoot.uuid), error);
 }
 
+void testAudioFadeJsonAndValidation()
+{
+    Entity entity = makeEntity(0, 30);
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.hash = QString(64, QLatin1Char('a'));
+    entity.content.asset.type = AssetType::Audio;
+    entity.content.asset.fadeIn = 0.75;
+    entity.content.asset.fadeOut = 1.5;
+    CHECK(validateEntity(entity));
+
+    const QJsonObject json = toJson(entity);
+    const QJsonObject content =
+        json.value(QStringLiteral("content")).toObject();
+    CHECK(content.value(QStringLiteral("fadeIn")).toDouble() == 0.75);
+    CHECK(content.value(QStringLiteral("fadeOut")).toDouble() == 1.5);
+
+    QString error;
+    const auto parsed = entityFromJson(json, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+    {
+        CHECK(parsed->content.asset.fadeIn == 0.75);
+        CHECK(parsed->content.asset.fadeOut == 1.5);
+    }
+
+    Entity bad = entity;
+    bad.content.asset.fadeIn = -1.0;
+    CHECK(!validateEntity(bad, &error));
+    bad.content.asset.fadeIn = 0.0;
+    bad.content.asset.fadeOut = std::nan("");
+    CHECK(!validateEntity(bad, &error));
+}
+
 } // namespace
 
 void runEntityTreeTests(int* checks, int* failures)
@@ -334,6 +367,7 @@ void runEntityTreeTests(int* checks, int* failures)
     testTreeRejectsInconsistentNesting();
     testProjectFollowValidation();
     testTrackRowsAndOverlap();
+    testAudioFadeJsonAndValidation();
 
     if (checks)
         *checks += gChecks;

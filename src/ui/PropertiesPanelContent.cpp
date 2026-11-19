@@ -24,6 +24,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 namespace pvf {
 
@@ -761,6 +762,82 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
 
     if (kind == ContentKind::Asset)
     {
+        if (entity->content.asset.type == AssetType::Audio)
+        {
+            const int fps = std::max(1, m_session->project().settings.fps);
+            const model::AssetContent& asset = entity->content.asset;
+            auto trimAudio = [this, entity](int newStart, int newEnd) {
+                QString trimError;
+                if (!m_session->editActions()->trimClip(m_sessionUuid,
+                                                        newStart, newEnd,
+                                                        &trimError))
+                    reportSessionError(trimError);
+            };
+            if (key == QLatin1String("startFrame"))
+            {
+                const int target = std::max(0, int(std::lround(value.toDouble())));
+                const int delta = target - entity->start;
+                if (delta != 0)
+                {
+                    QString moveError;
+                    if (!m_session->editActions()->moveClips({m_sessionUuid},
+                                                             delta, &moveError))
+                        reportSessionError(moveError);
+                }
+                return;
+            }
+            if (key == QLatin1String("trimStart"))
+            {
+                const int current = entity->content.asset.sourceIn;
+                const int target = std::max(
+                    0, int(std::lround(value.toDouble() * fps)));
+                const int nextStart = entity->start + (target - current);
+                if (target != current && nextStart < entity->end)
+                    trimAudio(nextStart, entity->end);
+                return;
+            }
+            if (key == QLatin1String("trimEnd"))
+            {
+                int mediaFrames = 0;
+                const auto stored = m_session->assets().getIncludingMissing(
+                    asset.hash);
+                if (stored)
+                    mediaFrames = stored->metadata
+                                      .value(QStringLiteral("durationFrames"))
+                                      .toInt(0);
+                if (mediaFrames <= 0)
+                    return;
+                const int current = std::max(
+                    0, mediaFrames - asset.sourceIn
+                           - (entity->end - entity->start));
+                const int target = std::max(
+                    0, int(std::lround(value.toDouble() * fps)));
+                const int nextEnd = entity->end - (target - current);
+                if (target != current && nextEnd > entity->start)
+                    trimAudio(entity->start, nextEnd);
+                return;
+            }
+            if (key == QLatin1String("fadeIn")
+                || key == QLatin1String("fadeOut"))
+            {
+                runSessionContentEdit(
+                    QStringLiteral("pvf: edit audio fade"),
+                    [key, value](model::Content& content) {
+                        if (content.kind != ContentKind::Asset
+                            || content.asset.type != AssetType::Audio)
+                            return false;
+                        const double seconds =
+                            std::clamp(value.toDouble(), 0.0, 36000.0);
+                        if (key == QLatin1String("fadeIn"))
+                            content.asset.fadeIn = seconds;
+                        else
+                            content.asset.fadeOut = seconds;
+                        return true;
+                    });
+                return;
+            }
+        }
+
         if (key == QLatin1String("sourceIn"))
             applySessionAsset(QStringLiteral("sourceIn"), value);
         else if (key == QLatin1String("volume"))

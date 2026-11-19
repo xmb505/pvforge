@@ -256,11 +256,23 @@ bool mixAudioEntity(const model::Project& project,
             if (gain > 0.0)
             {
                 const int channels = options.channels;
+                const double fps = std::max(1, options.fps);
                 for (int i = 0; i < count; ++i)
                 {
                     const int64_t output = blockStart + i;
                     if (output < destinationStart || output >= destinationEnd)
                         continue;
+                    const int sampleFrame = projectFrameForSample(options, output);
+                    double envelope = 1.0;
+                    if (content.fadeIn > 0.0)
+                        envelope *= std::clamp(
+                            double(sampleFrame - entity.start) / (fps * content.fadeIn),
+                            0.0, 1.0);
+                    if (content.fadeOut > 0.0)
+                        envelope *= std::clamp(
+                            double(entity.end - sampleFrame) / (fps * content.fadeOut),
+                            0.0, 1.0);
+                    const float sampleGain = float(gain * envelope);
                     for (int channel = 0; channel < channels; ++channel)
                     {
                         const size_t index =
@@ -269,7 +281,7 @@ bool mixAudioEntity(const model::Project& project,
                         const float value =
                             data[size_t(i) * size_t(channels)
                                  + size_t(channel)]
-                            * float(gain);
+                            * sampleGain;
                         mix[index] += value;
                         if (value != 0.0f)
                             *audible = true;
