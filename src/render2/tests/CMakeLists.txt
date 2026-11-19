@@ -48,6 +48,14 @@ foreach(test_case IN LISTS PVF_RENDER2_TEST_CASES)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
 endforeach()
 
+add_executable(pvf_render2_asset_tests AssetSizingTests.cpp)
+target_link_libraries(pvf_render2_asset_tests PRIVATE pvf_render2 Qt6::Gui)
+foreach(test_case IN ITEMS assetModelSizeIgnoresFramePixels html4xExportIsNotCropped)
+    add_test(NAME render2.${test_case} COMMAND pvf_render2_asset_tests ${test_case})
+    set_tests_properties(render2.${test_case} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+endforeach()
+
 add_executable(pvf_render2_hidden_tests HiddenVisibilityTests.cpp)
 target_link_libraries(pvf_render2_hidden_tests PRIVATE pvf_render2 Qt6::Gui)
 add_test(NAME render2.hiddenVisibility COMMAND pvf_render2_hidden_tests)

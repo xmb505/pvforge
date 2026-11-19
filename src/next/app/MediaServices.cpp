@@ -29,6 +29,9 @@ constexpr qint64 kVideoDiskBudgetBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDefaultVideoProxyWidth = 960;
 constexpr int kDefaultVideoMemoryFrames = 64;
 constexpr int kMaxHtmlPrefetchFrames = 60;
+// Mirrors render2's fallback for an HTML asset without a declared logicalSize.
+constexpr int kDefaultHtmlWidth = 800;
+constexpr int kDefaultHtmlHeight = 120;
 
 int floorFrame(double value)
 {
@@ -45,6 +48,18 @@ int projectContentEnd(const model::Project& project)
             end = std::max(end, it.value().end);
     }
     return end;
+}
+
+// The pvhtml.json logicalSize is stored as width/height metadata.  HTML entities
+// use it as their model size; frames at any preview/export resolution only
+// change sharpness, never placement.
+QSize htmlLogicalSize(const assets::StoredAsset& asset)
+{
+    QSize logical(asset.metadata.value(QStringLiteral("width")).toInt(),
+                  asset.metadata.value(QStringLiteral("height")).toInt());
+    if (logical.width() <= 0 || logical.height() <= 0)
+        logical = QSize(kDefaultHtmlWidth, kDefaultHtmlHeight);
+    return logical;
 }
 
 } // namespace
@@ -545,11 +560,11 @@ QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
 
 QImage MediaServices::exportHtmlFrame(const Uuid& entityUuid,
                                       double projectFrame,
-                                      const QSize& outputSize)
+                                      const QSize& exportPixelSize)
 {
     if (!m_html || !m_document)
         return {};
-    if (!outputSize.isValid() || outputSize.isEmpty())
+    if (!exportPixelSize.isValid() || exportPixelSize.isEmpty())
         return {};
 
     const model::Entity* entity = findAssetEntity(entityUuid, AssetType::Html);
@@ -561,12 +576,28 @@ QImage MediaServices::exportHtmlFrame(const Uuid& entityUuid,
     if (!asset)
         return {};
 
-    // The renderer/service is started lazily by finalFrame(); the export
-    // caller normally pre-starts it on the main thread before launching the
-    // worker.
+    // Renderer/service is started lazily by finalFrame(); the export caller
+    // normally pre-starts it on the main thread before launching the worker.
     html2::FrameRequest request =
         makeHtmlRequest(*entity, *asset, projectFrame);
-    request.size = outputSize;
+
+    // Export density: exportPixelSize is the encoded canvas in pixels, so the
+    // logical-size model rect maps to that many pixels per model unit.  This
+    // keeps 2x/4x exports at the same composition as 1x and the preview.
+    const model::ProjectSettings& settings = m_document->project().settings;
+    const double densityX = settings.width > 0
+                                ? double(exportPixelSize.width())
+                                      / double(settings.width)
+                                : 1.0;
+    const double densityY = settings.height > 0
+                                ? double(exportPixelSize.height())
+                                      / double(settings.height)
+                                : 1.0;
+    const double density = std::min(densityX, densityY);
+    const QSize logical = htmlLogicalSize(*asset);
+    request.size = QSize(
+        std::max(1, int(std::lround(double(logical.width()) * density))),
+        std::max(1, int(std::lround(double(logical.height()) * density))));
 
     QString error;
     const QImage image = m_html->finalFrame(request, &error);
@@ -576,14 +607,27 @@ QImage MediaServices::exportHtmlFrame(const Uuid& entityUuid,
     return image;
 }
 
-QSize MediaServices::htmlRequestSize() const
+#ifdef PVFORGE_TEST_HOOKS
+QSize MediaServices::htmlRequestSizeForTest(const Uuid& entityUuid) const
 {
-    if (!m_document)
+    const model::Entity* entity = findAssetEntity(entityUuid, AssetType::Html);
+    if (!entity || !m_document)
         return {};
+    const auto asset = m_document->assets().get(entity->content.asset.hash);
+    return asset ? htmlRequestSize(*asset) : QSize();
+}
+#endif
 
-    const model::ProjectSettings& project = m_document->project().settings;
-    int width = std::max(1, int(std::lround(project.width * m_settings.htmlScale)));
-    int height = std::max(1, int(std::lround(project.height * m_settings.htmlScale)));
+QSize MediaServices::htmlRequestSize(const assets::StoredAsset& asset) const
+{
+    // Preview clarity is a fraction of the logical model size, so a 0.5
+    // preview and a 2x export draw the same composition at different
+    // resolutions.
+    const QSize logical = htmlLogicalSize(asset);
+
+    const double scale = m_settings.htmlScale > 0.0 ? m_settings.htmlScale : 0.5;
+    int width = std::max(1, int(std::lround(double(logical.width()) * scale)));
+    int height = std::max(1, int(std::lround(double(logical.height()) * scale)));
 
     const int maxWidth = m_settings.htmlMaxWidth;
     if (maxWidth > 0 && width > maxWidth)
@@ -610,7 +654,7 @@ html2::FrameRequest MediaServices::makeHtmlRequest(const model::Entity& entity,
         asset.metadata.value(QStringLiteral("timeDependent")).toBool(true);
     request.localFrame = floorFrame(projectFrame - entity.start);
     request.time = (projectFrame - entity.start) / double(projectFps());
-    request.size = htmlRequestSize();
+    request.size = htmlRequestSize(asset);
 
     // Metadata declares the variables (and their defaults); an entity track
     // named var.<name> overrides the default at the entity-relative frame.

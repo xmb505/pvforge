@@ -121,13 +121,15 @@ public:
     // its own VideoFrames instance, so it can be called from the single export
     // worker thread without disturbing preview playback.
     //
-    // exportHtmlFrame renders through the final (third) browser at outputSize.
-    // The caller must only use it from one export worker thread; MediaServices
-    // never calls finalFrame() itself, so the service starts lazily on the
-    // first export request.
+    // exportHtmlFrame renders through the final (third) browser.  The frame is
+    // sized from the asset's logical size (HTML metadata width/height) scaled
+    // to the export's pixel density, so 1x/2x/4x exports only change sharpness,
+    // never composition.  The caller must only use it from one export worker
+    // thread; MediaServices never calls finalFrame() itself, so the service
+    // starts lazily on the first export request.
     QImage exportVideoFrame(const Uuid& entityUuid, double projectFrame);
     QImage exportHtmlFrame(const Uuid& entityUuid, double projectFrame,
-                           const QSize& outputSize);
+                           const QSize& exportPixelSize);
 
     QString cacheRoot() const { return m_cacheRoot; }
     bool htmlRunning() const;
@@ -145,7 +147,7 @@ public:
 
 #ifdef PVFORGE_TEST_HOOKS
     // Test accessors.
-    QSize htmlRequestSizeForTest() const { return htmlRequestSize(); }
+    QSize htmlRequestSizeForTest(const Uuid& entityUuid) const;
     html2::HtmlFrameService* htmlServiceForTest() const { return m_html.get(); }
     video2::VideoSequenceService* videoSequenceForTest(const AssetHash& hash) const;
 #endif
@@ -164,7 +166,7 @@ private:
     bool startHtml(QString* error);
     video2::VideoSequenceService* sequenceService(const assets::StoredAsset& asset);
     QString contentFilePath(const assets::StoredAsset& asset) const;
-    QSize htmlRequestSize() const;
+    QSize htmlRequestSize(const assets::StoredAsset& asset) const;
     QSize proxySize(const assets::StoredAsset& asset) const;
     int projectFps() const;
     html2::FrameRequest makeHtmlRequest(const model::Entity& entity,

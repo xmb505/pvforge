@@ -301,8 +301,10 @@ void MediaServicesTests::htmlProviderRendersBundle()
     QImage image;
     QTRY_VERIFY_WITH_TIMEOUT(!(image = media.htmlFrame(entity.uuid, 12.5)).isNull(),
                              120000);
-    QCOMPARE(image.size(), media.htmlRequestSizeForTest());
-    QCOMPARE(image.size(), QSize(320, 180));
+    QCOMPARE(image.size(), media.htmlRequestSizeForTest(entity.uuid));
+    // The bundle has no pvhtml.json, so its logical size is the 800x120
+    // default; the 0.5 preview clarity yields a 400x60 texture.
+    QCOMPARE(image.size(), QSize(400, 60));
 
     const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
     QVERIFY2(center.red() > 200 && center.green() < 60 && center.blue() < 60,
@@ -479,7 +481,10 @@ void MediaServicesTests::exportHtmlFrameUsesRequestedSize()
     const QImage image =
         media.exportHtmlFrame(entity.uuid, 12.5, QSize(480, 270));
     QVERIFY(!image.isNull());
-    QCOMPARE(image.size(), QSize(480, 270));
+    // 480x270 over the 640x360 project is a 0.75 pixel density: the 800x120
+    // logical HTML frame is rendered at 600x90 and drawn into the same model
+    // rectangle as the preview.  2x/4x exports never grow the model size.
+    QCOMPARE(image.size(), QSize(600, 90));
 
     const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
     QVERIFY2(center.red() > 200 && center.green() < 60 && center.blue() < 60,
@@ -499,21 +504,32 @@ void MediaServicesTests::htmlScaleChangesRequestSize()
                                  &error);
     QVERIFY2(document != nullptr, qPrintable(error));
 
+    // The bundle declares no pvhtml.json size, so the logical size is the
+    // 800x120 default.  htmlScale is a fraction of that model size, not of the
+    // project resolution.
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+    const Entity entity =
+        makeAssetEntity(AssetType::Html, stored->hash, 10, 0);
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
     AppSettings settings;
     settings.htmlScale = 0.25;
     settings.htmlMaxWidth = 2000;
     MediaServices media(document.get(), settings);
-    QCOMPARE(media.htmlRequestSizeForTest(), QSize(160, 90));
+    QCOMPARE(media.htmlRequestSizeForTest(entity.uuid), QSize(200, 30));
 
     settings.htmlScale = 0.5;
     media.applySettings(settings);
-    QCOMPARE(media.htmlRequestSizeForTest(), QSize(320, 180));
+    QCOMPARE(media.htmlRequestSizeForTest(entity.uuid), QSize(400, 60));
 
-    // The width cap keeps the project aspect ratio and rounds to integers.
+    // The width cap keeps the logical aspect ratio and rounds to integers.
     settings.htmlScale = 1.0;
     settings.htmlMaxWidth = 100;
     media.applySettings(settings);
-    QCOMPARE(media.htmlRequestSizeForTest(), QSize(100, 56));
+    QCOMPARE(media.htmlRequestSizeForTest(entity.uuid), QSize(100, 15));
 }
 
 QTEST_MAIN(MediaServicesTests)
