@@ -440,6 +440,23 @@ Result historyUndo(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("steps 必须在 1..10"));
 
+    // Materialize a human edit still inside the debounce window first: undo
+    // then removes exactly that edit instead of silently overwriting it with
+    // an older snapshot.
+    bool flushedPending = false;
+    if (tx.store->hasPendingWrites())
+    {
+        QString flushError;
+        if (!tx.store->commit(QStringLiteral("pvf: flush pending edit"),
+                              &flushError))
+        {
+            return failure(QStringLiteral("conflict"),
+                           QStringLiteral("有未提交的人工编辑，无法撤销：%1")
+                               .arg(flushError));
+        }
+        flushedPending = true;
+    }
+
     const int available = tx.store->undoDepth();
     if (available <= 0)
         return failure(QStringLiteral("conflict"),
@@ -464,6 +481,7 @@ Result historyUndo(Tx& tx, const QJsonObject& args)
     const QVector<store::GitCommit> head = tx.store->history(1);
     QJsonObject data;
     data.insert(QStringLiteral("steps"), applied);
+    data.insert(QStringLiteral("flushedPending"), flushedPending);
     data.insert(QStringLiteral("undoDepth"), tx.store->undoDepth());
     data.insert(QStringLiteral("redoDepth"), tx.store->redoDepth());
     data.insert(QStringLiteral("head"),
@@ -481,6 +499,20 @@ Result historyRedo(Tx& tx, const QJsonObject& args)
     if (steps < 1 || steps > 10)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("steps 必须在 1..10"));
+
+    bool flushedPending = false;
+    if (tx.store->hasPendingWrites())
+    {
+        QString flushError;
+        if (!tx.store->commit(QStringLiteral("pvf: flush pending edit"),
+                              &flushError))
+        {
+            return failure(QStringLiteral("conflict"),
+                           QStringLiteral("有未提交的人工编辑，无法重做：%1")
+                               .arg(flushError));
+        }
+        flushedPending = true;
+    }
 
     const int available = tx.store->redoDepth();
     if (available <= 0)
@@ -505,6 +537,7 @@ Result historyRedo(Tx& tx, const QJsonObject& args)
     const QVector<store::GitCommit> head = tx.store->history(1);
     QJsonObject data;
     data.insert(QStringLiteral("steps"), applied);
+    data.insert(QStringLiteral("flushedPending"), flushedPending);
     data.insert(QStringLiteral("undoDepth"), tx.store->undoDepth());
     data.insert(QStringLiteral("redoDepth"), tx.store->redoDepth());
     data.insert(QStringLiteral("head"),

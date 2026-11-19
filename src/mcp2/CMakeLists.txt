@@ -131,6 +131,23 @@ if(BUILD_TESTING)
         Qt6::Network
     )
 
+    # Safety regressions live in their own binary: the historical test file is
+    # under a size ratchet and a second process would only duplicate the
+    # fixture.
+    add_executable(pvf_mcp2_safety_tests tests/mcp2_safety_tests.cpp)
+    target_link_libraries(pvf_mcp2_safety_tests PRIVATE pvf_mcp2 Qt6::Test)
+    set(PVF_MCP2_SAFETY_TEST_CASES
+        historyUndoFlushesPendingHumanEdit
+        commitFailureRollsBackCleanly
+        timedOutFinishWritesNothing
+        assetDeleteTrashesAndUndoRestores
+    )
+    foreach(test_case IN LISTS PVF_MCP2_SAFETY_TEST_CASES)
+        add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_safety_tests ${test_case})
+        set_tests_properties(mcp2.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+    endforeach()
+
     set(PVF_MCP2_HTTP_TEST_CASES
         httpInitialize
         httpToolsList

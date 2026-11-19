@@ -2,6 +2,7 @@
 
 #include "EditorSession.h"
 #include "SettingsDialog.h"
+#include "TestMode.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
 #include "next/app/PlaybackController.h"
@@ -37,6 +38,7 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
 #include <QSignalBlocker>
@@ -968,8 +970,55 @@ void MainWindow::closeEvent(QCloseEvent* event)
         QString error;
         m_session->flush(&error);
         if (!error.isEmpty())
-            statusBar()->showMessage(
-                QStringLiteral("关闭时提交失败：%1").arg(error), 5000);
+        {
+            // A failed commit is not the same as an abnormal exit. Ask before
+            // closing, and leave a persistent hint for the next open.
+            bool closeAnyway = false;
+            if (testMode())
+            {
+                closeAnyway = true;
+            }
+            else
+            {
+                for (;;)
+                {
+                    QMessageBox box(
+                        QMessageBox::Warning, QStringLiteral("保存到 Git 失败"),
+                        QStringLiteral("工程文本已保存在磁盘上，但 Git 提交失败：\n\n%1\n\n"
+                                       "现在关闭会在下次打开时提示“提交失败”，"
+                                       "未提交的文本不会被自动丢弃。")
+                            .arg(error),
+                        QMessageBox::NoButton, this);
+                    QPushButton* retry = box.addButton(
+                        QStringLiteral("重试提交"), QMessageBox::ActionRole);
+                    QPushButton* close =
+                        box.addButton(QStringLiteral("仍然关闭"),
+                                      QMessageBox::DestructiveRole);
+                    QPushButton* cancel =
+                        box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+                    box.setDefaultButton(retry);
+                    box.setEscapeButton(cancel);
+                    box.exec();
+                    if (box.clickedButton() == retry)
+                    {
+                        error.clear();
+                        m_session->flush(&error);
+                        if (error.isEmpty())
+                            break;
+                        continue;
+                    }
+                    closeAnyway = box.clickedButton() == close;
+                    break;
+                }
+            }
+            if (!closeAnyway)
+            {
+                event->ignore();
+                return;
+            }
+            if (!error.isEmpty())
+                m_session->document()->store()->markCommitFailure(error);
+        }
         // Free the fixed MCP port before a project switch constructs the next
         // session (the new listener binds the same configured port).
         m_session->stopMcpServer();

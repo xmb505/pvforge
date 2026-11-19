@@ -5,6 +5,7 @@
 #include "ExportDialog.h"
 #include "ExportProgressDialog.h"
 #include "NewProjectDialog.h"
+#include "TestMode.h"
 #include "assets/AssetStore.h"
 #include "next/app/MediaServices.h"
 #include "next/app/PlaybackController.h"
@@ -82,7 +83,8 @@ bool MainWindow::saveSessionProject()
 namespace {
 
 SessionCrashRecoveryChoice askSessionCrashRecovery(
-    const QVector<store::DirtyText>& dirty, QWidget* parent)
+    const QVector<store::DirtyText>& dirty, const QString& commitFailure,
+    QWidget* parent)
 {
     QStringList lines;
     const int shown = std::min<int>(dirty.size(), 20);
@@ -91,22 +93,40 @@ SessionCrashRecoveryChoice askSessionCrashRecovery(
     if (dirty.size() > shown)
         lines << QStringLiteral("...等 %1 个文件").arg(dirty.size());
 
-    QMessageBox box(
-        QMessageBox::Question, QStringLiteral("发现未提交的文本改动"),
-        QStringLiteral("工程中有 %1 个未提交的文本文件，可能来自上次异常退出：\n\n"
-                       "%2\n\n请选择如何处理这些改动。")
-            .arg(dirty.size())
-            .arg(lines.join(QLatin1Char('\n'))),
-        QMessageBox::NoButton, parent);
+    const bool failedCommit = !commitFailure.isEmpty();
+    const QString title =
+        failedCommit ? QStringLiteral("上次关闭时 Git 提交失败")
+                     : QStringLiteral("发现未提交的文本改动");
+    QString text;
+    if (failedCommit)
+    {
+        text = QStringLiteral("上次关闭时工程文本已保存，但 Git 提交失败：\n\n%1\n\n"
+                              "重试提交会把这些文本写入一个恢复点；"
+                              "“恢复并打开”保留工作区文本但不再自动提交。")
+                   .arg(commitFailure);
+    }
+    else
+    {
+        text = QStringLiteral("工程中有 %1 个未提交的文本文件，"
+                              "可能来自上次异常退出：\n\n%2\n\n"
+                              "请选择如何处理这些改动。")
+                   .arg(dirty.size())
+                   .arg(lines.join(QLatin1Char('\n')));
+    }
+
+    QMessageBox box(QMessageBox::Question, title, text, QMessageBox::NoButton,
+                    parent);
     QPushButton* restore =
         box.addButton(QStringLiteral("恢复并打开"), QMessageBox::AcceptRole);
+    QPushButton* commit = box.addButton(
+        failedCommit ? QStringLiteral("重试提交")
+                     : QStringLiteral("提交为恢复点"),
+        QMessageBox::ActionRole);
     QPushButton* discard =
         box.addButton(QStringLiteral("丢弃未提交文本"), QMessageBox::DestructiveRole);
-    QPushButton* commit =
-        box.addButton(QStringLiteral("提交为恢复点"), QMessageBox::ActionRole);
     QPushButton* cancel =
         box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
-    box.setDefaultButton(restore);
+    box.setDefaultButton(failedCommit ? commit : restore);
     box.setEscapeButton(cancel);
     box.exec();
 
@@ -131,11 +151,14 @@ std::unique_ptr<EditorSession> openSessionProjectWithRecovery(
 
     const QVector<store::DirtyText> dirty =
         session->document()->store()->dirtyText();
-    if (dirty.isEmpty())
+    const QString commitFailure =
+        session->document()->store()->previousCommitFailure();
+    if (dirty.isEmpty() && commitFailure.isEmpty())
         return session;
 
     const SessionCrashRecoveryChoice choice =
-        handler ? handler(dirty) : askSessionCrashRecovery(dirty, parent);
+        handler ? handler(dirty, commitFailure)
+                : askSessionCrashRecovery(dirty, commitFailure, parent);
     QString recoveryError;
     switch (choice)
     {
@@ -173,7 +196,25 @@ std::unique_ptr<EditorSession> openSessionProjectWithRecovery(
             error->clear();
         return nullptr;
     }
+
+    // A project opened with quarantined files is read-only; tell the human and
+    // name the isolated files instead of failing every later edit silently.
+    const QString readOnlyReason =
+        session->document()->store()->readOnlyReason();
+    if (!readOnlyReason.isEmpty() && !testMode())
+    {
+        QMessageBox::warning(parent, QStringLiteral("工程以只读方式打开"),
+                             readOnlyReason);
+    }
     return session;
+}
+
+std::unique_ptr<EditorSession> openSessionProjectFromCli(
+    const QString& path, const SessionCrashRecoveryHandler& handler,
+    QString* error)
+{
+    const bool useGit = next::SettingsStore().load().gitEnabled;
+    return openSessionProjectWithRecovery(path, useGit, handler, nullptr, error);
 }
 
 void MainWindow::openSessionProject()

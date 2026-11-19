@@ -2,10 +2,12 @@
 
 #include "store_tests.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QJsonDocument>
+#include <QLockFile>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -794,41 +796,6 @@ void StoreTests::corruptProjectJson()
     error.clear();
     QVERIFY(!ProjectStore::open(path, &error));
     QVERIFY2(error.contains(QStringLiteral("project.json")), qPrintable(error));
-}
-
-void StoreTests::corruptEntityJson()
-{
-    SKIP_WITHOUT_GIT();
-
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-    const QString path = projectPath(temp);
-
-    QString error;
-    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
-    QVERIFY2(store.has_value(), qPrintable(error));
-
-    const QString uuid = model::newUuid();
-    const QString entityFile =
-        path + QStringLiteral("/entities/") + uuid + QStringLiteral(".json");
-
-    QVERIFY(writeText(entityFile, QStringLiteral("{ broken")));
-    error.clear();
-    QVERIFY(!ProjectStore::open(path, &error));
-    QVERIFY2(error.contains(uuid), qPrintable(error));
-
-    model::Entity other = makeEntity();
-    QVERIFY(writeText(entityFile,
-                      QString::fromUtf8(
-                          QJsonDocument(model::toJson(other)).toJson())));
-    error.clear();
-    QVERIFY(!ProjectStore::open(path, &error));
-    QVERIFY2(error.contains(QStringLiteral("不一致")), qPrintable(error));
-
-    QVERIFY(writeText(entityFile, QStringLiteral("{}")));
-    error.clear();
-    QVERIFY(!ProjectStore::open(path, &error));
-    QVERIFY(!error.isEmpty());
 }
 
 void StoreTests::nonGitDirectoryRejected()
@@ -1798,111 +1765,6 @@ void StoreTests::openRejectsUnmigratableVersion()
     QVERIFY2(error.contains(QString::number(model::migrations::minimumSupportedVersion())),
              qPrintable(error));
     QCOMPARE(readText(projectFile), text);
-}
-
-void StoreTests::openRejectsFutureEntityVersion()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    model::Entity entity = makeEntity(QStringLiteral("未来实体"));
-    QJsonObject entityObject = model::toJson(entity);
-    entityObject.insert(QStringLiteral("version"),
-                        model::kProjectFormatVersion + 1);
-    const QString entityText =
-        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
-
-    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
-    const QString entityFile = temp.filePath(QStringLiteral("entities/")
-                                             + entity.uuid
-                                             + QStringLiteral(".json"));
-    QVERIFY(writeText(
-        projectFile,
-        QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
-                              .toJson(QJsonDocument::Indented))));
-    QVERIFY(writeText(entityFile, entityText));
-
-    QString error;
-    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
-    // The error names the file and its uuid, not just "entity invalid".
-    QVERIFY2(error.contains(entity.uuid), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("实体版本")), qPrintable(error));
-    QVERIFY2(error.contains(QString::number(model::kProjectFormatVersion + 1)),
-             qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("不会被修改")), qPrintable(error));
-    QCOMPARE(readText(entityFile), entityText);
-}
-
-void StoreTests::openRejectsStaleEntityVersion()
-{
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-
-    model::Entity entity = makeEntity(QStringLiteral("过旧实体"));
-    QJsonObject entityObject = model::toJson(entity);
-    entityObject.insert(QStringLiteral("version"), 0);
-    const QString entityText =
-        QString::fromUtf8(QJsonDocument(entityObject).toJson(QJsonDocument::Indented));
-
-    const QString projectFile = temp.filePath(QStringLiteral("project.json"));
-    const QString entityFile = temp.filePath(QStringLiteral("entities/")
-                                             + entity.uuid
-                                             + QStringLiteral(".json"));
-    QVERIFY(writeText(
-        projectFile,
-        QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
-                              .toJson(QJsonDocument::Indented))));
-    QVERIFY(writeText(entityFile, entityText));
-
-    QString error;
-    QVERIFY(!ProjectStore::open(temp.path(), &error, false));
-    QVERIFY2(error.contains(entity.uuid), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("过旧")), qPrintable(error));
-    QVERIFY2(error.contains(QStringLiteral("最低支持版本")), qPrintable(error));
-    QCOMPARE(readText(entityFile), entityText);
-}
-
-void StoreTests::openStrictRequiredFields()
-{
-    // project.json: a required settings field is gone.
-    {
-        QTemporaryDir temp;
-        QVERIFY(temp.isValid());
-        QJsonObject object = model::toJson(model::Project{});
-        object.remove(QStringLiteral("fps"));
-        QVERIFY(writeText(
-            temp.filePath(QStringLiteral("project.json")),
-            QString::fromUtf8(
-                QJsonDocument(object).toJson(QJsonDocument::Indented))));
-
-        QString error;
-        QVERIFY(!ProjectStore::open(temp.path(), &error, false));
-        QVERIFY2(error.contains(QStringLiteral("fps")), qPrintable(error));
-    }
-
-    // Entity file: the error names the missing field.
-    {
-        QTemporaryDir temp;
-        QVERIFY(temp.isValid());
-        QVERIFY(writeText(
-            temp.filePath(QStringLiteral("project.json")),
-            QString::fromUtf8(QJsonDocument(model::toJson(model::Project{}))
-                                  .toJson(QJsonDocument::Indented))));
-
-        model::Entity entity = makeEntity();
-        QJsonObject entityObject = model::toJson(entity);
-        entityObject.remove(QStringLiteral("start"));
-        QVERIFY(writeText(
-            temp.filePath(QStringLiteral("entities/") + entity.uuid
-                          + QStringLiteral(".json")),
-            QString::fromUtf8(
-                QJsonDocument(entityObject).toJson(QJsonDocument::Indented))));
-
-        QString error;
-        QVERIFY(!ProjectStore::open(temp.path(), &error, false));
-        QVERIFY2(error.contains(QStringLiteral("start")), qPrintable(error));
-        QVERIFY2(error.contains(entity.uuid), qPrintable(error));
-    }
 }
 
 void StoreTests::unknownFieldsSurviveReopen()

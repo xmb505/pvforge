@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace pvf::mcp2::detail {
 
@@ -91,6 +92,8 @@ Tx::Tx(store::ProjectStore* projectStore)
     : store(projectStore)
     , backup(projectStore ? projectStore->project() : model::Project())
     , project(backup)
+    , assetTrashBefore(projectStore ? projectStore->trashedAssets()
+                                    : QSet<QString>())
 {
 }
 
@@ -100,49 +103,126 @@ void Tx::drop(const Uuid& uuid)
     deleted.insert(uuid);
 }
 
+bool Tx::restore(QString* error)
+{
+    if (!store)
+        return true;
+
+    QStringList failures;
+
+    // Entity files created only by this transaction have no backup entity;
+    // delete them before restoring the project copy. Files are addressed by
+    // UUID, and entity files are named after their root, so only roots get a
+    // direct unlink; descendants are rewritten with their root below.
+    for (const Uuid& uuid : std::as_const(dirty))
+    {
+        if (backup.entities.contains(uuid))
+            continue;
+        const QString path = store->root() + QStringLiteral("/entities/")
+                             + uuid + QStringLiteral(".json");
+        if (QFileInfo::exists(path) && !QFile::remove(path))
+            failures << QStringLiteral("无法删除新建实体文件 %1").arg(path);
+    }
+
+    store->mutableProject() = backup;
+
+    for (const Uuid& uuid : std::as_const(deleted))
+    {
+        if (!backup.entities.contains(uuid))
+            continue;
+        QString saveError;
+        if (!store->saveEntity(uuid, &saveError))
+            failures << saveError;
+    }
+    for (const Uuid& uuid : std::as_const(dirty))
+    {
+        if (!backup.entities.contains(uuid))
+            continue;
+        QString saveError;
+        if (!store->saveEntity(uuid, &saveError))
+            failures << saveError;
+    }
+    if (projectDirty)
+    {
+        QString saveError;
+        if (!store->saveProject(&saveError))
+            failures << saveError;
+    }
+
+    QString assetError;
+    QHash<QString, bool> assetState;
+    for (const QString& hash : store->trashedAssets())
+        assetState.insert(hash, assetTrashBefore.contains(hash));
+    for (const QString& hash : std::as_const(assetTrashBefore))
+        assetState.insert(hash, true);
+    if (!store->applyAssetTrashState(assetState, &assetError))
+        failures << assetError;
+
+    if (!failures.isEmpty())
+    {
+        if (error)
+            *error = failures.join(QStringLiteral("；"));
+        return false;
+    }
+    return true;
+}
+
 Result Tx::finish(const QJsonObject& data, const QString& message)
 {
     if (!store)
         return failure(QStringLiteral("not_available"), QStringLiteral("工程未打开"));
 
+    // Early exits happen after a tool may already have trashed an asset. Undo
+    // that side effect; if it cannot be undone, say so instead of pretending
+    // the project is unchanged.
+    const auto restoreNote = [this]() -> QString {
+        QString rollbackError;
+        if (restore(&rollbackError))
+            return QString();
+        const QString reason =
+            QStringLiteral("回滚失败：%1。工程可能不一致，请重新打开。")
+                .arg(rollbackError);
+        store->setReadOnly(reason);
+        return QStringLiteral("（%1）").arg(reason);
+    };
+
     // A stop that lands after the last batch item still cancels this call
     // before anything reaches the store.
     if (stopRequested(*this))
-        return stoppedByHuman();
+    {
+        const QString note = restoreNote();
+        if (note.isEmpty())
+            return stoppedByHuman();
+        QJsonObject details;
+        details.insert(QStringLiteral("inconsistent"), true);
+        return failure(QStringLiteral("stopped_by_human"),
+                       QStringLiteral("人类按下急停，此次操作未实现") + note,
+                       details);
+    }
+
+    // The HTTP layer told the client the request timed out (or is about to).
+    // Refuse to write so a retry cannot create a duplicate entity.
+    if (deadlineCheck && deadlineCheck())
+    {
+        const QString note = restoreNote();
+        QJsonObject details;
+        if (!note.isEmpty())
+            details.insert(QStringLiteral("inconsistent"), true);
+        return failure(QStringLiteral("request_timeout"),
+                       QStringLiteral("请求超时，未写入任何变更；请重试") + note,
+                       details);
+    }
 
     QString validationError;
     if (!model::validateProject(project, &validationError))
-        return failure(QStringLiteral("invalid_argument"), validationError);
-
-    const auto restore = [this] {
-        // Delete files that only exist because of this transaction before
-        // restoring the in-memory project from the backup.
-        for (const Uuid& uuid : dirty)
-        {
-            if (backup.entities.contains(uuid))
-                continue;
-            QFile::remove(store->root() + QStringLiteral("/entities/") + uuid
-                          + QStringLiteral(".json"));
-        }
-        store->mutableProject() = backup;
-        for (const Uuid& uuid : deleted)
-        {
-            QString ignored;
-            store->saveEntity(uuid, &ignored);
-        }
-        for (const Uuid& uuid : dirty)
-        {
-            if (!backup.entities.contains(uuid))
-                continue;
-            QString ignored;
-            store->saveEntity(uuid, &ignored);
-        }
-        if (projectDirty)
-        {
-            QString ignored;
-            store->saveProject(&ignored);
-        }
-    };
+    {
+        const QString note = restoreNote();
+        QJsonObject details;
+        if (!note.isEmpty())
+            details.insert(QStringLiteral("inconsistent"), true);
+        return failure(QStringLiteral("invalid_argument"),
+                       validationError + note, details);
+    }
 
     // Entity files hold a whole root subtree. Deleting every UUID in one tree
     // would make the second call fail, so hand the store only the topmost
@@ -158,14 +238,36 @@ Result Tx::finish(const QJsonObject& data, const QString& message)
         deleteRoots.append(uuid);
     }
     std::sort(deleteRoots.begin(), deleteRoots.end());
+
+    const auto rollbackFailure =
+        [this](const QString& code, const QString& reason) -> Result {
+        QString rollbackError;
+        if (restore(&rollbackError))
+            return failure(code,
+                           reason + QStringLiteral("（已完整回滚，工程未改变）"));
+
+        // Keep the human in control even when the rollback itself failed: turn
+        // the applied writes into one undo step and stop writing.
+        QString undoError;
+        const bool undoRecorded =
+            store->recordPendingAsUndo(QStringLiteral("pvf: AI 写入（回滚失败）"),
+                                       &undoError);
+        const QString inconsistent =
+            QStringLiteral("%1；回滚失败：%2。工程可能不一致，请重新打开工程。")
+                .arg(reason, rollbackError);
+        store->setReadOnly(inconsistent);
+        QJsonObject details;
+        details.insert(QStringLiteral("inconsistent"), true);
+        details.insert(QStringLiteral("rollbackError"), rollbackError);
+        details.insert(QStringLiteral("undoRecorded"), undoRecorded);
+        return failure(QStringLiteral("internal_error"), inconsistent, details);
+    };
+
     for (const Uuid& uuid : std::as_const(deleteRoots))
     {
         QString error;
         if (!store->deleteEntity(uuid, &error))
-        {
-            restore();
-            return failure(QStringLiteral("internal_error"), error);
-        }
+            return rollbackFailure(QStringLiteral("internal_error"), error);
     }
 
     store->mutableProject() = project;
@@ -176,20 +278,14 @@ Result Tx::finish(const QJsonObject& data, const QString& message)
     {
         QString error;
         if (!store->saveEntity(uuid, &error))
-        {
-            restore();
-            return failure(QStringLiteral("internal_error"), error);
-        }
+            return rollbackFailure(QStringLiteral("internal_error"), error);
     }
 
     if (projectDirty)
     {
         QString error;
         if (!store->saveProject(&error))
-        {
-            restore();
-            return failure(QStringLiteral("internal_error"), error);
-        }
+            return rollbackFailure(QStringLiteral("internal_error"), error);
     }
 
     QString error;
@@ -199,7 +295,7 @@ Result Tx::finish(const QJsonObject& data, const QString& message)
         beforeHash = before.first().hash;
 
     if (!store->commit(message, &error))
-        return failure(QStringLiteral("internal_error"), error);
+        return rollbackFailure(QStringLiteral("internal_error"), error);
 
     Result result = success(data);
     const QVector<store::GitCommit> history = store->history(1);

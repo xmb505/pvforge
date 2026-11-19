@@ -123,22 +123,6 @@ bool isTracked(const QString& root, const QString& relativePath)
     return result.exitCode == 0;
 }
 
-QString normalizedMessage(const QString& message)
-{
-    QString normalized = message.trimmed();
-    normalized.replace(QLatin1Char('\n'), QLatin1Char(' '));
-    normalized.replace(QLatin1Char('\r'), QLatin1Char(' '));
-    normalized.replace(QChar(0x1f), QLatin1Char(' '));
-    normalized = normalized.simplified();
-    if (normalized.isEmpty())
-        normalized = QStringLiteral("pvf: save");
-    else if (!normalized.startsWith(QStringLiteral("pvf:")))
-        normalized.prepend(QStringLiteral("pvf: "));
-    if (normalized == QStringLiteral("pvf:"))
-        normalized = QStringLiteral("pvf: save");
-    return normalized;
-}
-
 bool ensureGitIdentity(const QString& root, QString* error)
 {
     const ProcessResult name = runGit(

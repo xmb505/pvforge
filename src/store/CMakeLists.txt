@@ -19,8 +19,10 @@ endif()
 
 add_library(pvf_store STATIC
     ProjectStore.cpp
+    ProjectStoreAssets.cpp
     ProjectStoreFiles.cpp
     ProjectStoreGit.cpp
+    ProjectStoreUndo.cpp
     ProjectStoreSupport.h
 )
 
@@ -56,7 +58,6 @@ if(BUILD_TESTING)
         undoStackLimits
         assetsSurviveUndo
         corruptProjectJson
-        corruptEntityJson
         nonGitDirectoryRejected
         missingGitCreateFallsBack
         createRejectsInvalidInput
@@ -78,9 +79,6 @@ if(BUILD_TESTING)
         openRejectsFutureVersion
         openRejectsUnmigratableVersion
         openRejectsLegacyFlatFormat
-        openRejectsFutureEntityVersion
-        openRejectsStaleEntityVersion
-        openStrictRequiredFields
         unknownFieldsSurviveReopen
         nestedEntityTreeRoundTrip
         entityTreeRejectsInconsistentNesting
@@ -90,6 +88,32 @@ if(BUILD_TESTING)
 
     foreach(test_case IN LISTS PVF_STORE_TEST_CASES)
         add_test(NAME store.${test_case} COMMAND pvf_store_tests ${test_case})
+        set_tests_properties(store.${test_case} PROPERTIES
+            ENVIRONMENT "QT_IM_MODULE=none")
+    endforeach()
+
+    # Persistence safety regressions (issues #113 #114 #116 #117) live in a
+    # second binary so the historical store_tests.cpp stays under its ratchet.
+    add_executable(pvf_store_safety_tests tests/store_safety_tests.cpp)
+    target_link_libraries(pvf_store_safety_tests PRIVATE pvf_store Qt6::Test)
+
+    set(PVF_STORE_SAFETY_TEST_CASES
+        corruptEntityJson
+        openRejectsFutureEntityVersion
+        openRejectsStaleEntityVersion
+        openStrictRequiredFields
+        crossRootWriteRollsBackOnFailure
+        killBetweenWritesRecoversOnOpen
+        duplicateUuidAcrossFilesIsQuarantined
+        lockBlocksSecondInstance
+        externalChangeRefusesOverwrite
+        readFailureIsNotMissing
+        assetTrashIsUndoable
+        failedCreateRemovesPartialProject
+    )
+
+    foreach(test_case IN LISTS PVF_STORE_SAFETY_TEST_CASES)
+        add_test(NAME store.${test_case} COMMAND pvf_store_safety_tests ${test_case})
         set_tests_properties(store.${test_case} PROPERTIES
             ENVIRONMENT "QT_IM_MODULE=none")
     endforeach()

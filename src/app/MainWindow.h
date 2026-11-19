@@ -56,7 +56,9 @@ class Viewport;
 class WorkbenchPanel;
 
 // Crash recovery choices for the session shell.  The store scans uncommitted
-// text when the project opens; the shell asks before touching anything.
+// text when the project opens; the shell asks before touching anything. The
+// second handler argument describes a git commit that failed during the
+// previous close (empty when the last session ended cleanly).
 enum class SessionCrashRecoveryChoice
 {
     Restore,
@@ -64,8 +66,8 @@ enum class SessionCrashRecoveryChoice
     Commit,
     Cancel
 };
-using SessionCrashRecoveryHandler =
-    std::function<SessionCrashRecoveryChoice(const QVector<store::DirtyText>&)>;
+using SessionCrashRecoveryHandler = std::function<SessionCrashRecoveryChoice(
+    const QVector<store::DirtyText>& dirty, const QString& commitFailure)>;
 
 // Opens a `.pvproj` directory and resolves uncommitted text through `handler`
 // (or a modal dialog when empty).  Exposed so the crash-recovery branches can
@@ -73,6 +75,13 @@ using SessionCrashRecoveryHandler =
 std::unique_ptr<EditorSession> openSessionProjectWithRecovery(
     const QString& path, bool useGit, const SessionCrashRecoveryHandler& handler,
     QWidget* parent, QString* error);
+
+// The `--open <path>` entry point: reads the persisted Git setting and uses
+// the same recovery flow as the GUI. Exposed so the CLI parity can be tested
+// without re-running main().
+std::unique_ptr<EditorSession> openSessionProjectFromCli(
+    const QString& path, const SessionCrashRecoveryHandler& handler,
+    QString* error);
 
 class MainWindow : public QMainWindow
 {

@@ -109,8 +109,11 @@ int main(int argc, char* argv[])
     }
     if (!openPath.isEmpty())
     {
+        // Same Git setting and crash-recovery flow as the GUI: a project with
+        // a repository must not silently open read-only, and uncommitted text
+        // from a previous crash/commit failure must be reported.
         QString error;
-        auto session = pvf::EditorSession::openProject(openPath, &error);
+        auto session = pvf::openSessionProjectFromCli(openPath, {}, &error);
         if (!session)
         {
             qCritical().noquote() << "open failed:" << error;

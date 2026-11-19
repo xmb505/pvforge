@@ -22,7 +22,6 @@ private slots:
     void undoStackLimits();
     void assetsSurviveUndo();
     void corruptProjectJson();
-    void corruptEntityJson();
     void nonGitDirectoryRejected();
     void missingGitCreateFallsBack();
     void createRejectsInvalidInput();
@@ -44,9 +43,6 @@ private slots:
     void openRejectsFutureVersion();
     void openRejectsUnmigratableVersion();
     void openRejectsLegacyFlatFormat();
-    void openRejectsFutureEntityVersion();
-    void openRejectsStaleEntityVersion();
-    void openStrictRequiredFields();
     void unknownFieldsSurviveReopen();
 
     // v3 root-subtree format (store_tree_tests.cpp).

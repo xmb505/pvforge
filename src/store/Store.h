@@ -11,7 +11,13 @@
 #include <QString>
 #include <QVector>
 
+#include <memory>
 #include <optional>
+
+namespace pvf::store::detail {
+struct ProjectLock;
+struct TransactionOp;
+} // namespace pvf::store::detail
 
 namespace pvf::store {
 
@@ -32,13 +38,27 @@ struct DirtyText
     QString status;
 };
 
-// One in-memory undo step. Paths are relative to the project root and only
-// cover text project data (project.json, entities/<root-uuid>.json); assets
-// never enter the stack. An empty byte array means "the file did not exist".
+// One entity file quarantined while opening a project because it was corrupt
+// or repeated a UUID already loaded from another file. The file is moved to
+// `.pvforge/quarantine/`; the project opens read-only until the human decides
+// what to keep.
+struct QuarantinedFile
+{
+    QString path;
+    QString reason;
+};
+
+// One in-memory undo step. Text paths are relative to the project root and
+// cover project.json and entities/<root-uuid>.json. Assets are tracked by hash:
+// a hash in the "trash" set means the asset directory lives in `.trash/<hash>`
+// instead of `assets/<hash>`. An empty byte array means "the file did not
+// exist".
 struct UndoEntry
 {
     QHash<QString, QByteArray> before;
     QHash<QString, QByteArray> after;
+    QHash<QString, bool> assetsInTrashBefore;
+    QHash<QString, bool> assetsInTrashAfter;
     QString message;
 };
 
@@ -52,6 +72,8 @@ struct UndoEntry
 //   project.json            (settings + markers only; no entity list)
 //   entities/<root-uuid>.json  (one recursive root subtree per file)
 //   assets/                 (owned by assets::AssetStore, ignored by git)
+//   .trash/<hash>/          (deleted assets kept for undo, ignored by git)
+//   .pvforge/               (local state: lock, journal, quarantine, playhead)
 //   .cache/                 (local caches, ignored by git)
 //   .gitignore
 //
@@ -87,6 +109,30 @@ public:
     // Whether this store is actually using git right now.
     bool gitEnabled() const { return m_gitEnabled; }
 
+    // Read-only mode is entered when the project was opened with quarantined
+    // files or when a reload after a write failed. Every write entry point
+    // refuses and names the reason; reading and git history keep working.
+    bool readOnly() const { return !m_readOnlyReason.isEmpty(); }
+    QString readOnlyReason() const { return m_readOnlyReason; }
+    void setReadOnly(const QString& reason);
+    const QVector<QuarantinedFile>& quarantinedFiles() const
+    {
+        return m_quarantined;
+    }
+
+    // True when a human edit was saved but not committed to git yet. The MCP
+    // history tools flush this before undoing so an edit in the debounce window
+    // is not silently overwritten. Snapshots written back by undo/redo are not
+    // counted: they are already on disk and the next save commits them.
+    bool hasPendingWrites() const { return m_pendingHumanEdit; }
+
+    // Message recorded by markCommitFailure() for the previous close, empty
+    // when the last session ended cleanly. It lets the recovery dialog tell a
+    // failed git commit apart from an abnormal exit.
+    QString previousCommitFailure() const { return m_previousCommitFailure; }
+    bool markCommitFailure(const QString& message);
+    void clearCommitFailure();
+
     // True when a `git --version` probe succeeds; `version` receives its
     // trimmed output when provided.
     static bool gitBinaryAvailable(QString* version = nullptr);
@@ -103,6 +149,25 @@ public:
     bool saveProject(QString* error = nullptr);
     bool deleteEntity(const Uuid& uuid, QString* error = nullptr);
     bool commit(const QString& message, QString* error = nullptr);
+
+    // Moves assets/<hash> to `.trash/<hash>` and records the move in the
+    // pending transaction; commit() turns it into an undo step that puts the
+    // directory back. AssetStore::remove() stays a permanent physical delete
+    // for import rollbacks.
+    bool trashAsset(const AssetHash& hash, QString* error = nullptr);
+    // Entities whose content references `hash`.
+    QStringList entitiesReferencingAsset(const AssetHash& hash) const;
+    QSet<QString> trashedAssets() const;
+    // Moves assets so each hash in `trashed` lives in .trash/<hash> and every
+    // other hash lives in assets/<hash>. Missing content is left untouched
+    // (undo of a deletion cannot resurrect bytes the user never had).
+    bool applyAssetTrashState(const QHash<QString, bool>& trashed,
+                              QString* error = nullptr);
+
+    // Turns the pending writes into an undo entry without running git. Used
+    // when a rollback failed and the human still needs a way to revert.
+    bool recordPendingAsUndo(const QString& message,
+                             QString* error = nullptr);
 
     bool undo(QString* error = nullptr);
     bool redo(QString* error = nullptr);
@@ -145,34 +210,57 @@ public:
     // Test hook: shrink the default 200 entries / 512MB caps so eviction can
     // be exercised without hundreds of real commits.
     void setUndoLimitsForTest(int maxEntries, qint64 maxBytes);
+    // Test hook: fail the (0-based) nth staged file write inside the next file
+    // transaction. -1 disables the hook.
+    void setWriteFailureForTest(int index) { m_writeFailureForTest = index; }
+    // Test hook: leave a transaction journal on disk after applying `count`
+    // operations, as if the process were killed mid-save.
+    void setCrashAfterApplyForTest(int count)
+    {
+        m_crashAfterApplyForTest = count;
+    }
 #endif
 
     assets::AssetStore& assets() { return *m_assets; }
     QString root() const { return m_root; }
 
 private:
-    ProjectStore(QString root, model::Project project);
+    ProjectStore(QString root, model::Project project,
+                 std::shared_ptr<detail::ProjectLock> lock);
 
+    bool ensureWritable(QString* error) const;
     bool reload(QString* error);
     void refreshDirtyText();
     void clearDirty();
-    void notePath(const QString& relativePath);
-    void recordTxnUndo(const QString& message);
+    void refreshDigests();
+    bool verifyDigests(const QVector<detail::TransactionOp>& ops,
+                       QString* error) const;
+    bool writeTrackedFiles(const QVector<detail::TransactionOp>& ops,
+                           QString* error);
+    void noteExistingPath(const QString& relativePath);
+    void noteAssetTouch(const QString& hash);
+    bool recordTxnUndo(const QString& message, QString* error);
     void pushUndo(UndoEntry entry);
     void trimStack(QVector<UndoEntry>& stack);
     bool applySnapshot(const QHash<QString, QByteArray>& snapshot,
+                       const QHash<QString, bool>& assetsInTrash,
                        QString* error);
     Uuid entityRootOf(const Uuid& uuid, QString* error = nullptr) const;
     void rebuildEntityRootIndex();
-    bool writeEntityTree(const Uuid& rootUuid, QString* error);
-    bool removeEntityTreeFile(const Uuid& rootUuid, QString* error);
 
     QString m_root;
     model::Project m_project;
     std::optional<assets::AssetStore> m_assets;
+    // Shared so several ProjectStore objects in one process (tests, a future
+    // multi-view shell) share one project lock; the QLockFile is released when
+    // the last reference dies.
+    std::shared_ptr<detail::ProjectLock> m_lock;
     QVector<UndoEntry> m_undoStack;
     QVector<UndoEntry> m_redoStack;
     QVector<DirtyText> m_dirtyText;
+    QVector<QuarantinedFile> m_quarantined;
+    QString m_readOnlyReason;
+    QString m_previousCommitFailure;
     // UUID -> root UUID of the entity file that held it at the last successful
     // load/save/delete. saveEntity() uses this to rewrite the old root file
     // when a subtree is reparented; mutableProject() can therefore be edited
@@ -182,9 +270,24 @@ private:
     // before the first touch (empty when the file did not exist).
     QHash<QString, QByteArray> m_txnBefore;
     QSet<QString> m_txnPaths;
+    // A real edit (not an undo/redo snapshot) is waiting for its debounced
+    // git commit.
+    bool m_pendingHumanEdit = false;
+    // Asset hashes touched since the last commit; `true` means the directory
+    // was in .trash before this transaction touched it.
+    QHash<QString, bool> m_txnAssetBefore;
+    QSet<QString> m_txnAssets;
+    // SHA-256 (hex) of the bytes this store last wrote or read for each text
+    // path. "Known absent" is an empty string. A mismatch before a write means
+    // another program changed the project and overwriting it would lose data.
+    QHash<QString, QString> m_digests;
     bool m_gitEnabled = false;
     int m_undoLimit = 200;
     qint64 m_undoByteLimit = 512LL * 1024 * 1024;
+#ifdef PVFORGE_TEST_HOOKS
+    int m_writeFailureForTest = -1;
+    int m_crashAfterApplyForTest = -1;
+#endif
 };
 
 } // namespace pvf::store

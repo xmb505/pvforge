@@ -614,12 +614,16 @@ Result assetDelete(Tx& tx, const QJsonObject& args)
 
     const QString name = asset->name;
     QString removeError;
-    if (!tx.store->assets().remove(hash, &removeError))
+    // Move, don't delete: the directory lands in .trash/<hash> and the move is
+    // recorded as an undo step, so a human can press Ctrl+Z.
+    if (!tx.store->trashAsset(hash, &removeError))
         return failure(QStringLiteral("internal_error"), removeError);
 
     QJsonObject data;
     data.insert(QStringLiteral("hash"), hash);
     data.insert(QStringLiteral("deleted"), true);
+    data.insert(QStringLiteral("trashed"), true);
+    data.insert(QStringLiteral("undoAvailable"), true);
     data.insert(QStringLiteral("missingEntities"), missing);
     return tx.finish(data, QStringLiteral("pvf: delete asset \"%1\"").arg(name));
 }
