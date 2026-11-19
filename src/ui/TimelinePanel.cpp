@@ -245,6 +245,15 @@ void TimelinePanel::setSelectedEntity(EntityId id)
         return;
     }
 
+    // A document-driven selection that points at a clip already inside the
+    // multi-selection (Ctrl/Shift click, box select) must not collapse it.
+    if (id == m_selected || m_entitySelection.contains(id))
+    {
+        m_selected = id;
+        update();
+        return;
+    }
+
     if (m_owner >= 0)
     {
         if (entity->parent == m_owner)

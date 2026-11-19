@@ -7,6 +7,7 @@
 #include "assets/AssetStore.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
+#include "next/core/EntityLock.h"
 #include "render2/Render.h"
 
 #include <QFontMetrics>
@@ -116,7 +117,8 @@ Viewport::CameraPart Viewport::sessionCameraHitTest(const QPointF& pos) const
 
     const bool selected =
         m_session->document() && m_session->document()->selection() == uuid;
-    if (selected && !it->locked && it->parentUuid.isEmpty())
+    if (selected && !next::isEntityLocked(m_session->project(), uuid)
+        && it->parentUuid.isEmpty())
     {
         if (QLineF(pos, sessionCameraRotationHandle()).length() <= 10.0)
             return CameraPart::Rotate;
@@ -165,7 +167,8 @@ bool Viewport::handleSessionCameraPress(QMouseEvent* event)
         m_session->document()->setSelection(uuid);
     emit uuidSelected(uuid);
 
-    if (it->locked || !it->parentUuid.isEmpty())
+    if (next::isEntityLocked(m_session->project(), uuid)
+        || !it->parentUuid.isEmpty())
         return true;
 
     m_sessionDragKind = part == CameraPart::Move
@@ -203,7 +206,8 @@ void Viewport::applySessionCameraDrag(const QPointF& pos,
     if (!m_session || m_sessionDragUuid.isEmpty())
         return;
     auto it = m_session->mutableProject().entities.find(m_sessionDragUuid);
-    if (it == m_session->mutableProject().entities.end() || it->locked)
+    if (it == m_session->mutableProject().entities.end()
+        || next::isEntityLocked(m_session->project(), m_sessionDragUuid))
         return;
     model::Entity& entity = it.value();
     const gizmo::Transform start = m_sessionDragTransform;
@@ -334,7 +338,7 @@ void Viewport::drawSessionCameraOverlay(QPainter& painter)
 
     const bool selected =
         m_session->document() && m_session->document()->selection() == uuid;
-    const bool locked = it->locked;
+    const bool locked = next::isEntityLocked(m_session->project(), uuid);
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);

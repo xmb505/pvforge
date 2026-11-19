@@ -87,7 +87,16 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     if (!clip.contains(event->pos()))
         return;
 
-    selectEntity(id, true);
+    if (m_entitySelection.size() > 1 && m_entitySelection.contains(id))
+    {
+        m_selected = id;
+        update();
+    }
+    else
+    {
+        selectEntity(id, true);
+    }
+    const bool multi = m_entitySelection.size() > 1;
     QMenu menu(this);
     const bool hiddenNow = entity->hidden;
     const bool lockedNow = entity->locked;
@@ -99,7 +108,19 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
                                                : QStringLiteral("锁定片段"));
     menu.addSeparator();
     QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
-    QAction* remove = menu.addAction(QStringLiteral("删除片段"));
+    QAction* copy = menu.addAction(multi
+                                       ? QStringLiteral("复制选中片段")
+                                       : QStringLiteral("复制片段"));
+    QAction* duplicate = menu.addAction(multi
+                                            ? QStringLiteral("创建选中副本")
+                                            : QStringLiteral("创建副本"));
+    QAction* paste = menu.addAction(QStringLiteral("粘贴片段"));
+    paste->setEnabled(!m_clipClipboard.isEmpty());
+    QAction* group = menu.addAction(QStringLiteral("成组为文件夹"));
+    group->setEnabled(multi);
+    QAction* remove = menu.addAction(multi
+                                         ? QStringLiteral("删除选中片段")
+                                         : QStringLiteral("删除片段"));
     remove->setEnabled(!isEntityLocked(id));
     QAction* split = menu.addAction(QStringLiteral("在播放头切分"));
     const int playhead = m_session ? m_session->playhead() : 0;
@@ -176,6 +197,22 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     else if (chosen == open)
     {
         openPopup(id);
+    }
+    else if (chosen == copy)
+    {
+        copySelectedClips();
+    }
+    else if (chosen == duplicate)
+    {
+        duplicateSelectedClips();
+    }
+    else if (chosen == paste)
+    {
+        pasteClips();
+    }
+    else if (chosen == group)
+    {
+        groupSelectedClips();
     }
     else if (chosen == remove)
     {

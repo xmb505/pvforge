@@ -102,20 +102,28 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     if (event->key() == Qt::Key_Delete
         || event->key() == Qt::Key_Backspace)
     {
-        if (!m_selectedKeyframes.isEmpty())
-            deleteSelectedKeyframes();
-        else if (m_selected != kInvalidEntity)
-            deleteSelectedEntities();
+        requestDeleteSelection();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_C)
     {
-        copySelectedKeyframes();
+        if (!m_selectedKeyframes.isEmpty())
+            copySelectedKeyframes();
+        else
+            copySelectedClips();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_V)
     {
-        pasteKeyframes();
+        if (!m_keyClipboard.isEmpty())
+            pasteKeyframes();
+        else
+            pasteClips();
+        return;
+    }
+    if (plain == Qt::ControlModifier && event->key() == Qt::Key_D)
+    {
+        duplicateSelectedClips();
         return;
     }
     if (plain == Qt::NoModifier && event->key() == Qt::Key_S)

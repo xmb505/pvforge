@@ -12,6 +12,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <climits>
 
 namespace pvf {
 
@@ -313,6 +314,216 @@ QVector<Uuid> EditActions::addAssetEntities(const AssetHash& hash, int startFram
         return created;
     }
     return created;
+}
+
+QVector<Uuid> EditActions::duplicateEntities(const QVector<Uuid>& roots,
+                                            int deltaFrames,
+                                            const Uuid& newParent,
+                                            QString* error)
+{
+    QVector<Uuid> created;
+    if (error)
+        error->clear();
+    if (!isValid())
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return created;
+    }
+    const model::Project& project = m_session->project();
+    const QVector<Uuid> selected = uniqueRoots(project, roots, error);
+    if (selected.isEmpty())
+        return created;
+
+    QVector<model::Entity> clipboard;
+    QSet<Uuid> seen;
+    for (const Uuid& root : selected)
+    {
+        for (const Uuid& uuid : subtree(project, root))
+        {
+            if (seen.contains(uuid))
+                continue;
+            seen.insert(uuid);
+            clipboard.append(project.entities.value(uuid));
+        }
+    }
+    return pasteEntities(clipboard, newParent, deltaFrames, error);
+}
+
+QVector<Uuid> EditActions::pasteEntities(
+    const QVector<model::Entity>& clipboard, const Uuid& parent,
+    int deltaFrames, QString* error)
+{
+    QVector<Uuid> created;
+    if (error)
+        error->clear();
+    if (!isValid())
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return created;
+    }
+    if (clipboard.isEmpty())
+    {
+        setError(error, QStringLiteral("没有可粘贴的片段"));
+        return created;
+    }
+
+    const model::Project& project = m_session->project();
+    if (!parent.isEmpty())
+    {
+        const auto parentIt = project.entities.constFind(parent);
+        if (parentIt == project.entities.constEnd())
+        {
+            setError(error, QStringLiteral("父实体不存在：%1").arg(parent));
+            return created;
+        }
+        if (next::isEntityLocked(project, parent))
+        {
+            setError(error, QStringLiteral("父实体已锁定，不能粘贴"));
+            return created;
+        }
+    }
+
+    QSet<Uuid> sourceIds;
+    for (const model::Entity& entity : clipboard)
+        sourceIds.insert(entity.uuid);
+
+    model::Project working = project;
+    QHash<Uuid, Uuid> remap;
+    for (const model::Entity& entity : clipboard)
+        remap.insert(entity.uuid, model::newUuid());
+
+    QVector<Uuid> upserts;
+    for (const model::Entity& source : clipboard)
+    {
+        model::Entity clone = source;
+        clone.uuid = remap.value(source.uuid);
+        const bool isRoot =
+            source.parentUuid.isEmpty() || !sourceIds.contains(source.parentUuid);
+        clone.parentUuid = isRoot ? parent : remap.value(source.parentUuid);
+        clone.start += deltaFrames;
+        clone.end += deltaFrames;
+        if (clone.start < 0)
+        {
+            setError(error, QStringLiteral("粘贴后的开始帧为 %1").arg(clone.start));
+            return created;
+        }
+        if (isRoot)
+        {
+            clone.row = model::nextAutoRow(working, parent, clone.start,
+                                           clone.end);
+            created.append(clone.uuid);
+        }
+        for (model::SolverSegment& solver : clone.solvers)
+        {
+            const QString target =
+                solver.params.value(QStringLiteral("targetUuid")).toString();
+            const auto mapped = remap.constFind(target);
+            if (mapped != remap.constEnd())
+                solver.params.insert(QStringLiteral("targetUuid"), mapped.value());
+        }
+        working.entities.insert(clone.uuid, clone);
+        upserts.append(clone.uuid);
+    }
+
+    QString validationError;
+    if (!model::validateProject(working, &validationError))
+    {
+        setError(error, QStringLiteral("粘贴后工程校验失败：%1")
+                            .arg(validationError));
+        return {};
+    }
+
+    EditPlan plan;
+    plan.project = std::move(working);
+    plan.upserts = upserts;
+    plan.message = QStringLiteral("粘贴片段");
+    if (!apply(plan, error))
+        return {};
+    return created;
+}
+
+bool EditActions::groupIntoFolder(const QVector<Uuid>& roots, Uuid* folder,
+                                  QString* error)
+{
+    if (error)
+        error->clear();
+    if (!isValid())
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+    const model::Project& project = m_session->project();
+    const QVector<Uuid> selected = uniqueRoots(project, roots, error);
+    if (selected.isEmpty())
+        return false;
+    if (selected.size() < 2)
+    {
+        setError(error, QStringLiteral("至少选择两个片段才能成组"));
+        return false;
+    }
+
+    const Uuid parent = project.entities.value(selected.first()).parentUuid;
+    int start = INT_MAX;
+    int end = INT_MIN;
+    QVector<Uuid> allNodes;
+    QSet<Uuid> nodeSet;
+    for (const Uuid& root : selected)
+    {
+        const model::Entity& entity = project.entities.value(root);
+        if (entity.parentUuid != parent)
+        {
+            setError(error, QStringLiteral("只能把同一父级下的片段成组"));
+            return false;
+        }
+        start = std::min(start, entity.start);
+        end = std::max(end, entity.end);
+        for (const Uuid& node : subtree(project, root))
+            addUpsert(&allNodes, &nodeSet, node);
+    }
+    const QString locked = lockedSubtreeError(project, allNodes);
+    if (!locked.isEmpty())
+    {
+        setError(error, locked);
+        return false;
+    }
+
+    model::Project working = project;
+    model::Entity group;
+    group.uuid = model::newUuid();
+    group.name = QStringLiteral("文件夹");
+    group.parentUuid = parent;
+    group.start = start;
+    group.end = end;
+    group.row = model::nextAutoRow(project, parent, start, end);
+    group.content.kind = ContentKind::Empty;
+    working.entities.insert(group.uuid, group);
+
+    QVector<Uuid> upserts{group.uuid};
+    for (int i = 0; i < selected.size(); ++i)
+    {
+        model::Entity& child = working.entities[selected.at(i)];
+        child.parentUuid = group.uuid;
+        child.row = i;
+        upserts.append(selected.at(i));
+    }
+
+    QString validationError;
+    if (!model::validateProject(working, &validationError))
+    {
+        setError(error, QStringLiteral("成组后工程校验失败：%1")
+                            .arg(validationError));
+        return false;
+    }
+
+    EditPlan plan;
+    plan.project = std::move(working);
+    plan.upserts = upserts;
+    plan.message = QStringLiteral("成组为文件夹");
+    if (!apply(plan, error))
+        return false;
+    if (folder)
+        *folder = group.uuid;
+    return true;
 }
 
 bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,

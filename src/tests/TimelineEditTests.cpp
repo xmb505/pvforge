@@ -371,6 +371,52 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
                QStringLiteral("undo did not restore the deleted child")))
         return 1;
 
+    // Batch clip helpers from the multi-selection UI: duplicate, paste and
+    // group each produce one undoable commit and never touch the source clip.
+    const int beforeDuplicate = session->project().entities.size();
+    const QVector<pvf::Uuid> duplicated =
+        actions->duplicateEntities({video}, 0, pvf::Uuid(), &error);
+    if (!check(duplicated.size() == 1
+                   && session->project().entities.contains(duplicated.first())
+                   && entity(duplicated.first()).start == entity(video).start
+                   && entity(duplicated.first()).end == entity(video).end
+                   && session->project().entities.size() == beforeDuplicate + 1,
+               QStringLiteral("duplicateEntities failed: %1").arg(error)))
+        return 1;
+    if (!undo()
+        || !check(!session->project().entities.contains(duplicated.first()),
+                  QStringLiteral("duplicate undo left the copy")))
+        return 1;
+
+    QVector<pvf::model::Entity> clipboard;
+    clipboard.append(entity(video));
+    const QVector<pvf::Uuid> pasted =
+        actions->pasteEntities(clipboard, pvf::Uuid(), 100, &error);
+    if (!check(pasted.size() == 1 && session->project().entities.contains(pasted.first())
+                   && entity(pasted.first()).start == entity(video).start + 100,
+               QStringLiteral("pasteEntities failed: %1").arg(error)))
+        return 1;
+    if (!undo())
+        return 1;
+
+    pvf::Uuid folder;
+    if (!check(actions->groupIntoFolder({audio, video}, &folder, &error),
+               QStringLiteral("groupIntoFolder failed: %1").arg(error)))
+        return 1;
+    if (!check(!folder.isEmpty()
+                   && entity(audio).parentUuid == folder
+                   && entity(video).parentUuid == folder
+                   && entity(folder).start == std::min(entity(audio).start,
+                                                       entity(video).start)
+                   && entity(folder).end == std::max(entity(audio).end,
+                                                     entity(video).end),
+               QStringLiteral("group did not wrap both clips")))
+        return 1;
+    if (!undo() || !check(entity(audio).parentUuid.isEmpty()
+                              && entity(video).parentUuid.isEmpty(),
+                          QStringLiteral("group undo did not restore parents")))
+        return 1;
+
     return 0;
 }
 
@@ -729,6 +775,54 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     live->document()->setSelection(pvf::Uuid());
     QApplication::processEvents();
 
+    // Box select in clip mode selects whole clips, and Ctrl-click adds a clip
+    // without the document selection sync collapsing the set.
+    const int selectionAudioRow = rowForName(QStringLiteral("音频"));
+    const int selectionVideoRow = rowForName(QStringLiteral("视频"));
+    if (!check(selectionAudioRow >= 0 && selectionVideoRow >= 0,
+               QStringLiteral("multi-select rows missing")))
+        return 1;
+    const QPoint boxStart(timeline->frameXForTest(80),
+                          timeline->rowCenterYForTest(selectionVideoRow));
+    const QPoint boxEnd(timeline->frameXForTest(20),
+                        timeline->rowCenterYForTest(selectionAudioRow));
+    QMouseEvent boxPress(QEvent::MouseButtonPress, QPointF(boxStart),
+                         QPointF(timeline->mapToGlobal(boxStart)),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent boxMove(QEvent::MouseMove, QPointF(boxEnd),
+                        QPointF(timeline->mapToGlobal(boxEnd)), Qt::NoButton,
+                        Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent boxRelease(QEvent::MouseButtonRelease, QPointF(boxEnd),
+                           QPointF(timeline->mapToGlobal(boxEnd)),
+                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &boxPress);
+    QApplication::sendEvent(timeline, &boxMove);
+    QApplication::sendEvent(timeline, &boxRelease);
+    QApplication::processEvents();
+    if (!check(timeline->entitySelectionCountForTest() == 2,
+               QStringLiteral("box select selected %1 clips")
+                   .arg(timeline->entitySelectionCountForTest())))
+        return 1;
+
+    const int selectionParentRow = rowForName(QStringLiteral("父级"));
+    const QPoint ctrlPoint(timeline->frameXForTest(30),
+                           timeline->rowCenterYForTest(selectionParentRow));
+    QMouseEvent ctrlPress(QEvent::MouseButtonPress, QPointF(ctrlPoint),
+                          QPointF(timeline->mapToGlobal(ctrlPoint)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+    QMouseEvent ctrlRelease(QEvent::MouseButtonRelease, QPointF(ctrlPoint),
+                            QPointF(timeline->mapToGlobal(ctrlPoint)),
+                            Qt::LeftButton, Qt::NoButton, Qt::ControlModifier);
+    QApplication::sendEvent(timeline, &ctrlPress);
+    QApplication::sendEvent(timeline, &ctrlRelease);
+    QApplication::processEvents();
+    if (!check(timeline->entitySelectionCountForTest() == 3,
+               QStringLiteral("Ctrl-click left %1 selected clips")
+                   .arg(timeline->entitySelectionCountForTest())))
+        return 1;
+    live->document()->setSelection(pvf::Uuid());
+    QApplication::processEvents();
+
     // Dragging onto a folder clip asks world/local and commits the choice.
     const int reparentSourceRow = rowForName(QStringLiteral("世界位置"));
     const int reparentTargetRow = rowForName(QStringLiteral("目标父级"));
@@ -921,7 +1015,6 @@ int runTimelineEditTest(QApplication& app)
     const pvf::Uuid video = makeAsset(QStringLiteral("视频"), 0, 30, 2,
                                       pvf::AssetType::Video, videoHash, 5);
     const pvf::Uuid lockedRoot = makeEntity(QStringLiteral("锁定父级"), 0, 60, 3);
-    project.entities[lockedRoot].locked = true;
     const pvf::Uuid lockedChild =
         makeEntity(QStringLiteral("锁定子级"), 10, 20, 0, lockedRoot);
     const pvf::Uuid target = makeEntity(QStringLiteral("目标父级"), 100, 200, 4);
@@ -971,6 +1064,14 @@ int runTimelineEditTest(QApplication& app)
     if (!document->commitEntities(all, QStringLiteral("p2b1 setup"), &error))
     {
         qCritical() << "timeline-edit-test: setup commit failed" << error;
+        return 1;
+    }
+    // Lock the parent only after the tree exists: an ancestor-locked upsert is
+    // rejected on purpose, which is exactly the guard the checks below cover.
+    project.entities[lockedRoot].locked = true;
+    if (!document->commitEntity(lockedRoot, QStringLiteral("p2b1 lock"), &error))
+    {
+        qCritical() << "timeline-edit-test: lock commit failed" << error;
         return 1;
     }
     session->flush();

@@ -38,6 +38,18 @@ void PropertiesPanel::sessionSetTrackValue(const QString& track, double value)
     if (cameraScale)
         stored = std::clamp(std::abs(value), 0.05, 1.0);
 
+    if (m_autoKey)
+    {
+        const int relative = m_session->playhead() - entity->start;
+        if (relative < 0 || relative >= entity->duration())
+        {
+            reportSessionError(
+                QStringLiteral("播放头不在片段范围内，无法写入关键帧；"
+                               "把播放头移进片段或关闭自动关键帧"));
+            return;
+        }
+    }
+
     runSessionEdit(QStringLiteral("pvf: edit %1").arg(track),
                    [this, track, stored, cameraScale](model::Entity& e) {
                        if (cameraScale)

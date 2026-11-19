@@ -3,6 +3,7 @@
 #include "ui/TimelinePanelInternal.h"
 
 #include "app/EditorSession.h"
+#include "app/EditActionsSupport.h"
 #include "app/TimelineAdapter.h"
 #include "model/Project.h"
 #include "model/Uuid.h"
@@ -14,6 +15,7 @@
 #include <QPushButton>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace pvf {
@@ -100,7 +102,9 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
     if (m_dragMode == DragMode::MoveClip)
     {
         int delta = frameFromX(int(std::lround(pos.x()))) - m_dragStartFrame;
-        const int lower = actions->minMoveDelta({uuid});
+        const QVector<Uuid> clampRoots =
+            m_dragRoots.size() > 1 ? m_dragRoots : QVector<Uuid>{uuid};
+        const int lower = actions->minMoveDelta(clampRoots);
         delta = std::max(delta, lower);
         const int targetRow = dropRowForY(int(std::lround(pos.y())));
         if (delta == 0 && targetRow == m_dragStartRow)
@@ -112,7 +116,13 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
             syncPopups();
             return;
         }
-        if (!actions->planMoveToRow(uuid, delta, targetRow, &plan, &error))
+        // A multi-selection moves as one block in time; the pointer row only
+        // pins a single dragged clip.  Shared rows may split once the whole
+        // block shifts, so validation decides instead of a silent swap.
+        const bool multi = m_dragRoots.size() > 1;
+        if (multi ? !actions->planMove(m_dragRoots, delta, {}, &plan, &error)
+                  : !actions->planMoveToRow(uuid, delta, targetRow, &plan,
+                                            &error))
         {
             // A rejected plan (parent bounds, lock) restores the base preview;
             // the release handler reports the error once.
@@ -266,6 +276,146 @@ int TimelinePanel::promptReparentMode(const Uuid& target)
     return 0;
 }
 
+void TimelinePanel::requestDeleteSelection()
+{
+    if (!m_selectedKeyframes.isEmpty())
+        deleteSelectedKeyframes();
+    else if (m_selected != kInvalidEntity)
+        deleteSelectedEntities();
+}
+
+QVector<Uuid> TimelinePanel::selectedUuids() const
+{
+    QVector<Uuid> uuids;
+    for (const Entity& entity : activeEntities())
+    {
+        if (entity.id != m_selected && !m_entitySelection.contains(entity.id))
+            continue;
+        const Uuid uuid = uuidForEntityId(entity.id);
+        if (!uuid.isEmpty() && !uuids.contains(uuid))
+            uuids.append(uuid);
+    }
+    return uuids;
+}
+
+void TimelinePanel::copySelectedClips()
+{
+    if (!sessionMode() || !m_session)
+        return;
+    const QVector<Uuid> roots = selectedUuids();
+    if (roots.isEmpty())
+        return;
+    const model::Project& project = m_session->project();
+    QVector<model::Entity> clipboard;
+    QSet<Uuid> seen;
+    for (const Uuid& root : roots)
+    {
+        for (const Uuid& uuid : edit_detail::subtree(project, root))
+        {
+            if (seen.contains(uuid))
+                continue;
+            seen.insert(uuid);
+            clipboard.append(project.entities.value(uuid));
+        }
+    }
+    m_clipClipboard = clipboard;
+    emit editCommitted(roots.size() > 1
+                           ? QStringLiteral("已复制 %1 个片段").arg(roots.size())
+                           : QStringLiteral("已复制片段"));
+}
+
+void TimelinePanel::pasteClips()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    if (m_clipClipboard.isEmpty())
+        return;
+    const Uuid parent = m_owner >= 0 ? uuidForEntityId(m_owner) : Uuid();
+    int minStart = INT_MAX;
+    QSet<Uuid> ids;
+    for (const model::Entity& entity : m_clipClipboard)
+        ids.insert(entity.uuid);
+    for (const model::Entity& entity : m_clipClipboard)
+        if (entity.parentUuid.isEmpty() || !ids.contains(entity.parentUuid))
+            minStart = std::min(minStart, entity.start);
+    const int delta = m_frame - (minStart == INT_MAX ? m_frame : minStart);
+    QString error;
+    const QVector<Uuid> created =
+        m_session->editActions()->pasteEntities(m_clipClipboard, parent, delta,
+                                                &error);
+    if (created.isEmpty())
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    m_entitySelection.clear();
+    for (const Uuid& uuid : created)
+    {
+        const EntityId id = entityIdForUuid(uuid);
+        if (id != kInvalidEntity)
+            m_entitySelection.insert(id);
+    }
+    if (!created.isEmpty())
+        m_selected = entityIdForUuid(created.last());
+    emit entitySelected(m_selected);
+    emit editCommitted(QStringLiteral("粘贴片段"));
+    refreshFromSession();
+}
+
+void TimelinePanel::duplicateSelectedClips()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const QVector<Uuid> roots = selectedUuids();
+    if (roots.isEmpty())
+        return;
+    const Uuid parent = m_session->project().entities.value(roots.first()).parentUuid;
+    QString error;
+    const QVector<Uuid> created = m_session->editActions()->duplicateEntities(
+        roots, 0, parent, &error);
+    if (created.isEmpty())
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    m_entitySelection.clear();
+    for (const Uuid& uuid : created)
+    {
+        const EntityId id = entityIdForUuid(uuid);
+        if (id != kInvalidEntity)
+            m_entitySelection.insert(id);
+    }
+    m_selected = created.isEmpty() ? kInvalidEntity
+                                   : entityIdForUuid(created.last());
+    emit entitySelected(m_selected);
+    emit editCommitted(QStringLiteral("复制片段"));
+    refreshFromSession();
+}
+
+void TimelinePanel::groupSelectedClips()
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return;
+    const QVector<Uuid> roots = selectedUuids();
+    if (roots.size() < 2)
+        return;
+    QString error;
+    Uuid folder;
+    if (!m_session->editActions()->groupIntoFolder(roots, &folder, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return;
+    }
+    m_entitySelection.clear();
+    m_selected = entityIdForUuid(folder);
+    emit entitySelected(m_selected);
+    emit editCommitted(QStringLiteral("成组为文件夹"));
+    refreshFromSession();
+}
+
 void TimelinePanel::deleteSelectedEntities()
 {
     if (!m_session || !m_session->editActions())
@@ -303,6 +453,7 @@ void TimelinePanel::finishSessionDrag()
         m_autoScroll->stop();
     const DragMode mode = m_dragMode;
     const EntityId draggedId = m_dragEntity;
+    const QVector<Uuid> dragRoots = m_dragRoots;
     const QPointF releasePos = m_lastDragPos;
     // Resolve the drop row before clearing the drag mode: the clamp uses the
     // rows captured when the gesture started.
@@ -312,6 +463,7 @@ void TimelinePanel::finishSessionDrag()
     m_dragging = false;
     m_dragMode = DragMode::None;
     m_dragEntity = kInvalidEntity;
+    m_dragRoots.clear();
     m_dragKeyTrack.clear();
 
     if (!m_session || !m_session->editActions() || !m_adapter)
@@ -332,7 +484,9 @@ void TimelinePanel::finishSessionDrag()
     if (mode == DragMode::MoveClip)
     {
         int delta = frameFromX(int(std::lround(releasePos.x()))) - m_dragStartFrame;
-        delta = std::max(delta, actions->minMoveDelta({uuid}));
+        const QVector<Uuid> clampRoots =
+            dragRoots.size() > 1 ? dragRoots : QVector<Uuid>{uuid};
+        delta = std::max(delta, actions->minMoveDelta(clampRoots));
         const EntityId targetId = sessionBaseEntityAtRow(releaseRow);
         const Entity* target = findEntity(baseEntities, targetId);
         const Uuid targetUuid = uuidForEntityId(targetId);
@@ -343,7 +497,9 @@ void TimelinePanel::finishSessionDrag()
             && (target->data.value(QStringLiteral("contentKind")).toString()
                     == QStringLiteral("empty")
                 || !childIds(baseEntities, targetId).isEmpty());
-        if (targetHit && targetCanParent && releaseRow != m_dragStartRow
+        const bool multi = dragRoots.size() > 1;
+        if (!multi && targetHit && targetCanParent
+            && releaseRow != m_dragStartRow
             && isReparentCandidate(uuid, targetUuid))
         {
             m_moved = false;
@@ -363,13 +519,18 @@ void TimelinePanel::finishSessionDrag()
             return;
         }
 
-        // Blank rows are first-class targets: the model row is written even
-        // when no clip sits there.  Dropping on a clip swaps the two slots.
-        if (releaseRow != m_dragStartRow || delta != 0)
+        // Blank rows are first-class targets for a single clip.  A multi
+        // selection moves as one time block and keeps every row.
+        if (multi ? delta != 0
+                  : (releaseRow != m_dragStartRow || delta != 0))
         {
             EditPlan plan;
             QString error;
-            if (actions->planMoveToRow(uuid, delta, releaseRow, &plan, &error))
+            const bool planned =
+                multi ? actions->planMove(dragRoots, delta, {}, &plan, &error)
+                      : actions->planMoveToRow(uuid, delta, releaseRow, &plan,
+                                               &error);
+            if (planned)
             {
                 m_sessionPlan = plan;
                 m_sessionPlanValid = true;
@@ -384,11 +545,28 @@ void TimelinePanel::finishSessionDrag()
 
     if (m_sessionPlanValid && m_moved)
     {
+        const int keyDelta = m_sessionPlan.frameDelta;
         QString error;
         if (!actions->apply(m_sessionPlan, &error))
+        {
             emit editFailed(error);
+        }
         else
+        {
+            if (mode == DragMode::MoveKeyframe && keyDelta != 0)
+            {
+                QVector<KeyframeSelection> moved;
+                for (KeyframeSelection selection : m_selectedKeyframes)
+                {
+                    selection.frame += keyDelta;
+                    if (!moved.contains(selection))
+                        moved.append(selection);
+                }
+                m_selectedKeyframes = moved;
+                emit keyframeSelectionChanged(m_selectedKeyframes);
+            }
             emit editCommitted(m_sessionPlan.message);
+        }
     }
 
     m_sessionPlanValid = false;

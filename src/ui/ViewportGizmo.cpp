@@ -9,6 +9,7 @@
 #include "core/TextStyle.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
+#include "next/core/EntityLock.h"
 #include "render2/Render.h"
 
 #include <algorithm>
@@ -285,7 +286,8 @@ std::optional<gizmo::Handle> Viewport::hitSessionGizmo(const QPointF& pos) const
         return std::nullopt;
     const Uuid selected = m_session->document()->selection();
     const auto it = m_session->project().entities.constFind(selected);
-    if (it == m_session->project().entities.constEnd() || it->locked
+    if (it == m_session->project().entities.constEnd()
+        || next::isEntityLocked(m_session->project(), selected)
         || it->content.kind == ContentKind::Camera)
         return std::nullopt;
 
@@ -431,7 +433,7 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
         return;
     }
     model::Entity& entity = it.value();
-    if (entity.locked)
+    if (next::isEntityLocked(m_session->project(), m_sessionDragUuid))
         return;
 
     bool invertible = false;

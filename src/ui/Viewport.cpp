@@ -8,6 +8,7 @@
 #include "next/app/MediaServices.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
+#include "next/core/EntityLock.h"
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -236,7 +237,8 @@ void Viewport::mousePressEvent(QMouseEvent* event)
         if (m_session->document())
             m_session->document()->setSelection(hit->uuid);
         emit uuidSelected(hit->uuid);
-        if (m_editingEnabled && !hit->locked)
+        if (m_editingEnabled && !next::isEntityLocked(m_session->project(),
+                                                  hit->uuid))
             startSessionGizmoDrag(hit->uuid, SessionDragKind::Move,
                                   gizmo::Handle::MoveX, event->position());
     }

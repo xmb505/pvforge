@@ -23,6 +23,9 @@ struct EditPlan
     QVector<Uuid> upserts;
     QVector<Uuid> deletes;
     QString message;
+    // Effective frame delta for keyframe plans after boundary clamping.  The
+    // timeline uses it to remap the selected diamonds after a drag.
+    int frameDelta = 0;
     // True when the plan rewrites project.json (markers) instead of entity
     // files.  Marker gestures and entity gestures never mix in one plan.
     bool projectChanged = false;
@@ -173,6 +176,20 @@ public:
     // the new duration); children that would fall outside are rejected.
     bool replaceAsset(const Uuid& uuid, const AssetHash& hash,
                       QString* error = nullptr);
+
+    // Batch clip helpers used by the timeline multi-selection.  Each one
+    // commits exactly one plan.  duplicateEntities clones the selected
+    // subtrees under newParent (empty = keep the original parent);
+    // pasteEntities clones a clipboard captured by the panel; groupIntoFolder
+    // creates one empty folder around two or more siblings.
+    QVector<Uuid> duplicateEntities(const QVector<Uuid>& roots, int deltaFrames,
+                                    const Uuid& newParent,
+                                    QString* error = nullptr);
+    QVector<Uuid> pasteEntities(const QVector<model::Entity>& clipboard,
+                                const Uuid& parent, int deltaFrames,
+                                QString* error = nullptr);
+    bool groupIntoFolder(const QVector<Uuid>& roots, Uuid* folder,
+                         QString* error = nullptr);
 
     // Writes a plan into the document and commits upserts/deletes once.
     // On failure the in-memory project is restored and no undo step exists.

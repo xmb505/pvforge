@@ -130,6 +130,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
                 m_selectedTrack = frameTracks.first();
 
             m_dragMode = DragMode::MoveKeyframe;
+            m_dragRoots.clear();
             m_dragKeyTrack = track;
             m_keyDragStart = keyFrame;
             m_dragStartFrame = keyFrame;
@@ -149,6 +150,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         if (nearLeft || nearRight)
         {
             selectEntity(id, true);
+            m_dragRoots.clear();
             m_dragMode = nearLeft ? DragMode::TrimStart : DragMode::TrimEnd;
             beginSessionDrag();
             update();
@@ -184,6 +186,9 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
             }
             if (!m_entitySelection.contains(id))
                 selectEntity(id, true);
+            m_dragRoots.clear();
+            if (m_entitySelection.size() > 1)
+                m_dragRoots = selectedUuids();
             m_selectedKeyframes.clear();
             emit keyframeSelectionChanged(m_selectedKeyframes);
             m_dragMode = DragMode::MoveClip;
@@ -335,6 +340,43 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
     if (m_dragMode == DragMode::BoxSelect)
     {
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
+        const bool additive = event->modifiers() & Qt::ShiftModifier;
+
+        // Clip mode: the rubber band selects whole clips.  Keyframe mode keeps
+        // the historical diamond selection.
+        if (m_editMode == EditMode::Clips)
+        {
+            QSet<EntityId> selected =
+                additive ? m_entitySelection : QSet<EntityId>();
+            EntityId active = additive ? m_selected : kInvalidEntity;
+            for (const Entity& entity : activeEntities())
+            {
+                const bool dangling =
+                    entity.parent != kInvalidEntity
+                    && entityById(entity.parent) == nullptr;
+                if (entity.parent != m_owner
+                    && !(m_owner == kInvalidEntity && dangling))
+                    continue;
+                if (!isValidRow(rowOfEntity(entity)))
+                    continue;
+                const QRect clip = clipRect(entity);
+                if (clip.isEmpty() || !clip.intersects(box.toRect()))
+                    continue;
+                selected.insert(entity.id);
+                active = entity.id;
+            }
+            m_entitySelection = selected;
+            m_selected = selected.contains(active) ? active
+                        : selected.isEmpty() ? kInvalidEntity
+                                             : *selected.constBegin();
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+            emit entitySelected(m_selected);
+            m_dragMode = DragMode::None;
+            update();
+            return;
+        }
+
         const QVector<EntityId> rows = rowIds();
         // The old timeline's rubber band always picked keyframes, in every
         // edit mode.  Keep that muscle memory instead of making clip mode
@@ -345,7 +387,6 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         const int lastRow = topRow >= 0 ? topRow : int(rows.size()) - 1;
         const int firstFrame = std::max(0, frameFromX(int(box.left())));
         const int lastFrame = std::max(0, frameFromX(int(box.right())));
-        const bool additive = event->modifiers() & Qt::ShiftModifier;
         if (!additive)
             m_selectedKeyframes.clear();
         for (int row = std::max(0, firstRow);

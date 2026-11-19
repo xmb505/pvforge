@@ -57,6 +57,18 @@ bool validateForWrite(const model::Project& project,
             setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
             return false;
         }
+        // A locked ancestor owns the whole subtree: the stage and MCP must not
+        // bypass it just because the entity's own locked flag is false.  The
+        // entity's own flag is intentionally ignored so it can be unlocked.
+        if (hasLockedAncestor(project, uuid))
+        {
+            setError(error,
+                     QStringLiteral("实体 %1 的祖先已锁定，不能修改")
+                         .arg(project.entities.value(uuid).name.isEmpty()
+                                  ? uuid
+                                  : project.entities.value(uuid).name));
+            return false;
+        }
     }
 
     if (deletes.isEmpty())

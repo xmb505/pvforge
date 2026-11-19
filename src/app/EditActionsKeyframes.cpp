@@ -132,6 +132,7 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
     };
     QVector<Move> moves;
     QSet<Uuid> entities;
+    QSet<QString> seenMoves;
 
     for (const KeyRef& ref : keys)
     {
@@ -161,6 +162,12 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
             {
                 if (key.frame != ref.frame)
                     continue;
+                const QString moveKey =
+                    ref.entity + QLatin1Char('\n') + trackName
+                    + QLatin1Char('\n') + QString::number(key.frame);
+                if (seenMoves.contains(moveKey))
+                    continue;
+                seenMoves.insert(moveKey);
                 found = true;
                 moves.append(Move{ref.entity, trackName, key.frame, key});
             }
@@ -205,6 +212,7 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
         plan->upserts.clear();
         plan->deletes.clear();
         plan->projectChanged = false;
+        plan->frameDelta = 0;
         plan->message = QStringLiteral("移动关键帧");
         return true;
     }
@@ -286,6 +294,7 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
     plan->upserts = QVector<Uuid>(entities.begin(), entities.end());
     plan->deletes.clear();
     plan->projectChanged = false;
+    plan->frameDelta = delta;
     plan->message = QStringLiteral("移动关键帧");
     return true;
 }

@@ -82,6 +82,9 @@ public:
 
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
+    // Window-level Delete: keyframes first, then clips.  MainWindow forwards
+    // the key when no text editor has focus.
+    void requestDeleteSelection();
     void setEditMode(EditMode mode);
     EditMode editMode() const { return m_editMode; }
 
@@ -232,6 +235,18 @@ public:
     {
         return dropAsset(mime, frame, row);
     }
+    int audioPeakCountForTest(EntityId id) const
+    {
+        const Entity* entity = entityById(id);
+        return entity && entity->audio ? int(entity->audio->peaks.size()) : 0;
+    }
+    double clipTrimStartForTest(EntityId id) const
+    {
+        const Entity* entity = entityById(id);
+        return entity ? entity->data.value(QStringLiteral("trimStart"), 0.0)
+                            .toDouble()
+                      : 0.0;
+    }
 #endif
     // Popup keyframe selections are adopted by the main panel so the existing
     // Delete / easing actions see them.
@@ -319,6 +334,11 @@ private:
     QRect sessionBaseClipRect(const Entity& entity) const;
     int promptReparentMode(const Uuid& target);
     void deleteSelectedEntities();
+    void copySelectedClips();
+    void pasteClips();
+    void duplicateSelectedClips();
+    void groupSelectedClips();
+    QVector<Uuid> selectedUuids() const;
 
     // Session-backed keyframe editing.  Frames passed in are absolute project
     // frames; the model stores entity-relative ones.
@@ -466,12 +486,14 @@ private:
     QString m_dragKeyTrack;
     QVector<TrackKey> m_keyClipboard;
     Uuid m_keyClipboardEntity;
+    QVector<model::Entity> m_clipClipboard;
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;
     int m_markerDragFrame = 0;
 
     DragMode m_dragMode = DragMode::None;
     EntityId m_dragEntity = kInvalidEntity;
+    QVector<Uuid> m_dragRoots;
     int m_dragRow = -1;
     int m_dragStartFrame = 0;
     int m_dragStartRow = -1;
