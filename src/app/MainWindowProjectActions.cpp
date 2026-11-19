@@ -37,6 +37,12 @@ namespace pvf {
 #ifdef PVFORGE_TEST_HOOKS
 bool MainWindow::openSessionProjectForTest(const QString& path, QString* error)
 {
+    if (m_session && m_session->toolCallInProgress())
+    {
+        if (error)
+            *error = QStringLiteral("AI 工具正在执行，暂不能切换工程");
+        return false;
+    }
     const bool useGit = m_session ? m_session->appSettings().gitEnabled
                                   : next::SettingsStore().load().gitEnabled;
     if (m_session)
@@ -184,6 +190,12 @@ void MainWindow::openSessionProject()
             QStringLiteral("导出正在进行中，暂时不能切换工程。"), 5000);
         return;
     }
+    if (m_session && m_session->toolCallInProgress())
+    {
+        statusBar()->showMessage(
+            QStringLiteral("AI 工具正在执行，请等待本次调用结束再切换工程。"), 5000);
+        return;
+    }
 
     const QString path = QFileDialog::getExistingDirectory(
         this, QStringLiteral("打开项目（选择 .pvproj 工程目录）"), QString(),
@@ -224,6 +236,12 @@ void MainWindow::createSessionProject()
     {
         statusBar()->showMessage(
             QStringLiteral("导出正在进行中，暂时不能切换工程。"), 5000);
+        return;
+    }
+    if (m_session && m_session->toolCallInProgress())
+    {
+        statusBar()->showMessage(
+            QStringLiteral("AI 工具正在执行，请等待本次调用结束再切换工程。"), 5000);
         return;
     }
 

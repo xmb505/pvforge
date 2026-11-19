@@ -929,6 +929,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
         return;
     }
 
+    if (m_session && m_session->toolCallInProgress())
+    {
+        // handleRpc() is still on the stack and will dereference the server
+        // and Service after execute() returns. Destroying the session here
+        // (even through a queued close) is a use-after-free.
+        statusBar()->showMessage(
+            QStringLiteral("AI 工具正在执行，请等待本次调用结束再关闭。"), 5000);
+        event->ignore();
+        return;
+    }
+
     if (m_session)
     {
         // Edits are already on disk; flush only the debounced git commit and

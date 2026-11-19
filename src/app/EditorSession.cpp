@@ -9,7 +9,6 @@
 #include "next/app/WorkbenchServices.h"
 #include "render2/Render.h"
 
-#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
@@ -135,6 +134,7 @@ void EditorSession::setMcpPortOverrideForTest(quint16 port)
 void EditorSession::startMcpServer()
 {
     stopMcpServer();
+    m_restartMcpPending = false;
     if (!m_document || !m_document->store())
         return;
 
@@ -161,12 +161,12 @@ void EditorSession::startMcpServer()
     m_mcpService->setHtmlFrameProvider([this](const Uuid& uuid, double frame) {
         return m_media ? m_media->htmlFrameBlocking(uuid, frame) : QImage();
     });
-    // Long batch tools run on the UI thread.  Pumping events at each batch
-    // checkpoint keeps the emergency-stop button and the AI lock indicator
-    // responsive while a transaction is in flight.
-    m_mcpService->setBatchCheckpoint([] {
-        QCoreApplication::processEvents();
-    });
+    // Long batch tools run synchronously on the UI thread.  Pumping Qt events
+    // at a checkpoint re-enters closeEvent / project switching and can destroy
+    // this Service while execute() is still on the stack (issue #125).  The
+    // stop flag is still read between batch items, so an emergency stop that
+    // arrives before the tool starts takes effect; the UI stays frozen for the
+    // remainder of one tool call instead of risking a use-after-free.
 
     auto server = std::make_unique<mcp2::HttpServer>(m_mcpService.get());
 #ifdef PVFORGE_TEST_HOOKS
@@ -188,21 +188,76 @@ void EditorSession::startMcpServer()
     m_mcpError = port == 0
                      ? (error.isEmpty() ? QStringLiteral("未知错误") : error)
                      : QString();
+
+    m_toolCallsInFlight = std::make_shared<std::atomic<int>>(0);
+    const std::shared_ptr<std::atomic<int>> counter = m_toolCallsInFlight;
+    QObject::connect(server.get(), &mcp2::HttpServer::toolCallStarted,
+                     server.get(),
+                     [counter](const QString&, const QString&, bool) {
+                         counter->fetch_add(1, std::memory_order_relaxed);
+                     });
+    QObject::connect(
+        server.get(), &mcp2::HttpServer::toolCallFinished, server.get(),
+        [this, counter](const QString&, const QString&, qint64, bool) {
+            counter->fetch_sub(1, std::memory_order_relaxed);
+            if (counter->load(std::memory_order_relaxed) <= 0
+                && m_restartMcpPending)
+            {
+                m_restartMcpPending = false;
+                // Never restart from inside handleRpc(): the response for the
+                // current call has not been sent yet. The document is the
+                // context object, so a destroyed session cancels this.
+                QTimer::singleShot(0, m_document.get(), [this] {
+                    if (!toolCallInProgress() && m_restartMcpPending)
+                    {
+                        m_restartMcpPending = false;
+                        startMcpServer();
+                    }
+                });
+            }
+        });
     m_mcpServer = std::move(server);
+}
+
+bool EditorSession::toolCallInProgress() const
+{
+    return m_toolCallsInFlight
+           && m_toolCallsInFlight->load(std::memory_order_relaxed) > 0;
 }
 
 void EditorSession::stopMcpServer()
 {
     if (m_mcpServer)
-    {
         m_mcpServer->stop();
-        m_mcpServer.reset();
+
+    if (toolCallInProgress())
+    {
+        // execute() is still on this thread's stack: HttpServer::handleRpc
+        // continues to use `this` and the Service after execute() returns.
+        // Keep both alive until the current event-loop turn ends, then delete
+        // them. shared_ptr makes the ownership explicit without a raw delete.
+        std::shared_ptr<mcp2::HttpServer> server(m_mcpServer.release());
+        std::shared_ptr<mcp2::Service> service(m_mcpService.release());
+        QTimer::singleShot(0, [server, service] {
+            Q_UNUSED(server);
+            Q_UNUSED(service);
+        });
+        return;
     }
+
+    m_mcpServer.reset();
     m_mcpService.reset();
 }
 
 void EditorSession::restartMcpServer()
 {
+    if (toolCallInProgress())
+    {
+        // The settings change / restart request arrived while handleRpc() is
+        // on the stack. Perform it after the current call finishes.
+        m_restartMcpPending = true;
+        return;
+    }
     startMcpServer();
 }
 

@@ -223,8 +223,8 @@ void sendHttpError(QTcpSocket* socket, int status, const QString& code,
     sendHttp(socket, status, body, QByteArrayLiteral("application/json"), extra);
 }
 
-// Sets a bool for the lifetime of the guard.  Used to make tools/call
-// non-reentrant across the batch checkpoint's processEvents().
+// Sets a bool for the lifetime of the guard. Used to make tools/call
+// non-reentrant when a human confirmation dialog spins its own event loop.
 class BusyFlag
 {
 public:
@@ -1190,9 +1190,11 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             emit toolCallStarted(name, argsJson, write);
 
             QJsonObject serviceResult;
-            if (m_service)
+            // Re-check after execute(): a re-entrant close/switch may have
+            // dropped the Service, and `this` must not use it afterwards.
+            if (QPointer<Service> service = m_service; !service.isNull())
             {
-                serviceResult = m_service->execute(name, args);
+                serviceResult = service->execute(name, args);
             }
             else
             {

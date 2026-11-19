@@ -116,8 +116,10 @@ const ToolEntry kTools[] = {
 
 } // namespace
 
-Service::Service(store::ProjectStore* store, assets::AssetStore* assets)
-    : m_store(store)
+Service::Service(store::ProjectStore* store, assets::AssetStore* assets,
+                 QObject* parent)
+    : QObject(parent)
+    , m_store(store)
     , m_assets(assets)
 {
 }

@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QObject>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 
@@ -104,7 +105,9 @@ private:
 
     static QByteArray generateToken();
 
-    Service* m_service = nullptr;
+    // QPointer: a session may delete the Service after stopMcpServer(); a
+    // late request must see "工程未打开" instead of dereferencing freed memory.
+    QPointer<Service> m_service;
     QByteArray m_token;
     QByteArray m_sessionId;
     QString m_endpointFilePath;

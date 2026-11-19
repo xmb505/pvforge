@@ -4,6 +4,7 @@
 
 #include <QImage>
 #include <QJsonObject>
+#include <QObject>
 #include <QRect>
 #include <QString>
 
@@ -52,10 +53,13 @@ using ViewStateProvider = std::function<ViewState()>;
 // Every successful write tool is one logical operation and produces exactly one
 // git commit through store::ProjectStore::commit(). Batch tools validate the
 // whole payload before touching the store, so a failure leaves no partial data.
-class Service
+class Service : public QObject
 {
+    Q_OBJECT
+
 public:
-    Service(store::ProjectStore* store, assets::AssetStore* assets);
+    explicit Service(store::ProjectStore* store, assets::AssetStore* assets,
+                     QObject* parent = nullptr);
 
     // Installs the callback that supplies live UI state. An empty provider
     // yields ViewState defaults.

@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -132,7 +133,13 @@ public:
     void restartMcpServer();
     // Stops the listener without destroying the session; used when switching
     // projects so the next session can bind the same configured port.
+    // While a tool call is on the stack the objects are kept alive and deleted
+    // on the next event-loop turn: the caller (HttpServer::handleRpc) still
+    // owns `this` and the Service pointer until it returns.
     void stopMcpServer();
+    // True while an MCP tools/call is executing on this session's thread.
+    // close/open/restart must not destroy the Service or HttpServer then.
+    bool toolCallInProgress() const;
 
 #ifdef PVFORGE_TEST_HOOKS
     // Test hooks: a temporary config file (usually with port 0) and a port
@@ -208,6 +215,10 @@ private:
     std::unique_ptr<EditActions> m_editActions;
     std::unique_ptr<mcp2::Service> m_mcpService;
     std::unique_ptr<mcp2::HttpServer> m_mcpServer;
+    // Shared with the server's signals: a deferred deletion may outlive this
+    // session object while the current tool call finishes.
+    std::shared_ptr<std::atomic<int>> m_toolCallsInFlight;
+    bool m_restartMcpPending = false;
     QString m_mcpError;
     std::function<void(mcp2::ViewState&)> m_viewStateExtras;
     bool m_humanEditingEnabled = true;
