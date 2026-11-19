@@ -312,6 +312,12 @@ bool mixAudioEntity(const model::Project& project,
     const int64_t destinationStart =
         std::max<int64_t>(0, llround((overlapStart - exportStart)
                                      * samplesPerFrame));
+    // The clip ends at entity.end: samples past the overlap must never reach
+    // the mix even when the decoded source is longer (issue #128).
+    const int64_t destinationEnd = std::min<int64_t>(
+        mixFrames,
+        std::max<int64_t>(0, llround(double(overlapEnd - exportStart)
+                                     * samplesPerFrame)));
     const int64_t sourceFrame = content.sourceIn + (overlapStart - entity.start);
     const int64_t sourceStart =
         std::max<int64_t>(0, llround(sourceFrame * samplesPerFrame));
@@ -321,8 +327,8 @@ bool mixAudioEntity(const model::Project& project,
     auto mixConverted = [&](const float* data, int count) {
         const int64_t firstOutput =
             destinationStart + decodedSamples - sourceStart;
-        const int64_t firstFrameSample =
-            std::clamp<int64_t>(firstOutput, 0, std::max<int64_t>(0, mixFrames - 1));
+        const int64_t firstFrameSample = std::clamp<int64_t>(
+            firstOutput, 0, std::max<int64_t>(0, destinationEnd - 1));
         const int gainFrame =
             exportStart + int(firstFrameSample * fps / kAudioSampleRate);
         // Gain keeps its existing per-decoded-block sampling; visibility is
@@ -336,7 +342,7 @@ bool mixAudioEntity(const model::Project& project,
         {
             const int64_t output =
                 destinationStart + decodedSamples + i - sourceStart;
-            if (output < 0 || output >= mixFrames)
+            if (output < 0 || output >= destinationEnd)
                 continue;
             const int projectFrame =
                 exportStart + int(output * fps / kAudioSampleRate);
@@ -354,7 +360,8 @@ bool mixAudioEntity(const model::Project& project,
 
         decodedSamples += count;
         if (decodedSamples >= sourceStart
-            && destinationStart + (decodedSamples - sourceStart) >= mixFrames)
+            && destinationStart + (decodedSamples - sourceStart)
+                   >= destinationEnd)
             enough = true;
     };
 

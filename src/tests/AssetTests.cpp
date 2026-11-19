@@ -569,16 +569,54 @@ int assetDragTest(QApplication& app)
     const QString audioHash =
         video->video.metadata.value(QStringLiteral("audioHash")).toString();
     bool paired = false;
+    bool followsParent = false;
+    pvf::Uuid pairedAudioUuid;
     for (const pvf::model::Entity& entity : live->project().entities)
         if (entity.content.kind == pvf::ContentKind::Asset
             && entity.content.asset.type == pvf::AssetType::Audio
             && entity.content.asset.hash == audioHash
             && entity.start == 60 && entity.end == 120)
+        {
             paired = true;
+            pairedAudioUuid = entity.uuid;
+            followsParent = entity.parentUuid == videoUuid
+                            && entity.followParentRange;
+        }
     check(paired, QStringLiteral("paired WAV audio entity missing"));
+    // Issue #128: the split-out track is a child of the picture and follows its
+    // range by default, so moving/trimming/deleting the video keeps sync.
+    check(followsParent,
+          QStringLiteral("split audio is not a following child of the video"));
     flush();
     check(depth() == videoDepth + 1,
           QStringLiteral("video + audio drop was not one commit"));
+
+    // Moving the picture carries the audio along.
+    error.clear();
+    check(live->editActions()->moveClips({videoUuid}, 5, &error),
+          QStringLiteral("moving video + audio failed: %1").arg(error));
+    const pvf::model::Entity movedVideo =
+        live->project().entities.value(videoUuid);
+    const pvf::model::Entity movedAudio =
+        live->project().entities.value(pairedAudioUuid);
+    check(movedVideo.start == 65 && movedVideo.end == 125,
+          QStringLiteral("video move range wrong"));
+    check(movedAudio.start == 65 && movedAudio.end == 125,
+          QStringLiteral("audio did not follow the moved video: %1..%2")
+              .arg(movedAudio.start)
+              .arg(movedAudio.end));
+
+    // Trimming the picture trims the following audio too.
+    error.clear();
+    check(live->editActions()->trimClip(videoUuid, 65, 105, &error),
+          QStringLiteral("trimming video + audio failed: %1").arg(error));
+    const pvf::model::Entity trimmedAudio =
+        live->project().entities.value(pairedAudioUuid);
+    check(trimmedAudio.start == 65 && trimmedAudio.end == 105,
+          QStringLiteral("audio did not follow the trimmed video: %1..%2")
+              .arg(trimmedAudio.start)
+              .arg(trimmedAudio.end));
+    flush();
 
     const int audioDepth = depth();
     const pvf::EntityId audioId =

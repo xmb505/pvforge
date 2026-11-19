@@ -562,8 +562,55 @@ void MainWindow::replaceSessionAssetFromDialog(const QString& uuid)
     if (hash.isEmpty())
         return;
 
+    // A video's split-out audio track is a following child (issue #128).
+    // Replacing the picture should not leave the old sound behind, but the user
+    // decides: the new video's audio replaces it, or the old track stays.
+    bool syncChildAudio = true;
+    const auto stored = m_session->assets().get(hash);
+    if (stored && stored->type == AssetType::Video)
+    {
+        const model::Project& project = m_session->project();
+        const QString newAudio =
+            stored->metadata.value(QStringLiteral("audioHash")).toString();
+        bool hasAudioChild = false;
+        bool alreadyMatches = false;
+        for (auto child = project.entities.constBegin();
+             child != project.entities.constEnd(); ++child)
+        {
+            if (child.value().parentUuid != uuid)
+                continue;
+            if (child.value().content.kind != ContentKind::Asset
+                || child.value().content.asset.type != AssetType::Audio)
+                continue;
+            hasAudioChild = true;
+            alreadyMatches = !newAudio.isEmpty()
+                             && child.value().content.asset.hash == newAudio;
+        }
+
+        if (hasAudioChild && !alreadyMatches)
+        {
+            QMessageBox box(
+                QMessageBox::Question, QStringLiteral("更换视频素材"),
+                newAudio.isEmpty()
+                    ? QStringLiteral("新视频没有音轨。要移除当前分离出的音频片段吗？")
+                    : QStringLiteral("要同时把分离出的音频片段换成新视频的音轨吗？"),
+                QMessageBox::NoButton, this);
+            QPushButton* sync = box.addButton(
+                newAudio.isEmpty() ? QStringLiteral("移除音频")
+                                   : QStringLiteral("替换音频"),
+                QMessageBox::AcceptRole);
+            QPushButton* keep = box.addButton(QStringLiteral("保留旧音频"),
+                                              QMessageBox::RejectRole);
+            box.setDefaultButton(sync);
+            box.setEscapeButton(keep);
+            box.exec();
+            syncChildAudio = box.clickedButton() == sync;
+        }
+    }
+
     QString error;
-    if (!m_session->editActions()->replaceAsset(uuid, hash, &error))
+    if (!m_session->editActions()->replaceAsset(uuid, hash, &error,
+                                                syncChildAudio))
     {
         QMessageBox::warning(this, QStringLiteral("更换素材失败"), error);
         return;
