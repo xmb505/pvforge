@@ -13,6 +13,24 @@ namespace pvf::html2 {
 namespace {
 
 constexpr int kMaxRequestBytes = 64 * 1024;
+constexpr int kMaxConnections = 16;
+constexpr qint64 kMaxFileBytes = 64LL * 1024LL * 1024LL;
+
+// Locks the document to its own bundle: no external connections, no forms, no
+// nested browsing contexts. Inline script/style and data/blob images are kept
+// because .pvhtml pages may be single-file bundles.
+const char kContentSecurityPolicy[] =
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data:; "
+    "media-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "form-action 'none'; "
+    "frame-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'none'";
 
 QByteArray reasonPhrase(int status)
 {
@@ -28,10 +46,14 @@ QByteArray reasonPhrase(int status)
         return QByteArrayLiteral("Not Found");
     case 405:
         return QByteArrayLiteral("Method Not Allowed");
+    case 413:
+        return QByteArrayLiteral("Content Too Large");
     case 414:
         return QByteArrayLiteral("URI Too Long");
     case 500:
         return QByteArrayLiteral("Internal Server Error");
+    case 503:
+        return QByteArrayLiteral("Service Unavailable");
     default:
         return QByteArrayLiteral("Error");
     }
@@ -47,6 +69,10 @@ void sendResponse(QTcpSocket* socket, int status, const QByteArray& contentType,
     header += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
     header += "Cache-Control: no-store\r\n";
     header += "X-Content-Type-Options: nosniff\r\n";
+    header += "X-Frame-Options: DENY\r\n";
+    header += "Content-Security-Policy: ";
+    header += kContentSecurityPolicy;
+    header += "\r\n";
     header += "Connection: close\r\n\r\n";
 
     socket->write(header);
@@ -135,6 +161,7 @@ bool LocalBundleServer::start(const QString& bundleDir, QString* error)
 void LocalBundleServer::stop()
 {
     m_buffers.clear();
+    m_connections.clear();
     if (m_server)
     {
         m_server->close();
@@ -149,7 +176,7 @@ QUrl LocalBundleServer::baseUrl() const
 {
     QUrl url;
     url.setScheme(QStringLiteral("http"));
-    url.setHost(QStringLiteral("127.0.0.1"));
+    url.setHost(QString::fromLatin1(kBundleHost));
     if (m_port != 0)
         url.setPort(m_port);
     url.setPath(QStringLiteral("/"));
@@ -163,10 +190,18 @@ void LocalBundleServer::onNewConnection()
     while (QTcpSocket* socket = m_server->nextPendingConnection())
     {
         socket->setParent(m_server);
+        if (m_connections.size() >= kMaxConnections)
+        {
+            sendError(socket, 503, QStringLiteral("too many connections"));
+            continue;
+        }
+        m_connections.insert(socket);
+        m_buffers.insert(socket, QByteArray());
         connect(socket, &QTcpSocket::readyRead, this,
                 [this, socket]() { onReadyRead(socket); });
         connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
             m_buffers.remove(socket);
+            m_connections.remove(socket);
             socket->deleteLater();
         });
     }
@@ -293,6 +328,12 @@ void LocalBundleServer::serveFile(QTcpSocket* socket, const QString& relativePat
         return;
     }
 
+    if (resolved.size() > kMaxFileBytes)
+    {
+        sendError(socket, 413, QStringLiteral("bundle file is too large"));
+        return;
+    }
+
     QFile file(canonical);
     if (!file.open(QIODevice::ReadOnly))
     {
@@ -300,7 +341,7 @@ void LocalBundleServer::serveFile(QTcpSocket* socket, const QString& relativePat
         return;
     }
 
-    const QByteArray body = file.readAll();
+    const QByteArray body = file.read(kMaxFileBytes);
     sendResponse(socket, 200, mimeTypeForPath(canonical), body, headOnly);
 }
 

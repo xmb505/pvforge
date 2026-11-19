@@ -19,6 +19,7 @@
 #include <QSemaphore>
 #include <QSize>
 #include <QString>
+#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -354,6 +355,7 @@ void serverServesAndRejects()
     CHECK(server.isRunning());
     CHECK(server.port() != 0);
     CHECK(server.rootDir() == QFileInfo(bundle).canonicalFilePath());
+    CHECK(server.baseUrl().host() == QString::fromLatin1(pvf::html2::kBundleHost));
     if (server.port() == 0)
         return;
 
@@ -362,6 +364,10 @@ void serverServesAndRejects()
     CHECK(index.status == 200);
     CHECK(headerStartsWith(index, "text/html"));
     CHECK(index.body.contains("hello"));
+    CHECK(index.headers.contains("Content-Security-Policy: default-src 'self'"));
+    CHECK(index.headers.contains("connect-src 'self'"));
+    CHECK(index.headers.contains("form-action 'none'"));
+    CHECK(index.headers.contains("frame-src 'none'"));
 
     const HttpResponse css = get(server.port(), "/style.css");
     CHECK(css.status == 200);
@@ -1550,6 +1556,56 @@ void chromeExecutableOverride()
     service.stop();
     CHECK(!service.isRunning());
 }
+void renderRejectsCrossOriginNavigation()
+{
+    requireChrome();
+    QTemporaryDir temporary;
+    const QString bundle = buildSimpleBundle(temporary.path());
+    CHECK(temporary.isValid() && !bundle.isEmpty());
+    QTcpServer secret;
+    CHECK(secret.listen(QHostAddress::LocalHost, 0));
+    bool secretServed = false;
+    QObject::connect(&secret, &QTcpServer::newConnection, [&] {
+        while (QTcpSocket* socket = secret.nextPendingConnection())
+        {
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket] {
+                secretServed = secretServed || socket->readAll().contains("GET ");
+                socket->write("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecret");
+                socket->disconnectFromHost();
+            });
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        }
+    });
+    QString error;
+    if (!temporary.isValid() || bundle.isEmpty() || secret.serverPort() == 0) return;
+    const QString page = QStringLiteral(
+        "<!doctype html><body style=\"margin:0;background:#0000ff\"><script>"
+        "window.addEventListener('pvforgeframe', function (e) {"
+        "if (e.detail.frame === 1) location.href='http://pvforge-bundle.invalid:%1/';"
+        "});</script></body>").arg(secret.serverPort());
+    CHECK(writeFile(bundle + QStringLiteral("/index.html"), page.toUtf8()));
+    pvf::html2::PvhtmlRenderer renderer;
+    CHECK_DETAIL(renderer.start(&error), error);
+    if (!renderer.isRunning())
+        return;
+    pvf::html2::FrameRequest request;
+    request.bundleDir = bundle;
+    request.size = QSize(64, 36);
+    request.timeoutMs = 4000;
+    error.clear();
+    const QImage blocked = renderer.renderFrame(request, &error);
+    CHECK_DETAIL(!blocked.isNull(), error);
+    if (!blocked.isNull())
+        CHECK(colorNear(blocked, 32, 18, QColor(0, 0, 255)));
+    request.localFrame = 1;
+    error.clear();
+    const QImage escaped = renderer.renderFrame(request, &error);
+    CHECK(escaped.isNull());
+    CHECK(!secretServed);
+    CHECK_DETAIL(error.contains(QStringLiteral("bundle URL"))
+                     || error.contains(QStringLiteral("navigated or closed")), error);
+    renderer.stop();
+}
 
 } // namespace
 
@@ -1573,7 +1629,8 @@ int main(int argc, char** argv)
                                "customCacheBudgets chromeExecutableOverride "
                                "finalFrameSizeLimits finalRendererRestart "
                                "finalRendererCrossThreadStop finalRendererRepeatedStartStop "
-                               "finalRendererStopWhileRendering\n";
+                               "finalRendererStopWhileRendering "
+                               "renderRejectsCrossOriginNavigation\n";
         return 2;
     }
 
@@ -1616,6 +1673,8 @@ int main(int argc, char** argv)
         finalRendererRepeatedStartStop();
     else if (name == QStringLiteral("finalRendererStopWhileRendering"))
         finalRendererStopWhileRendering();
+    else if (name == QStringLiteral("renderRejectsCrossOriginNavigation"))
+        renderRejectsCrossOriginNavigation();
     else
     {
         QTextStream(stderr) << "unknown test case: " << name << '\n';

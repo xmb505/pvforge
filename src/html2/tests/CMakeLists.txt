@@ -28,6 +28,7 @@ set(PVF_HTML2_TEST_CASES
     finalRendererCrossThreadStop
     finalRendererRepeatedStartStop
     finalRendererStopWhileRendering
+    renderRejectsCrossOriginNavigation
 )
 
 # Every case runs its own pvf_html2_tests process, and most of them launch a

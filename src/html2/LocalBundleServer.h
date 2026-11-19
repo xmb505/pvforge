@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 
@@ -9,6 +10,11 @@ class QTcpServer;
 class QTcpSocket;
 
 namespace pvf::html2 {
+
+// Dedicated hostname for the one origin a rendered HTML layer may use. Chrome
+// resolves it to 127.0.0.1 through --host-resolver-rules; literal loopback
+// names stay behind the dead proxy and are additionally blocked by CDP Fetch.
+inline constexpr char kBundleHost[] = "pvforge-bundle.invalid";
 
 // True when `path` is a non-empty relative path that cannot escape a bundle:
 // no absolute prefix, no ".." segment, no NUL and no backslash.
@@ -53,6 +59,7 @@ private:
 
     QTcpServer* m_server = nullptr;
     QHash<QTcpSocket*, QByteArray> m_buffers;
+    QSet<QTcpSocket*> m_connections;
     QString m_rootDir;   // canonical bundle root
     quint16 m_port = 0;
     QString m_lastError;
