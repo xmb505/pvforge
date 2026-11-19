@@ -25,7 +25,6 @@ struct CliOptions
 {
     QString endpointPath;
     QString url;
-    QString token;
     bool help = false;
     bool version = false;
     QString error;
@@ -41,7 +40,6 @@ QString helpText()
         "Options:\n"
         "  --endpoint-file <path>  endpoint JSON written by PVForge (alias: --endpoint)\n"
         "  --url <url>             MCP URL; loopback only (http://127.0.0.1:<port>/mcp)\n"
-        "  --token <token>         bearer token for --url\n"
         "  -h, --help              show this help\n"
         "  --version               show the bridge version\n"
         "\n"
@@ -99,13 +97,14 @@ CliOptions parseArguments(const QStringList& arguments)
         {
             options.url = argument.mid(int(std::strlen("--url=")));
         }
-        else if (argument == QLatin1String("--token"))
+        else if (argument == QLatin1String("--token")
+                 || argument.startsWith(QLatin1String("--token=")))
         {
-            options.token = valueFor(argument);
-        }
-        else if (argument.startsWith(QLatin1String("--token=")))
-        {
-            options.token = argument.mid(int(std::strlen("--token=")));
+            // A token on the command line is visible in /proc and shell
+            // history. Tokens come from the endpoint file or the environment.
+            options.error = QStringLiteral(
+                "--token is not supported; use the endpoint file or "
+                "PVFORGE_MCP_TOKEN");
         }
         else
         {
@@ -167,7 +166,7 @@ int main(int argc, char* argv[])
 
     pvf::McpEndpoint endpoint;
     QString resolveError;
-    if (!pvf::resolveMcpEndpoint(endpointPath, options.url, options.token.toUtf8(),
+    if (!pvf::resolveMcpEndpoint(endpointPath, options.url, QByteArray(),
                                  qEnvironmentVariable("PVFORGE_MCP_URL"),
                                  qgetenv("PVFORGE_MCP_TOKEN"), &endpoint,
                                  &resolveError))

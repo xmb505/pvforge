@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -132,13 +133,23 @@ public:
     void restartMcpServer();
     // Stops the listener without destroying the session; used when switching
     // projects so the next session can bind the same configured port.
+    // While a tool call is on the stack the objects are kept alive and deleted
+    // on the next event-loop turn: the caller (HttpServer::handleRpc) still
+    // owns `this` and the Service pointer until it returns.
     void stopMcpServer();
+    // True while an MCP tools/call is executing on this session's thread.
+    // close/open/restart must not destroy the Service or HttpServer then.
+    bool toolCallInProgress() const;
 
 #ifdef PVFORGE_TEST_HOOKS
     // Test hooks: a temporary config file (usually with port 0) and a port
     // override keep the test process off the user's real endpoint file.
     static void setMcpConfigPathForTest(const QString& path);
     static void setMcpPortOverrideForTest(quint16 port);
+    // Replaces the modal "allow external asset import?" dialog. An empty
+    // function restores the real dialog.
+    static void setExternalImportConfirmerForTest(
+        std::function<bool(const QString&)> confirmer);
 #endif
 
     // AI write lock.  While false every human write path (EditActions and
@@ -178,6 +189,8 @@ private:
     explicit EditorSession(std::unique_ptr<next::ProjectDocument> document);
 
     void startMcpServer();
+    // Blocks on the human confirmation dialog for an outside asset import.
+    bool confirmExternalImport(const QString& path);
     // Coalesces re-warm requests into one queued call; a request that arrives
     // while the precompute is queued or running is dropped.
     void scheduleSolverPrecompute();
@@ -208,6 +221,10 @@ private:
     std::unique_ptr<EditActions> m_editActions;
     std::unique_ptr<mcp2::Service> m_mcpService;
     std::unique_ptr<mcp2::HttpServer> m_mcpServer;
+    // Shared with the server's signals: a deferred deletion may outlive this
+    // session object while the current tool call finishes.
+    std::shared_ptr<std::atomic<int>> m_toolCallsInFlight;
+    bool m_restartMcpPending = false;
     QString m_mcpError;
     std::function<void(mcp2::ViewState&)> m_viewStateExtras;
     bool m_humanEditingEnabled = true;

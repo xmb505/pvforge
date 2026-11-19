@@ -133,6 +133,12 @@ public:
     bool markCommitFailure(const QString& message);
     void clearCommitFailure();
 
+    // Non-empty when a `.git` directory was found but refused: it was not
+    // created by PVForge, is a gitdir pointer, escapes the project, or carries
+    // hooks/filters/includes that could run project-controlled code. The
+    // project still opens with in-memory undo and Git disabled.
+    QString gitWarning() const { return m_gitWarning; }
+
     // True when a `git --version` probe succeeds; `version` receives its
     // trimmed output when provided.
     static bool gitBinaryAvailable(QString* version = nullptr);
@@ -230,6 +236,9 @@ private:
 
     bool ensureWritable(QString* error) const;
     bool reload(QString* error);
+    // Re-checks the repository before a mutating git command; a project can be
+    // tampered with while it is open.
+    bool ensureTrustedGit(QString* error) const;
     void refreshDirtyText();
     void clearDirty();
     void refreshDigests();
@@ -282,6 +291,7 @@ private:
     // another program changed the project and overwriting it would lose data.
     QHash<QString, QString> m_digests;
     bool m_gitEnabled = false;
+    QString m_gitWarning;
     int m_undoLimit = 200;
     qint64 m_undoByteLimit = 512LL * 1024 * 1024;
 #ifdef PVFORGE_TEST_HOOKS

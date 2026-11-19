@@ -84,16 +84,34 @@ bool writeJson(const QString& path, const QJsonObject& object, QString* error)
     return true;
 }
 
+constexpr qint64 kMaxAssetJsonBytes = 1024 * 1024;
+
 std::optional<QJsonObject> readJson(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
+        return std::nullopt;
+    if (file.size() > kMaxAssetJsonBytes)
         return std::nullopt;
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
         return std::nullopt;
     return document.object();
+}
+
+// Canonical path of `path` when it resolves inside `base`; empty otherwise.
+// `base` must be a canonical path (or is canonicalised here).
+QString canonicalInside(const QString& base, const QString& path)
+{
+    const QString baseCanonical = QFileInfo(base).canonicalFilePath();
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+    if (baseCanonical.isEmpty() || canonical.isEmpty())
+        return QString();
+    if (canonical == baseCanonical
+        || canonical.startsWith(baseCanonical + QLatin1Char('/')))
+        return canonical;
+    return QString();
 }
 
 int projectFps(const QString& root)
@@ -134,9 +152,13 @@ QStringList contentFiles(const QString& directory)
 QString contentPath(const StoredAsset& asset)
 {
     const QStringList files = contentFiles(asset.directory);
-    if (files.isEmpty())
-        return {};
-    return asset.directory + QLatin1Char('/') + files.first();
+    for (const QString& name : files)
+    {
+        const QString path = asset.directory + QLatin1Char('/') + name;
+        if (!QFileInfo(path).isSymLink())
+            return path;
+    }
+    return {};
 }
 
 } // namespace
@@ -165,7 +187,12 @@ std::optional<StoredAsset> AssetStore::getByHash(const AssetHash& hash,
                                                   bool requireContent) const
 {
     const QString directory = m_assetsDir + QLatin1Char('/') + hash;
-    if (!QFileInfo(directory).isDir())
+    const QFileInfo directoryInfo(directory);
+    if (!directoryInfo.isDir() || directoryInfo.isSymLink())
+        return std::nullopt;
+    // assets/<hash> is project data; a symlink there could point at any local
+    // directory (and serve it through the HTML bundle origin).
+    if (canonicalInside(m_root, directory).isEmpty())
         return std::nullopt;
 
     const auto metadata = readJson(directory + QStringLiteral("/asset.json"));
@@ -241,10 +268,41 @@ bool missingContent(const StoredAsset& asset)
         QString entry = asset.metadata.value(QStringLiteral("entry")).toString();
         if (entry.isEmpty())
             entry = QStringLiteral("index.html");
-        return !QFileInfo(asset.directory + QStringLiteral("/bundle/") + entry)
-                    .isFile();
+        const QString bundle =
+            asset.directory + QStringLiteral("/bundle");
+        const QFileInfo bundleInfo(bundle);
+        if (!bundleInfo.isDir() || bundleInfo.isSymLink())
+            return true;
+        const QString canonicalBundle = canonicalInside(asset.directory, bundle);
+        if (canonicalBundle.isEmpty())
+            return true;
+        // The manifest entry is project-controlled; reject absolute or ".."
+        // paths and symlinks that resolve outside the bundle.
+        const QFileInfo entryInfo(bundle + QLatin1Char('/') + entry);
+        if (!entryInfo.isFile() || entryInfo.isSymLink())
+            return true;
+        return canonicalInside(canonicalBundle, entryInfo.absoluteFilePath())
+            .isEmpty();
     }
-    return contentFiles(asset.directory).isEmpty();
+
+    const QStringList files = contentFiles(asset.directory);
+    if (files.isEmpty())
+        return true;
+    // A symlinked content file is a path escape, even if it is readable.
+    const QString canonicalDirectory =
+        canonicalInside(asset.directory, asset.directory);
+    if (canonicalDirectory.isEmpty())
+        return true;
+    for (const QString& name : files)
+    {
+        const QString path = asset.directory + QLatin1Char('/') + name;
+        if (QFileInfo(path).isSymLink()
+            || canonicalInside(canonicalDirectory, path).isEmpty())
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool AssetStore::rename(const AssetHash& hash, const QString& name, QString* error)
@@ -316,6 +374,23 @@ bool AssetStore::setTags(const AssetHash& hash, const QStringList& tags, QString
     return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata, error);
 }
 
+bool AssetStore::markImportOrigin(const AssetHash& hash, const QString& origin,
+                                  bool humanApproved, QString* error)
+{
+    const auto asset = getByHash(hash);
+    if (!asset)
+    {
+        setError(error, QStringLiteral("素材不存在或内容缺失: %1").arg(hash));
+        return false;
+    }
+
+    QJsonObject metadata = asset->metadata;
+    metadata.insert(QStringLiteral("importedBy"), origin);
+    metadata.insert(QStringLiteral("humanApproved"), humanApproved);
+    return writeJson(asset->directory + QStringLiteral("/asset.json"), metadata,
+                     error);
+}
+
 bool AssetStore::remove(const AssetHash& hash, QString* error)
 {
     if (!isValidHash(hash))
@@ -324,9 +399,15 @@ bool AssetStore::remove(const AssetHash& hash, QString* error)
         return false;
     }
     const QString directory = m_assetsDir + QLatin1Char('/') + hash;
-    if (!QFileInfo(directory).isDir())
+    const QFileInfo directoryInfo(directory);
+    if (!directoryInfo.isDir())
     {
         setError(error, QStringLiteral("素材不存在: %1").arg(hash));
+        return false;
+    }
+    if (directoryInfo.isSymLink() || canonicalInside(m_root, directory).isEmpty())
+    {
+        setError(error, QStringLiteral("拒绝删除工程外的素材符号链接: %1").arg(hash));
         return false;
     }
     if (!QDir(directory).removeRecursively())
@@ -456,6 +537,13 @@ std::optional<StoredAsset> AssetStore::importFileImpl(const QString& path,
     if (!QDir().mkpath(m_assetsDir))
     {
         setError(error, QStringLiteral("无法创建素材目录: %1").arg(m_assetsDir));
+        return std::nullopt;
+    }
+    if (QFileInfo(m_assetsDir).isSymLink()
+        || canonicalInside(m_root, m_assetsDir).isEmpty())
+    {
+        setError(error, QStringLiteral("素材目录不能是工程外的符号链接: %1")
+                            .arg(m_assetsDir));
         return std::nullopt;
     }
 
@@ -617,6 +705,13 @@ std::optional<StoredAsset> AssetStore::importPvhtml(const QString& path, QString
     if (!QDir().mkpath(m_assetsDir))
     {
         setError(error, QStringLiteral("无法创建素材目录: %1").arg(m_assetsDir));
+        return std::nullopt;
+    }
+    if (QFileInfo(m_assetsDir).isSymLink()
+        || canonicalInside(m_root, m_assetsDir).isEmpty())
+    {
+        setError(error, QStringLiteral("素材目录不能是工程外的符号链接: %1")
+                            .arg(m_assetsDir));
         return std::nullopt;
     }
 

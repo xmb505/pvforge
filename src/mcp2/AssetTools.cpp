@@ -92,6 +92,52 @@ bool isInsideProject(const QString& root, const QFileInfo& source)
            || target.startsWith(base + QLatin1Char('/'));
 }
 
+// Credentials, keys and browser profiles must never be copied into a project
+// just because an AI asked for them, even with a human dialog available.
+bool isSensitivePath(const QString& canonicalPath)
+{
+    static const QStringList homeRelative = {
+        QStringLiteral(".ssh"),
+        QStringLiteral(".gnupg"),
+        QStringLiteral(".config"),
+        QStringLiteral(".local/share/keyrings"),
+        QStringLiteral(".pki"),
+        QStringLiteral(".aws"),
+        QStringLiteral(".azure"),
+        QStringLiteral(".docker"),
+        QStringLiteral(".kube"),
+        QStringLiteral(".password-store"),
+        QStringLiteral(".mozilla"),
+        QStringLiteral(".thunderbird"),
+        QStringLiteral(".git-credentials"),
+        QStringLiteral(".netrc"),
+        QStringLiteral(".npmrc"),
+        QStringLiteral(".pypirc"),
+        QStringLiteral(".vault-token"),
+    };
+    const QString home = QDir::homePath();
+    for (const QString& relative : homeRelative)
+    {
+        const QString base = home + QLatin1Char('/') + relative;
+        if (canonicalPath == base
+            || canonicalPath.startsWith(base + QLatin1Char('/')))
+        {
+            return true;
+        }
+    }
+
+    static const QStringList systemDirectories = {
+        QStringLiteral("/etc"),  QStringLiteral("/root"), QStringLiteral("/proc"),
+        QStringLiteral("/sys"),  QStringLiteral("/dev"),  QStringLiteral("/boot"),
+        QStringLiteral("/var/lib"), QStringLiteral("/var/run"),
+    };
+    for (const QString& base : systemDirectories)
+        if (canonicalPath == base
+            || canonicalPath.startsWith(base + QLatin1Char('/')))
+            return true;
+    return false;
+}
+
 bool isVisualGroup(AssetType type)
 {
     return type == AssetType::Image || type == AssetType::Video
@@ -169,7 +215,6 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     static const QStringList allowed = {
         QStringLiteral("path"), QStringLiteral("name"),
         QStringLiteral("type"), QStringLiteral("extractAudio"),
-        QStringLiteral("confirm"),
     };
     for (auto it = args.constBegin(); it != args.constEnd(); ++it)
     {
@@ -199,16 +244,41 @@ Result assetImport(Tx& tx, const QJsonObject& args)
                        QStringLiteral("素材文件超过 2GB 上限"), details);
     }
 
-    bool confirm = false;
-    if (!readBool(args, "confirm", &confirm, &error))
-        return error;
-    if (!confirm && !isInsideProject(tx.store->root(), source))
+    const QString canonicalSource = normalizedPath(source);
+    if (!isInsideProject(tx.store->root(), source))
     {
-        QJsonObject details;
-        details.insert(QStringLiteral("path"), normalizedPath(source));
-        details.insert(QStringLiteral("requires"), QStringLiteral("confirm"));
-        return failure(QStringLiteral("confirm_required"),
-                       QStringLiteral("导入工程目录外的素材需要 confirm"), details);
+        // An AI-supplied confirm flag is not human consent. Credentials and
+        // system directories are refused even before asking a human.
+        if (isSensitivePath(canonicalSource))
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("path"), canonicalSource);
+            details.insert(QStringLiteral("reason"), QStringLiteral("sensitive_path"));
+            return failure(QStringLiteral("permission_denied"),
+                           QStringLiteral("禁止导入敏感路径（密钥/配置/系统目录）"),
+                           details);
+        }
+        if (!tx.confirmExternalImport)
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("path"), canonicalSource);
+            details.insert(QStringLiteral("requires"),
+                           QStringLiteral("human_confirmation"));
+            details.insert(QStringLiteral("reason"),
+                           QStringLiteral("no_human_available"));
+            return failure(
+                QStringLiteral("confirm_required"),
+                QStringLiteral("导入工程目录外的素材必须在 PVForge 窗口由人类确认"),
+                details);
+        }
+        if (!tx.confirmExternalImport(canonicalSource))
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("path"), canonicalSource);
+            details.insert(QStringLiteral("reason"), QStringLiteral("human_denied"));
+            return failure(QStringLiteral("permission_denied"),
+                           QStringLiteral("用户拒绝导入工程外素材"), details);
+        }
     }
 
     QString name;
@@ -305,6 +375,18 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     }
 
     const bool deduplicated = before.contains(stored->hash);
+    if (!deduplicated)
+    {
+        QString originError;
+        if (!tx.store->assets().markImportOrigin(stored->hash,
+                                                 QStringLiteral("mcp"), true,
+                                                 &originError))
+            return failure(QStringLiteral("internal_error"), originError);
+        stored = tx.store->assets().get(stored->hash);
+        if (!stored)
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("记录素材来源后素材丢失"));
+    }
     if (!name.isEmpty() && !deduplicated)
     {
         if (!writeAssetName(*stored, name, &error))
@@ -318,10 +400,22 @@ Result assetImport(Tx& tx, const QJsonObject& args)
     const bool extractedAudio = extracted.has_value();
     if (extracted && !before.contains(extracted->hash))
     {
+        QString originError;
+        if (!tx.store->assets().markImportOrigin(extracted->hash,
+                                                 QStringLiteral("mcp"), true,
+                                                 &originError))
+            return failure(QStringLiteral("internal_error"), originError);
+        extracted = tx.store->assets().get(extracted->hash);
+        if (!extracted)
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("记录音频来源后素材丢失"));
         const QString audioName = stored->name + QStringLiteral(" 音频");
         if (!writeAssetName(*extracted, audioName, &error))
             return error;
         extracted = tx.store->assets().get(extracted->hash);
+        if (!extracted)
+            return failure(QStringLiteral("internal_error"),
+                           QStringLiteral("写入音频名后素材丢失"));
     }
 
     QJsonObject data;

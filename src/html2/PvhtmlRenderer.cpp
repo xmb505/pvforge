@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -191,14 +192,13 @@ bool PvhtmlRenderer::start(QString* error)
     options.executable = m_chromeExecutable;
     options.offline = true;
     options.timeoutMs = 15000;
-    // HtmlBrowser blocks every network destination with a dead proxy and
-    // removes Chromium's implicit loopback bypass. Re-add 127.0.0.1 so the
-    // bundle server stays reachable while external traffic remains offline.
-    // The host-resolver override is last so it replaces HtmlBrowser's
-    // "MAP * ~NOTFOUND"; EXCLUDE keeps every other host blocked.
+    // Only the dedicated bundle hostname bypasses the dead proxy and resolves,
+    // and it always resolves to loopback. Literal 127.0.0.1/localhost/::1 stay
+    // behind the proxy and are also blocked per request by Fetch.enable.
     options.extraArguments
-        << QStringLiteral("--proxy-bypass-list=<-loopback>,127.0.0.1,localhost")
-        << QStringLiteral("--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1");
+        << QStringLiteral("--proxy-bypass-list=<-loopback>,pvforge-bundle.invalid")
+        << QStringLiteral("--host-resolver-rules=MAP pvforge-bundle.invalid "
+                          "127.0.0.1, MAP * ~NOTFOUND");
 
     QString startError;
     if (!m_browser->start(options, &startError))
@@ -212,6 +212,7 @@ bool PvhtmlRenderer::start(QString* error)
     m_chromeVersion = m_browser->version().trimmed();
     if (!m_server)
         m_server = new LocalBundleServer(this);
+    installRequestGuard();
 
     if (error)
         error->clear();
@@ -254,6 +255,70 @@ QString PvhtmlRenderer::chromeVersion() const
     return m_chromeVersion;
 }
 
+void PvhtmlRenderer::installRequestGuard()
+{
+    if (!m_browser || !m_browser->cdp())
+        return;
+    // One connection per browser instance. The lambda is a child-context
+    // connection: when the browser (and its CdpClient) dies the slot is gone.
+    QObject::connect(
+        m_browser->cdp(), &pvf::html::CdpClient::eventReceived, m_browser,
+        [this](const QString& method, const QJsonObject& params,
+               const QString& sessionId) {
+            if (method == QLatin1String("Fetch.requestPaused"))
+                handleRequestPaused(params, sessionId);
+        });
+}
+
+void PvhtmlRenderer::handleRequestPaused(const QJsonObject& params,
+                                         const QString& sessionId)
+{
+    if (sessionId != m_sessionId || !m_browser || !m_browser->cdp())
+        return;
+
+    const QString requestId = params.value(QStringLiteral("requestId")).toString();
+    if (requestId.isEmpty())
+        return;
+
+    const QJsonObject request = params.value(QStringLiteral("request")).toObject();
+    const QString urlText = request.value(QStringLiteral("url")).toString();
+    const QString resourceType =
+        params.value(QStringLiteral("resourceType")).toString();
+    const bool navigation =
+        params.value(QStringLiteral("isNavigationRequest")).toBool()
+        || resourceType == QLatin1String("Document");
+
+    const QUrl url(urlText);
+    bool allow = false;
+    if (url.isValid() && (url.scheme() == QLatin1String("data")
+                          || url.scheme() == QLatin1String("blob")))
+    {
+        // Inline images/fonts do not leave the renderer process.
+        allow = !navigation;
+    }
+    else if (url.isValid() && url.scheme() == QLatin1String("http")
+             && m_server && m_server->isRunning()
+             && url.host() == QString::fromLatin1(kBundleHost)
+             && url.port() == int(m_server->port()))
+    {
+        allow = !navigation
+                || urlText == m_expectedDocumentUrl;
+    }
+
+    QJsonObject callParams;
+    callParams.insert(QStringLiteral("requestId"), requestId);
+    if (allow)
+    {
+        m_browser->cdp()->call(QStringLiteral("Fetch.continueRequest"),
+                               callParams, m_sessionId, 3000, nullptr);
+        return;
+    }
+    callParams.insert(QStringLiteral("errorReason"),
+                      QStringLiteral("BlockedByClient"));
+    m_browser->cdp()->call(QStringLiteral("Fetch.failRequest"), callParams,
+                           m_sessionId, 3000, nullptr);
+}
+
 bool PvhtmlRenderer::ensureServer(const QString& bundleDir, QString* error)
 {
     const QFileInfo info(bundleDir);
@@ -288,8 +353,13 @@ bool PvhtmlRenderer::ensureServer(const QString& bundleDir, QString* error)
     if (!m_server)
         m_server = new LocalBundleServer(this);
 
+    // The origin (host:port) changes with the bundle root, so the old page's
+    // Fetch guard and document URL are no longer valid. Start from a fresh
+    // target after the new server binds.
+    dropPage(true);
     m_server->stop();
     m_loadedUrl.clear();
+    m_expectedDocumentUrl.clear();
 
     QString serverError;
     if (!m_server->start(root, &serverError))
@@ -431,6 +501,45 @@ QImage PvhtmlRenderer::renderFrame(const FrameRequest& request, QString* error)
              QJsonObject{{QStringLiteral("behavior"), QStringLiteral("deny")}},
              m_sessionId, 2000);
 
+        // Every request is paused and checked against the one bundle origin.
+        // Unlike Network.setBlockedURLs this also stops top-level navigation.
+        const QJsonArray patterns{
+            QJsonObject{{QStringLiteral("urlPattern"), QStringLiteral("*")},
+                        {QStringLiteral("requestStage"),
+                         QStringLiteral("Request")}},
+        };
+        const SyncResult guarded =
+            call(QStringLiteral("Fetch.enable"),
+                 QJsonObject{{QStringLiteral("patterns"), patterns}},
+                 m_sessionId, 5000);
+        if (!guarded.ok())
+        {
+            return failFrame(QStringLiteral("cannot enable the HTML request guard: %1")
+                                 .arg(guarded.error));
+        }
+
+        // Defense in depth: literal loopback names and non-HTTP schemes fail in
+        // the network stack even before Fetch.requestPaused is handled.
+        const QJsonArray blocked{
+            QStringLiteral("*://127.0.0.1:*"),
+            QStringLiteral("*://localhost:*"),
+            QStringLiteral("*://[::1]:*"),
+            QStringLiteral("https://*"),
+            QStringLiteral("ftp://*"),
+            QStringLiteral("file://*"),
+        };
+        call(QStringLiteral("Network.setBlockedURLs"),
+             QJsonObject{{QStringLiteral("urls"), blocked}}, m_sessionId, 2000);
+
+        // window.open is not needed by the frame protocol; navigation is
+        // blocked by Fetch, this only removes the easiest escape hatch.
+        call(QStringLiteral("Page.addScriptToEvaluateOnNewDocument"),
+             QJsonObject{{QStringLiteral("source"),
+                          QStringLiteral("Object.defineProperty(window, 'open', "
+                                         "{ value: function () { return null; }, "
+                                         "writable: false, configurable: false });")}},
+             m_sessionId, 2000);
+
         const QJsonObject transparent{
             {QStringLiteral("color"),
              QJsonObject{{QStringLiteral("r"), 0},
@@ -469,6 +578,35 @@ QImage PvhtmlRenderer::renderFrame(const FrameRequest& request, QString* error)
     QUrl url = m_server->baseUrl();
     url.setPath(QStringLiteral("/") + request.entry);
     const QString targetUrl = url.toString(QUrl::FullyEncoded);
+    m_expectedDocumentUrl = targetUrl;
+
+    // Re-reads document.URL and rejects any page that left the exact bundle
+    // URL. Runs before dispatching a frame and again right before the
+    // screenshot, so a script that navigates itself cannot leak another local
+    // page into the PNG.
+    auto documentUrlError = [&](const QString& phase) -> QString {
+        const SyncResult state = call(
+            QStringLiteral("Runtime.evaluate"),
+            QJsonObject{{QStringLiteral("expression"), QStringLiteral("document.URL")},
+                        {QStringLiteral("returnByValue"), true}},
+            m_sessionId, 2000);
+        if (!state.ok())
+        {
+            return QStringLiteral("cannot read document.URL before %1: %2")
+                .arg(phase, state.error);
+        }
+        const QString actual = state.result.value(QStringLiteral("result"))
+                                   .toObject()
+                                   .value(QStringLiteral("value"))
+                                   .toString();
+        if (actual != targetUrl)
+        {
+            return QStringLiteral("HTML page left its bundle URL before %1 "
+                                  "(document.URL=%2, expected=%3)")
+                .arg(phase, actual, targetUrl);
+        }
+        return QString();
+    };
 
     if (m_loadedUrl != targetUrl)
     {
@@ -528,6 +666,12 @@ QImage PvhtmlRenderer::renderFrame(const FrameRequest& request, QString* error)
                                  .arg(timeoutMs));
 
         m_loadedUrl = targetUrl;
+    }
+    else
+    {
+        const QString urlError = documentUrlError(QStringLiteral("dispatch"));
+        if (!urlError.isEmpty())
+            return failFrame(urlError);
     }
 
     // --- foreground -------------------------------------------------------
@@ -595,6 +739,14 @@ QImage PvhtmlRenderer::renderFrame(const FrameRequest& request, QString* error)
     if (frameResult.result.contains(QStringLiteral("exceptionDetails")))
         return failFrame(QStringLiteral("HTML frame script failed: %1")
                              .arg(exceptionText(frameResult.result)));
+
+    // The page could have navigated during the (async) handshake. Re-check
+    // immediately before capture; failFrame drops the target so the next call
+    // starts from about:blank.
+    const QString postHandshakeUrlError =
+        documentUrlError(QStringLiteral("screenshot"));
+    if (!postHandshakeUrlError.isEmpty())
+        return failFrame(postHandshakeUrlError);
 
     // --- screenshot -------------------------------------------------------
     const QJsonObject clip{

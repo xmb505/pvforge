@@ -35,6 +35,13 @@ ProcessResult runProcess(const QString& program, const QStringList& arguments,
                          const QString& workDir = QString());
 ProcessResult runGit(const QString& root, const QStringList& arguments);
 QString processFailure(const ProcessResult& result);
+// True when `.git` is a repository PVForge created and it carries no settings
+// that could execute project-controlled code (hooks, fsmonitor, filters,
+// includes, textconv/diff drivers). `reason` explains every rejection.
+bool gitRepositoryIsTrusted(const QString& root, QString* reason);
+// Writes the marker that makes a repository trusted on the next open. Must be
+// called after `git init` created `.git`.
+bool markGitRepository(const QString& root, QString* error);
 bool gitVersion(QString* version);
 bool checkGit(QString* error);
 bool ensureGitIdentity(const QString& root, QString* error);

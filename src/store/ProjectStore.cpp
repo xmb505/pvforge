@@ -204,6 +204,9 @@ std::optional<ProjectStore> ProjectStore::create(
                             .arg(processFailure(init)));
         }
 
+        if (!markGitRepository(root, error))
+            return std::nullopt;
+
         if (!ensureGitIdentity(root, error))
             return fail(error ? *error : QStringLiteral("无法配置 git 身份"));
 
@@ -269,10 +272,19 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
 
     // Missing git or a missing repository is not an error: the project opens
     // as a plain text store. Only explicit useGit=false skips the probe.
-    const bool useRepo =
-        useGit
-        && gitBinaryAvailable()
-        && QFileInfo::exists(absolutePath(root, QStringLiteral(".git")));
+    // A repository PVForge did not create is refused with a visible warning
+    // instead of running project-controlled hooks/filters.
+    bool useRepo = false;
+    QString gitWarning;
+    if (useGit && gitBinaryAvailable()
+        && QFileInfo::exists(absolutePath(root, QStringLiteral(".git"))))
+    {
+        QString untrustedReason;
+        if (gitRepositoryIsTrusted(root, &untrustedReason))
+            useRepo = true;
+        else
+            gitWarning = untrustedReason;
+    }
 
     model::Project project;
     LoadReport report;
@@ -302,6 +314,7 @@ std::optional<ProjectStore> ProjectStore::open(const QString& projectDir,
                 .arg(store.m_quarantined.size())
                 .arg(names.join(QStringLiteral("、")));
     }
+    store.m_gitWarning = gitWarning;
 
     // Scan once so the caller can offer recover/discard. A transient git
     // failure (for example a stale index.lock) must not block opening; the
@@ -349,13 +362,21 @@ bool ProjectStore::setGitEnabled(bool enabled, QString* error)
 
     const QString gitDirectory =
         absolutePath(m_root, QStringLiteral(".git"));
-    if (m_gitEnabled && QFileInfo::exists(gitDirectory))
+    if (QFileInfo::exists(gitDirectory))
     {
+        QString reason;
+        if (!gitRepositoryIsTrusted(m_root, &reason))
+        {
+            setError(error,
+                     QStringLiteral("拒绝启用不安全的 Git 仓库：%1").arg(reason));
+            return false;
+        }
+        m_gitWarning.clear();
+        m_gitEnabled = true;
         refreshDirtyText();
         return true;
     }
 
-    if (!QFileInfo::exists(gitDirectory))
     {
         const QString ignorePath =
             absolutePath(m_root, QStringLiteral(".gitignore"));
@@ -373,6 +394,9 @@ bool ProjectStore::setGitEnabled(bool enabled, QString* error)
                          .arg(processFailure(init)));
             return false;
         }
+
+        if (!markGitRepository(m_root, error))
+            return false;
 
         if (!ensureGitIdentity(m_root, error))
             return false;
@@ -754,6 +778,23 @@ bool ProjectStore::verifyDigests(const QVector<TransactionOp>& ops,
     return true;
 }
 
+bool ProjectStore::ensureTrustedGit(QString* error) const
+{
+    if (!m_gitEnabled)
+    {
+        setError(error, QStringLiteral("Git 未启用"));
+        return false;
+    }
+    QString reason;
+    if (!gitRepositoryIsTrusted(m_root, &reason))
+    {
+        setError(error,
+                 QStringLiteral("Git 仓库已不可信，写操作已阻止：%1").arg(reason));
+        return false;
+    }
+    return true;
+}
+
 bool ProjectStore::commit(const QString& message, QString* error)
 {
     const QString normalized = normalizedMessage(message);
@@ -767,8 +808,11 @@ bool ProjectStore::commit(const QString& message, QString* error)
         return true;
     }
 
-    // Git backs up text project data only. assets/ and .trash/ are local and
-    // ignored, so they are never staged here.
+    if (!ensureTrustedGit(error))
+        return false;
+
+    // Git backs up text project data only. assets/, .cache/ and .trash/ are
+    // local and ignored, so they are never staged here.
     QStringList candidates = m_txnPaths.values();
     std::sort(candidates.begin(), candidates.end());
 
@@ -900,13 +944,8 @@ QVector<GitCommit> ProjectStore::history(int limit, QString* error) const
 
 bool ProjectStore::restoreCommit(const QString& hash, QString* error)
 {
-    if (!ensureWritable(error))
+    if (!ensureWritable(error) || !ensureTrustedGit(error))
         return false;
-    if (!m_gitEnabled)
-    {
-        setError(error, QStringLiteral("Git 未启用"));
-        return false;
-    }
 
     QString commit;
     if (!resolveCommit(m_root, hash, &commit, error))
@@ -1039,13 +1078,8 @@ QVector<DirtyText> ProjectStore::dirtyTextFiles(QString* error) const
 
 bool ProjectStore::commitRecoveredText(QString* error)
 {
-    if (!ensureWritable(error))
+    if (!ensureWritable(error) || !ensureTrustedGit(error))
         return false;
-    if (!m_gitEnabled)
-    {
-        setError(error, QStringLiteral("Git 未启用"));
-        return false;
-    }
 
     QString scanError;
     const QVector<DirtyText> dirty = dirtyTextFiles(&scanError);
@@ -1097,13 +1131,8 @@ bool ProjectStore::commitRecoveredText(QString* error)
 
 bool ProjectStore::discardDirtyText(QString* error)
 {
-    if (!ensureWritable(error))
+    if (!ensureWritable(error) || !ensureTrustedGit(error))
         return false;
-    if (!m_gitEnabled)
-    {
-        setError(error, QStringLiteral("Git 未启用"));
-        return false;
-    }
 
     QString scanError;
     const QVector<RawDirtyText> entries = scanRawDirtyText(m_root, &scanError);

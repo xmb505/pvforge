@@ -59,6 +59,18 @@ MainWindow::MainWindow(EditorSession* session, QWidget* parent)
     , m_sessionOwner(session)
 {
     buildSessionShell();
+    // A repository PVForge did not create (or one carrying hooks/filters) is
+    // ignored instead of executed; say so instead of silently losing the undo
+    // history the user expects.
+    if (m_session && m_session->document())
+    {
+        const QString warning = m_session->document()->store()->gitWarning();
+        if (!warning.isEmpty())
+        {
+            statusBar()->showMessage(
+                QStringLiteral("Git 已禁用：%1").arg(warning), 15000);
+        }
+    }
 }
 
 void MainWindow::buildSessionShell()
@@ -957,6 +969,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         statusBar()->showMessage(
             QStringLiteral("导出正在进行中，请先取消或等待完成。"), 5000);
+        event->ignore();
+        return;
+    }
+
+    if (m_session && m_session->toolCallInProgress())
+    {
+        // handleRpc() is still on the stack and will dereference the server
+        // and Service after execute() returns. Destroying the session here
+        // (even through a queued close) is a use-after-free.
+        statusBar()->showMessage(
+            QStringLiteral("AI 工具正在执行，请等待本次调用结束再关闭。"), 5000);
         event->ignore();
         return;
     }

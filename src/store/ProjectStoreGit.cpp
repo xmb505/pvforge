@@ -5,12 +5,212 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QSet>
+#include <QSaveFile>
 
 #include <algorithm>
 #include <utility>
 
 namespace pvf::store::detail {
+
+namespace {
+
+constexpr char kRepositoryMarker[] = "pvforge-repo";
+constexpr char kMarkerContents[] = "format=pvforge-git-repository\nversion=1\n";
+
+// Git configuration keys that run project-controlled programs or redirect git
+// at another repository/file. PVForge only ever writes user.name/user.email and
+// the default init config; anything here means the repository was modified.
+bool isForbiddenConfigKey(const QString& fullKey)
+{
+    static const QSet<QString> exact = {
+        QStringLiteral("core.hookspath"),
+        QStringLiteral("core.fsmonitor"),
+        QStringLiteral("core.sshcommand"),
+        QStringLiteral("core.editor"),
+        QStringLiteral("core.pager"),
+        QStringLiteral("core.askpass"),
+        QStringLiteral("core.attributesfile"),
+        QStringLiteral("sequence.editor"),
+        QStringLiteral("diff.external"),
+        QStringLiteral("protocol.ext.allow"),
+        QStringLiteral("credential.helper"),
+    };
+    const QString key = fullKey.toLower();
+    if (exact.contains(key))
+        return true;
+    return key.startsWith(QLatin1String("filter."))
+           || key.startsWith(QLatin1String("include."))
+           || key.startsWith(QLatin1String("includeif."))
+           || key.startsWith(QLatin1String("alias."))
+           || key.startsWith(QLatin1String("pager."))
+           || key.startsWith(QLatin1String("credential."))
+           || key.endsWith(QLatin1String(".textconv"))
+           || (key.startsWith(QLatin1String("diff."))
+               && key.endsWith(QLatin1String(".command")));
+}
+
+// Returns a forbidden key name found in one .gitattributes-style file, or an
+// empty string. `filter=` and `diff=` values name external drivers and
+// `textconv` opts into an external converter; all three can execute code.
+QString forbiddenAttribute(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+    const QString text = QString::fromUtf8(file.read(1024 * 1024)).toLower();
+    static const QRegularExpression pattern(
+        QStringLiteral("(?:^|[\\s;])(filter|diff)\\s*=|(?:^|[\\s;])textconv(?:\\s|$)"));
+    const QRegularExpressionMatch match = pattern.match(text);
+    return match.hasMatch() ? match.captured(0).trimmed() : QString();
+}
+
+QString forbiddenConfigIn(const QString& configPath)
+{
+    QFile file(configPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+    const QStringList lines =
+        QString::fromUtf8(file.read(1024 * 1024)).split(QLatin1Char('\n'));
+    QString section;
+    for (QString line : lines)
+    {
+        line = line.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))
+            || line.startsWith(QLatin1Char(';')))
+        {
+            continue;
+        }
+        if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']')))
+        {
+            section = line.mid(1, line.size() - 2).trimmed().toLower();
+            // [section "subsection"] -> section.subsection
+            const int quote = section.indexOf(QLatin1Char('"'));
+            if (quote >= 0)
+            {
+                section = section.left(quote).trimmed() + QLatin1Char('.')
+                          + section.mid(quote + 1).remove(QLatin1Char('"'));
+            }
+            continue;
+        }
+        const int equals = line.indexOf(QLatin1Char('='));
+        if (equals <= 0)
+            continue;
+        const QString key = line.left(equals).trimmed();
+        section = section.trimmed();
+        const QString fullKey =
+            section.isEmpty() ? key : section + QLatin1Char('.') + key;
+        if (isForbiddenConfigKey(fullKey))
+            return fullKey;
+    }
+    return QString();
+}
+
+QString canonicalOrEmpty(const QString& path)
+{
+    return QFileInfo(path).canonicalFilePath();
+}
+
+bool isInside(const QString& base, const QString& path)
+{
+    const QString normalizedBase = canonicalOrEmpty(base);
+    const QString normalizedPath = canonicalOrEmpty(path);
+    if (normalizedBase.isEmpty() || normalizedPath.isEmpty())
+        return false;
+    return normalizedPath == normalizedBase
+           || normalizedPath.startsWith(normalizedBase + QLatin1Char('/'));
+}
+
+} // namespace
+
+bool gitRepositoryIsTrusted(const QString& root, QString* reason)
+{
+    auto reject = [reason](const QString& message) {
+        if (reason)
+            *reason = message;
+        return false;
+    };
+
+    const QString gitDir = absolutePath(root, QStringLiteral(".git"));
+    const QFileInfo gitInfo(gitDir);
+    if (!gitInfo.exists())
+        return reject(QStringLiteral("工程没有 .git 仓库"));
+    // A `.git` file is a `gitdir:` pointer: git would operate on a repository
+    // outside the project. PVForge never creates that layout.
+    if (gitInfo.isSymLink() || !gitInfo.isDir())
+        return reject(QStringLiteral(".git 不是普通目录（疑似 gitdir 指针或符号链接）"));
+    if (!isInside(root, gitDir))
+        return reject(QStringLiteral(".git 指向工程目录之外"));
+
+    const QString marker = absolutePath(gitDir, QString::fromLatin1(kRepositoryMarker));
+    const QFileInfo markerInfo(marker);
+    if (!markerInfo.exists() || !markerInfo.isFile() || markerInfo.isSymLink())
+        return reject(QStringLiteral(
+            ".git 不是由 PVForge 创建（缺少 .git/pvforge-repo 标记）"));
+
+    const QString configPath = absolutePath(gitDir, QStringLiteral("config"));
+    if (QFileInfo::exists(configPath))
+    {
+        const QFileInfo configInfo(configPath);
+        if (configInfo.isSymLink() || !configInfo.isFile()
+            || !isInside(gitDir, configPath))
+        {
+            return reject(QStringLiteral(".git/config 被替换或指向工程之外"));
+        }
+        const QString key = forbiddenConfigIn(configPath);
+        if (!key.isEmpty())
+        {
+            return reject(QStringLiteral("仓库配置包含可执行项：%1").arg(key));
+        }
+    }
+
+    const QString infoAttributes =
+        absolutePath(gitDir, QStringLiteral("info/attributes"));
+    if (QFileInfo::exists(infoAttributes))
+    {
+        const QString attribute = forbiddenAttribute(infoAttributes);
+        if (!attribute.isEmpty())
+        {
+            return reject(QStringLiteral(".git/info/attributes 声明了外部过滤器：%1")
+                              .arg(attribute));
+        }
+    }
+
+    // .gitattributes is project content. It cannot define a filter itself, but
+    // it can bind a path to a filter declared in the repository config, so any
+    // filter/diff/textconv attribute is refused before git add runs.
+    for (const QString& relative :
+         {QStringLiteral(".gitattributes"), QStringLiteral("entities/.gitattributes")})
+    {
+        const QString path = absolutePath(root, relative);
+        if (!QFileInfo::exists(path))
+            continue;
+        const QFileInfo attributeInfo(path);
+        if (attributeInfo.isSymLink() || !isInside(root, path))
+            return reject(QStringLiteral("%1 被替换或指向工程之外").arg(relative));
+        const QString attribute = forbiddenAttribute(path);
+        if (!attribute.isEmpty())
+            return reject(QStringLiteral("%1 声明了外部过滤器：%2")
+                              .arg(relative, attribute));
+    }
+
+    if (reason)
+        reason->clear();
+    return true;
+}
+
+bool markGitRepository(const QString& root, QString* error)
+{
+    const QString gitDir = absolutePath(root, QStringLiteral(".git"));
+    if (!QFileInfo(gitDir).isDir())
+    {
+        setError(error, QStringLiteral("无法标记仓库：.git 目录不存在"));
+        return false;
+    }
+    return writeTextFile(absolutePath(gitDir, QString::fromLatin1(kRepositoryMarker)),
+                         QString::fromLatin1(kMarkerContents), error);
+}
 
 ProcessResult runProcess(const QString& program, const QStringList& arguments,
                          const QString& workDir)
@@ -20,8 +220,23 @@ ProcessResult runProcess(const QString& program, const QStringList& arguments,
     if (!workDir.isEmpty())
         process.setWorkingDirectory(workDir);
 
+    // Never inherit repository redirection, injected config or an alternate
+    // git/home directory from the caller. `git --version` is harmless but uses
+    // the same environment for consistency.
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    const QStringList inheritedKeys = environment.keys();
+    for (const QString& key : inheritedKeys)
+        if (key.startsWith(QLatin1String("GIT_")))
+            environment.remove(key);
+    environment.insert(QStringLiteral("GIT_CONFIG_NOSYSTEM"), QStringLiteral("1"));
+    environment.insert(QStringLiteral("GIT_CONFIG_GLOBAL"), QStringLiteral("/dev/null"));
+    environment.insert(QStringLiteral("GIT_CONFIG_SYSTEM"), QStringLiteral("/dev/null"));
+    environment.insert(QStringLiteral("GIT_ATTR_NOSYSTEM"), QStringLiteral("1"));
     environment.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
+    environment.insert(QStringLiteral("GIT_OPTIONAL_LOCKS"), QStringLiteral("0"));
+    environment.insert(QStringLiteral("GIT_PAGER"), QStringLiteral("cat"));
+    environment.insert(QStringLiteral("PAGER"), QStringLiteral("cat"));
+    environment.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
     process.setProcessEnvironment(environment);
 
     process.start(program, arguments);
@@ -50,9 +265,32 @@ ProcessResult runProcess(const QString& program, const QStringList& arguments,
 
 ProcessResult runGit(const QString& root, const QStringList& arguments)
 {
-    QStringList fullArguments;
-    fullArguments.reserve(arguments.size() + 2);
-    fullArguments << QStringLiteral("-C") << root;
+    // Global hardening applies to every invocation. Hooks and fsmonitor are
+    // disabled outright; protocol.file.allow=never keeps a project-controlled
+    // submodule/alternate from reading arbitrary files.
+    QStringList fullArguments{
+        QStringLiteral("--no-optional-locks"),
+        QStringLiteral("-c"),
+        QStringLiteral("core.hooksPath=/dev/null"),
+        QStringLiteral("-c"),
+        QStringLiteral("core.fsmonitor=false"),
+        QStringLiteral("-c"),
+        QStringLiteral("core.attributesFile=/dev/null"),
+        QStringLiteral("-c"),
+        QStringLiteral("protocol.file.allow=never"),
+        QStringLiteral("-c"),
+        QStringLiteral("protocol.ext.allow=never"),
+        QStringLiteral("-c"),
+        QStringLiteral("commit.gpgSign=false"),
+        QStringLiteral("-c"),
+        QStringLiteral("gc.auto=0"),
+        QStringLiteral("-c"),
+        QStringLiteral("maintenance.auto=false"),
+        QStringLiteral("-c"),
+        QStringLiteral("advice.detachedHead=false"),
+        QStringLiteral("-C"),
+        root,
+    };
     fullArguments += arguments;
     return runProcess(QStringLiteral("git"), fullArguments);
 }

@@ -20,6 +20,7 @@
 #include <cstring>
 
 #if defined(Q_OS_UNIX)
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -30,6 +31,58 @@ namespace {
 
 constexpr qint64 kMaxEndpointBytes = 64 * 1024;
 constexpr int kDefaultTimeoutMs = 60 * 1000;
+
+#if defined(Q_OS_UNIX)
+// A stale endpoint file can outlive the GUI and point at a reused port (and a
+// token that the next run also persisted). Require the recorded process to
+// still exist and belong to the same user.
+bool endpointProcessIsCurrent(qint64 pid, QString* detail)
+{
+    if (pid <= 0)
+        return true; // Older endpoint files did not record a pid.
+    if (::kill(pid_t(pid), 0) != 0 && errno == ESRCH)
+    {
+        if (detail)
+            *detail = QStringLiteral("recorded process %1 is not running").arg(pid);
+        return false;
+    }
+#if defined(Q_OS_LINUX)
+    QFile status(QStringLiteral("/proc/%1/status").arg(pid));
+    if (!status.open(QIODevice::ReadOnly))
+    {
+        if (detail)
+            *detail = QStringLiteral("cannot inspect recorded process %1").arg(pid);
+        return false;
+    }
+    // /proc files report size 0, so QFile::atEnd() is true before the first
+    // read; loop until readLine returns empty instead.
+    while (true)
+    {
+        const QByteArray line = status.readLine();
+        if (line.isEmpty())
+            break;
+        if (!line.startsWith("Uid:"))
+            continue;
+        const QList<QByteArray> fields = line.simplified().split(' ');
+        if (fields.size() >= 2 && fields.at(1).toUInt() != ::geteuid())
+        {
+            if (detail)
+                *detail = QStringLiteral("recorded process %1 belongs to another user")
+                              .arg(pid);
+            return false;
+        }
+        return true;
+    }
+    if (detail)
+        *detail = QStringLiteral("recorded process %1 has no UID").arg(pid);
+    return false;
+#else
+    return true;
+#endif
+}
+#else
+bool endpointProcessIsCurrent(qint64, QString*) { return true; }
+#endif
 
 QString endpointFileError(const QString& path, const QString& detail)
 {
@@ -100,7 +153,7 @@ bool loadMcpEndpointFile(const QString& path, McpEndpoint* endpoint, QString* er
     {
         *error = endpointFileError(
             path, QStringLiteral("cannot read endpoint file (%1); enable MCP in PVForge "
-                                 "or pass --url and --token")
+                                 "or pass --url and set PVFORGE_MCP_TOKEN")
                       .arg(QString::fromLocal8Bit(std::strerror(errno))));
         return false;
     }
@@ -128,8 +181,8 @@ bool loadMcpEndpointFile(const QString& path, McpEndpoint* endpoint, QString* er
     if (!info.exists() || !info.isFile())
     {
         *error = endpointFileError(path, QStringLiteral("file does not exist; enable MCP "
-                                                        "in PVForge or pass --url and "
-                                                        "--token"));
+                                                        "in PVForge or pass --url and set "
+                                                        "PVFORGE_MCP_TOKEN"));
         return false;
     }
 #endif
@@ -278,7 +331,7 @@ bool resolveMcpEndpoint(const QString& endpointPath, const QString& argumentUrl,
     }
     if (token.isEmpty())
     {
-        *error = QStringLiteral("no MCP token; pass --token, set PVFORGE_MCP_TOKEN, "
+        *error = QStringLiteral("no MCP token; set PVFORGE_MCP_TOKEN "
                                 "or enable MCP in PVForge");
         return false;
     }
@@ -298,6 +351,16 @@ bool resolveMcpEndpoint(const QString& endpointPath, const QString& argumentUrl,
         sources.append(QStringLiteral("environment"));
     if (fromFile)
         sources.append(QStringLiteral("endpoint file %1").arg(path));
+
+    if (fromFile)
+    {
+        QString pidError;
+        if (!endpointProcessIsCurrent(filePid, &pidError))
+        {
+            *error = endpointFileError(path, pidError);
+            return false;
+        }
+    }
 
     endpoint->url = parsed;
     endpoint->token = token;

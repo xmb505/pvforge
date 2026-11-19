@@ -97,6 +97,12 @@ public:
     bool setTags(const AssetHash& hash, const QStringList& tags,
                  QString* error = nullptr);
 
+    // Records where an import came from and whether a human approved it. MCP
+    // imports set origin="mcp", approved=true only after the UI dialog; preview
+    // rendering refuses to base64-encode assets marked approved=false.
+    bool markImportOrigin(const AssetHash& hash, const QString& origin,
+                          bool humanApproved, QString* error = nullptr);
+
     // Removes the asset directory. Returns false if it does not exist.
     bool remove(const AssetHash& hash, QString* error = nullptr);
 

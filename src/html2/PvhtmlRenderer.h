@@ -3,6 +3,7 @@
 #include "common/Types.h"
 
 #include <QImage>
+#include <QJsonObject>
 #include <QObject>
 #include <QSize>
 #include <QString>
@@ -110,6 +111,12 @@ public:
 private:
     bool ensureServer(const QString& bundleDir, QString* error);
     void dropPage(bool closeTarget);
+    // Connects the CDP event handler that answers Fetch.requestPaused. Only
+    // the exact bundle origin (dedicated host + this server's port) and
+    // non-navigation data/blob URLs are allowed; a top-level navigation must
+    // match m_expectedDocumentUrl exactly.
+    void installRequestGuard();
+    void handleRequestPaused(const QJsonObject& params, const QString& sessionId);
 
     pvf::html::HtmlBrowser* m_browser = nullptr;
     LocalBundleServer* m_server = nullptr;
@@ -117,6 +124,7 @@ private:
     QString m_sessionId;
     QString m_targetId;
     QString m_loadedUrl;
+    QString m_expectedDocumentUrl;
     QSize m_viewport;
     QString m_chromeVersion;
     QString m_chromeExecutable;

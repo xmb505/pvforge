@@ -126,8 +126,10 @@ const ToolEntry kTools[] = {
 
 } // namespace
 
-Service::Service(store::ProjectStore* store, assets::AssetStore* assets)
-    : m_store(store)
+Service::Service(store::ProjectStore* store, assets::AssetStore* assets,
+                 QObject* parent)
+    : QObject(parent)
+    , m_store(store)
     , m_assets(assets)
 {
 }
@@ -150,6 +152,11 @@ void Service::setHtmlFrameProvider(FrameProvider provider)
 void Service::setBatchCheckpoint(BatchCheckpoint checkpoint)
 {
     m_batchCheckpoint = std::move(checkpoint);
+}
+
+void Service::setExternalImportConfirmer(ExternalImportConfirmer confirmer)
+{
+    m_externalImportConfirmer = std::move(confirmer);
 }
 
 void Service::setClock(std::function<qint64()> clock)
@@ -267,6 +274,7 @@ QJsonObject Service::execute(const QString& tool, const QJsonObject& args)
         tx.writesEnabled = writesEnabled();
         tx.stopped = isStopped();
         tx.previewSlot = [this] { return takePreviewSlot(); };
+        tx.confirmExternalImport = m_externalImportConfirmer;
         tx.stopCheck = [this] {
             if (m_batchCheckpoint)
                 m_batchCheckpoint();

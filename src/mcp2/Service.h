@@ -4,6 +4,7 @@
 
 #include <QImage>
 #include <QJsonObject>
+#include <QObject>
 #include <QRect>
 #include <QString>
 
@@ -52,10 +53,13 @@ using ViewStateProvider = std::function<ViewState()>;
 // Every successful write tool is one logical operation and produces exactly one
 // git commit through store::ProjectStore::commit(). Batch tools validate the
 // whole payload before touching the store, so a failure leaves no partial data.
-class Service
+class Service : public QObject
 {
+    Q_OBJECT
+
 public:
-    Service(store::ProjectStore* store, assets::AssetStore* assets);
+    explicit Service(store::ProjectStore* store, assets::AssetStore* assets,
+                     QObject* parent = nullptr);
 
     // Installs the callback that supplies live UI state. An empty provider
     // yields ViewState defaults.
@@ -93,10 +97,17 @@ public:
     static bool isWriteTool(const QString& tool);
 
     // Optional hook run at every batch checkpoint, right before the stop flag
-    // is read. The UI can pump its event loop here so the stop button stays
-    // clickable during a long transaction.
+    // is read. It must be non-reentrant: the default (unset) does nothing, and
+    // callers must not pump Qt events here (issue #125).
     using BatchCheckpoint = std::function<void()>;
     void setBatchCheckpoint(BatchCheckpoint checkpoint);
+
+    // Human approval for importing a file or directory from outside the
+    // project. The UI installs a modal confirmation dialog; the callback blocks
+    // until the human answers. When unset, every outside import is refused:
+    // an AI-supplied `confirm: true` is never accepted on its own.
+    using ExternalImportConfirmer = std::function<bool(const QString& path)>;
+    void setExternalImportConfirmer(ExternalImportConfirmer confirmer);
 
     // Wall clock override for the preview rate limiter. Tests and embedders use
     // it to make limit_exceeded deterministic; the default is the system clock.
@@ -114,6 +125,7 @@ private:
     FrameProvider m_videoFrameProvider;
     FrameProvider m_htmlFrameProvider;
     BatchCheckpoint m_batchCheckpoint;
+    ExternalImportConfirmer m_externalImportConfirmer;
     std::function<qint64()> m_clock;
     std::atomic<qint64> m_previewWindowStart{0};
     std::atomic<int> m_previewWindowCount{0};

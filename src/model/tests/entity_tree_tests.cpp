@@ -355,6 +355,44 @@ void testAudioFadeJsonAndValidation()
     CHECK(!validateEntity(bad, &error));
 }
 
+void testSolverTargetChainDepthLimit()
+{
+    // A malicious project can build a target chain longer than any stack can
+    // recurse. validateProject must stop at the explicit depth cap instead of
+    // crashing. 4098 nodes is just above the 4096 limit.
+    Project project;
+    constexpr int kNodes = 4098;
+    QVector<Uuid> ids;
+    ids.reserve(kNodes);
+    for (int i = 0; i < kNodes; ++i)
+        ids.append(newUuid());
+    // detectSolverTargetCycles() seeds its DFS in sorted UUID order. Sorting
+    // the chain makes the first seed walk all 4098 nodes instead of starting
+    // near a leaf and finishing in constant depth.
+    std::sort(ids.begin(), ids.end());
+
+    for (int i = 0; i < kNodes; ++i)
+    {
+        Entity entity = makeEntity(0, 30);
+        entity.uuid = ids.at(i);
+        if (i + 1 < kNodes)
+        {
+            SolverSegment segment;
+            segment.id = newUuid();
+            segment.effect = SolverEffect::Gravity;
+            segment.startFrame = 0;
+            segment.endFrame = -1;
+            segment.params.insert(QStringLiteral("targetUuid"), ids.at(i + 1));
+            entity.solvers.append(segment);
+        }
+        project.entities.insert(entity.uuid, entity);
+    }
+
+    QString error;
+    CHECK(!validateProject(project, &error));
+    CHECK_DETAIL(error.contains(QStringLiteral("最大深度")), error);
+}
+
 } // namespace
 
 void runEntityTreeTests(int* checks, int* failures)
@@ -368,6 +406,7 @@ void runEntityTreeTests(int* checks, int* failures)
     testProjectFollowValidation();
     testTrackRowsAndOverlap();
     testAudioFadeJsonAndValidation();
+    testSolverTargetChainDepthLimit();
 
     if (checks)
         *checks += gChecks;

@@ -464,46 +464,6 @@ void StoreTests::assetImportCommit()
              qPrintable(show.out));
 }
 
-void StoreTests::commitFailureReportsStderr()
-{
-    SKIP_WITHOUT_GIT();
-
-    QTemporaryDir temp;
-    QVERIFY(temp.isValid());
-    const QString path = projectPath(temp);
-
-    QString error;
-    auto store = ProjectStore::create(path, model::ProjectSettings(), &error);
-    QVERIFY2(store.has_value(), qPrintable(error));
-
-    model::Entity entity = makeEntity();
-    store->mutableProject().entities.insert(entity.uuid, entity);
-    QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
-
-    const QString hookPath =
-        store->root() + QStringLiteral("/.git/hooks/pre-commit");
-    QVERIFY(writeText(hookPath,
-                      QStringLiteral("#!/bin/sh\n"
-                                     "echo hook-boom >&2\n"
-                                     "exit 1\n")));
-    QVERIFY(QFile::setPermissions(
-        hookPath,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
-            | QFileDevice::ReadGroup | QFileDevice::ExeGroup
-            | QFileDevice::ReadOther | QFileDevice::ExeOther));
-
-    error.clear();
-    QVERIFY(!store->commit(QStringLiteral("pvf: should fail"), &error));
-    QVERIFY2(error.contains(QStringLiteral("hook-boom")), qPrintable(error));
-
-    QVERIFY(QFile::remove(hookPath));
-    error.clear();
-    QVERIFY2(store->commit(QStringLiteral("pvf: retry"), &error),
-             qPrintable(error));
-    QCOMPARE(store->history(1, &error).first().message,
-             QStringLiteral("pvf: retry"));
-}
-
 void StoreTests::undoRedoRestoresText()
 {
     SKIP_WITHOUT_GIT();
@@ -1433,21 +1393,24 @@ void StoreTests::restoreCommitRollsBackOnCommitFailure()
                                + QStringLiteral(".json");
     const QString bytesB = readText(entityPath);
 
-    const QString hookPath =
-        store->root() + QStringLiteral("/.git/hooks/pre-commit");
-    QVERIFY(writeText(hookPath,
-                      QStringLiteral("#!/bin/sh\n"
-                                     "echo hook-boom >&2\n"
-                                     "exit 1\n")));
-    QVERIFY(QFile::setPermissions(
-        hookPath,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
-            | QFileDevice::ReadGroup | QFileDevice::ExeGroup
-            | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    // Force the recovery commit to fail after the text tree was already
+    // switched: a branch ref lock makes `git commit` fail without preventing
+    // the rollback's checkout+stage path from restoring the pre-call state.
+    const CommandResult branch =
+        runGit(path, {QStringLiteral("branch"), QStringLiteral("--show-current")});
+    QCOMPARE(branch.exitCode, 0);
+    const QString branchName = branch.out.trimmed();
+    QVERIFY(!branchName.isEmpty());
+    const QString lockPath = path + QStringLiteral("/.git/refs/heads/")
+                             + branchName + QStringLiteral(".lock");
+    QVERIFY(writeText(lockPath, QString()));
 
     error.clear();
     QVERIFY(!store->restoreCommit(commitA, &error));
-    QVERIFY2(error.contains(QStringLiteral("hook-boom")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("lock"), Qt::CaseInsensitive)
+                 || error.contains(QStringLiteral("失败")),
+             qPrintable(error));
+    QVERIFY(QFile::remove(lockPath));
 
     // The failed restore rolled the text tree, index and HEAD back.
     QCOMPARE(readText(entityPath), bytesB);

@@ -200,6 +200,9 @@ private slots:
     void pvhtmlRejectsMissingEntry();
     void pvhtmlRejectsSymlink();
     void videoImportWithAudio();
+    void symlinkedAssetDirectoryRejected();
+    void symlinkedContentRejected();
+    void symlinkedAssetsRootRejected();
 };
 
 void AssetsTest::sha256KnownFile()
@@ -792,6 +795,88 @@ void AssetsTest::videoImportWithAudio()
     QVERIFY(again->audio.has_value());
     QCOMPARE(again->audio->hash, imported->audio->hash);
     QCOMPARE(store.list().size(), 2);
+}
+
+void AssetsTest::symlinkedAssetDirectoryRejected()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString root = temp.filePath(QStringLiteral("Demo.pvproj"));
+    QVERIFY(QDir().mkpath(root));
+    pvf::assets::AssetStore store(root);
+
+    const QString source = temp.filePath(QStringLiteral("pic.png"));
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(source));
+    QString error;
+    const auto imported = store.importFile(source, &error);
+    QVERIFY2(imported.has_value(), qPrintable(error));
+
+    // Replace assets/<hash> with a symlink to a directory outside the project;
+    // reading that hash would otherwise expose arbitrary local files.
+    const QString outside = temp.filePath(QStringLiteral("outside-asset"));
+    QVERIFY(QDir().rename(imported->directory, outside));
+    QVERIFY(QFile::link(outside, imported->directory));
+    QVERIFY(!store.get(imported->hash).has_value());
+    QVERIFY(!store.getIncludingMissing(imported->hash).has_value());
+    QVERIFY(store.list().isEmpty());
+    QVERIFY(!store.remove(imported->hash, &error));
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+}
+
+void AssetsTest::symlinkedContentRejected()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString root = temp.filePath(QStringLiteral("Demo.pvproj"));
+    QVERIFY(QDir().mkpath(root));
+    pvf::assets::AssetStore store(root);
+
+    const QString source = temp.filePath(QStringLiteral("pic.png"));
+    QImage image(8, 8, QImage::Format_ARGB32);
+    image.fill(Qt::blue);
+    QVERIFY(image.save(source));
+    QString error;
+    const auto imported = store.importFile(source, &error);
+    QVERIFY2(imported.has_value(), qPrintable(error));
+
+    const QString secret = temp.filePath(QStringLiteral("secret.png"));
+    QVERIFY(image.save(secret));
+    for (const QString& name : QDir(imported->directory)
+                                   .entryList({QStringLiteral("content.*")},
+                                              QDir::Files))
+    {
+        const QString content = imported->directory + QLatin1Char('/') + name;
+        QVERIFY(QFile::remove(content));
+        QVERIFY(QFile::link(secret, content));
+    }
+    QVERIFY(!store.get(imported->hash).has_value());
+    const auto broken = store.getIncludingMissing(imported->hash);
+    QVERIFY(broken.has_value());
+    QVERIFY(pvf::assets::missingContent(*broken));
+}
+
+void AssetsTest::symlinkedAssetsRootRejected()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString root = temp.filePath(QStringLiteral("Demo.pvproj"));
+    QVERIFY(QDir().mkpath(root));
+    const QString outside = temp.filePath(QStringLiteral("outside-assets"));
+    QVERIFY(QDir().mkpath(outside));
+    QVERIFY(QFile::link(outside, root + QStringLiteral("/assets")));
+    pvf::assets::AssetStore store(root);
+
+    const QString source = temp.filePath(QStringLiteral("pic.png"));
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    QVERIFY(image.save(source));
+    QString error;
+    const auto imported = store.importFile(source, &error);
+    QVERIFY(!imported.has_value());
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+    QVERIFY(QDir(outside).isEmpty());
 }
 
 int main(int argc, char** argv)

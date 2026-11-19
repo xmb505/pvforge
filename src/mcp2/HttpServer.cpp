@@ -27,6 +27,11 @@
 #include <exception>
 #include <memory>
 
+#if defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #ifndef PVFORGE_VERSION
 #define PVFORGE_VERSION "0.3.0"
 #endif
@@ -65,7 +70,14 @@ QString defaultConfigPath()
 
 QString defaultEndpointPath()
 {
+#if defined(Q_OS_MACOS)
+    // Keep this identical to defaultMcpEndpointPath() in src/mcp/StdioBridge.cpp;
+    // a different directory made the bridge unable to find the GUI endpoint.
+    return QDir::homePath()
+           + QStringLiteral("/Library/Application Support/PVForge/mcp-endpoint.json");
+#else
     return configDirectory() + QStringLiteral("/mcp-endpoint.json");
+#endif
 }
 
 QFileDevice::Permissions privateFilePermissions()
@@ -223,8 +235,8 @@ void sendHttpError(QTcpSocket* socket, int status, const QString& code,
     sendHttp(socket, status, body, QByteArrayLiteral("application/json"), extra);
 }
 
-// Sets a bool for the lifetime of the guard.  Used to make tools/call
-// non-reentrant across the batch checkpoint's processEvents().
+// Sets a bool for the lifetime of the guard. Used to make tools/call
+// non-reentrant when a human confirmation dialog spins its own event loop.
 class BusyFlag
 {
 public:
@@ -485,6 +497,25 @@ bool HttpServer::loadOrCreateConfig(QString* error)
         m_token = generateToken();
         m_configuredPort = kDefaultPort;
         return saveConfig(error);
+    }
+
+#if defined(Q_OS_UNIX)
+    struct stat fileInfo;
+    if (::stat(QFile::encodeName(path).constData(), &fileInfo) == 0
+        && fileInfo.st_uid != ::geteuid())
+    {
+        if (error)
+            *error = QStringLiteral("MCP 配置 %1 不属于当前用户").arg(path);
+        return false;
+    }
+#endif
+    // The file contains the Bearer token; tighten a mode loosened by an old
+    // version or the user before reading it.
+    if (!QFile::setPermissions(path, privateFilePermissions()))
+    {
+        if (error)
+            *error = QStringLiteral("无法收紧 MCP 配置权限 %1").arg(path);
+        return false;
     }
 
     QFile file(path);
@@ -1190,9 +1221,11 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             emit toolCallStarted(name, argsJson, write);
 
             QJsonObject serviceResult;
-            if (m_service)
+            // Re-check after execute(): a re-entrant close/switch may have
+            // dropped the Service, and `this` must not use it afterwards.
+            if (QPointer<Service> service = m_service; !service.isNull())
             {
-                serviceResult = m_service->execute(name, args);
+                serviceResult = service->execute(name, args);
             }
             else
             {

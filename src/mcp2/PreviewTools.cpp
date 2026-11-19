@@ -4,6 +4,7 @@
 #include "render2/Render.h"
 
 #include <QColor>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -15,12 +16,67 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace pvf::mcp2::detail {
 
 namespace {
 
 constexpr int kMaxPreviewSide = 4096;
 constexpr qint64 kMaxPreviewBytes = 20LL * 1024LL * 1024LL;
+constexpr int kMaxPreviewFiles = 32;
+constexpr qint64 kPreviewTtlSeconds = 60 * 60;
+
+// Per-user directory: mode 0700, PNGs mode 0600, TTL and LRU pruning. /tmp is
+// shared, so a fixed 0644 file name would let other local users read frames of
+// the project.
+void setOwnerOnly(const QString& path, bool executable)
+{
+#ifdef Q_OS_UNIX
+    const mode_t mode = executable ? 0700 : 0600;
+    ::chmod(QFile::encodeName(path).constData(), mode);
+#else
+    QFile::setPermissions(path, executable
+                                    ? QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                          | QFileDevice::ExeOwner
+                                    : QFileDevice::ReadOwner
+                                          | QFileDevice::WriteOwner);
+#endif
+}
+
+QString previewDirectory()
+{
+    QString base = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (base.isEmpty())
+        base = QDir::tempPath();
+#ifdef Q_OS_UNIX
+    const QString suffix = QString::number(qint64(::geteuid()));
+#else
+    const QString suffix = QStringLiteral("user");
+#endif
+    const QString directory = base + QStringLiteral("/pvforge-previews-") + suffix;
+    if (!QDir().mkpath(directory))
+        return QString();
+    setOwnerOnly(directory, true);
+    return directory;
+}
+
+void prunePreviewDirectory(const QString& directory)
+{
+    const QFileInfoList files =
+        QDir(directory).entryInfoList({QStringLiteral("*.png")}, QDir::Files,
+                                      QDir::Time); // newest first
+    const QDateTime cutoff = QDateTime::currentDateTimeUtc().addSecs(-kPreviewTtlSeconds);
+    for (int i = 0; i < files.size(); ++i)
+    {
+        const QFileInfo& info = files.at(i);
+        if (i >= kMaxPreviewFiles || info.lastModified().toUTC() < cutoff)
+            QFile::remove(info.absoluteFilePath());
+    }
+}
 
 QJsonValue uuidValue(const Uuid& uuid)
 {
@@ -199,6 +255,30 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
     if (!readBool(args, "includeBase64", &includeBase64, &error))
         return error;
 
+    // Defense in depth for issue #123: base64 is the only channel that copies
+    // arbitrary user pixels into the AI response. A project whose metadata says
+    // an MCP import was never human-approved is not allowed to use it.
+    if (includeBase64)
+    {
+        for (const assets::StoredAsset& asset : tx.store->assets().listIncludingMissing())
+        {
+            const QJsonObject metadata = asset.metadata;
+            if (metadata.value(QStringLiteral("importedBy")).toString()
+                    != QLatin1String("mcp"))
+                continue;
+            if (metadata.value(QStringLiteral("humanApproved")).toBool())
+                continue;
+            QJsonObject details;
+            details.insert(QStringLiteral("assetHash"), asset.hash);
+            details.insert(QStringLiteral("reason"),
+                           QStringLiteral("unapproved_import"));
+            return failure(
+                QStringLiteral("permission_denied"),
+                QStringLiteral("存在未经人类确认导入的素材，禁止 base64 预览输出"),
+                details);
+        }
+    }
+
     if (tx.previewSlot && !tx.previewSlot())
     {
         QJsonObject details;
@@ -224,19 +304,18 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("internal_error"),
                        QStringLiteral("预览渲染失败"));
 
-    QString directory =
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    const QString directory = previewDirectory();
     if (directory.isEmpty())
-        directory = QDir::tempPath();
-    if (!QDir().mkpath(directory))
         return failure(QStringLiteral("internal_error"),
                        QStringLiteral("无法创建预览临时目录"));
+    prunePreviewDirectory(directory);
 
     const QString path = directory + QStringLiteral("/pvforge-preview-")
                          + model::newUuid() + QStringLiteral(".png");
     if (!image.save(path, "PNG"))
         return failure(QStringLiteral("internal_error"),
                        QStringLiteral("无法保存预览 PNG"));
+    setOwnerOnly(path, false);
     if (QFileInfo(path).size() > kMaxPreviewBytes)
     {
         QFile::remove(path);

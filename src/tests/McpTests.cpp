@@ -407,6 +407,26 @@ int mcpLockTest(QApplication& app)
     check(lockError.contains(QStringLiteral("AI")),
           QStringLiteral("Document lock error is unclear: %1").arg(lockError));
 
+    // Issue #125: while a tools/call is on the stack, closing the window or
+    // switching projects must be refused instead of destroying the Service and
+    // HttpServer under handleRpc().
+    check(live->toolCallInProgress(),
+          QStringLiteral("toolCallInProgress is false during a tool call"));
+    window->close();
+    QApplication::processEvents();
+    check(window->isVisible(),
+          QStringLiteral("close during an AI tool call was not ignored"));
+    check(window->editorSessionForTest() == live,
+          QStringLiteral("close destroyed the executing session"));
+    QString switchError;
+    check(!window->openSessionProjectForTest(
+              QDir(temp.path()).filePath(QStringLiteral("other.pvproj")),
+              &switchError),
+          QStringLiteral("project switch succeeded during an AI tool call"));
+    check(switchError.contains(QStringLiteral("AI")),
+          QStringLiteral("project switch error does not explain the AI lock: %1")
+              .arg(switchError));
+
     // Emergency stop releases human editing even before the tool unwinds.
     auto* stopButton = log
                            ? log->findChild<QToolButton*>(
@@ -432,6 +452,8 @@ int mcpLockTest(QApplication& app)
     server->toolCallFinished(QStringLiteral("entity.create"),
                              QStringLiteral("{\"ok\":false}"), 1, false);
     QApplication::processEvents();
+    check(!live->toolCallInProgress(),
+          QStringLiteral("toolCallInProgress stayed true after the tool finished"));
     check(window->humanEditingEnabledForTest(),
           QStringLiteral("tool finish re-locked the stopped editor"));
 
@@ -441,6 +463,20 @@ int mcpLockTest(QApplication& app)
     check(window->humanEditingEnabledForTest(),
           QStringLiteral("resume locked human editing"));
     check(!server->aiStopped(), QStringLiteral("resume did not clear the stop"));
+
+    // Stopping the MCP server from inside a tool call defers destruction to the
+    // next event-loop turn; emitting the matching finish must not crash and the
+    // session must end up without a listener.
+    server->toolCallStarted(QStringLiteral("entity.createMany"),
+                            QStringLiteral("{}"), true);
+    QApplication::processEvents();
+    live->stopMcpServer();
+    check(!live->mcpServer(), QStringLiteral("stopMcpServer kept the listener"));
+    server->toolCallFinished(QStringLiteral("entity.createMany"),
+                             QStringLiteral("{\"ok\":false}"), 1, false);
+    QApplication::processEvents();
+    check(!live->toolCallInProgress(),
+          QStringLiteral("deferred stop left the in-flight counter set"));
 
     qInfo() << "mcp-lock-test failures" << failures;
     return failures == 0 ? 0 : 1;
