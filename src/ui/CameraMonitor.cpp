@@ -2,8 +2,6 @@
 
 #include "app/EditorSession.h"
 #include "core/Settings.h"
-#include "media/VideoDecoder.h"
-#include "media/VideoProxy.h"
 #include "next/app/MediaServices.h"
 #include "next/app/ProjectDocument.h"
 #include "render2/Render.h"

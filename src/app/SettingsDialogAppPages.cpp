@@ -103,10 +103,6 @@ QWidget* SettingsDialog::createAppCachePage()
 
     auto* html = new QGroupBox(QStringLiteral("HTML 帧缓存"), content);
     auto* htmlForm = new QFormLayout(html);
-    m_appHtmlCacheEnabled = new QCheckBox(
-        QStringLiteral("启用 HTML 帧缓存（内存 + 磁盘 LRU）"), html);
-    m_appHtmlCacheEnabled->setObjectName(QStringLiteral("htmlCacheEnabled"));
-    htmlForm->addRow(m_appHtmlCacheEnabled);
     m_appHtmlMemoryMb = new QSpinBox(html);
     m_appHtmlMemoryMb->setObjectName(QStringLiteral("htmlMemoryMb"));
     m_appHtmlMemoryMb->setRange(32, 4096);
@@ -150,10 +146,6 @@ QWidget* SettingsDialog::createAppCachePage()
 
     auto* video = new QGroupBox(QStringLiteral("视频预览"), content);
     auto* videoForm = new QFormLayout(video);
-    m_appVideoProxyEnabled =
-        new QCheckBox(QStringLiteral("启用视频播放代理"), video);
-    m_appVideoProxyEnabled->setObjectName(QStringLiteral("videoProxyEnabled"));
-    videoForm->addRow(m_appVideoProxyEnabled);
     m_appVideoProxyWidth = new QComboBox(video);
     m_appVideoProxyWidth->setObjectName(QStringLiteral("videoProxyWidth"));
     m_appVideoProxyWidth->addItem(QStringLiteral("960 px"), 960);

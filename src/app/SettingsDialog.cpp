@@ -2,7 +2,6 @@
 
 #include "AppIcon.h"
 #include "SettingsDialogSupport.h"
-#include "core/Settings.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -31,71 +30,6 @@
 namespace pvf {
 
 using namespace settings_detail;
-
-SettingsDialog::SettingsDialog(QWidget* parent, McpServer* mcpServer)
-    : QDialog(parent)
-    , m_mcpServer(mcpServer)
-{
-    setWindowTitle(QStringLiteral("设置"));
-    setMinimumSize(660, 460);
-    resize(760, 560);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(10);
-
-    auto* body = new QHBoxLayout;
-    body->setSpacing(12);
-
-    m_categories = new QListWidget(this);
-    m_categories->setObjectName(QStringLiteral("settingsCategories"));
-    m_categories->setFixedWidth(158);
-    m_categories->setFrameShape(QFrame::StyledPanel);
-    m_categories->setIconSize(QSize(16, 16));
-    m_categories->setUniformItemSizes(true);
-    m_categories->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_categories->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    body->addWidget(m_categories);
-
-    m_pages = new QStackedWidget(this);
-    m_pages->setObjectName(QStringLiteral("settingsPages"));
-    m_pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    body->addWidget(m_pages, 1);
-
-    addPage(QStringLiteral("常规"), createGeneralPage(),
-            {QStringLiteral("preferences-system"), QStringLiteral("settings")});
-    addPage(QStringLiteral("编辑器"), createEditorPage(),
-            {QStringLiteral("document-edit"), QStringLiteral("accessories-text-editor")});
-    addPage(QStringLiteral("新项目"), createProjectPage(),
-            {QStringLiteral("document-new")});
-    addPage(QStringLiteral("时间轴"), createTimelinePage(),
-            {QStringLiteral("view-media-playlist"), QStringLiteral("media-playback-start")});
-    addPage(QStringLiteral("素材"), createAssetsPage(),
-            {QStringLiteral("folder")});
-    addPage(QStringLiteral("解码"), createDecodePage(),
-            {QStringLiteral("video-x-generic"), QStringLiteral("media-playback-start")});
-    addPage(QStringLiteral("MCP"), createMcpPage(),
-            {QStringLiteral("network-server"), QStringLiteral("network-wired")});
-    m_aboutIndex = addPage(QStringLiteral("关于"), createAboutPage(),
-                           {QStringLiteral("help-about")});
-
-    connect(m_categories, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (row >= 0)
-            m_pages->setCurrentIndex(row);
-    });
-    m_categories->setCurrentRow(0);
-
-    root->addLayout(body, 1);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    if (auto* ok = buttons->button(QDialogButtonBox::Ok))
-        ok->setText(QStringLiteral("确定"));
-    if (auto* cancel = buttons->button(QDialogButtonBox::Cancel))
-        cancel->setText(QStringLiteral("取消"));
-    connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &SettingsDialog::reject);
-    root->addWidget(buttons);
-}
 
 SettingsDialog::SettingsDialog(next::SettingsStore* store, QWidget* parent)
     : QDialog(parent)
@@ -171,7 +105,7 @@ void SettingsDialog::buildAppShell()
     });
     root->addWidget(buttons);
 
-    setAppSettings(m_appStore ? m_appStore->load() : next::AppSettings{});
+    setAppSettings(m_appStore->load());
 }
 
 QWidget* SettingsDialog::createAppGeneralPage()
@@ -267,8 +201,6 @@ QWidget* SettingsDialog::createAppEditorPage()
 
 next::AppSettings SettingsDialog::appSettings() const
 {
-    if (!m_appStore)
-        return next::AppSettings{};
     next::AppSettings settings;
     settings.autoSaveMinutes = m_appAutoSaveMinutes->value();
     settings.humanCommitDelayMs = m_appCommitDelayMs->value();
@@ -286,7 +218,6 @@ next::AppSettings SettingsDialog::appSettings() const
     if (m_appSnapAngle90->isChecked())
         settings.snapAngles << 90.0 << 270.0;
 
-    settings.htmlCacheEnabled = m_appHtmlCacheEnabled->isChecked();
     settings.htmlMemoryBytes = qint64(m_appHtmlMemoryMb->value()) * 1024 * 1024;
     settings.htmlDiskBytes = qint64(m_appHtmlDiskGb->value()) * 1024 * 1024 * 1024;
     settings.htmlScale = m_appHtmlScale->currentData().toDouble();
@@ -294,7 +225,6 @@ next::AppSettings SettingsDialog::appSettings() const
     settings.watchdogMs = m_appWatchdogMs->value();
     settings.chromeExecutable = m_appChromeExecutable->text().trimmed();
 
-    settings.videoProxyEnabled = m_appVideoProxyEnabled->isChecked();
     settings.videoProxyWidth = m_appVideoProxyWidth->currentData().toInt();
     settings.videoMemoryFrames = m_appVideoMemoryFrames->currentData().toInt();
 
@@ -316,8 +246,6 @@ next::AppSettings SettingsDialog::appSettings() const
 
 void SettingsDialog::setAppSettings(const next::AppSettings& settings)
 {
-    if (!m_appStore)
-        return;
     const next::AppSettings value = next::SettingsStore::sanitized(settings);
     m_appAutoSaveMinutes->setValue(value.autoSaveMinutes);
     m_appCommitDelayMs->setValue(value.humanCommitDelayMs);
@@ -333,7 +261,6 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
     m_appSnapAngle45->setChecked(hasAngle(45.0));
     m_appSnapAngle90->setChecked(hasAngle(90.0) || hasAngle(270.0));
 
-    m_appHtmlCacheEnabled->setChecked(value.htmlCacheEnabled);
     m_appHtmlMemoryMb->setValue(int(value.htmlMemoryBytes / (1024 * 1024)));
     m_appHtmlDiskGb->setValue(int(value.htmlDiskBytes / (1024 * 1024 * 1024)));
     const int htmlScale = m_appHtmlScale->findData(value.htmlScale);
@@ -343,7 +270,6 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
     m_appWatchdogMs->setValue(value.watchdogMs);
     m_appChromeExecutable->setText(value.chromeExecutable);
 
-    m_appVideoProxyEnabled->setChecked(value.videoProxyEnabled);
     const int proxyWidth = m_appVideoProxyWidth->findData(value.videoProxyWidth);
     if (proxyWidth >= 0)
         m_appVideoProxyWidth->setCurrentIndex(proxyWidth);
@@ -372,8 +298,6 @@ void SettingsDialog::setAppSettings(const next::AppSettings& settings)
 
 void SettingsDialog::saveAppSettings()
 {
-    if (!m_appStore)
-        return;
     m_appStore->save(appSettings());
 }
 
@@ -404,8 +328,6 @@ void SettingsDialog::setMcpStatus(bool running, quint16 port,
 void SettingsDialog::setGitInfo(const QString& repositoryPath,
                                 const QString& recentCommit)
 {
-    m_appGitRepositoryValue = repositoryPath;
-    m_appGitRecentValue = recentCommit;
     if (!m_appGitRepository || !m_appGitRecent)
         return;
     m_appGitRepository->setText(repositoryPath.isEmpty()
@@ -458,12 +380,6 @@ void SettingsDialog::setEndpointPath(const QString& path)
 {
     if (m_appMcpEndpoint)
         m_appMcpEndpoint->setText(path);
-}
-
-QString SettingsDialog::endpointPath() const
-{
-    return m_appMcpEndpoint ? m_appMcpEndpoint->text()
-                            : defaultEndpointPath();
 }
 
 QString SettingsDialog::defaultEndpointPath()
@@ -543,38 +459,8 @@ QWidget* SettingsDialog::createAboutPage()
 
 void SettingsDialog::accept()
 {
-    if (m_appStore)
-    {
-        saveAppSettings();
-        emit settingsApplied();
-        QDialog::accept();
-        return;
-    }
-
-    Settings::setLanguage(m_language->currentData().toString());
-    Settings::setSnapPixels(m_snapPixels->value());
-    Settings::setEdgeCenterSnap(m_edgeCenterSnap->isChecked());
-    Settings::setEdgeMidpointSnap(m_edgeMidpointSnap->isChecked());
-    QList<int> angles;
-    if (m_angle0->isChecked())
-        angles.append(0);
-    if (m_angle90->isChecked())
-        angles.append(90);
-    if (m_angle180->isChecked())
-        angles.append(180);
-    if (m_angle270->isChecked())
-        angles.append(270);
-    Settings::setSnapAngles(angles);
-    Settings::setAutoKeyDefault(m_autoKey->isChecked());
-    Settings::setAudioScrub(m_audioScrub->isChecked());
-    Settings::setAutosaveEnabled(m_autosave->isChecked());
-    Settings::setAutosaveMinutes(m_autosaveMinutes->value());
-    Settings::setDefaultSize(m_width->value(), m_height->value(), m_fps->value());
-    Settings::setTimelinePixelsPerFrame(m_timelineZoom->value());
-    Settings::setPackAssetsDefault(m_packAssets->isChecked());
-    Settings::setMcpPortAuto(m_mcpAutoPort->isChecked());
-    Settings::setMcpPort(m_mcpPort->value());
-    Settings::setMcpLogVisible(m_mcpLogEnabled->isChecked());
+    saveAppSettings();
+    emit settingsApplied();
     QDialog::accept();
 }
 

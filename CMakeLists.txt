@@ -49,23 +49,28 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 
 qt_standard_project_setup()
 
-add_executable(pvforge-mcp
-    src/mcp/main.cpp
+# The stdio bridge is shared by the pvforge-mcp CLI and its self-test; keep it
+# in one library so the TU is compiled once.  The editor GUI does not link it.
+add_library(pvf_mcp_bridge STATIC
     src/mcp/StdioBridge.cpp
+    src/mcp/StdioBridge.h
 )
+
+target_include_directories(pvf_mcp_bridge PUBLIC src)
+target_link_libraries(pvf_mcp_bridge PUBLIC Qt6::Core Qt6::Network)
+
+add_executable(pvforge-mcp src/mcp/main.cpp)
 
 target_compile_definitions(pvforge-mcp PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
 )
 
-target_include_directories(pvforge-mcp PRIVATE src)
-target_link_libraries(pvforge-mcp PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(pvforge-mcp PRIVATE pvf_mcp_bridge)
 
 # Everything the editor needs, minus the entry point. Kept as a static library
 # so `pvforge` and `pvforge-tests` share one compilation of the application
 # sources instead of building them twice.
 set(PVF_APP_SOURCES
-    src/core/CheckpointManager.cpp
     src/core/PerfMonitor.cpp
     src/core/Settings.cpp
     src/core/Lang.cpp
@@ -76,16 +81,11 @@ set(PVF_APP_SOURCES
     src/core/BrandWall.cpp
     src/core/VectorShape.cpp
     src/core/Easing.cpp
-    src/media/VideoDecoder.cpp
-    src/media/VideoProxy.cpp
-    src/media/AudioDecoder.cpp
     src/media/DecoderInfo.cpp
-    src/mcp/StdioBridge.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
     src/app/SettingsDialog.cpp
     src/app/SettingsDialogAppPages.cpp
-    src/app/SettingsDialogLegacyPages.cpp
     src/app/SettingsDialogSupport.h
     src/app/ExportDialog.cpp
     src/app/ExportProgressDialog.cpp
@@ -127,8 +127,6 @@ set(PVF_APP_SOURCES
     src/ui/AssetLibraryPanelThumbs.cpp
     src/ui/BezierEditorDialog.cpp
     src/ui/CameraMonitor.cpp
-    src/ui/EasingChooser.cpp
-    src/ui/EasingPicker.cpp
     src/ui/McpLogPanel.cpp
     src/ui/PerfMonitorWindow.cpp
     src/ui/TextLayoutDialog.cpp
@@ -176,10 +174,7 @@ add_library(pvf_app STATIC ${PVF_APP_SOURCES})
 target_compile_definitions(pvf_app PRIVATE
     PVFORGE_VERSION="${PROJECT_VERSION}"
     PVFORGE_BUILD_TYPE="$<CONFIG>"
-    PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
 )
-
-add_dependencies(pvf_app pvforge-mcp)
 
 target_include_directories(pvf_app PUBLIC src)
 target_link_libraries(pvf_app PUBLIC
@@ -236,7 +231,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         PVFORGE_MCP_BINARY="$<TARGET_FILE:pvforge-mcp>"
     )
     target_include_directories(pvforge-tests PRIVATE src)
-    target_link_libraries(pvforge-tests PRIVATE pvf_app)
+    target_link_libraries(pvforge-tests PRIVATE pvf_app pvf_mcp_bridge)
     pvf_add_lang_resources(pvforge-tests)
 
     # Every behavioural self-test switch is a CTest case (issue #110). Only
@@ -249,7 +244,6 @@ if(PVFORGE_BUILD_SELF_TESTS)
             session-test
             welcome-test
             settings-test
-            checkpoint-test
             git-test
             rename-test
             panel-layout-test
@@ -317,7 +311,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
         endforeach()
         set(PVF_SELF_TEST_CORE
-            self-test checkpoint-test git-test solver-convert-test
+            self-test git-test solver-convert-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_CORE)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;core")

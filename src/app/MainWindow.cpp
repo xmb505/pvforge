@@ -2,7 +2,6 @@
 
 #include "EditorSession.h"
 #include "SettingsDialog.h"
-#include "core/CheckpointManager.h"
 #include "core/Lang.h"
 #include "core/Settings.h"
 #include "next/app/PlaybackController.h"
