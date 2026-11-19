@@ -52,6 +52,18 @@ MainWindow::MainWindow(EditorSession* session, QWidget* parent)
     , m_sessionOwner(session)
 {
     buildSessionShell();
+    // A repository PVForge did not create (or one carrying hooks/filters) is
+    // ignored instead of executed; say so instead of silently losing the undo
+    // history the user expects.
+    if (m_session && m_session->document())
+    {
+        const QString warning = m_session->document()->store()->gitWarning();
+        if (!warning.isEmpty())
+        {
+            statusBar()->showMessage(
+                QStringLiteral("Git 已禁用：%1").arg(warning), 15000);
+        }
+    }
 }
 
 void MainWindow::buildSessionShell()
