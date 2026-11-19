@@ -15,7 +15,11 @@ private slots:
     void deleteEntityFile();
     void commitAndHistory();
     void assetImportCommit();
-    void commitFailureReportsStderr();
+    void commitIgnoresProjectHooks();
+    void commitRejectsCleanFilter();
+    void openRefusesForeignRepository();
+    void openRefusesGitDirPointer();
+    void openRefusesUnsafeConfig();
     void undoRedoRestoresText();
     void undoProjectSettings();
     void undoNewAndDeletedFiles();

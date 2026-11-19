@@ -87,6 +87,12 @@ public:
     // Whether this store is actually using git right now.
     bool gitEnabled() const { return m_gitEnabled; }
 
+    // Non-empty when a `.git` directory was found but refused: it was not
+    // created by PVForge, is a gitdir pointer, escapes the project, or carries
+    // hooks/filters/includes that could run project-controlled code. The
+    // project still opens with in-memory undo and Git disabled.
+    QString gitWarning() const { return m_gitWarning; }
+
     // True when a `git --version` probe succeeds; `version` receives its
     // trimmed output when provided.
     static bool gitBinaryAvailable(QString* version = nullptr);
@@ -154,6 +160,9 @@ private:
     ProjectStore(QString root, model::Project project);
 
     bool reload(QString* error);
+    // Re-checks the repository before a mutating git command; a project can be
+    // tampered with while it is open.
+    bool ensureTrustedGit(QString* error) const;
     void refreshDirtyText();
     void clearDirty();
     void notePath(const QString& relativePath);
@@ -183,6 +192,7 @@ private:
     QHash<QString, QByteArray> m_txnBefore;
     QSet<QString> m_txnPaths;
     bool m_gitEnabled = false;
+    QString m_gitWarning;
     int m_undoLimit = 200;
     qint64 m_undoByteLimit = 512LL * 1024 * 1024;
 };

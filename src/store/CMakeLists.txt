@@ -38,6 +38,7 @@ if(BUILD_TESTING)
     add_executable(pvf_store_tests
         tests/store_tests.cpp
         tests/store_tree_tests.cpp
+        tests/store_security_tests.cpp
         tests/store_tests.h
     )
     target_link_libraries(pvf_store_tests PRIVATE pvf_store Qt6::Test)
@@ -49,7 +50,11 @@ if(BUILD_TESTING)
         deleteEntityFile
         commitAndHistory
         assetImportCommit
-        commitFailureReportsStderr
+        commitIgnoresProjectHooks
+        commitRejectsCleanFilter
+        openRefusesForeignRepository
+        openRefusesGitDirPointer
+        openRefusesUnsafeConfig
         undoRedoRestoresText
         undoProjectSettings
         undoNewAndDeletedFiles
