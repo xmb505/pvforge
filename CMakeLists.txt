@@ -279,6 +279,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             mcp-test
             mcp-lock-test
             mcp-bridge-test
+            perf-scale-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_CASES)
             add_test(NAME pvf.${case} COMMAND pvforge-tests --${case})
