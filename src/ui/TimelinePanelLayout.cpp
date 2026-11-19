@@ -53,10 +53,16 @@ QVector<const Entity*> TimelinePanel::entitiesInRow(int row) const
     QVector<const Entity*> result;
     if (!isValidRow(row))
         return result;
-    for (const Entity& entity : activeEntities())
+    const QVector<Entity>& all = activeEntities();
+    // One id set instead of a linear entityById() lookup per entity (#132).
+    QSet<EntityId> knownIds;
+    knownIds.reserve(all.size());
+    for (const Entity& entity : all)
+        knownIds.insert(entity.id);
+    for (const Entity& entity : all)
     {
         const bool dangling = entity.parent != kInvalidEntity
-                              && entityById(entity.parent) == nullptr;
+                              && !knownIds.contains(entity.parent);
         if (entity.parent != m_owner
             && !(m_owner == kInvalidEntity && dangling))
             continue;

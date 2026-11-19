@@ -27,6 +27,7 @@ void drawEntitySubtree(QPainter& painter, const model::Project& project,
                        const assets::AssetStore& store, const Uuid& uuid,
                        double projectFrame, anim::World& world,
                        anim::Cache& cache, QSet<Uuid>& visited,
+                       const model::ChildrenIndex& index,
                        const Options& options, bool parentEditorHidden)
 {
     if (visited.contains(uuid))
@@ -46,8 +47,10 @@ void drawEntitySubtree(QPainter& painter, const model::Project& project,
             || (parentEditorHidden && entity.inheritVisibility));
 
     // Layer Sorter: negative-row children render behind the parent, then the
-    // parent itself, then non-negative-row children on top.
-    const QVector<Uuid> children = model::childrenOf(project, uuid);
+    // parent itself, then non-negative-row children on top.  The parent ->
+    // children index is built once per frame, so this walk is O(E log E)
+    // instead of re-scanning (and deep-copying) the project per node (#132).
+    const QVector<Uuid>& children = index.children(uuid);
     QVector<Uuid> negChildren;
     QVector<Uuid> posChildren;
     for (const Uuid& childUuid : children)
@@ -62,7 +65,7 @@ void drawEntitySubtree(QPainter& painter, const model::Project& project,
     for (const Uuid& childUuid : negChildren)
     {
         drawEntitySubtree(painter, project, store, childUuid, projectFrame,
-                          world, cache, visited, options, editorHidden);
+                          world, cache, visited, index, options, editorHidden);
     }
 
     if (detail::activeAt(entity, projectFrame))
@@ -87,21 +90,21 @@ void drawEntitySubtree(QPainter& painter, const model::Project& project,
     for (const Uuid& childUuid : posChildren)
     {
         drawEntitySubtree(painter, project, store, childUuid, projectFrame,
-                          world, cache, visited, options, editorHidden);
+                          world, cache, visited, index, options, editorHidden);
     }
 }
 
 void drawChildren(QPainter& painter, const model::Project& project,
                   const assets::AssetStore& store, const Uuid& parentUuid,
                   double projectFrame, anim::World& world, anim::Cache& cache,
-                  QSet<Uuid>& visited, const Options& options,
+                  QSet<Uuid>& visited, const model::ChildrenIndex& index,
+                  const Options& options,
                   bool parentEditorHidden = false)
 {
-    const QVector<Uuid> children = model::childrenOf(project, parentUuid);
-    for (const Uuid& uuid : children)
+    for (const Uuid& uuid : index.children(parentUuid))
     {
         drawEntitySubtree(painter, project, store, uuid, projectFrame, world,
-                          cache, visited, options, parentEditorHidden);
+                          cache, visited, index, options, parentEditorHidden);
     }
 }
 
@@ -138,8 +141,9 @@ void paintScene(QPainter& painter, const QTransform& transform, bool combine,
         painter.fillRect(projectCanvasRect(project), canvasBg);
 
     QSet<Uuid> visited;
+    const model::ChildrenIndex index(project);
     drawChildren(painter, project, assets, Uuid(), options.projectFrame, world,
-                 cache, visited, options, false);
+                 cache, visited, index, options, false);
     painter.restore();
 }
 

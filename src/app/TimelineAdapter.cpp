@@ -101,6 +101,69 @@ QString audioContentFile(const assets::StoredAsset& asset)
     return asset.directory + QLatin1Char('/') + files.first();
 }
 
+// Range, row, parent and keyframe fields derived from the model entity.  The
+// drag preview refreshes exactly these and keeps the expensive asset metadata
+// (name, duration, decoded peaks) from the snapshot it was built with.
+void fillViewFields(Entity& view, const model::Entity& source,
+                    const model::Project& project, int fps)
+{
+    view.name = source.name.isEmpty() ? source.uuid : source.name;
+    view.hidden = parentHidden(project, source);
+    view.locked = parentLocked(project, source);
+
+    QVariantMap& data = view.data;
+    data.insert(QStringLiteral("timelineRow"), source.row);
+    data.insert(QStringLiteral("clipStart"), source.start);
+    data.insert(QStringLiteral("clipEnd"), source.end);
+    data.insert(QStringLiteral("modelStart"), source.start);
+    data.insert(QStringLiteral("modelEnd"), source.end);
+    data.insert(QStringLiteral("modelDuration"), source.duration());
+    data.insert(QStringLiteral("contentKind"),
+                contentKindName(source.content.kind));
+
+    if (source.content.kind == ContentKind::Asset)
+    {
+        const model::AssetContent& asset = source.content.asset;
+        data.insert(QStringLiteral("assetHash"), asset.hash);
+        data.insert(QStringLiteral("assetType"), assetTypeName(asset.type));
+        data.insert(QStringLiteral("assetSourceIn"), asset.sourceIn);
+
+        if (asset.type == AssetType::Audio)
+        {
+            const int safeFps = std::max(1, fps);
+            const double trimStart = double(asset.sourceIn) / safeFps;
+            const int frames = data.value(QStringLiteral("assetDurationFrames"))
+                                   .toInt();
+            const int clipFrames = std::max(0, source.end - source.start);
+            const int left = frames > 0
+                                 ? std::max(0, frames - asset.sourceIn
+                                                    - clipFrames)
+                                 : 0;
+            data.insert(QStringLiteral("trimStart"), trimStart);
+            data.insert(QStringLiteral("trimEnd"), double(left) / safeFps);
+        }
+    }
+
+    // Keyframes are stored relative to entity.start in the new model; the
+    // legacy painter expects absolute project frames.
+    view.tracks.clear();
+    for (auto it = source.tracks.constBegin(); it != source.tracks.constEnd();
+         ++it)
+    {
+        Track track;
+        track.keys.reserve(it->keys.size());
+        for (const model::Keyframe& key : it->keys)
+        {
+            Keyframe viewKey;
+            viewKey.frame = double(source.start + key.frame);
+            viewKey.value = key.value;
+            viewKey.note = key.note;
+            track.keys.append(viewKey);
+        }
+        view.tracks.insert(it.key(), track);
+    }
+}
+
 } // namespace
 
 TimelineAdapter::TimelineAdapter(EditorSession* session)
@@ -150,10 +213,11 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
     snapshot.playhead = playhead;
 
     // Parent before children; each sibling group is already sorted by
-    // row, start then uuid (model::childrenOf).
+    // row, start then uuid.  One index build keeps the walk linear (#132).
+    const model::ChildrenIndex index(project);
     QVector<Uuid> order;
     std::function<void(const Uuid&)> appendChildren = [&](const Uuid& parent) {
-        for (const Uuid& uuid : model::childrenOf(project, parent))
+        for (const Uuid& uuid : index.children(parent))
         {
             const auto found = project.entities.constFind(uuid);
             if (found == project.entities.constEnd())
@@ -170,32 +234,15 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
         const model::Entity& source = project.entities[uuid];
         Entity view;
         view.id = idFor(uuid);
-        view.name = source.name.isEmpty() ? uuid : source.name;
         view.parent = source.parentUuid.isEmpty()
                           ? kInvalidEntity
                           : idFor(source.parentUuid);
         view.type = legacyType(source.content);
-        view.hidden = parentHidden(project, source);
-        view.locked = parentLocked(project, source);
-
-        QVariantMap data;
-        data.insert(QStringLiteral("timelineRow"), source.row);
-        data.insert(QStringLiteral("clipStart"), source.start);
-        data.insert(QStringLiteral("clipEnd"), source.end);
-        data.insert(QStringLiteral("modelStart"), source.start);
-        data.insert(QStringLiteral("modelEnd"), source.end);
-        data.insert(QStringLiteral("modelDuration"), source.duration());
-        data.insert(QStringLiteral("contentKind"),
-                    contentKindName(source.content.kind));
+        fillViewFields(view, source, project, project.settings.fps);
 
         if (source.content.kind == ContentKind::Asset)
         {
             const model::AssetContent& asset = source.content.asset;
-            data.insert(QStringLiteral("assetHash"), asset.hash);
-            data.insert(QStringLiteral("assetType"),
-                        assetTypeName(asset.type));
-            data.insert(QStringLiteral("assetSourceIn"), asset.sourceIn);
-
             const auto stored = m_session->assets().getIncludingMissing(asset.hash);
             if (stored)
             {
@@ -205,22 +252,12 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
                 const int frames =
                     metadata.value(QStringLiteral("durationFrames"))
                         .toInt();
-                data.insert(QStringLiteral("assetName"), stored->name);
-                data.insert(QStringLiteral("assetDurationSeconds"), seconds);
-                data.insert(QStringLiteral("assetDurationFrames"), frames);
+                view.data.insert(QStringLiteral("assetName"), stored->name);
+                view.data.insert(QStringLiteral("assetDurationSeconds"), seconds);
+                view.data.insert(QStringLiteral("assetDurationFrames"), frames);
 
                 if (asset.type == AssetType::Audio)
                 {
-                    const int fps = std::max(1, project.settings.fps);
-                    const double trimStart = double(asset.sourceIn) / fps;
-                    const int clipFrames = std::max(0, source.end - source.start);
-                    const int left = frames > 0
-                                         ? std::max(0, frames - asset.sourceIn
-                                                            - clipFrames)
-                                         : 0;
-                    data.insert(QStringLiteral("trimStart"), trimStart);
-                    data.insert(QStringLiteral("trimEnd"), double(left) / fps);
-
                     auto cached = m_audioPeaks.constFind(asset.hash);
                     if (cached == m_audioPeaks.constEnd())
                     {
@@ -239,25 +276,6 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
                     view.audio = cached.value();
                 }
             }
-        }
-        view.data = data;
-
-        // Keyframes are stored relative to entity.start in the new model;
-        // the legacy painter expects absolute project frames.
-        for (auto it = source.tracks.constBegin();
-             it != source.tracks.constEnd(); ++it)
-        {
-            Track track;
-            track.keys.reserve(it->keys.size());
-            for (const model::Keyframe& key : it->keys)
-            {
-                Keyframe viewKey;
-                viewKey.frame = double(source.start + key.frame);
-                viewKey.value = key.value;
-                viewKey.note = key.note;
-                track.keys.append(viewKey);
-            }
-            view.tracks.insert(it.key(), track);
         }
 
         if (source.parentUuid.isEmpty())
@@ -287,6 +305,38 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
               });
 
     return snapshot;
+}
+
+bool TimelineAdapter::patchSnapshot(TimelineSnapshot& snapshot,
+                                    const model::Project& project,
+                                    int playhead) const
+{
+    if (!m_session)
+        return false;
+    if (snapshot.entities.size() != project.entities.size())
+        return false;
+
+    int contentEnd = 0;
+    for (Entity& view : snapshot.entities)
+    {
+        const Uuid uuid = uuidForId(view.id);
+        const auto source = project.entities.constFind(uuid);
+        if (uuid.isEmpty() || source == project.entities.constEnd())
+            return false;
+
+        view.type = legacyType(source->content);
+        view.parent = source->parentUuid.isEmpty()
+                          ? kInvalidEntity
+                          : idForUuid(source->parentUuid);
+        fillViewFields(view, *source, project, project.settings.fps);
+        if (source->parentUuid.isEmpty())
+            contentEnd = std::max(contentEnd, source->end);
+    }
+
+    snapshot.playhead = playhead;
+    snapshot.fps = std::max(1, project.settings.fps);
+    snapshot.contentEnd = contentEnd;
+    return true;
 }
 
 } // namespace pvf

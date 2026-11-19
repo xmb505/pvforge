@@ -327,6 +327,10 @@ private:
     const model::Entity* sessionEntity(const Uuid& uuid) const;
     void beginSessionDrag();
     void updateSessionDragPreview(const QPointF& pos);
+    // Preview helpers: patch the live snapshot in place instead of rebuilding
+    // it from a whole-project copy on every mouse move (issue #132).
+    void applySessionPreview(const EditPlan& plan);
+    void resetSessionPreview();
     void finishSessionDrag();
     void cancelSessionDrag();
     bool isReparentCandidate(const Uuid& entity, const Uuid& target) const;
@@ -387,6 +391,30 @@ private:
     };
 
     // Row and range helpers.
+    // One paint pass resolves rows, clip rectangles and the popup track
+    // geometry once; the per-row loop then never re-scans the entity table
+    // (issue #132).
+    struct PaintCache
+    {
+        struct Row
+        {
+            int row = 0;
+            int top = 0;
+            QVector<const Entity*> entities;
+        };
+
+        int contentStart = 0;
+        int contentEnd = 180;
+        int minNeg = -1;
+        int maxPos = 0;
+        int dividerTop = 0;
+        QVector<Row> rows;
+        QHash<EntityId, QRect> clipRects;
+        QHash<EntityId, QVector<int>> keyframes;
+        bool hasAnyEntity = false;
+    };
+    PaintCache buildPaintCache() const;
+
     QVector<EntityId> rowIds() const;
     QVector<const Entity*> entitiesInRow(int row) const;
     EntityId entityAtRow(int row) const;

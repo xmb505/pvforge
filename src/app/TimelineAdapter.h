@@ -28,6 +28,15 @@ public:
     // timeline drag preview; the int <-> uuid mapping stays session-stable.
     TimelineSnapshot buildSnapshot(const model::Project& project, int playhead);
 
+    // Drag-preview fast path (issue #132): refresh only the range, row,
+    // parent, visibility, asset-range and keyframe fields of an existing
+    // snapshot from `project`.  Entity ids, order, asset metadata and decoded
+    // audio peaks are kept, so a mouse-move never re-reads asset.json or
+    // re-decodes audio.  Returns false when the project added/removed
+    // entities; the caller must then rebuild the snapshot.
+    bool patchSnapshot(TimelineSnapshot& snapshot, const model::Project& project,
+                       int playhead) const;
+
     // Session-stable entity ids for the legacy int based signals.
     int idForUuid(const Uuid& uuid) const;
     Uuid uuidForId(int id) const;

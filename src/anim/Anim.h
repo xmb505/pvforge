@@ -66,6 +66,12 @@ struct Cache
     // nullptr.  Playback sets this so a cold cache can never stall a frame.
     bool solverResultsLocked = false;
 
+    // Upper bound for the poses cached per entity (0 = unlimited).  Long-lived
+    // caches (the editor viewport) set a small window so a two-hour playback
+    // does not keep every sampled frame of every entity in memory: on insert
+    // the frames farthest from the newest sample are evicted first (#132).
+    int maxPosesPerEntity = 0;
+
     void clear();
     void clearEntity(const Uuid &uuid);
 };

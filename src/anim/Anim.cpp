@@ -442,7 +442,30 @@ Pose EvalContext::evaluate(const Uuid& uuid, double projectFrame)
     const Pose pose = localPose(entityIt.value(), projectFrame,
                                hasParent ? &parentPose : nullptr);
     m_visiting.remove(key);
-    m_cache.poses[uuid].insert(projectFrame, pose);
+
+    QHash<double, Pose>& frames = m_cache.poses[uuid];
+    frames.insert(projectFrame, pose);
+    const int limit = m_cache.maxPosesPerEntity;
+    if (limit > 0 && frames.size() > limit)
+    {
+        // Bounded playback cache: drop the sampled frame farthest from the
+        // one just evaluated, so a long play keeps a local window (#132).
+        auto farthest = frames.begin();
+        double farthestDistance = -1.0;
+        for (auto it = frames.begin(); it != frames.end(); ++it)
+        {
+            if (it.key() == projectFrame)
+                continue;
+            const double distance = std::abs(it.key() - projectFrame);
+            if (distance > farthestDistance)
+            {
+                farthestDistance = distance;
+                farthest = it;
+            }
+        }
+        if (farthest != frames.end() && farthest.key() != projectFrame)
+            frames.erase(farthest);
+    }
     return pose;
 }
 
