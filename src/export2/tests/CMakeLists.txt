@@ -19,8 +19,6 @@ set(PVF_EXPORT2_TEST_CASES
     overwriteExistingOutput
     cancelRemovesFile
     oversizedOutput
-    frameProviders
-    noFrameProviderPlaceholder
     resolutionScale4
     hiddenAudioStillExported
     visibleTrackMutesRange
@@ -51,6 +49,9 @@ target_link_libraries(pvf_export2_media_tests PRIVATE
 
 set(PVF_EXPORT2_MEDIA_TEST_CASES
     audioStopsAtEntityEnd
+    frameProviders
+    noFrameProviderFails
+    missingVisualAssetFails
 )
 
 foreach(test_case IN LISTS PVF_EXPORT2_MEDIA_TEST_CASES)

@@ -105,6 +105,73 @@ Entity makeAudioEntity(const Uuid& uuid, const AssetHash& hash, int start,
     return entity;
 }
 
+Entity makeAssetEntity(const Uuid& uuid, AssetType type, const AssetHash& hash,
+                       int start, int end)
+{
+    Entity entity = makeEntity(uuid, start, end);
+    entity.transform.x = 0.0;
+    entity.transform.y = 0.0;
+    entity.content.kind = ContentKind::Asset;
+    entity.content.asset.type = type;
+    entity.content.asset.hash = hash;
+    return entity;
+}
+
+// Writes a real asset directory (asset.json + content or HTML bundle) so the
+// renderer sees the asset as present instead of painting the missing-asset
+// card.
+AssetHash writeTestAsset(const QString& projectRoot, QChar hashFill,
+                         AssetType type, int width = 100, int height = 50)
+{
+    const AssetHash hash(64, hashFill);
+    const QString directory = projectRoot + QStringLiteral("/assets/") + hash;
+    if (!QDir().mkpath(directory))
+        return {};
+
+    QJsonObject metadata;
+    metadata.insert(QStringLiteral("hash"), hash);
+    metadata.insert(QStringLiteral("type"),
+                    type == AssetType::Html ? QStringLiteral("html")
+                                            : QStringLiteral("video"));
+    metadata.insert(QStringLiteral("name"), QStringLiteral("test-asset"));
+    metadata.insert(QStringLiteral("width"), width);
+    metadata.insert(QStringLiteral("height"), height);
+
+    if (type == AssetType::Html)
+    {
+        if (!QDir().mkpath(directory + QStringLiteral("/bundle")))
+            return {};
+        metadata.insert(QStringLiteral("entry"), QStringLiteral("index.html"));
+        QFile entry(directory + QStringLiteral("/bundle/index.html"));
+        if (!entry.open(QIODevice::WriteOnly))
+            return {};
+        entry.write("<html><body></body></html>");
+        entry.close();
+    }
+    else
+    {
+        QFile content(directory + QStringLiteral("/content.bin"));
+        if (!content.open(QIODevice::WriteOnly))
+            return {};
+        content.write("asset-bytes");
+        content.close();
+    }
+
+    QFile json(directory + QStringLiteral("/asset.json"));
+    if (!json.open(QIODevice::WriteOnly))
+        return {};
+    json.write(QJsonDocument(metadata).toJson());
+    json.close();
+    return hash;
+}
+
+QImage redImage()
+{
+    QImage image(100, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::red);
+    return image;
+}
+
 export2::Options makeOptions(const QString& path)
 {
     export2::Options options;
@@ -298,6 +365,123 @@ void testAudioStopsAtEntityEnd()
     CHECK(rms(3.5, 9.5) < 0.002);
 }
 
+// Moved from Export2Tests when placeholder exports became fatal (#129): the
+// providers must be called for real, present assets.
+void testFrameProviders()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    {
+        Project project = makeProject();
+        const Entity html = makeAssetEntity(
+            QStringLiteral("html"), AssetType::Html,
+            writeTestAsset(directory.path(), QLatin1Char('a'), AssetType::Html),
+            0, 10);
+        project.entities.insert(html.uuid, html);
+
+        const QString path = directory.path() + QStringLiteral("/html.mp4");
+        export2::Options options = makeOptions(path);
+        int calls = 0;
+        double lastFrame = -1.0;
+        options.htmlFrame = [&](const Uuid&, double projectFrame) {
+            ++calls;
+            lastFrame = projectFrame;
+            return redImage();
+        };
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+
+        CHECK(result.ok);
+        CHECK(QFileInfo::exists(path));
+        CHECK(calls == 10);
+        CHECK(std::abs(lastFrame - 9.0) < 1e-9);
+    }
+
+    {
+        Project project = makeProject();
+        const Entity video = makeAssetEntity(
+            QStringLiteral("video"), AssetType::Video,
+            writeTestAsset(directory.path(), QLatin1Char('b'), AssetType::Video),
+            0, 10);
+        project.entities.insert(video.uuid, video);
+
+        const QString path = directory.path() + QStringLiteral("/video.mp4");
+        export2::Options options = makeOptions(path);
+        options.outputFps = 60;
+        double lastFrame = -1.0;
+        options.videoFrame = [&](const Uuid&, double projectFrame) {
+            lastFrame = projectFrame;
+            return redImage();
+        };
+        const export2::Result result =
+            export2::exportVideo(project, store, options);
+
+        CHECK(result.ok);
+        CHECK(QFileInfo::exists(path));
+        CHECK(result.framesWritten == 20);
+        // 2x output fps samples fractional project frames.
+        CHECK(std::abs(lastFrame - 9.5) < 1e-9);
+    }
+}
+
+// Issue #129: a present asset whose provider returns no frame is a real export
+// failure, never a silent "视频" placeholder card.
+void testNoFrameProviderFails()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    Project project = makeProject();
+    project.entities.insert(
+        QStringLiteral("html"),
+        makeAssetEntity(QStringLiteral("html"), AssetType::Html,
+                        writeTestAsset(directory.path(), QLatin1Char('c'),
+                                       AssetType::Html),
+                        0, 10));
+    project.entities.insert(
+        QStringLiteral("video"),
+        makeAssetEntity(QStringLiteral("video"), AssetType::Video,
+                        writeTestAsset(directory.path(), QLatin1Char('d'),
+                                       AssetType::Video),
+                        0, 10));
+
+    const QString path = directory.path() + QStringLiteral("/placeholder.mp4");
+    const export2::Result result =
+        export2::exportVideo(project, store, makeOptions(path));
+
+    CHECK(!result.ok);
+    CHECK(!result.error.isEmpty());
+    CHECK(result.error.contains(QStringLiteral("视频"))
+          || result.error.contains(QStringLiteral("HTML")));
+    CHECK(!QFileInfo::exists(path));
+}
+
+// Issue #129: a missing visual asset must fail the export instead of encoding
+// the "素材丢失" card.
+void testMissingVisualAssetFails()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    Project project = makeProject();
+    project.entities.insert(
+        QStringLiteral("video"),
+        makeAssetEntity(QStringLiteral("video"), AssetType::Video,
+                        AssetHash(64, QLatin1Char('e')), 0, 10));
+
+    const QString path = directory.path() + QStringLiteral("/missing.mp4");
+    export2::Options options = makeOptions(path);
+    options.videoFrame = [](const Uuid&, double) { return redImage(); };
+    const export2::Result result = export2::exportVideo(project, store, options);
+
+    CHECK(!result.ok);
+    CHECK(result.error.contains(QStringLiteral("视频"))
+          && result.error.contains(QStringLiteral("video")));
+    CHECK(!QFileInfo::exists(path));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -306,6 +490,9 @@ int main(int argc, char** argv)
 
     const QVector<QPair<QString, void (*)()>> tests = {
         {QStringLiteral("audioStopsAtEntityEnd"), testAudioStopsAtEntityEnd},
+        {QStringLiteral("frameProviders"), testFrameProviders},
+        {QStringLiteral("noFrameProviderFails"), testNoFrameProviderFails},
+        {QStringLiteral("missingVisualAssetFails"), testMissingVisualAssetFails},
     };
 
     QString requested;

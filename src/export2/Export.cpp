@@ -1090,6 +1090,14 @@ Result exportVideo(const model::Project& project,
     renderOptions.background = background;
     renderOptions.videoFrame = options.videoFrame;
     renderOptions.htmlFrame = options.htmlFrame;
+    // Placeholder cards are preview-only (issue #129).  Any entity that cannot
+    // produce real content makes the export fail instead of silently encoding
+    // a "素材丢失" card into the MP4.
+    QStringList contentIssues;
+    renderOptions.contentIssue = [&contentIssues](const QString& message) {
+        if (contentIssues.size() < 4 && !contentIssues.contains(message))
+            contentIssues.append(message);
+    };
 
     const QPoint contentOffset((outputSize.width() - contentSize.width()) / 2,
                                (outputSize.height() - contentSize.height()) / 2);
@@ -1104,8 +1112,14 @@ Result exportVideo(const model::Project& project,
     {
         // Time sampling: output frame -> project frame (fractional at 2x/4x).
         renderOptions.projectFrame = start + frameIndex * projectFrameStep;
+        contentIssues.clear();
         QImage rendered = render2::renderFrame(project, assets, renderOptions,
                                                world, cache);
+        if (!contentIssues.isEmpty())
+            return fail(QStringLiteral("第 %1 帧缺少可导出内容：%2")
+                            .arg(QString::number(renderOptions.projectFrame,
+                                                 'g', 10),
+                                 contentIssues.join(QStringLiteral("；"))));
         if (rendered.isNull())
             return fail(QStringLiteral("渲染第 %1 帧失败")
                             .arg(renderOptions.projectFrame));

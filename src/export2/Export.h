@@ -109,8 +109,10 @@ struct Result
     bool ok = false;
     QString error;
     int framesWritten = 0;
-    // Non-fatal audio problems (missing asset, undecodable file, no AAC
-    // encoder, ...).  The export still succeeds and falls back to silence.
+    // Non-fatal problems (missing/undecodable audio asset, no AAC encoder,
+    // ...).  The export still succeeds and falls back to silence.  Visual
+    // content problems (missing image/video/HTML asset, a decode or HTML
+    // timeout) are fatal and reported through `error`, never as warnings.
     QStringList warnings;
 };
 

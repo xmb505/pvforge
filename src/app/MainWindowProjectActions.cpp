@@ -459,7 +459,9 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
                                        .arg(result.framesWritten)
                                        .arg(QDir::toNativeSeparators(outputPath));
                     if (!result.warnings.isEmpty())
-                        text += QStringLiteral("\n\n") + result.warnings.join('\n');
+                        text += QStringLiteral("\n\n警告 %1 条（音频被跳过）：\n%2")
+                                    .arg(result.warnings.size())
+                                    .arg(result.warnings.join('\n'));
                     const QString folder = QFileInfo(outputPath).absolutePath();
 
                     QMessageBox box(QMessageBox::Information,
