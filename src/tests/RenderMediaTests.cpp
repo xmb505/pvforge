@@ -287,6 +287,7 @@ int exportTest(QApplication& app)
     camera.name = QStringLiteral("Camera");
     camera.start = 0;
     camera.end = 24;
+    camera.row = 0;
     camera.content.kind = pvf::ContentKind::Camera;
     project.entities.insert(camera.uuid, camera);
 
@@ -295,6 +296,7 @@ int exportTest(QApplication& app)
     vector.name = QStringLiteral("红色方块");
     vector.start = 0;
     vector.end = 24;
+    vector.row = 1;
     vector.content.kind = pvf::ContentKind::Vector;
     vector.content.vector.width = 120;
     vector.content.vector.height = 120;
@@ -306,6 +308,7 @@ int exportTest(QApplication& app)
     audio.name = QStringLiteral("Tone");
     audio.start = 0;
     audio.end = 24;
+    audio.row = 2;
     audio.content.kind = pvf::ContentKind::Asset;
     audio.content.asset.type = pvf::AssetType::Audio;
     audio.content.asset.hash = imported->hash;

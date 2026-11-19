@@ -839,11 +839,13 @@ bool validateEntity(const Entity& entity, QString* error)
         return false;
     }
 
-    if (entity.row < 0)
+    // Private timelines grow negative rows below the parent clip.  Only the
+    // root timeline is one-sided, because nothing can sit under the stage.
+    if (entity.parentUuid.isEmpty() && entity.row < 0)
     {
         detail::setError(
             error,
-            QStringLiteral("实体 %1 的 row 不能小于 0").arg(entity.uuid));
+            QStringLiteral("根实体 %1 的 row 不能小于 0").arg(entity.uuid));
         return false;
     }
 

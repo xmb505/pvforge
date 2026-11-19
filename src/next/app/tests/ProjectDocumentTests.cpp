@@ -197,6 +197,7 @@ private slots:
 
         Entity keep = makeEntity(QStringLiteral("keep"), 0, 30);
         Entity drop = makeEntity(QStringLiteral("drop"), 0, 30);
+        drop.row = 1;
         document->mutableProject().entities.insert(keep.uuid, keep);
         document->mutableProject().entities.insert(drop.uuid, drop);
         QVERIFY2(document->commitEntities({keep.uuid, drop.uuid},

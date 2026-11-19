@@ -531,18 +531,8 @@ int timelineBottomUpTest(QApplication& app)
     dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
     const QPoint previewBottom(timeline->frameXForTest(30),
-                               timeline->rowCenterYForTest(0));
+                               timeline->rowCenterYForTest(3));
     sendDrag(dragFrom, previewBottom);
-    expect(rowFor(middle) == 0,
-           QStringLiteral("drag preview did not follow the pointer to row 0 (%1)")
-               .arg(rowFor(middle)));
-    dragTo = QPoint(timeline->frameXForTest(30),
-                    timeline->rowCenterYForTest(3));
-    QMouseEvent previewMove(QEvent::MouseMove, QPointF(dragTo),
-                            QPointF(timeline->mapToGlobal(dragTo)), Qt::NoButton,
-                            Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &previewMove);
-    QApplication::processEvents();
     expect(rowFor(middle) == 3,
            QStringLiteral("drag preview did not follow the pointer to row 3 (%1)")
                .arg(rowFor(middle)));
@@ -561,7 +551,8 @@ int timelineBottomUpTest(QApplication& app)
     expect(changedSignals == 0 && depthNow() == depthAtDragStart,
            QStringLiteral("Esc created a commit"));
 
-    // 4. Dropping on an occupied clip lands on that row and swaps slots.
+    // 4. Tracks are layers, not slots.  Dropping an overlapping clip on an
+    // occupied row is rejected with no commit: the occupant never gets moved.
     depthBefore = depthNow();
     changedSignals = 0;
     dragFrom = QPoint(timeline->frameXForTest(30),
@@ -570,14 +561,30 @@ int timelineBottomUpTest(QApplication& app)
                     timeline->rowCenterYForTest(2));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
+    expect(changedSignals == 0 && depthNow() == depthBefore,
+           QStringLiteral("overlapping row drop committed"));
+    expect(rowFor(middle) == 1 && rowFor(top) == 2,
+           QStringLiteral("overlapping row drop moved a clip (%1/%2)")
+               .arg(rowFor(middle))
+               .arg(rowFor(top)));
+
+    // 4b. Two clips may share one row when their time ranges do not overlap.
+    depthBefore = depthNow();
+    changedSignals = 0;
+    dragFrom = QPoint(timeline->frameXForTest(30),
+                      timeline->rowCenterYForTest(1));
+    dragTo = QPoint(timeline->frameXForTest(70),
+                    timeline->rowCenterYForTest(2));
+    sendDrag(dragFrom, dragTo);
+    sendRelease(dragTo);
     expect(changedSignals == 1 && depthNow() == depthBefore + 1,
-           QStringLiteral("occupied-slot drop did not commit once"));
-    expect(rowFor(middle) == 2 && rowFor(top) == 1 && rowFor(bottom) == 0,
-           QStringLiteral("occupied-slot drop did not swap rows (%1/%2)")
+           QStringLiteral("non-overlapping shared-row drop did not commit once"));
+    expect(rowFor(middle) == 2 && rowFor(top) == 2,
+           QStringLiteral("clips did not share one track (%1/%2)")
                .arg(rowFor(middle))
                .arg(rowFor(top)));
     expect(undo() && rowFor(middle) == 1 && rowFor(top) == 2,
-           QStringLiteral("undo did not restore swapped rows"));
+           QStringLiteral("undo did not restore the shared-row drop"));
 
     // 4b. A blank gap row is a valid target and stays a gap for the others.
     depthBefore = depthNow();

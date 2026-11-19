@@ -340,6 +340,51 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
         parentIndex[i] = indexOf.value(&parent.value(), -1);
     }
 
+    // A track is a layer, not an entity-exclusive slot: several clips may share
+    // one (parent, row) as long as their half-open [start, end) ranges do not
+    // overlap.  Validate that before anything renders or exports the project.
+    QHash<QString, QVector<const Entity*>> tracks;
+    tracks.reserve(nodes.size());
+    for (const Entity* entity : std::as_const(nodes))
+    {
+        const QString key = entity->parentUuid + QLatin1Char('\n')
+                            + QString::number(entity->row);
+        tracks[key].append(entity);
+    }
+    for (auto trackIt = tracks.begin(); trackIt != tracks.end(); ++trackIt)
+    {
+        QVector<const Entity*>& track = trackIt.value();
+        if (track.size() < 2)
+            continue;
+        std::sort(track.begin(), track.end(),
+                  [](const Entity* a, const Entity* b) {
+                      if (a->start != b->start)
+                          return a->start < b->start;
+                      return a->uuid < b->uuid;
+                  });
+        for (int i = 1; i < track.size(); ++i)
+        {
+            const Entity& previous = *track.at(i - 1);
+            const Entity& current = *track.at(i);
+            if (current.start >= previous.end)
+                continue;
+            detail::setError(
+                error,
+                QStringLiteral("实体 %1 与 %2 在同一父级 %3 的第 %4 行重叠："
+                               "[%5, %6) 与 [%7, %8)")
+                    .arg(previous.uuid, current.uuid,
+                         current.parentUuid.isEmpty()
+                             ? QStringLiteral("（根）")
+                             : current.parentUuid)
+                    .arg(current.row)
+                    .arg(previous.start)
+                    .arg(previous.end)
+                    .arg(current.start)
+                    .arg(current.end));
+            return false;
+        }
+    }
+
     // Walk every parent chain to reject cycles. Entities validated above make
     // sure a non-empty parentUuid always resolves. One colour array
     // (1 = on the current chain, 2 = known to reach a root) instead of a QSet

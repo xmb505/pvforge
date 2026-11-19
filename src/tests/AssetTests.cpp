@@ -2,6 +2,8 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
 
+#include "model/Query.h"
+
 namespace {
 
 bool writeTestPng(const QString& path, const QColor& color, const QSize& size = QSize(64, 40))
@@ -261,6 +263,7 @@ int assetsTest(QApplication& app)
     reference.name = QStringLiteral("引用 beta");
     reference.start = 0;
     reference.end = 30;
+    reference.row = 100;
     reference.content.kind = pvf::ContentKind::Asset;
     reference.content.asset.hash = beta->hash;
     reference.content.asset.type = pvf::AssetType::Image;
@@ -661,6 +664,8 @@ int assetReplaceTest(QApplication& app)
         entity.name = name;
         entity.start = start;
         entity.end = end;
+        entity.row = pvf::model::nextAutoRow(session->project(), pvf::Uuid(),
+                                             start, end);
         entity.content.kind = kind;
         session->mutableProject().entities.insert(entity.uuid, entity);
         return entity.uuid;

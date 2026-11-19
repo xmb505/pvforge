@@ -48,10 +48,10 @@ bool nearly(double a, double b, double epsilon = 1e-9)
 #define CHECK_DETAIL(condition, detail) \
     check((condition), #condition, (detail), __FILE__, __LINE__)
 
-Entity makeEntity(int start = 0, int end = 10)
+Entity makeEntity(int start = 0, int end = 10, int row = 0)
 {
     Entity entity;
-    entity.uuid = newUuid();
+    entity.row = row;  entity.uuid = newUuid();
     entity.name = QStringLiteral("实体");
     entity.start = start;
     entity.end = end;
@@ -1392,7 +1392,7 @@ void testSolverTargets()
     CHECK(error.contains(QStringLiteral("gravity")));
     CHECK(error.contains(QStringLiteral("targetUuid")));
 
-    Entity target = makeEntity(0, 100);
+    Entity target = makeEntity(0, 100, 1);
 
     // Empty string.
     source.solvers[0].params.insert(QStringLiteral("targetUuid"), QString());
@@ -1437,7 +1437,7 @@ void testSolverTargets()
     CHECK_DETAIL(validateProject(project, &error), error);
 
     // Two entities targeting each other.
-    Entity second = makeEntity(0, 100);
+    Entity second = makeEntity(0, 100, 2);
     source.solvers = {
         makeTargetSolver(SolverEffect::Gravity, second.uuid, 0, 20)};
     second.solvers = {
@@ -1451,7 +1451,7 @@ void testSolverTargets()
     CHECK(error.contains(second.uuid));
 
     // Three-entity cycle.
-    Entity third = makeEntity(0, 100);
+    Entity third = makeEntity(0, 100, 3);
     source.solvers = {
         makeTargetSolver(SolverEffect::Gravity, second.uuid, 0, 20)};
     second.solvers = {
@@ -1556,7 +1556,7 @@ void testProjectValidationWithoutRemoval()
     Entity parent = makeEntity(0, 100);
     Entity child = makeEntity(0, 50);
     child.parentUuid = parent.uuid;
-    Entity bystander = makeEntity(0, 100);
+    Entity bystander = makeEntity(0, 100, 1);
     project.entities.insert(parent.uuid, parent);
     project.entities.insert(child.uuid, child);
     project.entities.insert(bystander.uuid, bystander);
@@ -1591,13 +1591,14 @@ void testProjectValidationWithoutRemoval()
     Project mismatched = project;
     const Uuid otherKey = newUuid();
     mismatched.entities.insert(otherKey, parent);
+    mismatched.entities[otherKey].row = 1;  // keep row 0 free for the original
     CHECK(!validateProject(mismatched, &error));
     CHECK_DETAIL(validateProjectWithout(mismatched, {otherKey}, &error), error);
 
     // A solver target that is being deleted counts as missing.
     Project solved;
     Entity source = makeEntity(0, 100);
-    Entity target = makeEntity(0, 100);
+    Entity target = makeEntity(0, 100, 1);
     source.solvers = {makeTargetSolver(SolverEffect::Gravity, target.uuid)};
     solved.entities.insert(source.uuid, source);
     solved.entities.insert(target.uuid, target);
@@ -2242,7 +2243,6 @@ int main(int argc, char** argv)
         qInfo().noquote() << (gFailures == failuresBefore ? "PASS" : "FAIL")
                           << test.name;
     }
-
     qInfo().noquote() << QStringLiteral("%1 checks, %2 failures")
                              .arg(gChecks)
                              .arg(gFailures);

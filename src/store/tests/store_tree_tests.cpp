@@ -138,6 +138,8 @@ void StoreTests::nestedEntityTreeRoundTrip()
     // Reparenting a subtree to root must rewrite the old root file as well, or
     // the same UUID would live in two files.
     opened->mutableProject().entities[child.uuid].parentUuid.clear();
+    // A new root must not overlap the existing root on row 0.
+    opened->mutableProject().entities[child.uuid].row = 1;
     QVERIFY2(opened->saveEntity(child.uuid, &error), qPrintable(error));
     QVERIFY(QFileInfo::exists(entityFile(projectPath(temp), child.uuid)));
 

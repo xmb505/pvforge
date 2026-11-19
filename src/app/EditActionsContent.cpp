@@ -254,10 +254,14 @@ QVector<Uuid> EditActions::addAssetEntities(const AssetHash& hash, int startFram
     }
 
     int targetRow = row;
-    if (targetRow < 0
-        || rowIsOccupied(project, parent, targetRow, start, end))
+    // row < 0 is the "pick a row" sentinel for root insertions.  Inside a
+    // private timeline it is a real negative track and must be honoured; only
+    // a time conflict on that layer falls back to the next free row.
+    const bool autoRow = row < 0 && parent.isEmpty();
+    if (autoRow || rowIsOccupied(project, parent, targetRow, start, end))
         targetRow = model::nextAutoRow(project, parent, start, end);
-    targetRow = std::max(0, targetRow);
+    if (parent.isEmpty())
+        targetRow = std::max(0, targetRow);
 
     const QString name = asset->name.isEmpty() ? hash : asset->name;
 

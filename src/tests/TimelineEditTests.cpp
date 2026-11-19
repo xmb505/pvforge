@@ -501,8 +501,8 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
                   QStringLiteral("Esc did not restore the drag preview")))
         return 1;
 
-    // Vertical drag between occupied rows; the row change is part of the same
-    // single commit and swaps the two row slots.
+    // Vertical drag between occupied rows.  Tracks are layers: an overlapping
+    // drop is rejected without moving either clip.
     const int videoRow = rowForName(QStringLiteral("视频"));
     const int parentRow = rowForName(QStringLiteral("父级"));
     if (!check(videoRow >= 0 && parentRow >= 0,
@@ -536,36 +536,57 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     QApplication::sendEvent(timeline, &rowRelease);
     QApplication::processEvents();
     live->flush();
-    // Row slots are fixed: dropping on the video clip swaps the two slots, so
-    // the dragged clip lands exactly on the row under the pointer.
+    if (!check(changedSignals == 0,
+               QStringLiteral("overlapping row drag emitted %1 changed signals")
+                   .arg(changedSignals))
+        || !check(live->document()->store()->undoDepth() == panelDepth,
+                  QStringLiteral("overlapping row drag created an undo step"))
+        || !check(entity(parent).row == parentRow && entity(video).row == videoRow,
+                  QStringLiteral("overlapping row drag moved a clip (%1/%2)")
+                      .arg(entity(parent).row)
+                      .arg(entity(video).row)))
+        return 1;
+
+    // The same drop succeeds once the ranges no longer overlap: drag the
+    // parent 60 frames right on the video's row.
+    panelDepth = live->document()->store()->undoDepth();
+    changedSignals = 0;
+    const QPoint sharedFrom(timeline->frameXForTest(30),
+                            timeline->rowCenterYForTest(parentRow));
+    const QPoint sharedTo(timeline->frameXForTest(90),
+                          timeline->rowCenterYForTest(videoRow));
+    QMouseEvent sharedPress(QEvent::MouseButtonPress, QPointF(sharedFrom),
+                            QPointF(timeline->mapToGlobal(sharedFrom)),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent sharedMove(QEvent::MouseMove, QPointF(sharedTo),
+                           QPointF(timeline->mapToGlobal(sharedTo)), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent sharedRelease(QEvent::MouseButtonRelease, QPointF(sharedTo),
+                              QPointF(timeline->mapToGlobal(sharedTo)),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &sharedPress);
+    QApplication::sendEvent(timeline, &sharedMove);
+    QApplication::sendEvent(timeline, &sharedRelease);
+    QApplication::processEvents();
+    live->flush();
     if (!check(changedSignals == 1,
-               QStringLiteral("row drag emitted %1 changed signals")
+               QStringLiteral("shared-row drag emitted %1 changed signals")
                    .arg(changedSignals))
         || !check(live->document()->store()->undoDepth() == panelDepth + 1,
-                  QStringLiteral("row drag did not create one undo step"))
-        || !check(timeline->rowForEntityForTest(
-                      timeline->entityIdForUuid(parent))
-                      == videoRow,
-                  QStringLiteral("row drag did not land on the dropped row (row %1, expected %2; model %3; rows %4/%5/%6)")
-                      .arg(timeline->rowForEntityForTest(
-                          timeline->entityIdForUuid(parent)))
-                      .arg(videoRow)
+                  QStringLiteral("shared-row drag did not create one undo step"))
+        || !check(entity(parent).row == videoRow && entity(video).row == videoRow,
+                  QStringLiteral("shared-row drag did not share the track (%1/%2)")
                       .arg(entity(parent).row)
-                      .arg(timeline->rowNameForTest(0))
-                      .arg(timeline->rowNameForTest(1))
-                      .arg(timeline->rowNameForTest(2)))
-        || !check(timeline->rowForEntityForTest(
-                      timeline->entityIdForUuid(video))
-                      == parentRow,
-                  QStringLiteral("row drag did not move the occupant to the vacated row")))
+                      .arg(entity(video).row))
+        || !check(entity(parent).start == 60,
+                  QStringLiteral("shared-row drag did not shift time (%1)")
+                      .arg(entity(parent).start)))
         return 1;
     if (!check(live->document()->undo(&error),
-               QStringLiteral("row drag undo failed: %1").arg(error)))
+               QStringLiteral("shared-row drag undo failed: %1").arg(error)))
         return 1;
-    if (!check(timeline->rowForEntityForTest(
-                   timeline->entityIdForUuid(parent))
-                   == parentRow,
-               QStringLiteral("row drag undo did not restore rows")))
+    if (!check(entity(parent).row == parentRow && entity(parent).start == 0,
+               QStringLiteral("shared-row undo did not restore the row")))
         return 1;
 
     // Right-edge drag trims the parent and clips the child in one commit.

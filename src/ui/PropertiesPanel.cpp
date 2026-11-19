@@ -372,6 +372,7 @@ void PropertiesPanel::refreshSession()
     }
     setSpinIfIdle(m_basicStart, entity->start);
     setSpinIfIdle(m_basicEnd, entity->end);
+    m_basicRow->setMinimum(entity->parentUuid.isEmpty() ? 0 : -1000000);
     setSpinIfIdle(m_basicRow, entity->row);
     {
         const QSignalBlocker blocker(m_basicHidden);
@@ -404,6 +405,9 @@ void PropertiesPanel::refreshSession()
     // switched off.
     m_basicStart->setEnabled(editable && !entity->followParentRange);
     m_basicEnd->setEnabled(editable && !entity->followParentRange);
+    // Only the root timeline is one-sided; private timelines have negative
+    // tracks and the spin box must accept them.
+    m_basicRow->setMinimum(hasParent ? -1000000 : 0);
     m_basicRow->setEnabled(editable);
     m_basicHidden->setEnabled(editable);
     m_basicLocked->setEnabled(true);
