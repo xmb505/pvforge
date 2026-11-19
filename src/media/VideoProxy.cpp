@@ -152,9 +152,14 @@ void VideoProxyGenerator::startNext()
     });
 
     const QStringList arguments{
+        QStringLiteral("-nostdin"),
         QStringLiteral("-y"),
         QStringLiteral("-v"),
         QStringLiteral("error"),
+        // The media path is project-controlled. Never let it select the http,
+        // tcp or concat demuxer: only regular local files are accepted.
+        QStringLiteral("-protocol_whitelist"),
+        QStringLiteral("file"),
         QStringLiteral("-i"),
         job.source,
         QStringLiteral("-map"),

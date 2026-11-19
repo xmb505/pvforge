@@ -219,8 +219,26 @@ void Mcp2Tests::previewRefusesUnapprovedBase64()
                  .value(QStringLiteral("reason")).toString(),
              QStringLiteral("unapproved_import"));
 
-    // Without base64 the local PNG path is still available.
+    // Without base64 the local PNG path is still available, inside the private
+    // per-user directory and unreadable by other local users.
     result = fixture.call(QStringLiteral("preview.render_frame"),
                           QJsonObject{{QStringLiteral("frame"), 0}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    const QString path = result.value(QStringLiteral("data")).toObject()
+                             .value(QStringLiteral("path")).toString();
+    QVERIFY2(path.contains(QStringLiteral("/pvforge-previews-")), qPrintable(path));
+#ifdef Q_OS_UNIX
+    // Only the owner may read the frame (mode 0600) and enter the directory
+    // (0700); group/other bits must be clear.
+    const QFile::Permissions foreign =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    QCOMPARE(QFile::permissions(path) & foreign, QFile::Permissions{});
+    const QFile::Permissions directoryMode =
+        QFile::permissions(QFileInfo(path).absolutePath());
+    QCOMPARE(directoryMode & foreign, QFile::Permissions{});
+    QVERIFY(directoryMode & QFileDevice::ReadOwner);
+    QVERIFY(directoryMode & QFileDevice::ExeOwner);
+#endif
 }

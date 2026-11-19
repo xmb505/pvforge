@@ -1047,6 +1047,7 @@ void Mcp2Tests::assetAssignAndUnassign()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
+    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
 
     const QString imagePath = fixture.temp.filePath(QStringLiteral("assign.png"));
     QImage image(4, 4, QImage::Format_ARGB32);
@@ -1055,8 +1056,7 @@ void Mcp2Tests::assetAssignAndUnassign()
 
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath},
-                                 {QStringLiteral("confirm"), true}});
+                     QJsonObject{{QStringLiteral("path"), imagePath}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2304,6 +2304,7 @@ void Mcp2Tests::textualContentCanBecomeEmpty()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
+    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
 
     const QString imagePath = fixture.temp.filePath(QStringLiteral("text.png"));
     QImage image(4, 4, QImage::Format_ARGB32);
@@ -2311,8 +2312,7 @@ void Mcp2Tests::textualContentCanBecomeEmpty()
     QVERIFY(image.save(imagePath));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath},
-                                 {QStringLiteral("confirm"), true}});
+                     QJsonObject{{QStringLiteral("path"), imagePath}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2505,13 +2505,13 @@ void Mcp2Tests::specialContentCreateAndUpdate()
              ContentKind::HalftoneDots);
 
     // asset.assign recognises the special kinds and demands empty first.
+    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
     const QString imagePath = fixture.temp.filePath(QStringLiteral("special.png"));
     QImage image(4, 4, QImage::Format_ARGB32);
     image.fill(Qt::green);
     QVERIFY(image.save(imagePath));
     result = fixture.call(QStringLiteral("asset.import"),
-                          QJsonObject{{QStringLiteral("path"), imagePath},
-                                      {QStringLiteral("confirm"), true}});
+                          QJsonObject{{QStringLiteral("path"), imagePath}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
              qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
@@ -2815,13 +2815,13 @@ void Mcp2Tests::assetSourceInClamped()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
+    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
 
     const QString wavPath = fixture.temp.filePath(QStringLiteral("clamp.wav"));
     QVERIFY(writeWav(wavPath, 0.2, 44100));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), wavPath},
-                                 {QStringLiteral("confirm"), true}});
+                     QJsonObject{{QStringLiteral("path"), wavPath}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()
@@ -2859,6 +2859,7 @@ void Mcp2Tests::assetMissingContentStillListed()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
+    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
 
     const QString imagePath = fixture.temp.filePath(QStringLiteral("lost.png"));
     QImage image(4, 4, QImage::Format_ARGB32);
@@ -2866,8 +2867,7 @@ void Mcp2Tests::assetMissingContentStillListed()
     QVERIFY(image.save(imagePath));
     QJsonObject result =
         fixture.call(QStringLiteral("asset.import"),
-                     QJsonObject{{QStringLiteral("path"), imagePath},
-                                 {QStringLiteral("confirm"), true}});
+                     QJsonObject{{QStringLiteral("path"), imagePath}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     const QString hash = result.value(QStringLiteral("data")).toObject()
                              .value(QStringLiteral("asset")).toObject()

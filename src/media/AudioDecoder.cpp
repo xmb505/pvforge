@@ -8,6 +8,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/dict.h>
 #include <libswresample/swresample.h>
 }
 
@@ -53,7 +54,12 @@ AudioDecodeResult decodeAudioFile(const QString& path)
     FfmpegCleanup ff;
     const QByteArray utf8 = path.toUtf8();
 
-    if (avformat_open_input(&ff.format, utf8.constData(), nullptr, nullptr) < 0)
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    const int openResult =
+        avformat_open_input(&ff.format, utf8.constData(), nullptr, &options);
+    av_dict_free(&options);
+    if (openResult < 0)
     {
         result.error = QStringLiteral("无法打开音频文件");
         return result;

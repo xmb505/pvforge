@@ -55,6 +55,8 @@ if(BUILD_TESTING)
         openRefusesForeignRepository
         openRefusesGitDirPointer
         openRefusesUnsafeConfig
+        openRejectsSymlinkedTextFiles
+        openRejectsOversizedTextFile
         undoRedoRestoresText
         undoProjectSettings
         undoNewAndDeletedFiles

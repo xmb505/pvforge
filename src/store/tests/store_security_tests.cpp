@@ -201,6 +201,65 @@ void StoreTests::openRefusesGitDirPointer()
              qPrintable(opened->gitWarning()));
 }
 
+void StoreTests::openRejectsSymlinkedTextFiles()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto created =
+        ProjectStore::create(path, model::ProjectSettings(), &error, false);
+    QVERIFY2(created.has_value(), qPrintable(error));
+
+    // project.json is project data; a symlink could point at any local file.
+    const QString projectFile = path + QStringLiteral("/project.json");
+    const QString outside = temp.filePath(QStringLiteral("outside.json"));
+    QVERIFY(QFile::rename(projectFile, outside));
+    QVERIFY(QFile::link(outside, projectFile));
+
+    error.clear();
+    QVERIFY(!ProjectStore::open(path, &error, false));
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+
+    // The same rule applies to entities/<uuid>.json.
+    QVERIFY(QFile::remove(projectFile));
+    QVERIFY(QFile::rename(outside, projectFile));
+    const QString uuid = model::newUuid();
+    const QString entityFile = path + QStringLiteral("/entities/") + uuid
+                               + QStringLiteral(".json");
+    const QString outsideEntity = temp.filePath(QStringLiteral("outside-entity.json"));
+    QVERIFY(writeText(outsideEntity, QStringLiteral("{}")));
+    QVERIFY(QFile::link(outsideEntity, entityFile));
+
+    error.clear();
+    QVERIFY(!ProjectStore::open(path, &error, false));
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+}
+
+void StoreTests::openRejectsOversizedTextFile()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString path = projectPath(temp);
+
+    QString error;
+    auto created =
+        ProjectStore::create(path, model::ProjectSettings(), &error, false);
+    QVERIFY2(created.has_value(), qPrintable(error));
+
+    // 64 MiB + 1 sparse file: rejected by stat before any allocation.
+    QFile projectFile(path + QStringLiteral("/project.json"));
+    QVERIFY(projectFile.open(QIODevice::WriteOnly));
+    QVERIFY(projectFile.resize(64LL * 1024LL * 1024LL + 1));
+    projectFile.close();
+    QVERIFY(QFileInfo(projectFile).size() > 64LL * 1024LL * 1024LL);
+
+    error.clear();
+    QVERIFY(!ProjectStore::open(path, &error, false));
+    QVERIFY2(error.contains(QStringLiteral("64MB")), qPrintable(error));
+}
+
 void StoreTests::openRefusesUnsafeConfig()
 {
     if (!gitAvailable())

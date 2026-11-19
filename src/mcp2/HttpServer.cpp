@@ -27,6 +27,11 @@
 #include <exception>
 #include <memory>
 
+#if defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #ifndef PVFORGE_VERSION
 #define PVFORGE_VERSION "0.3.0"
 #endif
@@ -485,6 +490,25 @@ bool HttpServer::loadOrCreateConfig(QString* error)
         m_token = generateToken();
         m_configuredPort = kDefaultPort;
         return saveConfig(error);
+    }
+
+#if defined(Q_OS_UNIX)
+    struct stat fileInfo;
+    if (::stat(QFile::encodeName(path).constData(), &fileInfo) == 0
+        && fileInfo.st_uid != ::geteuid())
+    {
+        if (error)
+            *error = QStringLiteral("MCP 配置 %1 不属于当前用户").arg(path);
+        return false;
+    }
+#endif
+    // The file contains the Bearer token; tighten a mode loosened by an old
+    // version or the user before reading it.
+    if (!QFile::setPermissions(path, privateFilePermissions()))
+    {
+        if (error)
+            *error = QStringLiteral("无法收紧 MCP 配置权限 %1").arg(path);
+        return false;
     }
 
     QFile file(path);

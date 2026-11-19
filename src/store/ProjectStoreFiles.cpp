@@ -15,6 +15,12 @@
 
 namespace pvf::store::detail {
 
+namespace {
+// A malicious project could point project.json/entities at a huge file. The
+// limit is far above any real project document, small enough to avoid an OOM.
+constexpr qint64 kMaxTextDocumentBytes = 64LL * 1024LL * 1024LL;
+} // namespace
+
 void setError(QString* error, const QString& message)
 {
     if (error)
@@ -33,11 +39,31 @@ QString absolutePath(const QString& root, const QString& relativePath)
 
 bool readJsonObject(const QString& path, QJsonObject* object, QString* error)
 {
+    const QFileInfo info(path);
+    // Text project data is never a symlink: a link could make PVForge parse an
+    // arbitrary local file or write outside the project.
+    if (info.isSymLink())
+    {
+        setError(error, QStringLiteral("%1 是符号链接，拒绝读取").arg(path));
+        return false;
+    }
+    if (info.exists() && info.size() > kMaxTextDocumentBytes)
+    {
+        setError(error,
+                 QStringLiteral("%1 超过 64MB 文本上限").arg(path));
+        return false;
+    }
+
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
     {
         setError(error,
                  QStringLiteral("无法读取 %1：%2").arg(path, file.errorString()));
+        return false;
+    }
+    if (file.size() > kMaxTextDocumentBytes)
+    {
+        setError(error, QStringLiteral("%1 超过 64MB 文本上限").arg(path));
         return false;
     }
 
@@ -265,6 +291,12 @@ bool loadProjectData(const QString& root, model::Project* project,
             const QString fileName = fileInfo.fileName();
             const QString uuid = fileName.left(fileName.size() - 5);
             const QString path = fileInfo.absoluteFilePath();
+            if (fileInfo.isSymLink())
+            {
+                setError(error,
+                         QStringLiteral("实体文件 %1 是符号链接，拒绝读取").arg(path));
+                return false;
+            }
             if (!model::isValidUuid(uuid))
             {
                 setError(error,

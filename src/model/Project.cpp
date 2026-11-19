@@ -195,10 +195,23 @@ bool validateSolverTargets(const Project& project, const QSet<Uuid>* removed,
 bool detectSolverTargetCycles(const QHash<Uuid, QSet<Uuid>>& edges,
                               QString* error)
 {
+    // A malicious project can build an arbitrarily long target chain. The cap
+    // keeps the recursive walk far below the thread's stack limit; a legit
+    // project never nests solvers this deep.
+    constexpr int kMaxCycleSearchDepth = 4096;
+
     QHash<Uuid, int> state; // 1 = visiting, 2 = done
     QVector<Uuid> stack;
 
     std::function<bool(const Uuid&)> visit = [&](const Uuid& node) -> bool {
+        if (stack.size() >= kMaxCycleSearchDepth)
+        {
+            detail::setError(
+                error,
+                QStringLiteral("求解段目标依赖超过最大深度 %1（疑似恶意长链）")
+                    .arg(kMaxCycleSearchDepth));
+            return true;
+        }
         state.insert(node, 1);
         stack.append(node);
 

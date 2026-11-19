@@ -54,6 +54,9 @@ set(PVF_ASSET_TEST_CASES
     pvhtmlRejectsMissingEntry
     pvhtmlRejectsSymlink
     videoImportWithAudio
+    symlinkedAssetDirectoryRejected
+    symlinkedContentRejected
+    symlinkedAssetsRootRejected
 )
 
 foreach(test_case IN LISTS PVF_ASSET_TEST_CASES)

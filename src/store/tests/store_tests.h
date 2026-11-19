@@ -20,6 +20,8 @@ private slots:
     void openRefusesForeignRepository();
     void openRefusesGitDirPointer();
     void openRefusesUnsafeConfig();
+    void openRejectsSymlinkedTextFiles();
+    void openRejectsOversizedTextFile();
     void undoRedoRestoresText();
     void undoProjectSettings();
     void undoNewAndDeletedFiles();

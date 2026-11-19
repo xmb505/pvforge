@@ -339,7 +339,7 @@ int mcpBridgeTest()
     fileObject[QStringLiteral("version")] = 1;
     fileObject[QStringLiteral("url")] = QStringLiteral("http://127.0.0.1:39321/mcp");
     fileObject[QStringLiteral("token")] = QStringLiteral("file-token");
-    fileObject[QStringLiteral("pid")] = 123;
+    fileObject[QStringLiteral("pid")] = double(QCoreApplication::applicationPid());
     const QByteArray fileJson =
         QJsonDocument(fileObject).toJson(QJsonDocument::Compact);
 
@@ -354,7 +354,26 @@ int mcpBridgeTest()
            QStringLiteral("endpoint URL parsed as %1").arg(fileEndpoint.url.toString()));
     failIf(fileEndpoint.token != QByteArrayLiteral("file-token"),
            QStringLiteral("endpoint token was not parsed"));
-    failIf(fileEndpoint.pid != 123, QStringLiteral("endpoint pid was not parsed"));
+    failIf(fileEndpoint.pid != QCoreApplication::applicationPid(),
+           QStringLiteral("endpoint pid was not parsed"));
+
+    // A stale pid (a dead process) must not be used even when the token and
+    // port are otherwise valid.
+    QJsonObject staleObject = fileObject;
+    staleObject[QStringLiteral("pid")] = 2147483646;
+    failIf(!writeEndpointFile(
+               endpointPath,
+               QJsonDocument(staleObject).toJson(QJsonDocument::Compact), true),
+           QStringLiteral("cannot write the stale endpoint file"));
+    McpEndpoint staleEndpoint;
+    error.clear();
+    failIf(resolveMcpEndpoint(endpointPath, QString(), QByteArray(), QString(),
+                              QByteArray(), &staleEndpoint, &error),
+           QStringLiteral("stale endpoint pid was accepted"));
+    failIf(!error.contains(QStringLiteral("not running")),
+           QStringLiteral("stale pid error is unclear: %1").arg(error));
+    failIf(!writeEndpointFile(endpointPath, fileJson, true),
+           QStringLiteral("cannot restore the valid endpoint file"));
 
     failIf(!writeEndpointFile(endpointPath, fileJson, false),
            QStringLiteral("cannot change the endpoint file to mode 0644"));
@@ -817,6 +836,31 @@ int mcpBridgeTest()
                 QString::fromUtf8(helpProcess.readAllStandardOutput());
             failIf(!output.contains(QStringLiteral("--endpoint-file")),
                    QStringLiteral("--help output does not document --endpoint-file"));
+        }
+    }
+
+    {
+        // The token must never be a command-line argument (visible in /proc and
+        // shell history). The bridge rejects the old switch explicitly.
+        QProcess tokenProcess;
+        tokenProcess.setProcessEnvironment(environment);
+        tokenProcess.start(binary,
+                           QStringList{QStringLiteral("--token"),
+                                       QStringLiteral("deadbeef")});
+        if (!tokenProcess.waitForFinished(3000))
+        {
+            tokenProcess.kill();
+            fail(QStringLiteral("--token process did not exit"));
+        }
+        else
+        {
+            failIf(tokenProcess.exitCode() != 5,
+                   QStringLiteral("--token exit code is %1 (expected 5)")
+                       .arg(tokenProcess.exitCode()));
+            const QString error =
+                QString::fromUtf8(tokenProcess.readAllStandardError());
+            failIf(!error.contains(QStringLiteral("not supported")),
+                   QStringLiteral("--token error is unclear: %1").arg(error));
         }
     }
 

@@ -3,6 +3,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 }
@@ -35,7 +36,12 @@ QImage decodeVideoFirstFrame(const QString& path, QString* error, double* durati
         return QImage();
     };
 
-    if (avformat_open_input(&format, utf8.constData(), nullptr, nullptr) < 0)
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    const int openResult =
+        avformat_open_input(&format, utf8.constData(), nullptr, &options);
+    av_dict_free(&options);
+    if (openResult < 0)
         return fail(QStringLiteral("无法打开视频文件"));
 
     if (avformat_find_stream_info(format, nullptr) < 0)
