@@ -259,9 +259,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     auto* createBox = new QGroupBox(QStringLiteral("转换为求解段（快捷）"), content);
     createBox->setObjectName(QStringLiteral("solverCreateBox"));
     auto* createForm = new QFormLayout(createBox);
-    createForm->setContentsMargins(8, 6, 8, 6);
-    createForm->setVerticalSpacing(4);
-    createForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    configurePropertyForm(createForm, QMargins(8, 6, 8, 6));
 
     m_solverEffectCombo = new QComboBox(createBox);
     m_solverEffectCombo->setObjectName(QStringLiteral("solverEffectCombo"));
@@ -281,6 +279,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
         createBox);
     m_solverEndAuto->setObjectName(QStringLiteral("solverCreateEndAuto"));
     m_solverEndAuto->setWordWrap(true);
+    styleHintLabel(m_solverEndAuto);
     createForm->addRow(m_solverEndAuto);
 
     m_solverManualEnd =
@@ -323,6 +322,7 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
 
     m_solverEmpty = new QLabel(QStringLiteral("（没有求解段）"), content);
     m_solverEmpty->setObjectName(QStringLiteral("solverEmptyLabel"));
+    styleHintLabel(m_solverEmpty);
     box->addWidget(m_solverEmpty);
 
     // The trajectory mini window lives in the keyframe section so it sits
@@ -572,9 +572,7 @@ void PropertiesPanel::rebuildSolverCards(
         card.box->setObjectName(QStringLiteral("solverCard%1").arg(index));
         card.box->installEventFilter(this);
         auto* form = new QFormLayout(card.box);
-        form->setContentsMargins(8, 6, 8, 6);
-        form->setVerticalSpacing(4);
-        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        configurePropertyForm(form, QMargins(8, 6, 8, 6));
 
         auto* effectLabel = new QLabel(solverEffectName(solver.effect), card.box);
         effectLabel->setObjectName(QStringLiteral("solverEffect%1").arg(index));
@@ -591,6 +589,7 @@ void PropertiesPanel::rebuildSolverCards(
             QStringLiteral("solverEndInfo%1").arg(index));
         card.endInfo->setWordWrap(true);
         card.endInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        styleHintLabel(card.endInfo);
         form->addRow(card.endInfo);
 
         card.manualEnd =
@@ -620,6 +619,7 @@ void PropertiesPanel::rebuildSolverCards(
         velocityHint->setObjectName(
             QStringLiteral("solverVelocityHint%1").arg(index));
         velocityHint->setWordWrap(true);
+        styleHintLabel(velocityHint);
         form->addRow(velocityHint);
 
         // X/Y stay as an advanced numeric fallback, collapsed by default so
@@ -636,9 +636,7 @@ void PropertiesPanel::rebuildSolverCards(
         card.velocityRow->setObjectName(
             QStringLiteral("solverVelocityRow%1").arg(index));
         auto* velocityForm = new QFormLayout(card.velocityRow);
-        velocityForm->setContentsMargins(0, 0, 0, 0);
-        velocityForm->setVerticalSpacing(4);
-        velocityForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        configurePropertyForm(velocityForm, QMargins(0, 0, 0, 0));
 
         card.velocityX = new QDoubleSpinBox(card.velocityRow);
         card.velocityX->setObjectName(QStringLiteral("solverVelocityX%1").arg(index));
@@ -854,6 +852,8 @@ void PropertiesPanel::rebuildSolverCards(
             child->installEventFilter(this);
         m_solverCardsLayout->addWidget(card.box);
         fillSolverCard(card, entityUuid, solver);
+        equalizePropertyFormLabels(form);
+        equalizePropertyFormLabels(velocityForm);
         m_solverCards.append(card);
     }
 }

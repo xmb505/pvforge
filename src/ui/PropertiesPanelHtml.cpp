@@ -107,6 +107,7 @@ void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
     m_sessionHtmlInfo->setSizePolicy(QSizePolicy::Ignored,
                                       QSizePolicy::Preferred);
     m_sessionHtmlInfo->setMinimumWidth(0);
+    styleHintLabel(m_sessionHtmlInfo);
     box->addWidget(m_sessionHtmlInfo);
 
     m_sessionHtmlEmpty =
@@ -127,7 +128,7 @@ void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
     m_sessionHtmlWarning->setSizePolicy(QSizePolicy::Ignored,
                                          QSizePolicy::Preferred);
     m_sessionHtmlWarning->setMinimumWidth(0);
-    m_sessionHtmlWarning->setStyleSheet(QStringLiteral("color:#e0a050;"));
+    styleHintLabel(m_sessionHtmlWarning);
     m_sessionHtmlWarning->hide();
     box->addWidget(m_sessionHtmlWarning);
 

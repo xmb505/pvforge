@@ -24,8 +24,11 @@
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
 #include <QGroupBox>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -60,11 +63,21 @@ bool PropertiesPanel::eventFilter(QObject* watched, QEvent* event)
 
 void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
 {
+    if (!button)
+        return;
     button->setText(color.name().toUpper());
-    const QString text = color.lightness() > 140 ? QStringLiteral("#000")
-                                                 : QStringLiteral("#fff");
-    button->setStyleSheet(
-        QStringLiteral("background-color:%1;color:%2;").arg(color.name(), text));
+    // A small native swatch icon replaces the old hardcoded background QSS,
+    // so the text keeps the palette's normal contrast.
+    QPixmap swatch(14, 14);
+    swatch.fill(button->palette().color(QPalette::Base));
+    QPainter painter(&swatch);
+    painter.fillRect(QRect(0, 0, 14, 14), color);
+    painter.setPen(QPen(button->palette().color(QPalette::Shadow), 1));
+    painter.drawRect(QRect(0, 0, 13, 13));
+    painter.end();
+    button->setIcon(QIcon(swatch));
+    button->setIconSize(QSize(14, 14));
+    stylePropertyField(button);
 }
 
 QColor PropertiesPanel::pickColor(const QColor& initial, const QString& title)
@@ -505,14 +518,21 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
     const bool editable = sessionEditable();
     const int displayFrame = entity.start + frame;
 
+    QFont statusFont = m_keyStatus->font();
+    statusFont.setBold(hasKey);
+    m_keyStatus->setFont(statusFont);
+    QPalette statusPalette = m_keyStatus->palette();
+    // Use the untouched Text role as the normal colour: WindowText itself is
+    // rewritten below on every refresh.
+    statusPalette.setColor(
+        QPalette::WindowText,
+        hasKey ? statusPalette.color(QPalette::Text)
+               : statusPalette.color(QPalette::Disabled, QPalette::WindowText));
+    m_keyStatus->setPalette(statusPalette);
     if (hasKey)
     {
         m_keyStatus->setText(
             QStringLiteral("◆ 正在编辑：第 %1 帧（整帧关键帧）").arg(displayFrame));
-        m_keyStatus->setStyleSheet(
-            QStringLiteral("background:rgba(255,176,0,0.14);"
-                           "border:1px solid rgba(255,176,0,0.45);"
-                           "padding:5px;color:#ffb000;"));
     }
     else
     {
@@ -521,10 +541,6 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
         m_keyStatus->setText(
             QStringLiteral("▶ 播放针第 %1 帧（当前无关键帧，改任意参数自动新建）")
                 .arg(displayPlayhead));
-        m_keyStatus->setStyleSheet(
-            QStringLiteral("background:rgba(76,201,240,0.14);"
-                           "border:1px solid rgba(76,201,240,0.45);"
-                           "padding:5px;color:#4cc9f0;"));
     }
     m_keyDelete->setEnabled(editable && hasKey);
     m_keyDelete->setToolTip(hasKey
