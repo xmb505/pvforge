@@ -88,7 +88,7 @@ void MainWindow::buildSessionShell()
     m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     // P4b: the legacy workbench button keeps its place; session mode only
-    // exposes the special page (brand wall creation through the new model).
+    // exposes the workbench page through the new model.
     if (m_session)
     {
         m_workbench = new WorkbenchPanel(m_session, m_viewport);
@@ -558,23 +558,6 @@ void MainWindow::buildSessionShell()
 
     createSessionMenus();
     createSessionToolBar();
-    if (m_viewport)
-        m_viewport->setAutoKeyEnabled(!m_autoKeyAction
-                                      || m_autoKeyAction->isChecked());
-    if (m_props)
-    {
-        m_props->setAutoKey(!m_autoKeyAction || m_autoKeyAction->isChecked());
-        if (m_autoKeyAction)
-        {
-            connect(m_props, &PropertiesPanel::autoKeyToggled, this,
-                    [this](bool on) {
-                        const QSignalBlocker blocker(m_autoKeyAction);
-                        m_autoKeyAction->setChecked(on);
-                        if (m_viewport)
-                            m_viewport->setAutoKeyEnabled(on);
-                    });
-        }
-    }
     refreshSession();
     updateSessionPlaybackUi();
     updateWindowTitle();

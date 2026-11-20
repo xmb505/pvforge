@@ -192,7 +192,6 @@ public:
                                  const QString& note, const QStringList& tags,
                                  const QColor& color, QString* error = nullptr);
     bool removeAnnotationForTest(const QString& id);
-    bool setKeyframeNoteForTest(EntityId id, double frame, const QString& note);
     EntityId createFolderForTest(EntityId parent = kInvalidEntity);
 #endif
 
@@ -212,7 +211,6 @@ private:
     void applyScale(EntityId id, double sx, double sy, double x, double y);
     void applyPivot(EntityId id, double ax, double ay);
     void applyEntityData(EntityId id, const QVariantMap& data);
-    void applyComicTip(EntityId id, double tipX, double tipY);
     void replaceSourceFromDialog(EntityId id);
     void replaceSessionAssetFromDialog(const QString& uuid);
 
@@ -220,8 +218,6 @@ private:
     void pasteEntity();
     void duplicateEntity(EntityId id);
     void groupEntitiesIntoFolder(const QVector<EntityId>& ids);
-    void onPropertyKeyframeToggled(EntityId id, const QString& prop, double frame,
-                                   bool remove);
     void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
     void onPlayTick();
@@ -294,7 +290,6 @@ private:
     void showSceneDialog(const QString& sceneId = QString());
     void showAnnotationDialog(const QString& annotationId = QString(),
                               int frame = -1);
-    void editKeyframeNote(EntityId id, double frame);
     bool commitSceneCreate(const QString& name, int startFrame, int endFrame,
                            const QColor& color, const QString& note,
                            QString* error = nullptr, QString* createdId = nullptr);
@@ -311,7 +306,6 @@ private:
                                 const QString& note, const QStringList& tags,
                                 const QColor& color, QString* error = nullptr);
     bool commitAnnotationRemove(const QString& id);
-    bool commitKeyframeNote(EntityId id, double frame, const QString& note);
     void applyActiveSceneParent(EntityId id);
 
     EditorSession* m_session = nullptr;
@@ -366,7 +360,6 @@ private:
     QProgressBar* m_importProgress = nullptr;
 
     QAction* m_playAction = nullptr;
-    QAction* m_autoKeyAction = nullptr;
     QAction* m_packAssetsAction = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
