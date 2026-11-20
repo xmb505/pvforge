@@ -33,6 +33,7 @@ enum class EntityType
     HtmlLayer      // one HTML component captured by the CDP browser
 };
 
+
 // One whole-frame keyframe resolved to an absolute project frame.  The painter
 // draws exactly one diamond per entry; there are no per-property tracks.
 struct Keyframe

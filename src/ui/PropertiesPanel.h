@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditActions.h"
 #include "common/Types.h"
 #include "core/EntityId.h"
 
@@ -24,7 +25,6 @@ class QLineEdit;
 class QPushButton;
 class QSpinBox;
 class QToolButton;
-class QStackedWidget;
 class QVBoxLayout;
 
 namespace pvf {
@@ -33,20 +33,16 @@ namespace model {
 struct Content;
 struct EasingSpec;
 struct Entity;
+struct Keyframe;
 struct SolverSegment;
 } // namespace model
 
 namespace next {
-class SpecialContentEditor;
 class SolverPreviewWidget;
 } // namespace next
 
 class CollapsibleSection;
 class EditorSession;
-
-// Retired core::Project DTOs referenced by the legacy shell declarations below.
-struct EasingSpec;
-struct Entity;
 
 class PropertiesPanel : public QWidget
 {
@@ -56,41 +52,31 @@ public:
     // Session mode: reads model::Entity and writes through EditActions.
     explicit PropertiesPanel(EditorSession* session, QWidget* parent = nullptr);
 
-    void setEntity(EntityId id);
-    void setFrame(int frame);
     void refresh();
 
-    // Session mode selection.  The panel keeps the Uuid, not a legacy id.
     void setSelectedUuid(const Uuid& uuid);
     Uuid selectedUuid() const { return m_sessionUuid; }
-    bool sessionMode() const { return m_sessionMode; }
-    void setAutoKey(bool on);
-    bool autoKey() const { return m_autoKey; }
+    bool sessionMode() const { return true; }
     Uuid selectedSolverId() const { return m_selectedSolverId; }
 
-    // Playback freeze for the mini solver preview.  The panel connects this
-    // to EditorSession::playback(); MainWindow may also forward it.
+    // Timeline selection.  A single selected whole-frame key takes priority
+    // for property edits; a multi-selection only participates in time
+    // offset/delete/copy-params, so the panel edits the playhead frame.
+    void setSelectedKeyframes(const QVector<KeyRef>& selection);
+    int selectedKeyframeCount() const { return int(m_selectedKeys.size()); }
+
+    // Playback freeze for the mini solver preview.
     void setPlaybackActive(bool active);
 #ifdef PVFORGE_TEST_HOOKS
     bool playbackActiveForTest() const { return m_playbackActive; }
+    int activeEditFrameForTest() const;
 #endif
 
 signals:
-    void valueEdited(EntityId id, const QString& prop, double value);
-    void pivotEdited(EntityId id, double ax, double ay);
-    void parentEdited(EntityId id, EntityId parent);
-    void keyframeEasingEdited(EntityId id, int frame, const EasingSpec& spec);
-    // Data fields that are not part of the animated tracks; written as one
-    // undo step by the main window.
-    void dataEdited(EntityId id, const QVariantMap& data);
-    void keyframeToggled(EntityId id, const QString& prop, double frame, bool remove);
-    void replaceSourceRequested(EntityId id);
-
-    // Session mode reports failures to the shell status bar and mirrors the
-    // auto-key toggle with MainWindow's action.
     void sessionEditFailed(const QString& message);
+    // Informational status (out-of-range playhead etc.), not an edit failure.
+    void sessionStatusMessage(const QString& message);
     void sessionReplaceSourceRequested(const Uuid& uuid);
-    void autoKeyToggled(bool on);
     // A solver card was activated; the viewport keeps that trajectory visible.
     void solverSelected(const Uuid& entityUuid, const Uuid& solverId);
 
@@ -98,23 +84,22 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    // One numeric whole-frame animation parameter.  No per-parameter diamond:
+    // editing any animation value always writes the whole frame.
     struct Row
     {
         QString prop;
         QString baseLabel;
         QLabel* label = nullptr;
         QDoubleSpinBox* spin = nullptr;
-        QToolButton* key = nullptr;
-        double factor = 1.0;   // display value * factor = stored value
+        double factor = 1.0; // display value * factor = stored value
     };
 
-    // One manifest variable row in session mode. Numeric variables get a spin
-    // box and a diamond backed by `var.<name>`; boolean/string variables are
-    // read-only and show their manifest default.
+    // One manifest variable row.  Numeric variables are animation parameters
+    // stored in Keyframe::htmlVars; non-numeric variables stay read-only.
     struct SessionHtmlRow
     {
         QString name;
-        QString track;
         bool numeric = false;
         double defaultValue = 0.0;
         double minimum = -1000000000.0;
@@ -124,23 +109,7 @@ private:
         QString readOnlyText;
         QLabel* nameLabel = nullptr;
         QDoubleSpinBox* spin = nullptr;
-        QToolButton* key = nullptr;
         QLabel* readOnlyValue = nullptr;
-    };
-
-    struct TrackRow
-    {
-        QString track;
-        QString label;
-        bool step = false;
-        double minimum = -1000000000.0;
-        double maximum = 1000000000.0;
-        double singleStep = 1.0;
-        int decimals = 2;
-        QString suffix;
-        QLabel* name = nullptr;
-        QToolButton* diamond = nullptr;
-        QDoubleSpinBox* value = nullptr;
     };
 
     struct SolverCard
@@ -167,71 +136,55 @@ private:
     void buildCameraSection(QVBoxLayout* layout);
     void buildSolverSection(QVBoxLayout* layout);
 
-    void addRow(QFormLayout* form, const QString& label, const QString& prop, double lo,
-                double hi, int decimals, double step, double factor = 1.0);
-    struct DataRow
-    {
-        QString key;
-        QDoubleSpinBox* spin = nullptr;
-        QSpinBox* count = nullptr;
-        QPushButton* color = nullptr;
-    };
-
+    void addRow(QFormLayout* form, const QString& label, const QString& prop,
+                double lo, double hi, int decimals, double step,
+                double factor = 1.0);
     void buildTextSection(QVBoxLayout* layout);
-    void buildComicSection(QVBoxLayout* layout);
-    void buildLinesSection(QVBoxLayout* layout);
-    void buildBrandWallSection(QVBoxLayout* layout);
-    void buildHalftoneSection(QVBoxLayout* layout);
-    void buildSpecialSection(QVBoxLayout* layout);
-    void buildSessionHtmlSection(QVBoxLayout* layout);
-    void addDataRow(QFormLayout* form, const QString& label, const QString& key, double lo,
-                    double hi, int decimals, double step);
-    void addDataCount(QFormLayout* form, const QString& label, const QString& key, int lo,
-                      int hi);
-    void addDataColor(QFormLayout* form, const QString& label, const QString& key,
-                      const QColor& initial);
-    void emitDataEdit(const QString& key, const QVariant& value);
     void buildVectorSection(QVBoxLayout* layout);
     void buildMediaSection(QVBoxLayout* layout);
     void buildAudioSection(QVBoxLayout* layout);
     void buildPivotSection(QVBoxLayout* layout);
+    void buildSessionHtmlSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
     void applyAudioTrimStart(int playheadFrame);
     void applyAudioTrimEnd(int playheadFrame);
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
 
-    // ---- Session mode ----------------------------------------------------
+    // ---- session mode ----------------------------------------------------
     void refreshSession();
-    // Playhead-only update: frame-dependent spins/labels/keys plus the mini
-    // preview's current dot.  Never rebuilds solver cards or re-evaluates the
-    // solver preview.
     void refreshPlayheadOnly();
+    void refreshKeyframeStatus(const model::Entity& entity);
     void reloadSessionHtmlValues(const model::Entity& entity);
     const model::Entity* sessionEntity() const;
     bool sessionEditable() const;
-    int sessionRelativeFrame(const model::Entity& entity) const;
+    int playheadRelative(const model::Entity& entity) const;
+    // Selected single key's entity-relative frame, or -1.  Multi-selection
+    // deliberately returns -1 so the playhead frame is edited.
+    int selectedSingleKeyFrame(const model::Entity& entity) const;
+    int activeKeyFrame(const model::Entity& entity) const;
+
     bool runSessionEdit(const QString& message,
                         const std::function<bool(model::Entity&)>& mutate,
                         bool ignoreLock = false);
     bool runSessionContentEdit(const QString& message,
                                const std::function<bool(model::Content&)>& mutate);
-    void commitSpecialContentEdit();
+    // Pauses playback and returns the frame the edit targets.  Out-of-range
+    // frames are returned verbatim; callers write static values instead.
+    int prepareAnimationEdit(const model::Entity& entity);
+    bool writeAnimationValue(const QString& property, double value,
+                             bool boolean = false);
+    bool writeHtmlVariable(const QString& name, double value);
+    void deleteActiveKeyframe();
     void reloadSessionHtml(const model::Entity& entity);
     void rebuildSessionHtmlRows(const QJsonObject& variables);
-    void editSessionHtmlVariable(const QString& track, double value);
-    void toggleSessionHtmlKey(const QString& track, double fallback);
-    void sessionSetTrackValue(const QString& track, double value);
-    void sessionSetKeyValue(const QString& track, double value);
-    void sessionToggleKey(const QString& track);
-    void sessionAddTransformKeys();
-    void sessionSetGroupEasing(const model::EasingSpec& easing);
-    void sessionPromptGroupBezier();
+    void editSessionHtmlVariable(const QString& name, double value);
     void applySessionData(const QString& key, const QVariant& value);
     void applySessionParent(const Uuid& parent);
     void applySessionAsset(const QString& field, const QVariant& value);
-    void rebuildTrackRows(const model::Entity& entity);
-    void reloadTrackRows(const model::Entity& entity);
+    void copyTransformParams();
+    void pasteTransformParams();
+    void resetTransformParams();
     void updateSolverCards(const model::Entity& entity);
     void updateSolverPreview(const model::Entity& entity,
                              const QVector<model::SolverSegment>& solvers);
@@ -243,8 +196,10 @@ private:
     void reloadSolverConvert(const model::Entity& entity);
     bool canConvertCurrentKey(const model::Entity& entity,
                               QString* reason = nullptr) const;
+    void promptGroupBezier();
     void showSolverConvertMenu();
     void convertSolverFromKey(SolverEffect effect);
+    void cancelCurrentSolver();
     void createSolverFromPlayhead();
     void selectSolver(const Uuid& solverId);
     void syncSolverFocus(const QVector<model::SolverSegment>& solvers);
@@ -254,16 +209,13 @@ private:
     void reportSessionError(const QString& message);
 
     EditorSession* m_session = nullptr;
-    bool m_sessionMode = false;
     Uuid m_sessionUuid;
-    bool m_autoKey = true;
+    QVector<KeyRef> m_selectedKeys;
     bool m_editing = false;
     bool m_playbackActive = false;
-    EntityId m_entity = kInvalidEntity;
     int m_frame = 0;
+
     QLabel* m_title = nullptr;
-    QPushButton* m_keyButton = nullptr;
-    QPushButton* m_easeButton = nullptr;
     QWidget* m_parentRow = nullptr;
     QLabel* m_parentLabel = nullptr;
     QComboBox* m_parent = nullptr;
@@ -280,15 +232,7 @@ private:
     CollapsibleSection* m_mediaSection = nullptr;
     CollapsibleSection* m_audioSection = nullptr;
     CollapsibleSection* m_pivotSection = nullptr;
-    CollapsibleSection* m_comicSection = nullptr;
-    CollapsibleSection* m_linesSection = nullptr;
-    CollapsibleSection* m_wallSection = nullptr;
-    CollapsibleSection* m_halftoneSection = nullptr;
 
-    // Session-mode special content and HTML manifest pages.
-    CollapsibleSection* m_specialSection = nullptr;
-    next::SpecialContentEditor* m_specialEditor = nullptr;
-    Uuid m_specialUuid;
     CollapsibleSection* m_sessionHtmlSection = nullptr;
     QLabel* m_sessionHtmlInfo = nullptr;
     QLabel* m_sessionHtmlWarning = nullptr;
@@ -301,12 +245,6 @@ private:
     bool m_sessionHtmlPresent = false;
     bool m_sessionHtmlTimeDependent = true;
 
-    QLabel* m_wallInfo = nullptr;
-    QVector<DataRow> m_dataRows;
-    QHash<QString, QColor> m_dataColors;
-    QComboBox* m_comicShape = nullptr;
-    QCheckBox* m_comicTail = nullptr;
-    QStackedWidget* m_linesStack = nullptr;
     QCheckBox* m_usePivot = nullptr;
     QDoubleSpinBox* m_pivotX = nullptr;
     QDoubleSpinBox* m_pivotY = nullptr;
@@ -368,15 +306,21 @@ private:
     QCheckBox* m_basicPhysics = nullptr;
     QCheckBox* m_basicFollow = nullptr;
 
-    // Keyframe track rows (session only).  Easing is one control for the
-    // merged keyframe group at the current frame, matching the legacy UI.
-    QCheckBox* m_autoKeyCheck = nullptr;
+    // Whole-frame keyframe status + metadata.
+    QWidget* m_keyStatusRow = nullptr;
+    QLabel* m_keyStatus = nullptr;
+    QPushButton* m_keyDelete = nullptr;
     QComboBox* m_groupEasing = nullptr;
-    QWidget* m_trackHost = nullptr;
-    QFormLayout* m_trackForm = nullptr;
-    QVector<TrackRow> m_trackRows;
-    Uuid m_trackRowsEntity;
-    ContentKind m_trackRowsKind = ContentKind::Empty;
+    QLineEdit* m_keyNote = nullptr;
+    QPushButton* m_convertSolverButton = nullptr;
+    QPushButton* m_cancelSolverButton = nullptr;
+    QLabel* m_convertSolverHint = nullptr;
+
+    // Transform section MI operations.  The clipboard holds one whole-frame
+    // animation payload (public fields + content + htmlVars).
+    QCheckBox* m_transformLink = nullptr;
+    QJsonObject m_transformClipboard;
+    bool m_hasTransformClipboard = false;
 
     // Content pages that have no legacy widget.
     CollapsibleSection* m_cameraSection = nullptr;
@@ -394,11 +338,8 @@ private:
     QWidget* m_solverEndRow = nullptr;
     QSpinBox* m_solverEndSpin = nullptr;
     QPushButton* m_solverCreateButton = nullptr;
-    QPushButton* m_convertSolverButton = nullptr;
-    QLabel* m_convertSolverHint = nullptr;
     QVector<SolverCard> m_solverCards;
     Uuid m_selectedSolverId;
-    // Mini trajectory window: points + path + initial-velocity arrow only.
     next::SolverPreviewWidget* m_solverPreview = nullptr;
 };
 

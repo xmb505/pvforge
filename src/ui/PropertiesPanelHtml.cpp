@@ -2,11 +2,11 @@
 
 #include "CollapsibleSection.h"
 #include "PropertiesPanelInternal.h"
+#include "WholeFrameEdit.h"
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
 #include "model/Content.h"
 #include "model/Entity.h"
-#include "next/properties/SpecialContentEditor.h"
 
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
@@ -14,7 +14,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QSet>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -22,6 +21,7 @@
 namespace pvf {
 
 using namespace ui::detail;
+namespace wholeframe = ui::wholeframe;
 
 namespace {
 
@@ -41,11 +41,9 @@ QString jsonValueText(const QJsonValue& value)
 
 // Manifest variables may be plain defaults ({"speed": 2.5}) or descriptor
 // objects ({"speed": {"type": "number", "default": 2.5, "min": 0, "max": 10}}).
-// The asset store keeps the manifest's variables object verbatim.
 struct HtmlVarSpec
 {
     QString name;
-    QString track;
     bool numeric = false;
     double defaultValue = 0.0;
     double minimum = -1000000000.0;
@@ -59,7 +57,6 @@ HtmlVarSpec htmlVarSpec(const QString& name, const QJsonValue& value)
 {
     HtmlVarSpec spec;
     spec.name = name;
-    spec.track = QStringLiteral("var.") + name;
 
     QJsonValue defaultValue = value;
     if (value.isObject())
@@ -96,31 +93,6 @@ HtmlVarSpec htmlVarSpec(const QString& name, const QJsonValue& value)
 
 } // namespace
 
-void PropertiesPanel::buildSpecialSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* box = new QVBoxLayout(content);
-    box->setContentsMargins(10, 8, 10, 8);
-    box->setSpacing(6);
-
-    m_specialEditor = new next::SpecialContentEditor(content);
-    m_specialEditor->setObjectName(QStringLiteral("specialContentPage"));
-    // Keep the stacked pages at their natural height instead of letting the
-    // multi-line editors eat the whole scroll column.
-    m_specialEditor->setSizePolicy(QSizePolicy::Preferred,
-                                   QSizePolicy::Maximum);
-    box->addWidget(m_specialEditor);
-    connect(m_specialEditor, &next::SpecialContentEditor::edited, this,
-            &PropertiesPanel::commitSpecialContentEdit);
-
-    m_specialSection =
-        new CollapsibleSection(QStringLiteral("特殊内容"), content, this);
-    m_specialSection->setObjectName(QStringLiteral("specialContentSection"));
-    m_specialSection->setExpanded(true);
-    layout->insertWidget(layout->count() - 1, m_specialSection);
-    m_specialSection->hide();
-}
-
 void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
@@ -132,11 +104,13 @@ void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
     m_sessionHtmlInfo->setObjectName(QStringLiteral("sessionHtmlInfo"));
     m_sessionHtmlInfo->setWordWrap(true);
     m_sessionHtmlInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_sessionHtmlInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_sessionHtmlInfo->setSizePolicy(QSizePolicy::Ignored,
+                                      QSizePolicy::Preferred);
     m_sessionHtmlInfo->setMinimumWidth(0);
     box->addWidget(m_sessionHtmlInfo);
 
-    m_sessionHtmlEmpty = new QLabel(QStringLiteral("（manifest 未声明变量）"), content);
+    m_sessionHtmlEmpty =
+        new QLabel(QStringLiteral("（manifest 未声明变量）"), content);
     m_sessionHtmlEmpty->setObjectName(QStringLiteral("sessionHtmlEmpty"));
     m_sessionHtmlEmpty->setWordWrap(true);
     box->addWidget(m_sessionHtmlEmpty);
@@ -151,7 +125,7 @@ void PropertiesPanel::buildSessionHtmlSection(QVBoxLayout* layout)
     m_sessionHtmlWarning->setObjectName(QStringLiteral("sessionHtmlWarning"));
     m_sessionHtmlWarning->setWordWrap(true);
     m_sessionHtmlWarning->setSizePolicy(QSizePolicy::Ignored,
-                                        QSizePolicy::Preferred);
+                                         QSizePolicy::Preferred);
     m_sessionHtmlWarning->setMinimumWidth(0);
     m_sessionHtmlWarning->setStyleSheet(QStringLiteral("color:#e0a050;"));
     m_sessionHtmlWarning->hide();
@@ -190,18 +164,17 @@ void PropertiesPanel::rebuildSessionHtmlRows(const QJsonObject& variables)
         rowLayout->setSpacing(4);
 
         auto* nameLabel = new QLabel(spec.name, rowWidget);
-        nameLabel->setObjectName(QStringLiteral("sessionHtmlVarName_%1")
-                                    .arg(spec.track));
+        nameLabel->setObjectName(
+            QStringLiteral("sessionHtmlVarName_var.%1").arg(spec.name));
         nameLabel->setToolTip(
-            QStringLiteral("%1 · 默认值 %2")
-                .arg(spec.track)
+            QStringLiteral("var.%1 · 默认值 %2")
+                .arg(spec.name)
                 .arg(spec.numeric ? QString::number(spec.defaultValue, 'g', 8)
                                   : spec.text));
         rowLayout->addWidget(nameLabel, 1);
 
         SessionHtmlRow row;
         row.name = spec.name;
-        row.track = spec.track;
         row.numeric = spec.numeric;
         row.defaultValue = spec.defaultValue;
         row.minimum = spec.minimum;
@@ -214,45 +187,29 @@ void PropertiesPanel::rebuildSessionHtmlRows(const QJsonObject& variables)
         if (spec.numeric)
         {
             auto* spin = new QDoubleSpinBox(rowWidget);
-            spin->setObjectName(QStringLiteral("sessionHtmlVarValue_%1")
-                                    .arg(spec.track));
+            spin->setObjectName(
+                QStringLiteral("sessionHtmlVarValue_var.%1").arg(spec.name));
             spin->setRange(spec.minimum, spec.maximum);
             spin->setDecimals(spec.decimals);
             spin->setSingleStep(spec.step);
             spin->setKeyboardTracking(false);
             spin->setToolTip(
-                QStringLiteral("manifest 默认值 %1；修改后按自动关键帧规则写入 %2")
-                    .arg(spec.defaultValue)
-                    .arg(spec.track));
+                QStringLiteral("manifest 默认值 %1；修改后按自动整帧关键帧规则写入")
+                    .arg(spec.defaultValue));
             rowLayout->addWidget(spin, 1);
             row.spin = spin;
-
-            auto* key = new QToolButton(rowWidget);
-            key->setObjectName(QStringLiteral("sessionHtmlVarDiamond_%1")
-                                   .arg(spec.track));
-            key->setFixedSize(18, 18);
-            key->setAutoRaise(true);
-            key->setText(QStringLiteral("◇"));
-            key->setCursor(Qt::PointingHandCursor);
-            rowLayout->addWidget(key);
-            row.key = key;
-
-            const QString track = spec.track;
-            connect(key, &QToolButton::clicked, this, [this, track, spin] {
-                toggleSessionHtmlKey(track, spin->value());
-            });
             connect(spin, &QDoubleSpinBox::editingFinished, this,
-                    [this, track, spin] {
-                        editSessionHtmlVariable(track, spin->value());
+                    [this, name = spec.name, spin] {
+                        editSessionHtmlVariable(name, spin->value());
                     });
         }
         else
         {
             auto* value = new QLabel(spec.text, rowWidget);
-            value->setObjectName(QStringLiteral("sessionHtmlVarValue_%1")
-                                     .arg(spec.track));
+            value->setObjectName(
+                QStringLiteral("sessionHtmlVarValue_var.%1").arg(spec.name));
             value->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            value->setToolTip(QStringLiteral("%1（只读）").arg(spec.track));
+            value->setToolTip(QStringLiteral("var.%1（只读）").arg(spec.name));
             rowLayout->addWidget(value, 1);
             row.readOnlyValue = value;
         }
@@ -289,11 +246,11 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
         if (const auto stored = m_session->assets().get(hash))
         {
             m_sessionHtmlPresent = true;
-            m_sessionHtmlTimeDependent = stored->metadata
-                                             .value(QStringLiteral("timeDependent"))
-                                             .toBool(true);
-            variables = stored->metadata.value(QStringLiteral("variables"))
-                            .toObject();
+            m_sessionHtmlTimeDependent =
+                stored->metadata.value(QStringLiteral("timeDependent"))
+                    .toBool(true);
+            variables =
+                stored->metadata.value(QStringLiteral("variables")).toObject();
             name = stored->name;
             width = stored->metadata.value(QStringLiteral("width")).toInt(0);
             height = stored->metadata.value(QStringLiteral("height")).toInt(0);
@@ -307,8 +264,7 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
         }
         else
         {
-            QString info = name.isEmpty() ? QStringLiteral("HTML")
-                                          : name;
+            QString info = name.isEmpty() ? QStringLiteral("HTML") : name;
             if (width > 0 && height > 0)
                 info += QStringLiteral(" · %1×%2").arg(width).arg(height);
             info += QStringLiteral(" · timeDependent：%1")
@@ -327,16 +283,23 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
 
     QSet<QString> declared;
     for (const SessionHtmlRow& row : m_sessionHtmlRows)
-        declared.insert(row.track);
+        declared.insert(row.name);
     QStringList orphans;
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+    QSet<QString> seen;
+    for (const model::Keyframe& key : entity.keyframes)
     {
-        if (it.key().startsWith(QStringLiteral("var."))
-            && !declared.contains(it.key()) && !it->isEmpty())
-            orphans << it.key().mid(4);
+        for (auto it = key.htmlVars.constBegin(); it != key.htmlVars.constEnd();
+             ++it)
+        {
+            if (!declared.contains(it.key()) && !seen.contains(it.key()))
+            {
+                seen.insert(it.key());
+                orphans << it.key();
+            }
+        }
     }
     if (!orphans.isEmpty())
-        warnings << QStringLiteral("未使用的变量轨：%1")
+        warnings << QStringLiteral("未使用的 HTML 变量：%1")
                         .arg(orphans.join(QStringLiteral(", ")));
     m_sessionHtmlWarning->setText(warnings.join(QStringLiteral("\n")));
     m_sessionHtmlWarning->setVisible(!warnings.isEmpty());
@@ -346,134 +309,34 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
 
 void PropertiesPanel::reloadSessionHtmlValues(const model::Entity& entity)
 {
-    const int relative = sessionRelativeFrame(entity);
-    const bool inRange = relative >= 0 && relative < entity.duration();
-    const int sampleFrame = std::clamp(relative, 0, std::max(0, entity.duration() - 1));
+    const int relative = activeKeyFrame(entity);
+    const bool inRange = relative >= 0 && relative <= entity.duration();
     const bool editable = sessionEditable();
+
+    model::Keyframe key;
+    if (inRange)
+        key = wholeframe::keyAt(entity, relative, m_session);
+
     for (SessionHtmlRow& row : m_sessionHtmlRows)
     {
         if (!row.numeric)
         {
-            QString text = row.readOnlyText;
-            const auto trackIt = entity.tracks.constFind(row.track);
-            if (trackIt != entity.tracks.constEnd())
-            {
-                if (const auto value = model::evaluateTrack(trackIt.value(),
-                                                            sampleFrame, false))
-                    text = QString::number(*value, 'g', 8);
-            }
-            row.readOnlyValue->setText(text);
+            row.readOnlyValue->setText(row.readOnlyText);
             continue;
         }
-
         double value = row.defaultValue;
-        const auto trackIt = entity.tracks.constFind(row.track);
-        if (trackIt != entity.tracks.constEnd())
-        {
-            if (const auto evaluated = model::evaluateTrack(trackIt.value(),
-                                                            sampleFrame, false))
-                value = *evaluated;
-        }
+        if (inRange && key.htmlVars.value(row.name).isDouble())
+            value = key.htmlVars.value(row.name).toDouble();
         setSpinIfIdle(row.spin, value);
-
-        const bool hasKey = inRange && hasKeyAt(entity, row.track, relative);
-        row.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
-        row.key->setToolTip(
-            hasKey ? QStringLiteral("删除当前帧的「%1」关键帧").arg(row.name)
-                   : QStringLiteral("在当前帧给「%1」打关键帧，初值为 %2")
-                         .arg(row.name)
-                         .arg(row.spin->value()));
-        row.key->setEnabled(editable && inRange);
         row.spin->setEnabled(editable && inRange);
     }
 }
 
-void PropertiesPanel::editSessionHtmlVariable(const QString& track, double value)
+void PropertiesPanel::editSessionHtmlVariable(const QString& name, double value)
 {
-    const model::Entity* entity = sessionEntity();
-    if (!entity || !sessionEditable())
+    if (m_editing)
         return;
-    const int relative = sessionRelativeFrame(*entity);
-    if (relative < 0 || relative >= entity->duration())
-    {
-        reportSessionError(QStringLiteral("播放头不在实体范围内，无法修改变量"));
-        refresh();
-        return;
-    }
-    if (!m_autoKey && !hasKeyAt(*entity, track, relative))
-    {
-        reportSessionError(
-            QStringLiteral("HTML 变量没有静态值：先点菱形打关键帧，或开启自动关键帧"));
-        refresh();
-        return;
-    }
-    runSessionEdit(QStringLiteral("pvf: edit HTML variable"),
-                   [track, relative, value](model::Entity& e) {
-                       setKeyframeValue(e, track, relative, value);
-                       return true;
-                   });
-}
-
-void PropertiesPanel::toggleSessionHtmlKey(const QString& track, double fallback)
-{
-    const model::Entity* entity = sessionEntity();
-    if (!entity || !sessionEditable())
-        return;
-    const int relative = sessionRelativeFrame(*entity);
-    if (relative < 0 || relative >= entity->duration())
-    {
-        reportSessionError(QStringLiteral("播放头不在实体范围内：相对帧 %1，允许 0..%2")
-                               .arg(relative)
-                               .arg(entity->duration() - 1));
-        return;
-    }
-    if (hasKeyAt(*entity, track, relative))
-    {
-        runSessionEdit(QStringLiteral("pvf: delete HTML variable key"),
-                       [track, relative](model::Entity& e) {
-                           removeKeyframeAt(e, track, relative);
-                           return true;
-                       });
-        return;
-    }
-    runSessionEdit(QStringLiteral("pvf: add HTML variable key"),
-                   [track, relative, fallback](model::Entity& e) {
-                       setKeyframeValue(e, track, relative, fallback);
-                       return true;
-                   });
-}
-
-void PropertiesPanel::commitSpecialContentEdit()
-{
-    const model::Entity* entity = sessionEntity();
-    if (!m_session || m_editing || !m_specialEditor || !entity
-        || !next::SpecialContentEditor::handles(entity->content.kind))
-        return;
-    if (m_specialEditor->kind() != entity->content.kind)
-        return;
-
-    model::Content content = entity->content;
-    m_specialEditor->applyTo(content);
-
-    // The model accepts an empty brand-wall label list (it draws empty tiles),
-    // but saving an editor page with no label is meaningless.
-    if (content.kind == ContentKind::BrandWall
-        && content.brandWall.logos.isEmpty())
-    {
-        reportSessionError(QStringLiteral("未修改：品牌墙至少需要一个标签"));
-        refresh();
-        return;
-    }
-
-    runSessionContentEdit(
-        QStringLiteral("pvf: edit %1 content")
-            .arg(contentKindName(content.kind)),
-        [content](model::Content& updated) {
-            if (updated.kind != content.kind)
-                return false;
-            updated = content;
-            return true;
-        });
+    writeHtmlVariable(name, value);
 }
 
 } // namespace pvf

@@ -325,20 +325,8 @@ void PropertiesPanel::buildSolverSection(QVBoxLayout* layout)
     m_solverEmpty->setObjectName(QStringLiteral("solverEmptyLabel"));
     box->addWidget(m_solverEmpty);
 
-    // Mini trajectory window: target point, solver point, path and the
-    // initial-velocity arrow.  It never draws the entity content, so it stays
-    // readable at this size.  Above the cards it is the primary handle.
-    m_solverPreview = new next::SolverPreviewWidget(
-        m_session ? m_session->document() : nullptr, content);
-    if (m_session)
-        m_solverPreview->setAnimCache(&m_session->animCache());
-    m_solverPreview->setObjectName(QStringLiteral("solverPreviewMini"));
-    m_solverPreview->setMinimumWidth(260);
-    m_solverPreview->setFixedHeight(172);
-    m_solverPreview->setToolTip(
-        QStringLiteral("拖动红色箭头手柄调整初速度（松手提交，Esc 取消）"));
-    m_solverPreview->hide();
-    box->addWidget(m_solverPreview);
+    // The trajectory mini window lives in the keyframe section so it sits
+    // beside the easing/note/solver controls; buildSessionUi() creates it.
 
     m_solverHost = new QWidget(content);
     m_solverCardsLayout = new QVBoxLayout(m_solverHost);
@@ -391,16 +379,16 @@ void PropertiesPanel::reloadSolverCreate(const model::Entity& entity)
 bool PropertiesPanel::canConvertCurrentKey(const model::Entity& entity,
                                            QString* reason) const
 {
-    const int relative = sessionRelativeFrame(entity);
-    if (relative < 0 || relative >= entity.duration())
+    const int relative = activeKeyFrame(entity);
+    if (relative < 0 || relative > entity.duration())
     {
         if (reason)
             *reason = QStringLiteral("播放头不在片段范围内：相对帧 %1，允许 0..%2")
                           .arg(relative)
-                          .arg(entity.duration() - 1);
+                          .arg(entity.duration());
         return false;
     }
-    if (!hasAnyKeyAt(entity, relative))
+    if (!model::hasKeyframeAt(entity.keyframes, relative))
     {
         if (reason)
             *reason = QStringLiteral("当前帧没有关键帧；先在播放头处打一个普通关键帧");
@@ -485,7 +473,7 @@ void PropertiesPanel::updateSolverPreview(
     for (const model::SolverSegment& solver : solvers)
         if (solver.id == m_selectedSolverId)
             solverId = solver.id;
-    const int relative = sessionRelativeFrame(entity);
+    const int relative = playheadRelative(entity);
     if (solverId.isEmpty())
     {
         for (const model::SolverSegment& solver : solvers)
@@ -1027,7 +1015,7 @@ void PropertiesPanel::convertSolverFromKey(SolverEffect effect)
         return;
     }
 
-    const int relative = sessionRelativeFrame(*entity);
+    const int relative = activeKeyFrame(*entity);
     const int duration = entity->duration();
     const Uuid entityUuid = entity->uuid;
 
@@ -1142,6 +1130,24 @@ void PropertiesPanel::updateSolver(
     if (!ok)
         reportSessionError(error);
     refresh();
+}
+
+void PropertiesPanel::cancelCurrentSolver()
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int frame = activeKeyFrame(*entity);
+    Uuid solverId;
+    for (const model::SolverSegment& solver : entity->solvers)
+        if (solver.startFrame == frame)
+        {
+            solverId = solver.id;
+            break;
+        }
+    if (solverId.isEmpty())
+        return;
+    deleteSolver(solverId);
 }
 
 void PropertiesPanel::deleteSolver(const Uuid& solverId)

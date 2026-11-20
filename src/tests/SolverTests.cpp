@@ -58,35 +58,32 @@ int solverUiTest(QApplication& app)
     project.entities[ball].content.vector.height = 40.0;
     project.entities[ball].content.vector.fillColor =
         QStringLiteral("#ffd166");
-    pvf::model::Track ballX;
-    ballX.keys = {{0, 0.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
-    pvf::model::Track ballY;
-    ballY.keys = {{0, 200.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.y = 200.0;
+        project.entities[ball].keyframes.append(key);
+    }
 
     const pvf::Uuid spinner =
         makeEntity(QStringLiteral("自转物体"), 2, pvf::ContentKind::Vector);
     project.entities[spinner].transform.x = 150.0;
     project.entities[spinner].content.vector.width = 60.0;
     project.entities[spinner].content.vector.height = 60.0;
-    pvf::model::Track spinRotation;
-    spinRotation.keys = {{0, 0.0, {}, {}}};
-    project.entities[spinner].tracks.insert(QStringLiteral("rotation"),
-                                            spinRotation);
-
+    project.entities[spinner].keyframes.append(pvf::model::Keyframe{});
     const pvf::Uuid orbiter =
         makeEntity(QStringLiteral("公转物体"), 3, pvf::ContentKind::Vector);
     project.entities[orbiter].transform.x = -150.0;
     project.entities[orbiter].transform.y = 80.0;
     project.entities[orbiter].content.vector.width = 40.0;
     project.entities[orbiter].content.vector.height = 40.0;
-    pvf::model::Track orbitX;
-    orbitX.keys = {{0, -150.0, {}, {}}};
-    project.entities[orbiter].tracks.insert(QStringLiteral("x"), orbitX);
-    pvf::model::Track orbitY;
-    orbitY.keys = {{0, 80.0, {}, {}}};
-    project.entities[orbiter].tracks.insert(QStringLiteral("y"), orbitY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.x = -150.0;
+        key.y = 80.0;
+        project.entities[orbiter].keyframes.append(key);
+    }
 
     const QVector<pvf::Uuid> setup = {ground, ball, spinner, orbiter};
     if (!session->document()->commitEntities(setup,
@@ -323,8 +320,9 @@ int solverUiTest(QApplication& app)
     spinSolver.params.insert(QStringLiteral("angularVelocity"), 6.0);
     spinSolver.params.insert(QStringLiteral("direction"), 1);
     live->mutableProject().entities[spinner].solvers.append(spinSolver);
-    live->mutableProject().entities[spinner].tracks[
-        QStringLiteral("rotation")].keys = {{0, 0.0, {}, {}}};
+    if (live->mutableProject().entities[spinner].keyframes.isEmpty())
+        live->mutableProject().entities[spinner].keyframes.append(
+            pvf::model::Keyframe{});
     if (!document->commitEntity(spinner, QStringLiteral("solver-ui spin"),
                                 &error))
     {
@@ -460,12 +458,12 @@ int solverMiniPreviewTest(QApplication& app)
     project.entities[ball].transform.y = 200.0;
     project.entities[ball].content.vector.width = 40.0;
     project.entities[ball].content.vector.height = 40.0;
-    pvf::model::Track ballX;
-    ballX.keys = {{0, 0.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
-    pvf::model::Track ballY;
-    ballY.keys = {{0, 200.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.y = 200.0;
+        project.entities[ball].keyframes.append(key);
+    }
 
     const pvf::Uuid moon =
         makeEntity(QStringLiteral("卫星"), 2, pvf::ContentKind::Vector);
@@ -1013,12 +1011,12 @@ int solverPreviewFreezeTest(QApplication& app)
     project.entities[ball].transform.y = 200.0;
     project.entities[ball].content.vector.width = 40.0;
     project.entities[ball].content.vector.height = 40.0;
-    pvf::model::Track ballX;
-    ballX.keys = {{0, 0.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
-    pvf::model::Track ballY;
-    ballY.keys = {{0, 200.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.y = 200.0;
+        project.entities[ball].keyframes.append(key);
+    }
 
     pvf::model::SolverSegment gravity;
     gravity.id = pvf::model::newUuid();
@@ -1259,12 +1257,12 @@ int solverPlaybackPerfTest(QApplication& app)
     project.entities[ball].transform.y = 200.0;
     project.entities[ball].content.vector.width = 40.0;
     project.entities[ball].content.vector.height = 40.0;
-    pvf::model::Track ballX;
-    ballX.keys = {{0, 0.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
-    pvf::model::Track ballY;
-    ballY.keys = {{0, 200.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.y = 200.0;
+        project.entities[ball].keyframes.append(key);
+    }
 
     pvf::model::SolverSegment hole;
     hole.id = pvf::model::newUuid();
@@ -1601,21 +1599,25 @@ int solverConvertTest(QApplication& app)
     project.entities[ball].transform.y = 200.0;
     project.entities[ball].content.vector.width = 40.0;
     project.entities[ball].content.vector.height = 40.0;
-    pvf::model::Track ballX;
-    ballX.keys = {{0, 0.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("x"), ballX);
-    pvf::model::Track ballY;
-    ballY.keys = {{0, 200.0, {}, {}}};
-    project.entities[ball].tracks.insert(QStringLiteral("y"), ballY);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        key.y = 200.0;
+        project.entities[ball].keyframes.append(key);
+    }
 
     // A last key on a non-driven track (opacity) exercises conversion without
     // requiring an x/y key at the solver start frame.
     const pvf::Uuid marker =
         makeEntity(QStringLiteral("淡出块"), 2, pvf::ContentKind::Vector);
-    pvf::model::Track markerOpacity;
-    markerOpacity.keys = {{10, 0.5, {}, {}}, {20, 1.0, {}, {}}};
-    project.entities[marker].tracks.insert(QStringLiteral("opacity"),
-                                           markerOpacity);
+    {
+        pvf::model::Keyframe first;
+        first.frame = 10;
+        first.opacity = 0.5;
+        pvf::model::Keyframe second;
+        second.frame = 20;
+        project.entities[marker].keyframes = {first, second};
+    }
 
     const QVector<pvf::Uuid> setup = {ground, ball, marker};
     if (!session->document()->commitEntities(setup,
@@ -1790,8 +1792,7 @@ int solverConvertTest(QApplication& app)
 
     // The first key created after the solver start is the end marker: the
     // structural end becomes N-1 and the key at N is ordinary animation.
-    if (!check(live->editActions()->addKeyframe(ball, QStringLiteral("x"), 30,
-                                                &error),
+    if (!check(live->editActions()->addKeyframe(ball, 30, &error),
                QStringLiteral("could not add the end-marker key: %1").arg(error)))
         return 1;
     flush();
@@ -1813,7 +1814,7 @@ int solverConvertTest(QApplication& app)
 
     // Deleting the end marker restores the automatic end.
     if (!check(live->editActions()->deleteKeyframes(
-                   {pvf::KeyRef{ball, QStringLiteral("x"), 30}}, &error),
+                   {pvf::KeyRef{ball, 30}}, &error),
                QStringLiteral("could not delete the end-marker key: %1")
                    .arg(error)))
         return 1;
@@ -1830,8 +1831,7 @@ int solverConvertTest(QApplication& app)
     }
 
     // A later last key can become a second segment in the same clip.
-    if (!check(live->editActions()->addKeyframe(ball, QStringLiteral("x"), 40,
-                                                &error),
+    if (!check(live->editActions()->addKeyframe(ball, 40, &error),
                QStringLiteral("could not add the second start key: %1")
                    .arg(error)))
         return 1;

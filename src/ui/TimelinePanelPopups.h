@@ -117,18 +117,10 @@ private:
                 &TimelinePanel::scrubStarted);
         connect(m_panel, &TimelinePanel::entitySelected, m_source,
                 &TimelinePanel::entitySelected);
-        connect(m_panel, &TimelinePanel::deleteKeyframesRequested, m_source,
-                &TimelinePanel::deleteKeyframesRequested);
         connect(m_panel, &TimelinePanel::deleteEntityRequested, m_source,
                 &TimelinePanel::deleteEntityRequested);
         connect(m_panel, &TimelinePanel::audioMoved, m_source,
                 &TimelinePanel::audioMoved);
-        connect(m_panel, &TimelinePanel::keyframesMoveRequested, m_source,
-                &TimelinePanel::keyframesMoveRequested);
-        connect(m_panel, &TimelinePanel::snapshotEditRequested, m_source,
-                &TimelinePanel::snapshotEditRequested);
-        connect(m_panel, &TimelinePanel::keyframeAddRequested, m_source,
-                &TimelinePanel::keyframeAddRequested);
         connect(m_panel, &TimelinePanel::keyframeSelectionChanged, m_source,
                 &TimelinePanel::adoptKeyframeSelection);
         connect(m_panel, &TimelinePanel::editCommitted, m_source,

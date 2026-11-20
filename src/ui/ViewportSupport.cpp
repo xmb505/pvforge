@@ -143,10 +143,22 @@ bool transformsEqual(const gizmo::Transform& a, const gizmo::Transform& b)
 double trackValueOr(const model::Entity& entity, const char* property,
                     double relativeFrame, double fallback)
 {
-    const auto it = entity.tracks.constFind(QLatin1String(property));
-    if (it == entity.tracks.constEnd())
-        return fallback;
-    return model::evaluateTrack(it.value(), relativeFrame).value_or(fallback);
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
+    if (QLatin1String(property) == QLatin1String("x"))
+        return sample.x;
+    if (QLatin1String(property) == QLatin1String("y"))
+        return sample.y;
+    if (QLatin1String(property) == QLatin1String("rotation"))
+        return sample.rotation;
+    if (QLatin1String(property) == QLatin1String("scaleX"))
+        return sample.scaleX;
+    if (QLatin1String(property) == QLatin1String("scaleY"))
+        return sample.scaleY;
+    if (QLatin1String(property) == QLatin1String("opacity"))
+        return sample.opacity;
+    // Pivot is a definition parameter and never enters keyframes.
+    return fallback;
 }
 
 bool setStaticGizmoValue(model::Entity& entity, const QString& property,
@@ -189,24 +201,6 @@ bool setStaticGizmoValue(model::Entity& entity, const QString& property,
         return true;
     }
     return false;
-}
-
-void setTrackKeyValue(model::Entity& entity, const QString& property, int frame,
-                      double value)
-{
-    model::Track& track = entity.tracks[property];
-    for (model::Keyframe& keyframe : track.keys)
-    {
-        if (keyframe.frame == frame)
-        {
-            keyframe.value = value;
-            return;
-        }
-    }
-    model::Keyframe keyframe;
-    keyframe.frame = frame;
-    keyframe.value = value;
-    track.keys.append(keyframe);
 }
 
 bool solverDrivesProperty(const model::Entity& entity, const QString& property,
@@ -277,10 +271,19 @@ void drawArrowLine(QPainter& painter, QPointF from, QPointF to,
 double solverTrackValue(const model::Entity& entity, const QString& name,
                         int relativeFrame, double fallback)
 {
-    const auto it = entity.tracks.constFind(name);
-    if (it == entity.tracks.constEnd())
-        return fallback;
-    return model::evaluateTrack(it.value(), relativeFrame).value_or(fallback);
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
+    if (name == QLatin1String("x"))
+        return sample.x;
+    if (name == QLatin1String("y"))
+        return sample.y;
+    if (name == QLatin1String("rotation"))
+        return sample.rotation;
+    if (name == QLatin1String("scaleX"))
+        return sample.scaleX;
+    if (name == QLatin1String("scaleY"))
+        return sample.scaleY;
+    return fallback;
 }
 
 double transformRotationOf(const QTransform& transform)

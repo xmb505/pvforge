@@ -183,6 +183,29 @@ void TimelinePanel::refreshFromSession()
     m_adapter->refresh();
     rebuildSolverStopCache();
     setReadOnlySnapshot(m_adapter->snapshot());
+
+    // External edits (properties delete, MCP, trim) can remove selected keys.
+    // Prune the selection so Delete/copy-params never addresses a stale frame.
+    QVector<KeyframeSelection> kept;
+    for (const KeyframeSelection& selection : m_selectedKeyframes)
+    {
+        const Entity* entity = entityById(selection.entity);
+        if (!entity)
+            continue;
+        const int frame = int(std::lround(selection.frame));
+        for (const Keyframe& key : entity->keyframes)
+            if (int(std::lround(key.frame)) == frame)
+            {
+                kept.append(selection);
+                break;
+            }
+    }
+    if (kept.size() != m_selectedKeyframes.size())
+    {
+        m_selectedKeyframes = kept;
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+    }
+
     if (m_session)
     {
         if (m_frame != m_session->playhead())
@@ -309,8 +332,11 @@ void TimelinePanel::selectEntity(EntityId id, bool emitSignal)
 void TimelinePanel::adoptKeyframeSelection(
     const QVector<KeyframeSelection>& selection)
 {
+    if (m_selectedKeyframes == selection)
+        return;
     m_selectedKeyframes = selection;
     update();
+    emit keyframeSelectionChanged(m_selectedKeyframes);
     if (m_sourcePanel)
         m_sourcePanel->adoptKeyframeSelection(selection);
 }
@@ -340,11 +366,6 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     syncPopups();
 }
 #endif
-
-void TimelinePanel::setSelectedTrack(const QString& track)
-{
-    m_selectedTrack = track;
-}
 
 void TimelinePanel::setEditMode(EditMode mode)
 {

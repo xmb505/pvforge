@@ -191,20 +191,16 @@ int sessionGizmoTest(QApplication& app)
         ++failures;
     }
 
-    // Auto-key writes the current frame's key (relative frame 0 here).
+    // Every gizmo value is written as one whole-frame key at the playhead
+    // (relative frame 0 here).
     {
         const auto& rotatedEntity = sessionPtr->project().entities[uuid];
-        const auto track = rotatedEntity.tracks.constFind(
-            QStringLiteral("rotation"));
-        bool keyed = false;
-        if (track != rotatedEntity.tracks.constEnd())
-            for (const pvf::model::Keyframe& key : track.value().keys)
-                if (key.frame == 0
-                    && std::abs(std::remainder(key.value - 90.0, 360.0)) < 0.01)
-                    keyed = true;
-        if (!keyed)
+        const pvf::model::Keyframe* key =
+            pvf::model::keyframeAt(rotatedEntity.keyframes, 0);
+        if (!key
+            || std::abs(std::remainder(key->rotation - 90.0, 360.0)) >= 0.01)
         {
-            qCritical() << "gizmo-test: auto-key did not write the rotation key";
+            qCritical() << "gizmo-test: gizmo did not write a whole-frame key";
             ++failures;
         }
     }

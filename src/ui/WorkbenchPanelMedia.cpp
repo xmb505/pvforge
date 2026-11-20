@@ -90,11 +90,6 @@ void WorkbenchPanel::refreshMediaLibrary()
     }
 }
 
-void WorkbenchPanel::selectMedia(int templateIndex)
-{
-    Q_UNUSED(templateIndex);
-}
-
 void WorkbenchPanel::selectSessionMedia(const QString& hash)
 {
     if (!m_session || !m_mediaPreview || !m_mediaInfo)
@@ -104,7 +99,6 @@ void WorkbenchPanel::selectSessionMedia(const QString& hash)
         return;
 
     m_mediaHash = hash;
-    m_mediaTemplateIndex = -1;
     const QStringList files = QDir(asset->directory).entryList(
         {QStringLiteral("content.*")}, QDir::Files, QDir::Name);
     m_mediaPath = files.isEmpty() ? QString()
