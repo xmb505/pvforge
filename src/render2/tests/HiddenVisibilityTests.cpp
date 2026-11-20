@@ -96,14 +96,15 @@ void testHiddenEntityStillRenders()
     CHECK(nearColor(render(project, store, false).pixelColor(50, 50), Qt::red));
 }
 
-void testVisibleTrackStillHides()
+void testKeyframeVisibilityStillHides()
 {
     Project project = makeProject();
     Entity tracked = makeVector(QStringLiteral("tracked"));
     tracked.hidden = true;
-    Track visible;
-    visible.keys.append(Keyframe{0, 0.0});
-    tracked.tracks.insert(QStringLiteral("visible"), visible);
+    Keyframe hiddenKey;
+    hiddenKey.frame = 0;
+    hiddenKey.visible = false;
+    tracked.keyframes = {hiddenKey};
     project.entities.insert(tracked.uuid, tracked);
 
     QTemporaryDir directory;
@@ -154,7 +155,7 @@ int main(int argc, char** argv)
     QGuiApplication app(argc, argv);
 
     testHiddenEntityStillRenders();
-    testVisibleTrackStillHides();
+    testKeyframeVisibilityStillHides();
     testWorkbenchSkipsHidden();
     testWorkbenchHiddenParentInheritance();
 

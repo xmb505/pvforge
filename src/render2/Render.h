@@ -63,11 +63,12 @@ struct Options
     std::function<void(const QString&)> contentIssue;
 };
 
-// Content of an entity at a project frame with its numeric content tracks
-// applied.  Text: fontSize, lineHeight, letterSpacing, padding, boxWidth,
-// boxHeight, strokeWidth.  Vector: width, height, cornerRadius, strokeWidth.
-// Tracks are evaluated at the entity-relative frame; a missing or empty track
-// keeps the static value.  Colours, fonts and the text itself are not animated.
+// Content of an entity at a project frame with its whole-frame content
+// animation values applied.  Text: pixelSize, lineHeight, letterSpacing,
+// padding, boxWidth, boxHeight, strokeWidth.  Vector: width, height,
+// cornerRadius, strokeWidth.  Values are evaluated once at the entity-relative
+// frame from the whole-frame keyframe sample; no keyframe keeps the static
+// value.  Colours, fonts and the text itself are not animated.
 // The renderer, hit shapes and the workbench cache all derive the picture from
 // this, so a keyed field changes both the frame and its cache metadata.
 model::Content animatedContent(const model::Entity& entity, double projectFrame);

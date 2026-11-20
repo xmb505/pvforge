@@ -173,48 +173,6 @@ void writeContent(QDataStream& out, const model::Entity& entity,
         out << content.asset.hash
             << qint32(static_cast<int>(content.asset.type));
         break;
-    case ContentKind::ComicText: {
-        const model::ComicTextContent& comic = content.comic;
-        out << comic.text.toUtf8() << comic.fontFamily.toUtf8()
-            << qint32(comic.pixelSize) << comic.color.toUtf8()
-            << comic.strokeColor.toUtf8() << comic.strokeWidth
-            << qint32(comic.align) << comic.lineHeight << comic.bold
-            << comic.italic << comic.shape.toUtf8() << comic.boxWidth
-            << comic.boxHeight << comic.fillColor.toUtf8()
-            << comic.bubbleStrokeColor.toUtf8() << comic.bubbleStrokeWidth
-            << comic.cornerRadius << comic.tail << comic.tailX << comic.tailY
-            << comic.rotation << comic.padding << qint32(comic.seed);
-        break;
-    }
-    case ContentKind::RadialLines: {
-        const model::RadialLinesContent& radial = content.radial;
-        out << qint32(radial.count) << radial.radius << radial.innerRatio
-            << radial.width << radial.angle << radial.color.toUtf8()
-            << qint32(radial.seed);
-        break;
-    }
-    case ContentKind::FlowLines: {
-        const model::FlowLinesContent& flow = content.flow;
-        out << qint32(flow.count) << flow.length << flow.spacing
-            << flow.thickness << flow.area << flow.bend << flow.angle
-            << flow.phase << flow.color.toUtf8() << qint32(flow.seed);
-        break;
-    }
-    case ContentKind::HalftoneDots: {
-        const model::HalftoneDotsContent& halftone = content.halftone;
-        out << halftone.layout.toUtf8() << halftone.area << halftone.radius
-            << halftone.spacing << halftone.dotSize << halftone.angle
-            << halftone.gradientAngle << halftone.minRatio << halftone.jitter
-            << halftone.color.toUtf8() << qint32(halftone.seed);
-        break;
-    }
-    case ContentKind::BrandWall: {
-        const model::BrandWallContent& wall = content.brandWall;
-        out << wall.logos << qint32(wall.columns) << qint32(wall.rows)
-            << wall.spacing << wall.logoSize << wall.colors << wall.alternate
-            << wall.angle << wall.background.toUtf8() << qint32(wall.seed);
-        break;
-    }
     }
 }
 
@@ -254,17 +212,17 @@ void writeAssetDetails(QDataStream& out, const model::Entity& entity, int frame,
         out << requestedFrame << requestedTime << timeDependent
             << metadata.value(QStringLiteral("entry")).toString();
 
-        // Variable tracks still follow the entity-relative frame: a static
-        // page may expose controls that the timeline drives.
-        const double relativeFrame = double(localFrame);
-        for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+        // Whole-frame keyframes drive the declared numeric variables at the
+        // entity-relative frame.  A page marked timeDependent=false still lets
+        // the timeline drive those variables, so they are evaluated at the real
+        // relative frame, not the normalised render request frame.
+        const model::KeyframeSample sample = model::entitySampleAt(
+            entity, double(localFrame));
+        for (auto it = sample.htmlVars.constBegin();
+             it != sample.htmlVars.constEnd(); ++it)
         {
-            if (!it.key().startsWith(QStringLiteral("var."), Qt::CaseInsensitive))
-                continue;
-            const std::optional<double> value =
-                model::evaluateTrack(it.value(), relativeFrame);
-            if (value)
-                overrides.insert(it.key().mid(4), *value);
+            if (it.value().isDouble())
+                overrides.insert(it.key(), it.value().toDouble());
         }
     }
 

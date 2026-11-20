@@ -45,12 +45,59 @@ model::Entity textEntity(const Uuid& uuid, int start, int end)
     return entity;
 }
 
-void addKey(model::Entity& entity, const QString& track, int frame, double value)
+// Whole-frame key at one frame: the existing key when present, otherwise the
+// entity's static state (including the content animation defaults).
+model::Keyframe baseKey(const model::Entity& entity, int frame)
 {
+    if (const model::Keyframe* existing = model::keyframeAt(entity.keyframes,
+                                                           frame))
+        return *existing;
+    const model::KeyframeSample sample = model::staticEntitySample(entity);
     model::Keyframe key;
     key.frame = frame;
-    key.value = value;
-    entity.tracks[track].keys.append(key);
+    key.x = sample.x;
+    key.y = sample.y;
+    key.rotation = sample.rotation;
+    key.scaleX = sample.scaleX;
+    key.scaleY = sample.scaleY;
+    key.opacity = sample.opacity;
+    key.visible = sample.visible;
+    key.physicsInteract = sample.physicsInteract;
+    key.content = sample.content;
+    key.htmlVars = sample.htmlVars;
+    return key;
+}
+
+// Sets one public animation parameter at an entity-relative frame.
+void setWholeValue(model::Entity& entity, const QString& property, int frame,
+                   double value)
+{
+    model::Keyframe key = baseKey(entity, frame);
+    if (property == QLatin1String("x"))
+        key.x = value;
+    else if (property == QLatin1String("y"))
+        key.y = value;
+    else if (property == QLatin1String("rotation"))
+        key.rotation = value;
+    else if (property == QLatin1String("visible"))
+        key.visible = value != 0.0;
+    model::upsertKeyframe(entity.keyframes, key);
+}
+
+void setContentValue(model::Entity& entity, const QString& property, int frame,
+                     double value)
+{
+    model::Keyframe key = baseKey(entity, frame);
+    key.content.insert(property, value);
+    model::upsertKeyframe(entity.keyframes, key);
+}
+
+void setHtmlVar(model::Entity& entity, const QString& name, int frame,
+                double value)
+{
+    model::Keyframe key = baseKey(entity, frame);
+    key.htmlVars.insert(name, value);
+    model::upsertKeyframe(entity.keyframes, key);
 }
 
 workbench::Options metaOptions(const model::Project& project,
@@ -125,7 +172,7 @@ private slots:
     void metaTracksCameraBackgroundAndTarget();
     void metaTracksHtmlVariables();
     void metaTracksHtmlTimeline();
-    void metaTracksGenerativeContent();
+    void metaTracksContentFields();
     void metaTracksContentTracks();
     void signatureAndSize();
     void renderRectAndExpandedSize();
@@ -162,10 +209,9 @@ void WorkbenchCacheTests::metaIsStable()
     project.settings.height = 1080;
     project.settings.fps = 30;
     model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
-    addKey(entity, QStringLiteral("x"), 0, 0.0);
-    addKey(entity, QStringLiteral("x"), 100, 200.0);
+    setWholeValue(entity, QStringLiteral("x"), 0, 0.0);
+    setWholeValue(entity, QStringLiteral("x"), 100, 200.0);
     project.entities.insert(entity.uuid, entity);
-
     const workbench::Options options = metaOptions(project);
     const workbench::MetaBuilder builder(project, assets);
     const workbench::MetaBuilder secondBuilder(project, assets);
@@ -185,9 +231,9 @@ void WorkbenchCacheTests::metaTracksActiveEntity()
 
     model::Project project;
     model::Entity entity = textEntity(QStringLiteral("e1"), 0, 100);
-    addKey(entity, QStringLiteral("x"), 0, 0.0);
-    addKey(entity, QStringLiteral("x"), 50, 0.0);
-    addKey(entity, QStringLiteral("x"), 100, 0.0);
+    setWholeValue(entity, QStringLiteral("x"), 0, 0.0);
+    setWholeValue(entity, QStringLiteral("x"), 50, 0.0);
+    setWholeValue(entity, QStringLiteral("x"), 100, 0.0);
     project.entities.insert(entity.uuid, entity);
 
     const workbench::Options options = metaOptions(project);
@@ -196,8 +242,9 @@ void WorkbenchCacheTests::metaTracksActiveEntity()
     const workbench::FrameMeta before50 = builder.build(50, QString(), options);
     const workbench::FrameMeta before150 = builder.build(150, QString(), options);
 
-    project.entities[QStringLiteral("e1")].tracks[QStringLiteral("x")].keys[1].value =
-        25.0;
+    project.entities[QStringLiteral("e1")]
+        .keyframes[1]
+        .x = 25.0;
 
     const workbench::FrameMeta after50 = builder.build(50, QString(), options);
     const workbench::FrameMeta after150 = builder.build(150, QString(), options);
@@ -214,15 +261,14 @@ void WorkbenchCacheTests::metaIgnoresInactiveEntity()
 
     model::Project project;
     model::Entity entity = textEntity(QStringLiteral("later"), 200, 300);
-    addKey(entity, QStringLiteral("x"), 200, 0.0);
+    setWholeValue(entity, QStringLiteral("x"), 200, 0.0);
     project.entities.insert(entity.uuid, entity);
 
     const workbench::Options options = metaOptions(project);
     workbench::MetaBuilder builder(project, assets);
     const workbench::FrameMeta before = builder.build(150, QString(), options);
 
-    project.entities[QStringLiteral("later")].tracks[QStringLiteral("x")].keys[0].value =
-        999.0;
+    project.entities[QStringLiteral("later")].keyframes[0].x = 999.0;
     const workbench::FrameMeta after = builder.build(150, QString(), options);
     QVERIFY(before.equals(after));
 }
@@ -379,8 +425,8 @@ void WorkbenchCacheTests::metaTracksHtmlVariables()
     entity.content.kind = ContentKind::Asset;
     entity.content.asset.hash = stored->hash;
     entity.content.asset.type = AssetType::Html;
-    addKey(entity, QStringLiteral("var.progress"), 0, 0.0);
-    addKey(entity, QStringLiteral("var.progress"), 100, 100.0);
+    setHtmlVar(entity, QStringLiteral("progress"), 0, 0.0);
+    setHtmlVar(entity, QStringLiteral("progress"), 100, 100.0);
     project.entities.insert(entity.uuid, entity);
 
     const workbench::Options options = metaOptions(project);
@@ -388,9 +434,8 @@ void WorkbenchCacheTests::metaTracksHtmlVariables()
 
     const workbench::FrameMeta before = builder.build(50, QString(), options);
     project.entities[QStringLiteral("html")]
-        .tracks[QStringLiteral("var.progress")]
-        .keys[0]
-        .value = 50.0;
+        .keyframes[0]
+        .htmlVars.insert(QStringLiteral("progress"), 50.0);
     const workbench::FrameMeta afterTrack = builder.build(50, QString(), options);
     QVERIFY(!before.equals(afterTrack));
 
@@ -488,7 +533,7 @@ void WorkbenchCacheTests::metaTracksHtmlTimeline()
     QVERIFY(!defaultAtZero.equals(defaultMoved));
 }
 
-void WorkbenchCacheTests::metaTracksGenerativeContent()
+void WorkbenchCacheTests::metaTracksContentFields()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -496,9 +541,9 @@ void WorkbenchCacheTests::metaTracksGenerativeContent()
 
     using Mutation = std::function<void(model::Content&)>;
 
-    // Every field that can change the picture must invalidate an active frame
-    // and leave an inactive frame alone.  Fields are mutated one at a time so a
-    // field missing from writeContent shows up as a specific failure.
+    // Every definition field that can change the picture must invalidate an
+    // active frame and leave an inactive frame alone.  Animation fields are
+    // covered by metaTracksContentTracks below.
     const auto verifyKind = [&](ContentKind kind, const QList<Mutation>& mutations) {
         model::Project project;
         model::Entity entity = textEntity(QStringLiteral("g"), 0, 100);
@@ -520,95 +565,36 @@ void WorkbenchCacheTests::metaTracksGenerativeContent()
             const workbench::MetaBuilder changedBuilder(changed, assets);
 
             const QString label =
-                QStringLiteral("kind %1 field %2")
-                    .arg(int(kind))
-                    .arg(i);
+                QStringLiteral("kind %1 field %2").arg(int(kind)).arg(i);
             QVERIFY2(!active.equals(changedBuilder.build(50, QString(), options)),
                      qPrintable(label + QStringLiteral(" did not invalidate")));
             QVERIFY2(inactive.equals(changedBuilder.build(150, QString(), options)),
-                     qPrintable(label + QStringLiteral(" invalidated an inactive frame")));
+                     qPrintable(label
+                                + QStringLiteral(" invalidated an inactive frame")));
         }
     };
 
-    verifyKind(ContentKind::ComicText,
+    verifyKind(ContentKind::Text,
                {
-                   [](model::Content& c) { c.comic.text = QStringLiteral("boom"); },
-                   [](model::Content& c) { c.comic.fontFamily = QStringLiteral("Serif"); },
-                   [](model::Content& c) { c.comic.pixelSize += 1; },
-                   [](model::Content& c) { c.comic.color = QStringLiteral("#ff0000"); },
-                   [](model::Content& c) { c.comic.strokeColor = QStringLiteral("#00ff00"); },
-                   [](model::Content& c) { c.comic.strokeWidth += 1.0; },
-                   [](model::Content& c) { c.comic.align = 1; },
-                   [](model::Content& c) { c.comic.lineHeight += 0.1; },
-                   [](model::Content& c) { c.comic.bold = !c.comic.bold; },
-                   [](model::Content& c) { c.comic.italic = !c.comic.italic; },
-                   [](model::Content& c) { c.comic.shape = QStringLiteral("burst"); },
-                   [](model::Content& c) { c.comic.boxWidth += 1.0; },
-                   [](model::Content& c) { c.comic.boxHeight += 1.0; },
-                   [](model::Content& c) { c.comic.fillColor = QStringLiteral("#0000ff"); },
-                   [](model::Content& c) { c.comic.bubbleStrokeColor = QStringLiteral("#123456"); },
-                   [](model::Content& c) { c.comic.bubbleStrokeWidth += 1.0; },
-                   [](model::Content& c) { c.comic.cornerRadius += 1.0; },
-                   [](model::Content& c) { c.comic.tail = !c.comic.tail; },
-                   [](model::Content& c) { c.comic.tailX += 0.1; },
-                   [](model::Content& c) { c.comic.tailY += 0.1; },
-                   [](model::Content& c) { c.comic.rotation += 1.0; },
-                   [](model::Content& c) { c.comic.padding += 1.0; },
-                   [](model::Content& c) { c.comic.seed += 1; },
+                   [](model::Content& c) { c.text.text = QStringLiteral("boom"); },
+                   [](model::Content& c) { c.text.fontFamily = QStringLiteral("Serif"); },
+                   [](model::Content& c) { c.text.color = QStringLiteral("#ff0000"); },
+                   [](model::Content& c) { c.text.strokeColor = QStringLiteral("#00ff00"); },
+                   [](model::Content& c) { c.text.align = 1; },
+                   [](model::Content& c) { c.text.bold = !c.text.bold; },
+                   [](model::Content& c) { c.text.italic = !c.text.italic; },
+                   [](model::Content& c) { c.text.underline = !c.text.underline; },
+                   [](model::Content& c) { c.text.vertical = !c.text.vertical; },
+                   [](model::Content& c) { c.text.verticalRtl = !c.text.verticalRtl; },
                });
 
-    verifyKind(ContentKind::RadialLines,
+    verifyKind(ContentKind::Vector,
                {
-                   [](model::Content& c) { c.radial.count += 1; },
-                   [](model::Content& c) { c.radial.radius += 1.0; },
-                   [](model::Content& c) { c.radial.innerRatio += 0.01; },
-                   [](model::Content& c) { c.radial.width += 1.0; },
-                   [](model::Content& c) { c.radial.angle += 1.0; },
-                   [](model::Content& c) { c.radial.color = QStringLiteral("#ff0000"); },
-                   [](model::Content& c) { c.radial.seed += 1; },
-               });
-
-    verifyKind(ContentKind::FlowLines,
-               {
-                   [](model::Content& c) { c.flow.count += 1; },
-                   [](model::Content& c) { c.flow.length += 1.0; },
-                   [](model::Content& c) { c.flow.spacing += 1.0; },
-                   [](model::Content& c) { c.flow.thickness += 1.0; },
-                   [](model::Content& c) { c.flow.area += 1.0; },
-                   [](model::Content& c) { c.flow.bend += 1.0; },
-                   [](model::Content& c) { c.flow.angle += 1.0; },
-                   [](model::Content& c) { c.flow.phase += 0.01; },
-                   [](model::Content& c) { c.flow.color = QStringLiteral("#ff0000"); },
-                   [](model::Content& c) { c.flow.seed += 1; },
-               });
-
-    verifyKind(ContentKind::HalftoneDots,
-               {
-                   [](model::Content& c) { c.halftone.layout = QStringLiteral("radial"); },
-                   [](model::Content& c) { c.halftone.area += 1.0; },
-                   [](model::Content& c) { c.halftone.radius += 1.0; },
-                   [](model::Content& c) { c.halftone.spacing += 1.0; },
-                   [](model::Content& c) { c.halftone.dotSize += 0.5; },
-                   [](model::Content& c) { c.halftone.angle += 1.0; },
-                   [](model::Content& c) { c.halftone.gradientAngle += 1.0; },
-                   [](model::Content& c) { c.halftone.minRatio += 0.01; },
-                   [](model::Content& c) { c.halftone.jitter += 0.01; },
-                   [](model::Content& c) { c.halftone.color = QStringLiteral("#ff0000"); },
-                   [](model::Content& c) { c.halftone.seed += 1; },
-               });
-
-    verifyKind(ContentKind::BrandWall,
-               {
-                   [](model::Content& c) { c.brandWall.logos = {QStringLiteral("PV")}; },
-                   [](model::Content& c) { c.brandWall.columns += 1; },
-                   [](model::Content& c) { c.brandWall.rows += 1; },
-                   [](model::Content& c) { c.brandWall.spacing += 1.0; },
-                   [](model::Content& c) { c.brandWall.logoSize += 1.0; },
-                   [](model::Content& c) { c.brandWall.colors = {QStringLiteral("#ff0000")}; },
-                   [](model::Content& c) { c.brandWall.alternate = !c.brandWall.alternate; },
-                   [](model::Content& c) { c.brandWall.angle += 1.0; },
-                   [](model::Content& c) { c.brandWall.background = QStringLiteral("#000000"); },
-                   [](model::Content& c) { c.brandWall.seed += 1; },
+                   [](model::Content& c) { c.vector.shape += 1; },
+                   [](model::Content& c) { c.vector.sides += 1; },
+                   [](model::Content& c) { c.vector.innerRatio += 0.01; },
+                   [](model::Content& c) { c.vector.fillColor = QStringLiteral("#0000ff"); },
+                   [](model::Content& c) { c.vector.strokeColor = QStringLiteral("#123456"); },
                });
 }
 
@@ -618,17 +604,17 @@ void WorkbenchCacheTests::metaTracksContentTracks()
     QVERIFY(root.isValid());
     assets::AssetStore assets(root.path());
 
-    // Every content field that can be keyed must reach the frame meta as its
-    // evaluated value.  A field dropped from animatedContent shows up here as a
-    // mutation that no longer invalidates the active frame.
-    const auto verifyTrack = [&](ContentKind kind, const QString& track,
+    // Every content animation parameter that can be keyed must reach the frame
+    // meta as its evaluated value.  A field dropped from animatedContent shows
+    // up here as a mutation that no longer invalidates the active frame.
+    const auto verifyTrack = [&](ContentKind kind, const QString& property,
                                  double first, double second,
                                  double changedSecond) {
         model::Project project;
         model::Entity entity = textEntity(QStringLiteral("c"), 0, 100);
         entity.content.kind = kind;
-        addKey(entity, track, 0, first);
-        addKey(entity, track, 100, second);
+        setContentValue(entity, property, 0, first);
+        setContentValue(entity, property, 100, second);
         project.entities.insert(entity.uuid, entity);
 
         const workbench::Options options = metaOptions(project);
@@ -637,13 +623,14 @@ void WorkbenchCacheTests::metaTracksContentTracks()
         const workbench::FrameMeta inactive =
             builder.build(150, QString(), options);
 
-        const QString label = track;
+        const QString label = property;
         QVERIFY2(!active.equals(builder.build(60, QString(), options)),
                  qPrintable(label + QStringLiteral(" made two frames identical")));
 
         model::Project mutated = project;
-        mutated.entities[QStringLiteral("c")].tracks[track].keys[1].value =
-            changedSecond;
+        mutated.entities[QStringLiteral("c")]
+            .keyframes[1]
+            .content.insert(property, changedSecond);
         const workbench::MetaBuilder changed(mutated, assets);
         QVERIFY2(!active.equals(changed.build(50, QString(), options)),
                  qPrintable(label + QStringLiteral(" did not invalidate")));
@@ -652,7 +639,7 @@ void WorkbenchCacheTests::metaTracksContentTracks()
                             + QStringLiteral(" invalidated an inactive frame")));
     };
 
-    verifyTrack(ContentKind::Text, QStringLiteral("fontSize"), 20.0, 120.0,
+    verifyTrack(ContentKind::Text, QStringLiteral("pixelSize"), 20.0, 120.0,
                 400.0);
     verifyTrack(ContentKind::Text, QStringLiteral("lineHeight"), 1.0, 2.0, 3.0);
     verifyTrack(ContentKind::Text, QStringLiteral("letterSpacing"), 0.0, 10.0,

@@ -197,80 +197,38 @@ int maxInkStrength(const QImage& image)
     return best;
 }
 
-Track keyedTrack(std::initializer_list<std::pair<int, double>> keys)
+Keyframe wholeKey(int frame, double x = 0.0, double y = 0.0,
+                  double rotation = 0.0)
 {
-    Track track;
-    for (const auto& key : keys)
-        track.keys.append(Keyframe{key.first, key.second, {}, {}});
-    return track;
+    Keyframe key;
+    key.frame = frame;
+    key.x = x;
+    key.y = y;
+    key.rotation = rotation;
+    return key;
 }
 
-Entity makeSpecialEntity(ContentKind kind, const Uuid& uuid)
+// Adds a whole-frame key whose content animation values are set from a list of
+// (property, value) pairs.  Definition parameters never enter a keyframe.  The
+// other public parameters start from the entity's static state.
+Keyframe contentKey(const Entity& entity, int frame,
+                    std::initializer_list<std::pair<const char*, double>> values)
 {
-    Entity entity = makeEntity(uuid);
-    entity.transform.x = 0.0;
-    entity.transform.y = 0.0;
-
-    switch (kind)
-    {
-    case ContentKind::ComicText:
-        entity.content.kind = kind;
-        entity.content.comic.text = QStringLiteral("PV");
-        entity.content.comic.pixelSize = 56;
-        entity.content.comic.color = QStringLiteral("#000000");
-        entity.content.comic.shape = QStringLiteral("rect");
-        entity.content.comic.boxWidth = 260.0;
-        entity.content.comic.boxHeight = 150.0;
-        entity.content.comic.cornerRadius = 24.0;
-        entity.content.comic.tail = false;
-        entity.content.comic.fillColor = QStringLiteral("#ffffff");
-        entity.content.comic.bubbleStrokeColor = QStringLiteral("#000000");
-        entity.content.comic.bubbleStrokeWidth = 6.0;
-        break;
-    case ContentKind::RadialLines:
-        entity.content.kind = kind;
-        entity.content.radial.count = 24;
-        entity.content.radial.radius = 130.0;
-        entity.content.radial.innerRatio = 0.1;
-        entity.content.radial.width = 8.0;
-        entity.content.radial.color = QStringLiteral("#ff0000");
-        break;
-    case ContentKind::FlowLines:
-        entity.content.kind = kind;
-        entity.content.flow.count = 14;
-        entity.content.flow.length = 240.0;
-        entity.content.flow.spacing = 20.0;
-        entity.content.flow.thickness = 5.0;
-        entity.content.flow.area = 280.0;
-        entity.content.flow.bend = 40.0;
-        entity.content.flow.angle = 10.0;
-        entity.content.flow.color = QStringLiteral("#ff0000");
-        break;
-    case ContentKind::HalftoneDots:
-        entity.content.kind = kind;
-        entity.content.halftone.layout = QStringLiteral("grid");
-        entity.content.halftone.area = 220.0;
-        entity.content.halftone.spacing = 14.0;
-        entity.content.halftone.dotSize = 5.5;
-        entity.content.halftone.minRatio = 0.6;
-        entity.content.halftone.color = QStringLiteral("#ff0000");
-        break;
-    case ContentKind::BrandWall:
-        entity.content.kind = kind;
-        entity.content.brandWall.logos = {QStringLiteral("PV"),
-                                          QStringLiteral("ACME")};
-        entity.content.brandWall.columns = 4;
-        entity.content.brandWall.rows = 3;
-        entity.content.brandWall.spacing = 10.0;
-        entity.content.brandWall.logoSize = 70.0;
-        entity.content.brandWall.colors = {QStringLiteral("#ff0000"),
-                                           QStringLiteral("#00ff00")};
-        entity.content.brandWall.alternate = true;
-        break;
-    default:
-        break;
-    }
-    return entity;
+    const model::KeyframeSample sample = model::staticEntitySample(entity);
+    Keyframe key;
+    key.frame = frame;
+    key.x = sample.x;
+    key.y = sample.y;
+    key.rotation = sample.rotation;
+    key.scaleX = sample.scaleX;
+    key.scaleY = sample.scaleY;
+    key.opacity = sample.opacity;
+    key.visible = sample.visible;
+    key.physicsInteract = sample.physicsInteract;
+    key.content = model::animationValues(entity.content);
+    for (const auto& entry : values)
+        key.content.insert(QString::fromLatin1(entry.first), entry.second);
+    return key;
 }
 
 int countRedBorderPixels(const QImage& image)
@@ -938,12 +896,7 @@ void testSolverSelfShapeTerminates()
     ball.end = 60;
     ball.transform.x = 0.0;
     ball.transform.y = -40.0;
-    Track xTrack;
-    xTrack.keys = {{0, 0.0, {}, {}}};
-    ball.tracks.insert(QStringLiteral("x"), xTrack);
-    Track yTrack;
-    yTrack.keys = {{0, -40.0, {}, {}}};
-    ball.tracks.insert(QStringLiteral("y"), yTrack);
+    ball.keyframes = {wholeKey(0, 0.0, -40.0)};
 
     SolverSegment gravity;
     gravity.id = QStringLiteral("gravity");
@@ -979,15 +932,7 @@ void testFractionalProjectFrame()
     Project project = makeProject(100, 100);
     Entity rect = makeVector(QStringLiteral("moving"), 4, 4, Qt::red);
     rect.transform.y = 0.0;
-    Track xTrack;
-    Keyframe startKey;
-    startKey.frame = 0;
-    startKey.value = -50.0;
-    Keyframe endKey;
-    endKey.frame = 10;
-    endKey.value = 50.0;
-    xTrack.keys = {startKey, endKey};
-    rect.tracks.insert(QStringLiteral("x"), xTrack);
+    rect.keyframes = {wholeKey(0, -50.0, 0.0), wholeKey(10, 50.0, 0.0)};
     add(project, rect);
 
     QTemporaryDir directory;
@@ -1031,192 +976,6 @@ void testFrameProviderReceivesFractionalFrame()
     CHECK(std::abs(received - 5.5) < 1e-12);
 }
 
-void testSpecialContentRender()
-{
-    const QVector<QPair<ContentKind, QString>> kinds = {
-        {ContentKind::ComicText, QStringLiteral("comicText")},
-        {ContentKind::RadialLines, QStringLiteral("radialLines")},
-        {ContentKind::FlowLines, QStringLiteral("flowLines")},
-        {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
-        {ContentKind::BrandWall, QStringLiteral("brandWall")},
-    };
-
-    for (const auto& entry : kinds)
-    {
-        Project project = makeProject(640, 360);
-        add(project, makeSpecialEntity(entry.first, QStringLiteral("special")));
-
-        QTemporaryDir directory;
-        assets::AssetStore store(directory.path());
-        const QImage image =
-            render(project, store, 0, Uuid(), QSize(), QColor(Qt::white));
-
-        const QString name = entry.second;
-        const QRect bounds = inkBounds(image, Qt::white);
-        CHECK_DETAIL(!bounds.isEmpty(), name);
-        CHECK_DETAIL(countInkPixels(image, Qt::white) > 100, name);
-        CHECK_DETAIL(bounds.width() >= 80, name);
-        CHECK_DETAIL(bounds.height() >= 40, name);
-        CHECK_DETAIL(bounds.width() <= 600, name);
-        CHECK_DETAIL(bounds.height() <= 340, name);
-        CHECK_DETAIL(bounds.intersects(QRect(280, 140, 80, 80)), name);
-
-        if (entry.first == ContentKind::ComicText
-            || entry.first == ContentKind::RadialLines)
-        {
-            CHECK_DETAIL(std::abs(bounds.center().x() - 320) <= 8, name);
-            CHECK_DETAIL(std::abs(bounds.center().y() - 180) <= 8, name);
-        }
-        else if (entry.first == ContentKind::HalftoneDots)
-        {
-            CHECK_DETAIL(std::abs(bounds.center().x() - 320) <= 15, name);
-            CHECK_DETAIL(std::abs(bounds.center().y() - 180) <= 15, name);
-        }
-    }
-}
-
-void testSpecialContentOpacity()
-{
-    const QVector<QPair<ContentKind, QString>> kinds = {
-        {ContentKind::ComicText, QStringLiteral("comicText")},
-        {ContentKind::RadialLines, QStringLiteral("radialLines")},
-        {ContentKind::FlowLines, QStringLiteral("flowLines")},
-        {ContentKind::HalftoneDots, QStringLiteral("halftoneDots")},
-        {ContentKind::BrandWall, QStringLiteral("brandWall")},
-    };
-
-    for (const auto& entry : kinds)
-    {
-        QTemporaryDir directory;
-        assets::AssetStore store(directory.path());
-
-        const auto renderOpacity = [&](double opacity) {
-            Project project = makeProject(640, 360);
-            Entity entity = makeSpecialEntity(entry.first,
-                                              QStringLiteral("special"));
-            entity.transform.opacity = opacity;
-            add(project, entity);
-            return render(project, store, 0, Uuid(), QSize(),
-                          QColor(Qt::white));
-        };
-
-        const QImage opaque = renderOpacity(1.0);
-        const QImage half = renderOpacity(0.5);
-        const QImage transparent = renderOpacity(0.0);
-
-        const QString name = entry.second;
-        CHECK_DETAIL(countInkPixels(transparent, Qt::white) == 0, name);
-        CHECK_DETAIL(maxInkStrength(opaque) > maxInkStrength(half) + 60, name);
-    }
-}
-
-void testSpecialContentFollowsParent()
-{
-    Project project = makeProject(400, 300);
-
-    Entity parent = makeEntity(QStringLiteral("parent"));
-    parent.transform.x = 0.0;
-    parent.transform.y = 0.0;
-    add(project, parent);
-
-    Entity child =
-        makeSpecialEntity(ContentKind::RadialLines, QStringLiteral("child"));
-    child.parentUuid = parent.uuid;
-    child.transform.x = 0.0;
-    child.transform.y = 0.0;
-    add(project, child);
-
-    QTemporaryDir directory;
-    assets::AssetStore store(directory.path());
-    const QImage image =
-        render(project, store, 0, Uuid(), QSize(), QColor(Qt::white));
-
-    const QRect bounds = inkBounds(image, Qt::white);
-    CHECK(!bounds.isEmpty());
-    CHECK(std::abs(bounds.center().x() - 200) <= 8);
-    CHECK(std::abs(bounds.center().y() - 150) <= 8);
-}
-
-void testBrandWallLayout()
-{
-    QTemporaryDir directory;
-    assets::AssetStore store(directory.path());
-
-    const auto describe = [](const QRectF& rect) {
-        return QStringLiteral("%1x%2 at %3,%4")
-            .arg(rect.width())
-            .arg(rect.height())
-            .arg(rect.x())
-            .arg(rect.y());
-    };
-
-    const auto makeWall = [](int columns, int rows, bool alternate,
-                             double angle, const QString& background,
-                             const QStringList& logos) {
-        Project project = makeProject(400, 300);
-        Entity entity = makeEntity(QStringLiteral("wall"));
-        entity.transform.x = 0.0;
-        entity.transform.y = 0.0;
-        entity.content.kind = ContentKind::BrandWall;
-        BrandWallContent& wall = entity.content.brandWall;
-        wall.logos = logos;
-        wall.columns = columns;
-        wall.rows = rows;
-        wall.spacing = 10.0;
-        wall.logoSize = 50.0;
-        wall.colors = {QStringLiteral("#ff0000"), QStringLiteral("#00ff00"),
-                       QStringLiteral("#0000ff")};
-        wall.alternate = alternate;
-        wall.angle = angle;
-        wall.background = background;
-        add(project, entity);
-        return project;
-    };
-
-    // 3x3 wall of 50px tiles with 10px grout: 170x170 centred at (200,150).
-    const QImage rows = render(
-        makeWall(3, 3, false, 0.0, QString(), {}), store, 0, Uuid(), QSize(),
-        QColor(Qt::white));
-    const QRect bounds = inkBounds(rows, Qt::white);
-    CHECK_DETAIL(std::abs(bounds.width() - 170) <= 2, describe(bounds));
-    CHECK_DETAIL(std::abs(bounds.height() - 170) <= 2, describe(bounds));
-    CHECK_DETAIL(std::abs(bounds.center().x() - 200) <= 2, describe(bounds));
-    CHECK_DETAIL(std::abs(bounds.center().y() - 150) <= 2, describe(bounds));
-    CHECK(countInkPixels(rows, Qt::white) > 20000);
-
-    // Transparent background leaves the grout white.
-    CHECK(nearColor(rows.pixelColor(170, 90), Qt::white));
-    // Slot at row 1, column 0: row-major is red, checkerboard is green.
-    CHECK(nearColor(rows.pixelColor(120, 140), QColor(Qt::red)));
-
-    const QImage alternating = render(
-        makeWall(3, 3, true, 0.0, QString(), {}), store, 0, Uuid(), QSize(),
-        QColor(Qt::white));
-    CHECK(nearColor(alternating.pixelColor(120, 140), QColor(Qt::green)));
-
-    // An explicit background fills the grout.
-    const QImage filled = render(
-        makeWall(3, 3, false, 0.0, QStringLiteral("#000000"), {}), store, 0,
-        Uuid(), QSize(), QColor(Qt::white));
-    CHECK(nearColor(filled.pixelColor(170, 90), QColor(Qt::black)));
-
-    // A rotated 4x2 wall: 230x110 becomes 110x230.
-    const Project rotated =
-        makeWall(4, 2, false, 90.0, QString(), {QStringLiteral("PV")});
-    const QImage rotatedImage =
-        render(rotated, store, 0, Uuid(), QSize(), QColor(Qt::white));
-    const QRect rotatedBounds = inkBounds(rotatedImage, Qt::white);
-    CHECK_DETAIL(std::abs(rotatedBounds.width() - 110) <= 3,
-                 describe(rotatedBounds));
-    CHECK_DETAIL(std::abs(rotatedBounds.height() - 230) <= 3,
-                 describe(rotatedBounds));
-
-    render2::SceneWorld world(rotated, store);
-    const QRectF shape = world.shapeOf(QStringLiteral("wall"), 0).boundingRect();
-    CHECK_DETAIL(std::abs(shape.width() - 110.0) <= 0.5, describe(shape));
-    CHECK_DETAIL(std::abs(shape.height() - 230.0) <= 0.5, describe(shape));
-}
-
 void testAnimatedContentFieldMapping()
 {
     Entity text = makeEntity(QStringLiteral("text"), 100, 400);
@@ -1229,20 +988,18 @@ void testAnimatedContentFieldMapping()
     text.content.text.boxWidth = 100.0;
     text.content.text.boxHeight = 50.0;
     text.content.text.strokeWidth = 1.0;
-    text.tracks.insert(QStringLiteral("fontSize"),
-                       keyedTrack({{0, 20.0}, {100, 120.0}}));
-    text.tracks.insert(QStringLiteral("lineHeight"),
-                       keyedTrack({{0, 1.0}, {100, 2.0}}));
-    text.tracks.insert(QStringLiteral("letterSpacing"),
-                       keyedTrack({{0, 0.0}, {100, 10.0}}));
-    text.tracks.insert(QStringLiteral("padding"),
-                       keyedTrack({{0, 2.0}, {100, 22.0}}));
-    text.tracks.insert(QStringLiteral("boxWidth"),
-                       keyedTrack({{0, 100.0}, {100, 300.0}}));
-    text.tracks.insert(QStringLiteral("boxHeight"),
-                       keyedTrack({{0, 50.0}, {100, 150.0}}));
-    text.tracks.insert(QStringLiteral("strokeWidth"),
-                       keyedTrack({{0, 1.0}, {100, 3.0}}));
+    text.keyframes = {
+        contentKey(text, 0,
+                   {{"pixelSize", 20.0}, {"lineHeight", 1.0},
+                    {"letterSpacing", 0.0}, {"padding", 2.0},
+                    {"boxWidth", 100.0}, {"boxHeight", 50.0},
+                    {"strokeWidth", 1.0}}),
+        contentKey(text, 100,
+                   {{"pixelSize", 120.0}, {"lineHeight", 2.0},
+                    {"letterSpacing", 10.0}, {"padding", 22.0},
+                    {"boxWidth", 300.0}, {"boxHeight", 150.0},
+                    {"strokeWidth", 3.0}}),
+    };
 
     // Keys are entity-relative: project frame 150 is relative frame 50.
     const model::Content animated = render2::animatedContent(text, 150.0);
@@ -1262,14 +1019,14 @@ void testAnimatedContentFieldMapping()
     vector.content.vector.height = 50.0;
     vector.content.vector.cornerRadius = 10.0;
     vector.content.vector.strokeWidth = 2.0;
-    vector.tracks.insert(QStringLiteral("width"),
-                         keyedTrack({{0, 20.0}, {10, 220.0}}));
-    vector.tracks.insert(QStringLiteral("height"),
-                         keyedTrack({{0, 10.0}, {10, 110.0}}));
-    vector.tracks.insert(QStringLiteral("cornerRadius"),
-                         keyedTrack({{0, 0.0}, {10, 40.0}}));
-    vector.tracks.insert(QStringLiteral("strokeWidth"),
-                         keyedTrack({{0, 0.0}, {10, 8.0}}));
+    vector.keyframes = {
+        contentKey(vector, 0,
+                   {{"width", 20.0}, {"height", 10.0},
+                    {"cornerRadius", 0.0}, {"strokeWidth", 0.0}}),
+        contentKey(vector, 10,
+                   {{"width", 220.0}, {"height", 110.0},
+                    {"cornerRadius", 40.0}, {"strokeWidth", 8.0}}),
+    };
 
     const model::Content vectorAt = render2::animatedContent(vector, 5.0);
     CHECK(vectorAt.kind == ContentKind::Vector);
@@ -1280,7 +1037,7 @@ void testAnimatedContentFieldMapping()
     CHECK(vectorAt.vector.fillColor == vector.content.vector.fillColor);
 }
 
-void testContentTrackFallback()
+void testContentFallback()
 {
     Entity text = makeEntity(QStringLiteral("text"), 0, 100);
     text.content.kind = ContentKind::Text;
@@ -1288,20 +1045,17 @@ void testContentTrackFallback()
     text.content.text.lineHeight = 1.25;
     text.content.text.padding = 7.0;
 
-    // No track at all: every field keeps its static value.
+    // No keyframes: every field keeps its static value.
     const model::Content plain = render2::animatedContent(text, 999.0);
     CHECK(plain.text.pixelSize == 42);
     CHECK(std::abs(plain.text.lineHeight - 1.25) < 1e-9);
     CHECK(std::abs(plain.text.padding - 7.0) < 1e-9);
 
-    // An empty track (created before its first key) also falls back.
-    text.tracks.insert(QStringLiteral("fontSize"), Track());
-    const model::Content empty = render2::animatedContent(text, 50.0);
-    CHECK(empty.text.pixelSize == 42);
-
-    // A keyed track overrides the static value at the relative frame.
-    text.tracks.insert(QStringLiteral("fontSize"),
-                       keyedTrack({{0, 3.0}, {10, 13.0}}));
+    // Whole-frame keys override the static value at the relative frame.
+    text.keyframes = {
+        contentKey(text, 0, {{"pixelSize", 3.0}}),
+        contentKey(text, 10, {{"pixelSize", 13.0}}),
+    };
     const model::Content keyed = render2::animatedContent(text, 5.0);
     CHECK(keyed.text.pixelSize == 8);
     CHECK(std::abs(keyed.text.padding - 7.0) < 1e-9);
@@ -1315,7 +1069,7 @@ void testContentTrackFallback()
     CHECK(std::abs(staticVector.vector.height - 200.0) < 1e-9);
 }
 
-void testTextFontSizeTrackRenders()
+void testTextPixelSizeRenders()
 {
     Project project = makeProject(300, 300);
     Entity entity = makeEntity(QStringLiteral("text"), 0, 200);
@@ -1323,12 +1077,14 @@ void testTextFontSizeTrackRenders()
     entity.transform.y = 0.0;
     entity.content.kind = ContentKind::Text;
     entity.content.text.text = QStringLiteral("PV");
-    entity.content.text.pixelSize = 100; // ignored while the track has keys
+    entity.content.text.pixelSize = 100; // ignored while keyframes exist
     entity.content.text.bold = true;
     entity.content.text.color = QStringLiteral("#ffffff");
     entity.content.text.padding = 0.0;
-    entity.tracks.insert(QStringLiteral("fontSize"),
-                         keyedTrack({{0, 0.0}, {100, 100.0}}));
+    entity.keyframes = {
+        contentKey(entity, 0, {{"pixelSize", 0.0}}),
+        contentKey(entity, 100, {{"pixelSize", 100.0}}),
+    };
     add(project, entity);
 
     QTemporaryDir directory;
@@ -1500,7 +1256,7 @@ void testCollisionShapeUsesModelYUp()
     CHECK(shape.contains(QPointF(0.0, -9.0)));
 }
 
-void testVectorContentTracksRender()
+void testVectorContentAnimationRenders()
 {
     Project project = makeProject(300, 300);
     const QColor background(QStringLiteral("#101014"));
@@ -1515,8 +1271,10 @@ void testVectorContentTracksRender()
     bar.content.vector.cornerRadius = 0.0;
     bar.content.vector.fillColor = QStringLiteral("#ff0000");
     bar.content.vector.strokeWidth = 0.0;
-    bar.tracks.insert(QStringLiteral("width"),
-                      keyedTrack({{0, 20.0}, {100, 220.0}}));
+    bar.keyframes = {
+        contentKey(bar, 0, {{"width", 20.0}}),
+        contentKey(bar, 100, {{"width", 220.0}}),
+    };
     add(project, bar);
 
     Entity corner = makeEntity(QStringLiteral("corner"), 0, 200);
@@ -1529,8 +1287,10 @@ void testVectorContentTracksRender()
     corner.content.vector.cornerRadius = 0.0;
     corner.content.vector.fillColor = QStringLiteral("#0000ff");
     corner.content.vector.strokeWidth = 0.0;
-    corner.tracks.insert(QStringLiteral("cornerRadius"),
-                         keyedTrack({{0, 0.0}, {100, 40.0}}));
+    corner.keyframes = {
+        contentKey(corner, 0, {{"cornerRadius", 0.0}}),
+        contentKey(corner, 100, {{"cornerRadius", 40.0}}),
+    };
     add(project, corner);
 
     QTemporaryDir directory;
@@ -1605,16 +1365,10 @@ int main(int argc, char** argv)
         {QStringLiteral("fractionalProjectFrame"), testFractionalProjectFrame},
         {QStringLiteral("frameProviderReceivesFractionalFrame"),
          testFrameProviderReceivesFractionalFrame},
-        {QStringLiteral("specialContentRender"), testSpecialContentRender},
-        {QStringLiteral("specialContentOpacity"), testSpecialContentOpacity},
-        {QStringLiteral("specialContentFollowsParent"),
-         testSpecialContentFollowsParent},
-        {QStringLiteral("brandWallLayout"), testBrandWallLayout},
         {QStringLiteral("animatedContentFieldMapping"),
          testAnimatedContentFieldMapping},
-        {QStringLiteral("contentTrackFallback"), testContentTrackFallback},
-        {QStringLiteral("textFontSizeTrackRenders"),
-         testTextFontSizeTrackRenders},
+        {QStringLiteral("contentFallback"), testContentFallback},
+        {QStringLiteral("textPixelSizeRenders"), testTextPixelSizeRenders},
         {QStringLiteral("worldConventionOriginAndRotation"),
          testWorldConventionOriginAndRotation},
         {QStringLiteral("imageOrientationIsUpright"),
@@ -1623,8 +1377,8 @@ int main(int argc, char** argv)
          testCameraOrientationMatchesCanvas},
         {QStringLiteral("collisionShapeUsesModelYUp"),
          testCollisionShapeUsesModelYUp},
-        {QStringLiteral("vectorContentTracksRender"),
-         testVectorContentTracksRender},
+        {QStringLiteral("vectorContentAnimationRenders"),
+         testVectorContentAnimationRenders},
     };
 
     QString requested;

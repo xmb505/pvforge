@@ -276,13 +276,10 @@ void testVolumeHalf()
     staticHalf.entities[QStringLiteral("tone")].content.asset.volume = 0.5;
 
     Project trackHalf = loud;
-    Track volumeTrack;
-    Keyframe key;
-    key.frame = 0;
-    key.value = 0.5;
-    volumeTrack.keys.append(key);
-    trackHalf.entities[QStringLiteral("tone")].tracks.insert(
-        QStringLiteral("volume"), volumeTrack);
+    Keyframe volumeKey;
+    volumeKey.frame = 0;
+    volumeKey.content.insert(QStringLiteral("volume"), 0.5);
+    trackHalf.entities[QStringLiteral("tone")].keyframes = {volumeKey};
 
     const audio2::MixOptions options = mixOptions(0, 30);
     const QByteArray full = audio2::mixRange(loud, store, options);
@@ -491,13 +488,10 @@ void testHiddenAndInvisible()
     {
         Project project = makeProject();
         addAudioEntity(project, QStringLiteral("tracked"), asset->hash, 0, 30);
-        Track visibleTrack;
-        Keyframe key;
-        key.frame = 0;
-        key.value = 0.0;
-        visibleTrack.keys.append(key);
-        project.entities[QStringLiteral("tracked")].tracks.insert(
-            QStringLiteral("visible"), visibleTrack);
+        Keyframe hiddenKey;
+        hiddenKey.frame = 0;
+        hiddenKey.visible = false;
+        project.entities[QStringLiteral("tracked")].keyframes = {hiddenKey};
         CHECK(audio2::mixRange(project, store, options).isEmpty());
     }
 

@@ -74,10 +74,14 @@ bool solvedPoseAt(const model::Project& project,
     entity.transform.scaleY = 1.0;
     entity.transform.pivotX = 0.0;
     entity.transform.pivotY = 0.0;
-    entity.tracks.remove(QStringLiteral("scaleX"));
-    entity.tracks.remove(QStringLiteral("scaleY"));
-    entity.tracks.remove(QStringLiteral("pivotX"));
-    entity.tracks.remove(QStringLiteral("pivotY"));
+    // The probe must ignore the authored scale so the solver-space pose can be
+    // recovered from the evaluated matrix.  Scale is a whole-frame animation
+    // parameter, so clear it in every keyframe too.
+    for (model::Keyframe& key : entity.keyframes)
+    {
+        key.scaleX = 1.0;
+        key.scaleY = 1.0;
+    }
 
     render2::SceneWorld world(probe, assets);
     QTransform local = anim::evaluateEntity(probe, uuid, projectFrame, world).world;
@@ -260,51 +264,45 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
         shiftedSolvers.append(shifted);
     }
 
-    // Shift / crop every ordinary track.  Frame numbers are entity-relative.
-    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
-         ++trackIt)
+    // Shift / crop the whole-frame keyframes.  Frame numbers are
+    // entity-relative and frame == newDuration is a legal end-boundary key.
+    QVector<model::Keyframe> shiftedKeys;
+    shiftedKeys.reserve(entity.keyframes.size());
+    for (model::Keyframe key : entity.keyframes)
     {
-        QVector<model::Keyframe> kept;
-        kept.reserve(trackIt.value().keys.size());
-        for (model::Keyframe key : trackIt.value().keys)
-        {
-            key.frame -= deltaStart;
-            if (key.frame < 0 || key.frame >= newDuration)
-                continue;
-            kept.append(key);
-        }
-        trackIt.value().keys = kept;
+        key.frame -= deltaStart;
+        if (key.frame < 0 || key.frame > newDuration)
+            continue;
+        shiftedKeys.append(key);
     }
+    entity.keyframes = shiftedKeys;
 
     // A segment cut by the new start freezes at frame 0 with the evaluated
-    // pose, replacing whatever ordinary key landed there after the shift.
-    for (const QString& track : cutTracks)
+    // pose.  One whole-frame key replaces whatever key landed there after the
+    // shift; its other animation parameters come from the shifted frame-0
+    // sample.
+    if (!cutTracks.isEmpty())
     {
-        model::Track& target = entity.tracks[track];
-        for (int i = target.keys.size() - 1; i >= 0; --i)
-        {
-            if (target.keys.at(i).frame == 0)
-                target.keys.removeAt(i);
-        }
-
+        const model::KeyframeSample sample = model::entitySampleAt(entity, 0.0);
         model::Keyframe key;
         key.frame = 0;
-        if (track == QStringLiteral("x"))
-            key.value = cutPose.x;
-        else if (track == QStringLiteral("y"))
-            key.value = cutPose.y;
-        else
-            key.value = cutPose.rotation;
-        target.keys.append(key);
-    }
-
-    for (auto trackIt = entity.tracks.begin(); trackIt != entity.tracks.end();
-         ++trackIt)
-    {
-        std::sort(trackIt.value().keys.begin(), trackIt.value().keys.end(),
-                  [](const model::Keyframe& a, const model::Keyframe& b) {
-                      return a.frame < b.frame;
-                  });
+        key.x = sample.x;
+        key.y = sample.y;
+        key.rotation = sample.rotation;
+        key.scaleX = sample.scaleX;
+        key.scaleY = sample.scaleY;
+        key.opacity = sample.opacity;
+        key.visible = sample.visible;
+        key.physicsInteract = sample.physicsInteract;
+        key.content = sample.content;
+        key.htmlVars = sample.htmlVars;
+        if (cutTracks.contains(QStringLiteral("x")))
+            key.x = cutPose.x;
+        if (cutTracks.contains(QStringLiteral("y")))
+            key.y = cutPose.y;
+        if (cutTracks.contains(QStringLiteral("rotation")))
+            key.rotation = cutPose.rotation;
+        model::upsertKeyframe(entity.keyframes, key);
     }
 
     if (isTimedAsset(entity))

@@ -452,21 +452,17 @@ QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
         if (segmentEnd <= frame)
             continue;
 
-        // The next variable keyframe is the first frame whose cache key differs
-        // from the current one; stop before it because the frontend browser
-        // renders that frame when playback reaches it.
+        // The next whole-frame keyframe is the first frame whose cache key can
+        // differ from the current one; stop before it because the frontend
+        // browser renders that frame when playback reaches it.
         int boundary = segmentEnd;
-        for (auto track = entity.tracks.constBegin();
-             track != entity.tracks.constEnd(); ++track)
+        for (const model::Keyframe& key : entity.keyframes)
         {
-            if (!track.key().startsWith(QStringLiteral("var."),
-                                        Qt::CaseInsensitive))
-                continue;
-            for (const model::Keyframe& key : track.value().keys)
+            const qint64 absolute = qint64(entity.start) + key.frame;
+            if (absolute > frame && absolute < boundary)
             {
-                const qint64 absolute = qint64(entity.start) + key.frame;
-                if (absolute > frame && absolute < boundary)
-                    boundary = int(absolute);
+                boundary = int(absolute);
+                break;
             }
         }
 
@@ -660,20 +656,19 @@ html2::FrameRequest MediaServices::makeHtmlRequest(const model::Entity& entity,
     request.time = (projectFrame - entity.start) / double(projectFps());
     request.size = htmlRequestSize(asset);
 
-    // Metadata declares the variables (and their defaults); an entity track
-    // named var.<name> overrides the default at the entity-relative frame.
+    // Metadata declares the variables (and their defaults); the whole-frame
+    // keyframe sample overrides numeric variables at the entity-relative
+    // frame.  Non-number variables never enter a keyframe.
     request.vars = asset.metadata.value(QStringLiteral("variables"))
                        .toObject()
                        .toVariantMap();
-    const double relativeFrame = projectFrame - entity.start;
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+    const model::KeyframeSample sample = model::entitySampleAt(
+        entity, projectFrame - entity.start);
+    for (auto it = sample.htmlVars.constBegin();
+         it != sample.htmlVars.constEnd(); ++it)
     {
-        if (!it.key().startsWith(QStringLiteral("var."), Qt::CaseInsensitive))
-            continue;
-        const std::optional<double> value =
-            model::evaluateTrack(it.value(), relativeFrame);
-        if (value)
-            request.vars.insert(it.key().mid(4), *value);
+        if (it.value().isDouble())
+            request.vars.insert(it.key(), it.value().toDouble());
     }
     return request;
 }

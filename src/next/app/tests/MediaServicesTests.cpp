@@ -332,10 +332,13 @@ void MediaServicesTests::htmlPrefetchStopsAtVariableChange()
 
     Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 10, 0);
     entity.end = 200;
-    Track speed;
-    speed.keys.append(Keyframe{30, 1.0, EasingSpec(), QString()});
-    speed.keys.append(Keyframe{60, 2.0, EasingSpec(), QString()});
-    entity.tracks.insert(QStringLiteral("var.speed"), speed);
+    Keyframe speedAt30;
+    speedAt30.frame = 30;
+    speedAt30.htmlVars.insert(QStringLiteral("speed"), 1.0);
+    Keyframe speedAt60;
+    speedAt60.frame = 60;
+    speedAt60.htmlVars.insert(QStringLiteral("speed"), 2.0);
+    entity.keyframes = {speedAt30, speedAt60};
     document->mutableProject().entities.insert(entity.uuid, entity);
 
     MediaServices media(document.get(), AppSettings());

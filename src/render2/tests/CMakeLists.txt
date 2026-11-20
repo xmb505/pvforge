@@ -32,14 +32,10 @@ set(PVF_RENDER2_TEST_CASES
     solverSelfShapeTerminates
     fractionalProjectFrame
     frameProviderReceivesFractionalFrame
-    specialContentRender
-    specialContentOpacity
-    specialContentFollowsParent
-    brandWallLayout
     animatedContentFieldMapping
-    contentTrackFallback
-    textFontSizeTrackRenders
-    vectorContentTracksRender
+    contentFallback
+    textPixelSizeRenders
+    vectorContentAnimationRenders
 )
 
 foreach(test_case IN LISTS PVF_RENDER2_TEST_CASES)

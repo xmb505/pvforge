@@ -21,7 +21,7 @@ set(PVF_EXPORT2_TEST_CASES
     oversizedOutput
     resolutionScale4
     hiddenAudioStillExported
-    visibleTrackMutesRange
+    visibleKeyframeMutesRange
     parentVisibilityMutesChild
     crfRange
     encoderSelection

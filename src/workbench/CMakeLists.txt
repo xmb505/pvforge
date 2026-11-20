@@ -60,7 +60,7 @@ if(BUILD_TESTING)
         metaTracksCameraBackgroundAndTarget
         metaTracksHtmlVariables
         metaTracksHtmlTimeline
-        metaTracksGenerativeContent
+        metaTracksContentFields
         metaTracksContentTracks
         signatureAndSize
         renderRectAndExpandedSize

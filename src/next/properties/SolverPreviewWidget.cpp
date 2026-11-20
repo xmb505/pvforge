@@ -62,18 +62,6 @@ QString effectLabel(SolverEffect effect)
     return QStringLiteral("求解");
 }
 
-double trackValue(const model::Entity& entity, const QString& name, int frame,
-                  double fallback)
-{
-    const auto it = entity.tracks.constFind(name);
-    if (it != entity.tracks.constEnd())
-    {
-        if (const auto value = model::evaluateTrack(it.value(), frame))
-            return *value;
-    }
-    return fallback;
-}
-
 double transformRotation(const QTransform& transform)
 {
     return qRadiansToDegrees(std::atan2(transform.m12(), transform.m11()));
@@ -81,29 +69,20 @@ double transformRotation(const QTransform& transform)
 
 // Solver-space pose of the driven entity without running its solver.  This
 // mirrors anim::evaluateEntity()'s recursion fallback: gravity asks for the
-// moving entity's own shape while solving it, so we must not recurse.
+// moving entity's own shape while solving it, so we must not recurse.  Pivot is
+// a definition parameter and never keyframed.
 QTransform plainLocalTransform(const model::Entity& entity, int relativeFrame)
 {
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, double(relativeFrame));
     const model::Transform& fallback = entity.transform;
-    const double x = trackValue(entity, QStringLiteral("x"), relativeFrame, fallback.x);
-    const double y = trackValue(entity, QStringLiteral("y"), relativeFrame, fallback.y);
-    const double rotation = trackValue(entity, QStringLiteral("rotation"),
-                                       relativeFrame, fallback.rotation);
-    const double scaleX = trackValue(entity, QStringLiteral("scaleX"),
-                                      relativeFrame, fallback.scaleX);
-    const double scaleY = trackValue(entity, QStringLiteral("scaleY"),
-                                      relativeFrame, fallback.scaleY);
-    const double pivotX = trackValue(entity, QStringLiteral("pivotX"),
-                                      relativeFrame, fallback.pivotX);
-    const double pivotY = trackValue(entity, QStringLiteral("pivotY"),
-                                      relativeFrame, fallback.pivotY);
 
     QTransform local;
-    local.translate(x, y);
-    local.translate(pivotX, pivotY);
-    local.rotate(rotation);
-    local.scale(scaleX, scaleY);
-    local.translate(-pivotX, -pivotY);
+    local.translate(sample.x, sample.y);
+    local.translate(fallback.pivotX, fallback.pivotY);
+    local.rotate(sample.rotation);
+    local.scale(sample.scaleX, sample.scaleY);
+    local.translate(-fallback.pivotX, -fallback.pivotY);
     return local;
 }
 
@@ -455,13 +434,10 @@ void SolverPreviewWidget::computePreview(bool duringDrag)
     }
 
     const int startFrame = solver->startFrame;
-    const model::Transform& fallback = entity.transform;
-    double startRotation = fallback.rotation;
-    m_startPose = QPointF(
-        trackValue(entity, QStringLiteral("x"), startFrame, fallback.x),
-        trackValue(entity, QStringLiteral("y"), startFrame, fallback.y));
-    startRotation = trackValue(entity, QStringLiteral("rotation"), startFrame,
-                               fallback.rotation);
+    const model::KeyframeSample start =
+        model::entitySampleAt(entity, double(startFrame));
+    m_startPose = QPointF(start.x, start.y);
+    const double startRotation = start.rotation;
 
     Uuid targetUuid;
     if (solver->effect != SolverEffect::Spin)

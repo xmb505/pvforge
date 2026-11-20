@@ -943,7 +943,7 @@ void testHiddenAudioStillExported()
     CHECK(peakOf(samples) > 0.05);
 }
 
-void testVisibleTrackMutesRange()
+void testVisibleKeyframeMutesRange()
 {
     QTemporaryDir directory;
     CHECK(directory.isValid());
@@ -959,11 +959,16 @@ void testVisibleTrackMutesRange()
     Project project = makeProject(30);
     Entity audio =
         makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
-    Track visible;
-    visible.keys.append(Keyframe{0, 1.0});
-    visible.keys.append(Keyframe{10, 0.0});
-    visible.keys.append(Keyframe{20, 1.0});
-    audio.tracks.insert(QStringLiteral("visible"), visible);
+    Keyframe visibleAt0;
+    visibleAt0.frame = 0;
+    visibleAt0.visible = true;
+    Keyframe visibleAt10;
+    visibleAt10.frame = 10;
+    visibleAt10.visible = false;
+    Keyframe visibleAt20;
+    visibleAt20.frame = 20;
+    visibleAt20.visible = true;
+    audio.keyframes = {visibleAt0, visibleAt10, visibleAt20};
     project.entities.insert(audio.uuid, audio);
 
     const QString path = directory.path() + QStringLiteral("/visible.mp4");
@@ -1401,7 +1406,8 @@ int main(int argc, char** argv)
          testAudioDurationAtDoubleFps},
         {QStringLiteral("hiddenAudioStillExported"),
          testHiddenAudioStillExported},
-        {QStringLiteral("visibleTrackMutesRange"), testVisibleTrackMutesRange},
+        {QStringLiteral("visibleKeyframeMutesRange"),
+         testVisibleKeyframeMutesRange},
         {QStringLiteral("parentVisibilityMutesChild"),
          testParentVisibilityMutesChild},
         {QStringLiteral("crfRange"), testCrfRange},
