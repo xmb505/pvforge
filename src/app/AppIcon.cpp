@@ -22,11 +22,6 @@ QColor themeTextColor()
     return QApplication::palette().color(QPalette::Text);
 }
 
-QColor themeAccentColor()
-{
-    return QApplication::palette().color(QPalette::Highlight);
-}
-
 // Looks up a themed icon by name, trying several conventions.
 QIcon themedIcon(const QStringList& names)
 {
@@ -104,18 +99,6 @@ QIcon drawLock(bool locked)
     });
 }
 
-QIcon drawKeyframe()
-{
-    return vectorIcon([](QPainter& p) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(themeAccentColor());
-        QPolygonF diamond;
-        diamond << QPointF(32, 6) << QPointF(58, 32) << QPointF(32, 58)
-                << QPointF(6, 32);
-        p.drawPolygon(diamond);
-    });
-}
-
 } // namespace
 
 QIcon makeCubeIcon()
@@ -155,11 +138,6 @@ QIcon makeLockIcon(bool locked)
     if (!themed.isNull())
         return themed;
     return drawLock(locked);
-}
-
-QIcon makeKeyframeIcon()
-{
-    return drawKeyframe();
 }
 
 namespace {

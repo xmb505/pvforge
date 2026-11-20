@@ -235,23 +235,8 @@ void TimelinePanel::handleRowButton(int row, int index)
 {
     const EntityId id = entityAtRow(row);
     const Entity* entity = entityById(id);
-    if (!entity || id == kInvalidEntity)
+    if (!entity || id == kInvalidEntity || index < 0 || index > 1)
         return;
-
-    if (index == 2)
-    {
-        // Select every keyframe of this row, like the old timeline button.
-        m_selectedKeyframes.clear();
-        if (!isEntityLocked(id))
-        {
-            for (int frame : keyframeFrames(*entity))
-                m_selectedKeyframes.append(KeyframeSelection{id, double(frame)});
-        }
-        selectEntity(id, true);
-        emit keyframeSelectionChanged(m_selectedKeyframes);
-        update();
-        return;
-    }
 
     if (sessionMode())
     {
@@ -263,6 +248,26 @@ void TimelinePanel::handleRowButton(int row, int index)
                                          : EntityFlag::Locked,
                            !(index == 0 ? entity->hidden : entity->locked));
     update();
+}
+
+bool TimelinePanel::clipShowsInlineButtons(const Entity& entity) const
+{
+    const QRect clip = clipRect(entity);
+    return !clip.isEmpty() && clip.width() >= kInlineButtonsMinWidth;
+}
+
+int TimelinePanel::clipIconCount(const Entity& entity) const
+{
+    const QRect clip = clipRect(entity);
+    if (clip.isEmpty())
+        return 0;
+    if (m_altHeld)
+        return clip.width() >= kInlineButtonsMinWidth ? 2 : 0;
+    // Status indicators are not click targets, so even short clips can show
+    // the hidden/locked mark.
+    if (clip.width() < kButtonSize + 4)
+        return 0;
+    return int(entity.hidden) + int(entity.locked);
 }
 
 int TimelinePanel::rowAt(int y) const
@@ -644,15 +649,22 @@ QRect TimelinePanel::markerRect(int index) const
 
 QRect TimelinePanel::clipButtonRect(const Entity& entity, int index) const
 {
-    if (index < 0 || index > 2)
+    if (index < 0 || index > 1)
         return QRect();
     const QRect clip = clipRect(entity);
     if (clip.isEmpty())
         return QRect();
-    // The old row buttons now live inside the clip's left edge.
+    // The row buttons live inside the clip's left edge.
     const int x = clip.left() + 2 + index * (kButtonSize + kButtonGap);
     const int y = clip.top() + (clip.height() - kButtonSize) / 2;
     return QRect(x, y, kButtonSize, kButtonSize);
+}
+
+QRect TimelinePanel::playheadHandleRect() const
+{
+    const int center = xFromFrame(m_frame);
+    return QRect(center - kPlayheadHandleWidth / 2, 0, kPlayheadHandleWidth,
+                 kPlayheadHandleHeight);
 }
 
 QRect TimelinePanel::rowButtonRect(int row, int index) const
@@ -663,6 +675,9 @@ QRect TimelinePanel::rowButtonRect(int row, int index) const
 
 int TimelinePanel::hitKeyframeRow(int row, int x, int y) const
 {
+    // Alt is the clip layer: diamonds are dimmed and cannot be grabbed.
+    if (m_altHeld)
+        return -1;
     int best = -1;
     int bestDistance = 10;
     for (const Entity* entity : entitiesInRow(row))

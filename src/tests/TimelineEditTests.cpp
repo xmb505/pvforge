@@ -3,6 +3,7 @@
 #include "TestApp.h"
 
 #include <QDockWidget>
+#include <QThread>
 
 namespace {
 
@@ -803,32 +804,56 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
     live->document()->setSelection(pvf::Uuid());
     QApplication::processEvents();
 
-    // Box select in clip mode selects whole clips, and Ctrl-click adds a clip
-    // without the document selection sync collapsing the set.
+    // Alt + box select selects whole clips; the normal layer box-selects
+    // keyframes instead.
+    auto sendAlt = [timeline](QEvent::Type type) {
+        QKeyEvent alt(type, Qt::Key_Alt,
+                      type == QEvent::KeyPress ? Qt::AltModifier
+                                               : Qt::NoModifier);
+        QApplication::sendEvent(timeline, &alt);
+        QApplication::processEvents();
+    };
+    auto dragBox = [&](const QPoint& from, const QPoint& to,
+                       Qt::KeyboardModifiers modifiers) {
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
+                          QPointF(timeline->mapToGlobal(from)), Qt::LeftButton,
+                          Qt::LeftButton, modifiers);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to),
+                         QPointF(timeline->mapToGlobal(to)), Qt::NoButton,
+                         Qt::LeftButton, modifiers);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
+                            QPointF(timeline->mapToGlobal(to)), Qt::LeftButton,
+                            Qt::NoButton, modifiers);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &move);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+    };
+    auto clickAt = [&](const QPoint& pos, Qt::KeyboardModifiers modifiers) {
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos),
+                          QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                          Qt::LeftButton, modifiers);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos),
+                            QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
+                            Qt::NoButton, modifiers);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+    };
     const int selectionAudioRow = rowForName(QStringLiteral("音频"));
     const int selectionVideoRow = rowForName(QStringLiteral("视频"));
     if (!check(selectionAudioRow >= 0 && selectionVideoRow >= 0,
                QStringLiteral("multi-select rows missing")))
         return 1;
-    const QPoint boxStart(timeline->frameXForTest(80),
-                          timeline->rowCenterYForTest(selectionVideoRow));
-    const QPoint boxEnd(timeline->frameXForTest(20),
-                        timeline->rowCenterYForTest(selectionAudioRow));
-    QMouseEvent boxPress(QEvent::MouseButtonPress, QPointF(boxStart),
-                         QPointF(timeline->mapToGlobal(boxStart)),
-                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent boxMove(QEvent::MouseMove, QPointF(boxEnd),
-                        QPointF(timeline->mapToGlobal(boxEnd)), Qt::NoButton,
-                        Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent boxRelease(QEvent::MouseButtonRelease, QPointF(boxEnd),
-                           QPointF(timeline->mapToGlobal(boxEnd)),
-                           Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &boxPress);
-    QApplication::sendEvent(timeline, &boxMove);
-    QApplication::sendEvent(timeline, &boxRelease);
-    QApplication::processEvents();
+    sendAlt(QEvent::KeyPress);
+    dragBox(QPoint(timeline->frameXForTest(80),
+                   timeline->rowCenterYForTest(selectionVideoRow)),
+            QPoint(timeline->frameXForTest(20),
+                   timeline->rowCenterYForTest(selectionAudioRow)),
+            Qt::AltModifier);
+    sendAlt(QEvent::KeyRelease);
     if (!check(timeline->entitySelectionCountForTest() == 2,
-               QStringLiteral("box select selected %1 clips")
+               QStringLiteral("Alt box select selected %1 clips")
                    .arg(timeline->entitySelectionCountForTest())))
         return 1;
 
@@ -849,6 +874,74 @@ int editPanelChecks(std::unique_ptr<pvf::EditorSession> session,
                    .arg(timeline->entitySelectionCountForTest())))
         return 1;
     live->document()->setSelection(pvf::Uuid());
+    QApplication::processEvents();
+
+    // There is no keyframe-select button; clicking a blank area clears both
+    // layers, and the normal empty-box drag selects diamonds only.
+    if (!check(timeline->rowButtonRect(videoRow, 2).isEmpty(),
+               QStringLiteral("the blue select-all keyframes button survived")))
+        return 1;
+    if (!check(live->editActions()->addKeyframe(video, 10, &error),
+               QStringLiteral("keyframe box setup failed: %1").arg(error)))
+        return 1;
+    live->flush();
+    auto* objectTab = window->findChild<QWidget*>(QStringLiteral("objectTab"));
+    if (!check(objectTab != nullptr, QStringLiteral("object tab missing")))
+        return 1;
+    dragBox(QPoint(timeline->frameXForTest(80),
+                   timeline->rowCenterYForTest(videoRow)),
+            QPoint(timeline->frameXForTest(5),
+                   timeline->rowCenterYForTest(videoRow)),
+            Qt::NoModifier);
+    if (!check(timeline->selectedKeyframeCount() == 1
+                   && live->document()->selection() == video,
+               QStringLiteral("normal box select did not take the keyframe (%1)")
+                   .arg(timeline->selectedKeyframeCount())))
+        return 1;
+    clickAt(QPoint(timeline->frameXForTest(60),
+                   timeline->rowCenterYForTest(videoRow)),
+            Qt::NoModifier);
+    if (!check(live->document()->selection().isEmpty()
+                   && timeline->entitySelectionCountForTest() == 0
+                   && timeline->selectedKeyframeCount() == 0
+                   && !objectTab->isVisible(),
+               QStringLiteral("blank click did not clear every selection")))
+        return 1;
+
+    // Two separate slow clicks never rename; Alt + fast double-click does.
+    const QPoint clipPoint(timeline->frameXForTest(15),
+                           timeline->rowCenterYForTest(videoRow));
+    clickAt(clipPoint, Qt::NoModifier);
+    QThread::msleep(450);
+    clickAt(clipPoint, Qt::NoModifier);
+    if (!check(!timeline->inlineRenameActiveForTest(),
+               QStringLiteral("slow double-click still started a rename")))
+        return 1;
+    const int keysBeforeRename = int(entity(video).keyframes.size());
+    sendAlt(QEvent::KeyPress);
+    QMouseEvent renameDouble(QEvent::MouseButtonDblClick, QPointF(clipPoint),
+                             QPointF(timeline->mapToGlobal(clipPoint)),
+                             Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
+    QApplication::sendEvent(timeline, &renameDouble);
+    QApplication::processEvents();
+    if (!check(timeline->inlineRenameActiveForTest(),
+               QStringLiteral("Alt + double-click did not open the rename edit"))
+        || !check(int(entity(video).keyframes.size()) == keysBeforeRename,
+                  QStringLiteral("Alt + double-click also created a key")))
+        return 1;
+    auto* renameEdit =
+        timeline->findChild<QLineEdit*>(QStringLiteral("clipRenameEdit"));
+    if (!check(renameEdit != nullptr,
+               QStringLiteral("rename editor widget missing")))
+        return 1;
+    renameEdit->setText(QStringLiteral("视频改名"));
+    timeline->commitInlineRenameForTest();
+    QApplication::processEvents();
+    live->flush();
+    if (!check(entity(video).name == QStringLiteral("视频改名"),
+               QStringLiteral("Alt + double-click rename did not commit")))
+        return 1;
+    sendAlt(QEvent::KeyRelease);
     QApplication::processEvents();
 
     // Dragging onto a folder clip asks world/local and commits the choice.

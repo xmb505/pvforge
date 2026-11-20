@@ -764,8 +764,6 @@ int timelineBottomUpTest(QApplication& app)
            QStringLiteral("wheel down did not return to the bottom anchor"));
 
     // 6. Keyframe hit needs the diamond band, not only the X position.
-    timeline->setEditMode(pvf::TimelinePanel::EditMode::Keyframes);
-    QApplication::processEvents();
     const QPoint keyPoint(timeline->frameXForTest(20),
                           timeline->rowCenterYForTest(1));
     QMouseEvent keyPress(QEvent::MouseButtonPress, QPointF(keyPoint),
@@ -800,8 +798,6 @@ int timelineBottomUpTest(QApplication& app)
     QApplication::processEvents();
     expect(timeline->selectedKeyframeCount() == 0,
            QStringLiteral("clip body click selected a keyframe"));
-    timeline->setEditMode(pvf::TimelinePanel::EditMode::Clips);
-    QApplication::processEvents();
 
     // 7. Cross-parent drop: a folder row asks for reparent and lands on the
     // new parent's next free row.
@@ -1081,15 +1077,17 @@ int timelineUiTest(QApplication& app)
                    .arg(corner.name(), center.name()));
     }
 
-    // 4. Default clip mode: clicking a diamond selects it, seeks, and drags.
-    expect(timeline->editMode() == pvf::TimelinePanel::EditMode::Clips,
-           QStringLiteral("timeline does not start in clip mode"));
+    // 4. There is no clip/keyframe mode button; the normal layer is animation.
+    expect(timeline->findChild<QToolButton*>(
+               QStringLiteral("timelineModeButton"))
+               == nullptr,
+           QStringLiteral("timeline mode button still exists"));
     const int heroRow = rowFor(hero);
     const QPoint key30(timeline->frameXForTest(30),
                        timeline->rowCenterYForTest(heroRow));
     click(key30);
     expect(timeline->selectedKeyframeCount() == 1,
-           QStringLiteral("clicking a diamond in clip mode did not select it"));
+           QStringLiteral("clicking a diamond did not select it"));
     expect(window->currentFrameForTest() == 30,
            QStringLiteral("clicking a diamond did not seek (%1)")
                .arg(window->currentFrameForTest()));
@@ -1120,38 +1118,63 @@ int timelineUiTest(QApplication& app)
     expect(flush() == depthBeforeKeyDrag + 1,
            QStringLiteral("key drag did not create exactly one commit"));
 
-    // 5. Eye / lock buttons commit through EditActions exactly once.
+    // 5. Eye / lock buttons only exist on the Alt clip layer.
     auto entityFlag = [&](const pvf::Uuid& uuid, bool hidden) {
         const auto it = live->project().entities.constFind(uuid);
         if (it == live->project().entities.constEnd())
             return false;
         return hidden ? it->hidden : it->locked;
     };
-    auto clickRowButton = [&](const pvf::Uuid& uuid, int index) {
+    auto clickRowButton = [&](const pvf::Uuid& uuid, int index, bool alt) {
         const int row = rowFor(uuid);
-        click(timeline->rowButtonRect(row, index).center());
+        const QPoint pos = timeline->rowButtonRect(row, index).center();
+        if (alt)
+        {
+            QKeyEvent altOn(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+            QApplication::sendEvent(timeline, &altOn);
+        }
+        click(pos);
+        if (alt)
+        {
+            QKeyEvent altOff(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+            QApplication::sendEvent(timeline, &altOff);
+        }
         QApplication::processEvents();
         flush();
     };
+    clickRowButton(background, 0, false);
+    expect(!entityFlag(background, true),
+           QStringLiteral("normal click on the eye indicator hid the entity"));
     int depthBeforeFlag = flush();
-    clickRowButton(background, 0);
+    clickRowButton(background, 0, true);
     expect(entityFlag(background, true),
-           QStringLiteral("eye button did not hide the entity"));
+           QStringLiteral("Alt eye button did not hide the entity"));
     expect(flush() == depthBeforeFlag + 1,
            QStringLiteral("eye button did not commit once"));
     depthBeforeFlag = flush();
-    clickRowButton(hero, 1);
+    clickRowButton(hero, 1, true);
     expect(entityFlag(hero, false),
-           QStringLiteral("lock button did not lock the entity"));
+           QStringLiteral("Alt lock button did not lock the entity"));
     expect(flush() == depthBeforeFlag + 1,
            QStringLiteral("lock button did not commit once"));
     // Unlock so the screenshot shows an editable clip again.
-    clickRowButton(hero, 1);
+    clickRowButton(hero, 1, true);
     expect(!entityFlag(hero, false), QStringLiteral("lock button did not unlock"));
 
-    // 6. Screenshot in frame mode so the 1/5/10 tick density is visible.
+    // 6. The playhead owns a 14x11 grab handle on the ruler's top edge, and
+    // the old select-all-keys button is gone.
+    const QRect playhead = timeline->playheadHandleRectForTest();
+    expect(playhead.width() == 14 && playhead.height() == 11
+               && playhead.top() == 0
+               && playhead.x() + playhead.width() / 2
+                      == timeline->frameXForTest(
+                          timeline->currentFrameForTest()),
+           QStringLiteral("playhead triangle geometry is wrong (%1x%2)")
+               .arg(playhead.width())
+               .arg(playhead.height()));
+
+    // 7. Screenshot in frame mode so the 1/5/10 tick density is visible.
     timeline->setPixelsPerFrameForTest(6.0);
-    timeline->setEditMode(pvf::TimelinePanel::EditMode::Clips);
     timeline->setDisplayFrames(true);
     QApplication::processEvents();
     QDir().mkpath(QStringLiteral("/tmp/opencode"));
@@ -1328,14 +1351,14 @@ int timelineAssetsTest(QApplication& app)
     expect(timeline->dropRowForTest(bottom - 5) == 0,
            QStringLiteral("drop row at the bottom is not row 0"));
 
-    // 5. Eye / lock stay reachable inside the clip and commit through edits.
+    // 5. Eye / lock live on the Alt layer and commit through edits.
     auto click = [timeline](const QPoint& pos) {
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(pos),
                           QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
-                          Qt::LeftButton, Qt::NoModifier);
+                          Qt::LeftButton, Qt::AltModifier);
         QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos),
                             QPointF(timeline->mapToGlobal(pos)), Qt::LeftButton,
-                            Qt::NoButton, Qt::NoModifier);
+                            Qt::NoButton, Qt::AltModifier);
         QApplication::sendEvent(timeline, &press);
         QApplication::sendEvent(timeline, &release);
         QApplication::processEvents();
@@ -1553,7 +1576,6 @@ int timelineKeysTest(QApplication& app)
                QStringLiteral("whole-frame key setup failed: %1").arg(error)))
         return 1;
     live->flush();
-    timeline->setEditMode(pvf::TimelinePanel::EditMode::Keyframes);
 
     // Ctrl+Shift+C copies the source key's animation parameters to every
     // selected whole-frame key.
@@ -1646,29 +1668,6 @@ int timelineKeysTest(QApplication& app)
                    && timeline->selectedKeyframeCount() == 1,
                QStringLiteral("double-clicking a diamond changed the keys")))
         return 1;
-
-    // Slow double-click on the selected clip starts inline rename; Enter
-    // commits exactly one rename commit.
-    {
-        const int renameDepth = depth();
-        timeline->beginInlineRenameForTest(timeline->entityIdForUuid(clip));
-        QApplication::processEvents();
-        auto* edit =
-            timeline->findChild<QLineEdit*>(QStringLiteral("clipRenameEdit"));
-        if (!check(edit != nullptr,
-                   QStringLiteral("inline rename editor did not open")))
-            return 1;
-        edit->setText(QStringLiteral("关键帧片段改名"));
-        timeline->commitInlineRenameForTest();
-        QApplication::processEvents();
-        live->flush();
-        if (!check(live->project().entities.value(clip).name
-                       == QStringLiteral("关键帧片段改名"),
-                   QStringLiteral("inline rename did not reach the model"))
-            || !check(depth() == renameDepth + 1,
-                      QStringLiteral("inline rename was not one commit")))
-            return 1;
-    }
 
     // Closed solver interval: double-click is a no-op with a status message.
     {

@@ -105,21 +105,6 @@ void TimelinePanel::initPanel()
     connect(m_unitButton, &QToolButton::clicked, this,
             [this] { setDisplayFrames(!m_displayFrames); });
 
-    m_modeButton = new QToolButton(this);
-    m_modeButton->setObjectName(QStringLiteral("timelineModeButton"));
-    m_modeButton->setText(QStringLiteral("片段"));
-    m_modeButton->setToolTip(QStringLiteral("切换编辑模式：片段 / 关键帧"));
-    m_modeButton->setFixedSize(54, 20);
-    m_modeButton->setFocusPolicy(Qt::NoFocus);
-    m_modeButton->setStyleSheet(QStringLiteral(
-        "QToolButton { background: #2a2c33; color: #d8dce4;"
-        " border: 1px solid #4a4d55; border-radius: 0px; padding: 0 4px; }"
-        "QToolButton:hover { background: #3c404a; }"));
-    connect(m_modeButton, &QToolButton::clicked, this, [this] {
-        setEditMode(m_editMode == EditMode::Clips ? EditMode::Keyframes
-                                                  : EditMode::Clips);
-    });
-
     // Arrow-key stepping mirrors the old timeline: a tap moves one frame and
     // a hold repeats at the project frame rate after a short delay.
     m_holdTimer = new QTimer(this);
@@ -337,6 +322,35 @@ void TimelinePanel::selectEntity(EntityId id, bool emitSignal)
         emit entitySelected(id);
 }
 
+void TimelinePanel::setAltHeld(bool held)
+{
+    if (m_altHeld == held)
+        return;
+    m_altHeld = held;
+    // Alt switches to the clip layer; an in-flight keyframe drag must not
+    // keep moving diamonds behind the user's back.
+    if (held && m_dragMode == DragMode::MoveKeyframe)
+        cancelSessionDrag();
+    unsetCursor();
+    update();
+}
+
+void TimelinePanel::clearSelection()
+{
+    m_selected = kInvalidEntity;
+    m_entitySelection.clear();
+    m_lastClickedKeyEntity = kInvalidEntity;
+    m_lastClickedKeyFrame = -1;
+    const bool hadKeys = !m_selectedKeyframes.isEmpty();
+    m_selectedKeyframes.clear();
+    if (hadKeys)
+        emit keyframeSelectionChanged(m_selectedKeyframes);
+    if (m_session && m_session->document()
+        && !m_session->document()->selection().isEmpty())
+        m_session->document()->setSelection(Uuid());
+    update();
+}
+
 void TimelinePanel::adoptKeyframeSelection(
     const QVector<KeyframeSelection>& selection)
 {
@@ -374,24 +388,5 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     syncPopups();
 }
 #endif
-
-void TimelinePanel::setEditMode(EditMode mode)
-{
-    if (m_editMode == mode)
-        return;
-    m_editMode = mode;
-    if (m_modeButton)
-        m_modeButton->setText(mode == EditMode::Clips ? QStringLiteral("片段")
-                                                      : QStringLiteral("关键帧"));
-    if (mode == EditMode::Clips)
-    {
-        m_selectedKeyframes.clear();
-        emit keyframeSelectionChanged(m_selectedKeyframes);
-    }
-    update();
-    for (ClipPopup* popup : m_popups)
-        if (popup && popup->panel())
-            popup->panel()->setEditMode(mode);
-}
 
 } // namespace pvf

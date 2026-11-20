@@ -6,8 +6,6 @@
 #include "app/EditorSession.h"
 #include "model/Entity.h"
 
-#include <QApplication>
-#include <QDateTime>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QTimer>
@@ -19,15 +17,13 @@ namespace pvf {
 
 using ui::detail::plusButtonRect;
 
-namespace {
-constexpr qint64 kSlowDoubleClickMs = 1400;
-}
-
 void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
     if (!sessionMode() || event->button() != Qt::LeftButton)
         return;
     setFocus(Qt::MouseFocusReason);
+    if (event->modifiers() & Qt::AltModifier)
+        setAltHeld(true);
     if (m_popup)
         if (QWidget* popup = parentWidget())
             popup->raise();
@@ -56,10 +52,11 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     const EntityId id = hitClipRow(row, pressX);
     const Entity* entity = entityById(id);
 
-    // Inline clip buttons win over trim/keyframe gestures.
-    if (entity && clipRect(*entity).width() >= kInlineButtonsMinWidth)
+    // Only the Alt clip layer activates the inline eye/lock buttons; in the
+    // normal animation layer they are status indicators with no hit target.
+    if (entity && m_altHeld && clipShowsInlineButtons(*entity))
     {
-        for (int index = 0; index < 3; ++index)
+        for (int index = 0; index < 2; ++index)
         {
             if (clipButtonRect(*entity, index).contains(pos.toPoint()))
             {
@@ -76,6 +73,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         m_boxEnd = pos;
         m_pressFrame = std::max(0, frameFromX(pressX));
         m_pressEntity = kInvalidEntity;
+        m_boxSelectClips = m_altHeld;
         update();
         return;
     }
@@ -89,30 +87,11 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
 
     const int x = int(std::lround(pos.x()));
-    const int hitKeyFrame = isEntityLocked(id)
+    const int hitKeyFrame = (m_altHeld || isEntityLocked(id))
                                 ? -1
                                 : hitKeyframeRow(row, x,
                                                  int(std::lround(pos.y())));
 
-    // Slow double-click on an already selected clip starts inline rename.  A
-    // diamond owns its own double-click (selection), so rename only starts on
-    // the clip body.  A fast double-click arrives through
-    // mouseDoubleClickEvent and creates a whole-frame key instead.
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const qint64 interval = now - m_lastClipClickMs;
-    const bool alreadySelected =
-        id == m_selected || m_entitySelection.contains(id);
-    if (hitKeyFrame < 0 && alreadySelected && id == m_lastClipClickEntity
-        && interval > QApplication::doubleClickInterval()
-        && interval <= kSlowDoubleClickMs)
-    {
-        m_lastClipClickMs = 0;
-        m_lastClipClickEntity = kInvalidEntity;
-        beginInlineRename(id);
-        return;
-    }
-    m_lastClipClickMs = now;
-    m_lastClipClickEntity = id;
     m_dragEntity = id;
     m_dragRow = row;
     m_dragStartFrame = frameFromX(x);
@@ -161,7 +140,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         }
     }
 
-    if (m_editMode == EditMode::Clips && !isEntityLocked(id))
+    if (!isEntityLocked(id))
     {
         const bool nearLeft = std::abs(x - clip.left()) <= kTrimGrab;
         const bool nearRight = std::abs(x - clip.right()) <= kTrimGrab;
@@ -182,28 +161,26 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
             if (multiMod)
             {
                 if (m_entitySelection.contains(id))
-                {
                     m_entitySelection.remove(id);
-                    if (m_selected == id)
-                        m_selected = m_entitySelection.isEmpty()
-                                         ? kInvalidEntity
-                                         : *m_entitySelection.constBegin();
-                    if (m_selected != kInvalidEntity)
-                        emit entitySelected(m_selected);
-                }
                 else
-                {
-                    if (m_selected != kInvalidEntity)
-                        m_entitySelection.insert(m_selected);
                     m_entitySelection.insert(id);
-                    m_selected = id;
-                    emit entitySelected(id);
-                }
+                m_selected = m_entitySelection.contains(id)
+                                 ? id
+                             : m_entitySelection.isEmpty()
+                                 ? kInvalidEntity
+                                 : *m_entitySelection.constBegin();
+                m_selectedKeyframes.clear();
+                emit keyframeSelectionChanged(m_selectedKeyframes);
+                if (m_selected != kInvalidEntity)
+                    emit entitySelected(m_selected);
                 update();
-                return;
+                if (m_selected == kInvalidEntity)
+                    return;
             }
-            if (!m_entitySelection.contains(id))
+            else if (!m_entitySelection.contains(id))
+            {
                 selectEntity(id, true);
+            }
             m_dragRoots.clear();
             if (m_entitySelection.size() > 1)
                 m_dragRoots = selectedUuids();
@@ -222,6 +199,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     m_boxEnd = pos;
     m_pressFrame = std::max(0, m_dragStartFrame);
     m_pressEntity = id;
+    m_boxSelectClips = m_altHeld;
     update();
 }
 
@@ -229,6 +207,8 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
     if (!sessionMode())
         return;
+    if (event->modifiers() & Qt::AltModifier)
+        setAltHeld(true);
     if (m_dragMode == DragMode::MoveMarker)
     {
         updateMarkerDrag(int(std::lround(event->position().x())));
@@ -251,6 +231,7 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
             return;
         m_dragMode = DragMode::BoxSelect;
         m_boxStart = m_pressPos;
+        m_boxSelectClips = m_altHeld;
     }
     if (m_dragMode == DragMode::BoxSelect)
     {
@@ -297,11 +278,19 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
                     tip += QStringLiteral("\n素材 %1…").arg(hash.left(12));
             }
             setToolTip(tip);
-            if (!entity->locked && m_editMode == EditMode::Clips
-                && (std::abs(x - clip.left()) <= kTrimGrab
-                    || std::abs(x - clip.right()) <= kTrimGrab))
-                setCursor(Qt::SizeHorCursor);
+            bool overButton = false;
+            if (m_altHeld && clipShowsInlineButtons(*entity))
+                for (int index = 0; index < 2; ++index)
+                    if (clipButtonRect(*entity, index)
+                            .contains(event->position().toPoint()))
+                        overButton = true;
+            if (overButton)
+                setCursor(Qt::PointingHandCursor);
             else if (!entity->locked
+                     && (std::abs(x - clip.left()) <= kTrimGrab
+                         || std::abs(x - clip.right()) <= kTrimGrab))
+                setCursor(Qt::SizeHorCursor);
+            else if (!entity->locked && !m_altHeld
                      && hitKeyframeRow(row, x,
                                        int(std::lround(event->position().y())))
                             >= 0)
@@ -347,11 +336,14 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         m_dragMode = DragMode::None;
         m_frame = std::max(0, m_pressFrame);
         emit frameRequested(m_frame);
-        m_selectedKeyframes.clear();
-        emit keyframeSelectionChanged(m_selectedKeyframes);
-        if (m_pressEntity != kInvalidEntity
-            && (sessionMode() || !isEntityLocked(m_pressEntity)))
+        if (m_pressEntity == kInvalidEntity)
+            clearSelection();
+        else
+        {
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
             selectEntity(m_pressEntity, true);
+        }
         update();
         return;
     }
@@ -360,7 +352,7 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
         const bool additive = event->modifiers() & Qt::ShiftModifier;
 
-        if (m_editMode == EditMode::Clips)
+        if (m_boxSelectClips)
         {
             QSet<EntityId> selected =
                 additive ? m_entitySelection : QSet<EntityId>();
@@ -381,12 +373,18 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
                 selected.insert(entity.id);
                 active = entity.id;
             }
+            m_selectedKeyframes.clear();
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+            if (selected.isEmpty() && !additive)
+            {
+                clearSelection();
+                m_dragMode = DragMode::None;
+                return;
+            }
             m_entitySelection = selected;
             m_selected = selected.contains(active) ? active
                         : selected.isEmpty() ? kInvalidEntity
                                              : *selected.constBegin();
-            m_selectedKeyframes.clear();
-            emit keyframeSelectionChanged(m_selectedKeyframes);
             emit entitySelected(m_selected);
             m_dragMode = DragMode::None;
             update();
@@ -419,14 +417,22 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
                     m_selectedKeyframes.append(selection);
             }
         }
-        if (firstRow >= 0 && firstRow < rows.size())
+        m_dragMode = DragMode::None;
+        if (m_selectedKeyframes.isEmpty() && !additive)
         {
-            const Entity* last = entityById(rows[firstRow]);
-            if (last && !isEntityLocked(last->id))
-                selectEntity(last->id, true);
+            clearSelection();
+            return;
+        }
+        if (!m_selectedKeyframes.isEmpty())
+        {
+            const EntityId active = m_selectedKeyframes.first().entity;
+            m_entitySelection.clear();
+            m_entitySelection.insert(active);
+            m_selected = active;
+            emit entitySelected(active);
         }
         emit keyframeSelectionChanged(m_selectedKeyframes);
-        m_dragMode = DragMode::None;
+        update();
         return;
     }
     if (m_dragMode == DragMode::Scrub)
@@ -448,19 +454,46 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         return;
     if (event->position().x() < nameWidth())
         return;
+    if (event->modifiers() & Qt::AltModifier)
+        setAltHeld(true);
 
-    // Inline rename is the slow-double-click gesture; never create a key while
-    // the editor is open.
     if (m_renameEdit)
         return;
 
     const int row = rowAt(int(event->position().y()));
-    const EntityId id = entityAtRow(row);
+    const int x = int(std::lround(event->position().x()));
+    const EntityId id = hitClipRow(row, x);
     const Entity* entity = entityById(id);
-    if (!entity || isEntityLocked(id))
+    if (!entity)
         return;
 
-    const int x = int(std::lround(event->position().x()));
+    const QRect clip = clipRect(*entity);
+    if (clip.isEmpty() || !clip.contains(event->position().toPoint()))
+        return;
+    const QRect plus = plusButtonRect(clip, width() - kScrollBarSize);
+    if (!plus.isEmpty() && plus.contains(event->position().toPoint()))
+        return;
+
+    // The second press of a double-click has already armed a clip gesture.
+    m_autoScroll->stop();
+    m_dragMode = DragMode::None;
+    m_sessionPlanValid = false;
+    m_moved = false;
+
+    if (m_altHeld)
+    {
+        if (clipShowsInlineButtons(*entity))
+            for (int index = 0; index < 2; ++index)
+                if (clipButtonRect(*entity, index)
+                        .contains(event->position().toPoint()))
+                    return;
+        beginInlineRename(id);
+        return;
+    }
+
+    if (isEntityLocked(id))
+        return;
+
     const int keyFrame =
         hitKeyframeRow(row, x, int(std::lround(event->position().y())));
     if (keyFrame >= 0)
@@ -476,13 +509,6 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         update();
         return;
     }
-
-    const QRect clip = clipRect(*entity);
-    if (!clip.contains(event->position().toPoint()))
-        return;
-    const QRect plus = plusButtonRect(clip, width() - kScrollBarSize);
-    if (!plus.isEmpty() && plus.contains(event->position().toPoint()))
-        return;
 
     const int frame = std::clamp(frameFromX(x), clipStartOf(*entity),
                                  clipEndOf(*entity));
@@ -519,9 +545,8 @@ void TimelinePanel::beginInlineRename(EntityId id)
     auto* edit = new QLineEdit(this);
     edit->setObjectName(QStringLiteral("clipRenameEdit"));
     edit->setText(entity->name);
-    const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
     const int textLeft = clip.left() + 5
-                         + (showButtons ? kButtonStrip + 2 : 0);
+                         + (clipIconCount(*entity) > 0 ? kButtonStrip + 2 : 0);
     const int textRight = clip.right() - 5;
     edit->setGeometry(textLeft, clip.top() + 2,
                       std::max(60, textRight - textLeft), clip.height() - 4);

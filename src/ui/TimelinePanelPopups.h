@@ -91,11 +91,8 @@ private:
         m_panel->m_relativeTime = true;
         m_panel->m_pixelsPerFrame = source->m_pixelsPerFrame;
         m_panel->assignMissingRows();
-        m_panel->setEditMode(source->m_editMode);
         if (m_panel->m_unitButton)
             m_panel->m_unitButton->hide();
-        if (m_panel->m_modeButton)
-            m_panel->m_modeButton->hide();
         layout->addWidget(m_panel, 1);
 
         connect(m_timeMode, &QToolButton::toggled, this, [this](bool absolute) {
