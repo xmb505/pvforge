@@ -63,8 +63,6 @@ double trackValueOr(const model::Entity& entity, const char* property,
                     double relativeFrame, double fallback);
 bool setStaticGizmoValue(model::Entity& entity, const QString& property,
                          double value);
-void setTrackKeyValue(model::Entity& entity, const QString& property, int frame,
-                      double value);
 bool solverDrivesProperty(const model::Entity& entity, const QString& property,
                           int relativeFrame);
 

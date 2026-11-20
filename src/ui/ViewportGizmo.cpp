@@ -1,6 +1,7 @@
 #include "Viewport.h"
 
 #include "ui/ViewportInternal.h"
+#include "ui/WholeFrameEdit.h"
 
 #include "anim/Anim.h"
 #include "app/EditorSession.h"
@@ -151,31 +152,6 @@ gizmo::Bounds Viewport::sessionGizmoBounds(const model::Entity& entity) const
             size = QSizeF(std::max(1, m_session->settings().width),
                           std::max(1, m_session->settings().height));
         }
-        break;
-    case ContentKind::ComicText:
-        size = QSizeF(std::max(1.0, content.comic.boxWidth),
-                      std::max(1.0, content.comic.boxHeight));
-        break;
-    case ContentKind::RadialLines:
-        size = QSizeF(std::max(1.0, content.radial.radius * 2.0),
-                      std::max(1.0, content.radial.radius * 2.0));
-        break;
-    case ContentKind::FlowLines:
-        size = QSizeF(std::max(1.0, content.flow.length),
-                      std::max(1.0, content.flow.area));
-        break;
-    case ContentKind::HalftoneDots:
-        size = QSizeF(std::max(1.0, content.halftone.area),
-                      std::max(1.0, content.halftone.area));
-        break;
-    case ContentKind::BrandWall:
-        size = QSizeF(
-            std::max(1.0, content.brandWall.columns * content.brandWall.logoSize
-                              + (content.brandWall.columns - 1)
-                                    * content.brandWall.spacing),
-            std::max(1.0, content.brandWall.rows * content.brandWall.logoSize
-                              + (content.brandWall.rows - 1)
-                                    * content.brandWall.spacing));
         break;
     }
 
@@ -350,14 +326,24 @@ void Viewport::writeSessionGizmoValue(model::Entity& entity,
     if (solverDrivesProperty(entity, property, relativeFrame))
         return;
 
-    ui::detail::setStaticGizmoValue(entity, property, value);
+    // Pivot is a definition parameter: it never enters keyframes.
+    if (property == QLatin1String("pivotX")
+        || property == QLatin1String("pivotY"))
+    {
+        ui::detail::setStaticGizmoValue(entity, property, value);
+        return;
+    }
 
-    const bool hasTrack = entity.tracks.contains(property);
-    if (!hasTrack && !m_autoKeyEnabled)
+    // Every gizmo write at the playhead updates/creates one whole-frame
+    // keyframe.  Outside the clip there is no valid frame; the drag simply
+    // does not write (the property panel reports the out-of-range case).
+    if (!ui::wholeframe::canWriteKeyAt(entity, relativeFrame))
         return;
-    if (relativeFrame < 0 || relativeFrame >= entity.duration())
+    model::Keyframe key =
+        ui::wholeframe::keyAt(entity, relativeFrame, m_session);
+    if (!ui::wholeframe::setValue(key, property, value))
         return;
-    ui::detail::setTrackKeyValue(entity, property, relativeFrame, value);
+    model::upsertKeyframe(entity.keyframes, key);
 }
 
 void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,

@@ -93,11 +93,6 @@ public:
     void setCameraFrameVisible(bool on);
     QSize minimumSizeHint() const override { return {480, 270}; }
 
-    // Session gizmo: auto-key writes the current frame's keyframe in addition
-    // to the static value (same rule as the new viewport).
-    void setAutoKeyEnabled(bool on) { m_autoKeyEnabled = on; }
-    bool autoKeyEnabled() const { return m_autoKeyEnabled; }
-
     // AI write lock: selection, panning, zooming and the camera monitor keep
     // working; gizmo/camera drags that would write are ignored.
     void setEditingEnabled(bool on) { m_editingEnabled = on; }
@@ -283,7 +278,6 @@ private:
     int m_sessionImageExpand = -1;
 
     // ---- session gizmo state --------------------------------------------
-    bool m_autoKeyEnabled = true;
     bool m_editingEnabled = true;
     SessionDragKind m_sessionDragKind = SessionDragKind::None;
     Uuid m_sessionDragUuid;
