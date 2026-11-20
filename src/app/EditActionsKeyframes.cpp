@@ -2,22 +2,142 @@
 
 #include "EditActionsSupport.h"
 #include "EditorSession.h"
-#include "model/Query.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/EntityLock.h"
 #include "next/timeline/EntityRange.h"
 
 #include <QSet>
 
-#include <algorithm>
-#include <climits>
+#include <optional>
 
 namespace pvf {
 
 using namespace edit_detail;
 
-bool EditActions::planKeyframe(const Uuid& uuid, const QString& trackName,
-                               int frame, EditPlan* plan, QString* error) const
+namespace {
+
+// The instantaneous solver pose at an entity-relative frame.  Creating a key
+// inside an automatic segment ends the segment, so the key must hold the pose
+// the solver shows instead of the pre-segment interpolation.
+std::optional<solver::Sample> solverSampleAt(EditorSession* session,
+                                             const model::Entity& entity,
+                                             int frame)
+{
+    if (!session)
+        return std::nullopt;
+    const model::SolverSegment* segment = anim::solverAt(entity, frame);
+    if (!segment)
+        return std::nullopt;
+    const solver::Result* result =
+        session->solverResultFor(entity.uuid, segment->id);
+    if (!result || result->samples.isEmpty())
+        return std::nullopt;
+
+    for (const solver::Sample& sample : result->samples)
+    {
+        if (sample.frame == frame)
+            return sample;
+    }
+    // Past a physical stop the evaluator holds the last solved pose.
+    if (frame > result->samples.last().frame)
+        return result->samples.last();
+    return std::nullopt;
+}
+
+bool validateKeyframeFrame(const model::Entity& entity, int frame,
+                           QString* error)
+{
+    if (frame < 0 || frame > entity.duration())
+    {
+        setError(error, QStringLiteral("关键帧 %1 超出实体范围 0..%2")
+                            .arg(frame)
+                            .arg(entity.duration()));
+        return false;
+    }
+    if (keyframeBlockedAt(entity, frame))
+    {
+        setError(error,
+                 QStringLiteral("第 %1 帧由显式求解段驱动，不能写入普通关键帧")
+                     .arg(frame));
+        return false;
+    }
+    return true;
+}
+
+bool validateKeyframePayload(const model::Entity& entity,
+                             const model::Keyframe& keyframe, QString* error)
+{
+    QString contentError;
+    if (!model::validateKeyframeContent(entity.content, keyframe.content,
+                                        &contentError))
+    {
+        setError(error, QStringLiteral("关键帧内容参数非法：%1").arg(contentError));
+        return false;
+    }
+    if (!model::validateKeyframeHtmlVars(keyframe.htmlVars, &contentError))
+    {
+        setError(error, QStringLiteral("关键帧 HTML 变量非法：%1").arg(contentError));
+        return false;
+    }
+    return true;
+}
+
+// One validated selection entry.  Duplicate refs in a multi-selection are
+// collapsed so one gesture never writes the same frame twice.
+struct ResolvedKey
+{
+    Uuid entity;
+    int frame = 0;
+};
+
+bool resolveKey(const model::Project& project, const KeyRef& ref,
+                ResolvedKey* out, QString* error)
+{
+    const auto entityIt = project.entities.constFind(ref.entity);
+    if (entityIt == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(ref.entity));
+        return false;
+    }
+    if (next::isEntityLocked(project, ref.entity))
+    {
+        setError(error,
+                 QStringLiteral("实体 %1 或其祖先已锁定，不能编辑关键帧")
+                     .arg(displayName(entityIt.value())));
+        return false;
+    }
+    if (!model::hasKeyframeAt(entityIt.value().keyframes, ref.frame))
+    {
+        setError(error, QStringLiteral("第 %1 帧没有关键帧（%2）")
+                            .arg(ref.frame)
+                            .arg(displayName(entityIt.value())));
+        return false;
+    }
+    out->entity = ref.entity;
+    out->frame = ref.frame;
+    return true;
+}
+
+bool sameResolvedKey(const ResolvedKey& a, const ResolvedKey& b)
+{
+    return a.entity == b.entity && a.frame == b.frame;
+}
+
+bool containsResolvedKey(const QVector<ResolvedKey>& keys,
+                         const ResolvedKey& candidate)
+{
+    for (const ResolvedKey& key : keys)
+    {
+        if (sameResolvedKey(key, candidate))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+bool EditActions::planKeyframe(const Uuid& uuid, int frame, EditPlan* plan,
+                               QString* error) const
 {
     if (error)
         error->clear();
@@ -40,56 +160,32 @@ bool EditActions::planKeyframe(const Uuid& uuid, const QString& trackName,
                             .arg(displayName(it.value())));
         return false;
     }
+    if (!validateKeyframeFrame(it.value(), frame, error))
+        return false;
 
-    const QString track = trackName.trimmed();
-    if (track.isEmpty())
+    model::KeyframeSample sample = model::entitySampleAt(it.value(), frame);
+    if (const auto pose = solverSampleAt(m_session, it.value(), frame))
     {
-        setError(error, QStringLiteral("没有选中的轨道"));
-        return false;
-    }
-    if (!it.value().tracks.contains(track) && !trackNames(uuid).contains(track))
-    {
-        setError(error, QStringLiteral("实体 %1 不支持轨道 %2")
-                            .arg(displayName(it.value()), track));
-        return false;
-    }
-    if (frame < 0 || frame >= it.value().duration())
-    {
-        setError(error, QStringLiteral("关键帧 %1 超出实体范围 0..%2")
-                            .arg(frame)
-                            .arg(it.value().duration() - 1));
-        return false;
-    }
-    if (trackBlockedAt(it.value(), track, frame))
-    {
-        setError(error, QStringLiteral("轨道 %1 的第 %2 帧由求解段驱动，不能写入普通关键帧")
-                            .arg(track)
-                            .arg(frame));
-        return false;
+        sample.x = pose->pose.position.x();
+        sample.y = pose->pose.position.y();
+        sample.rotation = pose->pose.rotation;
+        sample.scaleX *= pose->pose.scale;
+        sample.scaleY *= pose->pose.scale;
     }
 
     model::Project working = project;
     model::Entity& entity = working.entities[uuid];
-    const double value = trackValueAt(entity, track, frame);
-    model::Track& target = entity.tracks[track];
-    bool updated = false;
-    for (model::Keyframe& key : target.keys)
+    model::Keyframe keyframe = keyframeFromSample(sample, frame);
+    if (const model::Keyframe* existing =
+            model::keyframeAt(entity.keyframes, frame))
     {
-        if (key.frame == frame)
-        {
-            key.value = value;
-            updated = true;
-            break;
-        }
+        // Re-evaluating a frame that already has a key keeps its author
+        // metadata and only refreshes the animation values.
+        keyframe.easing = existing->easing;
+        keyframe.note = existing->note;
+        keyframe.extras = existing->extras;
     }
-    if (!updated)
-    {
-        model::Keyframe key;
-        key.frame = frame;
-        key.value = value;
-        target.keys.append(key);
-    }
-    sortTrack(target);
+    model::upsertKeyframe(entity.keyframes, keyframe);
 
     QString validationError;
     if (!model::validateEntity(entity, &validationError))
@@ -102,7 +198,56 @@ bool EditActions::planKeyframe(const Uuid& uuid, const QString& trackName,
     plan->upserts = {uuid};
     plan->deletes.clear();
     plan->projectChanged = false;
-    plan->message = QStringLiteral("设置关键帧 %1").arg(track);
+    plan->message = QStringLiteral("设置关键帧");
+    return true;
+}
+
+bool EditActions::planUpsertKeyframe(const Uuid& uuid,
+                                     const model::Keyframe& keyframe,
+                                     EditPlan* plan, QString* error) const
+{
+    if (error)
+        error->clear();
+    if (!isValid() || !plan)
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(uuid);
+    if (it == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
+        return false;
+    }
+    if (next::isEntityLocked(project, uuid))
+    {
+        setError(error, QStringLiteral("实体 %1 或其祖先已锁定，不能编辑关键帧")
+                            .arg(displayName(it.value())));
+        return false;
+    }
+    if (!validateKeyframeFrame(it.value(), keyframe.frame, error))
+        return false;
+    if (!validateKeyframePayload(it.value(), keyframe, error))
+        return false;
+
+    model::Project working = project;
+    model::Entity& entity = working.entities[uuid];
+    model::upsertKeyframe(entity.keyframes, keyframe);
+
+    QString validationError;
+    if (!model::validateEntity(entity, &validationError))
+    {
+        setError(error, QStringLiteral("关键帧校验失败：%1").arg(validationError));
+        return false;
+    }
+
+    plan->project = std::move(working);
+    plan->upserts = {uuid};
+    plan->deletes.clear();
+    plan->projectChanged = false;
+    plan->message = QStringLiteral("设置关键帧");
     return true;
 }
 
@@ -126,87 +271,63 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
     struct Move
     {
         Uuid entity;
-        QString track;
         int from = 0;
         model::Keyframe key;
+        bool keep = true;
     };
     QVector<Move> moves;
+    QVector<ResolvedKey> resolved;
     QSet<Uuid> entities;
-    QSet<QString> seenMoves;
 
     for (const KeyRef& ref : keys)
     {
-        const auto entityIt = project.entities.constFind(ref.entity);
-        if (entityIt == project.entities.constEnd())
-        {
-            setError(error, QStringLiteral("实体不存在：%1").arg(ref.entity));
+        ResolvedKey resolvedKey;
+        if (!resolveKey(project, ref, &resolvedKey, error))
             return false;
-        }
-        const model::Entity& entity = entityIt.value();
-        if (next::isEntityLocked(project, ref.entity))
+        if (containsResolvedKey(resolved, resolvedKey))
+            continue;
+        resolved.append(resolvedKey);
+
+        const model::Entity& entity = project.entities.value(ref.entity);
+        if (solverStartsAt(entity, ref.frame))
         {
-            setError(error,
-                     QStringLiteral("实体 %1 或其祖先已锁定，不能移动关键帧")
-                         .arg(displayName(entity)));
-            return false;
-        }
-        if (ref.frame < 0 || ref.frame >= entity.duration())
-        {
-            setError(error, QStringLiteral("关键帧 %1 超出实体范围").arg(ref.frame));
+            setError(error, QStringLiteral("求解段开始帧的关键帧不能移动，"
+                                           "请先删除求解段"));
             return false;
         }
 
-        bool found = false;
-        auto collect = [&](const QString& trackName, const model::Track& track) {
-            for (const model::Keyframe& key : track.keys)
-            {
-                if (key.frame != ref.frame)
-                    continue;
-                const QString moveKey =
-                    ref.entity + QLatin1Char('\n') + trackName
-                    + QLatin1Char('\n') + QString::number(key.frame);
-                if (seenMoves.contains(moveKey))
-                    continue;
-                seenMoves.insert(moveKey);
-                found = true;
-                moves.append(Move{ref.entity, trackName, key.frame, key});
-            }
-        };
-        if (ref.track.isEmpty())
+        const int target = ref.frame + delta;
+        const model::Keyframe* key =
+            model::keyframeAt(entity.keyframes, ref.frame);
+        Move move{ref.entity, ref.frame, *key, true};
+        // Frames dragged past the clip boundary are dropped, matching the
+        // timeline gesture contract.  frame == duration stays legal.
+        if (target < 0 || target > entity.duration())
         {
-            for (auto track = entity.tracks.constBegin();
-                 track != entity.tracks.constEnd(); ++track)
-                collect(track.key(), track.value());
+            move.keep = false;
+            moves.append(move);
+            entities.insert(ref.entity);
+            continue;
         }
-        else
+        if (solverStartsAt(entity, target) && target != ref.frame)
         {
-            const auto track = entity.tracks.constFind(ref.track);
-            if (track != entity.tracks.constEnd())
-                collect(ref.track, track.value());
-        }
-        if (!found)
-        {
-            setError(error, QStringLiteral("第 %1 帧没有关键帧（%2）")
-                                .arg(ref.frame)
-                                .arg(keyLabel(ref)));
+            setError(error, QStringLiteral("第 %1 帧是求解段开始帧，"
+                                           "不能把普通关键帧移到那里")
+                                .arg(target));
             return false;
         }
+        if (keyframeBlockedAt(entity, target))
+        {
+            setError(error, QStringLiteral("第 %1 帧由显式求解段驱动")
+                                .arg(target));
+            return false;
+        }
+
+        moves.append(move);
         entities.insert(ref.entity);
     }
 
-    int minFrame = INT_MAX;
-    int maxFrame = INT_MIN;
-    int duration = INT_MAX;
-    for (const Move& move : moves)
-    {
-        minFrame = std::min(minFrame, move.from);
-        maxFrame = std::max(maxFrame, move.from);
-        duration = std::min(duration,
-                            project.entities.value(move.entity).duration());
-    }
-    delta = std::clamp(delta, -minFrame, duration - 1 - maxFrame);
-
-    if (delta == 0)
+    if (moves.isEmpty() || delta == 0)
     {
         plan->project = project;
         plan->upserts.clear();
@@ -217,69 +338,40 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
         return true;
     }
 
-    for (const Move& move : moves)
-    {
-        const model::Entity& entity = project.entities.value(move.entity);
-        const int target = move.from + delta;
-        if (solverStartKey(entity, move.track, move.from)
-            || solverStartKey(entity, move.track, target))
-        {
-            setError(error,
-                     QStringLiteral("求解段开始帧的关键帧不能移动，请先删除求解段"));
-            return false;
-        }
-        if (trackBlockedAt(entity, move.track, target))
-        {
-            setError(error, QStringLiteral("轨道 %1 的第 %2 帧由求解段驱动")
-                                .arg(move.track)
-                                .arg(target));
-            return false;
-        }
-    }
-
     model::Project working = project;
     for (const Uuid& uuid : entities)
     {
         model::Entity& entity = working.entities[uuid];
-        QHash<QString, QSet<int>> sources;
-        QHash<QString, QSet<int>> targets;
+        QSet<int> sources;
+        QSet<int> targets;
         for (const Move& move : moves)
         {
             if (move.entity != uuid)
                 continue;
-            sources[move.track].insert(move.from);
-            targets[move.track].insert(move.from + delta);
+            sources.insert(move.from);
+            if (move.keep)
+                targets.insert(move.from + delta);
         }
-        for (auto track = entity.tracks.begin(); track != entity.tracks.end();
-             ++track)
+
+        QVector<model::Keyframe> kept;
+        kept.reserve(entity.keyframes.size());
+        for (const model::Keyframe& keyframe : entity.keyframes)
         {
-            const QSet<int> trackSources = sources.value(track.key());
-            const QSet<int> trackTargets = targets.value(track.key());
-            if (trackSources.isEmpty() && trackTargets.isEmpty())
+            if (sources.contains(keyframe.frame)
+                || targets.contains(keyframe.frame))
                 continue;
-            QVector<model::Keyframe>& trackKeys = track->keys;
-            trackKeys.erase(std::remove_if(trackKeys.begin(), trackKeys.end(),
-                                           [&trackSources](const model::Keyframe& key) {
-                                               return trackSources.contains(key.frame);
-                                           }),
-                            trackKeys.end());
-            trackKeys.erase(std::remove_if(trackKeys.begin(), trackKeys.end(),
-                                           [&trackTargets](const model::Keyframe& key) {
-                                               return trackTargets.contains(key.frame);
-                                           }),
-                            trackKeys.end());
+            kept.append(keyframe);
         }
         for (const Move& move : moves)
         {
-            if (move.entity != uuid)
+            if (move.entity != uuid || !move.keep)
                 continue;
-            model::Keyframe key = move.key;
-            key.frame += delta;
-            entity.tracks[move.track].keys.append(key);
+            model::Keyframe moved = move.key;
+            moved.frame = move.from + delta;
+            kept.append(moved);
         }
-        for (auto track = entity.tracks.begin(); track != entity.tracks.end();
-             ++track)
-            sortTrack(track.value());
+        model::sortKeyframes(kept);
+        entity.keyframes = std::move(kept);
 
         QString validationError;
         if (!model::validateEntity(entity, &validationError))
@@ -317,71 +409,31 @@ bool EditActions::planDeleteKeyframes(const QVector<KeyRef>& keys,
 
     const model::Project& project = m_session->project();
     model::Project working = project;
+    QVector<ResolvedKey> resolved;
     QSet<Uuid> entities;
     bool changed = false;
 
     for (const KeyRef& ref : keys)
     {
-        const auto entityIt = working.entities.constFind(ref.entity);
-        if (entityIt == working.entities.constEnd())
-        {
-            setError(error, QStringLiteral("实体不存在：%1").arg(ref.entity));
+        ResolvedKey key;
+        if (!resolveKey(project, ref, &key, error))
             return false;
-        }
-        if (next::isEntityLocked(project, ref.entity))
+        if (containsResolvedKey(resolved, key))
+            continue;
+        resolved.append(key);
+
+        model::Entity& entity = working.entities[ref.entity];
+        if (solverStartsAt(entity, ref.frame))
         {
             setError(error,
-                     QStringLiteral("实体 %1 或其祖先已锁定，不能删除关键帧")
-                         .arg(displayName(entityIt.value())));
+                     QStringLiteral("求解段开始帧的关键帧不能删除，请先删除求解段"));
             return false;
         }
-        model::Entity& entity = working.entities[ref.entity];
-
-        auto eraseAt = [&](const QString& trackName, model::Track& track) {
-            QVector<model::Keyframe> kept;
-            kept.reserve(track.keys.size());
-            for (const model::Keyframe& key : track.keys)
-            {
-                if (key.frame != ref.frame)
-                {
-                    kept.append(key);
-                    continue;
-                }
-                if (solverStartKey(entity, trackName, key.frame))
-                {
-                    setError(error,
-                             QStringLiteral("求解段开始帧的关键帧不能删除，请先删除求解段"));
-                    return false;
-                }
-                changed = true;
-            }
-            track.keys = kept;
-            return true;
-        };
-
-        if (ref.track.isEmpty())
+        if (model::removeKeyframe(entity.keyframes, ref.frame))
         {
-            for (auto track = entity.tracks.begin(); track != entity.tracks.end();)
-            {
-                if (!eraseAt(track.key(), track.value()))
-                    return false;
-                if (track->keys.isEmpty())
-                    track = entity.tracks.erase(track);
-                else
-                    ++track;
-            }
+            changed = true;
+            entities.insert(ref.entity);
         }
-        else
-        {
-            auto track = entity.tracks.find(ref.track);
-            if (track == entity.tracks.end())
-                continue;
-            if (!eraseAt(ref.track, track.value()))
-                return false;
-            if (track->keys.isEmpty())
-                entity.tracks.erase(track);
-        }
-        entities.insert(ref.entity);
     }
 
     if (!changed)
@@ -428,49 +480,27 @@ bool EditActions::planSetKeyframeEasing(const QVector<KeyRef>& keys,
 
     const model::Project& project = m_session->project();
     model::Project working = project;
+    QVector<ResolvedKey> resolved;
     QSet<Uuid> entities;
     bool changed = false;
 
     for (const KeyRef& ref : keys)
     {
-        const auto entityIt = working.entities.constFind(ref.entity);
-        if (entityIt == working.entities.constEnd())
-        {
-            setError(error, QStringLiteral("实体不存在：%1").arg(ref.entity));
+        ResolvedKey key;
+        if (!resolveKey(project, ref, &key, error))
             return false;
-        }
-        if (next::isEntityLocked(project, ref.entity))
-        {
-            setError(error,
-                     QStringLiteral("实体 %1 或其祖先已锁定，不能修改关键帧缓动")
-                         .arg(displayName(entityIt.value())));
-            return false;
-        }
-        model::Entity& entity = working.entities[ref.entity];
+        if (containsResolvedKey(resolved, key))
+            continue;
+        resolved.append(key);
 
-        auto applyTrack = [&](const QString& trackName, model::Track& track) {
-            Q_UNUSED(trackName);
-            for (model::Keyframe& key : track.keys)
-            {
-                if (key.frame != ref.frame)
-                    continue;
-                key.easing = easing;
-                changed = true;
-            }
-        };
-        if (ref.track.isEmpty())
+        model::Entity& entity = working.entities[ref.entity];
+        if (model::Keyframe* keyframe =
+                mutableKeyframeAt(entity.keyframes, ref.frame))
         {
-            for (auto track = entity.tracks.begin(); track != entity.tracks.end();
-                 ++track)
-                applyTrack(track.key(), track.value());
+            keyframe->easing = easing;
+            changed = true;
+            entities.insert(ref.entity);
         }
-        else
-        {
-            auto track = entity.tracks.find(ref.track);
-            if (track != entity.tracks.end())
-                applyTrack(ref.track, track.value());
-        }
-        entities.insert(ref.entity);
     }
 
     if (!changed)
@@ -487,9 +517,9 @@ bool EditActions::planSetKeyframeEasing(const QVector<KeyRef>& keys,
     return true;
 }
 
-bool EditActions::planPasteKeyframes(const Uuid& uuid,
-                                     const QVector<TrackKey>& keys,
-                                     EditPlan* plan, QString* error) const
+bool EditActions::planSetKeyframeNote(const QVector<KeyRef>& keys,
+                                      const QString& note, EditPlan* plan,
+                                      QString* error) const
 {
     if (error)
         error->clear();
@@ -500,70 +530,143 @@ bool EditActions::planPasteKeyframes(const Uuid& uuid,
     }
     if (keys.isEmpty())
     {
-        setError(error, QStringLiteral("剪贴板没有关键帧"));
+        setError(error, QStringLiteral("没有选中的关键帧"));
         return false;
     }
 
     const model::Project& project = m_session->project();
-    const auto entityIt = project.entities.constFind(uuid);
-    if (entityIt == project.entities.constEnd())
-    {
-        setError(error, QStringLiteral("实体不存在：%1").arg(uuid));
-        return false;
-    }
-    if (next::isEntityLocked(project, uuid))
-    {
-        setError(error, QStringLiteral("实体 %1 或其祖先已锁定，不能粘贴关键帧")
-                            .arg(displayName(entityIt.value())));
-        return false;
-    }
-
-    const model::Entity& source = entityIt.value();
     model::Project working = project;
-    model::Entity& entity = working.entities[uuid];
-    for (const TrackKey& item : keys)
+    QVector<ResolvedKey> resolved;
+    QSet<Uuid> entities;
+    bool changed = false;
+
+    for (const KeyRef& ref : keys)
     {
-        if (item.track.isEmpty())
-        {
-            setError(error, QStringLiteral("粘贴的关键帧缺少轨道"));
+        ResolvedKey key;
+        if (!resolveKey(project, ref, &key, error))
             return false;
-        }
-        if (item.key.frame < 0 || item.key.frame >= source.duration())
+        if (containsResolvedKey(resolved, key))
+            continue;
+        resolved.append(key);
+
+        model::Entity& entity = working.entities[ref.entity];
+        if (model::Keyframe* keyframe =
+                mutableKeyframeAt(entity.keyframes, ref.frame))
         {
-            setError(error, QStringLiteral("关键帧 %1 超出实体范围 0..%2")
-                                .arg(item.key.frame)
-                                .arg(source.duration() - 1));
-            return false;
+            keyframe->note = note;
+            changed = true;
+            entities.insert(ref.entity);
         }
-        if (trackBlockedAt(source, item.track, item.key.frame))
-        {
-            setError(error, QStringLiteral("轨道 %1 的第 %2 帧由求解段驱动")
-                                .arg(item.track)
-                                .arg(item.key.frame));
-            return false;
-        }
-        model::Track& track = entity.tracks[item.track];
-        track.keys.erase(std::remove_if(track.keys.begin(), track.keys.end(),
-                                        [&item](const model::Keyframe& key) {
-                                            return key.frame == item.key.frame;
-                                        }),
-                         track.keys.end());
-        track.keys.append(item.key);
-        sortTrack(track);
     }
 
-    QString validationError;
-    if (!model::validateEntity(entity, &validationError))
+    if (!changed)
     {
-        setError(error, QStringLiteral("粘贴后关键帧校验失败：%1").arg(validationError));
+        setError(error, QStringLiteral("没有可修改注释的关键帧"));
         return false;
     }
 
     plan->project = std::move(working);
-    plan->upserts = {uuid};
+    plan->upserts = QVector<Uuid>(entities.begin(), entities.end());
     plan->deletes.clear();
     plan->projectChanged = false;
-    plan->message = QStringLiteral("粘贴关键帧");
+    plan->message = QStringLiteral("修改关键帧注释");
+    return true;
+}
+
+bool EditActions::planCopyKeyframeParams(const KeyRef& source,
+                                         const QVector<KeyRef>& targets,
+                                         EditPlan* plan, QString* error) const
+{
+    if (error)
+        error->clear();
+    if (!isValid() || !plan)
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+    if (targets.isEmpty())
+    {
+        setError(error, QStringLiteral("没有目标关键帧"));
+        return false;
+    }
+
+    const model::Project& project = m_session->project();
+    const auto sourceIt = project.entities.constFind(source.entity);
+    if (sourceIt == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(source.entity));
+        return false;
+    }
+    const model::Keyframe* sourceKey =
+        model::keyframeAt(sourceIt.value().keyframes, source.frame);
+    if (!sourceKey)
+    {
+        setError(error, QStringLiteral("源帧第 %1 帧没有关键帧")
+                            .arg(source.frame));
+        return false;
+    }
+
+    model::Project working = project;
+    QSet<Uuid> entities;
+    QVector<ResolvedKey> resolved;
+    bool changed = false;
+
+    for (const KeyRef& ref : targets)
+    {
+        const auto entityIt = working.entities.constFind(ref.entity);
+        if (entityIt == working.entities.constEnd())
+        {
+            setError(error, QStringLiteral("实体不存在：%1").arg(ref.entity));
+            return false;
+        }
+        if (next::isEntityLocked(project, ref.entity))
+        {
+            setError(error,
+                     QStringLiteral("实体 %1 或其祖先已锁定，不能复制参数")
+                         .arg(displayName(entityIt.value())));
+            return false;
+        }
+        // Out-of-range targets are dropped rather than rejected.
+        if (ref.frame < 0 || ref.frame > entityIt.value().duration())
+            continue;
+
+        ResolvedKey key;
+        if (!resolveKey(project, ref, &key, error))
+            return false;
+        if (containsResolvedKey(resolved, key))
+            continue;
+        resolved.append(key);
+
+        model::Entity& entity = working.entities[ref.entity];
+        model::Keyframe* target = mutableKeyframeAt(entity.keyframes, ref.frame);
+        if (!target)
+            continue;
+        copyAnimationParams(*sourceKey, target);
+        if (!keyframeParamsCompatible(sourceIt.value(), entity))
+        {
+            // Keep the target's own content values when the schemas differ.
+            const auto originalIt = project.entities.constFind(ref.entity);
+            const model::Keyframe* original =
+                originalIt == project.entities.constEnd()
+                    ? nullptr
+                    : model::keyframeAt(originalIt.value().keyframes, ref.frame);
+            if (original)
+            {
+                target->content = original->content;
+                target->htmlVars = original->htmlVars;
+            }
+        }
+        changed = true;
+        entities.insert(ref.entity);
+    }
+
+    plan->project = std::move(working);
+    plan->upserts = QVector<Uuid>(entities.begin(), entities.end());
+    plan->deletes.clear();
+    plan->projectChanged = false;
+    plan->message = QStringLiteral("复制关键帧参数");
+    if (!changed)
+        plan->project = project;
     return true;
 }
 

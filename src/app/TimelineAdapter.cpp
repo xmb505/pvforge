@@ -27,16 +27,6 @@ EntityType legacyType(const model::Content& content)
         return EntityType::Vector;
     case ContentKind::Camera:
         return EntityType::Camera;
-    case ContentKind::ComicText:
-        return EntityType::ComicText;
-    case ContentKind::RadialLines:
-        return EntityType::RadialLines;
-    case ContentKind::FlowLines:
-        return EntityType::FlowLines;
-    case ContentKind::HalftoneDots:
-        return EntityType::HalftoneDots;
-    case ContentKind::BrandWall:
-        return EntityType::BrandWall;
     case ContentKind::Asset:
         switch (content.asset.type)
         {
@@ -144,23 +134,29 @@ void fillViewFields(Entity& view, const model::Entity& source,
         }
     }
 
-    // Keyframes are stored relative to entity.start in the new model; the
-    // legacy painter expects absolute project frames.
-    view.tracks.clear();
-    for (auto it = source.tracks.constBegin(); it != source.tracks.constEnd();
-         ++it)
+    // Keyframes are stored relative to entity.start in the model; the legacy
+    // painter expects absolute project frames and one diamond per frame.
+    view.keyframes.clear();
+    view.keyframes.reserve(source.keyframes.size());
+    for (const model::Keyframe& key : source.keyframes)
     {
-        Track track;
-        track.keys.reserve(it->keys.size());
-        for (const model::Keyframe& key : it->keys)
+        Keyframe viewKey;
+        viewKey.frame = source.start + key.frame;
+        viewKey.ease = key.easing;
+        viewKey.note = key.note;
+        view.keyframes.append(viewKey);
+    }
+    for (const model::SolverSegment& solver : source.solvers)
+    {
+        const int startFrame = source.start + solver.startFrame;
+        const int endFrame = source.start + model::solverStructuralEnd(source, solver);
+        for (Keyframe& viewKey : view.keyframes)
         {
-            Keyframe viewKey;
-            viewKey.frame = double(source.start + key.frame);
-            viewKey.value = key.value;
-            viewKey.note = key.note;
-            track.keys.append(viewKey);
+            if (viewKey.frame == startFrame)
+                viewKey.solverStart = true;
+            if (viewKey.frame == endFrame)
+                viewKey.solverEnd = true;
         }
-        view.tracks.insert(it.key(), track);
     }
 }
 

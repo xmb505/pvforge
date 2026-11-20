@@ -114,22 +114,6 @@ void MainWindow::createSessionMenus()
     editMenu->addAction(m_redoAction);
     editMenu->addSeparator();
 
-    m_autoKeyAction =
-        new QAction(Lang::t(QStringLiteral("action.autoKey"),
-                            QStringLiteral("自动关键帧")),
-                    this);
-    m_autoKeyAction->setObjectName(QStringLiteral("autoKeyAction"));
-    m_autoKeyAction->setCheckable(true);
-    m_autoKeyAction->setChecked(Settings::autoKeyDefault());
-    connect(m_autoKeyAction, &QAction::toggled, this, [this](bool on) {
-        if (m_viewport)
-            m_viewport->setAutoKeyEnabled(on);
-        if (m_props)
-            m_props->setAutoKey(on);
-    });
-    editMenu->addAction(m_autoKeyAction);
-    editMenu->addSeparator();
-
     m_settingsAction = new QAction(QStringLiteral("设置…"), this);
     m_settingsAction->setObjectName(QStringLiteral("settingsAction"));
     m_settingsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+,")));
@@ -333,8 +317,6 @@ void MainWindow::createSessionToolBar()
         bar->addAction(m_endAction);
     if (m_fitAction)
         bar->addAction(m_fitAction);
-    if (m_autoKeyAction)
-        bar->addAction(m_autoKeyAction);
 }
 
 QAction* MainWindow::createPerfMonitorWindowAction()

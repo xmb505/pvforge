@@ -167,11 +167,6 @@ bool assetGroupMatches(const model::Content& content, AssetType incoming)
     case ContentKind::Camera:
     case ContentKind::Text:
     case ContentKind::Vector:
-    case ContentKind::ComicText:
-    case ContentKind::RadialLines:
-    case ContentKind::FlowLines:
-    case ContentKind::HalftoneDots:
-    case ContentKind::BrandWall:
         return false;
     }
     return false;
@@ -871,9 +866,9 @@ namespace {
 // ProjectDocument validates the whole tree and then saves every upsert before
 // deleting the removed entities.  A trim can therefore leave a to-be-deleted
 // sibling outside its parent's new range while the parent tree is written.
-// Normalise the doomed entities to their parent's range (and drop their tracks/
-// solvers) so the intermediate tree is valid; they are removed immediately
-// afterwards.  The final model/file state is exactly the plan's.
+// Normalise the doomed entities to their parent's range (and drop their
+// keyframes/solvers) so the intermediate tree is valid; they are removed
+// immediately afterwards.  The final model/file state is exactly the plan's.
 void prepareDeletedForWrite(model::Project& live, const QVector<Uuid>& deletes)
 {
     QSet<Uuid> deleting(deletes.begin(), deletes.end());
@@ -914,7 +909,7 @@ void prepareDeletedForWrite(model::Project& live, const QVector<Uuid>& deletes)
             }
             it->start = start;
             it->end = end;
-            it->tracks.clear();
+            it->keyframes.clear();
             it->solvers.clear();
             done.insert(uuid);
             progress = true;
