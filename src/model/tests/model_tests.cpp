@@ -1023,6 +1023,15 @@ void testSolverValidation()
     CHECK(validateEntity(openDriven));
     CHECK(solverStructuralEnd(openDriven, openDriven.solvers.first()) == 98);
 
+    // A keyframe at the end boundary (frame == duration) is an ordinary
+    // keyframe after the automatic segment; the segment ends at duration-1.
+    Entity endBoundary = makeEntity(0, 100);
+    endBoundary.solvers = {makeSolver(SolverEffect::Orbit, 10, -1)};
+    endBoundary.keyframes = {keyAt(100, 1.0)};
+    CHECK_DETAIL(validateEntity(endBoundary, &error), error);
+    CHECK(solverStructuralEnd(endBoundary, endBoundary.solvers.first()) == 99);
+    CHECK(isLastKeyframeInClip(endBoundary, 100));
+
     Entity explicitDriven = makeEntity(0, 100);
     explicitDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, 50)};
     explicitDriven.keyframes = {keyAt(40, 1.0)};
