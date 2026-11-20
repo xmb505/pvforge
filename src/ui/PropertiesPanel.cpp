@@ -274,14 +274,33 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
                    || property == QLatin1String("scaleY")))
         value = std::clamp(std::abs(value), 0.05, 1.0);
 
+    // A playhead inside an explicit solver segment is in range, but the frame
+    // is driven and cannot accept a normal keyframe.  This is not the
+    // out-of-range/static fallback path: refuse the edit instead of silently
+    // changing static defaults that the solver overrides.
+    if (inRange)
+    {
+        const int target = activeKeyFrame(*entity);
+        QString blockedReason;
+        if (!wholeframe::canWriteKeyAt(*entity, target, &blockedReason))
+        {
+            reportSessionError(
+                blockedReason.isEmpty()
+                    ? QStringLiteral("该帧由求解段驱动，不能写入普通关键帧")
+                    : blockedReason);
+            refresh();
+            return false;
+        }
+    }
+
     bool outOfRange = false;
     const bool ok = runSessionEdit(
         QStringLiteral("pvf: edit %1").arg(property),
         [this, property, value, boolean, camera, inRange,
          &outOfRange](model::Entity& e) {
-            const int target = activeKeyFrame(e);
-            if (inRange && wholeframe::canWriteKeyAt(e, target))
+            if (inRange)
             {
+                const int target = activeKeyFrame(e);
                 model::Keyframe key = wholeframe::keyAt(e, target, m_session);
                 if (boolean)
                     wholeframe::setBoolValue(key, property, value != 0.0);

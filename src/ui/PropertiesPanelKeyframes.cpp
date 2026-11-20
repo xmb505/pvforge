@@ -125,11 +125,21 @@ void PropertiesPanel::pasteTransformParams()
     if (!entity || !sessionEditable() || !m_hasTransformClipboard)
         return;
     const int frame = prepareAnimationEdit(*entity);
-    const bool inRange = frame >= 0 && frame <= entity->duration();
-    if (!inRange)
+    if (frame < 0 || frame > entity->duration())
     {
         reportSessionError(QStringLiteral(
             "播放针不在实体范围内：不能粘贴整帧参数"));
+        return;
+    }
+    const int target = activeKeyFrame(*entity);
+    QString blockedReason;
+    if (!wholeframe::canWriteKeyAt(*entity, target, &blockedReason))
+    {
+        reportSessionError(
+            blockedReason.isEmpty()
+                ? QStringLiteral("该帧由求解段驱动，不能粘贴整帧参数")
+                : blockedReason);
+        refresh();
         return;
     }
     const QJsonObject payload = m_transformClipboard;
@@ -155,7 +165,18 @@ void PropertiesPanel::resetTransformParams()
     if (frame < 0 || frame > entity->duration())
     {
         reportSessionError(QStringLiteral(
-            "播放针不在实体范围内：只修改静态参数"));
+            "播放针不在实体范围内：不能重置整帧参数"));
+        return;
+    }
+    const int target = activeKeyFrame(*entity);
+    QString blockedReason;
+    if (!wholeframe::canWriteKeyAt(*entity, target, &blockedReason))
+    {
+        reportSessionError(
+            blockedReason.isEmpty()
+                ? QStringLiteral("该帧由求解段驱动，不能重置整帧参数")
+                : blockedReason);
+        refresh();
         return;
     }
     runSessionEdit(QStringLiteral("pvf: reset animation parameters"),

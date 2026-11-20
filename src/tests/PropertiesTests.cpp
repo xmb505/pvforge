@@ -462,6 +462,91 @@ int propertiesTest(QApplication& app)
                   QStringLiteral("solver conversion was not one commit")))
         return 1;
     QApplication::processEvents();
+
+    // A playhead inside an explicit closed solver segment is in range, but the
+    // frame is solver-driven and must not be written as a normal whole-frame
+    // keyframe, nor fall back to changing static transform defaults.
+    {
+        auto& project = live->mutableProject();
+        project.entities[solverRoot].solvers[0].endFrame = 20;
+        QString closeError;
+        if (!document->commitEntity(solverRoot,
+                                    QStringLiteral("pvf: close solver"),
+                                    &closeError))
+        {
+            qCritical() << "properties-test: close solver failed" << closeError;
+            return 1;
+        }
+        flush();
+        document->setSelection(solverRoot);
+        live->setPlayhead(10);
+        QApplication::processEvents();
+
+        const double staticX =
+            live->project().entities.value(solverRoot).transform.x;
+        auto* xSpin = panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_x"));
+        if (!check(xSpin, QStringLiteral("x spin missing for solver lock test")))
+            return 1;
+        lastError.clear();
+        xSpin->setValue(staticX + 40.0);
+        QApplication::processEvents();
+        flush();
+        if (!check(!keyAt(live, solverRoot, 10),
+                   QStringLiteral("closed solver wrote a normal keyframe"))
+            || !check(std::abs(live->project()
+                                   .entities.value(solverRoot)
+                                   .transform.x
+                               - staticX)
+                          < 1e-9,
+                      QStringLiteral("closed solver changed static x"))
+            || !check(lastError.contains(QStringLiteral("求解")),
+                      QStringLiteral("closed solver did not report the block")))
+            return 1;
+
+        lastError.clear();
+        if (auto* resetBtn =
+                panel->findChild<QPushButton*>(QStringLiteral("transformReset")))
+        {
+            resetBtn->click();
+            QApplication::processEvents();
+            if (!check(lastError.contains(QStringLiteral("求解")),
+                       QStringLiteral("reset inside solver did not report the block"))
+                || !check(std::abs(live->project()
+                                       .entities.value(solverRoot)
+                                       .transform.x
+                                   - staticX)
+                              < 1e-9,
+                          QStringLiteral("reset inside solver changed static x")))
+                return 1;
+        }
+
+        // Copy from the solver-start key, then try to paste onto the locked
+        // middle frame: paste must report the same solver block and not create
+        // a normal keyframe.
+        auto* copyBtn =
+            panel->findChild<QPushButton*>(QStringLiteral("transformCopy"));
+        auto* pasteBtn =
+            panel->findChild<QPushButton*>(QStringLiteral("transformPaste"));
+        if (copyBtn && pasteBtn)
+        {
+            live->setPlayhead(0);
+            QApplication::processEvents();
+            copyBtn->click();
+            live->setPlayhead(10);
+            QApplication::processEvents();
+            lastError.clear();
+            pasteBtn->click();
+            QApplication::processEvents();
+            if (!check(lastError.contains(QStringLiteral("求解")),
+                       QStringLiteral("paste inside solver did not report the block"))
+                || !check(!keyAt(live, solverRoot, 10),
+                          QStringLiteral("paste inside solver created a normal key")))
+                return 1;
+        }
+    }
+
+    live->setPlayhead(0);
+    QApplication::processEvents();
     if (!check(solverCancel->isVisible() && solverCancel->isEnabled(),
                QStringLiteral("cancel-solver action is not available")))
         return 1;
