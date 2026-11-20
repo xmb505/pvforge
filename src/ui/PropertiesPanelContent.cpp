@@ -648,7 +648,8 @@ void PropertiesPanel::applySessionAsset(const QString& field,
 
     if (field == QLatin1String("volume"))
     {
-        writeAnimationValue(QStringLiteral("volume"), value.toDouble());
+        if (entity->content.asset.type == AssetType::Audio)
+            writeAnimationValue(QStringLiteral("volume"), value.toDouble());
         return;
     }
 

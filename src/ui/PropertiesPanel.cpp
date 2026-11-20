@@ -920,6 +920,10 @@ void PropertiesPanel::refreshSession()
         {
             setSpinIfIdle(m_assetVolume, content.volume);
         }
+        // Volume is an animated parameter only for audio; image/video have no
+        // volume animation key, so their static volume field stays hidden.
+        const bool audioAsset = content.type == AssetType::Audio;
+        m_assetVolume->setVisible(audioAsset);
         m_assetSourceIn->setEnabled(editable);
         m_assetVolume->setEnabled(editable);
         m_replaceSource->show();
