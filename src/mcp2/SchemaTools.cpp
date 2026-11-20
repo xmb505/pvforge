@@ -70,86 +70,41 @@ QJsonObject toolSchema(const QString& name, const QString& description,
     return object;
 }
 
-// Content is a tagged union: `kind` plus a same-named sub-object (the special
-// kinds, text/vector/camera) or flat asset fields.  The special kinds reject
-// unknown fields in mcp2 and defer numeric ranges to model::validateContent,
-// so the ranges below are documentation.
+// Content is a tagged union: `kind` plus a same-named sub-object (text/vector/
+// camera) or flat asset fields.  It only holds definition parameters; the
+// animation parameters live in each whole-frame keyframe's `content` object.
 QJsonObject contentSchema()
 {
-    const QJsonObject comicText = objectSchema({
-        {QStringLiteral("text"), prop(QStringLiteral("string"), QStringLiteral("气泡文字，可含换行"))},
+    const QJsonObject text = objectSchema({
+        {QStringLiteral("text"), prop(QStringLiteral("string"), QStringLiteral("文字，可含换行"))},
         {QStringLiteral("fontFamily"), prop(QStringLiteral("string"), QStringLiteral("空 = 默认字体"))},
-        {QStringLiteral("pixelSize"), prop(QStringLiteral("integer"), QStringLiteral("1..8192，默认 72"))},
+        {QStringLiteral("pixelSize"), prop(QStringLiteral("integer"), QStringLiteral("1..8192，默认 96；静态基准值，动画值写在 keyframes[].content"))},
         {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 文字色"))},
         {QStringLiteral("strokeColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 文字描边色"))},
-        {QStringLiteral("strokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000"))},
+        {QStringLiteral("strokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000；静态基准值"))},
         {QStringLiteral("align"), prop(QStringLiteral("integer"), QStringLiteral("0..65535（Qt 对齐标志）"))},
-        {QStringLiteral("lineHeight"), prop(QStringLiteral("number"), QStringLiteral("0.1..10"))},
+        {QStringLiteral("lineHeight"), prop(QStringLiteral("number"), QStringLiteral("0.1..10；静态基准值"))},
+        {QStringLiteral("letterSpacing"), prop(QStringLiteral("number"), QStringLiteral("静态基准值"))},
+        {QStringLiteral("padding"), prop(QStringLiteral("number"), QStringLiteral("0..100000；静态基准值"))},
+        {QStringLiteral("boxWidth"), prop(QStringLiteral("number"), QStringLiteral("静态基准值"))},
+        {QStringLiteral("boxHeight"), prop(QStringLiteral("number"), QStringLiteral("静态基准值"))},
         {QStringLiteral("bold"), prop(QStringLiteral("boolean"), QString())},
         {QStringLiteral("italic"), prop(QStringLiteral("boolean"), QString())},
-        {QStringLiteral("shape"), prop(QStringLiteral("string"), QStringLiteral("ellipse|rect|cloud|burst"))},
-        {QStringLiteral("boxWidth"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
-        {QStringLiteral("boxHeight"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
-        {QStringLiteral("fillColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 气泡填充色"))},
-        {QStringLiteral("bubbleStrokeColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex 气泡描边色"))},
-        {QStringLiteral("bubbleStrokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000"))},
-        {QStringLiteral("cornerRadius"), prop(QStringLiteral("number"), QStringLiteral("0..1000000"))},
-        {QStringLiteral("tail"), prop(QStringLiteral("boolean"), QStringLiteral("是否画气泡尖角"))},
-        {QStringLiteral("tailX"), prop(QStringLiteral("number"), QStringLiteral("-16..16（半宽倍数）"))},
-        {QStringLiteral("tailY"), prop(QStringLiteral("number"), QStringLiteral("-16..16（半高倍数）"))},
-        {QStringLiteral("rotation"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
-        {QStringLiteral("padding"), prop(QStringLiteral("number"), QStringLiteral("0..100000"))},
-        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QStringLiteral("抖动种子"))},
+        {QStringLiteral("underline"), prop(QStringLiteral("boolean"), QString())},
+        {QStringLiteral("vertical"), prop(QStringLiteral("boolean"), QString())},
+        {QStringLiteral("verticalRtl"), prop(QStringLiteral("boolean"), QString())},
     });
 
-    const QJsonObject radialLines = objectSchema({
-        {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("1..512，默认 56"))},
-        {QStringLiteral("radius"), prop(QStringLiteral("number"), QStringLiteral("1..1000000，默认 420"))},
+    const QJsonObject vector = objectSchema({
+        {QStringLiteral("shape"), prop(QStringLiteral("string"), QStringLiteral("ellipse|rect|triangle|polygon|star"))},
+        {QStringLiteral("width"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；静态基准值"))},
+        {QStringLiteral("height"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；静态基准值"))},
+        {QStringLiteral("cornerRadius"), prop(QStringLiteral("number"), QStringLiteral("0..1000000；静态基准值"))},
+        {QStringLiteral("sides"), prop(QStringLiteral("integer"), QStringLiteral("3..512（定义参数）"))},
         {QStringLiteral("innerRatio"), prop(QStringLiteral("number"), QStringLiteral("0..0.95"))},
-        {QStringLiteral("width"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000（外缘线宽）"))},
-        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
-        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
-        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
-    });
-
-    const QJsonObject flowLines = objectSchema({
-        {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("1..512，默认 26"))},
-        {QStringLiteral("length"), prop(QStringLiteral("number"), QStringLiteral("1..1000000"))},
-        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0.1..1000000"))},
-        {QStringLiteral("thickness"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
-        {QStringLiteral("area"), prop(QStringLiteral("number"), QStringLiteral("1..10000000"))},
-        {QStringLiteral("bend"), prop(QStringLiteral("number"), QStringLiteral("-1000000..1000000（曲线中点偏移 px）"))},
-        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
-        {QStringLiteral("phase"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
-        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
-        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
-    });
-
-    const QJsonObject halftoneDots = objectSchema({
-        {QStringLiteral("layout"), prop(QStringLiteral("string"), QStringLiteral("grid|radial"))},
-        {QStringLiteral("area"), prop(QStringLiteral("number"), QStringLiteral("1..10000000；grid 时 area/spacing<=512"))},
-        {QStringLiteral("radius"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；radial 时 radius/spacing<=256"))},
-        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
-        {QStringLiteral("dotSize"), prop(QStringLiteral("number"), QStringLiteral("0.1..100000"))},
-        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
-        {QStringLiteral("gradientAngle"), prop(QStringLiteral("number"), QStringLiteral("有限数（度）"))},
-        {QStringLiteral("minRatio"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
-        {QStringLiteral("jitter"), prop(QStringLiteral("number"), QStringLiteral("0..1"))},
-        {QStringLiteral("color"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
-        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
-    });
-
-    const QJsonObject brandWall = objectSchema({
-        {QStringLiteral("logos"), arrayOf(QStringLiteral("string"), QStringLiteral("最多 64 个，每项 1..128 字符"))},
-        {QStringLiteral("columns"), prop(QStringLiteral("integer"), QStringLiteral("1..64，默认 6"))},
-        {QStringLiteral("rows"), prop(QStringLiteral("integer"), QStringLiteral("1..64，默认 4"))},
-        {QStringLiteral("spacing"), prop(QStringLiteral("number"), QStringLiteral("0..512"))},
-        {QStringLiteral("logoSize"), prop(QStringLiteral("number"), QStringLiteral("1..1024"))},
-        {QStringLiteral("colors"), arrayOf(QStringLiteral("string"), QStringLiteral("至少 1 个、最多 64 个 CSS hex"))},
-        {QStringLiteral("alternate"), prop(QStringLiteral("boolean"), QStringLiteral("棋盘式错位"))},
-        {QStringLiteral("angle"), prop(QStringLiteral("number"), QStringLiteral("-360..360"))},
-        {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS hex；空 = 透明"))},
-        {QStringLiteral("seed"), prop(QStringLiteral("integer"), QString())},
+        {QStringLiteral("strokeWidth"), prop(QStringLiteral("number"), QStringLiteral("0..1000；静态基准值"))},
+        {QStringLiteral("fillColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
+        {QStringLiteral("strokeColor"), prop(QStringLiteral("string"), QStringLiteral("CSS hex"))},
     });
 
     QJsonObject kind;
@@ -158,25 +113,14 @@ QJsonObject contentSchema()
                 QJsonArray::fromStringList(
                     {QStringLiteral("empty"), QStringLiteral("text"),
                      QStringLiteral("vector"), QStringLiteral("camera"),
-                     QStringLiteral("asset"), QStringLiteral("comicText"),
-                     QStringLiteral("radialLines"), QStringLiteral("flowLines"),
-                     QStringLiteral("halftoneDots"), QStringLiteral("brandWall")}));
+                     QStringLiteral("asset")}));
     kind.insert(QStringLiteral("description"),
-                QStringLiteral("内容类型；特殊内容是一等公民，与 text/vector 同级"));
+                QStringLiteral("内容类型；特殊内容类型已整类删除"));
 
     QJsonObject properties;
     properties.insert(QStringLiteral("kind"), kind);
-    properties.insert(QStringLiteral("text"),
-                      prop(QStringLiteral("object"),
-                           QStringLiteral("kind=text：text/fontFamily/pixelSize/color/"
-                                          "strokeColor/strokeWidth/align/lineHeight/"
-                                          "letterSpacing/padding/boxWidth/boxHeight/"
-                                          "bold/italic/underline/vertical/verticalRtl")));
-    properties.insert(QStringLiteral("vector"),
-                      prop(QStringLiteral("object"),
-                           QStringLiteral("kind=vector：shape/width/height/cornerRadius/"
-                                          "sides/innerRatio/strokeWidth/fillColor/"
-                                          "strokeColor")));
+    properties.insert(QStringLiteral("text"), text);
+    properties.insert(QStringLiteral("vector"), vector);
     properties.insert(QStringLiteral("camera"),
                       prop(QStringLiteral("object"), QStringLiteral("kind=camera：空对象")));
     properties.insert(QStringLiteral("assetHash"),
@@ -188,21 +132,22 @@ QJsonObject contentSchema()
     properties.insert(QStringLiteral("sourceIn"),
                       prop(QStringLiteral("integer"), QStringLiteral("kind=asset：>= 0")));
     properties.insert(QStringLiteral("volume"),
-                      prop(QStringLiteral("number"), QStringLiteral("kind=asset：>= 0")));
-    properties.insert(QStringLiteral("comicText"), comicText);
-    properties.insert(QStringLiteral("radialLines"), radialLines);
-    properties.insert(QStringLiteral("flowLines"), flowLines);
-    properties.insert(QStringLiteral("halftoneDots"), halftoneDots);
-    properties.insert(QStringLiteral("brandWall"), brandWall);
+                      prop(QStringLiteral("number"), QStringLiteral("kind=asset：>= 0；静态基准值，动画值写在 keyframes[].content")));
+    properties.insert(QStringLiteral("fadeIn"),
+                      prop(QStringLiteral("number"), QStringLiteral("kind=audio：秒")));
+    properties.insert(QStringLiteral("fadeOut"),
+                      prop(QStringLiteral("number"), QStringLiteral("kind=audio：秒")));
 
     QJsonObject schema;
     schema.insert(QStringLiteral("type"), QStringLiteral("object"));
     schema.insert(
         QStringLiteral("description"),
-        QStringLiteral("特殊内容（comicText/radialLines/flowLines/halftoneDots/"
-                       "brandWall）是一等公民：entity.create 直接可用，"
-                       "entity.update 可改同 kind 字段；字段写在同名子对象里，"
-                       "未知字段会被拒绝，数值范围由模型兜底。"));
+        QStringLiteral("实体静态内容。这里只放定义参数（文字内容/字体/颜色、"
+                       "形状类型、素材引用等）；动画参数由整帧关键帧的 content "
+                       "承载：文本 pixelSize/lineHeight/letterSpacing/padding/"
+                       "boxWidth/boxHeight/strokeWidth，矢量 width/height/"
+                       "cornerRadius/strokeWidth，音频 volume，HTML 数字变量在 "
+                       "htmlVars。定义参数不能写进关键帧。"));
     schema.insert(QStringLiteral("properties"), properties);
     return schema;
 }
@@ -235,20 +180,28 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("inheritVisibility"), prop(QStringLiteral("boolean"), QString())},
             {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
             {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("参与碰撞"))},
-            {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity"))},
+            {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity（静态回退）"))},
             {QStringLiteral("content"), contentSchema()},
-            {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QStringLiteral("{track: [key,...]}"))},
+            {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整帧关键帧数组；每个对象含 frame/x/y/rotation/scaleX/scaleY/opacity/visible/physicsInteract/content/htmlVars/easing/note，没有 track"))},
             {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))},
         });
     }
     if (topic == QLatin1String("keyframes"))
     {
         return openSchema({
-            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration-1"))},
-            {QStringLiteral("value"), prop(QStringLiteral("number"), QStringLiteral("布尔轨道用 0/1"))},
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration（frame == duration 允许）"))},
+            {QStringLiteral("x"), prop(QStringLiteral("number"), QStringLiteral("必填；整帧关键帧包含全部动画参数"))},
+            {QStringLiteral("y"), prop(QStringLiteral("number"), QStringLiteral("必填"))},
+            {QStringLiteral("rotation"), prop(QStringLiteral("number"), QStringLiteral("必填，度"))},
+            {QStringLiteral("scaleX"), prop(QStringLiteral("number"), QStringLiteral("必填"))},
+            {QStringLiteral("scaleY"), prop(QStringLiteral("number"), QStringLiteral("必填"))},
+            {QStringLiteral("opacity"), prop(QStringLiteral("number"), QStringLiteral("必填，0..1"))},
+            {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QStringLiteral("必填，步骤值"))},
+            {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("必填，步骤值"))},
+            {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("必填；该内容类型的全部动画参数：文本 pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth；矢量 width/height/cornerRadius/strokeWidth；音频 volume；定义参数不能写进来"))},
+            {QStringLiteral("htmlVars"), prop(QStringLiteral("object"), QStringLiteral("HTML manifest 数字变量覆盖值；非数字变量不进关键帧"))},
             {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QStringLiteral("预设名或 {type:bezier,inX,inY,outX,outY}"))},
             {QStringLiteral("note"), prop(QStringLiteral("string"), QStringLiteral("最长 4096"))},
-            {QStringLiteral("tracks"), arrayOf(QStringLiteral("string"), QStringLiteral("x,y,rotation,scaleX,scaleY,opacity,pivotX,pivotY,visible,physicsInteract + 内容专用轨道"))},
         });
     }
     if (topic == QLatin1String("asset"))
@@ -294,7 +247,8 @@ QJsonObject schemaTopic(const QString& topic)
         schema.insert(QStringLiteral("detailsKeys"),
                       QJsonArray::fromStringList(
                           {QStringLiteral("allowedRange"),
-                           QStringLiteral("allowedTracks"), QStringLiteral("missing"),
+                           QStringLiteral("allowedFields"),
+                           QStringLiteral("startFrame"), QStringLiteral("missing"),
                            QStringLiteral("index"), QStringLiteral("lockedBy"),
                            QStringLiteral("conflicts"), QStringLiteral("requires"),
                            QStringLiteral("affected"), QStringLiteral("reason"),
@@ -361,14 +315,16 @@ QString guideMarkdown(const QString& topic)
         return QStringLiteral(
             "# 编写规则\n"
             "- 先读 `project.summary` 和 `entity.list`，再改。\n"
-            "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration-1`。\n"
+            "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration`（`frame == duration` 允许，作为末端插值目标）。\n"
             "- 一次工具调用只做一个逻辑操作；有文本 diff 的写工具各自产生一个 commit。\n"
             "- git 只管理文本；素材不进 git，纯素材导入可能没有 commit。\n"
             "- 没有启用 Git 时 MCP 只读；写工具返回 `permission_denied`（details.reason=`git_disabled`），不要重试，先让人类启用 Git。\n"
             "- 批量工具全成功或全回滚。\n"
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"
-            "- 特殊内容是一等公民：`comicText`/`radialLines`/`flowLines`/`halftoneDots`/`brandWall` 与 `text`/`vector` 一样直接放在实体 `content` 里，字段写在同名子对象（如 `{\"kind\":\"comicText\",\"comicText\":{\"text\":\"台词\"}}`）；`entity.update` 可改同 kind 字段，未知字段会被拒绝。\n"
+            "- 整帧关键帧：一个关键帧 = 该帧的全部动画参数 + 一个整体缓动 + 可选注释。没有 `track`，没有单参数轨道；`keyframes.set` 每个对象必须含 `frame,x,y,rotation,scaleX,scaleY,opacity,visible,physicsInteract`，以及该内容类型的全部 `content` 动画参数。\n"
+            "- 动画参数：文本 `pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth`；矢量 `width/height/cornerRadius/strokeWidth`；音频 `volume`；HTML 数字变量写在 `htmlVars`。定义参数（文字内容、字体、颜色、形状类型、素材引用等）不能写进关键帧。\n"
+            "- 改单个字段用 `keyframes.upsert`：服务端先按该帧求值补全全部动画参数，再覆盖传入字段。\n"
             "- 改完用 `entity.get` 或 `keyframes.get` 自查。\n");
     if (topic == QLatin1String("workflow"))
         return QStringLiteral(
@@ -376,7 +332,7 @@ QString guideMarkdown(const QString& topic)
             "1. `project.summary` 确认 fps/尺寸/内容长度；fps/尺寸创建后锁定，`project.update` 不能改。\n"
             "2. `entity.list` / `entity.get` 找到目标 UUID、父级、row。\n"
             "3. `entity.createTree` 一次建父子层级，或 `entity.createMany` 建平级实体。\n"
-            "4. `keyframes.setMany` 一次写多条轨道。\n"
+            "4. `keyframes.setMany` 一次写多个实体的整帧关键帧（没有 track）。\n"
             "5. `entity.move` / `entity.trim` / `entity.reparent` 调整时间与层级。\n"
             "6. 需要回退时用 `history.undo`（内存撤销，不产生 git commit），不要写相反值模拟撤销。\n");
     if (topic == QLatin1String("solver"))
@@ -386,8 +342,8 @@ QString guideMarkdown(const QString& topic)
             "- `endFrame>=0` 是高级显式覆盖：解到该帧并冻结；物理上更早停止时采样仍保留该区间，但 `stopped` 只在真实停止帧为真。\n"
             "- 停止原因分 `collision`（碰撞/落入事件视界）、`stopThreshold`（低速阈值）、`clipEnd`（片段末尾）、`explicitEnd`（显式结束帧）。\n"
             "- `gravity`/`orbit`/`blackhole`/`spiral` 必填 `params.targetUuid`；`spin` 不需要目标。\n"
-            "- `startFrame` 必须在被驱动轨道上已有关键帧：x/y（gravity/orbit/blackhole/spiral）或 rotation（spin）。\n"
-            "- 段不能重叠；段内不能写被驱动属性的普通关键帧。\n"
+            "- 求解起点必须是一个普通整帧关键帧：`startFrame` 上要有 `keyframes` 数组里的整帧关键帧。\n"
+            "- 段不能重叠；显式 `endFrame` 覆盖的 `startFrame < f <= endFrame`（含结束帧）内不能写普通整帧关键帧。自动段（`endFrame=-1`）由起点后的第一个普通整帧关键帧 N 结束于 N-1。\n"
             "- `solver.evaluate` 只读，返回相对 start 的采样点、速度和碰撞/停止标记，不写关键帧；`summary.stoppedFrame` 是第一次物理停止。\n");
     if (topic == QLatin1String("preview"))
         return QStringLiteral(
@@ -415,11 +371,17 @@ QString guideMarkdown(const QString& topic)
             "\"text\":{\"text\":\"PVFORGE\",\"pixelSize\":180}}}]}}\n"
             "```\n"
             "```json\n"
-            "{\"name\":\"台词\",\"start\":0,\"end\":60,"
-            "\"content\":{\"kind\":\"comicText\",\"comicText\":"
-            "{\"text\":\"台词内容\",\"shape\":\"burst\",\"pixelSize\":96}}}\n"
+            "{\"uuid\":\"<uuid>\",\"keyframes\":["
+            "{\"frame\":0,\"x\":0,\"y\":0,\"rotation\":0,\"scaleX\":1,"
+            "\"scaleY\":1,\"opacity\":1,\"visible\":true,"
+            "\"physicsInteract\":false,"
+            "\"content\":{\"pixelSize\":96,\"lineHeight\":1.0,"
+            "\"letterSpacing\":0,\"padding\":6,\"boxWidth\":0,\"boxHeight\":0,"
+            "\"strokeWidth\":0},\"htmlVars\":{},\"easing\":\"linear\","
+            "\"note\":\"\"}]}\n"
             "```\n"
-            "对所有关键帧调用 `keyframes.setMany`，帧号按各实体自己的 start 计算。\n");
+            "对所有关键帧调用 `keyframes.setMany`，帧号按各实体自己的 start 计算；"
+            "只改一个字段时用 `keyframes.upsert`。\n");
     return QString();
 }
 
@@ -508,14 +470,14 @@ QJsonObject listTools()
          {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("必填"))},
          {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("默认按内容类型"))},
          {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1"))},
-         {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset|comicText|radialLines|flowLines|halftoneDots|brandWall；字段见 schema.get entity"))},
+         {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset；定义参数见 schema.get entity，动画参数见 keyframes"))},
          {QStringLiteral("transform"), prop(QStringLiteral("object"), QString())},
          {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("inheritVisibility"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QString())},
          {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QString())},
-         {QStringLiteral("keyframes"), prop(QStringLiteral("object"), QString())},
+         {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整帧关键帧数组；每个对象必须含全部动画参数，没有 track"))},
          {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))}},
         {QStringLiteral("start")});
 
@@ -533,7 +495,7 @@ QJsonObject listTools()
                      {QStringLiteral("entities")})));
     tools.append(toolSchema(
         QStringLiteral("entity.get"),
-        QStringLiteral("读取实体完整状态和指定帧求值（默认播放头，含求解段）"),
+        QStringLiteral("读取实体完整状态（整帧关键帧数组）和指定帧求值（默认播放头，含求解段）"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("默认当前播放头"))},
                       {QStringLiteral("includeChildren"), prop(QStringLiteral("boolean"), QString())}},
@@ -543,7 +505,7 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("省略 = 全部"))},
                       {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500"))},
-                      {QStringLiteral("includeKeyframes"), prop(QStringLiteral("boolean"), QString())},
+                      {QStringLiteral("includeKeyframes"), prop(QStringLiteral("boolean"), QStringLiteral("返回整帧关键帧数组"))},
                       {QStringLiteral("includeSolvers"), prop(QStringLiteral("boolean"), QString())}})));
     tools.append(toolSchema(
         QStringLiteral("entity.update"), QStringLiteral("局部修改实体（不改时间/父级/关键帧/素材引用）"),
@@ -571,7 +533,7 @@ QJsonObject listTools()
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
         QStringLiteral("entity.reparent"),
-        QStringLiteral("换父级；preserveWorld 拒绝带 transform 关键帧的实体；"
+        QStringLiteral("换父级；preserveWorld 拒绝带整帧关键帧的实体；"
                        "引用该实体的求解段会列入 confirm_required"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
@@ -602,47 +564,54 @@ QJsonObject listTools()
 
     const QJsonObject keyframesSetSchema = objectSchema(
         {{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-         {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
-         {QStringLiteral("keys"), arrayOf(QStringLiteral("object"), QStringLiteral("空数组 = 清空"))}},
-        {QStringLiteral("uuid"), QStringLiteral("track"), QStringLiteral("keys")});
-    tools.append(toolSchema(QStringLiteral("keyframes.get"),
-                            QStringLiteral("读取单条或全部轨道"),
-                            objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                                          {QStringLiteral("track"), prop(QStringLiteral("string"), QString())}},
-                                         {QStringLiteral("uuid")})));
-    tools.append(toolSchema(QStringLiteral("keyframes.set"),
-                            QStringLiteral("替换一条轨道的全部关键帧"), keyframesSetSchema));
+         {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整组替换；每个对象必须含该实体类型的全部动画参数，缺字段报错"))}},
+        {QStringLiteral("uuid"), QStringLiteral("keyframes")});
     tools.append(toolSchema(
-        QStringLiteral("keyframes.setMany"), QStringLiteral("一次替换多条轨道，整批一个 commit"),
-        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,track,keys}"))}},
+        QStringLiteral("keyframes.get"),
+        QStringLiteral("读取实体的完整整帧关键帧数组"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("uuid")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.set"),
+        QStringLiteral("严格整组替换整帧关键帧；每个关键帧必须含全部动画参数，没有 track"),
+        keyframesSetSchema));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.setMany"),
+        QStringLiteral("一次替换多个实体的整帧关键帧，整批一个 commit"),
+        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,keyframes}"))}},
                      {QStringLiteral("items")})));
     tools.append(toolSchema(
-        QStringLiteral("keyframes.remove"), QStringLiteral("删除指定帧上的关键帧（幂等）"),
+        QStringLiteral("keyframes.upsert"),
+        QStringLiteral("按帧写入部分字段：先求值补全全部动画参数，再覆盖传入字段"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())}},
-                     {QStringLiteral("uuid"), QStringLiteral("track"), QStringLiteral("frame")})));
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("0..duration"))},
+                      {QStringLiteral("partial"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/opacity/visible/physicsInteract/content/htmlVars/easing/note 的子集"))}},
+                     {QStringLiteral("uuid"), QStringLiteral("frame")})));
     tools.append(toolSchema(
-        QStringLiteral("keyframes.move"), QStringLiteral("移动一个关键帧到另一帧"),
+        QStringLiteral("keyframes.remove"),
+        QStringLiteral("按帧删除整帧关键帧（幂等）；求解段起点不能删除"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
+                      {QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("要删除的帧号"))}},
+                     {QStringLiteral("uuid"), QStringLiteral("frames")})));
+    tools.append(toolSchema(
+        QStringLiteral("keyframes.move"),
+        QStringLiteral("移动一个整帧关键帧到另一帧"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("fromFrame"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("toFrame"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("overwrite"), prop(QStringLiteral("boolean"), QString())}},
-                     {QStringLiteral("uuid"), QStringLiteral("track"),
-                      QStringLiteral("fromFrame"), QStringLiteral("toFrame")})));
+                     {QStringLiteral("uuid"), QStringLiteral("fromFrame"),
+                      QStringLiteral("toFrame")})));
     tools.append(toolSchema(
-        QStringLiteral("keyframes.clear"), QStringLiteral("清空一条轨道"),
-        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())}},
-                     {QStringLiteral("uuid"), QStringLiteral("track")})));
+        QStringLiteral("keyframes.clear"), QStringLiteral("清空整帧关键帧"),
+        objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())}},
+                     {QStringLiteral("uuid")})));
     tools.append(toolSchema(
-        QStringLiteral("keyframes.setEasing"), QStringLiteral("修改已有关键帧的缓动"),
+        QStringLiteral("keyframes.setEasing"), QStringLiteral("修改已有关键帧的整帧缓动"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("track"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("frame"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QString())}},
-                     {QStringLiteral("uuid"), QStringLiteral("track"),
+                     {QStringLiteral("uuid"),
                       QStringLiteral("frame"), QStringLiteral("easing")})));
 
     tools.append(toolSchema(

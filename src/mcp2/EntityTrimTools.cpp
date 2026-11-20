@@ -16,32 +16,31 @@ namespace {
 
 // ---- trim helpers -------------------------------------------------------
 
-int trimTrack(model::Track& track, int deltaStart, int newDuration)
+int trimKeyframes(QVector<model::Keyframe>& keyframes, int deltaStart,
+                  int newDuration)
 {
     QVector<model::Keyframe> kept;
     int removed = 0;
-    for (const model::Keyframe& key : track.keys)
+    for (const model::Keyframe& key : keyframes)
     {
         model::Keyframe shifted = key;
         shifted.frame -= deltaStart;
-        if (shifted.frame < 0 || shifted.frame >= newDuration)
+        if (shifted.frame < 0 || shifted.frame > newDuration)
         {
             ++removed;
             continue;
         }
         kept.append(shifted);
     }
-    std::stable_sort(kept.begin(), kept.end(),
-                     [](const model::Keyframe& a, const model::Keyframe& b) {
-                         return a.frame < b.frame;
-                     });
-    track.keys = kept;
+    model::sortKeyframes(kept);
+    keyframes = kept;
     return removed;
 }
 
 // Solver samples drive local x/y (parent space) or rotation.  Evaluation adds
 // pivot/scale and every parent transform, so probe with a neutral scale/pivot
-// to recover exactly the values the solver wrote into the driven tracks.
+// to recover exactly the values the solver wrote.  Whole-frame keyframes
+// cannot drop one property, so the probe rewrites every key's scale instead.
 struct SolvedPose
 {
     double x = 0.0;
@@ -63,15 +62,17 @@ std::optional<SolvedPose> solvedPoseAt(const model::Project& project,
     entity.transform.scaleY = 1.0;
     entity.transform.pivotX = 0.0;
     entity.transform.pivotY = 0.0;
-    entity.tracks.remove(QStringLiteral("scaleX"));
-    entity.tracks.remove(QStringLiteral("scaleY"));
-    entity.tracks.remove(QStringLiteral("pivotX"));
-    entity.tracks.remove(QStringLiteral("pivotY"));
+    for (model::Keyframe& keyframe : entity.keyframes)
+    {
+        keyframe.scaleX = 1.0;
+        keyframe.scaleY = 1.0;
+    }
 
     render2::SceneWorld world(probe, assets);
     QTransform local =
         anim::evaluateEntity(probe, uuid, projectFrame, world).world;
-    if (!entity.parentUuid.isEmpty()
+    if (entity.space == model::EntitySpace::Parent
+        && !entity.parentUuid.isEmpty()
         && probe.entities.contains(entity.parentUuid))
     {
         const QTransform parent =
@@ -91,8 +92,7 @@ std::optional<SolvedPose> solvedPoseAt(const model::Project& project,
 }
 
 QStringList trimSolvers(model::Entity& entity, const model::Entity& old,
-                        int deltaStart, int newDuration,
-                        const std::optional<SolvedPose>& cutPose)
+                        int deltaStart, int newDuration)
 {
     QStringList removedIds;
     QVector<model::SolverSegment> kept;
@@ -106,33 +106,6 @@ QStringList trimSolvers(model::Entity& entity, const model::Entity& old,
         if (startRel < 0)
         {
             removedIds << segment.id;
-            // The new clip start lands inside this segment.  Freeze the pose
-            // the solver produced at the cut frame as an ordinary key so the
-            // trimmed clip starts exactly where the segment used to be.
-            if (endRel >= 0 && cutPose)
-            {
-                for (const QString& track : drivenTracks(segment.effect))
-                {
-                    model::Keyframe key;
-                    key.frame = 0;
-                    if (track == QLatin1String("x"))
-                        key.value = cutPose->x;
-                    else if (track == QLatin1String("y"))
-                        key.value = cutPose->y;
-                    else
-                        key.value = cutPose->rotation;
-                    key.easing.type = QStringLiteral("linear");
-                    model::Track target = entity.tracks.value(track);
-                    target.keys.erase(
-                        std::remove_if(target.keys.begin(), target.keys.end(),
-                                       [](const model::Keyframe& existing) {
-                                           return existing.frame == 0;
-                                       }),
-                        target.keys.end());
-                    target.keys.prepend(key);
-                    entity.tracks.insert(track, target);
-                }
-            }
             continue;
         }
 
@@ -271,8 +244,9 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
 
     // A start trim that lands inside a solver segment freezes the pose the
     // solver produced at the cut frame.  Probe the untouched project first:
-    // once the tracks shift, that pose is no longer recoverable.
+    // once the keyframes shift, that pose is no longer recoverable.
     std::optional<SolvedPose> cutPose;
+    model::KeyframeSample cutSample;
     if (deltaStart > 0)
     {
         bool cutsSegment = false;
@@ -291,17 +265,41 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
             if (!cutPose)
                 return failure(QStringLiteral("invalid_argument"),
                                QStringLiteral("实体不存在：%1").arg(uuid));
+            cutSample = model::entitySampleAt(old, deltaStart);
         }
     }
 
     if (old.content.kind == ContentKind::Asset)
         entity->content.asset.sourceIn = newSourceIn;
 
-    for (auto it = entity->tracks.begin(); it != entity->tracks.end(); ++it)
-        stats->removedKeyframes += trimTrack(it.value(), deltaStart, newDuration);
+    stats->removedKeyframes +=
+        trimKeyframes(entity->keyframes, deltaStart, newDuration);
 
-    stats->removedSolvers +=
-        trimSolvers(*entity, old, deltaStart, newDuration, cutPose);
+    stats->removedSolvers += trimSolvers(*entity, old, deltaStart, newDuration);
+
+    if (cutPose)
+    {
+        model::Keyframe frozen;
+        frozen.frame = 0;
+        frozen.x = cutPose->x;
+        frozen.y = cutPose->y;
+        frozen.rotation = cutPose->rotation;
+        frozen.scaleX = cutSample.scaleX;
+        frozen.scaleY = cutSample.scaleY;
+        frozen.opacity = cutSample.opacity;
+        frozen.visible = cutSample.visible;
+        frozen.physicsInteract = cutSample.physicsInteract;
+        frozen.content = cutSample.content;
+        frozen.htmlVars = cutSample.htmlVars;
+        if (const model::Keyframe* existing =
+                model::keyframeAt(entity->keyframes, 0))
+        {
+            frozen.easing = existing->easing;
+            frozen.note = existing->note;
+            frozen.extras = existing->extras;
+        }
+        model::upsertKeyframe(entity->keyframes, frozen);
+    }
 
     entity->start = newStart;
     entity->end = adjustedEnd;

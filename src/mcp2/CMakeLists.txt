@@ -40,6 +40,8 @@ add_library(pvf_mcp2 STATIC
     EntityTrimTools.cpp
     EntityDeleteTools.cpp
     EntityToolsInternal.h
+    KeyframePayload.cpp
+    KeyframePayload.h
     KeyframeTools.cpp
     SolverTools.cpp
     PreviewTools.cpp
@@ -110,8 +112,8 @@ if(BUILD_TESTING)
         moveRowOnlyAndGetDefaults
         entityGetIncludesSolvers
         textualContentCanBecomeEmpty
-        specialContentCreateAndUpdate
-        specialContentRejectsUnknownFields
+        wholeFrameKeyframesStrictAndUpsert
+        legacySplitTrackRejected
         writeFlagsReflectService
         previewDocumentContract
         previewRateLimit

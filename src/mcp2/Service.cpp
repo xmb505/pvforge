@@ -89,6 +89,7 @@ const ToolEntry kTools[] = {
     {"keyframes.get", &detail::keyframesGet},
     {"keyframes.set", &detail::keyframesSet},
     {"keyframes.setMany", &detail::keyframesSetMany},
+    {"keyframes.upsert", &detail::keyframesUpsert},
     {"keyframes.remove", &detail::keyframesRemove},
     {"keyframes.move", &detail::keyframesMove},
     {"keyframes.clear", &detail::keyframesClear},

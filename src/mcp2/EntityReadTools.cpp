@@ -70,18 +70,9 @@ Result entityGet(Tx& tx, const QJsonObject& args)
         scaleX > 1e-12 ? determinant / scaleX : std::hypot(a01, a11);
     const double rotation = std::atan2(a10, a00) * 180.0 / kPi;
 
-    const auto trackValue = [&](const QString& track, double fallback,
-                                bool step = false) {
-        const auto it = entity->tracks.constFind(track);
-        if (it == entity->tracks.constEnd())
-            return fallback;
-        const auto value = model::evaluateTrack(it.value(), relative, step);
-        return value ? *value : fallback;
-    };
-    const double pivotX =
-        trackValue(QStringLiteral("pivotX"), entity->transform.pivotX);
-    const double pivotY =
-        trackValue(QStringLiteral("pivotY"), entity->transform.pivotY);
+    const model::KeyframeSample sample = model::entitySampleAt(*entity, relative);
+    const double pivotX = entity->transform.pivotX;
+    const double pivotY = entity->transform.pivotY;
 
     QJsonObject evaluated;
     evaluated.insert(
@@ -98,8 +89,8 @@ Result entityGet(Tx& tx, const QJsonObject& args)
     if (entity->content.kind == ContentKind::Asset
         && entity->content.asset.type == AssetType::Audio)
         evaluated.insert(QStringLiteral("volume"),
-                         trackValue(QStringLiteral("volume"),
-                                    entity->content.asset.volume));
+                         sample.content.value(QStringLiteral("volume"))
+                             .toDouble(entity->content.asset.volume));
 
     QJsonObject data = entityFull(*entity);
     data.insert(QStringLiteral("evaluated"), evaluated);
@@ -184,11 +175,8 @@ Result entityList(Tx& tx, const QJsonObject& args)
         QJsonObject object = entityBrief(entities.at(i));
         if (includeKeyframes)
         {
-            QJsonObject keyframes;
-            for (auto it = entities.at(i).tracks.constBegin();
-                 it != entities.at(i).tracks.constEnd(); ++it)
-                keyframes.insert(it.key(), model::toJson(it.value()));
-            object.insert(QStringLiteral("keyframes"), keyframes);
+            object.insert(QStringLiteral("keyframes"),
+                          model::toJson(entities.at(i).keyframes));
         }
         if (includeSolvers)
         {

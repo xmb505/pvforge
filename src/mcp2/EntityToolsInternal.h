@@ -28,9 +28,6 @@ constexpr int kMaxDepth = 64;
 constexpr int kMaxFrame = 1000000;
 
 // ---- content parsing (EntityContentSupport.cpp) -------------------------
-std::optional<ContentKind> specialContentKindFromName(const QString& name);
-Result validateContentFieldsJson(const QJsonObject& object,
-                                 const QString& kindName);
 int assetDurationFrames(const assets::StoredAsset& asset);
 Result checkAssetDuration(const assets::AssetStore& assetStore,
                           const model::Content& content, int duration);

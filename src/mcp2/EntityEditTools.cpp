@@ -54,48 +54,24 @@ Affine inverse(const Affine& affine)
     return result;
 }
 
-double trackValueAt(const model::Entity& entity, const QString& track, int frame,
-                    double fallback)
-{
-    const auto it = entity.tracks.constFind(track);
-    if (it == entity.tracks.constEnd())
-        return fallback;
-    const auto value = model::evaluateTrack(it.value(), frame);
-    return value ? *value : fallback;
-}
-
-double evaluated(const model::Entity& entity, const QString& track, int frame,
-                 double fallback)
-{
-    return trackValueAt(entity, track, frame - entity.start, fallback);
-}
-
 Affine localAffine(const model::Entity& entity, int frame)
 {
-    const double x = evaluated(entity, QStringLiteral("x"), frame, entity.transform.x);
-    const double y = evaluated(entity, QStringLiteral("y"), frame, entity.transform.y);
-    const double rotation = evaluated(entity, QStringLiteral("rotation"), frame,
-                                      entity.transform.rotation);
-    const double scaleX = evaluated(entity, QStringLiteral("scaleX"), frame,
-                                    entity.transform.scaleX);
-    const double scaleY = evaluated(entity, QStringLiteral("scaleY"), frame,
-                                    entity.transform.scaleY);
-    const double pivotX = evaluated(entity, QStringLiteral("pivotX"), frame,
-                                    entity.transform.pivotX);
-    const double pivotY = evaluated(entity, QStringLiteral("pivotY"), frame,
-                                    entity.transform.pivotY);
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, frame - entity.start);
+    const double pivotX = entity.transform.pivotX;
+    const double pivotY = entity.transform.pivotY;
 
-    const double radians = rotation * kPi / 180.0;
+    const double radians = sample.rotation * kPi / 180.0;
     const double cosine = std::cos(radians);
     const double sine = std::sin(radians);
 
     Affine affine;
-    affine.a00 = cosine * scaleX;
-    affine.a01 = -sine * scaleY;
-    affine.a10 = sine * scaleX;
-    affine.a11 = cosine * scaleY;
-    affine.tx = x + pivotX - (affine.a00 * pivotX + affine.a01 * pivotY);
-    affine.ty = y + pivotY - (affine.a10 * pivotX + affine.a11 * pivotY);
+    affine.a00 = cosine * sample.scaleX;
+    affine.a01 = -sine * sample.scaleY;
+    affine.a10 = sine * sample.scaleX;
+    affine.a11 = cosine * sample.scaleY;
+    affine.tx = sample.x + pivotX - (affine.a00 * pivotX + affine.a01 * pivotY);
+    affine.ty = sample.y + pivotY - (affine.a10 * pivotX + affine.a11 * pivotY);
     return affine;
 }
 
@@ -289,10 +265,6 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("content.kind 必须是字符串"));
 
-        Result fieldCheck = validateContentFieldsJson(update, kindName);
-        if (!fieldCheck.ok)
-            return fieldCheck;
-
         const ContentKind current = entity.content.kind;
         const auto isTextual = [](ContentKind kind) {
             return kind == ContentKind::Text || kind == ContentKind::Vector;
@@ -308,8 +280,6 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
             target = ContentKind::Camera;
         else if (kindName == QLatin1String("asset"))
             target = ContentKind::Asset;
-        else if (const auto special = specialContentKindFromName(kindName))
-            target = *special;
         else
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("未知内容类型：%1").arg(kindName));
@@ -753,31 +723,23 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
 
     if (mode == QLatin1String("preserveWorld"))
     {
-        static const QStringList transformTracks = {
-            QStringLiteral("x"),        QStringLiteral("y"),
-            QStringLiteral("rotation"), QStringLiteral("scaleX"),
-            QStringLiteral("scaleY"),   QStringLiteral("pivotX"),
-            QStringLiteral("pivotY"),
-        };
-        QStringList animatedTracks;
-        for (const QString& track : transformTracks)
+        // A whole-frame keyframe always carries x/y/rotation/scale, so any
+        // keyframe drives the transform and conflicts with a static-only
+        // preserveWorld rewrite.
+        if (!entity->keyframes.isEmpty())
         {
-            const auto it = entity->tracks.constFind(track);
-            if (it != entity->tracks.constEnd() && !it.value().keys.isEmpty())
-                animatedTracks << track;
-        }
-        if (!animatedTracks.isEmpty())
-        {
+            QJsonArray frames;
+            for (const model::Keyframe& keyframe : entity->keyframes)
+                frames.append(keyframe.frame);
             QJsonObject details;
-            details.insert(QStringLiteral("tracks"),
-                           QJsonArray::fromStringList(animatedTracks));
+            details.insert(QStringLiteral("keyframes"), frames);
             details.insert(
                 QStringLiteral("hint"),
-                QStringLiteral("preserveWorld 只改静态 transform，会与关键帧冲突；"
-                               "请先移除这些关键帧，或改用 keepLocal"));
+                QStringLiteral("preserveWorld 只改静态 transform，会与整帧关键帧"
+                               "冲突；请先移除这些关键帧，或改用 keepLocal"));
             return failure(
                 QStringLiteral("conflict"),
-                QStringLiteral("实体有 transform 关键帧，不能用 preserveWorld 换父级"),
+                QStringLiteral("实体有整帧关键帧，不能用 preserveWorld 换父级"),
                 details);
         }
     }
@@ -796,10 +758,8 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
             scaleX > 1e-12 ? determinant / scaleX : std::hypot(local.a01, local.a11);
         const double rotation = std::atan2(local.a10, local.a00) * 180.0 / kPi;
 
-        const double pivotX = evaluated(*entity, QStringLiteral("pivotX"),
-                                        entity->start, entity->transform.pivotX);
-        const double pivotY = evaluated(*entity, QStringLiteral("pivotY"),
-                                        entity->start, entity->transform.pivotY);
+        const double pivotX = entity->transform.pivotX;
+        const double pivotY = entity->transform.pivotY;
 
         entity->transform.rotation = rotation;
         entity->transform.scaleX = scaleX;

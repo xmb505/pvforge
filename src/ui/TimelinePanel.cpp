@@ -186,24 +186,32 @@ void TimelinePanel::refreshFromSession()
 
     // External edits (properties delete, MCP, trim) can remove selected keys.
     // Prune the selection so Delete/copy-params never addresses a stale frame.
-    QVector<KeyframeSelection> kept;
-    for (const KeyframeSelection& selection : m_selectedKeyframes)
+    // External edits (properties delete, MCP, trim) can remove selected keys.
+    // Prune the selection so Delete/copy-params never addresses a stale frame.
+    // A session drag owns its selection update: the apply signal fires while
+    // the drag still holds the pre-move frames, so pruning there would drop a
+    // valid multi-selection before finishSessionDrag can offset it.
+    if (m_dragMode == DragMode::None && !m_sessionPlanValid)
     {
-        const Entity* entity = entityById(selection.entity);
-        if (!entity)
-            continue;
-        const int frame = int(std::lround(selection.frame));
-        for (const Keyframe& key : entity->keyframes)
-            if (int(std::lround(key.frame)) == frame)
-            {
-                kept.append(selection);
-                break;
-            }
-    }
-    if (kept.size() != m_selectedKeyframes.size())
-    {
-        m_selectedKeyframes = kept;
-        emit keyframeSelectionChanged(m_selectedKeyframes);
+        QVector<KeyframeSelection> kept;
+        for (const KeyframeSelection& selection : m_selectedKeyframes)
+        {
+            const Entity* entity = entityById(selection.entity);
+            if (!entity)
+                continue;
+            const int frame = int(std::lround(selection.frame));
+            for (const Keyframe& key : entity->keyframes)
+                if (int(std::lround(key.frame)) == frame)
+                {
+                    kept.append(selection);
+                    break;
+                }
+        }
+        if (kept.size() != m_selectedKeyframes.size())
+        {
+            m_selectedKeyframes = kept;
+            emit keyframeSelectionChanged(m_selectedKeyframes);
+        }
     }
 
     if (m_session)

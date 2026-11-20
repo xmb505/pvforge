@@ -116,11 +116,7 @@ Uuid lockedBy(const model::Project& project, const Uuid& uuid);
 bool ensureUnlocked(const model::Project& project, const Uuid& uuid, Result* error);
 QVector<Uuid> subtree(const model::Project& project, const Uuid& uuid);
 int depthOf(const model::Project& project, const Uuid& uuid);
-QStringList drivenTracks(SolverEffect effect);
 int solverEffectiveEnd(const model::Entity& entity, const model::SolverSegment& segment);
-QStringList allowedTracks(const model::Project& project,
-                          const assets::AssetStore& assetStore,
-                          const model::Entity& entity);
 int defaultRow(const model::Project& project, const Uuid& parentUuid, int start, int end);
 bool isFiniteNumber(double value);
 
@@ -165,6 +161,7 @@ Result entityDeleteMany(Tx& tx, const QJsonObject& args);
 Result keyframesGet(Tx& tx, const QJsonObject& args);
 Result keyframesSet(Tx& tx, const QJsonObject& args);
 Result keyframesSetMany(Tx& tx, const QJsonObject& args);
+Result keyframesUpsert(Tx& tx, const QJsonObject& args);
 Result keyframesRemove(Tx& tx, const QJsonObject& args);
 Result keyframesMove(Tx& tx, const QJsonObject& args);
 Result keyframesClear(Tx& tx, const QJsonObject& args);
