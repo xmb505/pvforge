@@ -43,6 +43,28 @@ void TimelinePanel::beginSessionDrag()
     update();
 }
 
+void TimelinePanel::applySessionPreview(const EditPlan& plan)
+{
+    // Patch only the changed fields of the live snapshot.  Rebuilding it would
+    // re-read asset metadata and re-decode audio peaks on every mouse move.
+    if (!m_adapter || !m_adapter->patchSnapshot(m_snapshot, plan.project, m_frame))
+        m_snapshot = m_adapter ? m_adapter->buildSnapshot(plan.project, m_frame)
+                               : m_sessionBaseSnapshot;
+    update();
+    syncPopups();
+}
+
+void TimelinePanel::resetSessionPreview()
+{
+    if (!m_moved)
+        return;
+    m_snapshot = m_sessionBaseSnapshot;
+    m_sessionPlanValid = false;
+    m_moved = false;
+    update();
+    syncPopups();
+}
+
 void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
 {
     if (m_dragMode != DragMode::MoveClip
@@ -73,29 +95,19 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
             if (!actions->planMoveKeyframes(selectedKeyRefs(), delta, &plan,
                                             &error))
             {
-                m_snapshot = m_sessionBaseSnapshot;
-                m_sessionPlanValid = false;
-                m_moved = false;
-                update();
-                syncPopups();
+                resetSessionPreview();
                 return;
             }
         }
         if (plan.isEmpty())
         {
-            m_snapshot = m_sessionBaseSnapshot;
-            m_sessionPlanValid = false;
-            m_moved = false;
-            update();
-            syncPopups();
+            resetSessionPreview();
             return;
         }
         m_sessionPlan = plan;
         m_sessionPlanValid = true;
         m_moved = true;
-        m_snapshot = m_adapter->buildSnapshot(plan.project, m_frame);
-        update();
-        syncPopups();
+        applySessionPreview(plan);
         return;
     }
 
@@ -109,11 +121,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         const int targetRow = dropRowForY(int(std::lround(pos.y())));
         if (delta == 0 && targetRow == m_dragStartRow)
         {
-            m_snapshot = m_sessionBaseSnapshot;
-            m_sessionPlanValid = false;
-            m_moved = false;
-            update();
-            syncPopups();
+            resetSessionPreview();
             return;
         }
         // A multi-selection moves as one block in time; the pointer row only
@@ -126,11 +134,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         {
             // A rejected plan (parent bounds, lock) restores the base preview;
             // the release handler reports the error once.
-            m_snapshot = m_sessionBaseSnapshot;
-            m_sessionPlanValid = false;
-            m_moved = false;
-            update();
-            syncPopups();
+            resetSessionPreview();
             return;
         }
     }
@@ -157,11 +161,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         }
         if (newStart == m_dragClipStart && newEnd == m_dragClipEnd)
         {
-            m_snapshot = m_sessionBaseSnapshot;
-            m_sessionPlanValid = false;
-            m_moved = false;
-            update();
-            syncPopups();
+            resetSessionPreview();
             return;
         }
         if (!actions->planTrim(uuid, newStart, newEnd, &plan, &error))
@@ -170,20 +170,14 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
 
     if (plan.isEmpty())
     {
-        m_snapshot = m_sessionBaseSnapshot;
-        m_sessionPlanValid = false;
-        m_moved = false;
-        update();
-        syncPopups();
+        resetSessionPreview();
         return;
     }
 
     m_sessionPlan = plan;
     m_sessionPlanValid = true;
     m_moved = true;
-    m_snapshot = m_adapter->buildSnapshot(plan.project, m_frame);
-    update();
-    syncPopups();
+    applySessionPreview(plan);
 }
 
 EntityId TimelinePanel::sessionBaseEntityAtRow(int row) const

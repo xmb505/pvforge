@@ -1,6 +1,8 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
 
+#include "render2/ImageCache.h"
+
 namespace {
 
 int perfMonitorTest(QApplication& app)
@@ -773,6 +775,166 @@ int perfFlameTest(QApplication& app)
 }
 
 
+// Scale regression gate for the issue #132/#131 hot paths.  The thresholds are
+// deliberately generous (Debug builds, shared CI machines); the asserted
+// ordering is algorithmic, the printed numbers are the benchmark record.
+int perfScaleTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    int failures = 0;
+    const auto check = [&failures](bool condition, const QString& message) {
+        if (condition)
+            return;
+        qCritical() << "perf-scale-test:" << message;
+        ++failures;
+    };
+
+    // 3000 entities: one root and 2999 children, each with three tracks.
+    pvf::model::Project project;
+    project.settings.fps = 30;
+    pvf::model::Entity root;
+    root.uuid = pvf::model::newUuid();
+    root.name = QStringLiteral("root");
+    root.start = 0;
+    root.end = 5000;
+    project.entities.insert(root.uuid, root);
+    for (int i = 0; i < 2999; ++i)
+    {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.name = QStringLiteral("clip-%1").arg(i);
+        entity.parentUuid = root.uuid;
+        entity.start = (i * 3) % 5000;
+        entity.end = std::min(5000, entity.start + 30);
+        entity.row = i % 40;
+        for (const QString& trackName : {QStringLiteral("x"), QStringLiteral("y"),
+                                         QStringLiteral("opacity")})
+        {
+            pvf::model::Track track;
+            track.keys.append({0, double(i), {}, {}});
+            track.keys.append({15, double(i + 1), {}, {}});
+            entity.tracks.insert(trackName, track);
+        }
+        project.entities.insert(entity.uuid, entity);
+    }
+
+    // Old call pattern: one childrenOf() per visited node.
+    QElapsedTimer perCallTimer;
+    perCallTimer.start();
+    int visited = 0;
+    std::function<void(const pvf::Uuid&)> walkPerCall =
+        [&](const pvf::Uuid& parent) {
+            for (const pvf::Uuid& uuid : pvf::model::childrenOf(project, parent))
+            {
+                ++visited;
+                walkPerCall(uuid);
+            }
+        };
+    walkPerCall(pvf::Uuid{});
+    const qint64 perCallMs = perCallTimer.elapsed();
+    check(visited == 3000, QStringLiteral("per-call walk visited %1").arg(visited));
+
+    // New pattern: one index per snapshot, const-reference lookups.
+    QElapsedTimer indexTimer;
+    indexTimer.start();
+    const pvf::model::ChildrenIndex index(project);
+    int indexedVisited = 0;
+    std::function<void(const pvf::Uuid&)> walkIndexed =
+        [&](const pvf::Uuid& parent) {
+            for (const pvf::Uuid& uuid : index.children(parent))
+            {
+                ++indexedVisited;
+                walkIndexed(uuid);
+            }
+        };
+    walkIndexed(pvf::Uuid{});
+    const qint64 indexMs = indexTimer.elapsed();
+    check(indexedVisited == 3000,
+          QStringLiteral("indexed walk visited %1").arg(indexedVisited));
+    check(indexMs * 4 < std::max<qint64>(1, perCallMs),
+          QStringLiteral("children index is not 4x faster (%1 ms vs %2 ms)")
+              .arg(indexMs)
+              .arg(perCallMs));
+
+    // 200 image entities: every frame used to re-read and re-decode all of
+    // them.  Two renders must decode each image exactly once.
+    QTemporaryDir temp;
+    check(temp.isValid(), QStringLiteral("no temp dir for image assets"));
+    pvf::assets::AssetStore store(temp.path());
+    pvf::model::Project imageProject;
+    imageProject.settings.width = 640;
+    imageProject.settings.height = 360;
+    for (int i = 0; i < 200; ++i)
+    {
+        QImage image(32, 32, QImage::Format_ARGB32);
+        image.fill(QColor((i * 7) % 255, (i * 13) % 255, 80));
+        const QString path = temp.filePath(QStringLiteral("img-%1.png").arg(i));
+        check(image.save(path), QStringLiteral("cannot write test image"));
+        const auto asset = store.importFile(path);
+        check(asset.has_value(), QStringLiteral("image import failed"));
+        if (!asset)
+            continue;
+
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.start = 0;
+        entity.end = 100;
+        entity.row = i;
+        entity.content.kind = pvf::ContentKind::Asset;
+        entity.content.asset.type = pvf::AssetType::Image;
+        entity.content.asset.hash = asset->hash;
+        imageProject.entities.insert(entity.uuid, entity);
+    }
+
+    pvf::render2::clearImageCache();
+    pvf::anim::Cache animCache;
+    pvf::render2::SceneWorld world(imageProject, store);
+    pvf::render2::Options options;
+    options.projectFrame = 10.0;
+    pvf::render2::renderFrame(imageProject, store, options, world, animCache);
+    const pvf::render2::ImageCacheStats first = pvf::render2::imageCacheStats();
+    check(first.decodes == 200,
+          QStringLiteral("first frame decoded %1 images").arg(first.decodes));
+
+    pvf::render2::renderFrame(imageProject, store, options, world, animCache);
+    const pvf::render2::ImageCacheStats second = pvf::render2::imageCacheStats();
+    check(second.decodes == first.decodes,
+          QStringLiteral("second frame re-decoded %1 images")
+              .arg(second.decodes - first.decodes));
+
+    // Bounded playback pose cache: 600 frames of 200 entities keep at most
+    // maxPosesPerEntity samples per entity instead of every visited frame.
+    pvf::model::Project poseProject;
+    for (int i = 0; i < 200; ++i)
+    {
+        pvf::model::Entity entity;
+        entity.uuid = pvf::model::newUuid();
+        entity.start = 0;
+        entity.end = 1000;
+        poseProject.entities.insert(entity.uuid, entity);
+    }
+    pvf::anim::Cache bounded;
+    bounded.maxPosesPerEntity = 24;
+    pvf::render2::SceneWorld poseWorld(poseProject, store);
+    for (int frame = 0; frame < 600; ++frame)
+        for (auto it = poseProject.entities.constBegin();
+             it != poseProject.entities.constEnd(); ++it)
+            pvf::anim::evaluateEntity(poseProject, it.key(), frame, poseWorld,
+                                      bounded);
+    int largest = 0;
+    for (auto it = bounded.poses.constBegin(); it != bounded.poses.constEnd();
+         ++it)
+        largest = std::max(largest, int(it.value().size()));
+    check(largest <= 24,
+          QStringLiteral("pose cache kept %1 frames for one entity").arg(largest));
+
+    qInfo() << "perf-scale-test:" << 2999 << "entities, childrenOf"
+            << perCallMs << "ms, index" << indexMs << "ms, image decodes"
+            << first.decodes << "->" << second.decodes << ", max poses"
+            << largest << ", failures" << failures;
+    return failures == 0 ? 0 : 1;
+}
+
 } // namespace
 
 namespace pvf::tests {
@@ -783,6 +945,8 @@ void registerPerfTests(Registry& registry)
                  [](QApplication& app) { return perfMonitorTest(app); });
     registry.add(QStringLiteral("--perf-flame-test"),
                  [](QApplication& app) { return perfFlameTest(app); });
+    registry.add(QStringLiteral("--perf-scale-test"),
+                 [](QApplication& app) { return perfScaleTest(app); });
 }
 
 } // namespace pvf::tests

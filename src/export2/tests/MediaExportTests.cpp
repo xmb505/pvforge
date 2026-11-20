@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QColor>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QScopeGuard>
@@ -30,6 +31,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
+#include <libswscale/swscale.h>
 }
 
 using namespace pvf;
@@ -482,6 +484,115 @@ void testMissingVisualAssetFails()
     CHECK(!QFileInfo::exists(path));
 }
 
+// Issue #131: the encoded stream must be tagged BT.709 / TV range so players
+// do not reinterpret the BT.601 sws default and shift the colours.  The red
+// rectangle also has to survive the RGB->YUV conversion.
+void testColorTagsAreBt709TvRange()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+    const Project project = makeProject();
+    const QString path = directory.path() + QStringLiteral("/color.mp4");
+    const export2::Result result =
+        export2::exportVideo(project, store, makeOptions(path));
+    CHECK(result.ok);
+    if (!result.ok)
+    {
+        QTextStream(stderr) << result.error << '\n';
+        return;
+    }
+
+    AVFormatContext* format = nullptr;
+    CHECK(avformat_open_input(&format, path.toUtf8().constData(), nullptr,
+                              nullptr)
+          >= 0);
+    if (!format)
+        return;
+    const auto closeFormat = qScopeGuard([&] { avformat_close_input(&format); });
+    CHECK(avformat_find_stream_info(format, nullptr) >= 0);
+
+    const AVCodecParameters* parameters = nullptr;
+    int videoIndex = -1;
+    for (unsigned i = 0; i < format->nb_streams; ++i)
+        if (format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            parameters = format->streams[i]->codecpar;
+            videoIndex = int(i);
+        }
+    CHECK(parameters != nullptr);
+    if (!parameters)
+        return;
+    CHECK(parameters->color_space == AVCOL_SPC_BT709);
+    CHECK(parameters->color_range == AVCOL_RANGE_MPEG);
+    CHECK(parameters->color_primaries == AVCOL_PRI_BT709);
+    CHECK(parameters->color_trc == AVCOL_TRC_BT709);
+
+    // Decode the first frame and check the red rectangle stays red (yuv420p
+    // chroma subsampling only softens it, it must not become orange/green).
+    const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
+    CHECK(codec != nullptr);
+    if (!codec)
+        return;
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    CHECK(context != nullptr);
+    if (!context)
+        return;
+    const auto freeContext = qScopeGuard([&] { avcodec_free_context(&context); });
+    CHECK(avcodec_parameters_to_context(context, parameters) >= 0);
+    CHECK(avcodec_open2(context, codec, nullptr) >= 0);
+
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    CHECK(packet && frame);
+    if (!packet || !frame)
+    {
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        return;
+    }
+    bool decoded = false;
+    while (!decoded && av_read_frame(format, packet) >= 0)
+    {
+        if (packet->stream_index != videoIndex)
+        {
+            av_packet_unref(packet);
+            continue;
+        }
+        if (avcodec_send_packet(context, packet) >= 0
+            && avcodec_receive_frame(context, frame) == 0)
+            decoded = true;
+        av_packet_unref(packet);
+    }
+    CHECK(decoded);
+    if (decoded)
+    {
+        // Use sws to get RGB and sample the frame centre (the rectangle).
+        SwsContext* sws = sws_getContext(
+            frame->width, frame->height,
+            static_cast<AVPixelFormat>(frame->format), frame->width,
+            frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr,
+            nullptr);
+        CHECK(sws != nullptr);
+        if (sws)
+        {
+            QImage image(frame->width, frame->height, QImage::Format_RGBA8888);
+            uint8_t* destination[4] = {image.bits(), nullptr, nullptr, nullptr};
+            int linesize[4] = {int(image.bytesPerLine()), 0, 0, 0};
+            CHECK(sws_scale(sws, frame->data, frame->linesize, 0, frame->height,
+                            destination, linesize)
+                  > 0);
+            sws_freeContext(sws);
+            const QColor centre = image.pixelColor(image.width() / 2,
+                                                   image.height() / 2);
+            CHECK(centre.red() > 180);
+            CHECK(centre.green() < 90 && centre.blue() < 90);
+        }
+    }
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -493,6 +604,8 @@ int main(int argc, char** argv)
         {QStringLiteral("frameProviders"), testFrameProviders},
         {QStringLiteral("noFrameProviderFails"), testNoFrameProviderFails},
         {QStringLiteral("missingVisualAssetFails"), testMissingVisualAssetFails},
+        {QStringLiteral("colorTagsAreBt709TvRange"),
+         testColorTagsAreBt709TvRange},
     };
 
     QString requested;

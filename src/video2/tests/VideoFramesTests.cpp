@@ -63,6 +63,9 @@ private slots:
     void sourceSize();
     void cacheHit();
     void lruEvicts();
+    void sequentialDecodeOpensOnce();
+    void randomAccessSeeksAgain();
+    void fractionalSourceFrameSamplesBetweenProjectFrames();
     void missingFile();
     void noVideoStream();
 
@@ -268,6 +271,53 @@ void VideoFramesTest::lruEvicts()
     QCOMPARE(frames.stats().hits, 0);
     QCOMPARE(frames.stats().misses, 4);
     QCOMPARE(frames.stats().decodes, 4);
+}
+
+void VideoFramesTest::sequentialDecodeOpensOnce()
+{
+    pvf::video2::VideoFrames frames(960, 1); // no memory cache: real decoding
+    QCOMPARE(frames.stats().opens, 0);
+
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        QString error;
+        const QImage image = frames.frame(makeRequest(frame), &error);
+        QVERIFY2(!image.isNull(), qPrintable(error));
+    }
+
+    // A forward walk keeps one decoder session and does not re-seek per frame.
+    QCOMPARE(frames.stats().opens, 1);
+    QVERIFY(frames.stats().seeks <= 1);
+    QCOMPARE(frames.stats().decodes, 30);
+}
+
+void VideoFramesTest::randomAccessSeeksAgain()
+{
+    pvf::video2::VideoFrames frames(960, 1);
+    QString error;
+    QVERIFY2(!frames.frame(makeRequest(40), &error).isNull(), qPrintable(error));
+    QVERIFY2(!frames.frame(makeRequest(5), &error).isNull(), qPrintable(error));
+
+    QCOMPARE(frames.stats().opens, 1);
+    QCOMPARE(frames.stats().seeks, 2);
+}
+
+void VideoFramesTest::fractionalSourceFrameSamplesBetweenProjectFrames()
+{
+    pvf::video2::VideoFrames frames(960, 1);
+    QString error;
+    QVERIFY2(!frames.frame(makeRequest(0), &error).isNull(), qPrintable(error));
+
+    // 2x export: 0, 0.5, 1, 1.5 project frames.  The half-frame requests must
+    // still resolve against the source instead of being floor()ed by callers.
+    pvf::video2::Request request = makeRequest(0);
+    request.sourceFrame = 0.5;
+    QVERIFY2(!frames.frame(request, &error).isNull(), qPrintable(error));
+    request.sourceFrame = 1.0;
+    const QImage atOne = frames.frame(request, &error);
+    QVERIFY2(!atOne.isNull(), qPrintable(error));
+    request.sourceFrame = 1.5;
+    QVERIFY2(!frames.frame(request, &error).isNull(), qPrintable(error));
 }
 
 void VideoFramesTest::missingFile()

@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QVector>
 
+#include <memory>
 #include <optional>
 
 namespace pvf::assets {
@@ -116,9 +117,23 @@ private:
     std::optional<StoredAsset> ensureAudio(const StoredAsset& video, QString* error);
     std::optional<StoredAsset> getByHash(const AssetHash& hash,
                                          bool requireContent = true) const;
+    // Parsed asset.json for one asset directory.  The cache is keyed by the
+    // file's size+mtime, so an edited metadata file is re-read while the
+    // per-frame get()/list() path skips the open+parse (issue #131).
+    std::optional<QJsonObject> readMetadata(const QString& directory) const;
+    // Writes asset.json and drops the cached parse for that file.
+    bool writeMetadata(const QString& directory, const QJsonObject& object,
+                       QString* error);
+
+    // Parsed asset.json cache.  Shared between copies of the store (a copied
+    // store still sees the same project), keyed by file size+mtime so an
+    // edited metadata file is re-read while the per-frame get()/list() path
+    // skips the open+parse (issue #131).
+    struct MetadataCache;
 
     QString m_root;
     QString m_assetsDir;
+    std::shared_ptr<MetadataCache> m_metadataCache;
 };
 
 } // namespace pvf::assets

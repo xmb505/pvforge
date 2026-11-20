@@ -67,6 +67,138 @@ const QPixmap& plusGlyphPixmap()
 
 } // namespace
 
+TimelinePanel::PaintCache TimelinePanel::buildPaintCache() const
+{
+    PaintCache cache;
+    const QVector<Entity>& entities = activeEntities();
+
+    // Entity ids that exist in this snapshot, so the dangling-parent rule does
+    // not run a linear find per entity (issue #132).
+    QSet<EntityId> knownIds;
+    knownIds.reserve(entities.size());
+    for (const Entity& entity : entities)
+        knownIds.insert(entity.id);
+
+    if (m_owner >= 0)
+    {
+        const Entity* ownerEntity = rangeOwner();
+        cache.contentStart = ownerEntity ? clipStartOf(*ownerEntity) : 0;
+        cache.contentEnd = ownerEntity
+                               ? std::max(cache.contentStart + 1,
+                                          clipEndOf(*ownerEntity))
+                               : 180;
+    }
+    else
+    {
+        cache.contentStart = 0;
+        cache.contentEnd = 180;
+        for (const Entity& entity : entities)
+            cache.contentEnd = std::max(cache.contentEnd, clipEndOf(entity));
+        if (sessionMode())
+            cache.contentEnd = std::max(cache.contentEnd, m_snapshot.contentEnd);
+    }
+
+    int maxRow = -1;
+    QHash<int, QVector<const Entity*>> byRow;
+    byRow.reserve(entities.size());
+    for (const Entity& entity : entities)
+    {
+        const bool dangling =
+            entity.parent != kInvalidEntity && !knownIds.contains(entity.parent);
+        if (entity.parent != m_owner
+            && !(m_owner == kInvalidEntity && dangling))
+            continue;
+        if (!rowMatchesFilter(entity))
+            continue;
+        const int row = rowOfEntity(entity);
+        byRow[row].append(&entity);
+        if (row >= 0)
+            maxRow = std::max(maxRow, row);
+    }
+
+    // Popup track bounds, resolved from the same one pass.
+    if (m_popup)
+    {
+        int minOccupiedNeg = 0;
+        int maxOccupiedPos = -1;
+        for (const Entity& entity : entities)
+        {
+            if (entity.parent != m_owner)
+                continue;
+            const int r = rowOfEntity(entity);
+            if (r < 0)
+                minOccupiedNeg = std::min(minOccupiedNeg, r);
+            else
+                maxOccupiedPos = std::max(maxOccupiedPos, r);
+        }
+        cache.minNeg = minOccupiedNeg < 0 ? minOccupiedNeg - 1 : -1;
+        cache.maxPos = maxOccupiedPos >= 0 ? maxOccupiedPos + 1 : 0;
+        cache.dividerTop = bodyBottom() - (-cache.minNeg) * kRowHeight
+                           + m_scrollY - kPopupDividerHeight;
+    }
+
+    if (m_popup)
+    {
+        for (int r = cache.minNeg; r <= cache.maxPos; ++r)
+        {
+            PaintCache::Row row;
+            row.row = r;
+            row.top = m_popup && r < 0
+                          ? bodyBottom() - (r - cache.minNeg + 1) * kRowHeight
+                                + 1 + m_scrollY
+                          : cache.dividerTop - (r + 1) * kRowHeight + 1;
+            row.entities = byRow.value(r);
+            cache.rows.append(std::move(row));
+        }
+    }
+    else
+    {
+        const int bodyHeight = std::max(0, bodyBottom() - kRulerHeight);
+        const int pageRows =
+            std::max(1, int(std::ceil(bodyHeight / double(kRowHeight))));
+        const int count = std::max(maxRow + 1, pageRows + 3);
+        cache.rows.reserve(count);
+        for (int r = 0; r < count; ++r)
+        {
+            PaintCache::Row row;
+            row.row = r;
+            row.top = bodyBottom() - (r + 1) * kRowHeight + 1 + m_scrollY;
+            row.entities = byRow.value(r);
+            cache.rows.append(std::move(row));
+        }
+    }
+
+    // Clip rectangles are computed once per entity; paint used to call
+    // clipRect() again for every inline button.
+    for (const PaintCache::Row& row : cache.rows)
+    {
+        if (!row.entities.isEmpty())
+            cache.hasAnyEntity = true;
+        for (const Entity* entity : row.entities)
+        {
+            if (!entity || cache.clipRects.contains(entity->id))
+                continue;
+            const int start = std::max(clipStartOf(*entity), cache.contentStart);
+            const int end = std::min(clipEndOf(*entity), cache.contentEnd);
+            if (end <= start)
+                continue;
+            const int raw0 = xFromFrame(start);
+            const int raw1 = xFromFrame(end);
+            if (raw1 <= nameWidth())
+                continue;
+            const int x0 = std::max(nameWidth(), raw0);
+            const int x1 = std::max(x0 + 1, raw1);
+            cache.clipRects.insert(entity->id,
+                                   QRect(x0, row.top + 3,
+                                         std::max(1, x1 - x0),
+                                         kRowHeight - 6));
+            cache.keyframes.insert(entity->id, keyframeFrames(*entity));
+        }
+    }
+
+    return cache;
+}
+
 void TimelinePanel::drawAudioClip(QPainter& p, const Entity& entity,
                                   const QRect& clip) const
 {
@@ -244,33 +376,19 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
-    const QVector<EntityId> rows = rowIds();
-    QVector<int> drawRows;
-    if (m_popup)
-    {
-        int minNeg = -1;
-        int maxPos = 0;
-        popupTrackBounds(&minNeg, &maxPos);
-        for (int r = minNeg; r <= maxPos; ++r)
-            drawRows.append(r);
-    }
-    else
-    {
-        for (int r = 0; r < rows.size(); ++r)
-            drawRows.append(r);
-    }
+    const PaintCache paintCache = buildPaintCache();
+    const QVector<PaintCache::Row>& drawRows = paintCache.rows;
 
     p.save();
     p.setClipRect(QRect(0, kRulerHeight, right, bottom - kRulerHeight));
-    bool hasAnyEntity = false;
-    for (int row : drawRows)
+    const bool hasAnyEntity = paintCache.hasAnyEntity;
+    for (const PaintCache::Row& drawRow : drawRows)
     {
-        const int top = rowTop(row);
+        const int row = drawRow.row;
+        const int top = drawRow.top;
         if (top + kRowHeight < kRulerHeight || top > bottom)
             continue;
-        const QVector<const Entity*> rowEntities = entitiesInRow(row);
-        if (!rowEntities.isEmpty())
-            hasAnyEntity = true;
+        const QVector<const Entity*>& rowEntities = drawRow.entities;
         const QRect rowRect(0, top, right, kRowHeight);
         bool rowSelected = false;
         for (const Entity* entity : rowEntities)
@@ -299,17 +417,25 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             // enough; short clips fall back to the clip context menu.
             const bool hidden = entity->hidden;
             const bool locked = entity->locked;
-            const QRect clip = clipRect(*entity);
+            const auto clipIt = paintCache.clipRects.constFind(entity->id);
+            if (clipIt == paintCache.clipRects.constEnd())
+                continue;
+            const QRect clip = clipIt.value();
             if (clip.isEmpty())
                 continue;
             const bool selected =
                 entity->id == m_selected || m_entitySelection.contains(entity->id);
             const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
+            const auto buttonRect = [&clip](int index) {
+                const int x = clip.left() + 2 + index * (kButtonSize + kButtonGap);
+                const int y = clip.top() + (clip.height() - kButtonSize) / 2;
+                return QRect(x, y, kButtonSize, kButtonSize);
+            };
             if (showButtons)
             {
-                makeEyeIcon(hidden).paint(&p, clipButtonRect(*entity, 0));
-                makeLockIcon(locked).paint(&p, clipButtonRect(*entity, 1));
-                makeKeyframeIcon().paint(&p, clipButtonRect(*entity, 2));
+                makeEyeIcon(hidden).paint(&p, buttonRect(0));
+                makeLockIcon(locked).paint(&p, buttonRect(1));
+                makeKeyframeIcon().paint(&p, buttonRect(2));
             }
             QColor color = clipColor(entity->type);
             const int alpha = hidden ? 80 : (selected ? 230 : 200);
@@ -462,7 +588,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
 
         const int centerY = clip.center().y();
-        for (int keyFrame : keyframeFrames(*entity))
+        const QVector<int> keyframesForEntity =
+            paintCache.keyframes.value(entity->id);
+        for (int keyFrame : keyframesForEntity)
         {
             if (keyFrame < clipStartOf(*entity) || keyFrame >= clipEndOf(*entity))
                 continue;

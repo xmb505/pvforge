@@ -52,6 +52,7 @@ set(PVF_EXPORT2_MEDIA_TEST_CASES
     frameProviders
     noFrameProviderFails
     missingVisualAssetFails
+    colorTagsAreBt709TvRange
 )
 
 foreach(test_case IN LISTS PVF_EXPORT2_MEDIA_TEST_CASES)

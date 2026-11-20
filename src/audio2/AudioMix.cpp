@@ -106,10 +106,9 @@ int projectFrameForSample(const MixOptions& options, int64_t sampleIndex)
 // entity.start or outside the requested range are ignored; entity frame n maps
 // to asset time (sourceIn + n - entity.start) / fps seconds.
 bool mixAudioEntity(const model::Project& project,
-                    const assets::AssetStore& assets,
-                    const model::Entity& entity, const MixOptions& options,
-                    int64_t totalSamples, float* mix, bool* audible,
-                    QString* error)
+                    const model::Entity& entity, const QString& path,
+                    const MixOptions& options, int64_t totalSamples,
+                    float* mix, bool* audible, QString* error)
 {
     const model::AssetContent& content = entity.content.asset;
     const int64_t overlapStart =
@@ -119,14 +118,6 @@ bool mixAudioEntity(const model::Project& project,
     if (overlapEnd <= overlapStart)
         return true;
 
-    const auto stored = assets.get(content.hash);
-    if (!stored)
-    {
-        *error = QStringLiteral("素材缺失");
-        return false;
-    }
-
-    const QString path = audioContentFile(*stored);
     if (path.isEmpty())
     {
         *error = QStringLiteral("素材内容文件缺失");
@@ -237,11 +228,35 @@ bool mixAudioEntity(const model::Project& project,
         0, content.sourceIn + (overlapStart - entity.start));
     const int64_t sourceStart = llround(sourceFrame * samplesPerFrame);
 
+    // Chunked playback mixes one bounded block at a time.  Without a seek the
+    // decoder would restart from sample 0 for every block (quadratic).  Seek
+    // half a second early so the resampler/primer can settle, then align the
+    // first converted block to the frame timestamp.
+    int64_t firstSample = sourceStart;
+    if (sourceStart > 0)
+    {
+        const int64_t seekSample =
+            std::max<int64_t>(0, sourceStart - options.sampleRate / 2);
+        const AVRational sampleBase{1, options.sampleRate};
+        const int64_t seekTimestamp =
+            av_rescale_q(seekSample, sampleBase, format->streams[audioIndex]->time_base);
+        if (av_seek_frame(format, audioIndex, seekTimestamp,
+                          AVSEEK_FLAG_BACKWARD)
+            >= 0)
+        {
+            avcodec_flush_buffers(decoderContext);
+            firstSample = seekSample;
+        }
+    }
+
     int64_t decodedSamples = 0;
+    int64_t baseSample = -1; // asset sample of the first converted block
     bool enough = false;
     auto mixConverted = [&](const float* data, int count) {
+        if (baseSample < 0)
+            baseSample = firstSample;
         const int64_t blockStart =
-            destinationStart + decodedSamples - sourceStart;
+            destinationStart + (baseSample + decodedSamples - sourceStart);
         const int64_t firstOutput =
             std::max<int64_t>(blockStart, destinationStart);
         if (firstOutput < destinationEnd)
@@ -314,6 +329,28 @@ bool mixAudioEntity(const model::Project& project,
     const int channels = options.channels;
     QByteArray converted;
     auto convertFrame = [&](const AVFrame* decoded) -> bool {
+        if (baseSample < 0)
+        {
+            // Anchor the resampled output to the frame timestamp so a seek to
+            // an earlier keyframe cannot shift the block (issue #143).
+            const int64_t timestamp =
+                decoded->best_effort_timestamp != AV_NOPTS_VALUE
+                    ? decoded->best_effort_timestamp
+                    : decoded->pts;
+            if (timestamp != AV_NOPTS_VALUE)
+            {
+                const AVStream* stream = format->streams[audioIndex];
+                const int64_t streamStart =
+                    stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
+                baseSample = av_rescale_q(
+                    timestamp - streamStart, stream->time_base,
+                    AVRational{1, options.sampleRate});
+            }
+            else
+            {
+                baseSample = firstSample;
+            }
+        }
         const int capacity = int(av_rescale_rnd(
             swr_get_delay(swr, options.sampleRate) + decoded->nb_samples,
             options.sampleRate, decoded->sample_rate, AV_ROUND_UP));
@@ -427,9 +464,9 @@ bool mixAudioEntity(const model::Project& project,
 
 } // namespace
 
-QByteArray mixRange(const model::Project& project,
-                    const assets::AssetStore& assets,
-                    const MixOptions& options, QStringList* warnings)
+QByteArray mixRangeWithPaths(const model::Project& project,
+                             const QHash<AssetHash, QString>& contentPaths,
+                             const MixOptions& options, QStringList* warnings)
 {
     if (options.endFrame <= options.startFrame || options.fps <= 0
         || options.sampleRate <= 0 || options.channels <= 0)
@@ -443,9 +480,17 @@ QByteArray mixRange(const model::Project& project,
         0, llround(double(totalFrames) * double(options.sampleRate)
                    / double(options.fps)));
     const int64_t totalValues = totalSamples * int64_t(options.channels);
-    if (totalSamples <= 0
-        || totalValues > std::numeric_limits<int>::max() / int64_t(sizeof(float)))
+    if (totalSamples <= 0)
+        return {};
+    if (totalValues > std::numeric_limits<int>::max() / int64_t(sizeof(float)))
     {
+        // One-shot mixing cannot hold this range in memory.  Never fail
+        // silently: the streaming player handles arbitrary lengths.
+        if (warnings)
+        {
+            warnings->append(
+                QStringLiteral("音频范围过长，超出一次性混音上限；请使用流式播放"));
+        }
         return {};
     }
 
@@ -467,7 +512,8 @@ QByteArray mixRange(const model::Project& project,
         }
 
         QString error;
-        if (!mixAudioEntity(project, assets, entity, options, totalSamples,
+        const QString path = contentPaths.value(entity.content.asset.hash);
+        if (!mixAudioEntity(project, entity, path, options, totalSamples,
                             mix, &audible, &error))
         {
             if (warnings)
@@ -495,6 +541,47 @@ QByteArray mixRange(const model::Project& project,
         return {};
 
     return pcm;
+}
+
+QByteArray mixRange(const model::Project& project,
+                    const assets::AssetStore& assets,
+                    const MixOptions& options, QStringList* warnings)
+{
+    if (options.endFrame <= options.startFrame || options.fps <= 0)
+        return {};
+
+    QHash<AssetHash, QString> contentPaths;
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
+    {
+        const model::Entity& entity = it.value();
+        if (entity.content.kind != ContentKind::Asset
+            || entity.content.asset.type != AssetType::Audio
+            || entity.end <= options.startFrame
+            || entity.start >= options.endFrame)
+        {
+            continue;
+        }
+        const AssetHash hash = entity.content.asset.hash;
+        if (contentPaths.contains(hash))
+            continue;
+        const auto stored = assets.get(hash);
+        if (!stored)
+        {
+            if (warnings)
+            {
+                const QString name =
+                    entity.name.isEmpty() ? entity.uuid : entity.name;
+                warnings->append(
+                    QStringLiteral("音频实体 \"%1\" 已跳过：素材缺失")
+                        .arg(name));
+            }
+            continue;
+        }
+        contentPaths.insert(hash, audioContentFile(*stored));
+    }
+
+    return mixRangeWithPaths(project, contentPaths, options, warnings);
 }
 
 } // namespace pvf::audio2

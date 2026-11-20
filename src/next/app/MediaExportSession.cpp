@@ -103,23 +103,28 @@ QImage MediaExportSession::videoFrame(const Uuid& entityUuid,
     if (path.isEmpty())
         return {};
 
-    if (!m_videoFrames)
+    if (m_exportDecoders.find(asset->hash) == m_exportDecoders.end())
     {
-        // Full-resolution decoder reserved for this export; a couple of entries
-        // are enough because 2x/4x output fps repeats the same project frame.
-        m_videoFrames = std::make_unique<video2::VideoFrames>(0, 2);
+        // One sequential decoder per video asset: an export that interleaves
+        // two clips keeps both files open and decodes each strictly forward
+        // instead of re-opening/seeking per frame (issue #131).
+        m_exportDecoders.emplace(
+            asset->hash, std::make_unique<video2::VideoFrames>(0, 2));
     }
+    video2::VideoFrames& decoder = *m_exportDecoders.at(asset->hash);
 
     video2::Request request;
     request.path = path;
+    // Fractional project frame -> source time: 2x/4x export samples the source
+    // between project frames instead of repeating floor()ed frames.
     request.sourceFrame =
-        entity->content.asset.sourceIn + floorFrame(projectFrame - entity->start);
+        entity->content.asset.sourceIn + (projectFrame - entity->start);
     request.fps = std::max(1, m_project.settings.fps);
     request.size = QSize();
     request.proxy = false;
 
     QString error;
-    const QImage image = m_videoFrames->frame(request, &error);
+    const QImage image = decoder.frame(request, &error);
     if (image.isNull())
         noteError(error);
     return image;
@@ -206,7 +211,7 @@ QImage MediaExportSession::htmlFrame(const Uuid& entityUuid,
 void MediaExportSession::finish()
 {
     m_html.reset();
-    m_videoFrames.reset();
+    m_exportDecoders.clear();
 }
 
 } // namespace pvf::next

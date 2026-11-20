@@ -1,4 +1,5 @@
 #include "audio2/Audio2.h"
+#include "audio2/AudioStream.h"
 #include "audio2/Peaks.h"
 
 #include "assets/Assets.h"
@@ -7,6 +8,7 @@
 #include <QAudioDevice>
 #include <QCoreApplication>
 #include <QDataStream>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QMediaDevices>
 #include <QProcess>
@@ -649,10 +651,130 @@ void testPeaks()
     CHECK(!error.isEmpty());
 }
 
+void testStreamLongRange()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    QString error;
+    const auto asset = store.importFile(
+        writeToneWav(directory.path() + QStringLiteral("/stream.wav"), 440.0,
+                     0.5));
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    // Two hours of timeline over a one-second asset: the one-shot mixer would
+    // allocate gigabytes (or silently return empty past ~93 minutes).
+    const int endFrame = 30 * 60 * 120;
+    addAudioEntity(project, QStringLiteral("long"), asset->hash, 0, endFrame);
+
+    audio2::AudioSnapshot snapshot =
+        audio2::captureAudioSnapshot(project, store, 0, endFrame, 30);
+    CHECK(snapshot.contentPaths.size() == 1);
+
+    audio2::AudioStream stream(std::move(snapshot), QAudioFormat::Float);
+    CHECK(stream.bufferCapacity() == 48000LL * 2 * 4);
+    CHECK(stream.open(QIODevice::ReadOnly));
+
+    QElapsedTimer timer;
+    timer.start();
+    QByteArray first(96000, '\0'); // 0.25 s of stereo float
+    const qint64 read = stream.read(first.data(), first.size());
+    const qint64 firstReadMs = timer.elapsed();
+    CHECK(read == first.size());
+    CHECK(firstReadMs < 2000);
+    CHECK(peak(first) > 0.2);
+
+    // The producer is bounded by the ring buffer, not by the 2 h range.
+    CHECK(stream.framesMixed() < 30LL * 60);
+    CHECK(!stream.finished());
+    stream.cancel();
+}
+
+void testStreamSeekOnlyMixesFromPosition()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    QString error;
+    const auto asset = store.importFile(
+        writeToneWav(directory.path() + QStringLiteral("/seek.wav"), 330.0,
+                     0.5, 5.0));
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    const int seekFrame = 30 * 2; // 2 s into the timeline
+    addAudioEntity(project, QStringLiteral("seek"), asset->hash, 0,
+                   30 * 60 * 60);
+
+    audio2::AudioSnapshot snapshot =
+        audio2::captureAudioSnapshot(project, store, seekFrame,
+                                     seekFrame + 30, 30);
+    CHECK(snapshot.contentPaths.size() == 1);
+
+    audio2::AudioStream stream(std::move(snapshot), QAudioFormat::Float);
+    CHECK(stream.open(QIODevice::ReadOnly));
+    QElapsedTimer timer;
+    timer.start();
+    QByteArray block(48000, '\0'); // 0.125 s
+    CHECK(stream.read(block.data(), block.size()) == block.size());
+    CHECK(timer.elapsed() < 2000);
+    // The requested position is inside the 5 s tone, so it must be audible
+    // immediately instead of silent padding while the old code mixed ahead.
+    CHECK(peak(block) > 0.2);
+    stream.cancel();
+}
+
+void testStreamSampleExactAndBounded()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    QString error;
+    const auto asset = store.importFile(
+        writeToneWav(directory.path() + QStringLiteral("/exact.wav"), 550.0,
+                     0.4));
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    addAudioEntity(project, QStringLiteral("exact"), asset->hash, 0, 60);
+
+    audio2::AudioSnapshot snapshot =
+        audio2::captureAudioSnapshot(project, store, 0, 60, 30);
+    audio2::AudioStream stream(std::move(snapshot), QAudioFormat::Float);
+    CHECK(stream.open(QIODevice::ReadOnly));
+
+    // 2 s at 48 kHz stereo float, delivered in small blocks.
+    const qint64 expected = 2LL * 48000 * 2 * 4;
+    qint64 total = 0;
+    qint64 reads = 0;
+    while (true)
+    {
+        QByteArray block(16384, '\0');
+        const qint64 count = stream.read(block.data(), block.size());
+        if (count <= 0)
+            break;
+        total += count;
+        ++reads;
+    }
+    CHECK(total == expected);
+    CHECK(reads > 1);
+    CHECK(stream.finished());
+    CHECK(stream.framesMixed() == 60);
+}
+
 } // namespace
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv){
     QCoreApplication application(argc, argv);
     const QString name = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
 
@@ -705,6 +827,21 @@ int main(int argc, char** argv)
     {
         known = true;
         testPlaybackNoDevice();
+    }
+    if (run("streamLongRange"))
+    {
+        known = true;
+        testStreamLongRange();
+    }
+    if (run("streamSeekOnlyMixesFromPosition"))
+    {
+        known = true;
+        testStreamSeekOnlyMixesFromPosition();
+    }
+    if (run("streamSampleExactAndBounded"))
+    {
+        known = true;
+        testStreamSampleExactAndBounded();
     }
     if (run("peaks"))
     {

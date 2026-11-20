@@ -184,9 +184,9 @@ private:
     bool m_htmlStartFailed = false;
 
     std::unique_ptr<video2::VideoFrames> m_videoFrames;
-    // Full-resolution decoder reserved for the export worker; not shared with
-    // the preview/proxy decoder above.
-    std::unique_ptr<video2::VideoFrames> m_exportVideoFrames;
+    // Full-resolution sequential decoders reserved for the export worker; one
+    // per video asset, not shared with the preview/proxy decoder above.
+    std::map<AssetHash, std::unique_ptr<video2::VideoFrames>> m_exportDecoders;
     std::map<AssetHash, std::unique_ptr<video2::VideoSequenceService>> m_sequences;
     std::unique_ptr<html2::HtmlFrameService> m_html;
 #ifdef PVFORGE_TEST_HOOKS

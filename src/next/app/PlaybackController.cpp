@@ -79,6 +79,8 @@ void PlaybackController::play()
     m_playing = true;
     m_timer->setInterval(std::max(1, 1000 / m_fps));
     m_timer->start();
+    anchorClock(start, clockNs());
+    m_lastAudioResyncNs = 0;
     m_lastFrame.start();
     m_watchdog.start();
 
@@ -147,22 +149,57 @@ void PlaybackController::tick()
         return;
     }
 
+    const qint64 elapsedNs = std::max<qint64>(0, clockNs() - m_anchorNs);
+    // Integer frame from elapsed monotonic time: 60fps lands on the correct
+    // frame at any tick granularity, and a stalled UI thread skips frames
+    // instead of slowing the picture down (issue #130).
+    const qint64 frameOffset = (elapsedNs * qint64(m_fps)) / 1000000000LL;
+    int target = m_anchorFrame + int(frameOffset);
+    target = std::min(target, m_endFrame);
+    // The clock is monotonic; a weird clock reading must never rewind the
+    // playhead or retrigger the same frame.
+    target = std::max(target, m_lastTarget);
+    m_lastTarget = target;
+
     const int current = m_document->playhead();
-    if (current >= m_endFrame) {
+    if (target > current) {
         m_advancing = true;
-        m_document->setPlayhead(m_endFrame);
+        m_document->setPlayhead(target);
         m_advancing = false;
-        pause();
-        return;
     }
 
-    const int next = std::min(current + 1, m_endFrame);
-    m_advancing = true;
-    m_document->setPlayhead(next);
-    m_advancing = false;
+    if (m_audio && m_audio->isPlaying()) {
+        const int audioFrame = m_audio->positionFrame();
+        const int tolerance = std::max(2, m_fps / 10);
+        if (audioFrame >= 0 && std::abs(audioFrame - target) > tolerance
+            && elapsedNs - m_lastAudioResyncNs >= 1000000000LL)
+        {
+            // The soundtrack drifted more than ~100 ms (device latency, a
+            // manual seek on the audio side); restart it at the picture clock
+            // instead of letting the two diverge for the rest of the clip.
+            m_lastAudioResyncNs = elapsedNs;
+            restartAudio(target);
+        }
+    }
 
-    if (next >= m_endFrame)
+    if (target >= m_endFrame)
         pause();
+}
+
+qint64 PlaybackController::clockNs() const
+{
+#ifdef PVFORGE_TEST_HOOKS
+    if (m_clockForTest)
+        return m_clockForTest();
+#endif
+    return m_clock.nsecsElapsed();
+}
+
+void PlaybackController::anchorClock(int frame, qint64 nowNs)
+{
+    m_anchorFrame = frame;
+    m_anchorNs = nowNs;
+    m_lastTarget = frame;
 }
 
 void PlaybackController::restartAudio(int frame)
@@ -190,7 +227,20 @@ void PlaybackController::onPlayheadChanged()
         pause();
         return;
     }
+
+    // A seek re-anchors the monotonic clock at the requested frame; without
+    // this the old elapsed time would immediately jump the playhead back to
+    // where the playback was before the seek.
+    anchorClock(frame, clockNs());
+    m_lastAudioResyncNs = 0;
     restartAudio(frame);
 }
+
+#ifdef PVFORGE_TEST_HOOKS
+void PlaybackController::setClockForTest(std::function<qint64()> clock)
+{
+    m_clockForTest = std::move(clock);
+}
+#endif
 
 } // namespace pvf::next

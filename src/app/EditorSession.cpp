@@ -59,6 +59,10 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     m_appSettings = m_settingsStore->load();
 
     m_animCache.sharedSolverResults = &m_solverResults;
+    // Keep the long-lived viewport cache bounded: playback samples every frame
+    // and the poses of frames far from the playhead are not worth the memory
+    // (#132).
+    m_animCache.maxPosesPerEntity = 24;
 
     m_media = std::make_unique<next::MediaServices>(m_document.get(), m_appSettings);
     // The camera monitor renders through this service on every paint; sharing

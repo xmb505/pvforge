@@ -3,7 +3,6 @@
 #include <algorithm>
 
 namespace pvf::model {
-
 namespace {
 
 bool entityComesBefore(const Entity& a, const Entity& b)
@@ -15,34 +14,48 @@ bool entityComesBefore(const Entity& a, const Entity& b)
     return a.uuid < b.uuid;
 }
 
-QVector<Uuid> sortedSiblings(const Project& project, const Uuid& parentUuid)
+} // namespace
+
+ChildrenIndex::ChildrenIndex(const Project& project)
 {
-    QVector<Entity> matches;
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
+    QHash<Uuid, QVector<const Entity*>> byParent;
+    byParent.reserve(project.entities.size());
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
     {
-        if (it.value().parentUuid == parentUuid)
-            matches.append(it.value());
+        byParent[it.value().parentUuid].append(&it.value());
     }
 
-    std::sort(matches.begin(), matches.end(), entityComesBefore);
-
-    QVector<Uuid> result;
-    result.reserve(matches.size());
-    for (const Entity& entity : matches)
-        result.append(entity.uuid);
-    return result;
+    m_children.reserve(byParent.size());
+    for (auto it = byParent.begin(); it != byParent.end(); ++it)
+    {
+        QVector<const Entity*> matches = it.value();
+        std::sort(matches.begin(), matches.end(),
+                  [](const Entity* a, const Entity* b) {
+                      return entityComesBefore(*a, *b);
+                  });
+        QVector<Uuid> sorted;
+        sorted.reserve(matches.size());
+        for (const Entity* entity : matches)
+            sorted.append(entity->uuid);
+        m_children.insert(it.key(), std::move(sorted));
+    }
 }
 
-} // namespace
+const QVector<Uuid>& ChildrenIndex::children(const Uuid& parentUuid) const
+{
+    const auto it = m_children.constFind(parentUuid);
+    return it == m_children.constEnd() ? m_empty : it.value();
+}
 
 QVector<Uuid> childrenOf(const Project& project, const Uuid& parentUuid)
 {
-    return sortedSiblings(project, parentUuid);
+    return ChildrenIndex(project).children(parentUuid);
 }
 
 QVector<Uuid> rootEntities(const Project& project)
 {
-    return sortedSiblings(project, Uuid{});
+    return ChildrenIndex(project).roots();
 }
 
 int nextAutoRow(const Project& project, const Uuid& parentUuid, int start,

@@ -121,7 +121,7 @@ void MediaServices::stop()
     m_sequences.clear();
     if (m_videoFrames)
         m_videoFrames->clear();
-    m_exportVideoFrames.reset();
+    m_exportDecoders.clear();
     if (m_html)
         m_html->stop();
     m_htmlInFlight = false;
@@ -535,24 +535,28 @@ QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,
     if (path.isEmpty())
         return {};
 
-    if (!m_exportVideoFrames)
+    if (m_exportDecoders.find(asset->hash) == m_exportDecoders.end())
     {
-        // A couple of entries are enough: 2x/4x output fps samples the same
-        // project frame several times in a row.  Full-resolution images are
-        // large, so keep this cache tiny.
-        m_exportVideoFrames = std::make_unique<video2::VideoFrames>(0, 2);
+        // One sequential decoder per video asset: an export that interleaves
+        // two clips keeps both files open and decodes each strictly forward
+        // instead of re-opening/seeking per frame (issue #131).
+        m_exportDecoders.emplace(
+            asset->hash, std::make_unique<video2::VideoFrames>(0, 2));
     }
+    video2::VideoFrames& decoder = *m_exportDecoders.at(asset->hash);
 
-    const int localFrame = floorFrame(projectFrame - entity->start);
     video2::Request request;
     request.path = path;
-    request.sourceFrame = entity->content.asset.sourceIn + localFrame;
+    // Keep the fractional project frame so 2x/4x export samples the source
+    // between project frames instead of repeating floor()ed ones.
+    request.sourceFrame =
+        entity->content.asset.sourceIn + (projectFrame - entity->start);
     request.fps = projectFps();
     request.size = QSize();
     request.proxy = false;
 
     QString error;
-    const QImage image = m_exportVideoFrames->frame(request, &error);
+    const QImage image = decoder.frame(request, &error);
     if (!error.isEmpty())
         qWarning().noquote() << "export video frame failed:" << error;
     return image;
