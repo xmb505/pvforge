@@ -200,6 +200,10 @@ std::optional<QJsonObject> AssetStore::readMetadata(
 {
     const QString path = directory + QStringLiteral("/asset.json");
     const QFileInfo info(path);
+    // Never let the metadata cache hide a path that was replaced by a symlink
+    // or grew past the JSON limit after it was first read.
+    if (!info.isFile() || info.isSymLink() || info.size() > kMaxAssetJsonBytes)
+        return std::nullopt;
     const qint64 size = info.size();
     const qint64 modifiedMs = info.lastModified().toMSecsSinceEpoch();
     {
