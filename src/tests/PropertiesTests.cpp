@@ -296,7 +296,7 @@ int propertiesTest(QApplication& app)
     lastError.clear();
     const int keysBefore = countKeys(live, text);
     const double staticOpacity = live->project().entities.value(text).transform.opacity;
-    opacitySpin->setValue(0.3);
+    opacitySpin->setValue(30.0);
     QApplication::processEvents();
     flush();
     if (!check(countKeys(live, text) == keysBefore,
@@ -358,6 +358,7 @@ int propertiesTest(QApplication& app)
         return 1;
 
     // Content-animation parameters use the same whole-frame rule.
+    panel->setSelectedKeyframes({});
     document->setSelection(text);
     live->setPlayhead(0);
     QApplication::processEvents();

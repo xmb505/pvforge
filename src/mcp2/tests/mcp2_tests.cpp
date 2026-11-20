@@ -94,16 +94,34 @@ QJsonObject entityArgs(const QString& name, int start, int end,
         args.insert(QStringLiteral("parentUuid"), parent);
     return args;
 }
-QJsonArray keys(std::initializer_list<QPair<int, double>> values)
+QJsonObject wholeKey(int frame, double x = 0.0, double y = 0.0,
+                     double rotation = 0.0, double scaleX = 1.0,
+                     double scaleY = 1.0, double opacity = 1.0,
+                     QJsonObject content = QJsonObject(),
+                     QJsonObject htmlVars = QJsonObject())
+{
+    return QJsonObject{
+        {QStringLiteral("frame"), frame},
+        {QStringLiteral("x"), x},
+        {QStringLiteral("y"), y},
+        {QStringLiteral("rotation"), rotation},
+        {QStringLiteral("scaleX"), scaleX},
+        {QStringLiteral("scaleY"), scaleY},
+        {QStringLiteral("opacity"), opacity},
+        {QStringLiteral("visible"), true},
+        {QStringLiteral("physicsInteract"), false},
+        {QStringLiteral("content"), content},
+        {QStringLiteral("htmlVars"), htmlVars},
+        {QStringLiteral("easing"), QStringLiteral("linear")},
+        {QStringLiteral("note"), QString()},
+    };
+}
+
+QJsonArray wholeKeys(std::initializer_list<QJsonObject> values)
 {
     QJsonArray array;
-    for (const auto& value : values)
-    {
-        QJsonObject key;
-        key.insert(QStringLiteral("frame"), value.first);
-        key.insert(QStringLiteral("value"), value.second);
-        array.append(key);
-    }
+    for (const QJsonObject& value : values)
+        array.append(value);
     return array;
 }
 constexpr char kSkipMessage[] = "git 不可用，跳过依赖 git 的测试";
@@ -173,8 +191,8 @@ void Mcp2Tests::createTreeOneCommit()
                                 {QStringLiteral("end"), 60},
                                 {QStringLiteral("row"), 2},
                                 {QStringLiteral("keyframes"),
-                                 QJsonObject{{QStringLiteral("scaleX"),
-                                              keys({{0, 0.0}, {59, 1.0}})}}}});
+                                 wholeKeys({wholeKey(0, 0.0, 0.0, 0.0, 0.0),
+                                            wholeKey(59, 0.0, 0.0, 0.0, 1.0)})}});
 
     QJsonObject root;
     root.insert(QStringLiteral("name"), QStringLiteral("卡片"));
@@ -215,8 +233,8 @@ void Mcp2Tests::keyframesSetRespectsDuration()
 
     QJsonObject args;
     args.insert(QStringLiteral("uuid"), uuid);
-    args.insert(QStringLiteral("track"), QStringLiteral("x"));
-    args.insert(QStringLiteral("keys"), keys({{0, 0.0}, {29, 5.0}}));
+    args.insert(QStringLiteral("keyframes"),
+                wholeKeys({wholeKey(0, 0.0), wholeKey(29, 5.0)}));
     QJsonObject result = fixture.call(QStringLiteral("keyframes.set"), args);
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
              qPrintable(result.value(QStringLiteral("error"))
@@ -229,7 +247,15 @@ void Mcp2Tests::keyframesSetRespectsDuration()
                  .toInt(),
              2);
 
-    args.insert(QStringLiteral("keys"), keys({{0, 0.0}, {30, 5.0}}));
+    // frame == duration is a normal interpolation target at the clip end.
+    args.insert(QStringLiteral("keyframes"),
+                wholeKeys({wholeKey(0, 0.0), wholeKey(30, 5.0)}));
+    result = fixture.call(QStringLiteral("keyframes.set"), args);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+
+    // frame > duration is rejected.
+    args.insert(QStringLiteral("keyframes"),
+                wholeKeys({wholeKey(0, 0.0), wholeKey(31, 5.0)}));
     result = fixture.call(QStringLiteral("keyframes.set"), args);
     QVERIFY(!result.value(QStringLiteral("ok")).toBool());
     QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
@@ -241,10 +267,11 @@ void Mcp2Tests::keyframesSetRespectsDuration()
             .value(QStringLiteral("allowedRange"))
             .toObject();
     QCOMPARE(range.value(QStringLiteral("min")).toInt(), 0);
-    QCOMPARE(range.value(QStringLiteral("max")).toInt(), 29);
+    QCOMPARE(range.value(QStringLiteral("max")).toInt(), 30);
 
     // Duplicate frames are rejected.
-    args.insert(QStringLiteral("keys"), keys({{1, 0.0}, {1, 1.0}}));
+    args.insert(QStringLiteral("keyframes"),
+                wholeKeys({wholeKey(1, 0.0), wholeKey(1, 1.0)}));
     result = fixture.call(QStringLiteral("keyframes.set"), args);
     QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
 
@@ -254,8 +281,9 @@ void Mcp2Tests::keyframesSetRespectsDuration()
                             entityArgs(QStringLiteral("裁剪"), 0, 60)));
     QJsonObject trimKeys;
     trimKeys.insert(QStringLiteral("uuid"), trimUuid);
-    trimKeys.insert(QStringLiteral("track"), QStringLiteral("x"));
-    trimKeys.insert(QStringLiteral("keys"), keys({{0, 0.0}, {10, 5.0}, {30, 9.0}}));
+    trimKeys.insert(QStringLiteral("keyframes"),
+                    wholeKeys({wholeKey(0, 0.0), wholeKey(10, 5.0),
+                               wholeKey(30, 9.0)}));
     QVERIFY(fixture.call(QStringLiteral("keyframes.set"), trimKeys)
                 .value(QStringLiteral("ok"))
                 .toBool());
@@ -272,10 +300,9 @@ void Mcp2Tests::keyframesSetRespectsDuration()
              1);
 
     result = fixture.call(QStringLiteral("keyframes.get"),
-                          QJsonObject{{QStringLiteral("uuid"), trimUuid},
-                                      {QStringLiteral("track"), QStringLiteral("x")}});
+                          QJsonObject{{QStringLiteral("uuid"), trimUuid}});
     const QJsonArray remaining =
-        result.value(QStringLiteral("data")).toObject().value(QStringLiteral("keys")).toArray();
+        result.value(QStringLiteral("data")).toObject().value(QStringLiteral("keyframes")).toArray();
     QCOMPARE(remaining.size(), 2);
     QCOMPARE(remaining.at(0).toObject().value(QStringLiteral("frame")).toInt(), 0);
     QCOMPARE(remaining.at(1).toObject().value(QStringLiteral("frame")).toInt(), 20);
@@ -295,52 +322,50 @@ void Mcp2Tests::solverDrivenTrackRejectsNormalKeys()
     QVERIFY(!target.isEmpty());
     QVERIFY(!ball.isEmpty());
 
-    model::Entity& entity = fixture.store->mutableProject().entities[ball];
-    model::Track xTrack;
-    model::Keyframe xKey;
-    xKey.frame = 0;
-    xKey.value = -360;
-    xTrack.keys.append(xKey);
-    entity.tracks.insert(QStringLiteral("x"), xTrack);
-    entity.tracks.insert(QStringLiteral("y"), xTrack);
+    QJsonObject setArgs{{QStringLiteral("uuid"), ball},
+                        {QStringLiteral("keyframes"),
+                         wholeKeys({wholeKey(0, -360.0, -360.0)})}};
+    QJsonObject result = fixture.call(QStringLiteral("keyframes.set"), setArgs);
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
 
-    model::SolverSegment segment;
-    segment.id = model::newUuid();
-    segment.effect = SolverEffect::Gravity;
-    segment.startFrame = 0;
-    segment.endFrame = 30;
-    segment.params.insert(QStringLiteral("targetUuid"), target);
-    entity.solvers.append(segment);
+    result = fixture.call(
+        QStringLiteral("solver.create"),
+        QJsonObject{{QStringLiteral("entityUuid"), ball},
+                    {QStringLiteral("effect"), QStringLiteral("gravity")},
+                    {QStringLiteral("startFrame"), 0},
+                    {QStringLiteral("endFrame"), 30},
+                    {QStringLiteral("params"),
+                     QJsonObject{{QStringLiteral("targetUuid"), target}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toObject()
+                            .value(QStringLiteral("message")).toString()));
 
-    QString error;
-    QVERIFY2(fixture.store->saveEntity(ball, &error), qPrintable(error));
-
-    QJsonObject args;
-    args.insert(QStringLiteral("uuid"), ball);
-    args.insert(QStringLiteral("track"), QStringLiteral("x"));
-
-    args.insert(QStringLiteral("keys"), keys({{0, -360.0}, {10, -300.0}}));
-    QJsonObject result = fixture.call(QStringLiteral("keyframes.set"), args);
+    // The explicit band is start < frame <= end, so frame 10 is rejected.
+    setArgs.insert(QStringLiteral("keyframes"),
+                   wholeKeys({wholeKey(0, -360.0, -360.0),
+                              wholeKey(10, -300.0, -300.0)}));
+    result = fixture.call(QStringLiteral("keyframes.set"), setArgs);
     QVERIFY(!result.value(QStringLiteral("ok")).toBool());
     QCOMPARE(errorCode(result), QStringLiteral("conflict"));
     QVERIFY(!result.value(QStringLiteral("error"))
                  .toObject()
                  .value(QStringLiteral("details"))
                  .toObject()
-                 .value(QStringLiteral("conflicts"))
+                 .value(QStringLiteral("conflictingFrames"))
                  .toArray()
                  .isEmpty());
 
     // Only the segment start frame is allowed.
-    args.insert(QStringLiteral("keys"), keys({{0, -360.0}}));
-    result = fixture.call(QStringLiteral("keyframes.set"), args);
+    setArgs.insert(QStringLiteral("keyframes"),
+                   wholeKeys({wholeKey(0, -360.0, -360.0)}));
+    result = fixture.call(QStringLiteral("keyframes.set"), setArgs);
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
 
     // Removing the start key destroys the initial state and is refused.
     result = fixture.call(QStringLiteral("keyframes.remove"),
                           QJsonObject{{QStringLiteral("uuid"), ball},
-                                      {QStringLiteral("track"), QStringLiteral("x")},
-                                      {QStringLiteral("frame"), 0}});
+                                      {QStringLiteral("frames"), QJsonArray{0}}});
     QCOMPARE(errorCode(result), QStringLiteral("conflict"));
 }
 
@@ -358,31 +383,28 @@ void Mcp2Tests::trimSolverRules()
     QVERIFY(!target.isEmpty() && !ball.isEmpty());
 
     {
-        model::Entity& entity = fixture.store->mutableProject().entities[ball];
-        model::Track xTrack;
-        model::Track yTrack;
-        model::Keyframe key;
-        key.frame = 5;
-        key.value = 42.0;
-        xTrack.keys.append(key);
-        key.value = 0.0;
-        yTrack.keys.append(key);
-        model::Keyframe after;
-        after.frame = 25;
-        after.value = 100.0;
-        xTrack.keys.append(after);
-        entity.tracks.insert(QStringLiteral("x"), xTrack);
-        entity.tracks.insert(QStringLiteral("y"), yTrack);
-        model::SolverSegment segment;
-        segment.id = model::newUuid();
-        segment.effect = SolverEffect::Gravity;
-        segment.startFrame = 5;
-        segment.endFrame = 20;
-        segment.initialVelocity = QPointF(60.0, 0.0);
-        segment.params.insert(QStringLiteral("targetUuid"), target);
-        entity.solvers.append(segment);
-        QString error;
-        QVERIFY2(fixture.store->saveEntity(ball, &error), qPrintable(error));
+        QJsonObject setArgs{
+            {QStringLiteral("uuid"), ball},
+            {QStringLiteral("keyframes"),
+             wholeKeys({wholeKey(5, 42.0, 0.0), wholeKey(25, 100.0, 0.0)})}};
+        QJsonObject setResult =
+            fixture.call(QStringLiteral("keyframes.set"), setArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
+
+        QJsonObject solverArgs{
+            {QStringLiteral("entityUuid"), ball},
+            {QStringLiteral("effect"), QStringLiteral("gravity")},
+            {QStringLiteral("startFrame"), 5},
+            {QStringLiteral("endFrame"), 20},
+            {QStringLiteral("initialVelocity"),
+             QJsonObject{{QStringLiteral("x"), 60.0},
+                         {QStringLiteral("y"), 0.0}}},
+            {QStringLiteral("params"),
+             QJsonObject{{QStringLiteral("targetUuid"), target}}}};
+        setResult = fixture.call(QStringLiteral("solver.create"), solverArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
     }
 
     const model::Project before = fixture.store->project();
@@ -405,16 +427,13 @@ void Mcp2Tests::trimSolverRules()
 
     const model::Entity& trimmed = fixture.store->project().entities.value(ball);
     QVERIFY(trimmed.solvers.isEmpty());
-    const auto xTrack = trimmed.tracks.value(QStringLiteral("x")).keys;
-    QCOMPARE(xTrack.size(), 2);
-    QCOMPARE(xTrack.first().frame, 0);
-    QVERIFY(qAbs(xTrack.first().value - cutPose.dx()) < 1e-9);
-    QCOMPARE(xTrack.last().frame, 15);
-    QCOMPARE(xTrack.last().value, 100.0);
-    const auto yTrack = trimmed.tracks.value(QStringLiteral("y")).keys;
-    QCOMPARE(yTrack.size(), 1);
-    QCOMPARE(yTrack.first().frame, 0);
-    QVERIFY(qAbs(yTrack.first().value - cutPose.dy()) < 1e-9);
+    const auto frozenKeys = trimmed.keyframes;
+    QCOMPARE(frozenKeys.size(), 2);
+    QCOMPARE(frozenKeys.first().frame, 0);
+    QVERIFY(qAbs(frozenKeys.first().x - cutPose.dx()) < 1e-9);
+    QVERIFY(qAbs(frozenKeys.first().y - cutPose.dy()) < 1e-9);
+    QCOMPARE(frozenKeys.last().frame, 15);
+    QCOMPARE(frozenKeys.last().x, 100.0);
 
     // A trim that cuts into the end keeps the segment but freezes it at the
     // new clip end instead of dropping the marker.
@@ -422,23 +441,24 @@ void Mcp2Tests::trimSolverRules()
         uuidOf(fixture.call(QStringLiteral("entity.create"),
                             entityArgs(QStringLiteral("小球二"), 0, 60)));
     {
-        model::Entity& entity = fixture.store->mutableProject().entities[ball2];
-        model::Track track;
-        model::Keyframe key;
-        key.frame = 0;
-        key.value = 0;
-        track.keys.append(key);
-        entity.tracks.insert(QStringLiteral("x"), track);
-        entity.tracks.insert(QStringLiteral("y"), track);
-        model::SolverSegment segment;
-        segment.id = model::newUuid();
-        segment.effect = SolverEffect::Gravity;
-        segment.startFrame = 0;
-        segment.endFrame = -1;
-        segment.params.insert(QStringLiteral("targetUuid"), target);
-        entity.solvers.append(segment);
-        QString error;
-        QVERIFY2(fixture.store->saveEntity(ball2, &error), qPrintable(error));
+        QJsonObject setArgs{{QStringLiteral("uuid"), ball2},
+                            {QStringLiteral("keyframes"),
+                             wholeKeys({wholeKey(0)})}};
+        QJsonObject setResult =
+            fixture.call(QStringLiteral("keyframes.set"), setArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
+
+        QJsonObject solverArgs{
+            {QStringLiteral("entityUuid"), ball2},
+            {QStringLiteral("effect"), QStringLiteral("gravity")},
+            {QStringLiteral("startFrame"), 0},
+            {QStringLiteral("endFrame"), -1},
+            {QStringLiteral("params"),
+             QJsonObject{{QStringLiteral("targetUuid"), target}}}};
+        setResult = fixture.call(QStringLiteral("solver.create"), solverArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
     }
 
     result = fixture.call(QStringLiteral("entity.trim"),
@@ -479,27 +499,26 @@ void Mcp2Tests::trimSolverCutPose()
     QVERIFY(!target.isEmpty() && !spinner.isEmpty());
 
     {
-        model::Entity& entity =
-            fixture.store->mutableProject().entities[spinner];
-        model::Track track;
-        model::Keyframe key;
-        key.frame = 5;
-        key.value = 0.0;
-        track.keys.append(key);
-        model::Keyframe after;
-        after.frame = 25;
-        after.value = 90.0;
-        track.keys.append(after);
-        entity.tracks.insert(QStringLiteral("rotation"), track);
-        model::SolverSegment segment;
-        segment.id = model::newUuid();
-        segment.effect = SolverEffect::Spin;
-        segment.startFrame = 5;
-        segment.endFrame = 20;
-        segment.params.insert(QStringLiteral("targetUuid"), target);
-        entity.solvers.append(segment);
-        QString error;
-        QVERIFY2(fixture.store->saveEntity(spinner, &error), qPrintable(error));
+        QJsonObject setArgs{
+            {QStringLiteral("uuid"), spinner},
+            {QStringLiteral("keyframes"),
+             wholeKeys({wholeKey(5, 0.0, 0.0, 0.0),
+                        wholeKey(25, 0.0, 0.0, 90.0)})}};
+        QJsonObject setResult =
+            fixture.call(QStringLiteral("keyframes.set"), setArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
+
+        QJsonObject solverArgs{
+            {QStringLiteral("entityUuid"), spinner},
+            {QStringLiteral("effect"), QStringLiteral("spin")},
+            {QStringLiteral("startFrame"), 5},
+            {QStringLiteral("endFrame"), 20},
+            {QStringLiteral("params"),
+             QJsonObject{{QStringLiteral("angularVelocity"), 6.0}}}};
+        setResult = fixture.call(QStringLiteral("solver.create"), solverArgs);
+        QVERIFY2(setResult.value(QStringLiteral("ok")).toBool(),
+                 qPrintable(errorCode(setResult)));
     }
 
     const model::Project before = fixture.store->project();
@@ -524,12 +543,12 @@ void Mcp2Tests::trimSolverCutPose()
     const model::Entity& trimmed =
         fixture.store->project().entities.value(spinner);
     QVERIFY(trimmed.solvers.isEmpty());
-    const auto keys = trimmed.tracks.value(QStringLiteral("rotation")).keys;
+    const auto keys = trimmed.keyframes;
     QCOMPARE(keys.size(), 2);
     QCOMPARE(keys.first().frame, 0);
-    QVERIFY(qAbs(keys.first().value - expectedRotation) < 1e-9);
+    QVERIFY(qAbs(keys.first().rotation - expectedRotation) < 1e-9);
     QCOMPARE(keys.last().frame, 15);
-    QCOMPARE(keys.last().value, 90.0);
+    QCOMPARE(keys.last().rotation, 90.0);
 }
 
 void Mcp2Tests::moveTrimReparentValidation()
@@ -689,8 +708,8 @@ void Mcp2Tests::lockedEntityRejectsWrite()
 
     result = fixture.call(QStringLiteral("keyframes.set"),
                           QJsonObject{{QStringLiteral("uuid"), locked},
-                                      {QStringLiteral("track"), QStringLiteral("x")},
-                                      {QStringLiteral("keys"), keys({{0, 1.0}})}});
+                                      {QStringLiteral("keyframes"),
+                                       wholeKeys({wholeKey(0, 1.0)})}});
     expectLocked(result, locked);
 
     result = fixture.call(QStringLiteral("entity.move"),
@@ -734,8 +753,8 @@ void Mcp2Tests::lockedEntityRejectsWrite()
 
     result = fixture.call(QStringLiteral("keyframes.set"),
                           QJsonObject{{QStringLiteral("uuid"), child},
-                                      {QStringLiteral("track"), QStringLiteral("x")},
-                                      {QStringLiteral("keys"), keys({{0, 2.0}})}});
+                                      {QStringLiteral("keyframes"),
+                                       wholeKeys({wholeKey(0, 2.0)})}});
     expectLocked(result, parent);
 
     result = fixture.call(QStringLiteral("entity.create"),
@@ -1025,11 +1044,11 @@ void Mcp2Tests::keyframesSetManyRollsBack()
 
     QJsonArray items;
     items.append(QJsonObject{{QStringLiteral("uuid"), uuid},
-                             {QStringLiteral("track"), QStringLiteral("opacity")},
-                             {QStringLiteral("keys"), keys({{0, 1.0}})}});
+                             {QStringLiteral("keyframes"),
+                              wholeKeys({wholeKey(0, 0.0)})}});
     items.append(QJsonObject{{QStringLiteral("uuid"), uuid},
-                             {QStringLiteral("track"), QStringLiteral("x")},
-                             {QStringLiteral("keys"), keys({{100, 1.0}})}});
+                             {QStringLiteral("keyframes"),
+                              wholeKeys({wholeKey(100, 0.0)})}});
 
     const QJsonObject result =
         fixture.call(QStringLiteral("keyframes.setMany"),
@@ -1040,7 +1059,7 @@ void Mcp2Tests::keyframesSetManyRollsBack()
                  .value(QStringLiteral("details")).toObject()
                  .value(QStringLiteral("index")).toInt(),
              1);
-    QVERIFY(fixture.store->project().entities.value(uuid).tracks.isEmpty());
+    QVERIFY(fixture.store->project().entities.value(uuid).keyframes.isEmpty());
 }
 
 void Mcp2Tests::assetAssignAndUnassign()
@@ -1226,7 +1245,7 @@ void Mcp2Tests::listToolsAndSchema()
 
     const QJsonObject tools = fixture.service->listTools();
     const QJsonArray array = tools.value(QStringLiteral("tools")).toArray();
-    QCOMPARE(array.size(), 46);
+    QCOMPARE(array.size(), 47);
 
     QStringList names;
     for (const QJsonValue& value : array)
@@ -1234,6 +1253,7 @@ void Mcp2Tests::listToolsAndSchema()
     QVERIFY(names.contains(QStringLiteral("project.get")));
     QVERIFY(names.contains(QStringLiteral("entity.createTree")));
     QVERIFY(names.contains(QStringLiteral("keyframes.setMany")));
+    QVERIFY(names.contains(QStringLiteral("keyframes.upsert")));
     QVERIFY(names.contains(QStringLiteral("solver.create")));
     QVERIFY(names.contains(QStringLiteral("solver.evaluate")));
     QVERIFY(names.contains(QStringLiteral("preview.render_frame")));
@@ -1266,6 +1286,21 @@ void Mcp2Tests::listToolsAndSchema()
                  .value(QStringLiteral("available"))
                  .toBool());
 
+    const QJsonObject keyframeSchema =
+        schema.value(QStringLiteral("keyframes")).toObject();
+    const QJsonObject keyframeProperties =
+        keyframeSchema.value(QStringLiteral("properties")).toObject();
+    QVERIFY(keyframeProperties.contains(QStringLiteral("content")));
+    QVERIFY(keyframeProperties.contains(QStringLiteral("htmlVars")));
+    QVERIFY(!keyframeProperties.contains(QStringLiteral("track")));
+    QVERIFY(!keyframeProperties.contains(QStringLiteral("tracks")));
+    const QJsonObject entitySchema =
+        schema.value(QStringLiteral("entity")).toObject()
+            .value(QStringLiteral("properties")).toObject();
+    QCOMPARE(entitySchema.value(QStringLiteral("keyframes")).toObject()
+                 .value(QStringLiteral("type")).toString(),
+             QStringLiteral("array"));
+
     result = fixture.call(QStringLiteral("guide.get"),
                           QJsonObject{{QStringLiteral("topic"), QStringLiteral("preview")}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
@@ -1293,8 +1328,7 @@ void Mcp2Tests::solverCreateUpdateDelete()
                             entityArgs(QStringLiteral("地面"), 0, 120)));
     QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
     ballArgs.insert(QStringLiteral("keyframes"),
-                    QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
-                                {QStringLiteral("y"), keys({{0, -400.0}})}});
+                    wholeKeys({wholeKey(0, -300.0, -400.0)}));
     const QString ball =
         uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
     QVERIFY(!ground.isEmpty() && !ball.isEmpty());
@@ -1415,8 +1449,7 @@ void Mcp2Tests::solverCreateUpdateDelete()
     // reverse-solved ellipse in solver.list.
     QJsonObject inlineArgs = entityArgs(QStringLiteral("轨道球"), 0, 120);
     inlineArgs.insert(QStringLiteral("keyframes"),
-                      QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
-                                  {QStringLiteral("y"), keys({{0, -400.0}})}});
+                      wholeKeys({wholeKey(0, -300.0, -400.0)}));
     inlineArgs.insert(
         QStringLiteral("solvers"),
         QJsonArray{QJsonObject{
@@ -1456,8 +1489,7 @@ void Mcp2Tests::solverValidationRejects()
                             entityArgs(QStringLiteral("地面"), 0, 120)));
     QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
     ballArgs.insert(QStringLiteral("keyframes"),
-                    QJsonObject{{QStringLiteral("x"), keys({{0, 0.0}})},
-                                {QStringLiteral("y"), keys({{0, 0.0}})}});
+                    wholeKeys({wholeKey(0, 0.0, 0.0)}));
     const QString ball =
         uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
     const QString noKeys =
@@ -1482,8 +1514,8 @@ void Mcp2Tests::solverValidationRejects()
     QCOMPARE(errorCode(result), QStringLiteral("conflict"));
     QCOMPARE(result.value(QStringLiteral("error")).toObject()
                  .value(QStringLiteral("details")).toObject()
-                 .value(QStringLiteral("missingTracks")).toArray().size(),
-             2);
+                 .value(QStringLiteral("startFrame")).toInt(),
+             0);
 
     result = fixture.call(QStringLiteral("solver.create"),
                           gravityArgs(ball, QString(), 0, 30));
@@ -1507,13 +1539,18 @@ void Mcp2Tests::solverValidationRejects()
                           gravityArgs(ball, ground, 0, 40));
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
 
-    // Rotation is not driven by the gravity segment, so a spin segment can use
-    // a start key inside the gravity range and then collide with it.
+    // The gravity segment is explicit (0..40, inclusive end), so a normal
+    // whole-frame key inside it is rejected.  A spin segment starting there
+    // then has no start keyframe and is rejected too.
     result = fixture.call(QStringLiteral("keyframes.set"),
                           QJsonObject{{QStringLiteral("uuid"), ball},
-                                      {QStringLiteral("track"), QStringLiteral("rotation")},
-                                      {QStringLiteral("keys"), keys({{20, 0.0}})}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+                                      {QStringLiteral("keyframes"),
+                                       wholeKeys({wholeKey(0, 0.0, 0.0),
+                                                  wholeKey(20, 0.0, 0.0)})}});
+    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
+    QVERIFY(!result.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("details")).toObject()
+                 .value(QStringLiteral("conflictingFrames")).toArray().isEmpty());
 
     result = fixture.call(
         QStringLiteral("solver.create"),
@@ -1524,16 +1561,16 @@ void Mcp2Tests::solverValidationRejects()
                     {QStringLiteral("params"),
                      QJsonObject{{QStringLiteral("angularVelocity"), 6.0}}}});
     QCOMPARE(errorCode(result), QStringLiteral("conflict"));
-    QVERIFY(!result.value(QStringLiteral("error")).toObject()
+    QCOMPARE(result.value(QStringLiteral("error")).toObject()
                  .value(QStringLiteral("details")).toObject()
-                 .value(QStringLiteral("conflicts")).toArray().isEmpty());
+                 .value(QStringLiteral("startFrame")).toInt(),
+             20);
     QCOMPARE(fixture.store->project().entities.value(ball).solvers.size(), 1);
 
     QJsonObject lockedArgs = entityArgs(QStringLiteral("锁住的球"), 0, 120);
     lockedArgs.insert(QStringLiteral("locked"), true);
     lockedArgs.insert(QStringLiteral("keyframes"),
-                      QJsonObject{{QStringLiteral("x"), keys({{0, 0.0}})},
-                                  {QStringLiteral("y"), keys({{0, 0.0}})}});
+                      wholeKeys({wholeKey(0, 0.0, 0.0)}));
     const QString locked = uuidOf(fixture.call(QStringLiteral("entity.create"),
                                                lockedArgs));
     QVERIFY(!locked.isEmpty());
@@ -1556,8 +1593,7 @@ void Mcp2Tests::solverSpiralCreateAndEvaluate()
                             entityArgs(QStringLiteral("圆心"), 0, 120)));
     QJsonObject ballArgs = entityArgs(QStringLiteral("螺旋球"), 0, 120);
     ballArgs.insert(QStringLiteral("keyframes"),
-                    QJsonObject{{QStringLiteral("x"), keys({{0, 300.0}})},
-                                {QStringLiteral("y"), keys({{0, 0.0}})}});
+                    wholeKeys({wholeKey(0, 300.0, 0.0)}));
     const QString ball =
         uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
     QVERIFY(!center.isEmpty() && !ball.isEmpty());
@@ -1837,8 +1873,7 @@ void Mcp2Tests::solverEvaluateNestedEntity()
         uuidOf(fixture.call(QStringLiteral("entity.create"), parentArgs));
     QJsonObject childArgs = entityArgs(QStringLiteral("子球"), 0, 60, parent);
     childArgs.insert(QStringLiteral("keyframes"),
-                     QJsonObject{{QStringLiteral("x"), keys({{0, 0.0}})},
-                                 {QStringLiteral("y"), keys({{0, 0.0}})}});
+                     wholeKeys({wholeKey(0, 0.0, 0.0)}));
     const QString child =
         uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
     const QString ground =
@@ -1942,9 +1977,10 @@ void Mcp2Tests::stopKeepsReadsWorking()
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
 
     result = fixture.call(QStringLiteral("keyframes.get"),
-                          QJsonObject{{QStringLiteral("uuid"), uuid},
-                                      {QStringLiteral("track"), QStringLiteral("x")}});
+                          QJsonObject{{QStringLiteral("uuid"), uuid}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
+    QVERIFY(result.value(QStringLiteral("data")).toObject()
+                .value(QStringLiteral("keyframes")).isArray());
 }
 
 void Mcp2Tests::resumeRestoresWrites()
@@ -2196,8 +2232,7 @@ void Mcp2Tests::moveRowOnlyAndGetDefaults()
             < 1e-6);
     QJsonObject animatedArgs = entityArgs(QStringLiteral("动画"), 0, 60);
     animatedArgs.insert(QStringLiteral("keyframes"),
-                        QJsonObject{{QStringLiteral("x"),
-                                     keys({{0, 0.0}, {30, 300.0}})}});
+                        wholeKeys({wholeKey(0, 0.0), wholeKey(30, 300.0)}));
     const QString animated =
         uuidOf(fixture.call(QStringLiteral("entity.create"), animatedArgs));
     QVERIFY(!animated.isEmpty());
@@ -2223,20 +2258,6 @@ void Mcp2Tests::moveRowOnlyAndGetDefaults()
 
 namespace {
 
-QVector<int> keyFrames(const QJsonObject& result, const QString& track)
-{
-    QVector<int> frames;
-    const QJsonArray keys = result.value(QStringLiteral("data"))
-                                .toObject()
-                                .value(QStringLiteral("keyframes"))
-                                .toObject()
-                                .value(track)
-                                .toArray();
-    for (const QJsonValue& key : keys)
-        frames.append(key.toObject().value(QStringLiteral("frame")).toInt());
-    return frames;
-}
-
 } // namespace
 
 void Mcp2Tests::entityGetIncludesSolvers()
@@ -2247,8 +2268,7 @@ void Mcp2Tests::entityGetIncludesSolvers()
     const QString ground = createEntity(fixture, QStringLiteral("地面"), 0, 120);
     QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
     ballArgs.insert(QStringLiteral("keyframes"),
-                    QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
-                                {QStringLiteral("y"), keys({{0, -400.0}})}});
+                    wholeKeys({wholeKey(0, -300.0, -400.0)}));
     const QString ball =
         uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
     QVERIFY(!ground.isEmpty() && !ball.isEmpty());
@@ -2356,314 +2376,223 @@ void Mcp2Tests::textualContentCanBecomeEmpty()
           QJsonObject{{QStringLiteral("kind"), QStringLiteral("vector")}});
 }
 
-void Mcp2Tests::specialContentCreateAndUpdate()
+void Mcp2Tests::wholeFrameKeyframesStrictAndUpsert()
 {
     Fixture fixture;
     QVERIFY(fixture.init());
 
-    struct Case
-    {
-        const char* kind;
-        const char* container;
-        ContentKind expected;
-        QJsonObject fields;
-    };
-
-    const QVector<Case> cases = {
-        { "comicText", "comicText", ContentKind::ComicText,
-          QJsonObject{{QStringLiteral("text"), QStringLiteral("第一句")},
-                      {QStringLiteral("pixelSize"), 96},
-                      {QStringLiteral("shape"), QStringLiteral("burst")},
-                      {QStringLiteral("seed"), 7}} },
-        { "radialLines", "radialLines", ContentKind::RadialLines,
-          QJsonObject{{QStringLiteral("count"), 24},
-                      {QStringLiteral("radius"), 300.0},
-                      {QStringLiteral("color"), QStringLiteral("#ff8800")}} },
-        { "flowLines", "flowLines", ContentKind::FlowLines,
-          QJsonObject{{QStringLiteral("count"), 12},
-                      {QStringLiteral("length"), 240.0},
-                      {QStringLiteral("phase"), 0.5}} },
-        { "halftoneDots", "halftoneDots", ContentKind::HalftoneDots,
-          QJsonObject{{QStringLiteral("layout"), QStringLiteral("radial")},
-                      {QStringLiteral("radius"), 200.0},
-                      {QStringLiteral("spacing"), 12.0}} },
-        { "brandWall", "brandWall", ContentKind::BrandWall,
-          QJsonObject{{QStringLiteral("logos"),
-                       QJsonArray{QStringLiteral("PV"), QStringLiteral("FORGE")}},
-                      {QStringLiteral("colors"),
-                       QJsonArray{QStringLiteral("#d246a0"),
-                                  QStringLiteral("#e8e8ee")}},
-                      {QStringLiteral("columns"), 3},
-                      {QStringLiteral("rows"), 2}} },
-    };
-
-    QStringList uuids;
-    for (const Case& item : cases)
-    {
-        const QString kind = QString::fromLatin1(item.kind);
-        QJsonObject content;
-        content.insert(QStringLiteral("kind"), kind);
-        content.insert(QString::fromLatin1(item.container), item.fields);
-
-        QJsonObject args = entityArgs(kind, 0, 60);
-        args.insert(QStringLiteral("content"), content);
-        const QJsonObject result =
-            fixture.call(QStringLiteral("entity.create"), args);
-        QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-                 qPrintable(QStringLiteral("%1: %2")
-                                .arg(errorCode(result),
-                                     result.value(QStringLiteral("error"))
-                                         .toObject()
-                                         .value(QStringLiteral("message"))
-                                         .toString())));
-
-        const QJsonObject data = result.value(QStringLiteral("data")).toObject();
-        const QString uuid = data.value(QStringLiteral("uuid")).toString();
-        QVERIFY(!uuid.isEmpty());
-        QCOMPARE(data.value(QStringLiteral("entity")).toObject()
-                     .value(QStringLiteral("contentKind")).toString(),
-                 kind);
-        QCOMPARE(fixture.store->project().entities.value(uuid).content.kind,
-                 item.expected);
-        uuids << uuid;
-    }
-
-    const model::Project& project = fixture.store->project();
-    QCOMPARE(project.entities.value(uuids.at(0)).content.comic.text,
-             QStringLiteral("第一句"));
-    QCOMPARE(project.entities.value(uuids.at(1)).content.radial.count, 24);
-    QCOMPARE(project.entities.value(uuids.at(2)).content.flow.count, 12);
-    QCOMPARE(project.entities.value(uuids.at(3)).content.halftone.layout,
-             QStringLiteral("radial"));
-    QCOMPARE(project.entities.value(uuids.at(4)).content.brandWall.logos.size(),
-             2);
-
-    // Same-kind partial patch merges into the existing struct.
-    QJsonObject nested;
-    nested.insert(QStringLiteral("text"), QStringLiteral("改过的台词"));
-    nested.insert(QStringLiteral("pixelSize"), 120);
-    QJsonObject contentPatch;
-    contentPatch.insert(QStringLiteral("comicText"), nested);
-    QJsonObject patch;
-    patch.insert(QStringLiteral("content"), contentPatch);
-    QJsonObject result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
-                    {QStringLiteral("patch"), patch}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.text,
-             QStringLiteral("改过的台词"));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.pixelSize,
-             120);
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.shape,
-             QStringLiteral("burst"));
-
-    // Explicit same kind plus one field.
-    nested = QJsonObject{{QStringLiteral("tail"), false}};
-    QJsonObject withKind;
-    withKind.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
-    withKind.insert(QStringLiteral("comicText"), nested);
-    patch.insert(QStringLiteral("content"), withKind);
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
-                    {QStringLiteral("patch"), patch}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.tail,
-             false);
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.comic.text,
-             QStringLiteral("改过的台词"));
-
-    // Special content goes back to empty, then empty can become another kind.
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("content"),
-                                  QJsonObject{{QStringLiteral("kind"),
-                                               QStringLiteral("empty")}}}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.kind,
-             ContentKind::Empty);
-
-    QJsonObject backContent;
-    backContent.insert(QStringLiteral("kind"), QStringLiteral("halftoneDots"));
-    backContent.insert(QStringLiteral("halftoneDots"),
-                       QJsonObject{{QStringLiteral("layout"), QStringLiteral("grid")},
-                                   {QStringLiteral("area"), 900.0}});
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), uuids.at(0)},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("content"), backContent}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(0)).content.kind,
-             ContentKind::HalftoneDots);
-
-    // asset.assign recognises the special kinds and demands empty first.
-    fixture.service->setExternalImportConfirmer([](const QString&) { return true; });
-    const QString imagePath = fixture.temp.filePath(QStringLiteral("special.png"));
-    QImage image(4, 4, QImage::Format_ARGB32);
-    image.fill(Qt::green);
-    QVERIFY(image.save(imagePath));
-    result = fixture.call(QStringLiteral("asset.import"),
-                          QJsonObject{{QStringLiteral("path"), imagePath}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    const QString hash = result.value(QStringLiteral("data")).toObject()
-                             .value(QStringLiteral("asset")).toObject()
-                             .value(QStringLiteral("hash")).toString();
-    QVERIFY(!hash.isEmpty());
-
-    const QJsonObject assignArgs{{QStringLiteral("entityUuid"), uuids.at(1)},
-                                 {QStringLiteral("assetHash"), hash}};
-    result = fixture.call(QStringLiteral("asset.assign"), assignArgs);
-    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
-
-    result = fixture.call(
-        QStringLiteral("entity.update"),
-        QJsonObject{{QStringLiteral("uuid"), uuids.at(1)},
-                    {QStringLiteral("patch"),
-                     QJsonObject{{QStringLiteral("content"),
-                                  QJsonObject{{QStringLiteral("kind"),
-                                               QStringLiteral("empty")}}}}}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    result = fixture.call(QStringLiteral("asset.assign"), assignArgs);
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QCOMPARE(fixture.store->project().entities.value(uuids.at(1)).content.kind,
-             ContentKind::Asset);
-
-    // Schema documents every kind and the special-kind fields.
-    result = fixture.call(QStringLiteral("schema.get"),
-                          QJsonObject{{QStringLiteral("topic"),
-                                       QStringLiteral("entity")}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    const QJsonObject contentSchema =
-        result.value(QStringLiteral("data")).toObject()
-            .value(QStringLiteral("schema")).toObject()
-            .value(QStringLiteral("properties")).toObject()
-            .value(QStringLiteral("content")).toObject();
-    const QJsonObject contentProperties =
-        contentSchema.value(QStringLiteral("properties")).toObject();
-    const QJsonArray kinds =
-        contentProperties.value(QStringLiteral("kind")).toObject()
-            .value(QStringLiteral("enum")).toArray();
-    QCOMPARE(kinds.size(), 10);
-    QVERIFY(kinds.contains(QJsonValue(QStringLiteral("comicText"))));
-    QVERIFY(kinds.contains(QJsonValue(QStringLiteral("brandWall"))));
-    QCOMPARE(contentProperties.value(QStringLiteral("comicText")).toObject()
-                 .value(QStringLiteral("properties")).toObject()
-                 .value(QStringLiteral("pixelSize")).toObject()
-                 .value(QStringLiteral("type")).toString(),
-             QStringLiteral("integer"));
-    QVERIFY(!contentProperties.value(QStringLiteral("halftoneDots")).toObject()
-                 .value(QStringLiteral("properties")).toObject()
-                 .value(QStringLiteral("radius")).toObject()
-                 .value(QStringLiteral("description")).toString().isEmpty());
-
-    result = fixture.call(QStringLiteral("guide.get"),
-                          QJsonObject{{QStringLiteral("topic"),
-                                       QStringLiteral("authoring")}});
-    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(result)));
-    QVERIFY(result.value(QStringLiteral("data")).toObject()
-                .value(QStringLiteral("markdown")).toString()
-                .contains(QStringLiteral("一等公民")));
-}
-
-void Mcp2Tests::specialContentRejectsUnknownFields()
-{
-    Fixture fixture;
-    QVERIFY(fixture.init());
-
-    const auto create = [&](const QJsonObject& content) {
-        QJsonObject args = entityArgs(QStringLiteral("坏内容"), 0, 10);
-        args.insert(QStringLiteral("content"), content);
-        return fixture.call(QStringLiteral("entity.create"), args);
-    };
-
-    QJsonObject nested;
-    nested.insert(QStringLiteral("text"), QStringLiteral("x"));
-    QJsonObject content;
-    content.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
-    content.insert(QStringLiteral("comicText"), nested);
-    content.insert(QStringLiteral("bogus"), 1);
-    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
-
-    content.remove(QStringLiteral("bogus"));
-    nested.insert(QStringLiteral("rays"), 5);
-    content.insert(QStringLiteral("comicText"), nested);
-    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
-
-    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("x")},
-                         {QStringLiteral("pixelSize"), QStringLiteral("big")}};
-    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("comicText")},
-                          {QStringLiteral("comicText"), nested}};
-    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
-
-    content = QJsonObject{
-        {QStringLiteral("kind"), QStringLiteral("radialLines")},
-        {QStringLiteral("radialLines"),
-         QJsonObject{{QStringLiteral("count"), 0}}}};
-    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
-
-    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("nope")}};
-    QCOMPARE(errorCode(create(content)), QStringLiteral("invalid_argument"));
-
-    // A valid entity for the update paths.
-    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("A")}};
-    content = QJsonObject{{QStringLiteral("kind"), QStringLiteral("comicText")},
-                          {QStringLiteral("comicText"), nested}};
-    const QJsonObject created = create(content);
-    QVERIFY2(created.value(QStringLiteral("ok")).toBool(),
-             qPrintable(errorCode(created)));
-    const QString uuid = uuidOf(created);
+    QJsonObject args = entityArgs(QStringLiteral("字幕"), 0, 60);
+    args.insert(QStringLiteral("content"),
+                QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                            {QStringLiteral("text"),
+                             QJsonObject{{QStringLiteral("text"), QStringLiteral("A")},
+                                         {QStringLiteral("fontFamily"),
+                                          QStringLiteral("Noto")}}}});
+    const QString uuid =
+        uuidOf(fixture.call(QStringLiteral("entity.create"), args));
     QVERIFY(!uuid.isEmpty());
 
-    const auto update = [&](const QJsonObject& contentPatch) {
-        QJsonObject patch;
-        patch.insert(QStringLiteral("content"), contentPatch);
-        return fixture.call(QStringLiteral("entity.update"),
-                            QJsonObject{{QStringLiteral("uuid"), uuid},
-                                        {QStringLiteral("patch"), patch}});
+    const auto textParams = [](double pixelSize, double lineHeight) {
+        return QJsonObject{{QStringLiteral("pixelSize"), pixelSize},
+                           {QStringLiteral("lineHeight"), lineHeight},
+                           {QStringLiteral("letterSpacing"), 0.0},
+                           {QStringLiteral("padding"), 6.0},
+                           {QStringLiteral("boxWidth"), 0.0},
+                           {QStringLiteral("boxHeight"), 0.0},
+                           {QStringLiteral("strokeWidth"), 0.0}};
     };
 
-    nested = QJsonObject{{QStringLiteral("text"), QStringLiteral("B")},
-                         {QStringLiteral("bogus"), true}};
-    QJsonObject contentPatch;
-    contentPatch.insert(QStringLiteral("comicText"), nested);
-    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+    QJsonObject result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{
+            {QStringLiteral("uuid"), uuid},
+            {QStringLiteral("keyframes"),
+             wholeKeys({wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+                                 textParams(96.0, 1.0)),
+                        wholeKey(30, 100.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+                                 textParams(120.0, 1.2))})}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QJsonObject data = result.value(QStringLiteral("data")).toObject();
+    QCOMPARE(data.value(QStringLiteral("count")).toInt(), 2);
+    QCOMPARE(data.value(QStringLiteral("keyframes")).toArray().at(0).toObject()
+                 .value(QStringLiteral("content")).toObject()
+                 .value(QStringLiteral("pixelSize")).toDouble(),
+             96.0);
+    QCOMPARE(data.value(QStringLiteral("keyframes")).toArray().at(0).toObject()
+                 .value(QStringLiteral("content")).toObject().size(),
+             7);
 
-    nested = QJsonObject{{QStringLiteral("pixelSize"), QStringLiteral("big")}};
-    contentPatch.insert(QStringLiteral("comicText"), nested);
-    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+    // Strict set: every content animation parameter is required.
+    QJsonObject missing = textParams(96.0, 1.0);
+    missing.remove(QStringLiteral("letterSpacing"));
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("keyframes"),
+                     wholeKeys({wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+                                         missing)})}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("letterSpacing")));
 
-    nested = QJsonObject{{QStringLiteral("pixelSize"), 0}};
-    contentPatch.insert(QStringLiteral("comicText"), nested);
-    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+    // Definition parameters cannot enter a keyframe.
+    QJsonObject definition = textParams(96.0, 1.0);
+    definition.insert(QStringLiteral("fontFamily"), QStringLiteral("Noto"));
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("keyframes"),
+                     wholeKeys({wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+                                         definition)})}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("定义参数")));
 
-    contentPatch = QJsonObject{
-        {QStringLiteral("kind"), QStringLiteral("comicText")},
-        {QStringLiteral("comicText"),
-         QJsonObject{{QStringLiteral("text"), QStringLiteral("B")}}},
-        {QStringLiteral("bogus"), 1}};
-    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+    QJsonObject topLevelDefinition =
+        wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, textParams(96.0, 1.0));
+    topLevelDefinition.insert(QStringLiteral("text"), QStringLiteral("A"));
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("keyframes"),
+                     QJsonArray{topLevelDefinition}}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
 
-    contentPatch = QJsonObject{{QStringLiteral("kind"), QStringLiteral("nope")}};
-    QCOMPARE(errorCode(update(contentPatch)), QStringLiteral("invalid_argument"));
+    // No per-property track field.
+    QJsonObject withTrack =
+        wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, textParams(96.0, 1.0));
+    withTrack.insert(QStringLiteral("track"), QStringLiteral("x"));
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("keyframes"), QJsonArray{withTrack}}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("track")));
 
-    // Rejected patches leave the stored content untouched.
-    QCOMPARE(fixture.store->project().entities.value(uuid).content.comic.text,
-             QStringLiteral("A"));
-    QCOMPARE(fixture.store->project().entities.value(uuid).content.comic.pixelSize,
-             72);
+    // HTML variables must be numbers; non-number variables stay static.
+    QJsonObject badVars =
+        wholeKey(0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, textParams(96.0, 1.0),
+                 QJsonObject{{QStringLiteral("speed"), QStringLiteral("fast")}});
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("keyframes"), QJsonArray{badVars}}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    // Upsert evaluates the frame, fills every animation parameter, then
+    // applies only the given fields.
+    result = fixture.call(
+        QStringLiteral("keyframes.upsert"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("frame"), 15},
+                    {QStringLiteral("partial"),
+                     QJsonObject{{QStringLiteral("x"), 50.0},
+                                 {QStringLiteral("content"),
+                                  QJsonObject{{QStringLiteral("pixelSize"),
+                                               110.0}}}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toObject()
+                            .value(QStringLiteral("message")).toString()));
+    data = result.value(QStringLiteral("data")).toObject();
+    QCOMPARE(data.value(QStringLiteral("count")).toInt(), 3);
+    const QJsonObject keyframe = data.value(QStringLiteral("keyframe")).toObject();
+    QCOMPARE(keyframe.value(QStringLiteral("x")).toDouble(), 50.0);
+    QCOMPARE(keyframe.value(QStringLiteral("scaleX")).toDouble(), 1.0);
+    const QJsonObject content = keyframe.value(QStringLiteral("content")).toObject();
+    QCOMPARE(content.size(), 7);
+    QCOMPARE(content.value(QStringLiteral("pixelSize")).toDouble(), 110.0);
+    QVERIFY(std::abs(content.value(QStringLiteral("lineHeight")).toDouble()
+                     - 1.1)
+            < 1e-9);
+
+    // frame == duration is a legal upsert target.
+    result = fixture.call(
+        QStringLiteral("keyframes.upsert"),
+        QJsonObject{{QStringLiteral("uuid"), uuid},
+                    {QStringLiteral("frame"), 60},
+                    {QStringLiteral("partial"),
+                     QJsonObject{{QStringLiteral("opacity"), 0.5}}}});
+    QVERIFY2(result.value(QStringLiteral("ok")).toBool(),
+             qPrintable(errorCode(result)));
+    QCOMPARE(result.value(QStringLiteral("data")).toObject()
+                 .value(QStringLiteral("keyframe")).toObject()
+                 .value(QStringLiteral("opacity")).toDouble(),
+             0.5);
+}
+
+void Mcp2Tests::legacySplitTrackRejected()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init());
+
+    // entity.create rejects the old {track: [key...]} object form.
+    QJsonObject createArgs = entityArgs(QStringLiteral("旧格式"), 0, 30);
+    createArgs.insert(QStringLiteral("keyframes"),
+                      QJsonObject{{QStringLiteral("x"),
+                                   wholeKeys({wholeKey(0)})}});
+    QJsonObject result =
+        fixture.call(QStringLiteral("entity.create"), createArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("旧分轨")));
+
+    const QString uuid = createEntity(fixture, QStringLiteral("实体"), 0, 30);
+
+    result = fixture.call(QStringLiteral("keyframes.set"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid},
+                                      {QStringLiteral("keyframes"),
+                                       QJsonObject{{QStringLiteral("x"),
+                                                    QJsonArray{}}}}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("旧分轨")));
+
+    // track is not an accepted argument in either direction.
+    result = fixture.call(QStringLiteral("keyframes.set"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid},
+                                      {QStringLiteral("track"), QStringLiteral("x")},
+                                      {QStringLiteral("keyframes"),
+                                       wholeKeys({wholeKey(0)})}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("track")));
+
+    result = fixture.call(QStringLiteral("keyframes.get"),
+                          QJsonObject{{QStringLiteral("uuid"), uuid},
+                                      {QStringLiteral("track"), QStringLiteral("x")}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+
+    // Old per-property keys carry frame/value but no whole-frame parameters.
+    result = fixture.call(
+        QStringLiteral("keyframes.set"),
+        QJsonObject{
+            {QStringLiteral("uuid"), uuid},
+            {QStringLiteral("keyframes"),
+             QJsonArray{QJsonObject{{QStringLiteral("frame"), 0},
+                                    {QStringLiteral("value"), 1.0}}}}});
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(result.value(QStringLiteral("error")).toObject()
+                .value(QStringLiteral("message")).toString()
+                .contains(QStringLiteral("缺少动画参数")));
+
+    // Deleted special content kinds are unknown, not silently converted.
+    QJsonObject specialArgs = entityArgs(QStringLiteral("漫画"), 0, 30);
+    specialArgs.insert(QStringLiteral("content"),
+                       QJsonObject{{QStringLiteral("kind"),
+                                    QStringLiteral("comicText")},
+                                   {QStringLiteral("comicText"),
+                                    QJsonObject{}}});
+    result = fixture.call(QStringLiteral("entity.create"), specialArgs);
+    QCOMPARE(errorCode(result), QStringLiteral("invalid_argument"));
+    QVERIFY(fixture.store->project().entities.size() == 1);
 }
 
 void Mcp2Tests::writeFlagsReflectService()
@@ -2909,8 +2838,7 @@ void Mcp2Tests::deleteReportsSolverDependencies()
     const QString ground = createEntity(fixture, QStringLiteral("地面"), 0, 120);
     QJsonObject ballArgs = entityArgs(QStringLiteral("小球"), 0, 120);
     ballArgs.insert(QStringLiteral("keyframes"),
-                    QJsonObject{{QStringLiteral("x"), keys({{0, -300.0}})},
-                                {QStringLiteral("y"), keys({{0, -400.0}})}});
+                    wholeKeys({wholeKey(0, -300.0, -400.0)}));
     const QString ball =
         uuidOf(fixture.call(QStringLiteral("entity.create"), ballArgs));
     QJsonObject solverArgs;
@@ -2980,8 +2908,7 @@ void Mcp2Tests::reparentPreserveWorldRejectsKeyframes()
         uuidOf(fixture.call(QStringLiteral("entity.create"), parentArgs));
     QJsonObject childArgs = entityArgs(QStringLiteral("子"), 0, 100, parent);
     childArgs.insert(QStringLiteral("keyframes"),
-                     QJsonObject{{QStringLiteral("x"),
-                                  keys({{0, 10.0}, {10, 20.0}})}});
+                     wholeKeys({wholeKey(0, 10.0), wholeKey(10, 20.0)}));
     const QString child =
         uuidOf(fixture.call(QStringLiteral("entity.create"), childArgs));
     QVERIFY(!parent.isEmpty() && !child.isEmpty());
@@ -2992,11 +2919,12 @@ void Mcp2Tests::reparentPreserveWorldRejectsKeyframes()
                     {QStringLiteral("parentUuid"), QJsonValue(QJsonValue::Null)},
                     {QStringLiteral("mode"), QStringLiteral("preserveWorld")}});
     QCOMPARE(errorCode(result), QStringLiteral("conflict"));
-    const QJsonArray tracks = result.value(QStringLiteral("error")).toObject()
+    const QJsonArray frames = result.value(QStringLiteral("error")).toObject()
                                   .value(QStringLiteral("details")).toObject()
-                                  .value(QStringLiteral("tracks")).toArray();
-    QCOMPARE(tracks.size(), 1);
-    QCOMPARE(tracks.at(0).toString(), QStringLiteral("x"));
+                                  .value(QStringLiteral("keyframes")).toArray();
+    QCOMPARE(frames.size(), 2);
+    QCOMPARE(frames.at(0).toInt(), 0);
+    QCOMPARE(frames.at(1).toInt(), 10);
     QCOMPARE(fixture.store->project().entities.value(child).parentUuid, parent);
 
     result = fixture.call(

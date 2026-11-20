@@ -45,8 +45,8 @@ private slots:
     void moveRowOnlyAndGetDefaults();
     void entityGetIncludesSolvers();
     void textualContentCanBecomeEmpty();
-    void specialContentCreateAndUpdate();
-    void specialContentRejectsUnknownFields();
+    void wholeFrameKeyframesStrictAndUpsert();
+    void legacySplitTrackRejected();
     void writeFlagsReflectService();
     void previewDocumentContract();
     void previewRateLimit();
