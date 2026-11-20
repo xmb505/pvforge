@@ -100,7 +100,7 @@ KeyframeSample staticEntitySample(const Entity& entity);
 bool isLastKeyframeInClip(const Entity& entity, int relativeFrame);
 
 // Inclusive structural end of a segment.  For endFrame == -1 this is the
-// earliest of: one frame before the next keyframe on any track, one frame
+// earliest of: one frame before the next whole-frame keyframe, one frame
 // before the next solver segment, and the clip's last frame.  The physical
 // stop/collision frame is a World-dependent concern and is applied on top by
 // anim; this helper stays model-only.  An explicit endFrame is returned
@@ -108,12 +108,12 @@ bool isLastKeyframeInClip(const Entity& entity, int relativeFrame);
 int solverStructuralEnd(const Entity& entity, const SolverSegment& segment);
 
 // Solver start/end frames must be inside the clip, segments must not overlap,
-// and driven properties (x/y or rotation) must not have normal keyframes
-// inside an explicitly ended segment. A keyframe at the segment start frame
-// is the initial state and is allowed.  For endFrame == -1 the structural end
-// is derived from the next keyframe / next segment / clip end, so a newly
-// created key automatically becomes the end marker instead of an invalid
-// key inside the segment.
+// and no ordinary whole-frame keyframe may sit inside an explicitly ended
+// segment (startFrame < frame <= endFrame).  A keyframe at the segment start
+// frame is the initial state and is allowed.  For endFrame == -1 the structural
+// end is derived from the next keyframe / next segment / clip end, so a newly
+// created key automatically becomes the end marker instead of an invalid key
+// inside the segment.
 bool validateSolvers(const Entity& entity, QString* error = nullptr);
 
 bool validateEntity(const Entity& entity, QString* error = nullptr);

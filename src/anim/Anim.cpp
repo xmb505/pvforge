@@ -229,7 +229,8 @@ const solver::Result* solverResultForImpl(
         return &cached.value();
 
     // A locked cache is exactly the playback contract: lookup only, never
-    // solve.  Callers fall back to ordinary tracks for missing segments.
+    // solve.  Callers fall back to ordinary whole-frame keyframes for missing
+    // segments.
     if (cache.solverResultsLocked)
         return nullptr;
 

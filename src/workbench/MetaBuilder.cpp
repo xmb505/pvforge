@@ -139,10 +139,10 @@ QSet<Uuid> collectEntities(const model::Project& project, int frame)
     return result;
 }
 
-// Serialises the content as it looks at this project frame: animated content
-// fields (fontSize, box sizes, vector size, ...) are written as their
-// evaluated values, so keying them changes the frame's cache metadata exactly
-// when it changes the picture.
+// Serialises the content as it looks at this project frame: whole-frame
+// content animation values (pixelSize, box sizes, vector size, ...) are written
+// as their evaluated values, so keying them changes the frame's cache metadata
+// exactly when it changes the picture.
 void writeContent(QDataStream& out, const model::Entity& entity,
                   double projectFrame)
 {
