@@ -78,24 +78,15 @@ public:
     EntityId entityIdForUuid(const Uuid& uuid) const;
     Uuid uuidForEntityId(EntityId id) const;
 
-    enum class EditMode { Clips, Keyframes };
-
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
     // Window-level Delete: keyframes first, then clips.  MainWindow forwards
     // the key when no text editor has focus.
     void requestDeleteSelection();
-    void setEditMode(EditMode mode);
-    EditMode editMode() const { return m_editMode; }
 
 #ifdef PVFORGE_TEST_HOOKS
     bool splitAtPlayheadForTest() { return splitAtPlayhead(); }
     bool inlineRenameActiveForTest() const { return m_renameEdit != nullptr; }
-    QString inlineRenameTextForTest() const
-    {
-        return m_renameEdit ? m_renameEdit->text() : QString();
-    }
-    void beginInlineRenameForTest(EntityId id) { beginInlineRename(id); }
     void setSelectedKeyframesForTest(
         const QVector<KeyframeSelection>& selection)
     {
@@ -123,6 +114,7 @@ public:
     QRect rowButtonRect(int row, int index) const;
     QRect clipButtonRect(const Entity& entity, int index) const;
 #ifdef PVFORGE_TEST_HOOKS
+    QRect playheadHandleRectForTest() const { return playheadHandleRect(); }
     int frameXForTest(double frame) const
     {
         return xFromFrame(int(std::lround(frame)));
@@ -356,7 +348,8 @@ private:
     void deleteSelectedKeyframes();
     void copyParamsToSelectedKeyframes();
 
-    // Slow double-click inline rename.  Enter/focus-out commits, Esc cancels.
+    // Alt + fast double-click inline rename.  Enter/focus-out commits, Esc
+    // cancels.
     void beginInlineRename(EntityId id);
     void finishInlineRename(bool commit);
 
@@ -433,6 +426,10 @@ private:
     int nameWidth() const;
     void handleRowButton(int row, int index);
     void toggleSessionFlag(EntityId id, bool hidden);
+    void setAltHeld(bool held);
+    void clearSelection();
+    bool clipShowsInlineButtons(const Entity& entity) const;
+    int clipIconCount(const Entity& entity) const;
     // Drop row under y for a clip drag: bottom row 0, gaps allowed, rows
     // above the highest clip collapse to highest + 1.
     int dropRowForY(int y) const;
@@ -490,6 +487,7 @@ private:
     void moveKeys(QVector<Entity>& entities, const QVector<KeyframeSelection>& keys,
                   int delta);
     QRect keyRect(const Entity& entity, int frame) const;
+    QRect playheadHandleRect() const;
     void drawAudioClip(QPainter& painter, const Entity& entity,
                        const QRect& clip) const;
 
@@ -519,8 +517,6 @@ private:
     bool m_editingKeyframeEdit = false;
     QLineEdit* m_renameEdit = nullptr;
     EntityId m_renameEntity = kInvalidEntity;
-    EntityId m_lastClipClickEntity = kInvalidEntity;
-    qint64 m_lastClipClickMs = 0;
     QVector<model::Entity> m_clipClipboard;
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;
@@ -566,7 +562,6 @@ private:
     QScrollBar* m_hScroll = nullptr;
     QScrollBar* m_vScroll = nullptr;
     QToolButton* m_unitButton = nullptr;
-    QToolButton* m_modeButton = nullptr;
     QTimer* m_autoScroll = nullptr;
     QTimer* m_holdTimer = nullptr;
     QTimer* m_holdDelay = nullptr;
@@ -575,8 +570,11 @@ private:
     int m_scrollY = 0;
     double m_pixelsPerFrame = 6.0;
     bool m_displayFrames = false;
-    EditMode m_editMode = EditMode::Clips;
     bool m_relativeTime = false;   // popup only
+    // Alt = clip management layer: keyframes are hit-blocked and dimmed,
+    // while the eye/lock buttons become clickable.
+    bool m_altHeld = false;
+    bool m_boxSelectClips = false;
 
     QHash<EntityId, ClipPopup*> m_popups;
 
@@ -592,10 +590,12 @@ private:
     static constexpr int kTrimGrab = 6;
     static constexpr int kButtonSize = 14;
     static constexpr int kButtonGap = 2;
-    static constexpr int kButtonStrip = 3 * (kButtonSize + kButtonGap);
-    // Clips narrower than this hide the inline eye/lock/key buttons; the
+    static constexpr int kButtonStrip = 2 * (kButtonSize + kButtonGap);
+    // Clips narrower than this hide the inline eye/lock buttons; the
     // right-click menu keeps those actions reachable for short clips.
     static constexpr int kInlineButtonsMinWidth = kButtonStrip + 44;
+    static constexpr int kPlayheadHandleWidth = 14;
+    static constexpr int kPlayheadHandleHeight = 11;
 };
 
 } // namespace pvf

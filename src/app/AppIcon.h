@@ -8,10 +8,9 @@ namespace pvf {
 // viewport workbench button.
 QIcon makeCubeIcon();
 
-// Row buttons shown on hover in the timeline object list.
+// Clip status icons: eye (with a slash when hidden) and lock.
 QIcon makeEyeIcon(bool hidden);
 QIcon makeLockIcon(bool locked);
-QIcon makeKeyframeIcon();
 
 // Vector shape thumbnails for the workbench and properties panel.
 QIcon makeShapeIcon(int shape);

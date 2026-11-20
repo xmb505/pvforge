@@ -65,9 +65,8 @@ QString TimelinePanel::clipNameTextForTest(EntityId id) const
     const QRect clip = clipRect(*entity);
     if (clip.isEmpty())
         return QString();
-    const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
     const int textLeft = clip.left() + 5
-                         + (showButtons ? kButtonStrip + 2 : 0);
+                         + (clipIconCount(*entity) > 0 ? kButtonStrip + 2 : 0);
     const QRect plus =
         ui::detail::plusButtonRect(clip, width() - kScrollBarSize);
     const int textRight = plus.isEmpty() ? clip.right() - 5 : plus.left() - 4;

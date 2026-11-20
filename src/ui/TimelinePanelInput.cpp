@@ -77,6 +77,12 @@ void TimelinePanel::wheelEvent(QWheelEvent* event)
 
 void TimelinePanel::keyPressEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_Alt)
+    {
+        setAltHeld(true);
+        event->accept();
+        return;
+    }
     const Qt::KeyboardModifiers plain =
         event->modifiers() & ~Qt::KeypadModifier;
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
@@ -141,6 +147,12 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
 
 void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_Alt)
+    {
+        setAltHeld(false);
+        event->accept();
+        return;
+    }
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
         && !event->isAutoRepeat())
     {
@@ -153,13 +165,16 @@ void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
 
 void TimelinePanel::focusOutEvent(QFocusEvent* event)
 {
-    // A key release can be lost when the focus moves mid-hold.
+    // A key release can be lost when the focus moves mid-hold; the same is
+    // true for the Alt clip layer.
     stopHold();
+    setAltHeld(false);
     QWidget::focusOutEvent(event);
 }
 
 void TimelinePanel::hideEvent(QHideEvent* event)
 {
+    setAltHeld(false);
     // Private timelines float over the main window, not inside this widget, so
     // hiding the timeline dock must explicitly take them down with it.
     for (ClipPopup* popup : m_popups)
@@ -185,18 +200,11 @@ void TimelinePanel::resizeEvent(QResizeEvent* event)
                                kScrollBarSize,
                                std::max(0, height() - kRulerHeight
                                                - kScrollBarSize));
-    // The name column is gone; unit and edit-mode toggles sit at the ruler's
-    // right edge where the old mode button already lived.
+    // The name column is gone; the unit toggle sits at the ruler's right edge.
     const int rulerRight = width() - kScrollBarSize;
-    if (m_modeButton)
-    {
-        m_modeButton->setGeometry(std::max(4, rulerRight - 58), 3, 54,
-                                  kRulerHeight - 7);
-        m_modeButton->setVisible(m_owner < 0 && width() > 280);
-    }
     if (m_unitButton)
     {
-        m_unitButton->setGeometry(std::max(4, rulerRight - 58 - 42), 3, 36,
+        m_unitButton->setGeometry(std::max(4, rulerRight - 42), 3, 36,
                                   kRulerHeight - 7);
         m_unitButton->setVisible(m_owner < 0 && width() > 200);
     }

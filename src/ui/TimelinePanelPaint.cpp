@@ -274,9 +274,6 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const int x = xFromFrame(frame);
         if (x < nameWidth() - 24 || x > right + 24)
             return;
-        // Keep the header mode button from covering a ruler label.
-        if (m_modeButton && m_modeButton->isVisible() && x > right - 62)
-            return;
         p.setPen(color);
         // Labels sit centred on their tick, not offset to the right.
         p.drawText(QRect(x - 48, 1, 96, kRulerHeight - 5),
@@ -402,9 +399,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             if (!entity)
                 continue;
 
-            // Clip-first: the entity name is the clip name. Eye / lock / select
-            // keys stay available as small inline buttons when the clip is wide
-            // enough; short clips fall back to the clip context menu.
+            // Clip-first: the entity name is the clip name.
             const bool hidden = entity->hidden;
             const bool locked = entity->locked;
             const auto clipIt = paintCache.clipRects.constFind(entity->id);
@@ -415,18 +410,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                 continue;
             const bool selected =
                 entity->id == m_selected || m_entitySelection.contains(entity->id);
-            const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
-            const auto buttonRect = [&clip](int index) {
-                const int x = clip.left() + 2 + index * (kButtonSize + kButtonGap);
-                const int y = clip.top() + (clip.height() - kButtonSize) / 2;
-                return QRect(x, y, kButtonSize, kButtonSize);
-            };
-            if (showButtons)
-            {
-                makeEyeIcon(hidden).paint(&p, buttonRect(0));
-                makeLockIcon(locked).paint(&p, buttonRect(1));
-                makeKeyframeIcon().paint(&p, buttonRect(2));
-            }
+            const int iconCount = clipIconCount(*entity);
+
             QColor color = clipColor(entity->type);
             const int alpha = hidden ? 80 : (selected ? 230 : 200);
             QColor fill = color;
@@ -524,7 +509,7 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         // solver count are secondary text on the right when the clip is wide
         // enough; the tooltip carries the full details for short clips.
         const int textLeft = clip.left() + 5
-                             + (showButtons ? kButtonStrip + 2 : 0);
+                             + (iconCount > 0 ? kButtonStrip + 2 : 0);
         const int textRight =
             plus.isEmpty() ? clip.right() - 5 : plus.left() - 4;
         const int startFrame = clipStartOf(*entity);
@@ -582,6 +567,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             paintCache.keyframes.value(entity->id);
         const int clipStart = clipStartOf(*entity);
         const int clipEnd = clipEndOf(*entity);
+        p.save();
+        if (m_altHeld)
+            p.setOpacity(0.35);
         for (int keyFrame : keyframesForEntity)
         {
             // frame == clipEnd is the ordinary key at the clip's end boundary;
@@ -627,6 +615,56 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                     p.setBrush(QColor(255, 176, 0));
             }
             p.drawPolygon(diamond);
+        }
+        p.restore();
+
+        // Clip management layer.  Normal mode only marks hidden/locked clips
+        // (no hit target); Alt raises the two clickable buttons to the top.
+        if (iconCount > 0)
+        {
+            const auto buttonRect = [&clip](int index) {
+                const int x =
+                    clip.left() + 2 + index * (kButtonSize + kButtonGap);
+                const int y = clip.top() + (clip.height() - kButtonSize) / 2;
+                return QRect(x, y, kButtonSize, kButtonSize);
+            };
+            if (m_altHeld)
+            {
+                for (int index = 0; index < 2; ++index)
+                {
+                    const QRect button = buttonRect(index);
+                    p.setPen(QPen(accent, 1));
+                    p.setBrush(QColor(accent.red(), accent.green(),
+                                      accent.blue(), 70));
+                    p.drawRect(button.adjusted(0, 0, -1, -1));
+                    const QIcon icon =
+                        index == 0 ? makeEyeIcon(hidden) : makeLockIcon(locked);
+                    icon.paint(&p, button.adjusted(1, 1, -1, -1),
+                               Qt::AlignCenter, QIcon::Normal);
+                }
+            }
+            else
+            {
+                int slot = 0;
+                p.save();
+                p.setOpacity(0.8);
+                if (hidden)
+                {
+                    const QRect button = buttonRect(slot++);
+                    makeEyeIcon(true).paint(&p, button, Qt::AlignCenter,
+                                            QIcon::Disabled);
+                    p.setPen(QPen(dim, 1.2));
+                    p.drawLine(button.left() + 2, button.bottom() - 2,
+                               button.right() - 2, button.top() + 2);
+                }
+                if (locked)
+                {
+                    const QRect button = buttonRect(slot);
+                    makeLockIcon(true).paint(&p, button, Qt::AlignCenter,
+                                             QIcon::Normal);
+                }
+                p.restore();
+            }
         }
         }
     }
@@ -704,6 +742,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         }
     }
 
+    // Body-clipped content ends here; the playhead owns the ruler too.
+    p.restore();
+
     const bool playheadInOwner =
         m_owner < 0 || (m_frame >= contentStart() && m_frame < contentEnd());
     const int playhead = xFromFrame(m_frame);
@@ -711,14 +752,24 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     {
         p.setPen(QPen(accent, 1.5));
         p.drawLine(playhead, 0, playhead, bottom);
-        QPolygonF marker;
-        marker << QPointF(playhead - 5, 0) << QPointF(playhead + 5, 0)
-               << QPointF(playhead, 8);
+
+        // A 14x11 grab handle sits on the ruler's top edge: wide flat top,
+        // short shoulders, pointed tip.  The dark outline keeps it readable
+        // on both light and dark accents.
+        const double half = kPlayheadHandleWidth / 2.0;
+        const double shoulder = 5.0;
+        const QPolygonF marker{
+            QPointF(playhead - half, 0.0),
+            QPointF(playhead + half, 0.0),
+            QPointF(playhead + half, shoulder),
+            QPointF(playhead, double(kPlayheadHandleHeight)),
+            QPointF(playhead - half, shoulder)};
+        p.setRenderHint(QPainter::Antialiasing, true);
         p.setBrush(accent);
-        p.setPen(Qt::NoPen);
+        p.setPen(QPen(QColor(20, 22, 26, 230), 1.0));
         p.drawPolygon(marker);
+        p.setRenderHint(QPainter::Antialiasing, false);
     }
-    p.restore();
 }
 
 } // namespace pvf
