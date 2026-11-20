@@ -378,6 +378,12 @@ add_subdirectory(src/next/properties)
 # shell links.
 add_subdirectory(src/next/app)
 
+# Phase B app-layer tests compile EditActions/TimelineAdapter without the
+# Phase C UI shell, so they stay runnable while pvf_app is being migrated.
+if(BUILD_TESTING)
+    add_subdirectory(src/app/tests)
+endif()
+
 # P1/P2 delivery shell: link only the document slice and the shared entity
 # range helpers.
 target_link_libraries(pvf_app PUBLIC pvf_next_document pvf_next_services
