@@ -4,6 +4,7 @@
 #include "ui/TimelineSnapshot.h"
 
 #include <QHash>
+#include <QLineEdit>
 #include <QRect>
 #include <QSet>
 #include <QVector>
@@ -12,6 +13,7 @@
 #include <memory>
 
 class QKeyEvent;
+class QLineEdit;
 class QContextMenuEvent;
 class QDragEnterEvent;
 class QDragMoveEvent;
@@ -33,18 +35,16 @@ namespace pvf {
 class EditorSession;
 class TimelineAdapter;
 
-// A keyframe position, identified by its entity and frame.
+// One whole-frame keyframe diamond, identified by its entity and absolute
+// project frame.
 struct KeyframeSelection
 {
     EntityId entity = kInvalidEntity;
     double frame = 0.0;
-    // Empty selects the merged diamond (every track at this frame); a track
-    // name selects one track for a single-track drag.
-    QString track;
 
     bool operator==(const KeyframeSelection& other) const
     {
-        return entity == other.entity && track == other.track
+        return entity == other.entity
                && qFuzzyCompare(frame + 1.0, other.frame + 1.0);
     }
 };
@@ -88,12 +88,21 @@ public:
     void setEditMode(EditMode mode);
     EditMode editMode() const { return m_editMode; }
 
-    // Track used by the next double-click key insertion.  Selecting a
-    // keyframe diamond also adopts its track.
-    void setSelectedTrack(const QString& track);
 #ifdef PVFORGE_TEST_HOOKS
-    QString selectedTrackForTest() const { return m_selectedTrack; }
     bool splitAtPlayheadForTest() { return splitAtPlayhead(); }
+    bool inlineRenameActiveForTest() const { return m_renameEdit != nullptr; }
+    QString inlineRenameTextForTest() const
+    {
+        return m_renameEdit ? m_renameEdit->text() : QString();
+    }
+    void beginInlineRenameForTest(EntityId id) { beginInlineRename(id); }
+    void setSelectedKeyframesForTest(
+        const QVector<KeyframeSelection>& selection)
+    {
+        adoptKeyframeSelection(selection);
+    }
+    void commitInlineRenameForTest() { finishInlineRename(true); }
+    void cancelInlineRenameForTest() { finishInlineRename(false); }
 #endif
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
@@ -265,12 +274,7 @@ signals:
     void entityMoveRequested(EntityId id, EntityId parent, int index);
     void entitiesMoveRequested(const QVector<EntityId>& ids, EntityId parent,
                                int index);
-    void keyframesMoveRequested(const QVector<KeyframeRecord>& records,
-                                double delta);
-    void keyframeAddRequested(EntityId id, int frame);
     void folderCreateRequested(EntityId parent);
-    void keyframeEasingRequested(const EasingSpec& spec);
-    void keyframeNoteRequested(EntityId id, double frame);
     void replaceSourceRequested(EntityId id);
     void copyEntityRequested(EntityId id);
     void duplicateEntityRequested(EntityId id);
@@ -346,14 +350,15 @@ private:
 
     // Session-backed keyframe editing.  Frames passed in are absolute project
     // frames; the model stores entity-relative ones.
-    bool addKeyframeAt(EntityId id, int frame, const QString& track);
-    void promptTrackAndAddKey(EntityId id, int frame, const QPoint& globalPos);
-    QStringList tracksAtFrame(EntityId id, int frame) const;
+    bool addKeyframeAt(EntityId id, int frame);
     bool keyframeSelectedAt(EntityId id, int frame) const;
     QVector<KeyRef> selectedKeyRefs() const;
     void deleteSelectedKeyframes();
-    void copySelectedKeyframes();
-    void pasteKeyframes();
+    void copyParamsToSelectedKeyframes();
+
+    // Slow double-click inline rename.  Enter/focus-out commits, Esc cancels.
+    void beginInlineRename(EntityId id);
+    void finishInlineRename(bool commit);
 
     // Split and marker edits, session mode only.
     bool splitAtPlayhead();
@@ -448,7 +453,6 @@ private:
     int clipEndOf(const Entity& entity) const;
     QRect clipRect(const Entity& entity) const;
     QVector<int> keyframeFrames(const Entity& entity) const;
-    QVector<KeyframeRecord> keyframeRecords(EntityId id, int frame) const;
     bool keyframeHasNote(EntityId id, double frame) const;
 
     // Scroll and coordinates.
@@ -510,10 +514,13 @@ private:
     EntityId m_selected = kInvalidEntity;
     QSet<EntityId> m_entitySelection;
     QVector<KeyframeSelection> m_selectedKeyframes;
-    QString m_selectedTrack;
-    QString m_dragKeyTrack;
-    QVector<TrackKey> m_keyClipboard;
-    Uuid m_keyClipboardEntity;
+    EntityId m_lastClickedKeyEntity = kInvalidEntity;
+    int m_lastClickedKeyFrame = -1;
+    bool m_editingKeyframeEdit = false;
+    QLineEdit* m_renameEdit = nullptr;
+    EntityId m_renameEntity = kInvalidEntity;
+    EntityId m_lastClipClickEntity = kInvalidEntity;
+    qint64 m_lastClipClickMs = 0;
     QVector<model::Entity> m_clipClipboard;
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;

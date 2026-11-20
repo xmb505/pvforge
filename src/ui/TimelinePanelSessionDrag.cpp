@@ -458,7 +458,6 @@ void TimelinePanel::finishSessionDrag()
     m_dragMode = DragMode::None;
     m_dragEntity = kInvalidEntity;
     m_dragRoots.clear();
-    m_dragKeyTrack.clear();
 
     if (!m_session || !m_session->editActions() || !m_adapter)
     {
@@ -549,10 +548,21 @@ void TimelinePanel::finishSessionDrag()
         {
             if (mode == DragMode::MoveKeyframe && keyDelta != 0)
             {
+                // Frames dragged past the clip boundary are dropped by the
+                // plan; the selection must drop them too.
                 QVector<KeyframeSelection> moved;
                 for (KeyframeSelection selection : m_selectedKeyframes)
                 {
                     selection.frame += keyDelta;
+                    const Uuid keyUuid = uuidForEntityId(selection.entity);
+                    const auto it =
+                        m_sessionPlan.project.entities.constFind(keyUuid);
+                    if (it == m_sessionPlan.project.entities.constEnd())
+                        continue;
+                    const int relative =
+                        int(std::lround(selection.frame)) - it->start;
+                    if (!model::hasKeyframeAt(it->keyframes, relative))
+                        continue;
                     if (!moved.contains(selection))
                         moved.append(selection);
                 }
@@ -572,8 +582,10 @@ void TimelinePanel::finishSessionDrag()
                         m_sessionPlan.project.entities.constFind(keyUuid);
                     if (it == m_sessionPlan.project.entities.constEnd())
                         continue;
+                    // frame == end is the ordinary keyframe at the clip's end
+                    // boundary; only keys past the duration are dropped.
                     if (selection.frame >= it->start
-                        && selection.frame < it->end)
+                        && selection.frame <= it->end)
                         kept.append(selection);
                 }
                 if (kept.size() != m_selectedKeyframes.size())
@@ -604,7 +616,6 @@ void TimelinePanel::cancelSessionDrag()
     m_moved = false;
     m_dragMode = DragMode::None;
     m_dragEntity = kInvalidEntity;
-    m_dragKeyTrack.clear();
     m_dragMarkerId.clear();
     unsetCursor();
     refreshFromSession();

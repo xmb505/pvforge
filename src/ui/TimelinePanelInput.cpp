@@ -105,20 +105,20 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
         requestDeleteSelection();
         return;
     }
+    if (plain == (Qt::ControlModifier | Qt::ShiftModifier)
+        && event->key() == Qt::Key_C)
+    {
+        copyParamsToSelectedKeyframes();
+        return;
+    }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_C)
     {
-        if (!m_selectedKeyframes.isEmpty())
-            copySelectedKeyframes();
-        else
-            copySelectedClips();
+        copySelectedClips();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_V)
     {
-        if (!m_keyClipboard.isEmpty())
-            pasteKeyframes();
-        else
-            pasteClips();
+        pasteClips();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_D)
@@ -214,6 +214,20 @@ void TimelinePanel::leaveEvent(QEvent* event)
 
 bool TimelinePanel::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_renameEdit && event->type() == QEvent::KeyPress)
+    {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape)
+        {
+            finishInlineRename(false);
+            return true;
+        }
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)
+        {
+            finishInlineRename(true);
+            return true;
+        }
+    }
     return QWidget::eventFilter(watched, event);
 }
 

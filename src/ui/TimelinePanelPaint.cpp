@@ -40,16 +40,6 @@ QColor clipColor(EntityType type)
         return QColor(92, 204, 142);
     case EntityType::Folder:
         return QColor(132, 138, 148);
-    case EntityType::ComicText:
-        return QColor(242, 153, 74);
-    case EntityType::RadialLines:
-        return QColor(255, 120, 160);
-    case EntityType::FlowLines:
-        return QColor(88, 196, 221);
-    case EntityType::BrandWall:
-        return QColor(180, 160, 255);
-    case EntityType::HalftoneDots:
-        return QColor(140, 200, 160);
     case EntityType::HtmlLayer:
         return QColor(86, 204, 242);
     }
@@ -590,15 +580,28 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const int centerY = clip.center().y();
         const QVector<int> keyframesForEntity =
             paintCache.keyframes.value(entity->id);
+        const int clipStart = clipStartOf(*entity);
+        const int clipEnd = clipEndOf(*entity);
         for (int keyFrame : keyframesForEntity)
         {
-            if (keyFrame < clipStartOf(*entity) || keyFrame >= clipEndOf(*entity))
+            // frame == clipEnd is the ordinary key at the clip's end boundary;
+            // the diamond is drawn half outside the clip body.
+            if (keyFrame < clipStart || keyFrame > clipEnd)
                 continue;
             const int x = xFromFrame(keyFrame);
-            if (x < clip.left() - 6 || x > clip.right() + 6)
+            if (x < clip.left() - 8 || x > clip.right() + 8)
                 continue;
-            const bool keySelected =
-                keyframeSelectedAt(entity->id, keyFrame);
+            const bool keySelected = keyframeSelectedAt(entity->id, keyFrame);
+            bool solverStart = false;
+            bool solverEnd = false;
+            for (const Keyframe& viewKey : entity->keyframes)
+            {
+                if (int(std::lround(viewKey.frame)) != keyFrame)
+                    continue;
+                solverStart = viewKey.solverStart;
+                solverEnd = viewKey.solverEnd;
+                break;
+            }
             const double radius = keySelected ? 5.5 : 4.5;
             QPolygonF diamond;
             diamond << QPointF(x, centerY - radius)
@@ -616,7 +619,12 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             else
             {
                 p.setPen(QPen(QColor(14, 16, 20, 210), 1.2));
-                p.setBrush(QColor(248, 250, 255));
+                if (solverStart)
+                    p.setBrush(QColor(76, 201, 240));
+                else if (solverEnd)
+                    p.setBrush(QColor(67, 209, 122));
+                else
+                    p.setBrush(QColor(255, 176, 0));
             }
             p.drawPolygon(diamond);
         }

@@ -61,22 +61,26 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     if (keyFrame >= 0)
     {
         selectEntity(id, true);
-        m_selectedKeyframes.clear();
-        m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame), QString()});
-        const QStringList frameTracks = tracksAtFrame(id, keyFrame);
-        if (!frameTracks.isEmpty())
-            m_selectedTrack = frameTracks.first();
+        const bool alreadySelected = keyframeSelectedAt(id, keyFrame);
+        if (!alreadySelected)
+        {
+            m_selectedKeyframes.clear();
+            m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame)});
+        }
+        m_lastClickedKeyEntity = id;
+        m_lastClickedKeyFrame = keyFrame;
         emit keyframeSelectionChanged(m_selectedKeyframes);
         update();
 
-        // Easing is edited in the Properties keyframe section; the clip menu
-        // only manages keys.
+        // Easing/note live in the Properties keyframe section; the clip menu
+        // manages whole-frame parameters and deletion.
         QMenu menu(this);
-        QAction* copy = menu.addAction(QStringLiteral("复制关键帧"));
-        QAction* remove = menu.addAction(QStringLiteral("删除关键帧"));
+        QAction* copyParams =
+            menu.addAction(QStringLiteral("复制参数到选中帧"));
+        QAction* remove = menu.addAction(QStringLiteral("删除整帧关键帧"));
         QAction* chosen = menu.exec(event->globalPos());
-        if (chosen == copy)
-            copySelectedKeyframes();
+        if (chosen == copyParams)
+            copyParamsToSelectedKeyframes();
         else if (chosen == remove)
             deleteSelectedKeyframes();
         event->accept();

@@ -89,17 +89,18 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
     if (!undo())
         return 1;
 
-    // Trim start: keys shift/crop and the child is clipped by the parent.
-    const int childTrackSize = entity(child).tracks.value(QStringLiteral("opacity")).keys.size();
-    if (!check(childTrackSize == 2, QStringLiteral("setup child keys wrong")))
+    // Trim start: whole-frame keys shift/crop and the child is clipped by the
+    // parent.
+    const int childKeyCount = entity(child).keyframes.size();
+    if (!check(childKeyCount == 2, QStringLiteral("setup child keys wrong")))
         return 1;
     if (!check(actions->trimClip(child, 15, 40, &error),
                QStringLiteral("trim start failed: %1").arg(error)))
         return 1;
     {
-        const auto& track = entity(child).tracks.value(QStringLiteral("opacity"));
         if (!check(entity(child).start == 15 && entity(child).end == 40
-                       && track.keys.size() == 1 && track.keys.first().frame == 24,
+                       && entity(child).keyframes.size() == 1
+                       && entity(child).keyframes.first().frame == 24,
                    QStringLiteral("trim start did not shift/crop keys")))
             return 1;
     }
@@ -111,9 +112,8 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
                QStringLiteral("trim end failed: %1").arg(error)))
         return 1;
     {
-        const auto& track = entity(child).tracks.value(QStringLiteral("opacity"));
-        if (!check(entity(child).end == 30 && track.keys.size() == 1
-                       && track.keys.first().frame == 0,
+        if (!check(entity(child).end == 30 && entity(child).keyframes.size() == 1
+                       && entity(child).keyframes.first().frame == 0,
                    QStringLiteral("trim end did not drop the late key")))
             return 1;
     }
@@ -204,9 +204,9 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
     // Parent-range following: enabling rewrites the child to the parent's
     // range, rebases keys to keep absolute frames and cascades to following
     // grandchildren.
-    auto keyFrames = [&](const pvf::Uuid& uuid, const QString& track) {
+    auto keyFrames = [&](const pvf::Uuid& uuid, const QString&) {
         QVector<int> frames;
-        for (const auto& key : entity(uuid).tracks.value(track).keys)
+        for (const auto& key : entity(uuid).keyframes)
             frames.append(key.frame);
         return frames;
     };
@@ -1029,9 +1029,14 @@ int runTimelineEditTest(QApplication& app)
     const pvf::Uuid parent = makeEntity(QStringLiteral("父级"), 0, 60, 0);
     const pvf::Uuid child = makeEntity(QStringLiteral("子级"), 10, 40, 0, parent);
     project.entities[child].content.kind = pvf::ContentKind::Text;
-    pvf::model::Track childTrack;
-    childTrack.keys = {{0, 0.0, {}, {}}, {29, 1.0, {}, {}}};
-    project.entities[child].tracks.insert(QStringLiteral("opacity"), childTrack);
+    {
+        pvf::model::Keyframe first;
+        first.frame = 0;
+        pvf::model::Keyframe second;
+        second.frame = 29;
+        second.opacity = 0.5;
+        project.entities[child].keyframes = {first, second};
+    }
 
     // A grandchild under the child makes a parent trim drop a whole subtree
     // while the parent itself stays in the same plan.
@@ -1076,15 +1081,19 @@ int runTimelineEditTest(QApplication& app)
     project.entities[followGrand].followParentRange = true;
     const pvf::Uuid followTarget =
         makeEntity(QStringLiteral("新跟随父级"), 5, 25, 10);
-    pvf::model::Track followTrack;
-    followTrack.keys = {{2, 0.0, {}, {}}, {8, 1.0, {}, {}},
-                        {12, 0.5, {}, {}}};
-    project.entities[followChild].tracks.insert(QStringLiteral("opacity"),
-                                                followTrack);
-    pvf::model::Track followGrandTrack;
-    followGrandTrack.keys = {{0, 1.0, {}, {}}};
-    project.entities[followGrand].tracks.insert(QStringLiteral("opacity"),
-                                                followGrandTrack);
+    for (const auto& pair : QVector<QPair<int, double>>{{2, 0.0}, {8, 1.0},
+                                                        {12, 0.5}})
+    {
+        pvf::model::Keyframe key;
+        key.frame = pair.first;
+        key.opacity = pair.second;
+        project.entities[followChild].keyframes.append(key);
+    }
+    {
+        pvf::model::Keyframe key;
+        key.frame = 0;
+        project.entities[followGrand].keyframes.append(key);
+    }
 
     const QVector<pvf::Uuid> all = {
         parent,      child,       childGrand,  audio,      video,

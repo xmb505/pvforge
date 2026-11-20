@@ -1,9 +1,14 @@
 #include "TimelinePanel.h"
 
+#include "WholeFrameEdit.h"
 #include "ui/TimelinePanelInternal.h"
 
 #include "app/EditorSession.h"
+#include "model/Entity.h"
 
+#include <QApplication>
+#include <QDateTime>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QTimer>
 
@@ -13,6 +18,10 @@
 namespace pvf {
 
 using ui::detail::plusButtonRect;
+
+namespace {
+constexpr qint64 kSlowDoubleClickMs = 1400;
+}
 
 void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
@@ -47,8 +56,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     const EntityId id = hitClipRow(row, pressX);
     const Entity* entity = entityById(id);
 
-    // Inline clip buttons win over trim/keyframe gestures, but only where
-    // they are actually painted (short clips use the context menu).
+    // Inline clip buttons win over trim/keyframe gestures.
     if (entity && clipRect(*entity).width() >= kInlineButtonsMinWidth)
     {
         for (int index = 0; index < 3; ++index)
@@ -80,6 +88,25 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    // Slow double-click on an already selected clip starts inline rename.  A
+    // fast double-click arrives through mouseDoubleClickEvent and creates a
+    // whole-frame key instead.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 interval = now - m_lastClipClickMs;
+    const bool alreadySelected =
+        id == m_selected || m_entitySelection.contains(id);
+    if (alreadySelected && id == m_lastClipClickEntity
+        && interval > QApplication::doubleClickInterval()
+        && interval <= kSlowDoubleClickMs)
+    {
+        m_lastClipClickMs = 0;
+        m_lastClipClickEntity = kInvalidEntity;
+        beginInlineRename(id);
+        return;
+    }
+    m_lastClipClickMs = now;
+    m_lastClipClickEntity = id;
+
     const int x = int(std::lround(pos.x()));
     m_dragEntity = id;
     m_dragRow = row;
@@ -96,18 +123,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         if (keyFrame >= 0)
         {
             selectEntity(id, true);
-            const QStringList frameTracks = tracksAtFrame(id, keyFrame);
-            const bool singleTrack =
-                (event->modifiers() & Qt::AltModifier) != 0
-                && !frameTracks.isEmpty();
-            QString track;
-            if (singleTrack)
-            {
-                track = frameTracks.contains(m_selectedTrack)
-                            ? m_selectedTrack
-                            : frameTracks.first();
-            }
-            KeyframeSelection selection{id, double(keyFrame), track};
+            const KeyframeSelection selection{id, double(keyFrame)};
             const bool toggle =
                 event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier);
             auto it = std::find(m_selectedKeyframes.begin(),
@@ -124,14 +140,11 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
                 m_selectedKeyframes.clear();
                 m_selectedKeyframes.append(selection);
             }
-            if (!track.isEmpty())
-                m_selectedTrack = track;
-            else if (!frameTracks.isEmpty())
-                m_selectedTrack = frameTracks.first();
+            m_lastClickedKeyEntity = id;
+            m_lastClickedKeyFrame = keyFrame;
 
             m_dragMode = DragMode::MoveKeyframe;
             m_dragRoots.clear();
-            m_dragKeyTrack = track;
             m_keyDragStart = keyFrame;
             m_dragStartFrame = keyFrame;
             m_frame = std::max(0, keyFrame);
@@ -342,8 +355,6 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         const QRectF box = QRectF(m_boxStart, m_boxEnd).normalized();
         const bool additive = event->modifiers() & Qt::ShiftModifier;
 
-        // Clip mode: the rubber band selects whole clips.  Keyframe mode keeps
-        // the historical diamond selection.
         if (m_editMode == EditMode::Clips)
         {
             QSet<EntityId> selected =
@@ -378,9 +389,6 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
         }
 
         const QVector<EntityId> rows = rowIds();
-        // The old timeline's rubber band always picked keyframes, in every
-        // edit mode.  Keep that muscle memory instead of making clip mode
-        // change what a drag means.
         const int topRow = rowAt(int(box.top()));
         const int bottomRow = rowAt(int(box.bottom()));
         const int firstRow = bottomRow >= 0 ? bottomRow : 0;
@@ -406,7 +414,6 @@ void TimelinePanel::mouseReleaseEvent(QMouseEvent* event)
                     m_selectedKeyframes.append(selection);
             }
         }
-        // The lowest selected row becomes the active entity.
         if (firstRow >= 0 && firstRow < rows.size())
         {
             const Entity* last = entityById(rows[firstRow]);
@@ -436,6 +443,12 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         return;
     if (event->position().x() < nameWidth())
         return;
+
+    // Inline rename is the slow-double-click gesture; never create a key while
+    // the editor is open.
+    if (m_renameEdit)
+        return;
+
     const int row = rowAt(int(event->position().y()));
     const EntityId id = entityAtRow(row);
     const Entity* entity = entityById(id);
@@ -449,13 +462,13 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     {
         selectEntity(id, true);
         m_selectedKeyframes.clear();
-        m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame), QString()});
-        const QStringList frameTracks = tracksAtFrame(id, keyFrame);
-        if (!frameTracks.isEmpty())
-            m_selectedTrack = frameTracks.first();
+        m_selectedKeyframes.append(KeyframeSelection{id, double(keyFrame)});
+        m_lastClickedKeyEntity = id;
+        m_lastClickedKeyFrame = keyFrame;
         emit keyframeSelectionChanged(m_selectedKeyframes);
+        m_frame = keyFrame;
+        emit frameRequested(m_frame);
         update();
-        // Easing lives in the Properties keyframe section, not on the clip.
         return;
     }
 
@@ -466,21 +479,101 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     if (!plus.isEmpty() && plus.contains(event->position().toPoint()))
         return;
 
-    const int frame = std::max(0, frameFromX(x));
+    const int frame = std::clamp(frameFromX(x), clipStartOf(*entity),
+                                 clipEndOf(*entity));
     m_frame = frame;
     emit frameRequested(m_frame);
     selectEntity(id, true);
 
-    const Uuid uuid = uuidForEntityId(id);
-    const QStringList tracks =
-        (m_session && m_session->editActions())
-            ? m_session->editActions()->trackNames(uuid)
-            : QStringList();
-    if (m_selectedTrack.isEmpty() || !tracks.contains(m_selectedTrack))
-        promptTrackAndAddKey(id, frame, event->globalPosition().toPoint());
-    else
-        addKeyframeAt(id, frame, m_selectedTrack);
+    const model::Entity* modelEntity = sessionEntity(uuidForEntityId(id));
+    if (!modelEntity)
+        return;
+    const int relative = frame - modelEntity->start;
+    QString reason;
+    if (!ui::wholeframe::canWriteKeyAt(*modelEntity, relative, &reason))
+    {
+        emit editCommitted(reason);
+        return;
+    }
+    addKeyframeAt(id, frame);
     update();
+}
+
+void TimelinePanel::beginInlineRename(EntityId id)
+{
+    finishInlineRename(true);
+    const Entity* entity = entityById(id);
+    if (!entity || isEntityLocked(id))
+        return;
+
+    const QRect clip = clipRect(*entity);
+    if (clip.isEmpty())
+        return;
+    m_renameEntity = id;
+
+    auto* edit = new QLineEdit(this);
+    edit->setObjectName(QStringLiteral("clipRenameEdit"));
+    edit->setText(entity->name);
+    const bool showButtons = clip.width() >= kInlineButtonsMinWidth;
+    const int textLeft = clip.left() + 5
+                         + (showButtons ? kButtonStrip + 2 : 0);
+    const int textRight = clip.right() - 5;
+    edit->setGeometry(textLeft, clip.top() + 2,
+                      std::max(60, textRight - textLeft), clip.height() - 4);
+    edit->selectAll();
+    edit->installEventFilter(this);
+    connect(edit, &QLineEdit::returnPressed, this,
+            [this] { finishInlineRename(true); });
+    connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
+        if (m_renameEdit == edit)
+            finishInlineRename(true);
+    });
+    edit->show();
+    edit->raise();
+    edit->setFocus(Qt::OtherFocusReason);
+    m_renameEdit = edit;
+    update();
+}
+
+void TimelinePanel::finishInlineRename(bool commit)
+{
+    if (!m_renameEdit)
+        return;
+    QLineEdit* edit = m_renameEdit;
+    m_renameEdit = nullptr;
+    const EntityId id = m_renameEntity;
+    m_renameEntity = kInvalidEntity;
+    const QString text = edit->text().trimmed();
+    edit->removeEventFilter(this);
+    edit->disconnect(this);
+    edit->hide();
+    edit->deleteLater();
+
+    if (!commit || text.isEmpty() || !m_session || !m_session->editActions())
+    {
+        update();
+        return;
+    }
+    const Uuid uuid = uuidForEntityId(id);
+    const model::Entity* entity = sessionEntity(uuid);
+    if (!entity || entity->name == text || isEntityLocked(id))
+    {
+        update();
+        return;
+    }
+    QString error;
+    const bool ok = m_session->editActions()->updateEntity(
+        uuid, QStringLiteral("pvf: rename clip"),
+        [text](model::Entity& e) {
+            e.name = text;
+            return true;
+        },
+        &error);
+    if (!ok)
+        emit editFailed(error);
+    else
+        emit editCommitted(QStringLiteral("重命名片段"));
+    refreshFromSession();
 }
 
 } // namespace pvf

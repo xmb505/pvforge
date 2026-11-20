@@ -104,10 +104,16 @@ int timelineTest(QApplication& app)
     }
 
     // Keyframes are stored relative to entity.start and must be shown at
-    // absolute frames by the read-only adapter.
-    pvf::model::Track track;
-    track.keys = {{0, 0.0, {}, {}}, {30, 1.0, {}, {}}};
-    project.entities[title].tracks.insert(QStringLiteral("opacity"), track);
+    // absolute frames by the read-only adapter.  One diamond per whole frame.
+    {
+        pvf::model::Keyframe first;
+        first.frame = 0;
+        first.opacity = 1.0;
+        pvf::model::Keyframe second;
+        second.frame = 30;
+        second.opacity = 0.0;
+        project.entities[title].keyframes = {first, second};
+    }
 
     pvf::model::Marker markerA;
     markerA.id = QStringLiteral("m1");
@@ -502,10 +508,14 @@ int timelineBottomUpTest(QApplication& app)
     const pvf::Uuid top = makeEntity(QStringLiteral("顶"), 20, 50, 2);
     // A non-empty, childless clip is a reorder target, not a parent target.
     live->mutableProject().entities[top].content.kind = pvf::ContentKind::Text;
-    pvf::model::Track track;
-    track.keys = {{0, 0.0, {}, {}}, {10, 100.0, {}, {}}};
-    live->mutableProject().entities[middle].tracks.insert(QStringLiteral("x"),
-                                                          track);
+    {
+        pvf::model::Keyframe first;
+        first.frame = 0;
+        pvf::model::Keyframe second;
+        second.frame = 10;
+        second.x = 100.0;
+        live->mutableProject().entities[middle].keyframes = {first, second};
+    }
     if (!expect(document->commitEntities({bottom, middle, top},
                                          QStringLiteral("bottom-up setup"),
                                          &error),
@@ -977,11 +987,18 @@ int timelineUiTest(QApplication& app)
     const pvf::Uuid hero = makeEntity(QStringLiteral("角色A"), 0, 120, 0);
     const pvf::Uuid background = makeEntity(QStringLiteral("背景B"), 20, 90, 1);
     const pvf::Uuid prop = makeEntity(QStringLiteral("道具C"), 40, 80, 2);
-    pvf::model::Track xTrack;
-    xTrack.keys = {{0, 0.0, {}, {}}, {30, 100.0, {}, {}},
-                   {60, 200.0, {}, {}}};
-    live->mutableProject().entities[hero].tracks.insert(QStringLiteral("x"),
-                                                        xTrack);
+    {
+        pvf::model::Keyframe first;
+        first.frame = 0;
+        pvf::model::Keyframe second;
+        second.frame = 30;
+        second.x = 100.0;
+        pvf::model::Keyframe third;
+        third.frame = 60;
+        third.x = 200.0;
+        live->mutableProject().entities[hero].keyframes = {first, second,
+                                                           third};
+    }
     if (!document->commitEntities({hero, background, prop},
                                   QStringLiteral("timeline ui setup"), &error))
     {
@@ -1088,7 +1105,7 @@ int timelineUiTest(QApplication& app)
     const pvf::model::Entity& heroAfter = live->project().entities.value(hero);
     bool has30 = false;
     bool has45 = false;
-    for (const pvf::model::Keyframe& key : heroAfter.tracks.value(QStringLiteral("x")).keys)
+    for (const pvf::model::Keyframe& key : heroAfter.keyframes)
     {
         if (key.frame == 30)
             has30 = true;
@@ -1441,9 +1458,11 @@ int timelineKeysTest(QApplication& app)
     segment.endFrame = 40;
     segment.params.insert(QStringLiteral("targetUuid"), other);
     project.entities[solver].solvers.append(segment);
-    pvf::model::Track solverX;
-    solverX.keys = {{10, 0.0, {}, {}}};
-    project.entities[solver].tracks.insert(QStringLiteral("x"), solverX);
+    {
+        pvf::model::Keyframe key;
+        key.frame = 10;
+        project.entities[solver].keyframes.append(key);
+    }
 
     if (!document->commitEntities({clip, other, solver},
                                   QStringLiteral("p2b2 keys setup"), &error))
@@ -1471,45 +1490,20 @@ int timelineKeysTest(QApplication& app)
         }
         return true;
     };
-    auto keyAt = [sessionPtr](const pvf::Uuid& uuid, const QString& track,
-                              int frame) {
+    auto keyAt = [sessionPtr](const pvf::Uuid& uuid, const QString&, int frame) {
         const auto entity = sessionPtr->project().entities.constFind(uuid);
         if (entity == sessionPtr->project().entities.constEnd())
             return false;
-        const auto keys = entity.value().tracks.constFind(track);
-        if (keys == entity.value().tracks.constEnd())
-            return false;
-        for (const auto& key : keys.value().keys)
-            if (key.frame == frame)
-                return true;
-        return false;
+        return pvf::model::keyframeAt(entity.value().keyframes, frame) != nullptr;
     };
-    auto keyCount = [sessionPtr](const pvf::Uuid& uuid, const QString& track) {
+    auto keyCount = [sessionPtr](const pvf::Uuid& uuid, const QString&) {
         const auto entity = sessionPtr->project().entities.constFind(uuid);
-        if (entity == sessionPtr->project().entities.constEnd())
-            return 0;
-        const auto keys = entity.value().tracks.constFind(track);
-        return keys == entity.value().tracks.constEnd()
+        return entity == sessionPtr->project().entities.constEnd()
                    ? 0
-                   : int(keys.value().keys.size());
+                   : int(entity.value().keyframes.size());
     };
 
-    // EditActions: insert, one commit, undo.
-    int beforeDepth = depth();
-    if (!check(actions->addKeyframe(clip, QStringLiteral("x"), 15, &error),
-               QStringLiteral("addKeyframe failed: %1").arg(error)))
-        return 1;
-    if (!check(keyAt(clip, QStringLiteral("x"), 15),
-               QStringLiteral("addKeyframe did not write the key")))
-        return 1;
-    flush();
-    if (!check(depth() == beforeDepth + 1,
-               QStringLiteral("addKeyframe did not commit once")))
-        return 1;
-    if (!undo())
-        return 1;
-
-    // Panel: double-click inserts on the selected track.
+    // Panel: double-click creates a whole-frame key at the drop frame.
     auto* window = new pvf::MainWindow(session.release());
     window->setAttribute(Qt::WA_DeleteOnClose);
     window->resize(1200, 800);
@@ -1536,8 +1530,7 @@ int timelineKeysTest(QApplication& app)
     const int clipRow = rowForName(QStringLiteral("关键帧片段"));
     if (!check(clipRow >= 0, QStringLiteral("clip row missing")))
         return 1;
-    timeline->setSelectedTrack(QStringLiteral("x"));
-    beforeDepth = depth();
+    int beforeDepth = depth();
     const QPoint dblPoint(timeline->frameXForTest(20),
                           timeline->rowCenterYForTest(clipRow));
     QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(dblPoint),
@@ -1555,167 +1548,182 @@ int timelineKeysTest(QApplication& app)
     if (!undo())
         return 1;
 
-    // Two tracks at one frame paint one merged diamond; dragging moves both.
-    if (!check(actions->addKeyframe(clip, QStringLiteral("x"), 10, &error)
-                   && actions->addKeyframe(clip, QStringLiteral("y"), 10, &error),
-               QStringLiteral("merged key setup failed: %1").arg(error)))
+    // One whole-frame diamond owns every animation parameter.
+    if (!check(actions->addKeyframe(clip, 10, &error),
+               QStringLiteral("whole-frame key setup failed: %1").arg(error)))
         return 1;
     live->flush();
     timeline->setEditMode(pvf::TimelinePanel::EditMode::Keyframes);
-    timeline->setSelectedTrack(QStringLiteral("x"));
-    beforeDepth = depth();
-    const QPoint mergeFrom(timeline->frameXForTest(10),
-                           timeline->rowCenterYForTest(clipRow));
-    const QPoint mergeTo(timeline->frameXForTest(15),
-                         timeline->rowCenterYForTest(clipRow));
-    QMouseEvent mergePress(QEvent::MouseButtonPress, QPointF(mergeFrom),
-                           QPointF(timeline->mapToGlobal(mergeFrom)),
-                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent mergeMove(QEvent::MouseMove, QPointF(mergeTo),
-                          QPointF(timeline->mapToGlobal(mergeTo)), Qt::NoButton,
-                          Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent mergeRelease(QEvent::MouseButtonRelease, QPointF(mergeTo),
-                             QPointF(timeline->mapToGlobal(mergeTo)),
-                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &mergePress);
-    QApplication::sendEvent(timeline, &mergeMove);
-    QApplication::sendEvent(timeline, &mergeRelease);
-    QApplication::processEvents();
-    live->flush();
-    if (!check(depth() == beforeDepth + 1,
-               QStringLiteral("merged drag did not commit once")))
-        return 1;
-    if (!check(keyAt(clip, QStringLiteral("x"), 15)
-                   && keyAt(clip, QStringLiteral("y"), 15)
-                   && !keyAt(clip, QStringLiteral("x"), 10)
-                   && !keyAt(clip, QStringLiteral("y"), 10),
-               QStringLiteral("merged drag did not move both tracks")))
-        return 1;
-    if (!undo())
-        return 1;
 
-    // Esc cancels a key drag without committing.
-    beforeDepth = depth();
-    const QPoint cancelFrom(timeline->frameXForTest(10),
-                            timeline->rowCenterYForTest(clipRow));
-    const QPoint cancelTo(timeline->frameXForTest(20),
-                          timeline->rowCenterYForTest(clipRow));
-    QMouseEvent cancelPress(QEvent::MouseButtonPress, QPointF(cancelFrom),
-                            QPointF(timeline->mapToGlobal(cancelFrom)),
-                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent cancelMove(QEvent::MouseMove, QPointF(cancelTo),
-                           QPointF(timeline->mapToGlobal(cancelTo)), Qt::NoButton,
-                           Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &cancelPress);
-    QApplication::sendEvent(timeline, &cancelMove);
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &escape);
-    QApplication::processEvents();
+    // Ctrl+Shift+C copies the source key's animation parameters to every
+    // selected whole-frame key.
+    if (!check(actions->addKeyframe(clip, 40, &error),
+               QStringLiteral("copy-params target setup failed")))
+        return 1;
     live->flush();
-    if (!check(depth() == beforeDepth,
-               QStringLiteral("Esc created an undo step")))
+    timeline->setSelectedKeyframesForTest(
+        {pvf::KeyframeSelection{timeline->entityIdForUuid(clip), 10.0},
+         pvf::KeyframeSelection{timeline->entityIdForUuid(clip), 40.0}});
+    if (!check(timeline->selectedKeyframeCount() == 2,
+               QStringLiteral("multi-selection setup failed")))
         return 1;
-    if (!check(keyAt(clip, QStringLiteral("x"), 10)
-                   && keyAt(clip, QStringLiteral("y"), 10)
-                   && !keyAt(clip, QStringLiteral("x"), 20),
-               QStringLiteral("Esc did not restore the key preview")))
-        return 1;
-
-    // Alt-drag moves only the selected track.
-    timeline->setSelectedTrack(QStringLiteral("x"));
-    beforeDepth = depth();
-    const QPoint singleFrom(timeline->frameXForTest(10),
-                            timeline->rowCenterYForTest(clipRow));
-    const QPoint singleTo(timeline->frameXForTest(12),
-                          timeline->rowCenterYForTest(clipRow));
-    QMouseEvent singlePress(QEvent::MouseButtonPress, QPointF(singleFrom),
-                            QPointF(timeline->mapToGlobal(singleFrom)),
-                            Qt::LeftButton, Qt::LeftButton, Qt::AltModifier);
-    QMouseEvent singleMove(QEvent::MouseMove, QPointF(singleTo),
-                           QPointF(timeline->mapToGlobal(singleTo)), Qt::NoButton,
-                           Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent singleRelease(QEvent::MouseButtonRelease, QPointF(singleTo),
-                              QPointF(timeline->mapToGlobal(singleTo)),
-                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &singlePress);
-    QApplication::sendEvent(timeline, &singleMove);
-    QApplication::sendEvent(timeline, &singleRelease);
-    QApplication::processEvents();
-    live->flush();
-    if (!check(depth() == beforeDepth + 1,
-               QStringLiteral("single-track drag did not commit once")))
-        return 1;
-    if (!check(keyAt(clip, QStringLiteral("x"), 12)
-                   && keyAt(clip, QStringLiteral("y"), 10)
-                   && !keyAt(clip, QStringLiteral("x"), 10),
-               QStringLiteral("single-track drag moved the wrong tracks")))
-        return 1;
-    if (!undo())
-        return 1;
-
-    // Click selects the merged diamond, Delete removes every track at the frame.
-    const QPoint selectPoint(timeline->frameXForTest(10),
-                             timeline->rowCenterYForTest(clipRow));
-    QMouseEvent selectPress(QEvent::MouseButtonPress, QPointF(selectPoint),
-                            QPointF(timeline->mapToGlobal(selectPoint)),
-                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent selectRelease(QEvent::MouseButtonRelease, QPointF(selectPoint),
-                              QPointF(timeline->mapToGlobal(selectPoint)),
-                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &selectPress);
-    QApplication::sendEvent(timeline, &selectRelease);
-    QApplication::processEvents();
-    if (!check(timeline->selectedKeyframeCount() == 1,
-               QStringLiteral("merged diamond was not selected")))
-        return 1;
-    QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
-    QApplication::sendEvent(timeline, &del);
-    QApplication::processEvents();
-    live->flush();
-    if (!check(keyCount(clip, QStringLiteral("x")) == 0
-                   && keyCount(clip, QStringLiteral("y")) == 0,
-               QStringLiteral("Delete did not remove the merged keys")))
-        return 1;
-    if (!undo())
-        return 1;
-
-    // Ctrl+C / Ctrl+V pastes at the playhead.
-    QApplication::sendEvent(timeline, &selectPress);
-    QApplication::sendEvent(timeline, &selectRelease);
-    QApplication::processEvents();
-    QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-    QApplication::sendEvent(timeline, &copy);
+    // Give the two keys distinct x values, then copy the playhead's value to
+    // the other selected frame.
+    {
+        auto key10 = *pvf::model::keyframeAt(
+            live->project().entities.value(clip).keyframes, 10);
+        key10.x = 10.0;
+        auto key40 = *pvf::model::keyframeAt(
+            live->project().entities.value(clip).keyframes, 40);
+        key40.x = 40.0;
+        error.clear();
+        if (!check(actions->upsertKeyframe(clip, key10, &error)
+                       && actions->upsertKeyframe(clip, key40, &error),
+                   QStringLiteral("copy-params values setup failed")))
+            return 1;
+        live->flush();
+    }
     live->setPlayhead(40);
-    QKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
-    QApplication::sendEvent(timeline, &paste);
+    QApplication::processEvents();
+    QKeyEvent copyParams(QEvent::KeyPress, Qt::Key_C,
+                         Qt::ControlModifier | Qt::ShiftModifier);
+    QApplication::sendEvent(timeline, &copyParams);
     QApplication::processEvents();
     live->flush();
-    if (!check(keyAt(clip, QStringLiteral("x"), 40)
-                   && keyAt(clip, QStringLiteral("y"), 40),
-               QStringLiteral("paste did not land on the playhead")))
+    if (!check(std::abs(live->project()
+                            .entities.value(clip)
+                            .keyframes.at(0)
+                            .x
+                        - 40.0)
+                   < 1e-6,
+               QStringLiteral("copy-params did not overwrite the other key")))
         return 1;
-    if (!undo())
+
+    // Multi-selected keys drag together and delete as one group.
+    {
+        const int dragFromX = timeline->frameXForTest(10);
+        const int dragToX = timeline->frameXForTest(15);
+        const int dragY = timeline->rowCenterYForTest(clipRow);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(dragFromX, dragY),
+                          QPointF(timeline->mapToGlobal(QPoint(dragFromX, dragY))),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent move(QEvent::MouseMove, QPointF(dragToX, dragY),
+                         QPointF(timeline->mapToGlobal(QPoint(dragToX, dragY))),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease,
+                            QPointF(dragToX, dragY),
+                            QPointF(timeline->mapToGlobal(QPoint(dragToX, dragY))),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &press);
+        QApplication::sendEvent(timeline, &move);
+        QApplication::sendEvent(timeline, &release);
+        QApplication::processEvents();
+        live->flush();
+    }
+    if (!check(keyAt(clip, QString(), 15) && keyAt(clip, QString(), 45)
+                   && !keyAt(clip, QString(), 10)
+                   && !keyAt(clip, QString(), 40),
+               QStringLiteral("multi-select drag did not offset the group")))
         return 1;
+    QKeyEvent groupDelete(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(timeline, &groupDelete);
+    QApplication::processEvents();
+    live->flush();
+    if (!check(!keyAt(clip, QString(), 15) && !keyAt(clip, QString(), 45),
+               QStringLiteral("multi-select delete left keys behind")))
+        return 1;
+    if (!undo() || !undo())
+        return 1;
+    if (!check(keyAt(clip, QString(), 10) && keyAt(clip, QString(), 40),
+               QStringLiteral("undo did not restore the group")))
+        return 1;
+
+    // Double-clicking the existing diamond selects it without adding a key.
+    const int keysBeforeSelect = keyCount(clip, QString());
+    QApplication::sendEvent(timeline, &doubleClick);
+    QApplication::processEvents();
+    if (!check(keyCount(clip, QString()) == keysBeforeSelect
+                   && timeline->selectedKeyframeCount() == 1,
+               QStringLiteral("double-clicking a diamond changed the keys")))
+        return 1;
+
+    // Slow double-click on the selected clip starts inline rename; Enter
+    // commits exactly one rename commit.
+    {
+        const int renameDepth = depth();
+        timeline->beginInlineRenameForTest(timeline->entityIdForUuid(clip));
+        QApplication::processEvents();
+        auto* edit =
+            timeline->findChild<QLineEdit*>(QStringLiteral("clipRenameEdit"));
+        if (!check(edit != nullptr,
+                   QStringLiteral("inline rename editor did not open")))
+            return 1;
+        edit->setText(QStringLiteral("关键帧片段改名"));
+        timeline->commitInlineRenameForTest();
+        QApplication::processEvents();
+        live->flush();
+        if (!check(live->project().entities.value(clip).name
+                       == QStringLiteral("关键帧片段改名"),
+                   QStringLiteral("inline rename did not reach the model"))
+            || !check(depth() == renameDepth + 1,
+                      QStringLiteral("inline rename was not one commit")))
+            return 1;
+    }
+
+    // Closed solver interval: double-click is a no-op with a status message.
+    {
+        const int solverRow = rowForName(QStringLiteral("求解片段"));
+        if (!check(solverRow >= 0, QStringLiteral("solver row missing")))
+            return 1;
+        QString status;
+        QObject::connect(timeline, &pvf::TimelinePanel::editCommitted,
+                         [&status](const QString& text) { status = text; });
+        const QPoint point(timeline->frameXForTest(20),
+                           timeline->rowCenterYForTest(solverRow));
+        QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(point),
+                                QPointF(timeline->mapToGlobal(point)),
+                                Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &doubleClick);
+        QApplication::processEvents();
+        if (!check(!keyAt(solver, QString(), 20),
+                   QStringLiteral("closed solver double-click created a key"))
+            || !check(status.contains(QStringLiteral("求解")),
+                      QStringLiteral("closed solver double-click had no status")))
+            return 1;
+    }
+    // The end-boundary key (frame == duration) is a real whole-frame key and
+    // hit-tests as a half-out diamond.
+    {
+        error.clear();
+        if (!check(actions->addKeyframe(clip, 60, &error),
+                   QStringLiteral("end-boundary key failed: %1").arg(error)))
+            return 1;
+        live->flush();
+        if (!check(keyAt(clip, QString(), 60),
+                   QStringLiteral("end-boundary key missing"))
+            || !check(timeline->keyframeHitForTest(
+                          clipRow, timeline->frameXForTest(60),
+                          timeline->rowCenterYForTest(clipRow))
+                          == 60,
+                      QStringLiteral("end-boundary diamond is not hit-testable")))
+            return 1;
+        if (!undo())
+            return 1;
+    }
 
     // Easing write path; the timeline opens EasingChooser for a key.
     pvf::model::EasingSpec easing;
     easing.type = QStringLiteral("easeinoutcubic");
     error.clear();
     if (!check(actions->setKeyframeEasing(
-                   QVector<pvf::KeyRef>{{clip, QStringLiteral("x"), 10}}, easing,
-                   &error),
+                   pvf::KeyRef{clip, 10}, easing, &error),
                QStringLiteral("setKeyframeEasing failed: %1").arg(error)))
         return 1;
     {
-        bool eased = false;
-        const auto track = sessionPtr->project()
-                               .entities.value(clip)
-                               .tracks.value(QStringLiteral("x"));
-        for (const auto& key : track.keys)
-            if (key.frame == 10
-                && key.easing.type == QStringLiteral("easeinoutcubic"))
-                eased = true;
-        if (!check(eased, QStringLiteral("key easing was not written")))
+        const pvf::model::Keyframe* key = pvf::model::keyframeAt(
+            sessionPtr->project().entities.value(clip).keyframes, 10);
+        if (!check(key && key->easing.type == QStringLiteral("easeinoutcubic"),
+                   QStringLiteral("whole-frame easing was not written")))
             return 1;
     }
     if (!undo())
@@ -1725,29 +1733,21 @@ int timelineKeysTest(QApplication& app)
     // and normal keys cannot be written inside the segment.
     error.clear();
     if (!check(!actions->deleteKeyframes(
-                   QVector<pvf::KeyRef>{{solver, QStringLiteral("x"), 10}},
-                   &error),
+                   QVector<pvf::KeyRef>{{solver, 10}}, &error),
                QStringLiteral("solver start key delete should fail")))
         return 1;
     error.clear();
     if (!check(!actions->moveKeyframes(
-                   QVector<pvf::KeyRef>{{solver, QStringLiteral("x"), 10}}, 1,
-                   &error),
+                   QVector<pvf::KeyRef>{{solver, 10}}, 1, &error),
                QStringLiteral("solver start key move should fail")))
         return 1;
     error.clear();
-    if (!check(!actions->addKeyframe(solver, QStringLiteral("x"), 20, &error),
+    if (!check(!actions->addKeyframe(solver, 20, &error),
                QStringLiteral("key inside a solver segment should fail")))
         return 1;
     if (!check(keyAt(solver, QStringLiteral("x"), 10)
                    && keyCount(solver, QStringLiteral("x")) == 1,
                QStringLiteral("failed solver edits changed the keys")))
-        return 1;
-
-    QDir().mkpath(QStringLiteral("/tmp/opencode"));
-    if (!check(window->grab().save(
-                   QStringLiteral("/tmp/opencode/pvforge-p2b2-keys.png")),
-               QStringLiteral("screenshot failed")))
         return 1;
 
     window->close();
@@ -1803,10 +1803,14 @@ int timelineSplitTest(QApplication& app)
     };
     const pvf::Uuid parent = makeEntity(QStringLiteral("父级"), 0, 60, 0);
     const pvf::Uuid child = makeEntity(QStringLiteral("子级"), 10, 50, 0, parent);
-    pvf::model::Track parentX;
-    parentX.keys = {{0, 0.0, {}, {}}, {10, 1.0, {}, {}},
-                    {30, 2.0, {}, {}}, {50, 3.0, {}, {}}};
-    project.entities[parent].tracks.insert(QStringLiteral("x"), parentX);
+    for (const auto& pair : QVector<QPair<int, double>>{{0, 0.0}, {10, 1.0},
+                                                        {30, 2.0}, {50, 3.0}})
+    {
+        pvf::model::Keyframe key;
+        key.frame = pair.first;
+        key.x = pair.second;
+        project.entities[parent].keyframes.append(key);
+    }
 
     pvf::model::Entity video;
     video.uuid = pvf::model::newUuid();
@@ -1858,15 +1862,12 @@ int timelineSplitTest(QApplication& app)
         return pvf::Uuid();
     };
     auto keyFrames = [](const pvf::model::Project& p, const pvf::Uuid& uuid,
-                        const QString& track) {
+                        const QString&) {
         QVector<int> frames;
         const auto entity = p.entities.constFind(uuid);
         if (entity == p.entities.constEnd())
             return frames;
-        const auto keys = entity.value().tracks.constFind(track);
-        if (keys == entity.value().tracks.constEnd())
-            return frames;
-        for (const auto& key : keys.value().keys)
+        for (const auto& key : entity.value().keyframes)
             frames.append(key.frame);
         std::sort(frames.begin(), frames.end());
         return frames;

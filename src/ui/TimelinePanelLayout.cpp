@@ -245,7 +245,7 @@ void TimelinePanel::handleRowButton(int row, int index)
         if (!isEntityLocked(id))
         {
             for (int frame : keyframeFrames(*entity))
-                m_selectedKeyframes.append(KeyframeSelection{id, double(frame), QString()});
+                m_selectedKeyframes.append(KeyframeSelection{id, double(frame)});
         }
         selectEntity(id, true);
         emit keyframeSelectionChanged(m_selectedKeyframes);
@@ -255,8 +255,6 @@ void TimelinePanel::handleRowButton(int row, int index)
 
     if (sessionMode())
     {
-        if (m_editMode == EditMode::Keyframes)
-            m_dragKeyTrack.clear();
         toggleSessionFlag(id, index == 0);
         return;
     }
@@ -472,37 +470,11 @@ QRect TimelinePanel::clipRectFor(EntityId id) const
 
 QVector<int> TimelinePanel::keyframeFrames(const Entity& entity) const
 {
-    QSet<int> frames;
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
-        for (const Keyframe& key : it->keys)
-            frames.insert(int(std::lround(key.frame)));
-    QVector<int> result(frames.begin(), frames.end());
+    QVector<int> result;
+    result.reserve(entity.keyframes.size());
+    for (const Keyframe& key : entity.keyframes)
+        result.append(int(std::lround(key.frame)));
     std::sort(result.begin(), result.end());
-    return result;
-}
-
-QVector<KeyframeRecord> TimelinePanel::keyframeRecords(EntityId id, int frame) const
-{
-    QVector<KeyframeRecord> result;
-    const Entity* entity = entityById(id);
-    if (!entity)
-        return result;
-    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
-    {
-        for (const Keyframe& key : it->keys)
-        {
-            if (int(std::lround(key.frame)) != frame)
-                continue;
-            KeyframeRecord record;
-            record.entity = id;
-            record.property = it.key();
-            record.frame = key.frame;
-            record.value = key.value;
-            record.ease = key.ease;
-            record.note = key.note;
-            result.append(record);
-        }
-    }
     return result;
 }
 
@@ -511,10 +483,9 @@ bool TimelinePanel::keyframeHasNote(EntityId id, double frame) const
     const Entity* entity = entityById(id);
     if (!entity)
         return false;
-    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd(); ++it)
-        for (const Keyframe& key : it->keys)
-            if (std::abs(key.frame - frame) < 0.5 && !key.note.isEmpty())
-                return true;
+    for (const Keyframe& key : entity->keyframes)
+        if (std::abs(key.frame - frame) < 0.5 && !key.note.isEmpty())
+            return true;
     return false;
 }
 
@@ -717,7 +688,9 @@ EntityId TimelinePanel::hitClipRow(int row, int x) const
     for (const Entity* entity : entitiesInRow(row))
     {
         const QRect clip = clipRect(*entity);
-        if (clip.contains(x, clip.center().y()))
+        // The end-boundary diamond is drawn half outside the clip body, so a
+        // small horizontal tolerance keeps it clickable.
+        if (clip.adjusted(-6, 0, 6, 0).contains(x, clip.center().y()))
             return entity->id;
     }
     return kInvalidEntity;

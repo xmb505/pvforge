@@ -309,8 +309,11 @@ void TimelinePanel::selectEntity(EntityId id, bool emitSignal)
 void TimelinePanel::adoptKeyframeSelection(
     const QVector<KeyframeSelection>& selection)
 {
+    if (m_selectedKeyframes == selection)
+        return;
     m_selectedKeyframes = selection;
     update();
+    emit keyframeSelectionChanged(m_selectedKeyframes);
     if (m_sourcePanel)
         m_sourcePanel->adoptKeyframeSelection(selection);
 }
@@ -340,11 +343,6 @@ void TimelinePanel::setPixelsPerFrameForTest(double pixels)
     syncPopups();
 }
 #endif
-
-void TimelinePanel::setSelectedTrack(const QString& track)
-{
-    m_selectedTrack = track;
-}
 
 void TimelinePanel::setEditMode(EditMode mode)
 {
