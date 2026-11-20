@@ -46,6 +46,8 @@
 #include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
+
+#include <cmath>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -517,6 +519,25 @@ void MainWindow::buildSessionShell()
                     && m_session->playback()->isPlaying())
                     m_session->playback()->pause();
             });
+            connect(m_timeline, &TimelinePanel::keyframeSelectionChanged, this,
+                    [this](const QVector<KeyframeSelection>& selection) {
+                        if (!m_props || !m_session || !m_timeline)
+                            return;
+                        QVector<KeyRef> refs;
+                        const model::Project& project = m_session->project();
+                        for (const KeyframeSelection& item : selection)
+                        {
+                            const Uuid uuid = m_timeline->uuidForEntityId(
+                                item.entity);
+                            const auto it = project.entities.constFind(uuid);
+                            if (it == project.entities.constEnd())
+                                continue;
+                            refs.append(KeyRef{
+                                uuid,
+                                int(std::lround(item.frame)) - it->start});
+                        }
+                        m_props->setSelectedKeyframes(refs);
+                    });
             connect(m_timeline, &TimelinePanel::editCommitted, this,
                     [this](const QString& text) {
                         statusBar()->showMessage(text, 2000);

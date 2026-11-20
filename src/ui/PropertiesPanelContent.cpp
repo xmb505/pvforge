@@ -2,6 +2,7 @@
 
 #include "CollapsibleSection.h"
 #include "PropertiesPanelInternal.h"
+#include "WholeFrameEdit.h"
 #include "app/EditActions.h"
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
@@ -20,7 +21,6 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QStackedWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -29,6 +29,7 @@
 namespace pvf {
 
 using namespace ui::detail;
+namespace wholeframe = ui::wholeframe;
 
 namespace {
 
@@ -101,14 +102,13 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
 
     m_textFont = new QFontComboBox(content);
     m_textFont->setObjectName(QStringLiteral("textFont"));
-    // Keep the property column inside the legacy 300px panel: the font model
-    // otherwise asks for the width of the longest installed family.
     m_textFont->setSizeAdjustPolicy(
         QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_textFont->setMinimumContentsLength(10);
-    connect(m_textFont, &QFontComboBox::currentFontChanged, this, [this](const QFont& font) {
-        applyData(QStringLiteral("font"), font.family());
-    });
+    connect(m_textFont, &QFontComboBox::currentFontChanged, this,
+            [this](const QFont& font) {
+                applyData(QStringLiteral("font"), font.family());
+            });
     form->addRow(QStringLiteral("字体"), m_textFont);
 
     m_textSize = new QSpinBox(content);
@@ -162,8 +162,10 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     m_textAlign = new QComboBox(content);
     m_textAlign->setObjectName(QStringLiteral("textAlign"));
     m_textAlign->addItem(QStringLiteral("居中"), int(Qt::AlignCenter));
-    m_textAlign->addItem(QStringLiteral("左对齐"), int(Qt::AlignLeft | Qt::AlignVCenter));
-    m_textAlign->addItem(QStringLiteral("右对齐"), int(Qt::AlignRight | Qt::AlignVCenter));
+    m_textAlign->addItem(QStringLiteral("左对齐"),
+                         int(Qt::AlignLeft | Qt::AlignVCenter));
+    m_textAlign->addItem(QStringLiteral("右对齐"),
+                         int(Qt::AlignRight | Qt::AlignVCenter));
     connect(m_textAlign, &QComboBox::currentIndexChanged, this, [this](int) {
         applyData(QStringLiteral("align"), m_textAlign->currentData());
     });
@@ -175,33 +177,23 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     m_textDirection->addItem(QStringLiteral("竖排 · 从右到左"), 1);
     m_textDirection->addItem(QStringLiteral("竖排 · 从左到右"), 2);
     connect(m_textDirection, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (m_sessionMode)
-        {
-            QVariantMap data;
-            data.insert(QStringLiteral("vertical"), index > 0);
-            data.insert(QStringLiteral("verticalRtl"), index != 2);
-            if (!m_sessionUuid.isEmpty())
-            {
-                runSessionContentEdit(
-                    QStringLiteral("pvf: edit text direction"),
-                    [&data](model::Content& content) {
-                        if (content.kind != ContentKind::Text)
-                            return false;
-                        content.text.vertical =
-                            data.value(QStringLiteral("vertical")).toBool();
-                        content.text.verticalRtl =
-                            data.value(QStringLiteral("verticalRtl")).toBool();
-                        return true;
-                    });
-            }
-            return;
-        }
-        if (m_entity == kInvalidEntity)
-            return;
         QVariantMap data;
         data.insert(QStringLiteral("vertical"), index > 0);
         data.insert(QStringLiteral("verticalRtl"), index != 2);
-        emit dataEdited(m_entity, data);
+        if (!m_sessionUuid.isEmpty())
+        {
+            runSessionContentEdit(
+                QStringLiteral("pvf: edit text direction"),
+                [&data](model::Content& content) {
+                    if (content.kind != ContentKind::Text)
+                        return false;
+                    content.text.vertical =
+                        data.value(QStringLiteral("vertical")).toBool();
+                    content.text.verticalRtl =
+                        data.value(QStringLiteral("verticalRtl")).toBool();
+                    return true;
+                });
+        }
     });
     form->addRow(QStringLiteral("排版方向"), m_textDirection);
 
@@ -232,235 +224,32 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
     layoutButton->setToolTip(
         QStringLiteral("打开文字排版编辑器：换行宽度、行距、内边距"));
     connect(layoutButton, &QPushButton::clicked, this, [this] {
-        if (m_sessionMode)
+        const model::Entity* entity = sessionEntity();
+        if (!entity || !sessionEditable()
+            || entity->content.kind != ContentKind::Text)
+            return;
+        TextLayoutDialog dialog(textStyleFromContent(entity->content.text), this);
+        if (dialog.exec() != QDialog::Accepted)
         {
-            const model::Entity* entity = sessionEntity();
-            if (!entity || !sessionEditable()
-                || entity->content.kind != ContentKind::Text)
-                return;
-            TextLayoutDialog dialog(textStyleFromContent(entity->content.text),
-                                    this);
-            if (dialog.exec() != QDialog::Accepted)
-            {
-                refresh();
-                return;
-            }
-            const model::TextContent edited = textContentFromStyle(
-                entity->content.text, dialog.style());
-            runSessionContentEdit(
-                QStringLiteral("pvf: edit text layout"),
-                [edited](model::Content& content) {
-                    if (content.kind != ContentKind::Text)
-                        return false;
-                    content.text = edited;
-                    return true;
-                });
+            refresh();
             return;
         }
+        const model::TextContent edited = textContentFromStyle(
+            entity->content.text, dialog.style());
+        runSessionContentEdit(
+            QStringLiteral("pvf: edit text layout"),
+            [edited](model::Content& content) {
+                if (content.kind != ContentKind::Text)
+                    return false;
+                content.text = edited;
+                return true;
+            });
     });
     form->addRow(layoutButton);
 
     m_textSection = new CollapsibleSection(QStringLiteral("文字"), content, this);
     m_textSection->setExpanded(true);
     layout->addWidget(m_textSection);
-}
-
-void PropertiesPanel::addDataRow(QFormLayout* form, const QString& label,
-                                 const QString& key, double lo, double hi, int decimals,
-                                 double step)
-{
-    auto* spin = new QDoubleSpinBox(form->parentWidget());
-    spin->setObjectName(QStringLiteral("data_") + key);
-    spin->setRange(lo, hi);
-    spin->setDecimals(decimals);
-    spin->setSingleStep(step);
-    connect(spin, &QDoubleSpinBox::valueChanged, this,
-            [this, key](double value) { emitDataEdit(key, value); });
-    DataRow row;
-    row.key = key;
-    row.spin = spin;
-    m_dataRows.append(row);
-    form->addRow(label, spin);
-}
-
-void PropertiesPanel::addDataCount(QFormLayout* form, const QString& label,
-                                   const QString& key, int lo, int hi)
-{
-    auto* spin = new QSpinBox(form->parentWidget());
-    spin->setObjectName(QStringLiteral("data_") + key);
-    spin->setRange(lo, hi);
-    connect(spin, &QSpinBox::valueChanged, this,
-            [this, key](int value) { emitDataEdit(key, value); });
-    DataRow row;
-    row.key = key;
-    row.count = spin;
-    m_dataRows.append(row);
-    form->addRow(label, spin);
-}
-
-void PropertiesPanel::addDataColor(QFormLayout* form, const QString& label,
-                                   const QString& key, const QColor& initial)
-{
-    auto* button = new QPushButton(form->parentWidget());
-    button->setObjectName(QStringLiteral("data_") + key);
-    m_dataColors.insert(key, initial);
-    setColorButton(button, initial);
-    connect(button, &QPushButton::clicked, this, [this, key, button] {
-        const QColor color = pickColor(m_dataColors.value(key), QStringLiteral("颜色"));
-        if (!color.isValid())
-            return;
-        m_dataColors.insert(key, color);
-        setColorButton(button, color);
-        emitDataEdit(key, color);
-    });
-    DataRow row;
-    row.key = key;
-    row.color = button;
-    m_dataRows.append(row);
-    form->addRow(label, button);
-}
-
-void PropertiesPanel::emitDataEdit(const QString& key, const QVariant& value)
-{
-    if (m_sessionMode)
-    {
-        applySessionData(key, value);
-        return;
-    }
-    if (m_entity == kInvalidEntity)
-        return;
-    QVariantMap data;
-    data.insert(key, value);
-    emit dataEdited(m_entity, data);
-}
-
-void PropertiesPanel::buildComicSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
-
-    m_comicShape = new QComboBox(content);
-    m_comicShape->addItem(QStringLiteral("椭圆"), 0);
-    m_comicShape->addItem(QStringLiteral("矩形"), 1);
-    m_comicShape->addItem(QStringLiteral("云朵"), 2);
-    m_comicShape->addItem(QStringLiteral("爆炸"), 3);
-    connect(m_comicShape, &QComboBox::currentIndexChanged, this, [this](int) {
-        emitDataEdit(QStringLiteral("bubbleShape"), m_comicShape->currentData());
-    });
-    form->addRow(QStringLiteral("形状"), m_comicShape);
-
-    m_comicTail = new QCheckBox(QStringLiteral("尖角"), content);
-    m_comicTail->setToolTip(QStringLiteral("拖动画面上的小圆点可以移动尖角"));
-    connect(m_comicTail, &QCheckBox::toggled, this, [this](bool on) {
-        emitDataEdit(QStringLiteral("bubbleTail"), on);
-    });
-    form->addRow(m_comicTail);
-
-    addDataRow(form, QStringLiteral("圆角"), QStringLiteral("bubbleRadius"), 0, 400, 0, 1);
-    addDataRow(form, QStringLiteral("尖角 X"), QStringLiteral("bubbleTipX"), -3, 3, 2, 0.05);
-    addDataRow(form, QStringLiteral("尖角 Y"), QStringLiteral("bubbleTipY"), -3, 3, 2, 0.05);
-    addDataRow(form, QStringLiteral("描边宽度"), QStringLiteral("strokeWidth"), 0, 60, 1, 1);
-    addDataColor(form, QStringLiteral("底色"), QStringLiteral("fill"), QColor(Qt::white));
-    addDataColor(form, QStringLiteral("描边色"), QStringLiteral("stroke"),
-                 QColor(24, 24, 28));
-
-    m_comicSection = new CollapsibleSection(QStringLiteral("漫画框"), content, this);
-    m_comicSection->setExpanded(true);
-    layout->addWidget(m_comicSection);
-}
-
-void PropertiesPanel::buildLinesSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* box = new QVBoxLayout(content);
-    box->setContentsMargins(10, 8, 10, 8);
-    box->setSpacing(6);
-    m_linesStack = new QStackedWidget(content);
-
-    auto* radial = new QWidget(m_linesStack);
-    auto* radialForm = new QFormLayout(radial);
-    radialForm->setContentsMargins(0, 0, 0, 0);
-    addDataCount(radialForm, QStringLiteral("线条数"), QStringLiteral("count"), 1, 400);
-    addDataRow(radialForm, QStringLiteral("半径"), QStringLiteral("radius"), 10, 4000, 0, 10);
-    addDataRow(radialForm, QStringLiteral("线宽"), QStringLiteral("width"), 1, 120, 1, 1);
-    addDataRow(radialForm, QStringLiteral("旋转 °/s"), QStringLiteral("spin"), -180, 180, 1,
-               1);
-    addDataRow(radialForm, QStringLiteral("随机速度 Hz"), QStringLiteral("flicker"), 0, 60, 1,
-               1);
-    addDataRow(radialForm, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
-    addDataColor(radialForm, QStringLiteral("颜色"), QStringLiteral("color"), QColor(Qt::white));
-    m_linesStack->addWidget(radial);
-
-    auto* flow = new QWidget(m_linesStack);
-    auto* flowForm = new QFormLayout(flow);
-    flowForm->setContentsMargins(0, 0, 0, 0);
-    addDataCount(flowForm, QStringLiteral("线条数"), QStringLiteral("count"), 1, 400);
-    addDataRow(flowForm, QStringLiteral("长度"), QStringLiteral("length"), 20, 4000, 0, 10);
-    addDataRow(flowForm, QStringLiteral("间距"), QStringLiteral("spacing"), 5, 600, 0, 5);
-    addDataRow(flowForm, QStringLiteral("粗细"), QStringLiteral("thickness"), 1, 80, 1, 1);
-    addDataRow(flowForm, QStringLiteral("速度 px/s"), QStringLiteral("speed"), 0, 6000, 0, 50);
-    addDataRow(flowForm, QStringLiteral("角度"), QStringLiteral("angle"), -180, 180, 0, 5);
-    addDataRow(flowForm, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
-    addDataColor(flowForm, QStringLiteral("颜色"), QStringLiteral("color"), QColor(Qt::white));
-    m_linesStack->addWidget(flow);
-
-    box->addWidget(m_linesStack);
-    m_linesSection = new CollapsibleSection(QStringLiteral("装饰线条"), content, this);
-    m_linesSection->setExpanded(true);
-    layout->addWidget(m_linesSection);
-}
-
-void PropertiesPanel::buildBrandWallSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
-
-    m_wallInfo = new QLabel(content);
-    m_wallInfo->setWordWrap(true);
-    m_wallInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_wallInfo->setMinimumWidth(0);
-    form->addRow(m_wallInfo);
-
-    auto* edit = new QPushButton(QStringLiteral("编辑瓷砖墙…"), content);
-    edit->setObjectName(QStringLiteral("wallEditButton"));
-    connect(edit, &QPushButton::clicked, this, [this] {
-    });
-    form->addRow(edit);
-
-    m_wallSection = new CollapsibleSection(QStringLiteral("品牌瓷砖墙"), content, this);
-    m_wallSection->setExpanded(true);
-    layout->addWidget(m_wallSection);
-}
-
-void PropertiesPanel::buildHalftoneSection(QVBoxLayout* layout)
-{
-    auto* content = new QWidget(this);
-    auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
-
-    addDataRow(form, QStringLiteral("范围"), QStringLiteral("area"), 100, 4000, 0, 50);
-    addDataRow(form, QStringLiteral("点间距"), QStringLiteral("spacing"), 4, 200, 1, 1);
-    addDataRow(form, QStringLiteral("最大点径"), QStringLiteral("dotSize"), 0.5, 60, 1,
-               0.5);
-    addDataRow(form, QStringLiteral("网格角度"), QStringLiteral("angle"), -180, 180, 1,
-               5);
-    addDataRow(form, QStringLiteral("渐隐角度"), QStringLiteral("gradientAngle"), -180,
-               180, 1, 5);
-    addDataRow(form, QStringLiteral("最小点比例"), QStringLiteral("minRatio"), 0, 1, 2,
-               0.05);
-    addDataRow(form, QStringLiteral("手绘抖动"), QStringLiteral("jitter"), 0, 1, 2, 0.05);
-    addDataRow(form, QStringLiteral("随机种子"), QStringLiteral("seed"), 1, 9999, 0, 1);
-    addDataColor(form, QStringLiteral("颜色"), QStringLiteral("color"), Qt::white);
-
-    m_halftoneSection =
-        new CollapsibleSection(QStringLiteral("漫画点阵"), content, this);
-    m_halftoneSection->setExpanded(true);
-    layout->addWidget(m_halftoneSection);
 }
 
 void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
@@ -492,7 +281,9 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     m_vectorCorner->setDecimals(1);
     m_vectorCorner->setSuffix(QStringLiteral(" px"));
     connect(m_vectorCorner, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("cornerRadius"), value); });
+            [this](double value) {
+                writeAnimationValue(QStringLiteral("cornerRadius"), value);
+            });
     form->addRow(QStringLiteral("圆角"), m_vectorCorner);
 
     m_vectorSides = new QSpinBox(content);
@@ -517,7 +308,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     m_vectorWidth->setDecimals(1);
     m_vectorWidth->setSuffix(QStringLiteral(" px"));
     connect(m_vectorWidth, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("width"), value); });
+            [this](double value) { writeAnimationValue(QStringLiteral("width"), value); });
     form->addRow(QStringLiteral("宽度"), m_vectorWidth);
 
     m_vectorHeight = new QDoubleSpinBox(content);
@@ -526,7 +317,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     m_vectorHeight->setDecimals(1);
     m_vectorHeight->setSuffix(QStringLiteral(" px"));
     connect(m_vectorHeight, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("height"), value); });
+            [this](double value) { writeAnimationValue(QStringLiteral("height"), value); });
     form->addRow(QStringLiteral("高度"), m_vectorHeight);
 
     m_fillButton = new QPushButton(content);
@@ -561,7 +352,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
     m_strokeWidth->setDecimals(1);
     m_strokeWidth->setSuffix(QStringLiteral(" px"));
     connect(m_strokeWidth, &QDoubleSpinBox::valueChanged, this,
-            [this](double value) { applyData(QStringLiteral("strokeWidth"), value); });
+            [this](double value) { writeAnimationValue(QStringLiteral("strokeWidth"), value); });
     form->addRow(QStringLiteral("描边宽度"), m_strokeWidth);
 
     m_vectorSection = new CollapsibleSection(QStringLiteral("矢量"), content, this);
@@ -584,14 +375,8 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     m_replaceSource = new QPushButton(QStringLiteral("更换素材…"), content);
     m_replaceSource->setObjectName(QStringLiteral("replaceSourceButton"));
     connect(m_replaceSource, &QPushButton::clicked, this, [this] {
-        if (m_sessionMode)
-        {
-            if (!m_sessionUuid.isEmpty())
-                emit sessionReplaceSourceRequested(m_sessionUuid);
-            return;
-        }
-        if (m_entity != kInvalidEntity)
-            emit replaceSourceRequested(m_entity);
+        if (!m_sessionUuid.isEmpty())
+            emit sessionReplaceSourceRequested(m_sessionUuid);
     });
     mediaLayout->addWidget(m_replaceSource);
     m_mediaSection = new CollapsibleSection(QStringLiteral("素材"), content, this);
@@ -624,26 +409,31 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     m_pivotY->setKeyboardTracking(false);
     form->addRow(QStringLiteral("轴心 Y"), m_pivotY);
 
-    auto* hint = new QLabel(QStringLiteral("轴心相对实体中心，旋转围绕轴心。"), content);
+    auto* hint = new QLabel(QStringLiteral("轴心相对实体中心，旋转围绕轴心。"
+                                           "轴心是定义参数，不进关键帧。"),
+                            content);
     hint->setWordWrap(true);
     form->addRow(hint);
 
-    connect(m_usePivot, &QCheckBox::toggled, this, [this](bool on) {
-        Q_UNUSED(on);
-    });
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {
-        if (m_sessionMode)
-        {
-            sessionSetTrackValue(QStringLiteral("pivotX"), value);
+        const model::Entity* entity = sessionEntity();
+        if (!entity || !sessionEditable())
             return;
-        }
+        runSessionEdit(QStringLiteral("pvf: edit pivot"),
+                       [value](model::Entity& e) {
+                           e.transform.pivotX = value;
+                           return true;
+                       });
     });
     connect(m_pivotY, &QDoubleSpinBox::valueChanged, this, [this](double value) {
-        if (m_sessionMode)
-        {
-            sessionSetTrackValue(QStringLiteral("pivotY"), value);
+        const model::Entity* entity = sessionEntity();
+        if (!entity || !sessionEditable())
             return;
-        }
+        runSessionEdit(QStringLiteral("pvf: edit pivot"),
+                       [value](model::Entity& e) {
+                           e.transform.pivotY = value;
+                           return true;
+                       });
     });
 
     m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
@@ -653,13 +443,7 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
 
 void PropertiesPanel::applyData(const QString& key, const QVariant& value)
 {
-    if (m_sessionMode)
-    {
-        applySessionData(key, value);
-        return;
-    }
-    Q_UNUSED(key);
-    Q_UNUSED(value);
+    applySessionData(key, value);
 }
 
 void PropertiesPanel::applySessionData(const QString& key, const QVariant& value)
@@ -673,22 +457,20 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
     {
         if (key == QLatin1String("size"))
         {
-            sessionSetTrackValue(QStringLiteral("fontSize"), value.toInt());
+            writeAnimationValue(QStringLiteral("pixelSize"), value.toInt());
             return;
         }
         if (key == QLatin1String("textStrokeWidth"))
         {
-            sessionSetTrackValue(QStringLiteral("strokeWidth"),
-                                 value.toDouble());
+            writeAnimationValue(QStringLiteral("strokeWidth"), value.toDouble());
             return;
         }
         if (key == QLatin1String("lineHeight")
             || key == QLatin1String("letterSpacing")
-            || key == QLatin1String("padding")
-            || key == QLatin1String("boxWidth")
+            || key == QLatin1String("padding") || key == QLatin1String("boxWidth")
             || key == QLatin1String("boxHeight"))
         {
-            sessionSetTrackValue(key, value.toDouble());
+            writeAnimationValue(key, value.toDouble());
             return;
         }
 
@@ -702,11 +484,11 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
                                   else if (key == QLatin1String("font"))
                                       text.fontFamily = value.toString();
                                   else if (key == QLatin1String("color"))
-                                      text.color = colorString(
-                                          value.value<QColor>());
+                                      text.color =
+                                          colorString(value.value<QColor>());
                                   else if (key == QLatin1String("textStrokeColor"))
-                                      text.strokeColor = colorString(
-                                          value.value<QColor>());
+                                      text.strokeColor =
+                                          colorString(value.value<QColor>());
                                   else if (key == QLatin1String("align"))
                                       text.align = value.toInt();
                                   else if (key == QLatin1String("bold"))
@@ -715,10 +497,6 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
                                       text.italic = value.toBool();
                                   else if (key == QLatin1String("underline"))
                                       text.underline = value.toBool();
-                                  else if (key == QLatin1String("vertical"))
-                                      text.vertical = value.toBool();
-                                  else if (key == QLatin1String("verticalRtl"))
-                                      text.verticalRtl = value.toBool();
                                   else
                                       return false;
                                   return true;
@@ -728,11 +506,11 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
 
     if (kind == ContentKind::Vector)
     {
-        if (key == QLatin1String("cornerRadius")
-            || key == QLatin1String("width") || key == QLatin1String("height")
+        if (key == QLatin1String("cornerRadius") || key == QLatin1String("width")
+            || key == QLatin1String("height")
             || key == QLatin1String("strokeWidth"))
         {
-            sessionSetTrackValue(key, value.toDouble());
+            writeAnimationValue(key, value.toDouble());
             return;
         }
 
@@ -748,11 +526,11 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
                                   else if (key == QLatin1String("innerRatio"))
                                       vector.innerRatio = value.toDouble();
                                   else if (key == QLatin1String("fill"))
-                                      vector.fillColor = colorString(
-                                          value.value<QColor>());
+                                      vector.fillColor =
+                                          colorString(value.value<QColor>());
                                   else if (key == QLatin1String("stroke"))
-                                      vector.strokeColor = colorString(
-                                          value.value<QColor>());
+                                      vector.strokeColor =
+                                          colorString(value.value<QColor>());
                                   else
                                       return false;
                                   return true;
@@ -768,27 +546,27 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
             const model::AssetContent& asset = entity->content.asset;
             auto trimAudio = [this, entity](int newStart, int newEnd) {
                 QString trimError;
-                if (!m_session->editActions()->trimClip(m_sessionUuid,
-                                                        newStart, newEnd,
-                                                        &trimError))
+                if (!m_session->editActions()->trimClip(m_sessionUuid, newStart,
+                                                        newEnd, &trimError))
                     reportSessionError(trimError);
             };
             if (key == QLatin1String("startFrame"))
             {
-                const int target = std::max(0, int(std::lround(value.toDouble())));
+                const int target =
+                    std::max(0, int(std::lround(value.toDouble())));
                 const int delta = target - entity->start;
                 if (delta != 0)
                 {
                     QString moveError;
-                    if (!m_session->editActions()->moveClips({m_sessionUuid},
-                                                             delta, &moveError))
+                    if (!m_session->editActions()->moveClips(
+                            {m_sessionUuid}, delta, &moveError))
                         reportSessionError(moveError);
                 }
                 return;
             }
             if (key == QLatin1String("trimStart"))
             {
-                const int current = entity->content.asset.sourceIn;
+                const int current = asset.sourceIn;
                 const int target = std::max(
                     0, int(std::lround(value.toDouble() * fps)));
                 const int nextStart = entity->start + (target - current);
@@ -799,8 +577,8 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
             if (key == QLatin1String("trimEnd"))
             {
                 int mediaFrames = 0;
-                const auto stored = m_session->assets().getIncludingMissing(
-                    asset.hash);
+                const auto stored =
+                    m_session->assets().getIncludingMissing(asset.hash);
                 if (stored)
                     mediaFrames = stored->metadata
                                       .value(QStringLiteral("durationFrames"))
@@ -841,7 +619,7 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
         if (key == QLatin1String("sourceIn"))
             applySessionAsset(QStringLiteral("sourceIn"), value);
         else if (key == QLatin1String("volume"))
-            applySessionAsset(QStringLiteral("volume"), value);
+            writeAnimationValue(QStringLiteral("volume"), value.toDouble());
     }
 }
 
@@ -852,20 +630,27 @@ void PropertiesPanel::applySessionParent(const Uuid& parent)
         return;
     m_editing = true;
     QString error;
-    const bool ok = m_session->editActions()->reparent(
-        m_sessionUuid, parent, false, &error);
+    const bool ok = m_session->editActions()->reparent(m_sessionUuid, parent,
+                                                       false, &error);
     m_editing = false;
     if (!ok)
         reportSessionError(error);
     refresh();
 }
 
-void PropertiesPanel::applySessionAsset(const QString& field, const QVariant& value)
+void PropertiesPanel::applySessionAsset(const QString& field,
+                                        const QVariant& value)
 {
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable()
         || entity->content.kind != ContentKind::Asset)
         return;
+
+    if (field == QLatin1String("volume"))
+    {
+        writeAnimationValue(QStringLiteral("volume"), value.toDouble());
+        return;
+    }
 
     int maxSourceIn = 1000000;
     const auto stored =
@@ -878,18 +663,14 @@ void PropertiesPanel::applySessionAsset(const QString& field, const QVariant& va
             maxSourceIn = std::max(0, frames - 1);
     }
 
+    if (field != QLatin1String("sourceIn"))
+        return;
     runSessionContentEdit(QStringLiteral("pvf: edit asset content"),
-                          [field, value, maxSourceIn](model::Content& content) {
+                          [value, maxSourceIn](model::Content& content) {
                               if (content.kind != ContentKind::Asset)
                                   return false;
-                              if (field == QLatin1String("sourceIn"))
-                                  content.asset.sourceIn = std::clamp(
-                                      value.toInt(), 0, maxSourceIn);
-                              else if (field == QLatin1String("volume"))
-                                  content.asset.volume = std::clamp(
-                                      value.toDouble(), 0.0, 2.0);
-                              else
-                                  return false;
+                              content.asset.sourceIn =
+                                  std::clamp(value.toInt(), 0, maxSourceIn);
                               return true;
                           });
 }

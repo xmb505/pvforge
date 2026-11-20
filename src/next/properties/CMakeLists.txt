@@ -37,8 +37,6 @@ endif()
 add_library(pvf_next_properties STATIC
     SolverPreviewWidget.cpp
     SolverPreviewWidget.h
-    SpecialContentEditor.cpp
-    SpecialContentEditor.h
     TextLayoutDialog.cpp
     TextLayoutDialog.h
 )

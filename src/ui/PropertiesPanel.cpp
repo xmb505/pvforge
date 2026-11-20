@@ -2,19 +2,20 @@
 
 #include "CollapsibleSection.h"
 #include "PropertiesPanelInternal.h"
+#include "WholeFrameEdit.h"
 #include "app/EditActions.h"
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
 #include "model/Content.h"
 #include "model/Easing.h"
 #include "model/Entity.h"
+#include "model/Keyframe.h"
 #include "model/Query.h"
 #include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
 #include "next/properties/SolverPreviewWidget.h"
-#include "next/properties/SpecialContentEditor.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -37,11 +38,11 @@
 namespace pvf {
 
 using namespace ui::detail;
+namespace wholeframe = ui::wholeframe;
 
 PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
     : QWidget(parent)
     , m_session(session)
-    , m_sessionMode(true)
 {
     buildUi();
     buildSessionUi();
@@ -54,13 +55,12 @@ PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
             if (selected != m_sessionUuid)
             {
                 m_sessionUuid = selected;
+                m_selectedKeys.clear();
                 refresh();
             }
         });
         connect(document, &next::Document::playheadChanged, this, [this] {
             m_frame = m_session->playhead();
-            // Scrubbing/playback only touches frame-dependent widgets; a full
-            // refresh() here rebuilt every solver card and re-ran the solver.
             refreshPlayheadOnly();
         });
         connect(document, &next::Document::changed, this, [this] {
@@ -69,9 +69,8 @@ PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)
         });
         if (auto* playback = m_session->playback())
         {
-            connect(playback,
-                    &next::PlaybackController::playbackStateChanged, this,
-                    [this](bool playing) { setPlaybackActive(playing); });
+            connect(playback, &next::PlaybackController::playbackStateChanged,
+                    this, [this](bool playing) { setPlaybackActive(playing); });
             m_playbackActive = playback->isPlaying();
             if (m_solverPreview)
                 m_solverPreview->setPlaybackActive(m_playbackActive);
@@ -97,10 +96,80 @@ bool PropertiesPanel::sessionEditable() const
     return !next::isEntityLocked(m_session->project(), entity->uuid);
 }
 
-int PropertiesPanel::sessionRelativeFrame(const model::Entity& entity) const
+int PropertiesPanel::playheadRelative(const model::Entity& entity) const
 {
     const int playhead = m_session ? m_session->playhead() : m_frame;
     return playhead - entity.start;
+}
+
+int PropertiesPanel::selectedSingleKeyFrame(const model::Entity& entity) const
+{
+    if (m_selectedKeys.size() != 1)
+        return -1;
+    const KeyRef& ref = m_selectedKeys.first();
+    if (ref.entity != entity.uuid
+        || !model::hasKeyframeAt(entity.keyframes, ref.frame))
+        return -1;
+    return ref.frame;
+}
+
+int PropertiesPanel::activeKeyFrame(const model::Entity& entity) const
+{
+    // One selected whole-frame key wins.  A multi-selection only affects
+    // offset/delete/copy, never the parameter write target.
+    const int selected = selectedSingleKeyFrame(entity);
+    if (selected >= 0)
+        return selected;
+    return playheadRelative(entity);
+}
+
+int PropertiesPanel::activeEditFrameForTest() const
+{
+    const model::Entity* entity = sessionEntity();
+    return entity ? activeKeyFrame(*entity) : -1;
+}
+
+void PropertiesPanel::setSelectedKeyframes(const QVector<KeyRef>& selection)
+{
+    m_selectedKeys = selection;
+    const model::Entity* entity = sessionEntity();
+    if (entity && m_selectedKeys.size() == 1)
+    {
+        const KeyRef& ref = m_selectedKeys.first();
+        if (ref.entity == entity->uuid && m_session)
+            m_session->setPlayhead(ref.frame + entity->start);
+    }
+    refreshPlayheadOnly();
+}
+
+void PropertiesPanel::setSelectedUuid(const Uuid& uuid)
+{
+    if (m_sessionUuid == uuid)
+    {
+        refresh();
+        return;
+    }
+    if (m_solverPreview)
+        m_solverPreview->clearSolver();
+    m_selectedSolverId.clear();
+    m_selectedKeys.clear();
+    m_sessionUuid = uuid;
+    refresh();
+}
+
+void PropertiesPanel::setPlaybackActive(bool active)
+{
+    if (m_playbackActive == active)
+        return;
+    m_playbackActive = active;
+    if (!m_solverPreview)
+        return;
+    m_solverPreview->setPlaybackActive(active);
+    if (active)
+        return;
+    QTimer::singleShot(0, m_solverPreview, [preview = m_solverPreview] {
+        preview->refreshPreview();
+    });
 }
 
 void PropertiesPanel::reportSessionError(const QString& message)
@@ -114,6 +183,8 @@ bool PropertiesPanel::runSessionEdit(
 {
     if (!m_session || m_sessionUuid.isEmpty())
         return false;
+    if (m_session->playback() && m_session->playback()->isPlaying())
+        m_session->playback()->pause();
     m_editing = true;
     QString error;
     const bool ok = m_session->editActions()->updateEntity(
@@ -130,6 +201,8 @@ bool PropertiesPanel::runSessionContentEdit(
 {
     if (!m_session || m_sessionUuid.isEmpty())
         return false;
+    if (m_session->playback() && m_session->playback()->isPlaying())
+        m_session->playback()->pause();
     m_editing = true;
     QString error;
     const bool ok = m_session->editActions()->updateContent(
@@ -141,160 +214,253 @@ bool PropertiesPanel::runSessionContentEdit(
     return ok;
 }
 
-bool PropertiesPanel::eventFilter(QObject* watched, QEvent* event)
+int PropertiesPanel::prepareAnimationEdit(const model::Entity& entity)
 {
-    if (event->type() == QEvent::MouseButtonPress
-        || event->type() == QEvent::FocusIn)
-    {
-        QWidget* widget = qobject_cast<QWidget*>(watched);
-        for (const SolverCard& card : m_solverCards)
-        {
-            if (card.box == watched
-                || (widget && card.box && card.box->isAncestorOf(widget)))
+    if (m_session && m_session->playback()
+        && m_session->playback()->isPlaying())
+        m_session->playback()->pause();
+    if (m_session)
+        m_session->setPlayhead(std::lround(double(m_session->playhead())));
+    return activeKeyFrame(entity);
+}
+
+bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
+                                          bool boolean)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return false;
+
+    const int frame = prepareAnimationEdit(*entity);
+    const bool inRange = frame >= 0 && frame <= entity->duration();
+    const bool camera = entity->content.kind == ContentKind::Camera;
+    if (camera && (property == QLatin1String("scaleX")
+                   || property == QLatin1String("scaleY")))
+        value = std::clamp(std::abs(value), 0.05, 1.0);
+
+    bool outOfRange = false;
+    const bool ok = runSessionEdit(
+        QStringLiteral("pvf: edit %1").arg(property),
+        [this, property, value, boolean, camera, inRange,
+         &outOfRange](model::Entity& e) {
+            const int target = activeKeyFrame(e);
+            if (inRange && wholeframe::canWriteKeyAt(e, target))
             {
-                selectSolver(card.id);
-                break;
+                model::Keyframe key = wholeframe::keyAt(e, target, m_session);
+                if (boolean)
+                    wholeframe::setBoolValue(key, property, value != 0.0);
+                else
+                    wholeframe::setValue(key, property, value);
+                if (camera && !boolean)
+                {
+                    if (property == QLatin1String("scaleX"))
+                        key.scaleY = std::abs(value) > 1e-9 ? value : key.scaleY;
+                    else if (property == QLatin1String("scaleY"))
+                        key.scaleX = std::abs(value) > 1e-9 ? value : key.scaleX;
+                }
+                model::upsertKeyframe(e.keyframes, key);
+                return true;
             }
-        }
-    }
-    return QWidget::eventFilter(watched, event);
+            outOfRange = true;
+            if (boolean)
+                return wholeframe::setStaticBoolValue(e, property, value != 0.0);
+            if (camera && !boolean)
+            {
+                if (property == QLatin1String("scaleX")
+                    || property == QLatin1String("scaleY"))
+                {
+                    e.transform.scaleX = value;
+                    e.transform.scaleY = value;
+                    return true;
+                }
+            }
+            return wholeframe::setStaticValue(e, property, value);
+        });
+    if (ok && outOfRange)
+        reportSessionError(QStringLiteral(
+            "播放针不在实体范围内：只修改了静态参数，没有创建关键帧"));
+    return ok;
 }
 
-void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
+bool PropertiesPanel::writeHtmlVariable(const QString& name, double value)
 {
-    button->setText(color.name().toUpper());
-    const QString text = color.lightness() > 140 ? QStringLiteral("#000")
-                                                 : QStringLiteral("#fff");
-    button->setStyleSheet(
-        QStringLiteral("background-color:%1;color:%2;").arg(color.name(), text));
-}
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return false;
 
-QColor PropertiesPanel::pickColor(const QColor& initial, const QString& title)
-{
-    return QColorDialog::getColor(initial, this, title, QColorDialog::ShowAlphaChannel);
-}
-
-void PropertiesPanel::setEntity(EntityId id)
-{
-    m_entity = id;
-    refresh();
-}
-
-void PropertiesPanel::setFrame(int frame)
-{
-    m_frame = frame;
-    refresh();
-}
-
-void PropertiesPanel::setSelectedUuid(const Uuid& uuid)
-{
-    if (!m_sessionMode)
-        return;
-    if (m_sessionUuid == uuid)
+    const int frame = prepareAnimationEdit(*entity);
+    if (frame < 0 || frame > entity->duration())
     {
+        reportSessionError(QStringLiteral(
+            "播放针不在实体范围内：HTML 变量只能存进整帧关键帧"));
         refresh();
-        return;
+        return false;
     }
-    // A different entity owns different solver ids: drop the focus and the
-    // mini preview binding before the rebind in refreshSession().
-    if (m_solverPreview)
-        m_solverPreview->clearSolver();
-    m_selectedSolverId.clear();
-    m_sessionUuid = uuid;
+    bool blocked = false;
+    const bool ok = runSessionEdit(
+        QStringLiteral("pvf: edit HTML variable"),
+        [this, name, value, &blocked](model::Entity& e) {
+            const int target = activeKeyFrame(e);
+            if (!wholeframe::canWriteKeyAt(e, target))
+            {
+                blocked = true;
+                return false;
+            }
+            model::Keyframe key = wholeframe::keyAt(e, target, m_session);
+            wholeframe::setHtmlVar(key, name, value);
+            model::upsertKeyframe(e.keyframes, key);
+            return true;
+        });
+    if (!ok && blocked)
+        reportSessionError(QStringLiteral("该帧由求解段驱动，不能写入普通关键帧"));
+    return ok;
+}
+
+void PropertiesPanel::deleteActiveKeyframe()
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    const int frame = activeKeyFrame(*entity);
+    if (!model::hasKeyframeAt(entity->keyframes, frame))
+        return;
+    m_editing = true;
+    QString error;
+    const bool ok = m_session->editActions()->deleteKeyframes(
+        {KeyRef{entity->uuid, frame}}, &error);
+    m_editing = false;
+    if (!ok)
+        reportSessionError(error);
+    else
+        m_selectedKeys.clear();
     refresh();
-}
-
-void PropertiesPanel::setAutoKey(bool on)
-{
-    if (m_autoKey == on)
-        return;
-    m_autoKey = on;
-    if (m_autoKeyCheck)
-    {
-        const QSignalBlocker blocker(m_autoKeyCheck);
-        m_autoKeyCheck->setChecked(on);
-    }
-}
-
-void PropertiesPanel::setPlaybackActive(bool active)
-{
-    if (m_playbackActive == active)
-        return;
-    m_playbackActive = active;
-    if (!m_solverPreview)
-        return;
-    m_solverPreview->setPlaybackActive(active);
-    if (active)
-        return;
-    // Pause: refresh the trajectory exactly once, after the session's queued
-    // re-warm has run.  The zero-delay timer registered here fires behind the
-    // precompute timer registered by EditorSession on the same signal.
-    QTimer::singleShot(0, m_solverPreview, [preview = m_solverPreview] {
-        preview->refreshPreview();
-    });
 }
 
 void PropertiesPanel::refreshPlayheadOnly()
 {
-    if (!m_sessionMode || m_editing || !m_session)
+    if (m_editing || !m_session)
         return;
     const model::Entity* entity = sessionEntity();
     if (!entity)
         return;
 
-    const bool camera = entity->content.kind == ContentKind::Camera;
-    const int relative = sessionRelativeFrame(*entity);
-    const bool inRange = relative >= 0 && relative < entity->duration();
+    m_frame = m_session->playhead();
+    const int relative = activeKeyFrame(*entity);
+    const bool inRange = relative >= 0 && relative <= entity->duration();
     const bool editable = sessionEditable();
-
-    m_keyButton->setEnabled(editable && inRange);
 
     for (Row& row : m_rows)
     {
+        const bool camera = entity->content.kind == ContentKind::Camera;
+        if (!inRange)
+            continue;
+        model::Keyframe key = wholeframe::keyAt(*entity, relative, m_session);
+        std::optional<double> value = wholeframe::value(key, row.prop);
+        if (!value)
+            continue;
+        double display = *value / row.factor;
+        if (camera && row.prop == QLatin1String("scaleX"))
+            display = std::abs(display);
+        if (!row.spin->hasFocus())
         {
             const QSignalBlocker blocker(row.spin);
-            double value = currentTrackValue(*entity, row.prop, relative,
-                                             isStepTrack(row.prop))
-                / row.factor;
-            if (camera && row.prop == QLatin1String("scaleX"))
-                value = std::abs(value);
-            if (!row.spin->hasFocus())
-                row.spin->setValue(value);
+            row.spin->setValue(display);
         }
-        if (!row.key)
-            continue;
-
-        const bool hasKey = inRange && hasKeyAt(*entity, row.prop, relative);
-        const bool blocked =
-            inRange && trackBlockedAt(*entity, row.prop, relative);
-        row.key->setText(hasKey ? QStringLiteral("◆") : QStringLiteral("◇"));
-        row.key->setToolTip(
-            blocked
-                ? QStringLiteral("该帧由求解段驱动，不能写入普通关键帧")
-                : hasKey
-                    ? QStringLiteral("删除当前帧的关键帧")
-                    : QStringLiteral("在当前帧打关键帧"));
-        row.key->setEnabled(editable && inRange && !blocked);
+        row.spin->setEnabled(editable);
     }
 
-    setSpinIfIdle(m_pivotX, currentTrackValue(*entity, QStringLiteral("pivotX"),
-                                              relative, false));
-    setSpinIfIdle(m_pivotY, currentTrackValue(*entity, QStringLiteral("pivotY"),
-                                              relative, false));
+    setSpinIfIdle(m_pivotX, entity->transform.pivotX);
+    setSpinIfIdle(m_pivotY, entity->transform.pivotY);
 
-    // Track rows and the group easing control are frame-dependent.  The
-    // structure check inside reloadTrackRows() is cheap and never rebuilds on
-    // a playhead tick.
-    reloadTrackRows(*entity);
     reloadSessionHtmlValues(*entity);
-    // Create/convert depend on whether the playhead sits on the last key.
     reloadSolverConvert(*entity);
+    refreshKeyframeStatus(*entity);
 
-    // The mini preview only needs a repaint for its current dot; the
-    // trajectory samples are already cached.  During playback it stays
-    // frozen, so don't even repaint it.
     if (!m_playbackActive && m_solverPreview)
         m_solverPreview->update();
+}
+
+void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
+{
+    if (!m_keyStatus || !m_keyDelete)
+        return;
+    const int frame = activeKeyFrame(entity);
+    const bool inRange = frame >= 0 && frame <= entity.duration();
+    const bool hasKey = inRange && model::hasKeyframeAt(entity.keyframes, frame);
+    const bool editable = sessionEditable();
+    const int displayFrame = entity.start + frame;
+
+    if (hasKey)
+    {
+        m_keyStatus->setText(
+            QStringLiteral("◆ 正在编辑：第 %1 帧（整帧关键帧）").arg(displayFrame));
+        m_keyStatus->setStyleSheet(
+            QStringLiteral("background:rgba(255,176,0,0.14);"
+                           "border:1px solid rgba(255,176,0,0.45);"
+                           "padding:5px;color:#ffb000;"));
+    }
+    else
+    {
+        m_keyStatus->setText(
+            QStringLiteral("▶ 播放针第 %1 帧（当前无关键帧，改任意参数自动新建）")
+                .arg(entity.start + std::max(0, playheadRelative(entity))));
+        m_keyStatus->setStyleSheet(
+            QStringLiteral("background:rgba(76,201,240,0.14);"
+                           "border:1px solid rgba(76,201,240,0.45);"
+                           "padding:5px;color:#4cc9f0;"));
+    }
+    m_keyDelete->setEnabled(editable && hasKey);
+    m_keyDelete->setToolTip(hasKey
+                                ? QStringLiteral("整帧删除当前关键帧")
+                                : QStringLiteral("当前帧没有关键帧"));
+
+    const model::Keyframe* key =
+        hasKey ? model::keyframeAt(entity.keyframes, frame) : nullptr;
+    if (m_groupEasing)
+    {
+        const QSignalBlocker blocker(m_groupEasing);
+        if (key)
+        {
+            const QString type = model::canonicalEasingName(key->easing.type);
+            int index = m_groupEasing->findData(type);
+            if (index < 0)
+            {
+                m_groupEasing->addItem(type, type);
+                index = m_groupEasing->count() - 1;
+            }
+            m_groupEasing->setCurrentIndex(index);
+        }
+        else
+        {
+            m_groupEasing->setCurrentIndex(-1);
+        }
+        m_groupEasing->setPlaceholderText(
+            key ? QStringLiteral("整帧缓动（本帧 → 下一帧）")
+                : QStringLiteral("当前帧无关键帧"));
+        m_groupEasing->setEnabled(editable && key);
+    }
+    if (m_keyNote)
+    {
+        if (!m_keyNote->hasFocus())
+        {
+            const QSignalBlocker blocker(m_keyNote);
+            m_keyNote->setText(key ? key->note : QString());
+        }
+        m_keyNote->setEnabled(editable && key);
+        m_keyNote->setPlaceholderText(
+            key ? QStringLiteral("注释（给 AI 看）")
+                : QStringLiteral("当前帧无关键帧，注释不可编辑"));
+    }
+    if (m_cancelSolverButton)
+    {
+        bool isSolverStart = false;
+        if (key)
+            for (const model::SolverSegment& solver : entity.solvers)
+                if (solver.startFrame == frame)
+                    isSolverStart = true;
+        m_cancelSolverButton->setVisible(isSolverStart);
+        m_cancelSolverButton->setEnabled(editable && isSolverStart);
+    }
 }
 
 void PropertiesPanel::refreshSession()
@@ -302,26 +468,24 @@ void PropertiesPanel::refreshSession()
     if (m_editing)
         return;
     const model::Entity* entity = sessionEntity();
-    const bool valid = entity != nullptr;
-    if (!valid)
+    if (!entity)
     {
         m_title->setText(QStringLiteral("未选择对象"));
         for (CollapsibleSection* section :
              {m_basicSection, m_transformSection, m_keySection, m_textSection,
-              m_comicSection, m_linesSection, m_wallSection, m_halftoneSection,
-              m_specialSection, m_sessionHtmlSection,
-              m_vectorSection, m_mediaSection, m_audioSection, m_pivotSection,
-              m_cameraSection, m_solverSection})
+              m_sessionHtmlSection, m_vectorSection, m_mediaSection,
+              m_audioSection, m_pivotSection, m_cameraSection, m_solverSection})
         {
             if (section)
                 section->hide();
         }
-        m_specialUuid.clear();
         if (m_solverPreview)
         {
             m_solverPreview->clearSolver();
             m_solverPreview->hide();
         }
+        if (m_keyStatusRow)
+            m_keyStatusRow->hide();
         return;
     }
 
@@ -332,11 +496,11 @@ void PropertiesPanel::refreshSession()
     const bool vector = kind == ContentKind::Vector;
     const bool asset = kind == ContentKind::Asset;
     const bool audio = asset && entity->content.asset.type == AssetType::Audio;
-    const bool special = next::SpecialContentEditor::handles(kind);
 
     m_title->setText(entity->name + QStringLiteral(" · ")
                      + contentKindLabel(kind));
 
+    m_keyStatusRow->show();
     m_basicSection->show();
     m_transformSection->show();
     m_keySection->show();
@@ -346,11 +510,6 @@ void PropertiesPanel::refreshSession()
     m_mediaSection->setVisible(asset);
     m_audioSection->setVisible(audio);
     m_audioSection->setEnabled(editable);
-    m_comicSection->hide();
-    m_linesSection->hide();
-    m_wallSection->hide();
-    m_halftoneSection->hide();
-    m_specialSection->setVisible(special);
     m_cameraSection->setVisible(camera);
     m_solverSection->show();
 
@@ -361,7 +520,6 @@ void PropertiesPanel::refreshSession()
     m_textSection->setEnabled(editable);
     m_vectorSection->setEnabled(editable);
     m_mediaSection->setEnabled(editable);
-    m_specialSection->setEnabled(editable);
     m_sessionHtmlSection->setEnabled(editable);
     m_cameraSection->setEnabled(true);
     m_solverSection->setEnabled(editable);
@@ -401,13 +559,8 @@ void PropertiesPanel::refreshSession()
     }
     const bool hasParent = !entity->parentUuid.isEmpty();
     m_basicName->setEnabled(editable);
-    // A following range is owned by the parent: editing start/end directly is
-    // either a no-op or an error, so keep the fields read-only until follow is
-    // switched off.
     m_basicStart->setEnabled(editable && !entity->followParentRange);
     m_basicEnd->setEnabled(editable && !entity->followParentRange);
-    // Only the root timeline is one-sided; private timelines have negative
-    // tracks and the spin box must accept them.
     m_basicRow->setMinimum(hasParent ? -1000000 : 0);
     m_basicRow->setEnabled(editable);
     m_basicHidden->setEnabled(editable);
@@ -451,8 +604,7 @@ void PropertiesPanel::refreshSession()
         setAudioSpin(m_audioTrimEnd, trimEnd, maximum);
         {
             const QSignalBlocker blocker(m_audioVolume);
-            m_audioVolume->setValue(int(std::lround(assetContent.volume
-                                                    * 100.0)));
+            m_audioVolume->setValue(int(std::lround(assetContent.volume * 100.0)));
         }
         setAudioSpin(m_audioFadeIn, assetContent.fadeIn, maximum);
         setAudioSpin(m_audioFadeOut, assetContent.fadeOut, maximum);
@@ -505,23 +657,17 @@ void PropertiesPanel::refreshSession()
     if (m_parentLabel)
         m_parentLabel->show();
 
-    const int relative = sessionRelativeFrame(*entity);
-    const bool inRange = relative >= 0 && relative < entity->duration();
-    m_keyButton->setEnabled(editable && inRange);
+    const int relative = activeKeyFrame(*entity);
+    const bool inRange = relative >= 0 && relative <= entity->duration();
 
     for (Row& row : m_rows)
     {
         const bool hiddenRow =
             camera && (row.prop == QLatin1String("scaleY")
                        || row.prop == QLatin1String("opacity"));
-        // Hide the whole form row: a hidden spin box used to leave its key
-        // diamond dangling below the camera framing row.
-        if (row.key && row.key->parentWidget())
-            row.key->parentWidget()->setVisible(!hiddenRow);
+        if (row.label)
+            row.label->setVisible(!hiddenRow);
         row.spin->setVisible(!hiddenRow);
-        row.label->setVisible(!hiddenRow);
-        if (row.key)
-            row.key->setVisible(!hiddenRow);
         {
             const QSignalBlocker blocker(row.spin);
             if (camera && row.prop == QLatin1String("scaleX"))
@@ -546,44 +692,41 @@ void PropertiesPanel::refreshSession()
                 row.spin->setToolTip(QString());
                 row.factor = 1.0;
             }
-            double value = currentTrackValue(*entity, row.prop, relative,
-                                             isStepTrack(row.prop))
-                / row.factor;
-            if (camera && row.prop == QLatin1String("scaleX"))
-                value = std::abs(value);
-            if (!row.spin->hasFocus())
-                row.spin->setValue(value);
+            if (inRange)
+            {
+                const model::Keyframe key =
+                    wholeframe::keyAt(*entity, relative, m_session);
+                if (const auto value = wholeframe::value(key, row.prop))
+                {
+                    double display = *value / row.factor;
+                    if (camera && row.prop == QLatin1String("scaleX"))
+                        display = std::abs(display);
+                    if (!row.spin->hasFocus())
+                        row.spin->setValue(display);
+                }
+            }
         }
         row.spin->setEnabled(editable && !hiddenRow);
-
-        if (row.key)
-        {
-            const bool hasKey = inRange && hasKeyAt(*entity, row.prop, relative);
-            const bool blocked =
-                inRange && trackBlockedAt(*entity, row.prop, relative);
-            row.key->setText(hasKey ? QStringLiteral("◆")
-                                    : QStringLiteral("◇"));
-            row.key->setToolTip(
-                blocked
-                    ? QStringLiteral("该帧由求解段驱动，不能写入普通关键帧")
-                    : hasKey
-                        ? QStringLiteral("删除当前帧的关键帧")
-                        : QStringLiteral("在当前帧打关键帧"));
-            row.key->setEnabled(editable && inRange && !blocked);
-        }
     }
 
     m_usePivot->hide();
-    setSpinIfIdle(m_pivotX, currentTrackValue(*entity, QStringLiteral("pivotX"),
-                                              relative, false));
-    setSpinIfIdle(m_pivotY, currentTrackValue(*entity, QStringLiteral("pivotY"),
-                                              relative, false));
+    setSpinIfIdle(m_pivotX, entity->transform.pivotX);
+    setSpinIfIdle(m_pivotY, entity->transform.pivotY);
     m_pivotX->setEnabled(editable);
     m_pivotY->setEnabled(editable);
 
     if (text)
     {
         const model::TextContent& content = entity->content.text;
+        const model::Keyframe key = inRange
+                                        ? wholeframe::keyAt(*entity, relative,
+                                                            m_session)
+                                        : model::Keyframe();
+        auto keyValue = [&key, &content](const QString& name, double fallback) {
+            if (const auto value = wholeframe::value(key, name))
+                return *value;
+            return fallback;
+        };
         if (!m_textContent->hasFocus())
         {
             const QSignalBlocker blocker(m_textContent);
@@ -592,14 +735,17 @@ void PropertiesPanel::refreshSession()
         if (!m_textFont->hasFocus())
         {
             const QSignalBlocker blocker(m_textFont);
-            m_textFont->setCurrentFont(
-                content.fontFamily.isEmpty() ? QFont()
-                                             : QFont(content.fontFamily));
+            m_textFont->setCurrentFont(content.fontFamily.isEmpty()
+                                           ? QFont()
+                                           : QFont(content.fontFamily));
         }
-        setSpinIfIdle(m_textSize, content.pixelSize);
+        setSpinIfIdle(m_textSize,
+                      keyValue(QStringLiteral("pixelSize"), content.pixelSize));
         m_textColorValue = QColor(content.color);
         setColorButton(m_textColorButton, m_textColorValue);
-        setSpinIfIdle(m_textStrokeWidth, content.strokeWidth);
+        setSpinIfIdle(m_textStrokeWidth,
+                      keyValue(QStringLiteral("strokeWidth"),
+                               content.strokeWidth));
         m_textStrokeColorValue = QColor(content.strokeColor);
         setColorButton(m_textStrokeColorButton, m_textStrokeColorValue);
         {
@@ -623,30 +769,52 @@ void PropertiesPanel::refreshSession()
             const QSignalBlocker blocker(m_textUnderline);
             m_textUnderline->setChecked(content.underline);
         }
-        setSpinIfIdle(m_textLineHeight, content.lineHeight);
-        setSpinIfIdle(m_textLetterSpacing, content.letterSpacing);
-        setSpinIfIdle(m_textPadding, content.padding);
-        setSpinIfIdle(m_textBoxWidth, content.boxWidth);
-        setSpinIfIdle(m_textBoxHeight, content.boxHeight);
+        setSpinIfIdle(m_textLineHeight,
+                      keyValue(QStringLiteral("lineHeight"),
+                               content.lineHeight));
+        setSpinIfIdle(m_textLetterSpacing,
+                      keyValue(QStringLiteral("letterSpacing"),
+                               content.letterSpacing));
+        setSpinIfIdle(m_textPadding,
+                      keyValue(QStringLiteral("padding"), content.padding));
+        setSpinIfIdle(m_textBoxWidth,
+                      keyValue(QStringLiteral("boxWidth"), content.boxWidth));
+        setSpinIfIdle(m_textBoxHeight,
+                      keyValue(QStringLiteral("boxHeight"), content.boxHeight));
     }
 
     if (vector)
     {
         const model::VectorContent& content = entity->content.vector;
+        const model::Keyframe key = inRange
+                                        ? wholeframe::keyAt(*entity, relative,
+                                                            m_session)
+                                        : model::Keyframe();
+        auto keyValue = [&key, &content](const QString& name, double fallback) {
+            if (const auto value = wholeframe::value(key, name))
+                return *value;
+            return fallback;
+        };
         {
             const QSignalBlocker blocker(m_vectorShape);
             selectComboData(m_vectorShape, content.shape);
         }
-        setSpinIfIdle(m_vectorCorner, content.cornerRadius);
+        setSpinIfIdle(m_vectorCorner,
+                      keyValue(QStringLiteral("cornerRadius"),
+                               content.cornerRadius));
         setSpinIfIdle(m_vectorSides, content.sides);
         setSpinIfIdle(m_vectorInner, content.innerRatio);
-        setSpinIfIdle(m_vectorWidth, content.width);
-        setSpinIfIdle(m_vectorHeight, content.height);
+        setSpinIfIdle(m_vectorWidth,
+                      keyValue(QStringLiteral("width"), content.width));
+        setSpinIfIdle(m_vectorHeight,
+                      keyValue(QStringLiteral("height"), content.height));
         m_fillValue = QColor(content.fillColor);
         setColorButton(m_fillButton, m_fillValue);
         m_strokeValue = QColor(content.strokeColor);
         setColorButton(m_strokeButton, m_strokeValue);
-        setSpinIfIdle(m_strokeWidth, content.strokeWidth);
+        setSpinIfIdle(m_strokeWidth,
+                      keyValue(QStringLiteral("strokeWidth"),
+                               content.strokeWidth));
         m_vectorCorner->setEnabled(editable && content.shape == 3);
         m_vectorSides->setEnabled(editable
                                   && (content.shape == 6 || content.shape == 7));
@@ -666,7 +834,19 @@ void PropertiesPanel::refreshSession()
         m_assetSourceIn->setMaximum(frames > 0 ? std::max(0, frames - 1)
                                                : 1000000);
         setSpinIfIdle(m_assetSourceIn, content.sourceIn);
-        setSpinIfIdle(m_assetVolume, content.volume);
+        if (inRange)
+        {
+            const model::Keyframe key =
+                wholeframe::keyAt(*entity, relative, m_session);
+            if (const auto volume = wholeframe::value(key, QStringLiteral("volume")))
+                setSpinIfIdle(m_assetVolume, *volume);
+            else
+                setSpinIfIdle(m_assetVolume, content.volume);
+        }
+        else
+        {
+            setSpinIfIdle(m_assetVolume, content.volume);
+        }
         m_assetSourceIn->setEnabled(editable);
         m_assetVolume->setEnabled(editable);
         m_replaceSource->show();
@@ -683,23 +863,8 @@ void PropertiesPanel::refreshSession()
         m_mediaInfo->setToolTip(content.hash);
     }
 
-    if (special && m_specialEditor)
-    {
-        const bool reload = m_specialUuid != entity->uuid
-            || m_specialEditor->kind() != kind;
-        m_specialUuid = entity->uuid;
-        QWidget* focus = QApplication::focusWidget();
-        if (reload || !focus || !m_specialEditor->isAncestorOf(focus))
-            m_specialEditor->setContent(entity->content);
-    }
-    else
-    {
-        m_specialUuid.clear();
-    }
-
     reloadSessionHtml(*entity);
 
-    reloadTrackRows(*entity);
     updateSolverCards(*entity);
     for (SolverCard& card : m_solverCards)
         card.box->setEnabled(editable);
@@ -707,20 +872,12 @@ void PropertiesPanel::refreshSession()
     m_solverEffectCombo->setEnabled(editable);
     m_solverTargetCombo->setEnabled(editable);
     m_solverEndSpin->setEnabled(editable);
-
-    {
-        const QSignalBlocker blocker(m_autoKeyCheck);
-        m_autoKeyCheck->setChecked(m_autoKey);
-    }
+    refreshKeyframeStatus(*entity);
 }
 
 void PropertiesPanel::refresh()
 {
-    if (m_sessionMode)
-    {
-        refreshSession();
-        return;
-    }
+    refreshSession();
 }
 
 } // namespace pvf

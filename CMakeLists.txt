@@ -85,9 +85,6 @@ set(PVF_APP_SOURCES
     src/core/Lang.cpp
     src/core/TextStyle.cpp
     src/core/TextBlock.cpp
-    src/core/ComicBox.cpp
-    src/core/LineDeco.cpp
-    src/core/BrandWall.cpp
     src/core/VectorShape.cpp
     src/core/Easing.cpp
     src/media/DecoderInfo.cpp
@@ -121,10 +118,10 @@ set(PVF_APP_SOURCES
     src/ui/PropertiesPanelInternal.h
     src/ui/PropertiesPanelKeyframes.cpp
     src/ui/PropertiesPanelSolver.cpp
+    src/ui/WholeFrameEdit.cpp
+    src/ui/WholeFrameEdit.h
     src/next/properties/SolverPreviewWidget.cpp
     src/next/properties/SolverPreviewWidget.h
-    src/next/properties/SpecialContentEditor.cpp
-    src/next/properties/SpecialContentEditor.h
     src/next/properties/TextLayoutDialog.cpp
     src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
@@ -139,7 +136,6 @@ set(PVF_APP_SOURCES
     src/ui/McpLogPanel.cpp
     src/ui/PerfMonitorWindow.cpp
     src/ui/TextLayoutDialog.cpp
-    src/ui/BrandWallDialog.cpp
     src/ui/CollapsibleSection.cpp
     src/ui/EnvironmentPanel.cpp
     src/ui/ProjectPropertiesPanel.cpp
@@ -258,10 +254,8 @@ if(PVFORGE_BUILD_SELF_TESTS)
             panel-layout-test
             properties-test
             keyframe-easing-group-test
-            properties-special-test
             html-vars-test
             text-layout-test
-            brandwall-create-test
             export-dialog-test
             export-test
             assets-test
@@ -306,8 +300,8 @@ if(PVFORGE_BUILD_SELF_TESTS)
 
         set(PVF_SELF_TEST_UI
             session-test welcome-test settings-test rename-test panel-layout-test
-            properties-test keyframe-easing-group-test properties-special-test
-            html-vars-test text-layout-test brandwall-create-test
+            properties-test keyframe-easing-group-test
+            html-vars-test text-layout-test
             export-dialog-test
             assets-test asset-import-test asset-drag-test asset-replace-test
             workbench-assets-test
