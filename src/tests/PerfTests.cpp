@@ -789,7 +789,8 @@ int perfScaleTest(QApplication& app)
         ++failures;
     };
 
-    // 3000 entities: one root and 2999 children, each with three tracks.
+    // 3000 entities: one root and 2999 children, each with two whole-frame
+    // keyframes.
     pvf::model::Project project;
     project.settings.fps = 30;
     pvf::model::Entity root;
@@ -807,13 +808,16 @@ int perfScaleTest(QApplication& app)
         entity.start = (i * 3) % 5000;
         entity.end = std::min(5000, entity.start + 30);
         entity.row = i % 40;
-        for (const QString& trackName : {QStringLiteral("x"), QStringLiteral("y"),
-                                         QStringLiteral("opacity")})
         {
-            pvf::model::Track track;
-            track.keys.append({0, double(i), {}, {}});
-            track.keys.append({15, double(i + 1), {}, {}});
-            entity.tracks.insert(trackName, track);
+            pvf::model::Keyframe first;
+            first.frame = 0;
+            first.x = double(i);
+            first.y = double(i);
+            pvf::model::Keyframe second;
+            second.frame = 15;
+            second.x = double(i + 1);
+            second.y = double(i + 1);
+            entity.keyframes = {first, second};
         }
         project.entities.insert(entity.uuid, entity);
     }

@@ -64,11 +64,6 @@ bool assetCompatible(ContentKind kind, AssetType currentType, AssetType incoming
     case ContentKind::Camera:
     case ContentKind::Text:
     case ContentKind::Vector:
-    case ContentKind::ComicText:
-    case ContentKind::RadialLines:
-    case ContentKind::FlowLines:
-    case ContentKind::HalftoneDots:
-    case ContentKind::BrandWall:
         return false;
     }
     return false;

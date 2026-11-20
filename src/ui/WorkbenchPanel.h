@@ -1,6 +1,5 @@
 #pragma once
 
-#include "core/BrandWall.h"
 #include "core/EntityId.h"
 #include "core/TextStyle.h"
 #include "model/Content.h"
@@ -38,8 +37,8 @@ class WorkbenchPanel : public QFrame
     Q_OBJECT
 
 public:
-    // Session mode: the special page creates model::BrandWallContent through
-    // EditorSession. Other legacy creation pages are not shown yet.
+    // Session mode creation panel: media, text, vector and camera.  Every
+    // creation goes through EditorSession so it is one undo step.
     explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);
 
     // Show docked at an explicit viewport rectangle.  Installs the click-away
@@ -76,15 +75,10 @@ protected:
 private:
     QWidget* buildHeader();
     void buildUi();
-    QWidget* buildSessionSpecialPage();
-    void createSessionBrandWall();
-    void updateSessionWallSummary();
     QWidget* buildMediaPage();
     QWidget* buildTextPage();
-    QWidget* buildTextBoxPage();
     QWidget* buildVectorPage();
     QWidget* buildCameraPage();
-    QWidget* buildSpecialPage();
 
     void createCurrent();
     void createSessionCurrent();
@@ -93,17 +87,11 @@ private:
     bool createSessionVector();
     bool createSessionCamera();
     bool createSessionEntity(model::Entity entity, const QString& message);
-    void refreshSessionMediaLibrary();
     void selectSessionMedia(const QString& hash);
-    EntityId createSpecial();
-    EntityId createTextBox();
-    void updateSpecialPreview();
-    void updateTextBoxPreview();
     TextStyle currentTextStyle() const;
     void pickMedia();
     void refreshMediaLibrary();
     void updateVectorFields();
-    void selectMedia(int templateIndex);
     void updateCreateState();
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
@@ -119,8 +107,7 @@ private:
     QStackedWidget* m_pages = nullptr;
     QPushButton* m_create = nullptr;
 
-    // Selected media template.
-    int m_mediaTemplateIndex = -1;
+    // Selected media.
     QString m_mediaPath;
     QString m_mediaHash;
     QLabel* m_mediaPreview = nullptr;
@@ -128,64 +115,14 @@ private:
     QListWidget* m_mediaLibrary = nullptr;
 
     QLineEdit* m_textContent = nullptr;
-    QFontComboBox* m_textFont = nullptr;    QSpinBox* m_textSize = nullptr;
+    QFontComboBox* m_textFont = nullptr;
+    QSpinBox* m_textSize = nullptr;
     QPushButton* m_textColor = nullptr;
     QComboBox* m_textAlign = nullptr;
     QColor m_textColorValue{Qt::white};
     TextStyle m_textStyle;
 
     QLineEdit* m_cameraName = nullptr;
-
-    QListWidget* m_textBoxTypes = nullptr;
-    QComboBox* m_textBoxShape = nullptr;
-    QLabel* m_textBoxPreview = nullptr;
-
-    QListWidget* m_specialTypes = nullptr;
-    QStackedWidget* m_specialForms = nullptr;
-    QLabel* m_specialPreview = nullptr;
-    QLineEdit* m_comicContent = nullptr;
-    QSpinBox* m_comicSize = nullptr;
-    QPushButton* m_comicColor = nullptr;
-    QColor m_comicColorValue{30, 30, 36};
-    QComboBox* m_comicDirection = nullptr;
-    QCheckBox* m_comicBold = nullptr;
-    QCheckBox* m_comicItalic = nullptr;
-    QCheckBox* m_comicUnderline = nullptr;
-    QPushButton* m_comicFill = nullptr;
-    QPushButton* m_comicStroke = nullptr;
-    QDoubleSpinBox* m_comicStrokeWidth = nullptr;
-    QColor m_comicFillValue{Qt::white};
-    QColor m_comicStrokeValue{24, 22, 28};
-    QDoubleSpinBox* m_radialFlicker = nullptr;
-    TextStyle m_comicStyle;
-    QSpinBox* m_radialCount = nullptr;
-    QDoubleSpinBox* m_radialThickness = nullptr;
-    QPushButton* m_radialColor = nullptr;
-    QColor m_radialColorValue{Qt::white};
-    QSpinBox* m_flowCount = nullptr;
-    QDoubleSpinBox* m_flowSpeed = nullptr;
-    QDoubleSpinBox* m_flowAngle = nullptr;
-    BrandWallParams m_wallParams;
-    QVector<QImage> m_wallImages;
-    QLabel* m_wallSummary = nullptr;
-    model::BrandWallContent m_wallContent;
-    QLabel* m_sessionWallPreview = nullptr;
-    void updateWallSummary();
-    QString m_wallLogoAPath;
-    QString m_wallLogoBPath;
-    QImage m_wallImageA;
-    QImage m_wallImageB;
-    QPushButton* m_flowColor = nullptr;
-    QColor m_flowColorValue{Qt::white};
-    QDoubleSpinBox* m_halftoneArea = nullptr;
-    QDoubleSpinBox* m_halftoneSpacing = nullptr;
-    QDoubleSpinBox* m_halftoneSize = nullptr;
-    QDoubleSpinBox* m_halftoneAngle = nullptr;
-    QDoubleSpinBox* m_halftoneGradient = nullptr;
-    QDoubleSpinBox* m_halftoneMin = nullptr;
-    QDoubleSpinBox* m_halftoneJitter = nullptr;
-    QPushButton* m_halftoneColor = nullptr;
-    QColor m_halftoneColorValue{Qt::white};
 
     QListWidget* m_vectorShapes = nullptr;
     QDoubleSpinBox* m_vectorCorner = nullptr;

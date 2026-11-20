@@ -716,11 +716,13 @@ int assetReplaceTest(QApplication& app)
     session->mutableProject().entities[videoEntity].content.asset.hash =
         longVideo->hash;
     session->mutableProject().entities[videoEntity].content.asset.sourceIn = 5;
-    pvf::model::Track track;
     for (int frame : {0, 20, 29, 60, 89})
-        track.keys.append(pvf::model::Keyframe{frame, double(frame), {}, {}});
-    session->mutableProject().entities[videoEntity].tracks.insert(
-        QStringLiteral("x"), track);
+    {
+        pvf::model::Keyframe key;
+        key.frame = frame;
+        key.x = double(frame);
+        session->mutableProject().entities[videoEntity].keyframes.append(key);
+    }
 
     const pvf::Uuid childEntity =
         makeEntity(QStringLiteral("子实体"), 10, 60, pvf::ContentKind::Empty);
@@ -845,11 +847,9 @@ int assetReplaceTest(QApplication& app)
               && replaced.content.asset.sourceIn == 5,
           QStringLiteral("asset/sourceIn not updated"));
     bool outOfRangeKey = false;
-    if (const auto trackIt = replaced.tracks.constFind(QStringLiteral("x"));
-        trackIt != replaced.tracks.constEnd())
-        for (const pvf::model::Keyframe& key : trackIt->keys)
-            if (key.frame >= expectedDuration)
-                outOfRangeKey = true;
+    for (const pvf::model::Keyframe& key : replaced.keyframes)
+        if (key.frame > expectedDuration)
+            outOfRangeKey = true;
     check(!outOfRangeKey, QStringLiteral("out-of-range keys were kept"));
     flush();
     check(depth() == beforeReplace + 1,
