@@ -126,8 +126,12 @@ bool mixAudioEntity(const model::Project& project,
 
     const QByteArray pathUtf8 = path.toUtf8();
     AVFormatContext* format = nullptr;
-    if (avformat_open_input(&format, pathUtf8.constData(), nullptr, nullptr)
-        < 0)
+    AVDictionary* openOptions = nullptr;
+    av_dict_set(&openOptions, "protocol_whitelist", "file", 0);
+    const int openStatus =
+        avformat_open_input(&format, pathUtf8.constData(), nullptr, &openOptions);
+    av_dict_free(&openOptions);
+    if (openStatus < 0)
     {
         *error = QStringLiteral("无法打开音频文件");
         return false;

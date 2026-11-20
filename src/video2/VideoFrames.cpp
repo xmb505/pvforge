@@ -67,8 +67,12 @@ void fail(Input& input, QString* error, const QString& message)
 bool openInput(Input& input, const QString& path, QString* error)
 {
     const QByteArray utf8 = path.toUtf8();
-    if (avformat_open_input(&input.format, utf8.constData(), nullptr, nullptr)
-        < 0)
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    const int openStatus =
+        avformat_open_input(&input.format, utf8.constData(), nullptr, &options);
+    av_dict_free(&options);
+    if (openStatus < 0)
     {
         fail(input, error, QStringLiteral("无法打开视频文件"));
         return false;

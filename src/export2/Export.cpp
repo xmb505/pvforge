@@ -222,9 +222,12 @@ bool mixAudioEntity(const model::Project& project,
     }
 
     AVFormatContext* format = nullptr;
-    if (avformat_open_input(&format, path.toUtf8().constData(), nullptr,
-                            nullptr)
-        < 0)
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    const int openStatus = avformat_open_input(
+        &format, path.toUtf8().constData(), nullptr, &options);
+    av_dict_free(&options);
+    if (openStatus < 0)
     {
         *error = QStringLiteral("无法打开音频文件");
         return false;
