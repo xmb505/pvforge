@@ -457,65 +457,6 @@ bool EditActions::planDelete(const QVector<Uuid>& roots, EditPlan* plan,
     return true;
 }
 
-QStringList EditActions::trackNames(const Uuid& uuid) const
-{
-    QStringList result;
-    if (!isValid())
-        return result;
-    const auto it = m_session->project().entities.constFind(uuid);
-    if (it == m_session->project().entities.constEnd())
-        return result;
-
-    const model::Entity& entity = it.value();
-    for (auto track = entity.tracks.constBegin(); track != entity.tracks.constEnd();
-         ++track)
-        if (!result.contains(track.key()))
-            result.append(track.key());
-
-    auto add = [&result](const QString& name) {
-        if (!result.contains(name))
-            result.append(name);
-    };
-    add(QStringLiteral("x"));
-    add(QStringLiteral("y"));
-    add(QStringLiteral("rotation"));
-    add(QStringLiteral("scaleX"));
-    add(QStringLiteral("scaleY"));
-    if (entity.content.kind == ContentKind::Camera)
-        return result;
-    add(QStringLiteral("opacity"));
-    add(QStringLiteral("pivotX"));
-    add(QStringLiteral("pivotY"));
-    add(QStringLiteral("visible"));
-    add(QStringLiteral("physicsInteract"));
-
-    switch (entity.content.kind)
-    {
-    case ContentKind::Text:
-        add(QStringLiteral("fontSize"));
-        add(QStringLiteral("lineHeight"));
-        add(QStringLiteral("letterSpacing"));
-        add(QStringLiteral("strokeWidth"));
-        add(QStringLiteral("padding"));
-        add(QStringLiteral("boxWidth"));
-        add(QStringLiteral("boxHeight"));
-        break;
-    case ContentKind::Vector:
-        add(QStringLiteral("width"));
-        add(QStringLiteral("height"));
-        add(QStringLiteral("cornerRadius"));
-        add(QStringLiteral("strokeWidth"));
-        break;
-    case ContentKind::Asset:
-        if (entity.content.asset.type == AssetType::Audio)
-            add(QStringLiteral("volume"));
-        break;
-    default:
-        break;
-    }
-    return result;
-}
-
 int EditActions::minMoveDelta(const QVector<Uuid>& roots) const
 {
     if (!isValid())
@@ -653,11 +594,20 @@ bool EditActions::deleteEntities(const QVector<Uuid>& roots, bool confirm,
     return apply(plan, error);
 }
 
-bool EditActions::addKeyframe(const Uuid& uuid, const QString& track, int frame,
-                              QString* error)
+bool EditActions::addKeyframe(const Uuid& uuid, int frame, QString* error)
 {
     EditPlan plan;
-    if (!planKeyframe(uuid, track, frame, &plan, error))
+    if (!planKeyframe(uuid, frame, &plan, error))
+        return false;
+    return apply(plan, error);
+}
+
+bool EditActions::upsertKeyframe(const Uuid& uuid,
+                                 const model::Keyframe& keyframe,
+                                 QString* error)
+{
+    EditPlan plan;
+    if (!planUpsertKeyframe(uuid, keyframe, &plan, error))
         return false;
     return apply(plan, error);
 }
@@ -679,21 +629,31 @@ bool EditActions::moveKeyframes(const QVector<KeyRef>& keys, int delta,
     return apply(plan, error);
 }
 
-bool EditActions::setKeyframeEasing(const QVector<KeyRef>& keys,
+bool EditActions::setKeyframeEasing(const KeyRef& key,
                                     const model::EasingSpec& easing,
                                     QString* error)
 {
     EditPlan plan;
-    if (!planSetKeyframeEasing(keys, easing, &plan, error))
+    if (!planSetKeyframeEasing({key}, easing, &plan, error))
         return false;
     return apply(plan, error);
 }
 
-bool EditActions::pasteKeyframes(const Uuid& uuid,
-                                 const QVector<TrackKey>& keys, QString* error)
+bool EditActions::setKeyframeNote(const KeyRef& key, const QString& note,
+                                  QString* error)
 {
     EditPlan plan;
-    if (!planPasteKeyframes(uuid, keys, &plan, error))
+    if (!planSetKeyframeNote({key}, note, &plan, error))
+        return false;
+    return apply(plan, error);
+}
+
+bool EditActions::copyKeyframeParams(const KeyRef& source,
+                                     const QVector<KeyRef>& targets,
+                                     QString* error)
+{
+    EditPlan plan;
+    if (!planCopyKeyframeParams(source, targets, &plan, error))
         return false;
     return apply(plan, error);
 }

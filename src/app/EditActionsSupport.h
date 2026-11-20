@@ -11,10 +11,7 @@
 #include "next/core/EntityLock.h"
 
 #include <QSet>
-#include <QStringList>
-
-#include <algorithm>
-#include <optional>
+#include <QString>
 
 namespace pvf {
 namespace edit_detail {
@@ -140,36 +137,26 @@ inline int parentStart(const model::Project& project, const model::Entity& entit
     return it == project.entities.constEnd() ? 0 : it.value().start;
 }
 
-inline QStringList solverDrivenTracks(SolverEffect effect)
-{
-    if (effect == SolverEffect::Spin)
-        return {QStringLiteral("rotation")};
-    return {QStringLiteral("x"), QStringLiteral("y")};
-}
-
-inline bool solverStartKey(const model::Entity& entity, const QString& track,
-                           int frame)
+inline bool solverStartsAt(const model::Entity& entity, int frame)
 {
     for (const model::SolverSegment& solver : entity.solvers)
     {
-        if (solver.startFrame == frame
-            && solverDrivenTracks(solver.effect).contains(track))
+        if (solver.startFrame == frame)
             return true;
     }
     return false;
 }
 
-// A normal key inside an explicitly ended solver segment is invalid; the
-// start key is the segment's initial state and stays editable.  Automatic
-// segments end one frame before the first key created after the start, so a
-// new key is the end marker rather than an illegal key inside the segment.
-inline bool trackBlockedAt(const model::Entity& entity, const QString& track,
-                           int frame)
+// An ordinary whole-frame key inside an explicitly ended solver segment is
+// invalid; the start key is the segment's initial state and stays editable.
+// A key at frame == endFrame is part of the solved band, so it is rejected
+// too.  Automatic segments derive their end from the first key after the
+// start, so a new key is the end marker rather than an illegal key inside the
+// segment.
+inline bool keyframeBlockedAt(const model::Entity& entity, int frame)
 {
     for (const model::SolverSegment& solver : entity.solvers)
     {
-        if (!solverDrivenTracks(solver.effect).contains(track))
-            continue;
         if (solver.endFrame < 0)
             continue;
         if (frame > solver.startFrame && frame <= solver.endFrame)
@@ -178,101 +165,67 @@ inline bool trackBlockedAt(const model::Entity& entity, const QString& track,
     return false;
 }
 
-inline bool stepTrack(const QString& track)
+inline model::Keyframe keyframeFromSample(const model::KeyframeSample& sample,
+                                          int frame)
 {
-    return track == QLatin1String("visible")
-           || track == QLatin1String("physicsInteract");
+    model::Keyframe keyframe;
+    keyframe.frame = frame;
+    keyframe.x = sample.x;
+    keyframe.y = sample.y;
+    keyframe.rotation = sample.rotation;
+    keyframe.scaleX = sample.scaleX;
+    keyframe.scaleY = sample.scaleY;
+    keyframe.opacity = sample.opacity;
+    keyframe.visible = sample.visible;
+    keyframe.physicsInteract = sample.physicsInteract;
+    keyframe.content = sample.content;
+    keyframe.htmlVars = sample.htmlVars;
+    return keyframe;
 }
 
-inline std::optional<double> staticTrackValue(const model::Entity& entity,
-                                              const QString& track)
+// Copies every animation parameter, leaving frame/easing/note/extras alone.
+inline void copyAnimationParams(const model::Keyframe& source,
+                                model::Keyframe* target)
 {
-    const model::Transform& transform = entity.transform;
-    if (track == QLatin1String("x"))
-        return transform.x;
-    if (track == QLatin1String("y"))
-        return transform.y;
-    if (track == QLatin1String("rotation"))
-        return transform.rotation;
-    if (track == QLatin1String("scaleX"))
-        return transform.scaleX;
-    if (track == QLatin1String("scaleY"))
-        return transform.scaleY;
-    if (track == QLatin1String("pivotX"))
-        return transform.pivotX;
-    if (track == QLatin1String("pivotY"))
-        return transform.pivotY;
-    if (track == QLatin1String("opacity"))
-        return transform.opacity;
-    if (track == QLatin1String("visible"))
-        return entity.visible ? 1.0 : 0.0;
-    if (track == QLatin1String("physicsInteract"))
-        return entity.physicsInteract ? 1.0 : 0.0;
-
-    const model::Content& content = entity.content;
-    if (content.kind == ContentKind::Text)
-    {
-        const model::TextContent& text = content.text;
-        if (track == QLatin1String("fontSize"))
-            return text.pixelSize;
-        if (track == QLatin1String("lineHeight"))
-            return text.lineHeight;
-        if (track == QLatin1String("letterSpacing"))
-            return text.letterSpacing;
-        if (track == QLatin1String("strokeWidth"))
-            return text.strokeWidth;
-        if (track == QLatin1String("padding"))
-            return text.padding;
-        if (track == QLatin1String("boxWidth"))
-            return text.boxWidth;
-        if (track == QLatin1String("boxHeight"))
-            return text.boxHeight;
-    }
-    else if (content.kind == ContentKind::Vector)
-    {
-        const model::VectorContent& vector = content.vector;
-        if (track == QLatin1String("width"))
-            return vector.width;
-        if (track == QLatin1String("height"))
-            return vector.height;
-        if (track == QLatin1String("cornerRadius"))
-            return vector.cornerRadius;
-        if (track == QLatin1String("strokeWidth"))
-            return vector.strokeWidth;
-    }
-    else if (content.kind == ContentKind::Asset
-             && content.asset.type == AssetType::Audio
-             && track == QLatin1String("volume"))
-    {
-        return content.asset.volume;
-    }
-    return std::nullopt;
+    target->x = source.x;
+    target->y = source.y;
+    target->rotation = source.rotation;
+    target->scaleX = source.scaleX;
+    target->scaleY = source.scaleY;
+    target->opacity = source.opacity;
+    target->visible = source.visible;
+    target->physicsInteract = source.physicsInteract;
+    target->content = source.content;
+    target->htmlVars = source.htmlVars;
 }
 
-inline double trackValueAt(const model::Entity& entity, const QString& track,
-                           int frame)
+// Content animation parameters only make sense between entities with the same
+// content schema.  HTML variables additionally belong to one asset manifest.
+inline bool keyframeParamsCompatible(const model::Entity& source,
+                                     const model::Entity& target)
 {
-    const auto it = entity.tracks.constFind(track);
-    if (it != entity.tracks.constEnd())
+    if (source.content.kind != target.content.kind)
+        return false;
+    if (source.content.kind != ContentKind::Asset)
+        return true;
+    if (source.content.asset.type != target.content.asset.type)
+        return false;
+    if (source.content.asset.type == AssetType::Html)
+        return source.content.asset.hash == target.content.asset.hash;
+    return true;
+}
+
+inline model::Keyframe* mutableKeyframeAt(QVector<model::Keyframe>& keyframes,
+                                          int frame)
+{
+    for (model::Keyframe& keyframe : keyframes)
     {
-        if (const auto value =
-                model::evaluateTrack(it.value(), frame, stepTrack(track)))
-            return *value;
+        if (keyframe.frame == frame)
+            return &keyframe;
+        if (keyframe.frame > frame)
+            break;
     }
-    return staticTrackValue(entity, track).value_or(0.0);
-}
-
-inline void sortTrack(model::Track& track)
-{
-    std::sort(track.keys.begin(), track.keys.end(),
-              [](const model::Keyframe& a, const model::Keyframe& b) {
-                  return a.frame < b.frame;
-              });
-}
-
-inline QString keyLabel(const KeyRef& key)
-{
-    return key.track.isEmpty() ? QStringLiteral("全部轨道") : key.track;
+    return nullptr;
 }
 
 } // namespace edit_detail

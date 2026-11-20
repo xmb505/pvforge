@@ -36,20 +36,11 @@ struct EditPlan
     }
 };
 
-// One keyframe address.  frame is entity-relative.  An empty track means
-// "every track that has a key at this frame" (the merged diamond).
+// One whole-frame keyframe address.  frame is entity-relative.
 struct KeyRef
 {
     Uuid entity;
-    QString track;
     int frame = 0;
-};
-
-// A keyframe with its track, used by copy/paste.
-struct TrackKey
-{
-    QString track;
-    model::Keyframe key;
 };
 
 // The only entry point for human timeline writes.  A gesture builds one plan
@@ -81,10 +72,14 @@ public:
     bool planDelete(const QVector<Uuid>& roots, EditPlan* plan,
                     QString* error = nullptr) const;
 
-    // Keyframes.  All frames are entity-relative.  planKeyframe inserts or
-    // updates one key with the value the track evaluates to at that frame.
-    bool planKeyframe(const Uuid& uuid, const QString& track, int frame,
-                      EditPlan* plan, QString* error = nullptr) const;
+    // Keyframes.  All frames are entity-relative; every key carries the whole
+    // frame's animation parameters.  planKeyframe inserts the frame evaluated
+    // at `frame` (including an open solver's instantaneous pose) or updates
+    // the existing key while keeping its easing/note.
+    bool planKeyframe(const Uuid& uuid, int frame, EditPlan* plan,
+                      QString* error = nullptr) const;
+    bool planUpsertKeyframe(const Uuid& uuid, const model::Keyframe& keyframe,
+                            EditPlan* plan, QString* error = nullptr) const;
     bool planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
                            EditPlan* plan, QString* error = nullptr) const;
     bool planDeleteKeyframes(const QVector<KeyRef>& keys, EditPlan* plan,
@@ -92,16 +87,20 @@ public:
     bool planSetKeyframeEasing(const QVector<KeyRef>& keys,
                                const model::EasingSpec& easing, EditPlan* plan,
                                QString* error = nullptr) const;
-    bool planPasteKeyframes(const Uuid& uuid, const QVector<TrackKey>& keys,
-                            EditPlan* plan, QString* error = nullptr) const;
+    bool planSetKeyframeNote(const QVector<KeyRef>& keys, const QString& note,
+                             EditPlan* plan, QString* error = nullptr) const;
+    // Copies animation parameters (public fields, content and htmlVars) from
+    // the source key onto every in-range target key.  Each target keeps its
+    // own frame, easing, note and extras.  Targets outside the target entity's
+    // 0..duration range are dropped.  Content/htmlVars are only copied between
+    // entities with a compatible content type (and the same HTML asset).
+    bool planCopyKeyframeParams(const KeyRef& source,
+                                const QVector<KeyRef>& targets, EditPlan* plan,
+                                QString* error = nullptr) const;
 
     // Splits one clip (and its subtree) at the absolute frame.
     bool planSplit(const Uuid& uuid, int frame, EditPlan* plan,
                    QString* error = nullptr) const;
-
-    // Tracks a double-click can key: the entity's existing tracks first, then
-    // the standard transform/visibility tracks it supports.
-    QStringList trackNames(const Uuid& uuid) const;
 
     // Project markers.  Each marker edit is one project.json commit.
     bool addMarker(const model::Marker& marker, QString* error = nullptr);
@@ -136,16 +135,20 @@ public:
 
     // Direct keyframe/split operations.  Each validates, applies and commits
     // exactly once.
-    bool addKeyframe(const Uuid& uuid, const QString& track, int frame,
-                     QString* error = nullptr);
+    bool addKeyframe(const Uuid& uuid, int frame, QString* error = nullptr);
+    bool upsertKeyframe(const Uuid& uuid, const model::Keyframe& keyframe,
+                        QString* error = nullptr);
     bool deleteKeyframes(const QVector<KeyRef>& keys, QString* error = nullptr);
     bool moveKeyframes(const QVector<KeyRef>& keys, int delta,
                        QString* error = nullptr);
-    bool setKeyframeEasing(const QVector<KeyRef>& keys,
+    bool setKeyframeEasing(const KeyRef& key,
                            const model::EasingSpec& easing,
                            QString* error = nullptr);
-    bool pasteKeyframes(const Uuid& uuid, const QVector<TrackKey>& keys,
-                        QString* error = nullptr);
+    bool setKeyframeNote(const KeyRef& key, const QString& note,
+                         QString* error = nullptr);
+    bool copyKeyframeParams(const KeyRef& source,
+                            const QVector<KeyRef>& targets,
+                            QString* error = nullptr);
     bool splitClip(const Uuid& uuid, int frame, QString* error = nullptr);
 
     // One whole-entity edit built from the current document, validated as an
