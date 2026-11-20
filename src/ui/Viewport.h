@@ -18,6 +18,7 @@
 
 class QKeyEvent;
 class QPainter;
+class QPainterPath;
 class QToolButton;
 
 namespace pvf {
@@ -107,6 +108,7 @@ public:
     QPointF gizmoCornerForTest(const Uuid& uuid, int visualCorner) const;
     QRectF gizmoRotateHitRectForTest(const Uuid& uuid, gizmo::Handle handle) const;
     double gizmoRotateGlyphAngleForTest(const Uuid& uuid, int visualCorner) const;
+    QPainterPath gizmoRotateGlyphPathForTest() const;
     QPointF gizmoOppositeCornerForTest(const Uuid& uuid, gizmo::Handle handle) const;
     std::optional<gizmo::Handle> gizmoHandleAtForTest(const QPointF& pos) const;
     bool gizmoCornerHandlesVisibleForTest() const

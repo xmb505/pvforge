@@ -47,8 +47,7 @@ void PropertiesPanel::buildUi()
 
     auto* transformContent = new QWidget(this);
     auto* transformForm = new QFormLayout(transformContent);
-    transformForm->setContentsMargins(10, 6, 10, 6);
-    transformForm->setVerticalSpacing(6);
+    configurePropertyForm(transformForm);
     m_parentRow = new QWidget(transformContent);
     auto* parentLayout = new QHBoxLayout(m_parentRow);
     parentLayout->setContentsMargins(0, 0, 0, 0);
@@ -94,10 +93,14 @@ void PropertiesPanel::buildUi()
     auto* reset = new QPushButton(QStringLiteral("重置"), transformOps);
     reset->setObjectName(QStringLiteral("transformReset"));
     opsLayout->addWidget(m_transformLink);
-    opsLayout->addStretch(1);
-    opsLayout->addWidget(copy);
-    opsLayout->addWidget(paste);
-    opsLayout->addWidget(reset);
+    // The three operation buttons share the remaining width instead of
+    // overflowing a narrow dock.
+    for (QPushButton* button : {copy, paste, reset})
+    {
+        button->setMinimumWidth(0);
+        button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        opsLayout->addWidget(button, 1);
+    }
     transformForm->addRow(transformOps);
     connect(copy, &QPushButton::clicked, this,
             &PropertiesPanel::copyTransformParams);
@@ -215,8 +218,7 @@ void PropertiesPanel::buildSessionUi()
 
     // Asset fields.
     auto* assetForm = new QFormLayout();
-    assetForm->setContentsMargins(0, 0, 0, 0);
-    assetForm->setVerticalSpacing(6);
+    configurePropertyForm(assetForm, QMargins(0, 0, 0, 0));
     m_assetHash = new QLineEdit(this);
     m_assetHash->setObjectName(QStringLiteral("assetHash"));
     m_assetHash->setReadOnly(true);
@@ -345,6 +347,7 @@ void PropertiesPanel::buildSessionUi()
     m_convertSolverHint->setObjectName(QStringLiteral("solverConvertHint"));
     m_convertSolverHint->setWordWrap(true);
     m_convertSolverHint->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    styleHintLabel(m_convertSolverHint);
     m_keyLayout->addWidget(m_convertSolverHint);
 
     if (m_session)
@@ -365,23 +368,22 @@ void PropertiesPanel::buildSessionUi()
 
     m_basicSection->setExpanded(false);
     m_keySection->setExpanded(true);
+    // One growing field column for every editor: numbers, enums and colour
+    // buttons share the same right edge.
     for (QWidget* widget : findChildren<QWidget*>())
-        if (qobject_cast<QDoubleSpinBox*>(widget) || qobject_cast<QSpinBox*>(widget)
-            || qobject_cast<QComboBox*>(widget)
+        if (qobject_cast<QDoubleSpinBox*>(widget)
+            || qobject_cast<QSpinBox*>(widget) || qobject_cast<QComboBox*>(widget)
             || qobject_cast<QLineEdit*>(widget))
-            widget->setFixedHeight(24);
-    for (CollapsibleSection* section :
-         {m_transformSection, m_textSection, m_vectorSection})
-        if (auto* form = section ? section->findChild<QFormLayout*>() : nullptr)
-            form->setVerticalSpacing(2);
+            stylePropertyField(widget);
+    for (QFormLayout* form : findChildren<QFormLayout*>())
+        equalizePropertyFormLabels(form);
 }
 
 void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
+    configurePropertyForm(form);
 
     m_basicName = new QLineEdit(content);
     m_basicName->setObjectName(QStringLiteral("entityName"));
@@ -547,6 +549,7 @@ void PropertiesPanel::buildCameraSection(QVBoxLayout* layout)
     m_cameraInfo->setText(
         QStringLiteral("摄像机内容为只读：位置、旋转和取景比例请在变换区编辑。"
                        "取景比例按绝对值限制在 0.05–1.0（5%–100%）。"));
+    styleHintLabel(m_cameraInfo);
     box->addWidget(m_cameraInfo);
     m_cameraSection = new CollapsibleSection(QStringLiteral("摄像机"), content, this);
     m_cameraSection->setExpanded(true);
@@ -599,8 +602,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
+    configurePropertyForm(form);
 
     auto addCaptureRow = [this, content, form](const QString& label,
                                                QWidget* field,
@@ -694,6 +696,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
                        "「取」把播放头位置填入字段。"),
         content);
     hint->setWordWrap(true);
+    styleHintLabel(hint);
     form->addRow(hint);
 
     m_audioSection = new CollapsibleSection(QStringLiteral("音频"), content, this);

@@ -1,6 +1,7 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
 
+#include <QFormLayout>
 #include <QJsonArray>
 
 namespace {
@@ -201,6 +202,44 @@ int propertiesTest(QApplication& app)
                QStringLiteral("basic/transform/status widgets missing")))
         return 1;
 
+    // Native styling: no hardcoded QSS, left-aligned forms, one field column.
+    QString styledWidget;
+    for (QWidget* widget : panel->findChildren<QWidget*>())
+        if (!widget->styleSheet().isEmpty())
+        {
+            styledWidget = widget->objectName();
+            break;
+        }
+    if (!check(styledWidget.isEmpty(),
+               QStringLiteral("property widget still carries QSS: %1")
+                   .arg(styledWidget)))
+        return 1;
+    for (QFormLayout* form : panel->findChildren<QFormLayout*>())
+        if (!check((form->labelAlignment() & Qt::AlignLeft) != 0
+                       && form->fieldGrowthPolicy()
+                              == QFormLayout::AllNonFixedFieldsGrow,
+                   QStringLiteral("property form is not left/native aligned")))
+            return 1;
+    auto* section = panel->findChild<pvf::CollapsibleSection*>();
+    auto* header = section ? section->findChild<QToolButton*>() : nullptr;
+    if (!check(section && header && header->font().bold()
+                   && header->sizePolicy().horizontalPolicy()
+                          != QSizePolicy::Expanding,
+               QStringLiteral("collapsible header is not flush-left bold")))
+        return 1;
+    auto* textAlign = panel->findChild<QComboBox*>(QStringLiteral("textAlign"));
+    auto* textColor =
+        panel->findChild<QPushButton*>(QStringLiteral("textColor"));
+    QApplication::processEvents();
+    if (!check(textAlign && textColor
+                   && std::abs(xSpin->width() - textAlign->width()) <= 1
+                   && std::abs(xSpin->width() - textColor->width()) <= 1,
+               QStringLiteral("property field widths differ (%1/%2/%3)")
+                   .arg(xSpin->width())
+                   .arg(textAlign ? textAlign->width() : -1)
+                   .arg(textColor ? textColor->width() : -1)))
+        return 1;
+
     // No key: the panel shows the playhead status and an edit creates one
     // fully populated whole-frame key.
     if (!check(status->text().contains(QStringLiteral("当前无关键帧")),
@@ -228,7 +267,10 @@ int propertiesTest(QApplication& app)
             return 1;
     }
     if (!check(status->text().contains(QStringLiteral("整帧关键帧")),
-               QStringLiteral("key status text missing: %1").arg(status->text())))
+               QStringLiteral("key status text missing: %1").arg(status->text()))
+        || !check(status->palette().color(QPalette::WindowText)
+                      == status->palette().color(QPalette::Text),
+                  QStringLiteral("key status did not return to the normal colour")))
         return 1;
 
     // Same frame updates the existing key instead of appending.

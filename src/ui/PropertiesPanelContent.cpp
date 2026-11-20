@@ -90,8 +90,7 @@ void PropertiesPanel::buildTextSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
+    configurePropertyForm(form);
     m_textForm = form;
 
     m_textContent = new QLineEdit(content);
@@ -256,8 +255,7 @@ void PropertiesPanel::buildVectorSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
+    configurePropertyForm(form);
 
     m_vectorShape = new QComboBox(content);
     m_vectorShape->setObjectName(QStringLiteral("vectorShape"));
@@ -371,6 +369,7 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     m_mediaInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_mediaInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_mediaInfo->setMinimumWidth(0);
+    styleHintLabel(m_mediaInfo);
     mediaLayout->addWidget(m_mediaInfo);
     m_replaceSource = new QPushButton(QStringLiteral("更换素材…"), content);
     m_replaceSource->setObjectName(QStringLiteral("replaceSourceButton"));
@@ -388,8 +387,7 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
 {
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
-    form->setContentsMargins(10, 8, 10, 8);
-    form->setVerticalSpacing(6);
+    configurePropertyForm(form);
 
     m_usePivot = new QCheckBox(QStringLiteral("启用自定义轴心"), content);
     m_usePivot->setObjectName(QStringLiteral("usePivot"));
@@ -413,6 +411,7 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
                                            "轴心是定义参数，不进关键帧。"),
                             content);
     hint->setWordWrap(true);
+    styleHintLabel(hint);
     form->addRow(hint);
 
     connect(m_pivotX, &QDoubleSpinBox::valueChanged, this, [this](double value) {

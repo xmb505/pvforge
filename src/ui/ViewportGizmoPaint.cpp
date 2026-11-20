@@ -29,24 +29,25 @@ QPainterPath carrowGlyphPath()
     const double outerRadius = size - 3.0 - 1.5 * delta;
     const double innerRadius = size - 3.0 - 2.5 * delta;
 
+    const double midRadius = (outerRadius + innerRadius) / 2.0;
+
+    // Closed 90-degree annular sector with one triangular head at each end.
+    // Order: outer arc start -> outer arc end -> bottom tip -> inner arc start
+    // -> inner arc end -> top tip -> close.  Every head base is a radial chord
+    // on the sector, so the outline never crosses itself.
     QPainterPath path;
-    // First arrow head: tip, outer side, inner notch (= outer arc start).
-    path.moveTo(1.5, 1.5 + delta);
-    path.lineTo(arcCenterX, 1.5);
-    path.lineTo(arcCenterX, arcCenterY - outerRadius);
+    path.moveTo(arcCenterX, arcCenterY - outerRadius);
     // 90-degree outer arc from 12 o'clock to 3 o'clock (Qt angles: 90 -> 0).
     path.arcTo(QRectF(arcCenterX - outerRadius, arcCenterY - outerRadius,
                       2.0 * outerRadius, 2.0 * outerRadius),
                90.0, -90.0);
-    // Second arrow head: tip, outer side, inner notch (= inner arc start).
-    path.lineTo(arcCenterX + outerRadius - delta / 2.0, arcCenterY + delta);
-    path.lineTo(arcCenterX + outerRadius + delta, arcCenterY);
+    path.lineTo(arcCenterX + midRadius, arcCenterY + delta);
     path.lineTo(arcCenterX + innerRadius, arcCenterY);
     // 90-degree inner arc back from 3 o'clock to 12 o'clock.
     path.arcTo(QRectF(arcCenterX - innerRadius, arcCenterY - innerRadius,
                       2.0 * innerRadius, 2.0 * innerRadius),
                0.0, 90.0);
-    path.lineTo(1.5, 1.5 + delta);
+    path.lineTo(arcCenterX - delta, arcCenterY - midRadius);
     path.closeSubpath();
     return path.translated(-size / 2.0, -size / 2.0);
 }
