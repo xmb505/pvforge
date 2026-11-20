@@ -97,22 +97,19 @@ QString audioContentFile(const assets::StoredAsset& asset)
 
 double audioGainAt(const model::Entity& entity, int projectFrame)
 {
-    double gain = entity.content.asset.volume;
-    const auto track = entity.tracks.constFind(QStringLiteral("volume"));
-    if (track != entity.tracks.constEnd())
-    {
-        const int relativeFrame = projectFrame - entity.start;
-        gain = model::evaluateTrack(track.value(), relativeFrame)
-                   .value_or(gain);
-    }
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, double(projectFrame - entity.start));
+    const QJsonValue value = sample.content.value(QStringLiteral("volume"));
+    double gain = value.isDouble() ? value.toDouble()
+                                   : entity.content.asset.volume;
     if (!std::isfinite(gain) || gain < 0.0)
         return 0.0;
     return std::min(gain, 4.0);
 }
 
-// Mirrors the Anim visibility rule: the visible track is step-evaluated and a
-// parent hiding its child is controlled by inheritVisibility.  `hidden` is
-// editor-only and must not silence an exported track.
+// Mirrors the Anim visibility rule: the whole-frame `visible` step value plus
+// inherited parent visibility.  `hidden` is editor-only and must not silence
+// an exported track.
 bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
                      int projectFrame, QSet<Uuid>& visiting)
 {
@@ -125,15 +122,9 @@ bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
     visiting.insert(uuid);
     const model::Entity& entity = it.value();
 
-    double value = entity.visible ? 1.0 : 0.0;
-    const auto track = entity.tracks.constFind(QStringLiteral("visible"));
-    if (track != entity.tracks.constEnd())
-    {
-        value = model::evaluateTrack(track.value(),
-                                     projectFrame - entity.start, true)
-                    .value_or(value);
-    }
-    bool visible = value != 0.0;
+    bool visible = model::entitySampleAt(
+                       entity, double(projectFrame - entity.start))
+                       .visible;
 
     if (visible && !entity.parentUuid.isEmpty() && entity.inheritVisibility)
         visible = entityVisibleAt(project, entity.parentUuid, projectFrame,
@@ -150,10 +141,10 @@ bool entityVisibleAt(const model::Project& project, const model::Entity& entity,
     return entityVisibleAt(project, entity.uuid, projectFrame, visiting);
 }
 
-// Visibility only changes on an integer frame that holds a `visible` key on
-// the entity or one of its ancestors (the track is step-evaluated), so
-// sampling those breakpoints is enough to know whether the entity is visible
-// anywhere in [startFrame, endFrame).
+// Visibility only changes on an integer frame that holds a whole-frame
+// keyframe on the entity or one of its ancestors, so sampling those keyframes
+// is enough to know whether the entity is visible anywhere in
+// [startFrame, endFrame).
 bool visibleAtAnyFrame(const model::Project& project,
                        const model::Entity& entity, int startFrame,
                        int endFrame)
@@ -168,15 +159,11 @@ bool visibleAtAnyFrame(const model::Project& project,
         if (it == project.entities.constEnd())
             break;
         const model::Entity& node = it.value();
-        const auto track = node.tracks.constFind(QStringLiteral("visible"));
-        if (track != node.tracks.constEnd())
+        for (const model::Keyframe& key : node.keyframes)
         {
-            for (const model::Keyframe& key : track->keys)
-            {
-                const int frame = node.start + key.frame;
-                if (frame > startFrame && frame < endFrame)
-                    frames.append(frame);
-            }
+            const int frame = node.start + key.frame;
+            if (frame > startFrame && frame < endFrame)
+                frames.append(frame);
         }
         uuid = node.parentUuid;
     }

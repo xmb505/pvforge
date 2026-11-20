@@ -52,22 +52,6 @@ QString joinKey(const Uuid& uuid, double frame)
     return uuid + kKeySeparator + QString::number(frame, 'g', 17);
 }
 
-std::optional<double> trackValueIfPresent(const model::Entity& entity,
-                                          const QString& name, double relativeFrame,
-                                          bool step = false)
-{
-    const auto it = entity.tracks.constFind(name);
-    if (it == entity.tracks.constEnd())
-        return std::nullopt;
-    return model::evaluateTrack(it.value(), relativeFrame, step);
-}
-
-double trackValue(const model::Entity& entity, const QString& name,
-                  double relativeFrame, double fallback, bool step = false)
-{
-    return trackValueIfPresent(entity, name, relativeFrame, step).value_or(fallback);
-}
-
 struct LocalValues
 {
     double x = 0.0;
@@ -84,30 +68,22 @@ struct LocalValues
 // Solver-free values, used for cycle guards and re-entrancy fallbacks.
 LocalValues plainValues(const model::Entity& entity, double relativeFrame)
 {
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
     LocalValues values;
-    values.x = trackValue(entity, QStringLiteral("x"), relativeFrame,
-                          entity.transform.x);
-    values.y = trackValue(entity, QStringLiteral("y"), relativeFrame,
-                          entity.transform.y);
-    values.rotation = trackValue(entity, QStringLiteral("rotation"), relativeFrame,
-                                 entity.transform.rotation);
-    values.scaleX = trackValue(entity, QStringLiteral("scaleX"), relativeFrame,
-                               entity.transform.scaleX);
-    values.scaleY = trackValue(entity, QStringLiteral("scaleY"), relativeFrame,
-                               entity.transform.scaleY);
-    values.pivotX = trackValue(entity, QStringLiteral("pivotX"), relativeFrame,
-                               entity.transform.pivotX);
-    values.pivotY = trackValue(entity, QStringLiteral("pivotY"), relativeFrame,
-                               entity.transform.pivotY);
-    values.opacity = trackValue(entity, QStringLiteral("opacity"), relativeFrame,
-                                entity.transform.opacity);
-
+    values.x = sample.x;
+    values.y = sample.y;
+    values.rotation = sample.rotation;
+    values.scaleX = sample.scaleX;
+    values.scaleY = sample.scaleY;
+    // Pivot is a definition parameter; it is never keyframed.
+    values.pivotX = entity.transform.pivotX;
+    values.pivotY = entity.transform.pivotY;
+    values.opacity = sample.opacity;
     // `hidden` is an editor-only flag: it affects the workbench canvas and the
-    // timeline, never rendering or export.  Only the visible track decides.
-    const double visibleValue = trackValue(
-        entity, QStringLiteral("visible"), relativeFrame,
-        entity.visible ? 1.0 : 0.0, true);
-    values.visible = visibleValue != 0.0;
+    // timeline, never rendering or export.  Only the whole-frame `visible`
+    // value decides.
+    values.visible = sample.visible;
     return values;
 }
 
@@ -165,12 +141,11 @@ bool hasRequiredTarget(const model::Project& project,
 
 solver::Pose startPoseAt(const model::Entity& entity, int relativeFrame)
 {
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
     solver::Pose pose;
-    pose.position = QPointF(
-        trackValue(entity, QStringLiteral("x"), relativeFrame, entity.transform.x),
-        trackValue(entity, QStringLiteral("y"), relativeFrame, entity.transform.y));
-    pose.rotation = trackValue(entity, QStringLiteral("rotation"), relativeFrame,
-                               entity.transform.rotation);
+    pose.position = QPointF(sample.x, sample.y);
+    pose.rotation = sample.rotation;
     return pose;
 }
 
@@ -254,7 +229,8 @@ const solver::Result* solverResultForImpl(
         return &cached.value();
 
     // A locked cache is exactly the playback contract: lookup only, never
-    // solve.  Callers fall back to ordinary tracks for missing segments.
+    // solve.  Callers fall back to ordinary whole-frame keyframes for missing
+    // segments.
     if (cache.solverResultsLocked)
         return nullptr;
 
@@ -330,7 +306,8 @@ private:
     std::optional<double> anchoredValue(const model::Entity& entity,
                                         const QString& track,
                                         double relativeFrame,
-                                        const model::SolverSegment& segment);
+                                        const model::SolverSegment& segment,
+                                        double fallback);
     std::optional<solver::Sample> sampleAt(const model::Entity& entity,
                                            const model::SolverSegment& segment,
                                            double relativeFrame);
@@ -473,34 +450,27 @@ Pose EvalContext::localPose(const model::Entity& entity, double projectFrame,
                             const Pose* parent)
 {
     const double relativeFrame = projectFrame - entity.start;
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
+
     LocalValues values;
-    values.x = drivenValue(entity, QStringLiteral("x"), relativeFrame,
-                           entity.transform.x);
-    values.y = drivenValue(entity, QStringLiteral("y"), relativeFrame,
-                           entity.transform.y);
+    values.x = drivenValue(entity, QStringLiteral("x"), relativeFrame, sample.x);
+    values.y = drivenValue(entity, QStringLiteral("y"), relativeFrame, sample.y);
     values.rotation = drivenValue(entity, QStringLiteral("rotation"),
-                                  relativeFrame, entity.transform.rotation);
-    values.scaleX = trackValue(entity, QStringLiteral("scaleX"), relativeFrame,
-                               entity.transform.scaleX);
-    values.scaleY = trackValue(entity, QStringLiteral("scaleY"), relativeFrame,
-                               entity.transform.scaleY);
+                                  relativeFrame, sample.rotation);
+    values.scaleX = sample.scaleX;
+    values.scaleY = sample.scaleY;
     // A black-hole capture shrink multiplies the authored scale instead of
     // replacing it, so the entity keeps its own size when the option is off
     // (issue #52).
     const double solverScale = drivenScale(entity, relativeFrame);
     values.scaleX *= solverScale;
     values.scaleY *= solverScale;
-    values.pivotX = trackValue(entity, QStringLiteral("pivotX"), relativeFrame,
-                               entity.transform.pivotX);
-    values.pivotY = trackValue(entity, QStringLiteral("pivotY"), relativeFrame,
-                               entity.transform.pivotY);
-    values.opacity = trackValue(entity, QStringLiteral("opacity"), relativeFrame,
-                                entity.transform.opacity);
-
-    const double visibleValue = trackValue(
-        entity, QStringLiteral("visible"), relativeFrame,
-        entity.visible ? 1.0 : 0.0, true);
-    values.visible = visibleValue != 0.0;
+    // Pivot is a definition parameter; it is never keyframed.
+    values.pivotX = entity.transform.pivotX;
+    values.pivotY = entity.transform.pivotY;
+    values.opacity = sample.opacity;
+    values.visible = sample.visible;
 
     return composePose(values, entity.inheritVisibility, parent,
                        entity.space != model::EntitySpace::Canvas);
@@ -523,7 +493,7 @@ double EvalContext::drivenValue(const model::Entity& entity,
             return sample->pose.rotation;
         }
         // Missing target / empty solve: behave as if the segment did not exist.
-        return trackValue(entity, track, relativeFrame, fallback);
+        return fallback;
     }
 
     if (const model::SolverSegment* segment = latestEndedSegment(
@@ -532,11 +502,11 @@ double EvalContext::drivenValue(const model::Entity& entity,
         // The solved end pose is an implicit left key; interpolate from it to
         // the first ordinary key after the segment instead of jumping back.
         if (const auto value = anchoredValue(entity, track, relativeFrame,
-                                             *segment))
+                                             *segment, fallback))
             return *value;
     }
 
-    return trackValue(entity, track, relativeFrame, fallback);
+    return fallback;
 }
 
 double EvalContext::drivenScale(const model::Entity& entity,
@@ -653,7 +623,7 @@ int EvalContext::endFrameFor(const model::Entity& entity,
 
 std::optional<double> EvalContext::anchoredValue(
     const model::Entity& entity, const QString& track, double relativeFrame,
-    const model::SolverSegment& segment)
+    const model::SolverSegment& segment, double fallback)
 {
     const int end = endFrameFor(entity, segment);
     if (end < segment.startFrame)
@@ -671,28 +641,37 @@ std::optional<double> EvalContext::anchoredValue(
     else
         anchor = sample->pose.rotation;
 
-    const auto trackIt = entity.tracks.constFind(track);
-    if (trackIt == entity.tracks.constEnd())
-        return anchor;
-
+    // The first whole-frame key after the solver end is the interpolation
+    // target.
     const model::Keyframe* next = nullptr;
-    for (const model::Keyframe& key : trackIt->keys)
+    for (const model::Keyframe& key : entity.keyframes)
     {
-        if (key.frame > end && (!next || key.frame < next->frame))
+        if (key.frame > end)
+        {
             next = &key;
+            break;
+        }
     }
     if (!next)
         return anchor;
     if (relativeFrame >= next->frame)
         return std::nullopt; // ordinary interpolation takes over from here
 
+    double target = fallback;
+    if (track == QStringLiteral("x"))
+        target = next->x;
+    else if (track == QStringLiteral("y"))
+        target = next->y;
+    else
+        target = next->rotation;
+
     const int span = next->frame - end;
     if (span <= 0)
-        return next->value;
+        return target;
 
     // The synthetic anchor has no easing of its own; use a linear ramp.
     const double t = double(relativeFrame - end) / double(span);
-    return anchor + (next->value - anchor) * t;
+    return anchor + (target - anchor) * t;
 }
 
 std::optional<solver::Sample> EvalContext::sampleAt(
@@ -842,10 +821,8 @@ bool physicsInteractAt(const model::Project& project, const Uuid& entityUuid,
         return false;
 
     const model::Entity& entity = it.value();
-    const double value = trackValue(
-        entity, QStringLiteral("physicsInteract"), projectFrame - entity.start,
-        entity.physicsInteract ? 1.0 : 0.0, true);
-    return value != 0.0;
+    return model::entitySampleAt(entity, projectFrame - entity.start)
+        .physicsInteract;
 }
 
 Pose evaluateEntity(const model::Project& project, const Uuid& entityUuid,

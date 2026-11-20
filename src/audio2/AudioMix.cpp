@@ -40,9 +40,9 @@ QString audioContentFile(const assets::StoredAsset& asset)
     return asset.directory + QLatin1Char('/') + files.first();
 }
 
-// Mirrors the Anim visibility rule: the visible track is step-evaluated and a
-// parent hiding its child is controlled by inheritVisibility.  `hidden` is
-// editor-only and must not mute preview or exported audio.
+// Mirrors the Anim visibility rule: the whole-frame `visible` value is a step
+// value and a parent hiding its child is controlled by inheritVisibility.
+// `hidden` is editor-only and must not mute preview or exported audio.
 bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
                      int projectFrame, QSet<Uuid>& visiting)
 {
@@ -55,15 +55,9 @@ bool entityVisibleAt(const model::Project& project, const Uuid& uuid,
     visiting.insert(uuid);
     const model::Entity& entity = it.value();
 
-    double value = entity.visible ? 1.0 : 0.0;
-    const auto track = entity.tracks.constFind(QStringLiteral("visible"));
-    if (track != entity.tracks.constEnd())
-    {
-        value = model::evaluateTrack(track.value(),
-                                     projectFrame - entity.start, true)
-                    .value_or(value);
-    }
-    bool visible = value != 0.0;
+    bool visible = model::entitySampleAt(
+                       entity, double(projectFrame - entity.start))
+                       .visible;
 
     if (visible && !entity.parentUuid.isEmpty() && entity.inheritVisibility)
         visible = entityVisibleAt(project, entity.parentUuid, projectFrame,
@@ -82,13 +76,11 @@ bool entityVisibleAt(const model::Project& project, const model::Entity& entity,
 
 double audioGainAt(const model::Entity& entity, int projectFrame)
 {
-    double gain = entity.content.asset.volume;
-    const auto track = entity.tracks.constFind(QStringLiteral("volume"));
-    if (track != entity.tracks.constEnd())
-    {
-        gain = model::evaluateTrack(track.value(), projectFrame - entity.start)
-                   .value_or(gain);
-    }
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, double(projectFrame - entity.start));
+    const QJsonValue value = sample.content.value(QStringLiteral("volume"));
+    double gain = value.isDouble() ? value.toDouble()
+                                   : entity.content.asset.volume;
     if (!std::isfinite(gain) || gain < 0.0)
         return 0.0;
     return gain;

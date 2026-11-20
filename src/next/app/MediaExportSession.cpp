@@ -189,16 +189,13 @@ QImage MediaExportSession::htmlFrame(const Uuid& entityUuid,
                        .toObject()
                        .toVariantMap();
 
-    const double relativeFrame = projectFrame - entity->start;
-    for (auto it = entity->tracks.constBegin(); it != entity->tracks.constEnd();
-         ++it)
+    const model::KeyframeSample sample = model::entitySampleAt(
+        *entity, projectFrame - entity->start);
+    for (auto it = sample.htmlVars.constBegin();
+         it != sample.htmlVars.constEnd(); ++it)
     {
-        if (!it.key().startsWith(QStringLiteral("var."), Qt::CaseInsensitive))
-            continue;
-        const std::optional<double> value =
-            model::evaluateTrack(it.value(), relativeFrame);
-        if (value)
-            request.vars.insert(it.key().mid(4), *value);
+        if (it.value().isDouble())
+            request.vars.insert(it.key(), it.value().toDouble());
     }
 
     QString error;

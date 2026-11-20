@@ -102,12 +102,22 @@ public:
         return uuid;
     }
 
-    void addKey(const Uuid& uuid, const QString& trackName, int frame, double value)
+    void addKey(const Uuid& uuid, const QString& property, int frame,
+                double value)
     {
+        model::Entity& entity = m_project.entities[uuid];
         model::Keyframe keyframe;
+        if (const model::Keyframe* existing =
+                model::keyframeAt(entity.keyframes, frame))
+            keyframe = *existing;
         keyframe.frame = frame;
-        keyframe.value = value;
-        m_project.entities[uuid].tracks[trackName].keys.append(keyframe);
+        if (property == QLatin1String("x"))
+            keyframe.x = value;
+        else if (property == QLatin1String("y"))
+            keyframe.y = value;
+        else if (property == QLatin1String("rotation"))
+            keyframe.rotation = value;
+        model::upsertKeyframe(entity.keyframes, keyframe);
     }
 
     void movePlayhead(int frame)

@@ -196,12 +196,10 @@ void StoreTests::saveEntityReopen()
     entity.content.text.text = QStringLiteral("Hello");
     entity.content.text.pixelSize = 120;
 
-    model::Track track;
     model::Keyframe key;
     key.frame = 0;
-    key.value = 3.5;
-    track.keys.append(key);
-    entity.tracks.insert(QStringLiteral("x"), track);
+    key.x = 3.5;
+    entity.keyframes = {key};
 
     store->mutableProject().entities.insert(entity.uuid, entity);
     QVERIFY2(store->saveEntity(entity.uuid, &error), qPrintable(error));
@@ -221,8 +219,8 @@ void StoreTests::saveEntityReopen()
     QCOMPARE(it->content.kind, ContentKind::Text);
     QCOMPARE(it->content.text.text, QStringLiteral("Hello"));
     QCOMPARE(it->content.text.pixelSize, 120);
-    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.size(), 1);
-    QCOMPARE(it->tracks.value(QStringLiteral("x")).keys.first().value, 3.5);
+    QCOMPARE(it->keyframes.size(), 1);
+    QCOMPARE(it->keyframes.first().x, 3.5);
 
     model::Entity invalid = makeEntity(QStringLiteral("坏实体"), 10, 10);
     store->mutableProject().entities.insert(invalid.uuid, invalid);
