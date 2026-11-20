@@ -57,6 +57,11 @@ set(PVF_ASSET_TEST_CASES
     symlinkedAssetDirectoryRejected
     symlinkedContentRejected
     symlinkedAssetsRootRejected
+    symlinkedAssetMetadataRejected
+    oversizedAssetMetadataRejected
+    pvhtmlRejectsSymlinkedManifest
+    pvhtmlRejectsOversizedManifest
+    protocolWhitelistBlocksNestedProtocols
 )
 
 foreach(test_case IN LISTS PVF_ASSET_TEST_CASES)

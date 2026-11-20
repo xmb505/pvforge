@@ -39,6 +39,7 @@ private slots:
     void viewStateReturnsInjected();
     void previewRenderFrameWritesPng();
     void previewRefusesUnapprovedBase64();
+    void previewTempFilesArePruned();
     void previewRejectsOversize();
     void solverEvaluateNestedEntity();
     void moveRowOnlyAndGetDefaults();

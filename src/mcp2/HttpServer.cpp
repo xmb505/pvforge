@@ -1,11 +1,11 @@
 #include "mcp2/HttpServer.h"
 
+#include "mcp2/EndpointFile.h"
 #include "mcp2/Service.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDebug>
-#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -14,7 +14,6 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QRandomGenerator>
-#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -55,111 +54,22 @@ const char kProtocolVersion[] = "2025-06-18";
 
 QString configDirectory()
 {
-    QString base = qEnvironmentVariable("XDG_CONFIG_HOME").trimmed();
-    if (base.isEmpty())
-        base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.config");
-    return base + QStringLiteral("/PVForge");
+    return detail::configDirectory();
 }
 
 QString defaultConfigPath()
 {
-    return configDirectory() + QStringLiteral("/mcp.json");
+    return detail::defaultConfigPath();
 }
 
 QString defaultEndpointPath()
 {
-#if defined(Q_OS_MACOS)
-    // Keep this identical to defaultMcpEndpointPath() in src/mcp/StdioBridge.cpp;
-    // a different directory made the bridge unable to find the GUI endpoint.
-    return QDir::homePath()
-           + QStringLiteral("/Library/Application Support/PVForge/mcp-endpoint.json");
-#else
-    return configDirectory() + QStringLiteral("/mcp-endpoint.json");
-#endif
+    return detail::defaultEndpointPath();
 }
 
 QFileDevice::Permissions privateFilePermissions()
 {
     return QFileDevice::ReadOwner | QFileDevice::WriteOwner;
-}
-
-QFileDevice::Permissions privateDirectoryPermissions()
-{
-    return QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
-}
-
-// Writes a private file atomically (temp file in the target directory, then
-// rename). The parent directory is created when missing and the file is left
-// at mode 0600 because it contains the MCP token.
-bool writePrivateFile(const QString& path, const QByteArray& data, QString* error)
-{
-    const QFileInfo info(path);
-    const QString directory = info.absolutePath();
-    if (!QDir().mkpath(directory))
-    {
-        if (error)
-            *error = QStringLiteral("无法创建目录 %1").arg(directory);
-        return false;
-    }
-    QFile::setPermissions(directory, privateDirectoryPermissions());
-
-    const QString tempPath =
-        path + QStringLiteral(".tmp-%1").arg(QCoreApplication::applicationPid());
-    QFile::remove(tempPath);
-    QFile file(tempPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        if (error)
-            *error = file.errorString();
-        return false;
-    }
-    if (!file.setPermissions(privateFilePermissions()))
-    {
-        if (error)
-            *error = QStringLiteral("无法设置临时文件权限");
-        file.close();
-        QFile::remove(tempPath);
-        return false;
-    }
-    if (file.write(data) != data.size() || !file.flush())
-    {
-        if (error)
-            *error = file.errorString();
-        file.close();
-        QFile::remove(tempPath);
-        return false;
-    }
-    file.close();
-
-#if defined(Q_OS_UNIX)
-    if (std::rename(QFile::encodeName(tempPath).constData(),
-                    QFile::encodeName(path).constData())
-        != 0)
-    {
-        if (error)
-            *error = QStringLiteral("无法替换文件 %1").arg(path);
-        QFile::remove(tempPath);
-        return false;
-    }
-#else
-    QFile::remove(path);
-    if (!QFile::rename(tempPath, path))
-    {
-        if (error)
-            *error = QStringLiteral("无法替换文件 %1").arg(path);
-        QFile::remove(tempPath);
-        return false;
-    }
-#endif
-    if (!QFile::setPermissions(path, privateFilePermissions()))
-    {
-        if (error)
-            *error = QStringLiteral("无法设置文件权限 %1").arg(path);
-        return false;
-    }
-    return true;
 }
 
 QByteArray reasonPhrase(int status)
@@ -411,6 +321,7 @@ HttpServer::HttpServer(Service* service, QObject* parent)
     , m_service(service)
     , m_token(generateToken())
     , m_sessionId(generateToken())
+    , m_startNonce(generateToken())
 {
 }
 
@@ -422,6 +333,7 @@ HttpServer::~HttpServer()
 void HttpServer::setToken(const QByteArray& token)
 {
     m_token = token.isEmpty() ? generateToken() : token;
+    m_tokenPinned = true;
     QString error;
     if (!saveConfig(&error))
         qWarning("mcpserver2: cannot write config %s: %s",
@@ -437,6 +349,7 @@ void HttpServer::setToken(const QByteArray& token)
 void HttpServer::resetCredentials()
 {
     m_token = generateToken();
+    m_tokenPinned = false;
     QString error;
     if (!saveConfig(&error))
         qWarning("mcpserver2: cannot write config %s: %s",
@@ -501,12 +414,26 @@ bool HttpServer::loadOrCreateConfig(QString* error)
 
 #if defined(Q_OS_UNIX)
     struct stat fileInfo;
-    if (::stat(QFile::encodeName(path).constData(), &fileInfo) == 0
-        && fileInfo.st_uid != ::geteuid())
+    if (::lstat(QFile::encodeName(path).constData(), &fileInfo) == 0)
     {
-        if (error)
-            *error = QStringLiteral("MCP 配置 %1 不属于当前用户").arg(path);
-        return false;
+        if (S_ISLNK(fileInfo.st_mode))
+        {
+            if (error)
+                *error = QStringLiteral("MCP 配置 %1 是符号链接").arg(path);
+            return false;
+        }
+        if (!S_ISREG(fileInfo.st_mode))
+        {
+            if (error)
+                *error = QStringLiteral("MCP 配置 %1 不是普通文件").arg(path);
+            return false;
+        }
+        if (fileInfo.st_uid != ::geteuid())
+        {
+            if (error)
+                *error = QStringLiteral("MCP 配置 %1 不属于当前用户").arg(path);
+            return false;
+        }
     }
 #endif
     // The file contains the Bearer token; tighten a mode loosened by an old
@@ -617,19 +544,22 @@ bool HttpServer::saveConfig(QString* error)
     root.insert(QStringLiteral("token"), QString::fromLatin1(m_token));
 
     const QByteArray data = compactJson(root) + '\n';
-    return writePrivateFile(configFilePath(), data, error);
+    return detail::writePrivateFile(configFilePath(), data, error);
 }
 
 bool HttpServer::writeEndpointFile(QString* error)
 {
     QJsonObject root;
+    root.insert(QStringLiteral("format"), QStringLiteral("pvforge-mcp-endpoint"));
+    root.insert(QStringLiteral("version"), 1);
     root.insert(QStringLiteral("url"), endpointUrl());
     root.insert(QStringLiteral("token"), QString::fromLatin1(m_token));
     root.insert(QStringLiteral("port"), int(m_port));
     root.insert(QStringLiteral("pid"), double(QCoreApplication::applicationPid()));
+    root.insert(QStringLiteral("nonce"), QString::fromLatin1(m_startNonce));
 
     const QByteArray data = compactJson(root) + '\n';
-    if (!writePrivateFile(endpointFilePath(), data, error))
+    if (!detail::writePrivateFile(endpointFilePath(), data, error))
     {
         m_endpointWritten = false;
         return false;
@@ -645,6 +575,12 @@ void HttpServer::removeEndpointFile()
     m_endpointWritten = false;
 
     const QString path = endpointFilePath();
+#if defined(Q_OS_UNIX)
+    struct stat info;
+    if (::lstat(QFile::encodeName(path).constData(), &info) != 0
+        || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid())
+        return;
+#endif
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return;
@@ -654,12 +590,71 @@ void HttpServer::removeEndpointFile()
     const QJsonObject root = QJsonDocument::fromJson(data).object();
     const qint64 pid = qint64(root.value(QStringLiteral("pid")).toDouble());
     const QString token = root.value(QStringLiteral("token")).toString();
+    const QString nonce = root.value(QStringLiteral("nonce")).toString();
     // Only remove a file this process wrote; another PVForge instance may have
     // replaced it while this one was shutting down.
     if (pid != QCoreApplication::applicationPid()
-        || token != QString::fromLatin1(m_token))
+        || token != QString::fromLatin1(m_token)
+        || nonce != QString::fromLatin1(m_startNonce))
         return;
     QFile::remove(path);
+}
+
+bool HttpServer::cleanupStaleEndpointFile()
+{
+    const QString path = endpointFilePath();
+#if defined(Q_OS_UNIX)
+    struct stat info;
+    if (::lstat(QFile::encodeName(path).constData(), &info) != 0)
+        return false;
+    if (S_ISLNK(info.st_mode))
+    {
+        // Removing the link cannot touch its target. A symlinked endpoint is
+        // never valid, because writePrivateFile() refuses to create one.
+        QFile::remove(path);
+        return true;
+    }
+    if (!S_ISREG(info.st_mode))
+        return false;
+    if (info.st_uid != ::geteuid())
+    {
+        qWarning("mcpserver2: endpoint file %s belongs to another user",
+                 qPrintable(path));
+        return false;
+    }
+#else
+    if (!QFileInfo::exists(path))
+        return false;
+#endif
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray data = file.read(kMaxConfigBytes + 1);
+    file.close();
+
+    bool stale = data.size() > kMaxConfigBytes;
+    qint64 pid = 0;
+    if (!stale)
+    {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject())
+            stale = true;
+        else
+            pid = qint64(document.object().value(QStringLiteral("pid")).toDouble());
+    }
+    if (!stale)
+        stale = detail::endpointPidIsStale(pid);
+    if (!stale)
+        return false;
+    if (!QFile::remove(path))
+    {
+        qWarning("mcpserver2: cannot remove stale endpoint file %s",
+                 qPrintable(path));
+        return false;
+    }
+    return true;
 }
 
 QByteArray HttpServer::generateToken()
@@ -678,6 +673,11 @@ QByteArray HttpServer::generateToken()
 quint16 HttpServer::start(quint16 port, QString* error)
 {
     stop();
+
+    // A crash leaves the endpoint file behind with a fixed port and token. Drop
+    // it before binding so a failed bind cannot leave a stale discovery file
+    // pointing at a port now owned by another process.
+    cleanupStaleEndpointFile();
 
     QString configError;
     if (!loadOrCreateConfig(&configError))
@@ -704,6 +704,13 @@ quint16 HttpServer::start(quint16 port, QString* error)
     }
     m_port = m_server->serverPort();
     m_configuredPort = m_port;
+    // Rotate the bearer token on every start unless setToken() pinned an
+    // explicit one. The stdio bridge reads the endpoint file after the GUI
+    // starts, so rotation is transparent for the normal launch flow, while a
+    // token cached from an earlier run stops working. Only rotate after the
+    // bind succeeded: a failed start must not invalidate a good token.
+    if (!m_tokenPinned)
+        m_token = generateToken();
 
     QString saveError;
     if (!saveConfig(&saveError))

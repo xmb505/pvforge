@@ -233,7 +233,8 @@ int mcpSessionTest(QApplication& app)
               QStringLiteral("write failed after resume"));
     }
 
-    // Restarting the session keeps the token from the config file.
+    // Restarting the session rotates the bearer token; clients re-read the
+    // endpoint file instead of reusing a credential from an earlier run.
     const QByteArray tokenBefore = server->token();
     window->close();
     QApplication::processEvents();
@@ -245,8 +246,8 @@ int mcpSessionTest(QApplication& app)
               QStringLiteral("reopen failed: %1").arg(error)))
     {
         check(reopened->mcpServer()
-                  && reopened->mcpServer()->token() == tokenBefore,
-              QStringLiteral("token changed across restart"));
+                  && reopened->mcpServer()->token() != tokenBefore,
+              QStringLiteral("token was not rotated across restart"));
         check(reopened->mcpServer()
                   && reopened->mcpServer()->isRunning(),
               QStringLiteral("MCP server did not restart"));

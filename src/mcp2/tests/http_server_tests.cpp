@@ -227,9 +227,13 @@ private slots:
     void httpToolsCallProjectGet();
     void httpSecurityAndLimits();
     void httpNotificationsAndErrors();
-    void httpCredentialsPersistAcrossRestart();
+    void httpCredentialsRotateAcrossRestart();
     void httpDefaultConfigUsesFixedPort();
     void httpPortConflictFailsClearly();
+    void httpRejectsSymlinkedConfig();
+    void httpCleansStaleEndpoint();
+    void httpFailedBindRemovesStaleEndpoint();
+    void httpFailedBindPreservesLiveEndpoint();
     void httpStopAiBlocksWrites();
 };
 
@@ -329,6 +333,9 @@ void HttpServerTests::httpToolsCallProjectGet()
 
     QVERIFY(QFileInfo::exists(fixture.endpointPath));
     const QJsonObject endpoint = readJsonFile(fixture.endpointPath);
+    QCOMPARE(endpoint.value(QStringLiteral("format")).toString(),
+             QStringLiteral("pvforge-mcp-endpoint"));
+    QCOMPARE(endpoint.value(QStringLiteral("version")).toInt(), 1);
     QCOMPARE(endpoint.value(QStringLiteral("url")).toString(),
              fixture.server->endpointUrl());
     QCOMPARE(endpoint.value(QStringLiteral("token")).toString(),
@@ -336,6 +343,16 @@ void HttpServerTests::httpToolsCallProjectGet()
     QCOMPARE(endpoint.value(QStringLiteral("port")).toInt(), int(fixture.server->port()));
     QCOMPARE(qint64(endpoint.value(QStringLiteral("pid")).toDouble()),
              QCoreApplication::applicationPid());
+    // A per-start nonce proves the file belongs to this run, not a crashed one.
+    QCOMPARE(endpoint.value(QStringLiteral("nonce")).toString().size(), 64);
+#ifdef Q_OS_UNIX
+    const QFile::Permissions foreign =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    QCOMPARE(QFile::permissions(fixture.endpointPath) & foreign,
+             QFile::Permissions{});
+#endif
 
     QSignalSpy spy(fixture.server.get(), &mcp2::HttpServer::toolInvoked);
 
@@ -485,17 +502,31 @@ void HttpServerTests::httpNotificationsAndErrors()
              -32602);
 }
 
-void HttpServerTests::httpCredentialsPersistAcrossRestart()
+void HttpServerTests::httpCredentialsRotateAcrossRestart()
 {
     Fixture fixture;
     QVERIFY(fixture.init(true, 0));
 
+    // The config contains the Bearer token; a mode loosened by an old version
+    // or the user must be tightened on load.
+    QVERIFY(QFile::setPermissions(fixture.configPath,
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ReadGroup
+                                      | QFileDevice::ReadOther));
+
     QString error;
     const quint16 firstPort = fixture.server->start(0, &error);
     QVERIFY2(firstPort > 0, qPrintable(error));
+#ifdef Q_OS_UNIX
+    const QFile::Permissions foreign =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    QCOMPARE(QFile::permissions(fixture.configPath) & foreign,
+             QFile::Permissions{});
+#endif
     const QByteArray firstToken = fixture.server->token();
     QCOMPARE(firstToken.size(), 64);
-    const QJsonObject firstEndpoint = readJsonFile(fixture.endpointPath);
     fixture.server->stop();
 
     QVERIFY(!QFileInfo::exists(fixture.endpointPath));
@@ -507,30 +538,38 @@ void HttpServerTests::httpCredentialsPersistAcrossRestart()
     QCOMPARE(config.value(QStringLiteral("token")).toString(),
              QString::fromLatin1(firstToken));
 
+    // The port stays stable, but a fresh start must not reuse the old bearer
+    // token: a token cached from a previous run stops authenticating.
     const quint16 secondPort = fixture.server->start(0, &error);
     QVERIFY2(secondPort > 0, qPrintable(error));
     QCOMPARE(secondPort, firstPort);
-    QCOMPARE(fixture.server->token(), firstToken);
+    const QByteArray secondToken = fixture.server->token();
+    QVERIFY2(secondToken != firstToken, "token was reused across restart");
+    QCOMPARE(secondToken.size(), 64);
 
-    const QJsonObject secondEndpoint = readJsonFile(fixture.endpointPath);
-    QCOMPARE(secondEndpoint, firstEndpoint);
-    QCOMPARE(secondEndpoint.value(QStringLiteral("url")).toString(),
+    const QJsonObject endpoint = readJsonFile(fixture.endpointPath);
+    QCOMPARE(endpoint.value(QStringLiteral("url")).toString(),
              QStringLiteral("http://127.0.0.1:%1/mcp").arg(firstPort));
-    QCOMPARE(secondEndpoint.value(QStringLiteral("token")).toString(),
-             QString::fromLatin1(firstToken));
-    QCOMPARE(secondEndpoint.value(QStringLiteral("port")).toInt(), int(firstPort));
+    QCOMPARE(endpoint.value(QStringLiteral("token")).toString(),
+             QString::fromLatin1(secondToken));
+    QCOMPARE(endpoint.value(QStringLiteral("port")).toInt(), int(firstPort));
 
     config = readJsonFile(fixture.configPath);
     QCOMPARE(config.value(QStringLiteral("port")).toInt(), int(firstPort));
     QCOMPARE(config.value(QStringLiteral("token")).toString(),
-             QString::fromLatin1(firstToken));
+             QString::fromLatin1(secondToken));
+
+    const QJsonObject ping{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                           {QStringLiteral("id"), 40},
+                           {QStringLiteral("method"), QStringLiteral("ping")}};
+    QCOMPARE(sendRpc(fixture, firstToken, ping).status, 401);
 
     fixture.server->stop();
     QVERIFY(!QFileInfo::exists(fixture.endpointPath));
 
     fixture.server->resetCredentials();
     const QByteArray resetToken = fixture.server->token();
-    QVERIFY(resetToken != firstToken);
+    QVERIFY(resetToken != secondToken);
     QCOMPARE(resetToken.size(), 64);
 
     config = readJsonFile(fixture.configPath);
@@ -541,11 +580,12 @@ void HttpServerTests::httpCredentialsPersistAcrossRestart()
     const quint16 thirdPort = fixture.server->start(0, &error);
     QVERIFY2(thirdPort > 0, qPrintable(error));
     QCOMPARE(thirdPort, firstPort);
-    QCOMPARE(fixture.server->token(), resetToken);
+    const QByteArray thirdToken = fixture.server->token();
+    QVERIFY2(thirdToken != resetToken, "token was reused after reset");
     QCOMPARE(readJsonFile(fixture.endpointPath)
                  .value(QStringLiteral("token"))
                  .toString(),
-             QString::fromLatin1(resetToken));
+             QString::fromLatin1(thirdToken));
 
     fixture.server->stop();
 }
@@ -607,6 +647,168 @@ void HttpServerTests::httpPortConflictFailsClearly()
     QVERIFY(!fixture.server->isRunning());
     QVERIFY(!QFileInfo::exists(fixture.endpointPath));
 
+    blocker.close();
+}
+
+void HttpServerTests::httpRejectsSymlinkedConfig()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init(false));
+
+    // A symlinked mcp.json would make the server read bearer credentials from
+    // (and chmod) an arbitrary file the user owns.
+    QVERIFY(QDir().mkpath(QFileInfo(fixture.configPath).absolutePath()));
+    const QString outside = fixture.temp.filePath(QStringLiteral("outside-mcp.json"));
+    QVERIFY(writeJsonFile(outside,
+                          QJsonObject{{QStringLiteral("host"),
+                                       QStringLiteral("127.0.0.1")},
+                                      {QStringLiteral("port"), 0}}));
+    QVERIFY(QFile::link(outside, fixture.configPath));
+
+    QString error;
+    QCOMPARE(fixture.server->start(0, &error), quint16(0));
+    QVERIFY2(error.contains(QStringLiteral("符号链接")), qPrintable(error));
+    QVERIFY(!fixture.server->isRunning());
+    QVERIFY(!QFileInfo::exists(fixture.endpointPath));
+    // The link target is untouched.
+    QVERIFY(QFileInfo::exists(outside));
+}
+
+void HttpServerTests::httpCleansStaleEndpoint()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init(false));
+    QVERIFY(QDir().mkpath(QFileInfo(fixture.configPath).absolutePath()));
+
+    const QString oldToken = QStringLiteral("stale-config-token");
+    QVERIFY(writeJsonFile(fixture.configPath,
+                          QJsonObject{{QStringLiteral("host"),
+                                       QStringLiteral("127.0.0.1")},
+                                      {QStringLiteral("port"), 0},
+                                      {QStringLiteral("token"), oldToken}}));
+
+    // A crashed run leaves this endpoint behind: the pid is gone and the token
+    // is the one persisted in mcp.json.
+    const QString deadPid = QStringLiteral("2147483646");
+    QJsonObject stale{{QStringLiteral("format"),
+                       QStringLiteral("pvforge-mcp-endpoint")},
+                      {QStringLiteral("version"), 1},
+                      {QStringLiteral("url"),
+                       QStringLiteral("http://127.0.0.1:39001/mcp")},
+                      {QStringLiteral("token"), oldToken},
+                      {QStringLiteral("port"), 39001},
+                      {QStringLiteral("pid"), deadPid.toDouble()},
+                      {QStringLiteral("nonce"), QStringLiteral("stale-nonce")}};
+    QVERIFY(writeJsonFile(fixture.endpointPath, stale));
+
+    QString error;
+    const quint16 port = fixture.server->start(0, &error);
+    QVERIFY2(port > 0, qPrintable(error));
+
+    const QByteArray token = fixture.server->token();
+    QVERIFY2(QString::fromLatin1(token) != oldToken,
+             "a new start must rotate the bearer token");
+    const QJsonObject endpoint = readJsonFile(fixture.endpointPath);
+    QCOMPARE(endpoint.value(QStringLiteral("token")).toString(),
+             QString::fromLatin1(token));
+    QCOMPARE(endpoint.value(QStringLiteral("port")).toInt(), int(port));
+    QCOMPARE(qint64(endpoint.value(QStringLiteral("pid")).toDouble()),
+             QCoreApplication::applicationPid());
+    QCOMPARE(endpoint.value(QStringLiteral("nonce")).toString().size(), 64);
+
+    const QJsonObject config = readJsonFile(fixture.configPath);
+    QCOMPARE(config.value(QStringLiteral("token")).toString(),
+             QString::fromLatin1(token));
+
+    // The token from the stale file no longer authenticates.
+    const QJsonObject ping{{QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                           {QStringLiteral("id"), 30},
+                           {QStringLiteral("method"), QStringLiteral("ping")}};
+    const Response rejected = sendRpc(fixture, oldToken.toLatin1(), ping);
+    QCOMPARE(rejected.status, 401);
+
+    fixture.server->stop();
+}
+
+void HttpServerTests::httpFailedBindRemovesStaleEndpoint()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init(false));
+    QVERIFY(QDir().mkpath(QFileInfo(fixture.configPath).absolutePath()));
+
+    QTcpServer blocker;
+    QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+    const quint16 busyPort = blocker.serverPort();
+
+    QVERIFY(writeJsonFile(fixture.configPath,
+                          QJsonObject{{QStringLiteral("host"),
+                                       QStringLiteral("127.0.0.1")},
+                                      {QStringLiteral("port"), int(busyPort)},
+                                      {QStringLiteral("token"),
+                                       QStringLiteral("stale-config-token")}}));
+    QJsonObject stale{{QStringLiteral("format"),
+                       QStringLiteral("pvforge-mcp-endpoint")},
+                      {QStringLiteral("version"), 1},
+                      {QStringLiteral("url"),
+                       QStringLiteral("http://127.0.0.1:39001/mcp")},
+                      {QStringLiteral("token"),
+                       QStringLiteral("stale-config-token")},
+                      {QStringLiteral("port"), 39001},
+                      {QStringLiteral("pid"), 2147483646.0},
+                      {QStringLiteral("nonce"), QStringLiteral("stale-nonce")}};
+    QVERIFY(writeJsonFile(fixture.endpointPath, stale));
+
+    QString error;
+    QCOMPARE(fixture.server->start(0, &error), quint16(0));
+    QVERIFY(!error.isEmpty());
+    // Discovery must not keep pointing at a stale port after a failed bind.
+    QVERIFY(!QFileInfo::exists(fixture.endpointPath));
+    blocker.close();
+}
+
+void HttpServerTests::httpFailedBindPreservesLiveEndpoint()
+{
+    Fixture fixture;
+    QVERIFY(fixture.init(false));
+    QVERIFY(QDir().mkpath(QFileInfo(fixture.configPath).absolutePath()));
+
+    QTcpServer blocker;
+    QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+    const quint16 busyPort = blocker.serverPort();
+
+    QProcess owner;
+    owner.start(QStringLiteral("sleep"), {QStringLiteral("30")});
+    if (!owner.waitForStarted(3000))
+        QSKIP("cannot start a helper process for the live-pid endpoint test");
+    const qint64 livePid = owner.processId();
+
+    QVERIFY(writeJsonFile(fixture.configPath,
+                          QJsonObject{{QStringLiteral("host"),
+                                       QStringLiteral("127.0.0.1")},
+                                      {QStringLiteral("port"), int(busyPort)}}));
+    QJsonObject live{{QStringLiteral("format"),
+                      QStringLiteral("pvforge-mcp-endpoint")},
+                     {QStringLiteral("version"), 1},
+                     {QStringLiteral("url"),
+                      QStringLiteral("http://127.0.0.1:39002/mcp")},
+                     {QStringLiteral("token"), QStringLiteral("live-token")},
+                     {QStringLiteral("port"), 39002},
+                     {QStringLiteral("pid"), double(livePid)},
+                     {QStringLiteral("nonce"), QStringLiteral("live-nonce")}};
+    QVERIFY(writeJsonFile(fixture.endpointPath, live));
+
+    QString error;
+    QCOMPARE(fixture.server->start(0, &error), quint16(0));
+    // A second instance must not delete a live instance's discovery file just
+    // because its own bind failed.
+    QVERIFY(QFileInfo::exists(fixture.endpointPath));
+    QCOMPARE(readJsonFile(fixture.endpointPath)
+                 .value(QStringLiteral("token"))
+                 .toString(),
+             QStringLiteral("live-token"));
+
+    owner.kill();
+    owner.waitForFinished(3000);
     blocker.close();
 }
 

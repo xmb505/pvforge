@@ -88,6 +88,10 @@ constexpr qint64 kMaxAssetJsonBytes = 1024 * 1024;
 
 std::optional<QJsonObject> readJson(const QString& path)
 {
+    const QFileInfo info(path);
+    // asset.json is project data; a symlink could point at any local file.
+    if (!info.isFile() || info.isSymLink() || info.size() > kMaxAssetJsonBytes)
+        return std::nullopt;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return std::nullopt;

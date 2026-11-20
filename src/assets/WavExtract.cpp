@@ -10,6 +10,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/dict.h>
 #include <libavutil/error.h>
 #include <libswresample/swresample.h>
 }
@@ -105,7 +106,11 @@ bool extractWav(const QString& videoPath, const QString& outPath, QString* error
     FfmpegGuard ff;
     const QByteArray utf8 = videoPath.toUtf8();
 
-    int status = avformat_open_input(&ff.format, utf8.constData(), nullptr, nullptr);
+    // Project-controlled media must not select a network or concat protocol.
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "protocol_whitelist", "file", 0);
+    int status = avformat_open_input(&ff.format, utf8.constData(), nullptr, &options);
+    av_dict_free(&options);
     if (status < 0)
     {
         setError(error, QStringLiteral("无法打开媒体文件: %1").arg(ffmpegError(status)));

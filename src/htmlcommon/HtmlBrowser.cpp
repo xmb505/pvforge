@@ -66,10 +66,19 @@ bool usePipeTransport()
 {
     if (!cdpPipeTransportSupported())
         return false;
+    // Security: a --remote-debugging-port listener has no authentication.
+    // Any local process can scan loopback ports, attach to DevTools and drive
+    // (or read) the HTML layer. The inherited fd 3/4 pipe is the only
+    // transport with a kernel-enforced process boundary, so it is forced
+    // wherever the platform supports it. The old debugging escape hatch is
+    // logged and ignored instead of silently opening a port.
     const QString mode =
         qEnvironmentVariable("PVFORGE_CDP_TRANSPORT").trimmed().toLower();
-    return mode != QStringLiteral("ws") && mode != QStringLiteral("websocket")
-           && mode != QStringLiteral("port");
+    if (!mode.isEmpty() && mode != QStringLiteral("pipe"))
+        qWarning("pvforge: ignoring PVFORGE_CDP_TRANSPORT=%s; the DevTools pipe "
+                 "is required for local isolation",
+                 qPrintable(mode));
+    return true;
 }
 
 #ifdef Q_OS_UNIX
@@ -207,8 +216,10 @@ bool HtmlBrowser::start(const BrowserStartOptions& options, QString* error)
 
     QStringList arguments{
         QStringLiteral("--headless=new"),
-        // P0: the production transport is the inherited fd 3/4 pipe. The
-        // loopback port exists only for PVFORGE_CDP_TRANSPORT=ws.
+        // P0: the production transport is the inherited fd 3/4 pipe. A
+        // loopback port is opened only on platforms where the pipe is
+        // unavailable; on Linux/macOS forcing pipe prevents other local
+        // processes from attaching to the unauthenticated DevTools listener.
         QStringLiteral("--user-data-dir=") + m_userDataDir->path(),
         QStringLiteral("--no-first-run"),
         QStringLiteral("--no-default-browser-check"),

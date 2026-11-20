@@ -48,8 +48,8 @@ public:
     static QString installHint();
 
     // Production transport is Chromium's --remote-debugging-pipe (fd 3/4).
-    // Setting PVFORGE_CDP_TRANSPORT=ws selects the loopback WebSocket backend
-    // for debugging; production never uses it.
+    // Where supported it is forced: the loopback WebSocket fallback has no
+    // authentication and is only used on platforms without pipe support.
     static bool pipeTransportSupported();
 
     bool start(const QString& executable = QString(), QString* error = nullptr);

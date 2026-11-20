@@ -29,6 +29,13 @@ bool isSafeBundleRelativePath(const QString& path);
 //    resolve outside the bundle;
 //  - no directory listing; "/" maps to index.html.
 //
+// Linux cannot report a TCP peer's UID: SO_PEERCRED is AF_UNIX-only and
+// returns pid 0 for TCP. The ephemeral port plus page CSP/CDP request blocking
+// keep the bundle away from the page, but another same-machine process can
+// still fetch files if it discovers the port. A UID boundary would require an
+// AF_UNIX listener with SO_PEERCRED plus a browser-side HTTP-over-UDS bridge;
+// that is not implemented because Chromium has no supported UDS proxy client.
+//
 // The server keeps the port and the canonical root so the renderer can reuse
 // one origin for every frame of a bundle.
 class LocalBundleServer : public QObject
