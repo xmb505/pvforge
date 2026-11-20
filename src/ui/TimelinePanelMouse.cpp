@@ -88,14 +88,21 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    const int x = int(std::lround(pos.x()));
+    const int hitKeyFrame = isEntityLocked(id)
+                                ? -1
+                                : hitKeyframeRow(row, x,
+                                                 int(std::lround(pos.y())));
+
     // Slow double-click on an already selected clip starts inline rename.  A
-    // fast double-click arrives through mouseDoubleClickEvent and creates a
-    // whole-frame key instead.
+    // diamond owns its own double-click (selection), so rename only starts on
+    // the clip body.  A fast double-click arrives through
+    // mouseDoubleClickEvent and creates a whole-frame key instead.
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const qint64 interval = now - m_lastClipClickMs;
     const bool alreadySelected =
         id == m_selected || m_entitySelection.contains(id);
-    if (alreadySelected && id == m_lastClipClickEntity
+    if (hitKeyFrame < 0 && alreadySelected && id == m_lastClipClickEntity
         && interval > QApplication::doubleClickInterval()
         && interval <= kSlowDoubleClickMs)
     {
@@ -106,8 +113,6 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     }
     m_lastClipClickMs = now;
     m_lastClipClickEntity = id;
-
-    const int x = int(std::lround(pos.x()));
     m_dragEntity = id;
     m_dragRow = row;
     m_dragStartFrame = frameFromX(x);
@@ -119,7 +124,7 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 
     if (!isEntityLocked(id))
     {
-        const int keyFrame = hitKeyframeRow(row, x, int(std::lround(pos.y())));
+        const int keyFrame = hitKeyFrame;
         if (keyFrame >= 0)
         {
             selectEntity(id, true);
