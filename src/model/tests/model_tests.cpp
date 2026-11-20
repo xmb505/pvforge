@@ -62,7 +62,23 @@ Keyframe keyAt(int frame, double value)
 {
     Keyframe keyframe;
     keyframe.frame = frame;
-    keyframe.value = value;
+    keyframe.x = value;
+    return keyframe;
+}
+
+// A whole-frame key with every public parameter explicitly set.
+Keyframe wholeKey(int frame, double x, double y, double rotation,
+                  double scaleX = 1.0, double scaleY = 1.0,
+                  double opacity = 1.0)
+{
+    Keyframe keyframe;
+    keyframe.frame = frame;
+    keyframe.x = x;
+    keyframe.y = y;
+    keyframe.rotation = rotation;
+    keyframe.scaleX = scaleX;
+    keyframe.scaleY = scaleY;
+    keyframe.opacity = opacity;
     return keyframe;
 }
 
@@ -158,14 +174,6 @@ void testContentJsonRoundTrip()
             entity.content.asset.sourceIn = 7;
             entity.content.asset.volume = 0.35;
             break;
-        case ContentKind::ComicText:
-        case ContentKind::RadialLines:
-        case ContentKind::FlowLines:
-        case ContentKind::HalftoneDots:
-        case ContentKind::BrandWall:
-            // Detailed round-trips for the special content live in
-            // testSpecialContentJsonRoundTrip.
-            break;
         }
 
         const QJsonObject json = toJson(entity);
@@ -205,439 +213,24 @@ void testContentJsonRoundTrip()
     CHECK(assetJson.contains(QStringLiteral("volume")));
 }
 
-void testSpecialContentJsonRoundTrip()
+void testUnsupportedContentKindRejected()
 {
     QString error;
-
-    Entity comicEntity = makeEntity(3, 53);
-    comicEntity.content.kind = ContentKind::ComicText;
-    ComicTextContent& comic = comicEntity.content.comic;
-    comic.text = QStringLiteral("咚！");
-    comic.fontFamily = QStringLiteral("Noto Sans SC");
-    comic.pixelSize = 64;
-    comic.color = QStringLiteral("#112233");
-    comic.strokeColor = QStringLiteral("#445566");
-    comic.strokeWidth = 2.5;
-    comic.align = 132;
-    comic.lineHeight = 1.2;
-    comic.bold = true;
-    comic.italic = true;
-    comic.shape = QStringLiteral("burst");
-    comic.boxWidth = 320.0;
-    comic.boxHeight = 180.0;
-    comic.fillColor = QStringLiteral("#fefefe");
-    comic.bubbleStrokeColor = QStringLiteral("#101010");
-    comic.bubbleStrokeWidth = 5.0;
-    comic.cornerRadius = 18.0;
-    comic.tail = false;
-    comic.tailX = 0.4;
-    comic.tailY = 1.6;
-    comic.rotation = 15.0;
-    comic.padding = 12.0;
-    comic.seed = 7;
-
-    const QJsonObject comicJson = toJson(comicEntity);
-    const QJsonObject comicContent =
-        comicJson.value(QStringLiteral("content")).toObject();
-    CHECK(comicContent.value(QStringLiteral("kind")).toString()
-          == QStringLiteral("comicText"));
-    CHECK(comicContent.contains(QStringLiteral("comicText")));
-    const QJsonObject comicFields =
-        comicContent.value(QStringLiteral("comicText")).toObject();
-    CHECK(comicFields.value(QStringLiteral("shape")).toString()
-          == QStringLiteral("burst"));
-    CHECK(comicFields.contains(QStringLiteral("bubbleStrokeColor")));
-    CHECK(comicFields.contains(QStringLiteral("tailX")));
-    CHECK(comicFields.contains(QStringLiteral("cornerRadius")));
-
-    const auto parsedComic = entityFromJson(comicJson, &error);
-    CHECK_DETAIL(parsedComic.has_value(), error);
-    if (parsedComic)
-    {
-        CHECK(toJson(*parsedComic) == comicJson);
-        CHECK(parsedComic->content.kind == ContentKind::ComicText);
-        CHECK(parsedComic->content.comic.text == comic.text);
-        CHECK(parsedComic->content.comic.shape == QStringLiteral("burst"));
-        CHECK(nearly(parsedComic->content.comic.bubbleStrokeWidth, 5.0));
-        CHECK(nearly(parsedComic->content.comic.tailY, 1.6));
-        CHECK(nearly(parsedComic->content.comic.rotation, 15.0));
-    }
-
-    Entity radialEntity = makeEntity(0, 10);
-    radialEntity.content.kind = ContentKind::RadialLines;
-    RadialLinesContent& radial = radialEntity.content.radial;
-    radial.count = 37;
-    radial.radius = 512.0;
-    radial.innerRatio = 0.12;
-    radial.width = 24.0;
-    radial.angle = 33.0;
-    radial.color = QStringLiteral("#abcdef");
-    radial.seed = 9;
-
-    const QJsonObject radialJson = toJson(radialEntity);
-    CHECK(radialJson.value(QStringLiteral("content"))
-              .toObject()
-              .value(QStringLiteral("kind"))
-              .toString()
-          == QStringLiteral("radialLines"));
-    const auto parsedRadial = entityFromJson(radialJson, &error);
-    CHECK_DETAIL(parsedRadial.has_value(), error);
-    if (parsedRadial)
-    {
-        CHECK(toJson(*parsedRadial) == radialJson);
-        CHECK(parsedRadial->content.radial.count == 37);
-        CHECK(nearly(parsedRadial->content.radial.radius, 512.0));
-        CHECK(nearly(parsedRadial->content.radial.innerRatio, 0.12));
-        CHECK(nearly(parsedRadial->content.radial.angle, 33.0));
-    }
-
-    Entity flowEntity = makeEntity(0, 10);
-    flowEntity.content.kind = ContentKind::FlowLines;
-    FlowLinesContent& flow = flowEntity.content.flow;
-    flow.count = 19;
-    flow.length = 360.0;
-    flow.spacing = 28.0;
-    flow.thickness = 6.5;
-    flow.area = 800.0;
-    flow.bend = -120.0;
-    flow.angle = -12.0;
-    flow.phase = 0.35;
-    flow.color = QStringLiteral("#00ff88");
-    flow.seed = 3;
-
-    const QJsonObject flowJson = toJson(flowEntity);
-    const auto parsedFlow = entityFromJson(flowJson, &error);
-    CHECK_DETAIL(parsedFlow.has_value(), error);
-    if (parsedFlow)
-    {
-        CHECK(toJson(*parsedFlow) == flowJson);
-        CHECK(parsedFlow->content.flow.count == 19);
-        CHECK(nearly(parsedFlow->content.flow.bend, -120.0));
-        CHECK(nearly(parsedFlow->content.flow.phase, 0.35));
-        CHECK(parsedFlow->content.flow.color == QStringLiteral("#00ff88"));
-    }
-
-    Entity halftoneEntity = makeEntity(0, 10);
-    halftoneEntity.content.kind = ContentKind::HalftoneDots;
-    HalftoneDotsContent& halftone = halftoneEntity.content.halftone;
-    halftone.layout = QStringLiteral("radial");
-    halftone.area = 1024.0;
-    halftone.radius = 500.0;
-    halftone.spacing = 22.0;
-    halftone.dotSize = 9.0;
-    halftone.angle = 60.0;
-    halftone.gradientAngle = 180.0;
-    halftone.minRatio = 0.25;
-    halftone.jitter = 0.4;
-    halftone.color = QStringLiteral("#222222");
-    halftone.seed = 11;
-
-    const QJsonObject halftoneJson = toJson(halftoneEntity);
-    const auto parsedHalftone = entityFromJson(halftoneJson, &error);
-    CHECK_DETAIL(parsedHalftone.has_value(), error);
-    if (parsedHalftone)
-    {
-        CHECK(toJson(*parsedHalftone) == halftoneJson);
-        CHECK(parsedHalftone->content.halftone.layout
-              == QStringLiteral("radial"));
-        CHECK(nearly(parsedHalftone->content.halftone.minRatio, 0.25));
-        CHECK(nearly(parsedHalftone->content.halftone.jitter, 0.4));
-        CHECK(parsedHalftone->content.halftone.seed == 11);
-    }
-
-    Entity wallEntity = makeEntity(0, 10);
-    wallEntity.content.kind = ContentKind::BrandWall;
-    BrandWallContent& wall = wallEntity.content.brandWall;
-    wall.logos = {QStringLiteral("PV"), QStringLiteral("Lumen")};
-    wall.columns = 5;
-    wall.rows = 3;
-    wall.spacing = 14.5;
-    wall.logoSize = 160.0;
-    wall.colors = {QStringLiteral("#112233"), QStringLiteral("#ff8800")};
-    wall.alternate = false;
-    wall.angle = -21.0;
-    wall.background = QStringLiteral("#000000");
-    wall.seed = 9;
-
-    const QJsonObject wallJson = toJson(wallEntity);
-    const auto parsedWall = entityFromJson(wallJson, &error);
-    CHECK_DETAIL(parsedWall.has_value(), error);
-    if (parsedWall)
-    {
-        CHECK(toJson(*parsedWall) == wallJson);
-        CHECK(parsedWall->content.brandWall.logos
-              == QStringList({QStringLiteral("PV"), QStringLiteral("Lumen")}));
-        CHECK(parsedWall->content.brandWall.columns == 5);
-        CHECK(parsedWall->content.brandWall.rows == 3);
-        CHECK(nearly(parsedWall->content.brandWall.spacing, 14.5));
-        CHECK(nearly(parsedWall->content.brandWall.logoSize, 160.0));
-        CHECK(parsedWall->content.brandWall.colors.size() == 2);
-        CHECK(!parsedWall->content.brandWall.alternate);
-        CHECK(nearly(parsedWall->content.brandWall.angle, -21.0));
-        CHECK(parsedWall->content.brandWall.background
-              == QStringLiteral("#000000"));
-        CHECK(parsedWall->content.brandWall.seed == 9);
-    }
-
-    // Unknown top-level fields in a content object are preserved, not dropped.
-    QJsonObject unknown = comicJson;
-    QJsonObject unknownContent =
-        unknown.value(QStringLiteral("content")).toObject();
-    QJsonObject futureFields =
-        unknownContent.value(QStringLiteral("comicText")).toObject();
-    futureFields.insert(QStringLiteral("speechBubbleGlow"), 0.75);
-    unknownContent.insert(QStringLiteral("comicText"), futureFields);
-    unknownContent.insert(QStringLiteral("futureKindData"), true);
-    unknown.insert(QStringLiteral("content"), unknownContent);
-    const auto parsedUnknown = entityFromJson(unknown, &error);
-    CHECK_DETAIL(parsedUnknown.has_value(), error);
-    if (parsedUnknown)
-    {
-        CHECK(parsedUnknown->content.extras.contains(
-            QStringLiteral("futureKindData")));
-        const QJsonObject writtenContent =
-            toJson(*parsedUnknown).value(QStringLiteral("content")).toObject();
-        CHECK(writtenContent.value(QStringLiteral("futureKindData")).toBool());
-        // Nested payload objects are outside the top-level preservation
-        // policy, so a field inside comicText is still dropped.
-        CHECK(!writtenContent.value(QStringLiteral("comicText"))
-                   .toObject()
-                   .contains(QStringLiteral("speechBubbleGlow")));
-    }
-
-    // The same tolerance applies inside brandWall.
-    QJsonObject unknownWall = toJson(wallEntity);
-    QJsonObject unknownWallContent =
-        unknownWall.value(QStringLiteral("content")).toObject();
-    QJsonObject wallFields =
-        unknownWallContent.value(QStringLiteral("brandWall")).toObject();
-    wallFields.insert(QStringLiteral("glow"), 1.0);
-    unknownWallContent.insert(QStringLiteral("brandWall"), wallFields);
-    unknownWall.insert(QStringLiteral("content"), unknownWallContent);
-    const auto parsedUnknownWall = entityFromJson(unknownWall, &error);
-    CHECK_DETAIL(parsedUnknownWall.has_value(), error);
-    if (parsedUnknownWall)
-        CHECK(toJson(*parsedUnknownWall) == toJson(wallEntity));
-}
-
-void testSpecialContentValidation()
-{
-    const auto reject = [](const Entity& entity, const QString& field) {
-        QString error;
-        const bool valid = validateEntity(entity, &error);
-        CHECK_DETAIL(!valid, field);
-        CHECK_DETAIL(error.contains(field), error);
-    };
-
-    Entity comic = makeEntity();
-    comic.content.kind = ContentKind::ComicText;
-    CHECK(validateEntity(comic));
-
-    Entity bad = comic;
-    bad.content.comic.boxWidth = 0.0;
-    reject(bad, QStringLiteral("boxWidth"));
-
-    bad = comic;
-    bad.content.comic.boxHeight = 0.0;
-    reject(bad, QStringLiteral("boxHeight"));
-
-    bad = comic;
-    bad.content.comic.pixelSize = 0;
-    reject(bad, QStringLiteral("pixelSize"));
-
-    bad = comic;
-    bad.content.comic.lineHeight = 0.0;
-    reject(bad, QStringLiteral("lineHeight"));
-
-    bad = comic;
-    bad.content.comic.bubbleStrokeWidth = -1.0;
-    reject(bad, QStringLiteral("bubbleStrokeWidth"));
-
-    bad = comic;
-    bad.content.comic.tailX = 99.0;
-    reject(bad, QStringLiteral("tailX"));
-
-    bad = comic;
-    bad.content.comic.shape = QStringLiteral("hexagon");
-    reject(bad, QStringLiteral("shape"));
-
-    Entity radial = makeEntity();
-    radial.content.kind = ContentKind::RadialLines;
-    CHECK(validateEntity(radial));
-
-    bad = radial;
-    bad.content.radial.count = 0;
-    reject(bad, QStringLiteral("count"));
-
-    bad = radial;
-    bad.content.radial.count = 513;
-    reject(bad, QStringLiteral("count"));
-
-    bad = radial;
-    bad.content.radial.radius = 0.0;
-    reject(bad, QStringLiteral("radius"));
-
-    bad = radial;
-    bad.content.radial.innerRatio = 1.2;
-    reject(bad, QStringLiteral("innerRatio"));
-
-    bad = radial;
-    bad.content.radial.width = 0.0;
-    reject(bad, QStringLiteral("width"));
-
-    Entity flow = makeEntity();
-    flow.content.kind = ContentKind::FlowLines;
-    CHECK(validateEntity(flow));
-
-    bad = flow;
-    bad.content.flow.count = 0;
-    reject(bad, QStringLiteral("count"));
-
-    bad = flow;
-    bad.content.flow.count = 513;
-    reject(bad, QStringLiteral("count"));
-
-    bad = flow;
-    bad.content.flow.length = 0.0;
-    reject(bad, QStringLiteral("length"));
-
-    bad = flow;
-    bad.content.flow.spacing = 0.0;
-    reject(bad, QStringLiteral("spacing"));
-
-    bad = flow;
-    bad.content.flow.thickness = 0.0;
-    reject(bad, QStringLiteral("thickness"));
-
-    bad = flow;
-    bad.content.flow.area = 0.0;
-    reject(bad, QStringLiteral("area"));
-
-    bad = flow;
-    bad.content.flow.phase = 1.5;
-    reject(bad, QStringLiteral("phase"));
-
-    Entity halftone = makeEntity();
-    halftone.content.kind = ContentKind::HalftoneDots;
-    CHECK(validateEntity(halftone));
-
-    bad = halftone;
-    bad.content.halftone.layout = QStringLiteral("hexagon");
-    reject(bad, QStringLiteral("layout"));
-
-    bad = halftone;
-    bad.content.halftone.area = 0.0;
-    reject(bad, QStringLiteral("area"));
-
-    bad = halftone;
-    bad.content.halftone.radius = 0.0;
-    reject(bad, QStringLiteral("radius"));
-
-    bad = halftone;
-    bad.content.halftone.spacing = 0.0;
-    reject(bad, QStringLiteral("spacing"));
-
-    bad = halftone;
-    bad.content.halftone.dotSize = 0.0;
-    reject(bad, QStringLiteral("dotSize"));
-
-    bad = halftone;
-    bad.content.halftone.minRatio = 1.5;
-    reject(bad, QStringLiteral("minRatio"));
-
-    bad = halftone;
-    bad.content.halftone.jitter = -0.1;
-    reject(bad, QStringLiteral("jitter"));
-
-    bad = halftone;
-    bad.content.halftone.area = 10000.0;
-    bad.content.halftone.spacing = 1.0;
-    reject(bad, QStringLiteral("过密"));
-
-    bad = halftone;
-    bad.content.halftone.layout = QStringLiteral("radial");
-    bad.content.halftone.radius = 10000.0;
-    bad.content.halftone.spacing = 1.0;
-    reject(bad, QStringLiteral("过密"));
-
-    Entity wall = makeEntity();
-    wall.content.kind = ContentKind::BrandWall;
-    CHECK(validateEntity(wall));
-
-    bad = wall;
-    bad.content.brandWall.columns = 0;
-    reject(bad, QStringLiteral("columns"));
-
-    bad = wall;
-    bad.content.brandWall.rows = 65;
-    reject(bad, QStringLiteral("rows"));
-
-    bad = wall;
-    bad.content.brandWall.spacing = -1.0;
-    reject(bad, QStringLiteral("spacing"));
-
-    bad = wall;
-    bad.content.brandWall.logoSize = 0.0;
-    reject(bad, QStringLiteral("logoSize"));
-
-    bad = wall;
-    bad.content.brandWall.angle = 361.0;
-    reject(bad, QStringLiteral("angle"));
-
-    bad = wall;
-    bad.content.brandWall.logos = QStringList(65, QStringLiteral("x"));
-    reject(bad, QStringLiteral("logos"));
-
-    bad = wall;
-    bad.content.brandWall.logos = {QStringLiteral("ok"), QString()};
-    reject(bad, QStringLiteral("logos"));
-
-    bad = wall;
-    bad.content.brandWall.logos = {QString(129, QLatin1Char('x'))};
-    reject(bad, QStringLiteral("logos"));
-
-    bad = wall;
-    bad.content.brandWall.colors.clear();
-    reject(bad, QStringLiteral("colors"));
-
-    bad = wall;
-    bad.content.brandWall.colors = {QStringLiteral("not-a-color")};
-    reject(bad, QStringLiteral("colors"));
-
-    bad = wall;
-    bad.content.brandWall.background = QStringLiteral("not-a-color");
-    reject(bad, QStringLiteral("background"));
-
-    // Invalid enum names are rejected while parsing, with a specific error.
-    QString error;
-    QJsonObject badComic;
-    badComic.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
-    QJsonObject badComicFields;
-    badComicFields.insert(QStringLiteral("shape"), QStringLiteral("hexagon"));
-    badComic.insert(QStringLiteral("comicText"), badComicFields);
-    const auto parsedComic = contentFromJson(badComic, &error);
+    QJsonObject comic;
+    comic.insert(QStringLiteral("kind"), QStringLiteral("comicText"));
+    const auto parsedComic = contentFromJson(comic, &error);
     CHECK(!parsedComic.has_value());
-    CHECK(error.contains(QStringLiteral("shape")));
+    CHECK(error.contains(QStringLiteral("未知内容类型")));
 
-    QJsonObject badHalftone;
-    badHalftone.insert(QStringLiteral("kind"), QStringLiteral("halftoneDots"));
-    QJsonObject badHalftoneFields;
-    badHalftoneFields.insert(QStringLiteral("layout"), QStringLiteral("hexagon"));
-    badHalftone.insert(QStringLiteral("halftoneDots"), badHalftoneFields);
-    const auto parsedHalftone = contentFromJson(badHalftone, &error);
-    CHECK(!parsedHalftone.has_value());
-    CHECK(error.contains(QStringLiteral("layout")));
-
-    QJsonObject badWall;
-    badWall.insert(QStringLiteral("kind"), QStringLiteral("brandWall"));
-    QJsonObject badWallFields;
-    badWallFields.insert(QStringLiteral("colors"),
-                         QJsonArray::fromStringList(
-                             {QStringLiteral("not-a-color")}));
-    badWall.insert(QStringLiteral("brandWall"), badWallFields);
-    const auto parsedWall = contentFromJson(badWall, &error);
-    CHECK(!parsedWall.has_value());
-    CHECK(error.contains(QStringLiteral("colors")));
+    // Every removed special kind is an unknown kind now, so an old project
+    // fails to load instead of silently losing its artwork.
+    for (const char* name : {"radialLines", "flowLines", "halftoneDots",
+                             "brandWall"})
+    {
+        QJsonObject document;
+        document.insert(QStringLiteral("kind"), QString::fromLatin1(name));
+        CHECK(!contentFromJson(document, &error).has_value());
+    }
 }
 
 void testEntityJsonRoundTrip()
@@ -655,29 +248,34 @@ void testEntityJsonRoundTrip()
     entity.content.kind = ContentKind::Text;
     entity.content.text.text = QStringLiteral("标题文字");
     entity.content.text.bold = true;
+    entity.content.text.pixelSize = 96;
+    entity.content.text.lineHeight = 1.25;
 
-    Track xTrack;
-    Keyframe x0 = keyAt(0, 10.0);
-    x0.note = QStringLiteral("起点");
-    Keyframe x1 = keyAt(50, 90.0);
-    x1.easing.type = QStringLiteral("easeInOut");
-    xTrack.keys = {x0, x1};
+    Keyframe first = wholeKey(0, 10.0, -4.0, 0.0, 1.0, 2.0, 0.8);
+    first.note = QStringLiteral("起点");
+    first.content.insert(QStringLiteral("pixelSize"), 96.0);
+    first.content.insert(QStringLiteral("lineHeight"), 1.25);
+    first.htmlVars.insert(QStringLiteral("progress"), 0.0);
+    first.easing.type = QStringLiteral("bezier");
+    first.easing.inX = 0.2;
+    first.easing.inY = 0.1;
+    first.easing.outX = 0.7;
+    first.easing.outY = 1.2;
 
-    Track rotationTrack;
-    Keyframe rotation0 = keyAt(0, 0.0);
-    rotation0.easing.type = QStringLiteral("bezier");
-    rotation0.easing.inX = 0.2;
-    rotation0.easing.inY = 0.1;
-    rotation0.easing.outX = 0.7;
-    rotation0.easing.outY = 1.2;
-    rotationTrack.keys = {rotation0, keyAt(90, 180.0)};
+    Keyframe second = wholeKey(50, 90.0, 20.0, 45.0, 1.5, 2.0, 0.4);
+    second.content.insert(QStringLiteral("pixelSize"), 160.0);
+    second.content.insert(QStringLiteral("lineHeight"), 2.0);
+    second.htmlVars.insert(QStringLiteral("progress"), 1.0);
+    second.easing.type = QStringLiteral("easeInOut");
+    second.visible = false;
+    second.physicsInteract = true;
 
-    Track visibleTrack;
-    visibleTrack.keys = {keyAt(0, 1.0), keyAt(20, 0.0), keyAt(40, 1.0)};
+    // frame == duration (100) is an ordinary keyframe at the end boundary.
+    Keyframe boundary = wholeKey(100, 120.0, 30.0, 90.0);
+    boundary.content.insert(QStringLiteral("pixelSize"), 200.0);
+    boundary.content.insert(QStringLiteral("lineHeight"), 2.25);
 
-    entity.tracks.insert(QStringLiteral("x"), xTrack);
-    entity.tracks.insert(QStringLiteral("rotation"), rotationTrack);
-    entity.tracks.insert(QStringLiteral("visible"), visibleTrack);
+    entity.keyframes = {first, second, boundary};
 
     SolverSegment gravity = makeSolver(SolverEffect::Gravity, 10, 40);
     gravity.initialVelocity = QPointF(2.0, -3.5);
@@ -712,16 +310,17 @@ void testEntityJsonRoundTrip()
     CHECK(parsed->physicsInteract);
     CHECK(nearly(parsed->transform.scaleX, -0.5));
     CHECK(nearly(parsed->transform.opacity, 0.75));
-    CHECK(parsed->tracks.size() == 3);
-    CHECK(parsed->tracks.value(QStringLiteral("x")).keys.size() == 2);
-    CHECK(parsed->tracks.value(QStringLiteral("rotation"))
-              .keys.at(0)
-              .easing.type
-          == QStringLiteral("bezier"));
-    CHECK(nearly(parsed->tracks.value(QStringLiteral("rotation"))
-                     .keys.at(0)
-                     .easing.outY,
-                 1.2));
+    CHECK(parsed->keyframes.size() == 3);
+    CHECK(parsed->keyframes.at(0).frame == 0);
+    CHECK(nearly(parsed->keyframes.at(0).x, 10.0));
+    CHECK(nearly(parsed->keyframes.at(0).content.value(QStringLiteral("lineHeight")).toDouble(), 1.25));
+    CHECK(nearly(parsed->keyframes.at(0).htmlVars.value(QStringLiteral("progress")).toDouble(), 0.0));
+    CHECK(parsed->keyframes.at(0).easing.type == QStringLiteral("bezier"));
+    CHECK(nearly(parsed->keyframes.at(0).easing.outY, 1.2));
+    CHECK(parsed->keyframes.at(1).frame == 50);
+    CHECK(!parsed->keyframes.at(1).visible);
+    CHECK(parsed->keyframes.at(1).physicsInteract);
+    CHECK(parsed->keyframes.at(2).frame == 100);
     CHECK(parsed->solvers.size() == 3);
     CHECK(parsed->solvers.at(0).effect == SolverEffect::Gravity);
     CHECK(parsed->solvers.at(0).endFrame == 40);
@@ -737,6 +336,10 @@ void testEntityJsonRoundTrip()
 void testComponentJsonRoundTrip()
 {
     Keyframe keyframe = keyAt(12, 3.5);
+    keyframe.y = -4.0;
+    keyframe.rotation = 33.0;
+    keyframe.content.insert(QStringLiteral("pixelSize"), 42.0);
+    keyframe.htmlVars.insert(QStringLiteral("speed"), 2.5);
     keyframe.note = QStringLiteral("标记");
     keyframe.easing.type = QStringLiteral("bezier");
     keyframe.easing.inX = 0.15;
@@ -754,15 +357,15 @@ void testComponentJsonRoundTrip()
         CHECK(toJson(*parsedKeyframe) == keyframeJson);
     }
 
-    Track track;
-    track.keys = {keyframe, keyAt(20, 9.0)};
-    const QJsonArray trackJson = toJson(track);
-    const auto parsedTrack = trackFromJson(trackJson, &error);
-    CHECK_DETAIL(parsedTrack.has_value(), error);
-    if (parsedTrack)
+    const QVector<Keyframe> keys = {keyframe, wholeKey(20, 9.0, 1.0, 5.0)};
+    const QJsonArray keysJson = toJson(keys);
+    CHECK(keysJson.size() == 2);
+    const auto parsedKeys = keyframesFromJson(keysJson, &error);
+    CHECK_DETAIL(parsedKeys.has_value(), error);
+    if (parsedKeys)
     {
-        CHECK(*parsedTrack == track);
-        CHECK(toJson(*parsedTrack) == trackJson);
+        CHECK(*parsedKeys == keys);
+        CHECK(toJson(*parsedKeys) == keysJson);
     }
 
     SolverSegment segment = makeSolver(SolverEffect::Orbit, 5, 30);
@@ -852,182 +455,241 @@ void testProjectJsonRoundTrip()
     CHECK(parsed->settings.background == QStringLiteral("#000000"));
 }
 
-void testTrackEvaluation()
+void testWholeFrameEvaluation()
 {
-    Track emptyTrack;
-    CHECK(!emptyTrack.valueAt(0).has_value());
+    KeyframeSample fallback;
+    fallback.x = 7.0;
+    fallback.y = 9.0;
+    fallback.rotation = 3.0;
+    fallback.scaleX = 1.0;
+    fallback.scaleY = 1.0;
+    fallback.opacity = 0.4;
+    fallback.visible = true;
+    fallback.content.insert(QStringLiteral("pixelSize"), 96.0);
+    fallback.content.insert(QStringLiteral("lineHeight"), 1.25);
+    // The manifest default of a declared numeric HTML variable is the static
+    // fallback the project author sees before adding any keyframe.
+    fallback.htmlVars.insert(QStringLiteral("progress"), 0.0);
 
-    Track linear;
-    linear.keys = {keyAt(0, 0.0), keyAt(10, 100.0)};
+    // Empty keyframes fall back to the static sample unchanged.
+    const KeyframeSample empty = evaluateKeyframes({}, fallback, 42.5);
+    CHECK(nearly(empty.x, 7.0));
+    CHECK(nearly(empty.y, 9.0));
+    CHECK(nearly(empty.rotation, 3.0));
+    CHECK(nearly(empty.opacity, 0.4));
+    CHECK(nearly(empty.content.value(QStringLiteral("pixelSize")).toDouble(), 96.0));
+    CHECK(empty.visible);
 
-    auto value = linear.valueAt(-5);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = linear.valueAt(0);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = linear.valueAt(5);
-    CHECK(value.has_value() && nearly(*value, 50.0));
-    value = linear.valueAt(10);
-    CHECK(value.has_value() && nearly(*value, 100.0));
-    value = linear.valueAt(50);
-    CHECK(value.has_value() && nearly(*value, 100.0));
+    Keyframe a;
+    a.frame = 0;
+    a.x = 0.0;
+    a.y = 0.0;
+    a.rotation = 0.0;
+    a.scaleX = 1.0;
+    a.scaleY = 1.0;
+    a.opacity = 1.0;
+    a.visible = true;
+    a.physicsInteract = false;
+    a.content.insert(QStringLiteral("pixelSize"), 20.0);
+    a.content.insert(QStringLiteral("lineHeight"), 1.0);
+    a.htmlVars.insert(QStringLiteral("progress"), 0.0);
 
-    Track easeIn;
-    Keyframe easeIn0 = keyAt(0, 0.0);
-    easeIn0.easing.type = QStringLiteral("easeIn");
-    easeIn.keys = {easeIn0, keyAt(8, 100.0)};
-    value = easeIn.valueAt(4);
-    CHECK(value.has_value() && nearly(*value, 25.0));
+    Keyframe b = a;
+    b.frame = 10;
+    b.x = 100.0;
+    b.y = 50.0;
+    b.rotation = 90.0;
+    b.scaleX = 2.0;
+    b.scaleY = 3.0;
+    b.opacity = 0.5;
+    b.visible = false;
+    b.physicsInteract = true;
+    b.content.insert(QStringLiteral("pixelSize"), 120.0);
+    b.content.insert(QStringLiteral("lineHeight"), 2.0);
+    b.htmlVars.insert(QStringLiteral("progress"), 10.0);
 
-    Track easeOut;
-    Keyframe easeOut0 = keyAt(0, 0.0);
-    easeOut0.easing.type = QStringLiteral("easeOut");
-    easeOut.keys = {easeOut0, keyAt(8, 100.0)};
-    value = easeOut.valueAt(4);
-    CHECK(value.has_value() && nearly(*value, 75.0));
+    const QVector<Keyframe> keys = {a, b};
 
-    Track easeInOut;
-    Keyframe easeInOut0 = keyAt(0, 0.0);
-    easeInOut0.easing.type = QStringLiteral("easeInOut");
-    easeInOut.keys = {easeInOut0, keyAt(8, 100.0)};
-    value = easeInOut.valueAt(2);
-    CHECK(value.has_value() && nearly(*value, 12.5));
-    value = easeInOut.valueAt(4);
-    CHECK(value.has_value() && nearly(*value, 50.0));
+    // Every numeric field shares one eased progress value.
+    const KeyframeSample mid = evaluateKeyframes(keys, fallback, 5.0);
+    CHECK(nearly(mid.x, 50.0));
+    CHECK(nearly(mid.y, 25.0));
+    CHECK(nearly(mid.rotation, 45.0));
+    CHECK(nearly(mid.scaleX, 1.5));
+    CHECK(nearly(mid.scaleY, 2.0));
+    CHECK(nearly(mid.opacity, 0.75));
+    CHECK(nearly(mid.content.value(QStringLiteral("pixelSize")).toDouble(), 70.0));
+    CHECK(nearly(mid.content.value(QStringLiteral("lineHeight")).toDouble(), 1.5));
+    CHECK(nearly(mid.htmlVars.value(QStringLiteral("progress")).toDouble(), 5.0));
 
-    Track bezier;
-    Keyframe bezier0 = keyAt(0, 0.0);
-    bezier0.easing.type = QStringLiteral("bezier");
-    bezier.keys = {bezier0, keyAt(100, 100.0)};
-    value = bezier.valueAt(50);
-    CHECK(value.has_value() && nearly(*value, 50.0, 1e-6));
-    value = bezier.valueAt(25);
-    CHECK(value.has_value() && *value > 0.0 && *value < 25.0);
-    value = bezier.valueAt(75);
-    CHECK(value.has_value() && *value > 75.0 && *value < 100.0);
+    // Boolean parameters are step values from the left key.
+    CHECK(mid.visible);
+    CHECK(!mid.physicsInteract);
+    CHECK(!evaluateKeyframes(keys, fallback, 10.0).visible);
+    CHECK(evaluateKeyframes(keys, fallback, 9.9).visible);
+    CHECK(evaluateKeyframes(keys, fallback, 10.0).physicsInteract);
 
-    Track stepTrack;
-    stepTrack.keys = {keyAt(0, 0.0), keyAt(10, 1.0)};
-    value = stepTrack.valueAt(5, true);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = stepTrack.valueAt(9, true);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = stepTrack.valueAt(10, true);
-    CHECK(value.has_value() && nearly(*value, 1.0));
-    value = stepTrack.valueAt(5, false);
-    CHECK(value.has_value() && nearly(*value, 0.5));
+    // Fractional frames sample between the same two keys.
+    const KeyframeSample quarter = evaluateKeyframes(keys, fallback, 2.5);
+    CHECK(nearly(quarter.x, 25.0));
+    CHECK(nearly(quarter.content.value(QStringLiteral("pixelSize")).toDouble(), 45.0));
+    CHECK(nearly(quarter.htmlVars.value(QStringLiteral("progress")).toDouble(), 2.5));
 
-    Track unsorted;
-    unsorted.keys = {keyAt(10, 100.0), keyAt(0, 0.0)};
-    value = unsorted.valueAt(5);
-    CHECK(value.has_value() && nearly(*value, 50.0));
+    // Values are held before the first and after the last key.
+    CHECK(nearly(evaluateKeyframes(keys, fallback, -5.0).x, 0.0));
+    CHECK(nearly(evaluateKeyframes(keys, fallback, 50.0).opacity, 0.5));
+    CHECK(nearly(evaluateKeyframes(keys, fallback, 50.0).htmlVars
+                     .value(QStringLiteral("progress")).toDouble(),
+                 10.0));
 
-    Track unknownEasing;
-    Keyframe unknown0 = keyAt(0, 0.0);
-    unknown0.easing.type = QStringLiteral("bogus");
-    unknownEasing.keys = {unknown0, keyAt(10, 100.0)};
-    value = unknownEasing.valueAt(5);
-    CHECK(value.has_value() && nearly(*value, 50.0));
+    // The left key's easing controls the whole frame.
+    QVector<Keyframe> eased = keys;
+    eased[0].easing.type = QStringLiteral("easeIn");
+    CHECK(nearly(evaluateKeyframes(eased, fallback, 5.0).x, 25.0));
+    eased[0].easing.type = QStringLiteral("easeOut");
+    CHECK(nearly(evaluateKeyframes(eased, fallback, 5.0).x, 75.0));
+    eased[0].easing.type = QStringLiteral("linear");
+    eased[0].easing.type = QStringLiteral("bogus");
+    CHECK(nearly(evaluateKeyframes(eased, fallback, 5.0).x, 50.0));
+
+    // Missing content / htmlVars fields fall back to the static defaults while
+    // a field present only on one key is held.
+    Keyframe sparse = a;
+    sparse.content = QJsonObject{};
+    sparse.htmlVars = QJsonObject{};
+    QVector<Keyframe> sparseKeys = {sparse, b};
+    const KeyframeSample sparseMid = evaluateKeyframes(sparseKeys, fallback, 5.0);
+    CHECK(nearly(sparseMid.content.value(QStringLiteral("pixelSize")).toDouble(), 108.0));
+    CHECK(nearly(sparseMid.htmlVars.value(QStringLiteral("progress")).toDouble(), 5.0));
+
+    // A single key is constant at every query, fractional or step.
+    const QVector<Keyframe> single = {a};
+    CHECK(nearly(evaluateKeyframes(single, fallback, -3.0).x, 0.0));
+    CHECK(nearly(evaluateKeyframes(single, fallback, 7.5).x, 0.0));
+
+    // frame == duration is an ordinary interpolation target at the end
+    // boundary; it does not clamp the sample to the clip's last rendered frame.
+    Keyframe endKey = b;
+    endKey.frame = 100;
+    QVector<Keyframe> boundaryKeys = {a, endKey};
+    CHECK(nearly(evaluateKeyframes(boundaryKeys, fallback, 50.0).x, 50.0));
 }
 
-void testDuplicateFrameEvaluation()
+void testKeyframeJsonAndValidation()
 {
-    // Keys that share a frame are legal. The historic rules are: a query on the
-    // first frame takes the first of its duplicates, a query on the last frame
-    // takes the last one, and an interior query takes the last duplicate at or
-    // before it.
-    Track firstDuplicated;
-    firstDuplicated.keys = {keyAt(0, 1.0), keyAt(0, 2.0), keyAt(5, 9.0)};
+    QString error;
 
-    auto value = firstDuplicated.valueAt(0);
-    CHECK(value.has_value() && nearly(*value, 1.0));
-    value = firstDuplicated.valueAt(1);
-    CHECK(value.has_value() && nearly(*value, 3.4));
-    value = firstDuplicated.valueAt(5);
-    CHECK(value.has_value() && nearly(*value, 9.0));
+    // JSON round trip keeps every public parameter and both numeric objects.
+    Keyframe key = wholeKey(12, 3.5, -2.0, 15.0, 1.2, 0.8, 0.6);
+    key.content.insert(QStringLiteral("pixelSize"), 42.0);
+    key.content.insert(QStringLiteral("lineHeight"), 1.5);
+    key.htmlVars.insert(QStringLiteral("speed"), 2.5);
+    key.visible = false;
+    key.physicsInteract = true;
+    key.note = QStringLiteral("注释");
+    key.easing.type = QStringLiteral("bezier");
 
-    Track interiorDuplicated;
-    interiorDuplicated.keys = {keyAt(0, 0.0), keyAt(2, 10.0), keyAt(2, 20.0),
-                               keyAt(6, 60.0)};
-    value = interiorDuplicated.valueAt(2);
-    CHECK(value.has_value() && nearly(*value, 20.0));
-    value = interiorDuplicated.valueAt(1);
-    CHECK(value.has_value() && nearly(*value, 5.0));
-    value = interiorDuplicated.valueAt(4);
-    CHECK(value.has_value() && nearly(*value, 40.0));
+    const QJsonObject json = toJson(key);
+    const auto parsed = keyframeFromJson(json, &error);
+    CHECK_DETAIL(parsed.has_value(), error);
+    if (parsed)
+    {
+        CHECK(*parsed == key);
+        CHECK(toJson(*parsed) == json);
+    }
 
-    Track lastDuplicated;
-    lastDuplicated.keys = {keyAt(0, 0.0), keyAt(5, 10.0), keyAt(5, 20.0)};
-    value = lastDuplicated.valueAt(5);
-    CHECK(value.has_value() && nearly(*value, 20.0));
-    value = lastDuplicated.valueAt(4);
-    CHECK(value.has_value() && nearly(*value, 8.0));
+    // A duplicate frame is rejected both while parsing and by validation.
+    const QJsonArray duplicateJson = QJsonArray{toJson(key), toJson(key)};
+    CHECK(!keyframesFromJson(duplicateJson, &error).has_value());
+    CHECK(error.contains(QStringLiteral("重复")));
 
-    // Same rules once the track has to be ordered first. Ordering is stable, so
-    // the duplicates keep their insertion order: reversing the track swaps which
-    // duplicate is "first".
-    Track unsorted = firstDuplicated;
-    std::reverse(unsorted.keys.begin(), unsorted.keys.end());
-    value = unsorted.valueAt(0);
-    CHECK(value.has_value() && nearly(*value, 2.0));
-    value = unsorted.valueAt(1);
-    CHECK(value.has_value() && nearly(*value, 2.6));
+    Entity duplicateEntity = makeEntity(0, 10);
+    duplicateEntity.keyframes = {keyAt(0, 1.0), keyAt(0, 2.0)};
+    CHECK(!validateEntity(duplicateEntity, &error));
+    CHECK(error.contains(QStringLiteral("重复")));
 
-    // A single key is a constant track for every query, including fractional
-    // and step queries.
-    Track single;
-    single.keys = {keyAt(7, 42.0)};
-    value = single.valueAt(0);
-    CHECK(value.has_value() && nearly(*value, 42.0));
-    value = single.valueAt(7, true);
-    CHECK(value.has_value() && nearly(*value, 42.0));
-    value = evaluateTrack(single, 6.5);
-    CHECK(value.has_value() && nearly(*value, 42.0));
+    // frame == duration is legal; frame > duration is rejected.
+    Entity boundaryEntity = makeEntity(0, 10);
+    boundaryEntity.keyframes = {keyAt(0, 1.0), keyAt(10, 2.0)};
+    CHECK_DETAIL(validateEntity(boundaryEntity, &error), error);
+
+    Entity beyond = makeEntity(0, 10);
+    beyond.keyframes = {keyAt(11, 2.0)};
+    CHECK(!validateEntity(beyond, &error));
+    CHECK(error.contains(QStringLiteral("0..10")));
+
+    // Unsorted programmatic keys are an invariant violation; the parser sorts
+    // a hand-authored array instead of failing.
+    Entity unsortedEntity = makeEntity(0, 10);
+    unsortedEntity.keyframes = {keyAt(5, 1.0), keyAt(1, 2.0)};
+    CHECK(!validateEntity(unsortedEntity, &error));
+    CHECK(error.contains(QStringLiteral("升序")));
+
+    const QJsonArray unsortedJson = QJsonArray{toJson(keyAt(5, 1.0)),
+                                               toJson(keyAt(1, 2.0))};
+    const auto sorted = keyframesFromJson(unsortedJson, &error);
+    CHECK_DETAIL(sorted.has_value(), error);
+    if (sorted)
+    {
+        CHECK(sorted->at(0).frame == 1);
+        CHECK(sorted->at(1).frame == 5);
+    }
+
+    // Old per-property track objects / non-array keyframes fail loudly.
+    QJsonObject oldEntityJson = toJson(makeEntity(0, 10));
+    QJsonObject oldTracks;
+    oldTracks.insert(QStringLiteral("x"), QJsonArray{toJson(keyAt(0, 1.0))});
+    oldEntityJson.insert(QStringLiteral("keyframes"), oldTracks);
+    CHECK(!entityFromJson(oldEntityJson, &error).has_value());
+    CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
+
+    oldEntityJson.insert(QStringLiteral("keyframes"), QStringLiteral("nope"));
+    CHECK(!entityFromJson(oldEntityJson, &error).has_value());
+    CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
+
+    QJsonObject legacyTracksJson = toJson(makeEntity(0, 10));
+    legacyTracksJson.remove(QStringLiteral("keyframes"));
+    legacyTracksJson.insert(QStringLiteral("tracks"), QJsonObject{});
+    CHECK(!entityFromJson(legacyTracksJson, &error).has_value());
+    CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
+
+    // Content keys must be animation parameters of the entity type.
+    Entity text = makeEntity(0, 100);
+    text.content.kind = ContentKind::Text;
+    text.keyframes = {keyAt(0, 0.0)};
+    text.keyframes[0].content.insert(QStringLiteral("fontSize"), 20.0);
+    CHECK(!validateEntity(text, &error));
+    CHECK(error.contains(QStringLiteral("fontSize")));
+
+    text.keyframes[0].content = QJsonObject{};
+    text.keyframes[0].content.insert(QStringLiteral("pixelSize"), 20.0);
+    CHECK_DETAIL(validateEntity(text, &error), error);
+
+    // Definition parameters can never be keyframed.
+    text.keyframes[0].content.insert(QStringLiteral("text"),
+                                     QStringLiteral("x"));
+    CHECK(!validateEntity(text, &error));
+
+    // htmlVars must be finite numbers.
+    text.keyframes[0].content = QJsonObject{};
+    text.keyframes[0].htmlVars.insert(QStringLiteral("count"), true);
+    CHECK(!validateEntity(text, &error));
+
+    // Editing helpers keep the vector sorted and replace the same frame.
+    QVector<Keyframe> editKeys;
+    upsertKeyframe(editKeys, keyAt(5, 1.0));
+    upsertKeyframe(editKeys, keyAt(1, 2.0));
+    upsertKeyframe(editKeys, keyAt(5, 3.0));
+    CHECK(editKeys.size() == 2);
+    CHECK(editKeys.at(0).frame == 1);
+    CHECK(editKeys.at(1).frame == 5);
+    CHECK(nearly(editKeys.at(1).x, 3.0));
+    CHECK(keyframeAt(editKeys, 5) != nullptr);
+    CHECK(keyframeAt(editKeys, 4) == nullptr);
+    CHECK(removeKeyframe(editKeys, 5));
+    CHECK(!removeKeyframe(editKeys, 5));
 }
 
-void testFractionalTrackEvaluation()
-{
-    Track linear;
-    linear.keys = {keyAt(0, 0.0), keyAt(10, 10.0)};
-
-    auto value = evaluateTrack(linear, 5.5);
-    CHECK(value.has_value() && nearly(*value, 5.5));
-    value = evaluateTrack(linear, 2.25);
-    CHECK(value.has_value() && nearly(*value, 2.25));
-
-    // The int overload keeps its old behaviour and clamps outside the keys.
-    value = evaluateTrack(linear, 5);
-    CHECK(value.has_value() && nearly(*value, 5.0));
-    value = evaluateTrack(linear, -0.5);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = evaluateTrack(linear, 20.5);
-    CHECK(value.has_value() && nearly(*value, 10.0));
-
-    // Ease-in applies to the fractional position inside the segment.
-    Track easeIn;
-    Keyframe easeIn0 = keyAt(0, 0.0);
-    easeIn0.easing.type = QStringLiteral("easeIn");
-    easeIn.keys = {easeIn0, keyAt(8, 100.0)};
-
-    value = evaluateTrack(easeIn, 4.0);
-    CHECK(value.has_value() && nearly(*value, 25.0));
-    value = evaluateTrack(easeIn, 2.5); // t = 0.3125 -> eased t^2
-    CHECK(value.has_value() && nearly(*value, 100.0 * 0.3125 * 0.3125));
-
-    // Step tracks take the left value of floor(frame).
-    Track step;
-    step.keys = {keyAt(0, 1.0), keyAt(5, 0.0), keyAt(10, 1.0)};
-
-    value = evaluateTrack(step, 5.9, true);
-    CHECK(value.has_value() && nearly(*value, 0.0));
-    value = evaluateTrack(step, 4.9, true);
-    CHECK(value.has_value() && nearly(*value, 1.0));
-    value = evaluateTrack(step, 10.0, true);
-    CHECK(value.has_value() && nearly(*value, 1.0));
-    value = evaluateTrack(step, 10.9, true);
-    CHECK(value.has_value() && nearly(*value, 1.0));
-    value = evaluateTrack(step, 2.5, false);
-    CHECK(value.has_value() && nearly(*value, 0.5));
-}
 
 void testEasingPresets()
 {
@@ -1263,16 +925,20 @@ void testEntityValidation()
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
-    bad.tracks.insert(QStringLiteral("x"), Track{{keyAt(10, 5.0)}});
+    bad.keyframes = {keyAt(11, 5.0)};
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
-    bad.tracks.insert(QStringLiteral("x"), Track{{keyAt(-1, 5.0)}});
+    bad.keyframes = {keyAt(-1, 5.0)};
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
-    bad.tracks.insert(QStringLiteral("x"), Track{{keyAt(9, 5.0)}});
-    CHECK(validateEntity(bad));
+    bad.keyframes = {keyAt(0, 5.0), keyAt(5, 6.0), keyAt(10, 7.0)};
+    CHECK_DETAIL(validateEntity(bad, &error), error);
+
+    bad.keyframes.append(keyAt(5, 8.0));
+    CHECK(!validateEntity(bad, &error));
+    CHECK(error.contains(QStringLiteral("重复")));
 
     bad = valid;
     bad.content.kind = ContentKind::Asset;
@@ -1328,41 +994,29 @@ void testSolverValidation()
 
     Entity gravity = makeEntity(0, 100);
     gravity.solvers = {makeSolver(SolverEffect::Gravity, 20, 40)};
-    gravity.tracks.insert(QStringLiteral("x"), Track{{keyAt(20, 0.0)}});
+    gravity.keyframes = {keyAt(20, 0.0)};
     CHECK(validateEntity(gravity));
 
-    gravity.tracks.insert(QStringLiteral("x"),
-                          Track{{keyAt(20, 0.0), keyAt(30, 5.0)}});
+    gravity.keyframes = {keyAt(20, 0.0), keyAt(30, 5.0)};
     CHECK(!validateEntity(gravity, &error));
 
-    gravity.tracks.insert(QStringLiteral("x"),
-                          Track{{keyAt(20, 0.0), keyAt(41, 5.0)}});
-    CHECK(validateEntity(gravity));
+    gravity.keyframes = {keyAt(20, 0.0), keyAt(41, 5.0)};
+    CHECK_DETAIL(validateEntity(gravity, &error), error);
 
-    gravity.tracks.insert(QStringLiteral("y"), Track{{keyAt(40, 5.0)}});
+    gravity.keyframes.append(keyAt(40, 5.0));
     CHECK(!validateEntity(gravity, &error));
-
-    gravity.tracks.remove(QStringLiteral("y"));
-    gravity.tracks.insert(QStringLiteral("rotation"),
-                          Track{{keyAt(30, 45.0)}});
-    CHECK(validateEntity(gravity));
 
     Entity spin = makeEntity(0, 100);
     spin.solvers = {makeSolver(SolverEffect::Spin, 20, 40)};
-    spin.tracks.insert(QStringLiteral("rotation"), Track{{keyAt(20, 0.0)}});
+    spin.keyframes = {keyAt(20, 0.0)};
     CHECK(validateEntity(spin));
 
-    spin.tracks.insert(QStringLiteral("rotation"),
-                       Track{{keyAt(20, 0.0), keyAt(30, 45.0)}});
+    spin.keyframes = {keyAt(20, 0.0), keyAt(30, 45.0)};
     CHECK(!validateEntity(spin, &error));
-
-    spin.tracks.insert(QStringLiteral("rotation"), Track{{keyAt(20, 0.0)}});
-    spin.tracks.insert(QStringLiteral("x"), Track{{keyAt(30, 3.0)}});
-    CHECK(validateEntity(spin));
 
     Entity openDriven = makeEntity(0, 100);
     openDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, -1)};
-    openDriven.tracks.insert(QStringLiteral("y"), Track{{keyAt(99, 1.0)}});
+    openDriven.keyframes = {keyAt(99, 1.0)};
     // Automatic segments derive their end from the next key: the key at 99
     // is the end marker (solver structurally ends at 98), not an illegal key
     // inside the segment.
@@ -1371,7 +1025,7 @@ void testSolverValidation()
 
     Entity explicitDriven = makeEntity(0, 100);
     explicitDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, 50)};
-    explicitDriven.tracks.insert(QStringLiteral("y"), Track{{keyAt(40, 1.0)}});
+    explicitDriven.keyframes = {keyAt(40, 1.0)};
     CHECK(!validateEntity(explicitDriven, &error));
 }
 
@@ -1581,8 +1235,7 @@ void testProjectValidationWithoutRemoval()
     // copy-based check removed it before validating.
     Project broken = project;
     broken.entities[child.uuid].end = 101;
-    broken.entities[child.uuid].tracks.insert(QStringLiteral("x"),
-                                             Track{{keyAt(500, 1.0)}});
+    broken.entities[child.uuid].keyframes = {keyAt(500, 1.0)};
     CHECK(!validateProject(broken, &error));
     CHECK_DETAIL(validateProjectWithout(broken, {child.uuid}, &error), error);
 
@@ -1632,7 +1285,7 @@ void testInvalidJson()
     CHECK(!entityFromJson(badRange, &error).has_value());
 
     Entity badKeyframe = makeEntity(0, 10);
-    badKeyframe.tracks.insert(QStringLiteral("x"), Track{{keyAt(10, 1.0)}});
+    badKeyframe.keyframes = {keyAt(11, 1.0)};
     CHECK(!entityFromJson(toJson(badKeyframe), &error).has_value());
 
     QJsonObject unknownContent = toJson(makeEntity());
@@ -1693,7 +1346,7 @@ void testDefaults()
     CHECK(nearly(parsed->transform.scaleY, 1.0));
     CHECK(nearly(parsed->transform.opacity, 1.0));
     CHECK(parsed->content.kind == ContentKind::Empty);
-    CHECK(parsed->tracks.isEmpty());
+    CHECK(parsed->keyframes.isEmpty());
     CHECK(parsed->solvers.isEmpty());
     CHECK(parsed->parentUuid.isEmpty());
 
@@ -1768,23 +1421,14 @@ void testChildrenAndRootSorting()
 
 void testJsonDeterminism()
 {
-    // Git-friendly output: track storage order must not leak into JSON text.
+    // Git-friendly output: keyframes are a sorted array, so identical content
+    // always serialises to identical bytes.
     Entity a = makeEntity(0, 100);
     a.uuid = QStringLiteral("11111111-1111-4111-8111-111111111111");
-    Track xTrack;
-    xTrack.keys = {keyAt(0, 1.0), keyAt(10, 2.0)};
-    Track yTrack;
-    yTrack.keys = {keyAt(0, 3.0)};
-    Track visibleTrack;
-    visibleTrack.keys = {keyAt(0, 1.0), keyAt(5, 0.0)};
+    a.keyframes = {wholeKey(0, 1.0, 3.0, 0.0), wholeKey(10, 2.0, 3.0, 0.0)};
+    a.keyframes[1].visible = false;
 
     Entity b = a;
-    a.tracks.insert(QStringLiteral("x"), xTrack);
-    a.tracks.insert(QStringLiteral("y"), yTrack);
-    a.tracks.insert(QStringLiteral("visible"), visibleTrack);
-    b.tracks.insert(QStringLiteral("visible"), visibleTrack);
-    b.tracks.insert(QStringLiteral("y"), yTrack);
-    b.tracks.insert(QStringLiteral("x"), xTrack);
 
     const QByteArray ja = QJsonDocument(toJson(a)).toJson(QJsonDocument::Compact);
     const QByteArray jb = QJsonDocument(toJson(b)).toJson(QJsonDocument::Compact);
@@ -1848,7 +1492,7 @@ void testFormatVersion()
     // Entity files carry their own format marker and version, in the same
     // numbering as project.json.
     Entity entity = makeEntity(0, 10);
-    entity.tracks.insert(QStringLiteral("x"), Track{{keyAt(0, 1.0)}});
+    entity.keyframes = {keyAt(0, 1.0)};
     const QJsonObject currentEntity = toJson(entity);
     CHECK(currentEntity.value(QStringLiteral("format")).toString()
           == QLatin1String(kEntityFormat));
@@ -1917,18 +1561,17 @@ void testRequiredFieldsStrict()
 
     // Nested objects report their full JSON path.
     Entity keyed = makeEntity(0, 10);
-    keyed.tracks.insert(QStringLiteral("x"), Track{{keyAt(3, 7.0)}});
+    keyed.keyframes = {keyAt(3, 7.0)};
     QJsonObject keyedJson = toJson(keyed);
-    QJsonObject keyframes =
-        keyedJson.value(QStringLiteral("keyframes")).toObject();
-    QJsonObject key =
-        keyframes.value(QStringLiteral("x")).toArray().at(0).toObject();
-    key.remove(QStringLiteral("value"));
-    keyframes.insert(QStringLiteral("x"), QJsonArray{key});
+    QJsonArray keyframes =
+        keyedJson.value(QStringLiteral("keyframes")).toArray();
+    QJsonObject key = keyframes.at(0).toObject();
+    key.remove(QStringLiteral("x"));
+    keyframes.replace(0, key);
     keyedJson.insert(QStringLiteral("keyframes"), keyframes);
     error.clear();
     CHECK(!entityFromJson(keyedJson, strict, &error).has_value());
-    CHECK_DETAIL(error.contains(QStringLiteral("keyframes.x[0].value")), error);
+    CHECK_DETAIL(error.contains(QStringLiteral("keyframes[0].x")), error);
 
     Entity solved = makeEntity(0, 10);
     solved.solvers.append(makeSolver(SolverEffect::Gravity, 0, 5));
@@ -1952,14 +1595,14 @@ void testRequiredFieldsStrict()
     QStringList warnings;
     ParseOptions lenient;
     lenient.warnings = &warnings;
-    QJsonObject keyNoValue;
-    keyNoValue.insert(QStringLiteral("frame"), 2);
+    QJsonObject keyNoFrame;
+    keyNoFrame.insert(QStringLiteral("x"), 2.0);
     error.clear();
-    const auto parsedKey = keyframeFromJson(keyNoValue, lenient, &error);
+    const auto parsedKey = keyframeFromJson(keyNoFrame, lenient, &error);
     CHECK_DETAIL(parsedKey.has_value(), error);
     if (parsedKey)
-        CHECK(nearly(parsedKey->value, 0.0));
-    CHECK_DETAIL(warnings.join(QLatin1Char(';')).contains(QStringLiteral("value")),
+        CHECK(parsedKey->frame == 0);
+    CHECK_DETAIL(warnings.join(QLatin1Char(';')).contains(QStringLiteral("frame")),
                  warnings.join(QLatin1Char(';')));
 }
 
@@ -2006,7 +1649,7 @@ void testUnknownFieldsRoundTrip()
     Entity entity = makeEntity(0, 24);
     entity.content.kind = ContentKind::Text;
     entity.content.text.text = QStringLiteral("hi");
-    entity.tracks.insert(QStringLiteral("x"), Track{{keyAt(5, 3.0)}});
+    entity.keyframes = {keyAt(5, 3.0)};
     entity.solvers.append(makeSolver(SolverEffect::Gravity, 0, 3));
 
     Project project;
@@ -2027,11 +1670,11 @@ void testUnknownFieldsRoundTrip()
     entityJson.insert(QStringLiteral("content"), contentFill.first);
     entityNames += contentFill.second;
 
-    QJsonObject keyframes = entityJson.value(QStringLiteral("keyframes")).toObject();
+    QJsonArray keyframes = entityJson.value(QStringLiteral("keyframes")).toArray();
     const auto keyFill = fill(
-        keyframes.value(QStringLiteral("x")).toArray().at(0).toObject(),
+        keyframes.at(0).toObject(),
         QStringLiteral("futureKey"), 5);
-    keyframes.insert(QStringLiteral("x"), QJsonArray{keyFill.first});
+    keyframes.replace(0, keyFill.first);
     entityJson.insert(QStringLiteral("keyframes"), keyframes);
     entityNames += keyFill.second;
 
@@ -2055,8 +1698,6 @@ void testUnknownFieldsRoundTrip()
                                        .toObject()
                                        .contains(name);
             const bool inKey = written.value(QStringLiteral("keyframes"))
-                                   .toObject()
-                                   .value(QStringLiteral("x"))
                                    .toArray()
                                    .at(0)
                                    .toObject()
@@ -2204,18 +1845,16 @@ struct TestCase
 const TestCase kTests[] = {
     {"uuid", testUuid},
     {"content-json-roundtrip", testContentJsonRoundTrip},
-    {"special-content-json-roundtrip", testSpecialContentJsonRoundTrip},
+    {"removed-content-kind", testUnsupportedContentKindRejected},
     {"entity-json-roundtrip", testEntityJsonRoundTrip},
     {"json-determinism", testJsonDeterminism},
     {"component-json-roundtrip", testComponentJsonRoundTrip},
     {"project-json-roundtrip", testProjectJsonRoundTrip},
-    {"track-evaluation", testTrackEvaluation},
-    {"track-evaluation-duplicates", testDuplicateFrameEvaluation},
-    {"track-evaluation-fractional", testFractionalTrackEvaluation},
+    {"whole-frame-evaluation", testWholeFrameEvaluation},
+    {"keyframe-json-and-validation", testKeyframeJsonAndValidation},
     {"easing-presets", testEasingPresets},
     {"easing-json", testEasingJson},
     {"entity-validation", testEntityValidation},
-    {"special-content-validation", testSpecialContentValidation},
     {"solver-validation", testSolverValidation},
     {"solver-targets", testSolverTargets},
     {"project-validation", testProjectValidation},

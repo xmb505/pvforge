@@ -45,21 +45,6 @@ std::optional<SolverEffect> solverEffectFromName(const QString& name)
     return std::nullopt;
 }
 
-QStringList drivenTracks(SolverEffect effect)
-{
-    switch (effect)
-    {
-    case SolverEffect::Gravity:
-    case SolverEffect::Orbit:
-    case SolverEffect::BlackHole:
-    case SolverEffect::Spiral:
-        return {QStringLiteral("x"), QStringLiteral("y")};
-    case SolverEffect::Spin:
-        return {QStringLiteral("rotation")};
-    }
-    return {};
-}
-
 } // namespace
 
 QJsonObject toJson(const SolverSegment& segment)
@@ -185,11 +170,7 @@ QJsonObject toJson(const Entity& entity)
     object.insert(QStringLiteral("visible"), entity.visible);
     object.insert(QStringLiteral("physicsInteract"), entity.physicsInteract);
     object.insert(QStringLiteral("transform"), toJson(entity.transform));
-
-    QJsonObject keyframes;
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
-        keyframes.insert(it.key(), toJson(it.value()));
-    object.insert(QStringLiteral("keyframes"), keyframes);
+    object.insert(QStringLiteral("keyframes"), toJson(entity.keyframes));
 
     QJsonArray solvers;
     for (const SolverSegment& segment : entity.solvers)
@@ -211,6 +192,17 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
     if (!migrations::checkDocumentVersion(object, QStringLiteral("实体"),
                                           options, error))
     {
+        return std::nullopt;
+    }
+
+    // Old per-property track objects are not migrated: the whole-frame format
+    // is intentionally incompatible and must fail loudly.
+    if (object.contains(QStringLiteral("tracks")))
+    {
+        detail::setError(
+            error,
+            QStringLiteral("旧分轨工程格式已废弃：实体不再包含 tracks 对象，"
+                           "关键帧必须是整帧 keyframes 数组"));
         return std::nullopt;
     }
 
@@ -330,38 +322,6 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
         detail::warnDefaulted(object, QStringLiteral("transform"), options);
     }
 
-    const QJsonValue keyframesValue = object.value(QStringLiteral("keyframes"));
-    if (!keyframesValue.isUndefined() && !keyframesValue.isNull())
-    {
-        if (!keyframesValue.isObject())
-        {
-            detail::setError(error, QStringLiteral("keyframes 必须是对象"));
-            return std::nullopt;
-        }
-        const QJsonObject keyframes = keyframesValue.toObject();
-        for (auto it = keyframes.constBegin(); it != keyframes.constEnd(); ++it)
-        {
-            if (it.key().isEmpty())
-            {
-                detail::setError(error, QStringLiteral("关键帧轨道名不能为空"));
-                return std::nullopt;
-            }
-            ParseOptions trackOptions = options;
-            trackOptions.prefix =
-                detail::joinPath(detail::joinPath(options.prefix,
-                                                  QStringLiteral("keyframes")),
-                                 it.key());
-            const auto track = trackFromJson(it.value(), trackOptions, error);
-            if (!track)
-                return std::nullopt;
-            entity.tracks.insert(it.key(), *track);
-        }
-    }
-    else
-    {
-        detail::warnDefaulted(object, QStringLiteral("keyframes"), options);
-    }
-
     const QJsonValue contentValue = object.value(QStringLiteral("content"));
     if (!contentValue.isUndefined() && !contentValue.isNull())
     {
@@ -381,6 +341,18 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
     {
         detail::warnDefaulted(object, QStringLiteral("content"), options);
     }
+
+    // Content is parsed first: the keyframe content schema depends on the
+    // entity type.  A non-array value is the old per-property track object and
+    // is refused instead of migrated.
+    const QJsonValue keyframesValue = object.value(QStringLiteral("keyframes"));
+    const auto keyframes = keyframesFromJson(
+        keyframesValue,
+        detail::childOptions(options, QStringLiteral("keyframes")),
+        &entity.content, entity.duration(), error);
+    if (!keyframes)
+        return std::nullopt;
+    entity.keyframes = *keyframes;
 
     const QJsonValue solversValue = object.value(QStringLiteral("solvers"));
     if (!solversValue.isUndefined() && !solversValue.isNull())
@@ -619,47 +591,39 @@ bool flattenEntityTree(const EntityTreeNode& root,
     return flattenNode(root, entities, Uuid(), QStringLiteral("$"), error);
 }
 
-bool validateTrack(const Track& track, int duration, const QString& trackName,
-                   QString* error)
+KeyframeSample staticEntitySample(const Entity& entity)
 {
-    if (duration <= 0)
-    {
-        detail::setError(
-            error, QStringLiteral("轨道 %1 所属实体的时长必须大于 0").arg(trackName));
-        return false;
-    }
+    KeyframeSample sample;
+    sample.x = entity.transform.x;
+    sample.y = entity.transform.y;
+    sample.rotation = entity.transform.rotation;
+    sample.scaleX = entity.transform.scaleX;
+    sample.scaleY = entity.transform.scaleY;
+    sample.opacity = entity.transform.opacity;
+    sample.visible = entity.visible;
+    sample.physicsInteract = entity.physicsInteract;
+    sample.content = animationValues(entity.content);
+    return sample;
+}
 
-    for (const Keyframe& keyframe : track.keys)
-    {
-        if (keyframe.frame < 0 || keyframe.frame >= duration)
-        {
-            detail::setError(
-                error,
-                QStringLiteral("轨道 %1 的关键帧帧号 %2 超出允许范围 0..%3")
-                    .arg(trackName)
-                    .arg(keyframe.frame)
-                    .arg(duration - 1));
-            return false;
-        }
-    }
-    return true;
+KeyframeSample entitySampleAt(const Entity& entity, double relativeFrame)
+{
+    return evaluateKeyframes(entity.keyframes, staticEntitySample(entity),
+                             relativeFrame);
 }
 
 bool isLastKeyframeInClip(const Entity& entity, int relativeFrame)
 {
-    bool found = false;
-    for (auto track = entity.tracks.constBegin();
-         track != entity.tracks.constEnd(); ++track)
+    // The vector is sorted; the first key after `relativeFrame` means this is
+    // not the last one.
+    for (const Keyframe& keyframe : entity.keyframes)
     {
-        for (const Keyframe& keyframe : track.value().keys)
-        {
-            if (keyframe.frame == relativeFrame)
-                found = true;
-            else if (keyframe.frame > relativeFrame)
-                return false;
-        }
+        if (keyframe.frame == relativeFrame)
+            return true;
+        if (keyframe.frame > relativeFrame)
+            return false;
     }
-    return found;
+    return false;
 }
 
 int solverStructuralEnd(const Entity& entity, const SolverSegment& segment)
@@ -674,13 +638,16 @@ int solverStructuralEnd(const Entity& entity, const SolverSegment& segment)
 
     // The first ordinary key created after the solver start is the end
     // marker: the solver stops at N-1 and the key at N belongs to the normal
-    // animation that follows.
-    for (auto track = entity.tracks.constBegin();
-         track != entity.tracks.constEnd(); ++track)
+    // animation that follows.  A key at frame == duration is an ordinary
+    // interpolation target at the end boundary and yields duration-1, which is
+    // already the clip's last frame.
+    for (const Keyframe& keyframe : entity.keyframes)
     {
-        for (const Keyframe& keyframe : track.value().keys)
-            if (keyframe.frame > segment.startFrame)
-                end = std::min(end, keyframe.frame - 1);
+        if (keyframe.frame > segment.startFrame)
+        {
+            end = std::min(end, keyframe.frame - 1);
+            break;
+        }
     }
 
     // A later segment owns the following frames; automatic segments cannot
@@ -765,23 +732,25 @@ bool validateSolvers(const Entity& entity, QString* error)
         }
         effectiveEnds.append(effectiveEnd);
 
-        for (const QString& trackName : drivenTracks(segment.effect))
+        // A whole-frame key inside an explicit segment would fight the solver
+        // for every driven property, so any ordinary keyframe in
+        // (startFrame, endFrame] is rejected.  Automatic segments derive their
+        // end from the next keyframe, so they can never contain one.
+        if (segment.endFrame >= 0)
         {
-            const auto track = entity.tracks.constFind(trackName);
-            if (track == entity.tracks.constEnd())
-                continue;
-
-            for (const Keyframe& keyframe : track.value().keys)
+            for (const Keyframe& keyframe : entity.keyframes)
             {
                 if (keyframe.frame > segment.startFrame
                     && keyframe.frame <= effectiveEnd)
                 {
                     detail::setError(
                         error,
-                        label + QStringLiteral("（%1）驱动属性 %2，但轨道在该段内仍有关键帧 %3")
-                                    .arg(solverEffectName(segment.effect))
-                                    .arg(trackName)
-                                    .arg(keyframe.frame));
+                        label
+                            + QStringLiteral("（%1）覆盖到帧 %2，但整帧关键帧 %3 "
+                                             "仍位于该求解区间内")
+                                  .arg(solverEffectName(segment.effect))
+                                  .arg(segment.endFrame)
+                                  .arg(keyframe.frame));
                     return false;
                 }
             }
@@ -880,10 +849,14 @@ bool validateEntity(const Entity& entity, QString* error)
         return false;
     }
 
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
+    QString keyframeError;
+    if (!validateKeyframes(entity.keyframes, entity.duration(), entity.content,
+                           &keyframeError))
     {
-        if (!validateTrack(it.value(), entity.duration(), it.key(), error))
-            return false;
+        detail::setError(
+            error, QStringLiteral("实体 %1 的关键帧非法：%2")
+                       .arg(entity.uuid, keyframeError));
+        return false;
     }
 
     return validateSolvers(entity, error);

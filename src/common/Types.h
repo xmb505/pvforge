@@ -22,12 +22,7 @@ enum class ContentKind
     Text,
     Vector,
     Camera,
-    Asset,
-    ComicText,
-    RadialLines,
-    FlowLines,
-    HalftoneDots,
-    BrandWall
+    Asset
 };
 
 enum class SolverEffect
@@ -69,16 +64,6 @@ inline QString contentKindName(ContentKind kind)
         return QStringLiteral("camera");
     case ContentKind::Asset:
         return QStringLiteral("asset");
-    case ContentKind::ComicText:
-        return QStringLiteral("comicText");
-    case ContentKind::RadialLines:
-        return QStringLiteral("radialLines");
-    case ContentKind::FlowLines:
-        return QStringLiteral("flowLines");
-    case ContentKind::HalftoneDots:
-        return QStringLiteral("halftoneDots");
-    case ContentKind::BrandWall:
-        return QStringLiteral("brandWall");
     }
     return QStringLiteral("empty");
 }

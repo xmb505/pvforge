@@ -63,7 +63,9 @@ struct Entity
     bool physicsInteract = false;
     Transform transform;
     Content content;
-    QHash<QString, Track> tracks; // serialized as "keyframes"
+    // Whole-frame keyframes, relative to start, strictly ascending by frame.
+    // Serialized as the "keyframes" array.
+    QVector<Keyframe> keyframes;
     QVector<SolverSegment> solvers;
     // Unknown keys, preserved verbatim so fields written by a newer version or
     // an external tool survive a load/save cycle.
@@ -82,14 +84,19 @@ struct EntityTreeNode
     QVector<EntityTreeNode> children;
 };
 
-// Keyframes must stay in 0 .. duration-1.
-bool validateTrack(const Track& track, int duration, const QString& trackName,
-                   QString* error = nullptr);
+// Whole-frame sample at an entity-relative frame.  Empty keyframes fall back to
+// the static transform / visible / physicsInteract / content values.  `content`
+// holds the content animation defaults, so callers can apply it directly.
+KeyframeSample entitySampleAt(const Entity& entity, double relativeFrame);
 
-// True when the entity-relative frame holds at least one keyframe and no
-// track has a later key.  This is the keyframe that may become a solver start:
-// the first key created after it (frame N) becomes the end marker and the
-// solver structurally ends at N-1.
+// Static whole-frame values (no keyframes): the fallback used by
+// entitySampleAt() and the starting point for creating a new keyframe.
+KeyframeSample staticEntitySample(const Entity& entity);
+
+// True when the entity-relative frame holds at least one whole-frame keyframe
+// and no later keyframe exists.  This is the keyframe that may become a solver
+// start: the first key created after it (frame N) becomes the end marker and
+// the solver structurally ends at N-1.
 bool isLastKeyframeInClip(const Entity& entity, int relativeFrame);
 
 // Inclusive structural end of a segment.  For endFrame == -1 this is the
