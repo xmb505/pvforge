@@ -32,3 +32,4 @@ endforeach()
 # Guarantee that this test really runs without an audio output device.
 set_tests_properties(audio2.playbackNoDevice PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_RUNTIME_DIR=/nonexistent")
+set_tests_properties(audio2.peaks PROPERTIES SKIP_RETURN_CODE 77)

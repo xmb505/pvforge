@@ -296,8 +296,7 @@ void MediaServicesTests::htmlProviderRendersBundle()
 
     MediaServices media(document.get(), settings);
     QString startError;
-    if (!media.start(&startError))
-        QSKIP("the HTML service could not start");
+    QVERIFY2(media.start(&startError), qPrintable(startError));
     QVERIFY(media.htmlRunning());
 
     QImage image;
@@ -433,8 +432,7 @@ void MediaServicesTests::htmlPrefetchFillsCache()
 
     MediaServices media(document.get(), AppSettings());
     QString startError;
-    if (!media.start(&startError))
-        QSKIP("the HTML service could not start");
+    QVERIFY2(media.start(&startError), qPrintable(startError));
 
     media.prefetchHtml(12, true);
     QTRY_VERIFY_WITH_TIMEOUT(
@@ -477,8 +475,7 @@ void MediaServicesTests::exportHtmlFrameUsesRequestedSize()
 
     MediaServices media(document.get(), settings);
     QString startError;
-    if (!media.start(&startError))
-        QSKIP("the HTML service could not start");
+    QVERIFY2(media.start(&startError), qPrintable(startError));
 
     const QImage image =
         media.exportHtmlFrame(entity.uuid, 12.5, QSize(480, 270));

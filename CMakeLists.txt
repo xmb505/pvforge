@@ -2,11 +2,20 @@ cmake_minimum_required(VERSION 3.21)
 
 project(PVForge VERSION 0.3.0 DESCRIPTION "2D music PV editor with a Mine-imator style animation workflow" LANGUAGES CXX)
 
+# Debug builds default to tests; a plain Release configure must not compile
+# test hooks or test binaries unless the caller explicitly asks for them.
+set(_pvf_testing_default OFF)
+if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_pvf_testing_default ON)
+endif()
+option(BUILD_TESTING "Build the test suite" ${_pvf_testing_default})
 # Enable testing at the top level so `ctest` in the build root discovers the
 # add_test() calls registered by the module subdirectories. Enabling it only in
 # subdirectories writes their CTestTestfile.cmake but leaves the build root
 # without one, so a root-level ctest reports zero tests.
-include(CTest)
+if(BUILD_TESTING)
+    enable_testing()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -339,6 +348,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
 endif()
 
 install(TARGETS pvforge pvforge-mcp RUNTIME DESTINATION bin)
+install(FILES README.md LICENSE DESTINATION share/pvforge)
 
 # New entity model modules. The legacy pvforge target links only the small
 # document/core/store slice (pvf_next_document) plus the services and panels

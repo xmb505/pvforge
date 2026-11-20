@@ -49,8 +49,54 @@ jobs:
           -DBUILD_TESTING=ON
           -DPVFORGE_BUILD_SELF_TESTS=ON
 
+      - name: 确保 Chrome 可用（HTML 图层测试）
+        run: |
+          if ! command -v google-chrome >/dev/null 2>&1 \
+             && ! command -v chromium >/dev/null 2>&1; then
+            wget -q -O /tmp/google-chrome.deb \
+              https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+
       - name: 构建
         run: cmake --build build -j 4
 
-      - name: 跑自检
-        run: ctest --test-dir build -L self-test --output-on-failure -j 2
+      - name: 跑全量测试
+        run: ctest --test-dir build --output-on-failure -j 4
+
+  release:
+    name: Release 构建 + 交付检查
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: ci/install-deps.sh
+
+      - name: 安装 Qt 6.7.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          modules: 'qtmultimedia qtimageformats'
+          cache: true
+
+      - name: 配置（Release）
+        run: cmake --preset release
+
+      - name: 构建
+        run: cmake --build --preset release -j 4
+
+      - name: 安装到 staging
+        run: cmake --install build/release --prefix "$RUNNER_TEMP/pvforge-install"
+
+      - name: 交付二进制检查
+        run: |
+          test -x "$RUNNER_TEMP/pvforge-install/bin/pvforge"
+          test -x "$RUNNER_TEMP/pvforge-install/bin/pvforge-mcp"
+          if nm -C build/release/pvforge | grep -q 'ForTest'; then
+            echo "release binary contains test hooks" >&2
+            exit 1
+          fi
+          ldd build/release/pvforge | grep -q 'not found' && exit 1 || true
+          "$RUNNER_TEMP/pvforge-install/bin/pvforge-mcp" --version

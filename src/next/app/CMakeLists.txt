@@ -113,7 +113,8 @@ if(BUILD_TESTING)
     target_link_libraries(pvf_next_document_tests PRIVATE pvf_next_document Qt6::Test)
     add_test(NAME next.project_document COMMAND pvf_next_document_tests)
     set_tests_properties(next.project_document PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+        SKIP_RETURN_CODE 77)
 
     add_executable(pvf_media_services_tests tests/MediaServicesTests.cpp)
     target_link_libraries(pvf_media_services_tests PRIVATE pvf_next_services Qt6::Test)
@@ -122,17 +123,20 @@ if(BUILD_TESTING)
     # share the lock with html2.* so a full `ctest -j4` does not race them.
     set_tests_properties(next.media_services PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
-        RESOURCE_LOCK pvforge_chrome)
+        RESOURCE_LOCK pvforge_chrome
+        SKIP_RETURN_CODE 77)
 
     add_executable(pvf_playback_controller_tests tests/PlaybackControllerTests.cpp)
     target_link_libraries(pvf_playback_controller_tests PRIVATE pvf_next_services Qt6::Test)
     add_test(NAME next.playback_controller COMMAND pvf_playback_controller_tests)
     set_tests_properties(next.playback_controller PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+        SKIP_RETURN_CODE 77)
 
     add_executable(pvf_workbench_services_tests tests/WorkbenchIntegrationTests.cpp)
     target_link_libraries(pvf_workbench_services_tests PRIVATE pvf_next_services Qt6::Test)
     add_test(NAME next.workbench_integration COMMAND pvf_workbench_services_tests)
     set_tests_properties(next.workbench_integration PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+        SKIP_RETURN_CODE 77)
 endif()

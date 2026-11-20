@@ -26,6 +26,7 @@ namespace {
 
 int gChecks = 0;
 int gFailures = 0;
+int gSkip = 0;
 
 void check(bool condition, const char* expression, const char* file, int line)
 {
@@ -604,6 +605,7 @@ void testPeaks()
     if (!makePeaksFixture(path))
     {
         QTextStream(stderr) << QStringLiteral("ffmpeg 不可用，跳过 peaks 测试\n");
+        gSkip = 77;
         return;
     }
 
@@ -858,5 +860,7 @@ int main(int argc, char** argv){
     QTextStream(stderr) << QStringLiteral("%1 checks, %2 failures\n")
                                .arg(gChecks)
                                .arg(gFailures);
-    return gFailures == 0 ? 0 : 1;
+    if (gFailures != 0)
+        return 1;
+    return gSkip != 0 ? gSkip : 0;
 }
