@@ -1,5 +1,7 @@
 #include "Viewport.h"
 
+#include "ui/ViewportInternal.h"
+
 #include "app/EditorSession.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
@@ -64,6 +66,11 @@ QRectF Viewport::gizmoRotateHitRectForTest(const Uuid& uuid,
     const double half = gizmo::kRotateHitSize / 2.0;
     return QRectF(center.x() - half, center.y() - half, gizmo::kRotateHitSize,
                   gizmo::kRotateHitSize);
+}
+
+QPainterPath Viewport::gizmoRotateGlyphPathForTest() const
+{
+    return ui::detail::carrowGlyphPath();
 }
 
 double Viewport::gizmoRotateGlyphAngleForTest(const Uuid& uuid,

@@ -5,6 +5,8 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
 
+#include <QPainterPath>
+
 namespace {
 
 QPointF rotatePointForTest(const QPointF& point, double degrees)
@@ -636,6 +638,22 @@ int inkscapeHandlesTest(QApplication& app)
     // 1) Unzoomed geometry: each corner glyph rides its visual corner at a
     //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
     const std::array<double, 4> baseAngles{270.0, 0.0, 90.0, 180.0};
+    {
+        // One closed outline, two triangular heads and a hollow 90-degree
+        // band: no self-crossing and no trace of the old bow-tie order.
+        const QPainterPath glyph = viewport->gizmoRotateGlyphPathForTest();
+        const QRectF box = glyph.boundingRect();
+        if (glyph.toFillPolygons().size() != 1
+            || !glyph.contains(QPointF(1.6, -1.6))
+            || !glyph.contains(QPointF(-5.5, -4.0))
+            || !glyph.contains(QPointF(4.0, 5.5))
+            || glyph.contains(QPointF(-4.0, 4.0))
+            || box.left() < -9.0 || box.right() > 9.0)
+        {
+            qCritical() << "inkscape-handles-test: carrow path is not clean";
+            ++failures;
+        }
+    }
     if (std::abs(pvf::gizmo::kRotateHandleSize - 18.0) > 1e-9
         || std::abs(pvf::gizmo::kRotateHitSize - 18.0) > 1e-9)
     {
