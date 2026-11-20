@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
-# App-layer tests that do not link the legacy UI shell.  During Phase B the
-# full pvf_app target is blocked on the Phase C panels, so these compile
-# EditActions, EditorSession and TimelineAdapter directly against the new
-# model and the document/services libraries.
+# App-layer tests that do not link the legacy UI shell.  The real mcp2 service
+# is linked directly: the old test-only stubs were removed in Phase D.
 find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
 add_executable(pvf_app_edit_tests
     EditActionsTests.cpp
-    McpStubs.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp2/Service.h
     ${CMAKE_SOURCE_DIR}/src/mcp2/HttpServer.h
     ${CMAKE_SOURCE_DIR}/src/app/EditorSession.cpp
@@ -23,6 +20,7 @@ target_link_libraries(pvf_app_edit_tests PRIVATE
     pvf_next_services
     pvf_entity_range
     pvf_next_timeline
+    pvf_mcp2
     Qt6::Test
 )
 target_compile_definitions(pvf_app_edit_tests PRIVATE PVFORGE_TEST_HOOKS)

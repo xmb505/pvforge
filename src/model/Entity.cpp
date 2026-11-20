@@ -614,16 +614,20 @@ KeyframeSample entitySampleAt(const Entity& entity, double relativeFrame)
 
 bool isLastKeyframeInClip(const Entity& entity, int relativeFrame)
 {
-    // The vector is sorted; the first key after `relativeFrame` means this is
-    // not the last one.
+    // The vector is sorted; any key after `relativeFrame` means this is not
+    // the last one.  Finding the queried frame is not enough.
+    bool found = false;
     for (const Keyframe& keyframe : entity.keyframes)
     {
         if (keyframe.frame == relativeFrame)
-            return true;
+        {
+            found = true;
+            continue;
+        }
         if (keyframe.frame > relativeFrame)
             return false;
     }
-    return false;
+    return found;
 }
 
 int solverStructuralEnd(const Entity& entity, const SolverSegment& segment)

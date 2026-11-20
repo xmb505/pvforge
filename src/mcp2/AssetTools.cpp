@@ -522,11 +522,6 @@ Result assetAssign(Tx& tx, const QJsonObject& args)
                        QStringLiteral("摄像机不能换素材"));
     case ContentKind::Text:
     case ContentKind::Vector:
-    case ContentKind::ComicText:
-    case ContentKind::RadialLines:
-    case ContentKind::FlowLines:
-    case ContentKind::HalftoneDots:
-    case ContentKind::BrandWall:
         return failure(QStringLiteral("conflict"),
                        QStringLiteral("请先把实体内容改为 empty 再换素材"));
     case ContentKind::Empty:

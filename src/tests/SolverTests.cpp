@@ -581,12 +581,12 @@ int solverMiniPreviewTest(QApplication& app)
 
     auto* mini = panel->findChild<pvf::next::SolverPreviewWidget*>(
         QStringLiteral("solverPreviewMini"));
+    auto* keySection = panel->findChild<pvf::CollapsibleSection*>(QStringLiteral("keySection"));
     if (!check(mini != nullptr, QStringLiteral("mini widget missing"))
-        || !check(solverSection->isAncestorOf(mini),
-                  QStringLiteral("mini widget is not inside the solver section"))
+        || !check(keySection && keySection->isAncestorOf(mini),
+                  QStringLiteral("mini widget is not inside the keyframe section"))
         || !check(mini->isVisible(), QStringLiteral("mini widget hidden")))
         return 1;
-
     // Size window: about 260x160 .. 300x180 (width follows the panel).
     if (!check(mini->width() >= 260 && mini->width() <= 440,
                QStringLiteral("mini width out of range: %1").arg(mini->width()))

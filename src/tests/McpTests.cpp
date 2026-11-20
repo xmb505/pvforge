@@ -99,8 +99,8 @@ int mcpSessionTest(QApplication& app)
             .toObject()
             .value(QStringLiteral("tools"))
             .toArray();
-    check(tools.size() == 46,
-          QStringLiteral("tools/list returned %1 tools, expected 46")
+    check(tools.size() == 47,
+          QStringLiteral("tools/list returned %1 tools, expected 47")
               .arg(tools.size()));
 
     // Read tools work without Git.

@@ -668,88 +668,9 @@ int depthOf(const model::Project& project, const Uuid& uuid)
     return depth;
 }
 
-QStringList drivenTracks(SolverEffect effect)
-{
-    switch (effect)
-    {
-    case SolverEffect::Gravity:
-    case SolverEffect::Orbit:
-    case SolverEffect::BlackHole:
-    case SolverEffect::Spiral:
-        return {QStringLiteral("x"), QStringLiteral("y")};
-    case SolverEffect::Spin:
-        return {QStringLiteral("rotation")};
-    }
-    return {};
-}
-
 int solverEffectiveEnd(const model::Entity& entity, const model::SolverSegment& segment)
 {
     return segment.endFrame == -1 ? entity.duration() - 1 : segment.endFrame;
-}
-
-QStringList allowedTracks(const model::Project& project,
-                          const assets::AssetStore& assetStore,
-                          const model::Entity& entity)
-{
-    Q_UNUSED(project);
-    QStringList tracks = {
-        QStringLiteral("x"),       QStringLiteral("y"),
-        QStringLiteral("rotation"),QStringLiteral("scaleX"),
-        QStringLiteral("scaleY"),  QStringLiteral("opacity"),
-        QStringLiteral("pivotX"),  QStringLiteral("pivotY"),
-        QStringLiteral("visible"), QStringLiteral("physicsInteract"),
-    };
-
-    switch (entity.content.kind)
-    {
-    case ContentKind::Text:
-        tracks << QStringLiteral("fontSize") << QStringLiteral("lineHeight")
-               << QStringLiteral("letterSpacing") << QStringLiteral("strokeWidth")
-               << QStringLiteral("padding") << QStringLiteral("boxWidth")
-               << QStringLiteral("boxHeight");
-        break;
-    case ContentKind::Vector:
-        tracks << QStringLiteral("width") << QStringLiteral("height")
-               << QStringLiteral("cornerRadius") << QStringLiteral("strokeWidth");
-        break;
-    case ContentKind::Camera:
-        tracks.removeAll(QStringLiteral("opacity"));
-        tracks.removeAll(QStringLiteral("pivotX"));
-        tracks.removeAll(QStringLiteral("pivotY"));
-        tracks.removeAll(QStringLiteral("visible"));
-        tracks.removeAll(QStringLiteral("physicsInteract"));
-        break;
-    case ContentKind::Asset:
-        if (entity.content.asset.type == AssetType::Audio)
-            tracks << QStringLiteral("volume");
-        if (entity.content.asset.type == AssetType::Html)
-        {
-            const auto asset = assetStore.get(entity.content.asset.hash);
-            const QJsonObject variables =
-                asset ? asset->metadata.value(QStringLiteral("variables")).toObject()
-                      : QJsonObject();
-            for (auto it = variables.constBegin(); it != variables.constEnd(); ++it)
-                tracks << QStringLiteral("var.") + it.key();
-        }
-        break;
-    case ContentKind::Empty:
-    case ContentKind::ComicText:
-    case ContentKind::RadialLines:
-    case ContentKind::FlowLines:
-    case ContentKind::HalftoneDots:
-    case ContentKind::BrandWall:
-        // The special contents animate through the transform tracks only.
-        break;
-    }
-
-    // Tracks kept from a previous content type stay readable and writable.
-    for (auto it = entity.tracks.constBegin(); it != entity.tracks.constEnd(); ++it)
-    {
-        if (!tracks.contains(it.key()))
-            tracks << it.key();
-    }
-    return tracks;
 }
 
 int defaultRow(const model::Project& project, const Uuid& parentUuid, int start,

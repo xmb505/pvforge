@@ -1032,6 +1032,14 @@ void testSolverValidation()
     CHECK(solverStructuralEnd(endBoundary, endBoundary.solvers.first()) == 99);
     CHECK(isLastKeyframeInClip(endBoundary, 100));
 
+    // Only a key with no later key is the last one; an earlier key in the same
+    // clip must report false.
+    Entity twoKeys = makeEntity(0, 100);
+    twoKeys.keyframes = {keyAt(10, 0.0), keyAt(20, 1.0)};
+    CHECK(!isLastKeyframeInClip(twoKeys, 10));
+    CHECK(isLastKeyframeInClip(twoKeys, 20));
+    CHECK(!isLastKeyframeInClip(twoKeys, 15));
+
     Entity explicitDriven = makeEntity(0, 100);
     explicitDriven.solvers = {makeSolver(SolverEffect::Orbit, 10, 50)};
     explicitDriven.keyframes = {keyAt(40, 1.0)};

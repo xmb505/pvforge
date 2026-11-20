@@ -38,6 +38,40 @@
 namespace pvf {
 
 using namespace ui::detail;
+
+bool PropertiesPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::FocusIn)
+    {
+        QWidget* widget = qobject_cast<QWidget*>(watched);
+        for (const SolverCard& card : m_solverCards)
+        {
+            if (card.box == watched
+                || (widget && card.box && card.box->isAncestorOf(widget)))
+            {
+                selectSolver(card.id);
+                break;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void PropertiesPanel::setColorButton(QPushButton* button, const QColor& color)
+{
+    button->setText(color.name().toUpper());
+    const QString text = color.lightness() > 140 ? QStringLiteral("#000")
+                                                 : QStringLiteral("#fff");
+    button->setStyleSheet(
+        QStringLiteral("background-color:%1;color:%2;").arg(color.name(), text));
+}
+
+QColor PropertiesPanel::pickColor(const QColor& initial, const QString& title)
+{
+    return QColorDialog::getColor(initial, this, title,
+                                  QColorDialog::ShowAlphaChannel);
+}
 namespace wholeframe = ui::wholeframe;
 
 PropertiesPanel::PropertiesPanel(EditorSession* session, QWidget* parent)

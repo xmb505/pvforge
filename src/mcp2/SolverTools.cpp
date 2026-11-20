@@ -1,4 +1,5 @@
 #include "mcp2/Internal.h"
+#include "mcp2/KeyframePayload.h"
 
 #include "anim/Anim.h"
 #include "render2/Render.h"
@@ -61,16 +62,6 @@ int segmentEnd(const model::Entity& entity, const model::SolverSegment& segment)
     return segment.endFrame < 0 ? entity.duration() - 1 : segment.endFrame;
 }
 
-double trackNumber(const model::Entity& entity, const QString& track,
-                   int relativeFrame, double fallback)
-{
-    const auto it = entity.tracks.constFind(track);
-    if (it == entity.tracks.constEnd())
-        return fallback;
-    const auto value = model::evaluateTrack(it.value(), relativeFrame);
-    return value ? *value : fallback;
-}
-
 double paramValue(const QVariantMap& params, const char* key, double fallback)
 {
     const auto it = params.constFind(QString::fromLatin1(key));
@@ -83,14 +74,11 @@ double paramValue(const QVariantMap& params, const char* key, double fallback)
 
 solver::Pose startPoseAt(const model::Entity& entity, int relativeFrame)
 {
+    const model::KeyframeSample sample =
+        model::entitySampleAt(entity, relativeFrame);
     solver::Pose pose;
-    pose.position = QPointF(
-        trackNumber(entity, QStringLiteral("x"), relativeFrame,
-                    entity.transform.x),
-        trackNumber(entity, QStringLiteral("y"), relativeFrame,
-                    entity.transform.y));
-    pose.rotation = trackNumber(entity, QStringLiteral("rotation"), relativeFrame,
-                                entity.transform.rotation);
+    pose.position = QPointF(sample.x, sample.y);
+    pose.rotation = sample.rotation;
     return pose;
 }
 
@@ -362,60 +350,44 @@ Result parseInitialVelocity(const QJsonValue& value, QPointF* out)
 Result checkStartKeyframes(const model::Entity& entity,
                            const model::SolverSegment& segment)
 {
-    QStringList missing;
-    for (const QString& track : drivenTracks(segment.effect))
-    {
-        const auto it = entity.tracks.constFind(track);
-        bool found = false;
-        if (it != entity.tracks.constEnd())
-        {
-            for (const model::Keyframe& key : it->keys)
-            {
-                if (key.frame == segment.startFrame)
-                {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if (!found)
-            missing << track;
-    }
-    if (missing.isEmpty())
+    if (model::hasKeyframeAt(entity.keyframes, segment.startFrame))
         return success();
     QJsonObject details;
-    details.insert(QStringLiteral("missingTracks"),
-                   QJsonArray::fromStringList(missing));
-    return failure(QStringLiteral("conflict"),
-                   QStringLiteral("求解开始帧缺少被驱动轨道的关键帧"), details);
+    details.insert(QStringLiteral("solverId"), segment.id);
+    details.insert(QStringLiteral("startFrame"), segment.startFrame);
+    return failure(
+        QStringLiteral("conflict"),
+        QStringLiteral("求解开始帧 %1 缺少整帧关键帧；求解起点必须是一个普通"
+                       "整帧关键帧")
+            .arg(segment.startFrame),
+        details);
 }
 
 Result checkInteriorKeyframes(const model::Entity& entity,
                               const model::SolverSegment& segment)
 {
-    const int end = segmentEnd(entity, segment);
+    // Automatic segments end at the first key after the start, so a key there
+    // is the end marker and is always legal.
+    if (segment.endFrame < 0)
+        return success();
+
     QJsonArray conflicts;
-    for (const QString& track : drivenTracks(segment.effect))
+    for (const model::Keyframe& keyframe : entity.keyframes)
     {
-        const auto it = entity.tracks.constFind(track);
-        if (it == entity.tracks.constEnd())
+        if (keyframe.frame <= segment.startFrame
+            || keyframe.frame > segment.endFrame)
             continue;
-        for (const model::Keyframe& key : it->keys)
-        {
-            if (key.frame <= segment.startFrame || key.frame > end)
-                continue;
-            QJsonObject item;
-            item.insert(QStringLiteral("track"), track);
-            item.insert(QStringLiteral("frame"), key.frame);
-            conflicts.append(item);
-        }
+        QJsonObject item;
+        item.insert(QStringLiteral("solverId"), segment.id);
+        item.insert(QStringLiteral("frame"), keyframe.frame);
+        conflicts.append(item);
     }
     if (conflicts.isEmpty())
         return success();
     QJsonObject details;
     details.insert(QStringLiteral("conflictingFrames"), conflicts);
     return failure(QStringLiteral("conflict"),
-                   QStringLiteral("求解段区间内仍有被驱动属性的普通关键帧"),
+                   QStringLiteral("求解段区间（含结束帧）内仍有普通整帧关键帧"),
                    details);
 }
 

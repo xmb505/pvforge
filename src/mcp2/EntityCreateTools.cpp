@@ -1,4 +1,5 @@
 #include "mcp2/EntityToolsInternal.h"
+#include "mcp2/KeyframePayload.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -22,109 +23,6 @@ const QStringList kCreateKeys = {
     QStringLiteral("visible"),   QStringLiteral("physicsInteract"),
     QStringLiteral("keyframes"), QStringLiteral("solvers"),
 };
-
-Result parseKeyframesForCreate(const QJsonValue& value, int duration,
-                               model::Entity& entity,
-                               const QStringList& allowedTracks)
-{
-    if (value.isUndefined() || value.isNull())
-        return success();
-    if (!value.isObject())
-        return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("keyframes 必须是对象"));
-
-    const QJsonObject object = value.toObject();
-    for (auto it = object.constBegin(); it != object.constEnd(); ++it)
-    {
-        if (!allowedTracks.contains(it.key()))
-        {
-            QJsonObject details;
-            details.insert(QStringLiteral("allowedTracks"),
-                           QJsonArray::fromStringList(allowedTracks));
-            return failure(QStringLiteral("invalid_argument"),
-                           QStringLiteral("未知轨道：%1").arg(it.key()), details);
-        }
-
-        if (!it.value().isArray())
-            return failure(QStringLiteral("invalid_argument"),
-                           QStringLiteral("轨道 %1 必须是关键帧数组").arg(it.key()));
-
-        model::Track parsedTrack;
-        QSet<int> frames;
-        const QJsonArray keyArray = it.value().toArray();
-        for (int i = 0; i < keyArray.size(); ++i)
-        {
-            if (!keyArray.at(i).isObject())
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("轨道 %1 的第 %2 个关键帧不是对象")
-                                   .arg(it.key())
-                                   .arg(i));
-            const QJsonObject keyObject = keyArray.at(i).toObject();
-            const QJsonValue frameValue = keyObject.value(QStringLiteral("frame"));
-            if (!frameValue.isDouble()
-                || std::floor(frameValue.toDouble()) != frameValue.toDouble())
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("轨道 %1 的关键帧 frame 必须是整数")
-                                   .arg(it.key()));
-            if (!keyObject.value(QStringLiteral("value")).isDouble())
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("轨道 %1 的关键帧 value 必须是数字")
-                                   .arg(it.key()));
-
-            QString keyError;
-            const auto key = model::keyframeFromJson(keyObject, &keyError);
-            if (!key)
-                return failure(QStringLiteral("invalid_argument"), keyError);
-
-            model::EasingSpec easing;
-            QJsonValue normalizedEasing;
-            Result easingError;
-            if (!parseEasing(keyObject.value(QStringLiteral("easing")), &easing,
-                             &normalizedEasing, &easingError))
-                return easingError;
-            Q_UNUSED(normalizedEasing);
-
-            model::Keyframe normalized = *key;
-            normalized.easing = easing;
-
-            if (normalized.frame < 0 || normalized.frame >= duration)
-            {
-                QJsonObject range;
-                range.insert(QStringLiteral("min"), 0);
-                range.insert(QStringLiteral("max"), duration - 1);
-                QJsonObject details;
-                details.insert(QStringLiteral("track"), it.key());
-                details.insert(QStringLiteral("allowedRange"), range);
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("关键帧帧号 %1 超出轨道 %2 的范围 0..%3")
-                                   .arg(normalized.frame)
-                                   .arg(it.key())
-                                   .arg(duration - 1),
-                               details);
-            }
-            if (frames.contains(normalized.frame))
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("轨道 %1 的帧 %2 重复")
-                                   .arg(it.key())
-                                   .arg(normalized.frame));
-            frames.insert(normalized.frame);
-            if (!isFiniteNumber(normalized.value))
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("轨道 %1 的关键帧值非法").arg(it.key()));
-            if (normalized.note.size() > 4096)
-                return failure(QStringLiteral("invalid_argument"),
-                               QStringLiteral("关键帧 note 最长 4096 字符"));
-            parsedTrack.keys.append(normalized);
-        }
-
-        std::stable_sort(parsedTrack.keys.begin(), parsedTrack.keys.end(),
-                         [](const model::Keyframe& a, const model::Keyframe& b) {
-                             return a.frame < b.frame;
-                         });
-        entity.tracks.insert(it.key(), parsedTrack);
-    }
-    return success();
-}
 
 Result createEntityInternal(Tx& tx, const QJsonObject& args,
                             const QSet<Uuid>* parentWhitelist, Uuid* createdUuid)
@@ -285,10 +183,10 @@ Result createEntityInternal(Tx& tx, const QJsonObject& args,
         entity.transform = *transform;
     }
 
-    entity.tracks.clear();
-    Result keyframeResult = parseKeyframesForCreate(
-        args.value(QStringLiteral("keyframes")), entity.duration(), entity,
-        allowedTracks(project, tx.store->assets(), entity));
+    entity.keyframes.clear();
+    Result keyframeResult = parseWholeFrameKeyframes(
+        entity.content, entity.duration(),
+        args.value(QStringLiteral("keyframes")), &entity.keyframes);
     if (!keyframeResult.ok)
         return keyframeResult;
 

@@ -1531,14 +1531,14 @@ int timelineKeysTest(QApplication& app)
     if (!check(clipRow >= 0, QStringLiteral("clip row missing")))
         return 1;
     int beforeDepth = depth();
-    const QPoint dblPoint(timeline->frameXForTest(20),
+    const QPoint dblPoint(timeline->frameXForTest(10),
                           timeline->rowCenterYForTest(clipRow));
     QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(dblPoint),
                             QPointF(timeline->mapToGlobal(dblPoint)),
                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(timeline, &doubleClick);
     QApplication::processEvents();
-    if (!check(keyAt(clip, QStringLiteral("x"), 20),
+    if (!check(keyAt(clip, QStringLiteral("x"), 10),
                QStringLiteral("double-click did not insert a key")))
         return 1;
     live->flush();
@@ -1898,7 +1898,7 @@ int timelineSplitTest(QApplication& app)
                QStringLiteral("split ranges are wrong")))
         return 1;
     if (!check(keyFrames(plan.project, parent, QStringLiteral("x"))
-                       == QVector<int>({0, 10})
+                       == QVector<int>({0, 10, 30})
                    && keyFrames(plan.project, rightParent, QStringLiteral("x"))
                           == QVector<int>({0, 20}),
                QStringLiteral("split keys were not cropped/shifted")))
