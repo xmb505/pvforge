@@ -10,6 +10,7 @@
 #include <QTransform>
 #include <QtMath>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
@@ -78,18 +79,93 @@ Entity makeEntity(const Uuid& uuid, int start = 0, int end = 100)
     return entity;
 }
 
+// Test helper: writes one animation parameter as a piecewise-linear track.
+// Whole-frame keyframes are created at the union of the existing frames and the
+// new breakpoints, so every other parameter keeps the value it already had at
+// that frame.  This mirrors the old per-property track setup used by the tests.
 void setTrack(Entity& entity, const char* name,
               std::initializer_list<std::pair<int, double>> keys)
 {
-    Track track;
-    for (const auto& entry : keys)
+    const QString property = QString::fromLatin1(name);
+    QVector<std::pair<int, double>> points(keys.begin(), keys.end());
+    std::sort(points.begin(), points.end());
+
+    const auto valueAt = [&points](double frame) -> double {
+        if (points.isEmpty())
+            return 0.0;
+        if (frame <= points.first().first)
+            return points.first().second;
+        if (frame >= points.last().first)
+            return points.last().second;
+        for (int i = 1; i < points.size(); ++i)
+        {
+            if (frame <= points.at(i).first)
+            {
+                const auto& left = points.at(i - 1);
+                const auto& right = points.at(i);
+                const double span = right.first - left.first;
+                if (span <= 0)
+                    return right.second;
+                const double t = (frame - left.first) / span;
+                return left.second + (right.second - left.second) * t;
+            }
+        }
+        return points.last().second;
+    };
+
+    QSet<int> frames;
+    for (const Keyframe& key : entity.keyframes)
+        frames.insert(key.frame);
+    for (const auto& point : points)
+        frames.insert(point.first);
+
+    QVector<Keyframe> merged;
+    merged.reserve(frames.size());
+    for (const int frame : frames)
     {
-        Keyframe keyframe;
-        keyframe.frame = entry.first;
-        keyframe.value = entry.second;
-        track.keys.append(keyframe);
+        const KeyframeSample sample =
+            model::entitySampleAt(entity, double(frame));
+        Keyframe key;
+        key.frame = frame;
+        key.x = sample.x;
+        key.y = sample.y;
+        key.rotation = sample.rotation;
+        key.scaleX = sample.scaleX;
+        key.scaleY = sample.scaleY;
+        key.opacity = sample.opacity;
+        key.visible = sample.visible;
+        key.physicsInteract = sample.physicsInteract;
+        key.content = sample.content;
+        key.htmlVars = sample.htmlVars;
+        if (const Keyframe* existing = model::keyframeAt(entity.keyframes, frame))
+        {
+            key.easing = existing->easing;
+            key.note = existing->note;
+            key.extras = existing->extras;
+        }
+
+        const double value = valueAt(frame);
+        if (property == QLatin1String("x"))
+            key.x = value;
+        else if (property == QLatin1String("y"))
+            key.y = value;
+        else if (property == QLatin1String("rotation"))
+            key.rotation = value;
+        else if (property == QLatin1String("scaleX"))
+            key.scaleX = value;
+        else if (property == QLatin1String("scaleY"))
+            key.scaleY = value;
+        else if (property == QLatin1String("opacity"))
+            key.opacity = value;
+        else if (property == QLatin1String("visible"))
+            key.visible = value != 0.0;
+        else if (property == QLatin1String("physicsInteract"))
+            key.physicsInteract = value != 0.0;
+        merged.append(key);
     }
-    entity.tracks.insert(QString::fromLatin1(name), track);
+
+    model::sortKeyframes(merged);
+    entity.keyframes = merged;
 }
 
 SolverSegment makeSegment(const Uuid& id, SolverEffect effect, int startFrame,
@@ -597,12 +673,12 @@ void testCanvasSpaceIgnoresParentTransform()
     // The parent is animated in every transform component so a leaked parent
     // matrix cannot accidentally agree with the canvas pose at frame 0 only.
     Entity parent = makeEntity(QStringLiteral("canvas-parent"));
+    parent.transform.opacity = 0.5;
     setTrack(parent, "x", {{0, 0.0}, {10, 100.0}});
     setTrack(parent, "y", {{0, 0.0}, {10, 50.0}});
     setTrack(parent, "rotation", {{0, 0.0}, {10, 90.0}});
     setTrack(parent, "scaleX", {{0, 1.0}, {10, 2.0}});
     setTrack(parent, "scaleY", {{0, 1.0}, {10, 3.0}});
-    parent.transform.opacity = 0.5;
     addEntity(project, parent);
 
     Entity canvasChild = makeEntity(QStringLiteral("canvas-child"));
@@ -1054,6 +1130,94 @@ void testSharedSolverCache()
                   cachedPose.world.map(QPointF(0.0, 0.0)).x(), 1e-9));
 }
 
+// Whole-frame sampling through the anim entry points: every public parameter,
+// content numbers and HTML variables share one eased progress; booleans are
+// step values; an entity without keyframes falls back to its static state.
+void testWholeFrameSample()
+{
+    Entity entity = makeEntity(QStringLiteral("sample"), 100, 200);
+    entity.transform.x = 5.0;
+    entity.transform.y = 6.0;
+    entity.transform.rotation = 7.0;
+    entity.transform.scaleX = 0.5;
+    entity.transform.scaleY = 0.25;
+    entity.transform.opacity = 0.4;
+    entity.content.kind = ContentKind::Text;
+    entity.content.text.text = QStringLiteral("PV");
+    entity.content.text.pixelSize = 10;
+    entity.content.text.lineHeight = 1.0;
+
+    const KeyframeSample plain = entitySampleAt(entity, 50.0);
+    CHECK_NEAR(plain.x, 5.0, 1e-9);
+    CHECK_NEAR(plain.y, 6.0, 1e-9);
+    CHECK_NEAR(plain.rotation, 7.0, 1e-9);
+    CHECK_NEAR(plain.scaleX, 0.5, 1e-9);
+    CHECK_NEAR(plain.scaleY, 0.25, 1e-9);
+    CHECK_NEAR(plain.opacity, 0.4, 1e-9);
+    CHECK_NEAR(plain.content.value(QStringLiteral("pixelSize")).toDouble(), 10.0,
+               1e-9);
+    CHECK_NEAR(plain.content.value(QStringLiteral("lineHeight")).toDouble(), 1.0,
+               1e-9);
+
+    Keyframe a;
+    a.frame = 0;
+    a.x = 0.0;
+    a.y = 0.0;
+    a.rotation = 0.0;
+    a.scaleX = 1.0;
+    a.scaleY = 1.0;
+    a.opacity = 1.0;
+    a.visible = true;
+    a.physicsInteract = false;
+    a.content.insert(QStringLiteral("pixelSize"), 20.0);
+    a.content.insert(QStringLiteral("lineHeight"), 1.0);
+    a.htmlVars.insert(QStringLiteral("progress"), 0.0);
+
+    Keyframe b = a;
+    b.frame = 10;
+    b.x = 100.0;
+    b.y = 50.0;
+    b.rotation = 90.0;
+    b.scaleX = 2.0;
+    b.scaleY = 3.0;
+    b.opacity = 0.2;
+    b.visible = false;
+    b.physicsInteract = true;
+    b.content.insert(QStringLiteral("pixelSize"), 120.0);
+    b.content.insert(QStringLiteral("lineHeight"), 2.0);
+    b.htmlVars.insert(QStringLiteral("progress"), 10.0);
+    entity.keyframes = {a, b};
+
+    const KeyframeSample mid = entitySampleAt(entity, 5.0);
+    CHECK_NEAR(mid.x, 50.0, 1e-9);
+    CHECK_NEAR(mid.y, 25.0, 1e-9);
+    CHECK_NEAR(mid.rotation, 45.0, 1e-9);
+    CHECK_NEAR(mid.scaleX, 1.5, 1e-9);
+    CHECK_NEAR(mid.scaleY, 2.0, 1e-9);
+    CHECK_NEAR(mid.opacity, 0.6, 1e-9);
+    CHECK_NEAR(mid.content.value(QStringLiteral("pixelSize")).toDouble(), 70.0,
+               1e-9);
+    CHECK_NEAR(mid.content.value(QStringLiteral("lineHeight")).toDouble(), 1.5,
+               1e-9);
+    CHECK_NEAR(mid.htmlVars.value(QStringLiteral("progress")).toDouble(), 5.0,
+               1e-9);
+    CHECK(mid.visible);
+    CHECK(!mid.physicsInteract);
+
+    // A fractional project frame maps to a fractional relative frame.
+    entity.start = 100;
+    const KeyframeSample fractional = entitySampleAt(entity, 2.5);
+    CHECK_NEAR(fractional.x, 25.0, 1e-9);
+    CHECK_NEAR(fractional.htmlVars.value(QStringLiteral("progress")).toDouble(),
+               2.5, 1e-9);
+
+    // Keyframes at the end boundary are ordinary interpolation targets.
+    QVector<Keyframe> boundary = {a, b};
+    boundary[1].frame = 100;
+    entity.keyframes = boundary;
+    CHECK_NEAR(entitySampleAt(entity, 50.0).x, 50.0, 1e-9);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1061,6 +1225,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
 
     testNormalTracks();
+    testWholeFrameSample();
     testFractionalTracks();
     testPivotFormula();
     testGravitySegment();
