@@ -123,11 +123,13 @@ int PropertiesPanel::activeKeyFrame(const model::Entity& entity) const
     return playheadRelative(entity);
 }
 
+#ifdef PVFORGE_TEST_HOOKS
 int PropertiesPanel::activeEditFrameForTest() const
 {
     const model::Entity* entity = sessionEntity();
     return entity ? activeKeyFrame(*entity) : -1;
 }
+#endif
 
 void PropertiesPanel::setSelectedKeyframes(const QVector<KeyRef>& selection)
 {
