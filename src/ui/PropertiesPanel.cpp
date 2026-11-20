@@ -374,6 +374,66 @@ void PropertiesPanel::refreshPlayheadOnly()
     setSpinIfIdle(m_pivotX, entity->transform.pivotX);
     setSpinIfIdle(m_pivotY, entity->transform.pivotY);
 
+    // Content animation parameters are frame-dependent too; keep their
+    // controls in sync while scrubbing without rebuilding the solver cards.
+    if (inRange)
+    {
+        const model::Keyframe key = wholeframe::keyAt(*entity, relative,
+                                                      m_session);
+        auto keyOr = [&key](const QString& name, double fallback) {
+            return wholeframe::value(key, name).value_or(fallback);
+        };
+        if (entity->content.kind == ContentKind::Text)
+        {
+            const model::TextContent& text = entity->content.text;
+            setSpinIfIdle(m_textSize, keyOr(QStringLiteral("pixelSize"),
+                                            text.pixelSize));
+            setSpinIfIdle(m_textStrokeWidth,
+                          keyOr(QStringLiteral("strokeWidth"),
+                                text.strokeWidth));
+            setSpinIfIdle(m_textLineHeight,
+                          keyOr(QStringLiteral("lineHeight"), text.lineHeight));
+            setSpinIfIdle(m_textLetterSpacing,
+                          keyOr(QStringLiteral("letterSpacing"),
+                                text.letterSpacing));
+            setSpinIfIdle(m_textPadding,
+                          keyOr(QStringLiteral("padding"), text.padding));
+            setSpinIfIdle(m_textBoxWidth,
+                          keyOr(QStringLiteral("boxWidth"), text.boxWidth));
+            setSpinIfIdle(m_textBoxHeight,
+                          keyOr(QStringLiteral("boxHeight"), text.boxHeight));
+        }
+        else if (entity->content.kind == ContentKind::Vector)
+        {
+            const model::VectorContent& vector = entity->content.vector;
+            setSpinIfIdle(m_vectorWidth,
+                          keyOr(QStringLiteral("width"), vector.width));
+            setSpinIfIdle(m_vectorHeight,
+                          keyOr(QStringLiteral("height"), vector.height));
+            setSpinIfIdle(m_vectorCorner,
+                          keyOr(QStringLiteral("cornerRadius"),
+                                vector.cornerRadius));
+            setSpinIfIdle(m_strokeWidth,
+                          keyOr(QStringLiteral("strokeWidth"),
+                                vector.strokeWidth));
+        }
+        else if (entity->content.kind == ContentKind::Asset)
+        {
+            const model::AssetContent& asset = entity->content.asset;
+            const double volume = keyOr(QStringLiteral("volume"),
+                                        asset.volume);
+            if (asset.type == AssetType::Audio)
+            {
+                const QSignalBlocker blocker(m_audioVolume);
+                m_audioVolume->setValue(int(std::lround(volume * 100.0)));
+            }
+            else
+            {
+                setSpinIfIdle(m_assetVolume, volume);
+            }
+        }
+    }
+
     reloadSessionHtmlValues(*entity);
     reloadSolverConvert(*entity);
     refreshKeyframeStatus(*entity);
@@ -607,8 +667,17 @@ void PropertiesPanel::refreshSession()
         setAudioSpin(m_audioTrimStart, trimStart, maximum);
         setAudioSpin(m_audioTrimEnd, trimEnd, maximum);
         {
+            const int audioFrame = activeKeyFrame(*entity);
+            double volume = assetContent.volume;
+            if (audioFrame >= 0 && audioFrame <= entity->duration())
+            {
+                const model::Keyframe key =
+                    wholeframe::keyAt(*entity, audioFrame, m_session);
+                volume = wholeframe::value(key, QStringLiteral("volume"))
+                             .value_or(volume);
+            }
             const QSignalBlocker blocker(m_audioVolume);
-            m_audioVolume->setValue(int(std::lround(assetContent.volume * 100.0)));
+            m_audioVolume->setValue(int(std::lround(volume * 100.0)));
         }
         setAudioSpin(m_audioFadeIn, assetContent.fadeIn, maximum);
         setAudioSpin(m_audioFadeOut, assetContent.fadeOut, maximum);
