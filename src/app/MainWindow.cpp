@@ -342,6 +342,10 @@ void MainWindow::buildSessionShell()
                     statusBar()->showMessage(
                         QStringLiteral("编辑失败：%1").arg(message), 5000);
                 });
+        connect(m_props, &PropertiesPanel::sessionStatusMessage, this,
+                [this](const QString& message) {
+                    statusBar()->showMessage(message, 5000);
+                });
         connect(m_props, &PropertiesPanel::sessionReplaceSourceRequested, this,
                 &MainWindow::replaceSessionAssetFromDialog);
     }

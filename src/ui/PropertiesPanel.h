@@ -74,6 +74,8 @@ public:
 
 signals:
     void sessionEditFailed(const QString& message);
+    // Informational status (out-of-range playhead etc.), not an edit failure.
+    void sessionStatusMessage(const QString& message);
     void sessionReplaceSourceRequested(const Uuid& uuid);
     // A solver card was activated; the viewport keeps that trajectory visible.
     void solverSelected(const Uuid& entityUuid, const Uuid& solverId);

@@ -154,6 +154,10 @@ int propertiesTest(QApplication& app)
                      [&lastError](const QString& message) {
                          lastError = message;
                      });
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionStatusMessage,
+                     [&lastError](const QString& message) {
+                         lastError = message;
+                     });
 
     auto check = [](bool condition, const QString& message) {
         if (!condition)
@@ -700,6 +704,10 @@ int htmlVarsTest(QApplication& app)
         return 1;
     QString lastError;
     QObject::connect(panel, &pvf::PropertiesPanel::sessionEditFailed,
+                     [&lastError](const QString& message) {
+                         lastError = message;
+                     });
+    QObject::connect(panel, &pvf::PropertiesPanel::sessionStatusMessage,
                      [&lastError](const QString& message) {
                          lastError = message;
                      });

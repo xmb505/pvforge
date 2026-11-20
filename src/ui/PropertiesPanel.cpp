@@ -279,7 +279,7 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
             return wholeframe::setStaticValue(e, property, value);
         });
     if (ok && outOfRange)
-        reportSessionError(QStringLiteral(
+        emit sessionStatusMessage(QStringLiteral(
             "播放针不在实体范围内：只修改了静态参数，没有创建关键帧"));
     return ok;
 }
@@ -293,7 +293,7 @@ bool PropertiesPanel::writeHtmlVariable(const QString& name, double value)
     const int frame = prepareAnimationEdit(*entity);
     if (frame < 0 || frame > entity->duration())
     {
-        reportSessionError(QStringLiteral(
+        emit sessionStatusMessage(QStringLiteral(
             "播放针不在实体范围内：HTML 变量只能存进整帧关键帧"));
         refresh();
         return false;
@@ -403,9 +403,11 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
     }
     else
     {
+        const int displayPlayhead =
+            m_session ? m_session->playhead() : entity.start;
         m_keyStatus->setText(
             QStringLiteral("▶ 播放针第 %1 帧（当前无关键帧，改任意参数自动新建）")
-                .arg(entity.start + std::max(0, playheadRelative(entity))));
+                .arg(displayPlayhead));
         m_keyStatus->setStyleSheet(
             QStringLiteral("background:rgba(76,201,240,0.14);"
                            "border:1px solid rgba(76,201,240,0.45);"
