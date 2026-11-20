@@ -8,12 +8,11 @@
 // every edit goes through EditorSession/EditActions, so the painters only need
 // the small read-only view of an entity.
 
-#include "core/Easing.h"
+#include "model/Easing.h"
 #include "core/EntityId.h"
 #include "media/AudioClip.h"
 
 #include <QColor>
-#include <QHash>
 #include <QString>
 #include <QVariantMap>
 #include <QVector>
@@ -31,28 +30,20 @@ enum class EntityType
     Camera,
     Audio,
     Folder,
-    ComicText,     // comic balloon with a shaped border and a tail
-    RadialLines,   // hand drawn rays bursting from a point
-    FlowLines,     // parallel streaks flowing across the scene
-    BrandWall,     // checkerboard tile wall with brand logos
-    HalftoneDots,  // manga screentone with a fading dot grid
     HtmlLayer      // one HTML component captured by the CDP browser
 };
 
+// One whole-frame keyframe resolved to an absolute project frame.  The painter
+// draws exactly one diamond per entry; there are no per-property tracks.
 struct Keyframe
 {
-    double frame = 0.0;
-    double value = 0.0;
-    EasingSpec ease;
+    int frame = 0;
+    model::EasingSpec ease;
     QString note;      // optional author note, never rendered
-};
-
-// One animated property of an entity, resolved to absolute project frames.
-struct Track
-{
-    QVector<Keyframe> keys;
-
-    bool isEmpty() const { return keys.isEmpty(); }
+    // This frame is a solver segment start / structural end.  A key can be
+    // both when the segment has zero length.
+    bool solverStart = false;
+    bool solverEnd = false;
 };
 
 struct Entity
@@ -65,23 +56,12 @@ struct Entity
     QString name;
     // Type-specific static data plus the clip range the painter reads.
     QVariantMap data;
-    QHash<QString, Track> tracks;
+    QVector<Keyframe> keyframes;
     std::shared_ptr<AudioClip> audio;   // decoded peaks for the waveform clip
 
     bool isCamera() const { return type == EntityType::Camera; }
     bool isAudio() const { return type == EntityType::Audio; }
     bool isFolder() const { return type == EntityType::Folder; }
-};
-
-// A removed keyframe, kept so it can be restored by undo.
-struct KeyframeRecord
-{
-    EntityId entity = kInvalidEntity;
-    QString property;
-    double frame = 0.0;
-    double value = 0.0;
-    EasingSpec ease;
-    QString note;
 };
 
 enum class EntityFlag { Hidden, Locked };
