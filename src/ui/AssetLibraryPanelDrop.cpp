@@ -308,8 +308,15 @@ bool AssetLibraryPanel::eventFilter(QObject* watched, QEvent* event)
         case QEvent::DragMove:
             return handleExternalDragMove(static_cast<QDragMoveEvent*>(event));
         case QEvent::DragLeave:
-            setExternalDragActive(false);
-            return true;
+            // Only swallow the leave for an external hover we claimed; an
+            // internal drag-out must still reach the item view so it stops its
+            // own drag/auto-scroll state.
+            if (m_externalDragActive)
+            {
+                setExternalDragActive(false);
+                return true;
+            }
+            break;
         case QEvent::Drop:
             return handleExternalDrop(static_cast<QDropEvent*>(event));
         case QEvent::Leave:
