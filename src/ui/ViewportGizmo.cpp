@@ -8,10 +8,13 @@
 #include "assets/AssetStore.h"
 #include "core/TextBlock.h"
 #include "core/TextStyle.h"
+#include "next/app/PlaybackController.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 #include "next/core/EntityLock.h"
 #include "render2/Render.h"
+
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -351,6 +354,17 @@ void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
 {
     if (!m_session)
         return;
+
+    // A multi-key gesture works on whole frames, so stop playback and round
+    // the playhead before reading either the entity or the gizmo transform.
+    if (m_selectedKeyframes.size() > 1)
+    {
+        if (auto* playback = m_session->playback();
+            playback && playback->isPlaying())
+            playback->pause();
+        m_session->setPlayhead(std::lround(double(m_session->playhead())));
+    }
+
     const auto it = m_session->project().entities.constFind(uuid);
     if (it == m_session->project().entities.constEnd())
         return;
@@ -358,6 +372,26 @@ void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
     m_sessionDragKind = kind;
     m_sessionDragUuid = uuid;
     m_sessionDragStart = it.value();
+    m_sessionDragKeyStart.clear();
+    QSet<int> seenFrames;
+    for (const KeyRef& ref : m_selectedKeyframes)
+    {
+        if (ref.entity != uuid || seenFrames.contains(ref.frame))
+            continue;
+        if (const model::Keyframe* key =
+                model::keyframeAt(it.value().keyframes, ref.frame))
+        {
+            seenFrames.insert(ref.frame);
+            m_sessionDragKeyStart.append(SessionDragKeyStart{ref.frame, *key});
+        }
+    }
+    std::sort(m_sessionDragKeyStart.begin(), m_sessionDragKeyStart.end(),
+              [](const SessionDragKeyStart& a, const SessionDragKeyStart& b) {
+                  return a.frame < b.frame;
+              });
+    m_sessionDragMultiKey = m_sessionDragKeyStart.size() > 1;
+    if (!m_sessionDragMultiKey)
+        m_sessionDragKeyStart.clear();
     m_sessionDragHandle = handle;
     m_sessionDragTransform = sessionGizmoTransform(it.value());
     m_sessionDragBounds = sessionGizmoBounds(it.value());
@@ -432,6 +466,27 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
     m_showGuideX = false;
     m_showGuideY = false;
 
+    // Multi-key drags are deltas from each key's own press-time snapshot, so
+    // every selected frame keeps its existing trajectory offset.
+    const auto applyToSelectedKeys = [this, &entity](auto&& mutate) {
+        if (!m_sessionDragMultiKey)
+            return false;
+        for (const SessionDragKeyStart& start : m_sessionDragKeyStart)
+        {
+            // A key that ended up inside a closed solver segment is driven by
+            // the solver; leave it untouched.
+            if (!ui::wholeframe::canWriteKeyAt(entity, start.frame))
+                continue;
+            if (!model::keyframeAt(entity.keyframes, start.frame))
+                continue;
+            model::Keyframe key = start.key;
+            key.frame = start.frame;
+            mutate(key);
+            model::upsertKeyframe(entity.keyframes, key);
+        }
+        return true;
+    };
+
     switch (m_sessionDragKind)
     {
     case SessionDragKind::Move:
@@ -443,6 +498,13 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
             x = snapSessionAxis(x, true);
             y = snapSessionAxis(y, false);
         }
+        const double dx = x - m_sessionDragTransform.x;
+        const double dy = y - m_sessionDragTransform.y;
+        if (applyToSelectedKeys([dx, dy](model::Keyframe& key) {
+                key.x += dx;
+                key.y += dy;
+            }))
+            break;
         writeSessionGizmoValue(entity, QStringLiteral("x"), x);
         writeSessionGizmoValue(entity, QStringLiteral("y"), y);
         break;
@@ -460,6 +522,13 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
                              : m_sessionDragTransform.y + amount;
         if (snapActive)
             value = snapSessionAxis(value, moveX);
+        const double delta =
+            value - (moveX ? m_sessionDragTransform.x
+                           : m_sessionDragTransform.y);
+        if (applyToSelectedKeys([moveX, delta](model::Keyframe& key) {
+                (moveX ? key.x : key.y) += delta;
+            }))
+            break;
         writeSessionGizmoValue(entity, moveX ? QStringLiteral("x")
                                              : QStringLiteral("y"),
                                value);
@@ -509,6 +578,16 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
             degrees = targetRotation - m_sessionDragTransform.rotation;
         }
 
+        if (applyToSelectedKeys([degrees](model::Keyframe& key) {
+                key.rotation += degrees;
+            }))
+        {
+            m_sessionDragRotateOrigin = origin;
+            m_sessionDragAroundCorner = aroundOpposite;
+            m_sessionDragLastWidget = pos;
+            break;
+        }
+
         const gizmo::DragResult result =
             (aroundOpposite || aroundCenter)
                 ? gizmo::rotateAround(m_sessionDragTransform, origin, degrees)
@@ -545,6 +624,19 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
         const gizmo::DragResult result = gizmo::cornerScale(
             m_sessionDragTransform, m_sessionDragBounds, m_sessionDragHandle,
             mouseLocal, uniform, true);
+        const double factorX =
+            std::abs(m_sessionDragTransform.scaleX) > 1e-9
+                ? result.transform.scaleX / m_sessionDragTransform.scaleX
+                : 1.0;
+        const double factorY =
+            std::abs(m_sessionDragTransform.scaleY) > 1e-9
+                ? result.transform.scaleY / m_sessionDragTransform.scaleY
+                : 1.0;
+        if (applyToSelectedKeys([factorX, factorY](model::Keyframe& key) {
+                key.scaleX *= factorX;
+                key.scaleY *= factorY;
+            }))
+            break;
         writeSessionGizmoValue(entity, QStringLiteral("x"), result.transform.x);
         writeSessionGizmoValue(entity, QStringLiteral("y"), result.transform.y);
         writeSessionGizmoValue(entity, QStringLiteral("scaleX"),
@@ -564,6 +656,19 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
                                  snapSessionPixel(mouseLocal.y()));
         const gizmo::DragResult result =
             gizmo::centerScale(m_sessionDragTransform, mouseLocal, uniform);
+        const double factorX =
+            std::abs(m_sessionDragTransform.scaleX) > 1e-9
+                ? result.transform.scaleX / m_sessionDragTransform.scaleX
+                : 1.0;
+        const double factorY =
+            std::abs(m_sessionDragTransform.scaleY) > 1e-9
+                ? result.transform.scaleY / m_sessionDragTransform.scaleY
+                : 1.0;
+        if (applyToSelectedKeys([factorX, factorY](model::Keyframe& key) {
+                key.scaleX *= factorX;
+                key.scaleY *= factorY;
+            }))
+            break;
         writeSessionGizmoValue(entity, QStringLiteral("scaleX"),
                                result.transform.scaleX);
         writeSessionGizmoValue(entity, QStringLiteral("scaleY"),
@@ -578,10 +683,34 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
         return;
     }
 
-    // Compare the frame-evaluated result: animated tracks can leave the static
-    // fallback untouched outside the edited frame.
-    m_sessionDragChanged =
-        !transformsEqual(sessionGizmoTransform(entity), m_sessionDragTransform);
+    if (m_sessionDragMultiKey && m_sessionDragKind != SessionDragKind::Pivot)
+    {
+        // A multi-key gesture can move frames other than the playhead, so the
+        // playhead transform is not a reliable change probe.
+        bool changed = false;
+        for (const SessionDragKeyStart& start : m_sessionDragKeyStart)
+        {
+            const model::Keyframe* key =
+                model::keyframeAt(entity.keyframes, start.frame);
+            if (!key || std::abs(key->x - start.key.x) > 1e-9
+                || std::abs(key->y - start.key.y) > 1e-9
+                || std::abs(key->rotation - start.key.rotation) > 1e-9
+                || std::abs(key->scaleX - start.key.scaleX) > 1e-9
+                || std::abs(key->scaleY - start.key.scaleY) > 1e-9)
+            {
+                changed = true;
+                break;
+            }
+        }
+        m_sessionDragChanged = changed;
+    }
+    else
+    {
+        // Compare the frame-evaluated result: animated tracks can leave the
+        // static fallback untouched outside the edited frame.
+        m_sessionDragChanged = !transformsEqual(sessionGizmoTransform(entity),
+                                                m_sessionDragTransform);
+    }
     m_session->animCache().clear();
     invalidateSessionImage();
     update();
@@ -599,6 +728,8 @@ void Viewport::finishSessionGizmoDrag()
     m_sessionDragKind = SessionDragKind::None;
     m_sessionDragUuid.clear();
     m_sessionDragStart = model::Entity();
+    m_sessionDragKeyStart.clear();
+    m_sessionDragMultiKey = false;
     m_sessionDragChanged = false;
     m_sessionDragGrabOffset = QPointF();
     m_sessionDragOppositeCorner = QPointF();
@@ -678,6 +809,8 @@ void Viewport::cancelSessionDrag()
     m_sessionDragKind = SessionDragKind::None;
     m_sessionDragUuid.clear();
     m_sessionDragStart = model::Entity();
+    m_sessionDragKeyStart.clear();
+    m_sessionDragMultiKey = false;
     m_sessionDragChanged = false;
     m_sessionDragGrabOffset = QPointF();
     m_sessionDragOppositeCorner = QPointF();
