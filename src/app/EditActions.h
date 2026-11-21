@@ -43,6 +43,26 @@ struct KeyRef
     int frame = 0;
 };
 
+// One timeline keyframe clipboard entry.  `offset` is relative to the earliest
+// copied key; `keyframe` is the complete whole-frame snapshot (its own `frame`
+// is ignored on paste).
+struct KeyframeClipEntry
+{
+    int offset = 0;
+    model::Keyframe keyframe;
+};
+
+// Timeline Ctrl+C clipboard: keyframes only, never entities.  `sourceContent`
+// records the source content schema so `content` / `htmlVars` can be dropped
+// when the paste target is incompatible (e.g. vector -> text).
+struct KeyframeClipboard
+{
+    model::Content sourceContent;
+    QVector<KeyframeClipEntry> entries;
+
+    bool isEmpty() const { return entries.isEmpty(); }
+};
+
 // The only entry point for human timeline writes.  A gesture builds one plan
 // and calls apply() once, so ProjectDocument records exactly one undo step.
 // Entity ranges and their cascade rules come from next::applyEntityRange.
@@ -97,6 +117,16 @@ public:
     bool planCopyKeyframeParams(const KeyRef& source,
                                 const QVector<KeyRef>& targets, EditPlan* plan,
                                 QString* error = nullptr) const;
+    // Pastes a keyframe-only clipboard onto `target`: every entry lands on
+    // anchor + entry.offset.  Public animation parameters, easing and note
+    // always travel; content/htmlVars only when the target has a compatible
+    // content schema.  Same-frame keys are overwritten, out-of-range frames and
+    // frames inside an explicit solver segment are dropped.  pastedFrames
+    // (optional) receives the target-relative frames actually written.
+    bool planPasteKeyframes(const KeyframeClipboard& clipboard, const Uuid& target,
+                            int anchor, EditPlan* plan,
+                            QVector<int>* pastedFrames = nullptr,
+                            QString* error = nullptr) const;
 
     // Splits one clip (and its subtree) at the absolute frame.
     bool planSplit(const Uuid& uuid, int frame, EditPlan* plan,

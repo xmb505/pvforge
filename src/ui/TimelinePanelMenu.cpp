@@ -76,7 +76,7 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
         // manages whole-frame parameters and deletion.
         QMenu menu(this);
         QAction* copyParams =
-            menu.addAction(QStringLiteral("复制参数到选中帧"));
+            menu.addAction(QStringLiteral("复制参数到选中帧\tAlt+Shift+C"));
         QAction* remove = menu.addAction(QStringLiteral("删除整帧关键帧"));
         QAction* chosen = menu.exec(event->globalPos());
         if (chosen == copyParams)
@@ -113,12 +113,13 @@ void TimelinePanel::contextMenuEvent(QContextMenuEvent* event)
     menu.addSeparator();
     QAction* open = menu.addAction(QStringLiteral("打开私有时间线"));
     QAction* copy = menu.addAction(multi
-                                       ? QStringLiteral("复制选中片段")
-                                       : QStringLiteral("复制片段"));
+                                       ? QStringLiteral("复制选中片段\tCtrl+Shift+C")
+                                       : QStringLiteral("复制片段\tCtrl+Shift+C"));
     QAction* duplicate = menu.addAction(multi
                                             ? QStringLiteral("创建选中副本")
                                             : QStringLiteral("创建副本"));
-    QAction* paste = menu.addAction(QStringLiteral("粘贴片段"));
+    QAction* paste =
+        menu.addAction(QStringLiteral("粘贴片段\tCtrl+Shift+V"));
     paste->setEnabled(!m_clipClipboard.isEmpty());
     QAction* group = menu.addAction(QStringLiteral("成组为文件夹"));
     group->setEnabled(multi);

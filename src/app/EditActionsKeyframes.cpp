@@ -7,6 +7,7 @@
 #include "next/timeline/EntityRange.h"
 
 #include <QSet>
+#include <QStringList>
 
 #include <optional>
 
@@ -667,6 +668,133 @@ bool EditActions::planCopyKeyframeParams(const KeyRef& source,
     plan->message = QStringLiteral("复制关键帧参数");
     if (!changed)
         plan->project = project;
+    return true;
+}
+
+bool EditActions::planPasteKeyframes(const KeyframeClipboard& clipboard,
+                                     const Uuid& target, int anchor,
+                                     EditPlan* plan,
+                                     QVector<int>* pastedFrames,
+                                     QString* error) const
+{
+    if (error)
+        error->clear();
+    if (pastedFrames)
+        pastedFrames->clear();
+    if (!isValid() || !plan)
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+    if (clipboard.entries.isEmpty())
+    {
+        setError(error, QStringLiteral("剪贴板没有关键帧"));
+        return false;
+    }
+
+    const model::Project& project = m_session->project();
+    const auto it = project.entities.constFind(target);
+    if (it == project.entities.constEnd())
+    {
+        setError(error, QStringLiteral("实体不存在：%1").arg(target));
+        return false;
+    }
+    if (next::isEntityLocked(project, target))
+    {
+        setError(error, QStringLiteral("实体 %1 或其祖先已锁定，不能粘贴关键帧")
+                            .arg(displayName(it.value())));
+        return false;
+    }
+
+    model::Project working = project;
+    model::Entity& entity = working.entities[target];
+    const bool compatible = contentSchemasCompatible(clipboard.sourceContent,
+                                                     entity.content);
+
+    QVector<int> frames;
+    QSet<int> seen;
+    int dropped = 0;
+    int blocked = 0;
+    for (const KeyframeClipEntry& entry : clipboard.entries)
+    {
+        const int frame = anchor + entry.offset;
+        // Pasted frames never stretch the clip: out-of-range entries vanish.
+        if (frame < 0 || frame > entity.duration())
+        {
+            ++dropped;
+            continue;
+        }
+        if (keyframeBlockedAt(entity, frame))
+        {
+            ++blocked;
+            continue;
+        }
+        if (seen.contains(frame))
+            continue;
+        seen.insert(frame);
+
+        // Start from the target's own whole-frame values so an incompatible
+        // source can never leak its content/htmlVars schema into the target.
+        model::KeyframeSample sample = model::entitySampleAt(entity, frame);
+        if (const auto pose = solverSampleAt(m_session, entity, frame))
+        {
+            sample.x = pose->pose.position.x();
+            sample.y = pose->pose.position.y();
+            sample.rotation = pose->pose.rotation;
+            sample.scaleX *= pose->pose.scale;
+            sample.scaleY *= pose->pose.scale;
+        }
+        model::Keyframe keyframe = keyframeFromSample(sample, frame);
+        keyframe.x = entry.keyframe.x;
+        keyframe.y = entry.keyframe.y;
+        keyframe.rotation = entry.keyframe.rotation;
+        keyframe.scaleX = entry.keyframe.scaleX;
+        keyframe.scaleY = entry.keyframe.scaleY;
+        keyframe.opacity = entry.keyframe.opacity;
+        keyframe.visible = entry.keyframe.visible;
+        keyframe.physicsInteract = entry.keyframe.physicsInteract;
+        keyframe.easing = entry.keyframe.easing;
+        keyframe.note = entry.keyframe.note;
+        keyframe.extras = entry.keyframe.extras;
+        if (compatible)
+        {
+            keyframe.content = entry.keyframe.content;
+            keyframe.htmlVars = entry.keyframe.htmlVars;
+        }
+        model::upsertKeyframe(entity.keyframes, keyframe);
+        frames.append(frame);
+    }
+
+    QString message = frames.isEmpty()
+                          ? QStringLiteral("没有可粘贴的关键帧")
+                          : QStringLiteral("粘贴 %1 个关键帧").arg(frames.size());
+    QStringList skipped;
+    if (dropped > 0)
+        skipped.append(QStringLiteral("越界 %1 帧").arg(dropped));
+    if (blocked > 0)
+        skipped.append(QStringLiteral("求解段 %1 帧").arg(blocked));
+    if (!skipped.isEmpty())
+        message += QStringLiteral("；跳过 ") + skipped.join(QStringLiteral("、"));
+
+    if (!frames.isEmpty())
+    {
+        QString validationError;
+        if (!model::validateEntity(entity, &validationError))
+        {
+            setError(error, QStringLiteral("粘贴后关键帧校验失败：%1")
+                                .arg(validationError));
+            return false;
+        }
+    }
+
+    plan->project = std::move(working);
+    plan->upserts = frames.isEmpty() ? QVector<Uuid>{}
+                                     : QVector<Uuid>{target};
+    plan->deletes.clear();
+    plan->projectChanged = false;
+    plan->message = message;
+    if (pastedFrames)
+        *pastedFrames = frames;
     return true;
 }
 

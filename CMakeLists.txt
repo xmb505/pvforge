@@ -219,6 +219,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/SolverTests.cpp
         src/tests/ProfileFixtures.cpp
         src/tests/TimelineTests.cpp
+        src/tests/KeyframeClipboardTests.cpp
         src/tests/ViewportCameraTests.cpp
         src/tests/EditorTests.cpp
         src/tests/RenderMediaTests.cpp
@@ -269,6 +270,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             timeline-assets-test
             timeline-edit-test
             timeline-keys-test
+            keyframe-clipboard-test
             timeline-split-test
             timeline-marker-test
             timeline-edit-e2e

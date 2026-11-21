@@ -1577,8 +1577,9 @@ int timelineKeysTest(QApplication& app)
         return 1;
     live->flush();
 
-    // Ctrl+Shift+C copies the source key's animation parameters to every
-    // selected whole-frame key.
+    // Alt+Shift+C copies the source key's animation parameters to every
+    // selected whole-frame key (Ctrl+Shift+C now belongs to the clip
+    // clipboard).
     if (!check(actions->addKeyframe(clip, 40, &error),
                QStringLiteral("copy-params target setup failed")))
         return 1;
@@ -1608,7 +1609,7 @@ int timelineKeysTest(QApplication& app)
     live->setPlayhead(40);
     QApplication::processEvents();
     QKeyEvent copyParams(QEvent::KeyPress, Qt::Key_C,
-                         Qt::ControlModifier | Qt::ShiftModifier);
+                         Qt::AltModifier | Qt::ShiftModifier);
     QApplication::sendEvent(timeline, &copyParams);
     QApplication::processEvents();
     live->flush();
