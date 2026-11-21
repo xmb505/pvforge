@@ -53,6 +53,7 @@ void registerAssetTests(Registry& registry);
 void registerMcpTests(Registry& registry);
 void registerPerfTests(Registry& registry);
 void registerPanelLayoutTests(Registry& registry);
+void registerClosedRangeTests(Registry& registry);
 
 // Called from main() when tests are compiled in.
 std::optional<int> dispatch(QApplication& app);

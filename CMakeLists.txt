@@ -233,6 +233,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/McpTests.cpp
         src/tests/PerfTests.cpp
         src/tests/PanelLayoutTests.cpp
+        src/tests/ClosedRangeTests.cpp
         # Test-only helpers live in src/tests.
         src/tests/StdioBridgeTest.cpp
     )
@@ -292,6 +293,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             mcp-lock-test
             mcp-bridge-test
             perf-scale-test
+            closed-range-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_CASES)
             add_test(NAME pvf.${case} COMMAND pvforge-tests --${case})
@@ -319,7 +321,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             timeline-split-test timeline-marker-test timeline-edit-e2e
             solver-ui-test solver-mini-preview-test solver-preview-freeze-test
             gizmo-test inkscape-handles-test scale-link-test
-            camera-monitor-test
+            camera-monitor-test closed-range-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_UI)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
