@@ -38,7 +38,8 @@ public:
     void toggle();
     bool isPlaying() const { return m_playing; }
 
-    // Highest end frame among root entities.  0 means no content.
+    // Exclusive content boundary: the furthest root entity's closed `end`
+    // plus one.  0 means no content.
     int contentEnd() const;
 
     // Frame watchdog (docs/AI/ENTITY_MODEL.md 6.5).  While playing, every real

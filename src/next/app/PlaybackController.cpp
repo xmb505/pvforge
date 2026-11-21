@@ -55,11 +55,13 @@ int PlaybackController::contentEnd() const
     if (!m_document)
         return 0;
 
+    // Exclusive boundary: the last renderable frame is the furthest root
+    // entity's closed `end`, so the boundary sits at end + 1.
     int end = 0;
     const auto& entities = m_document->project().entities;
     for (auto it = entities.constBegin(); it != entities.constEnd(); ++it) {
         if (it.value().parentUuid.isEmpty())
-            end = std::max(end, it.value().end);
+            end = std::max(end, it.value().end + 1);
     }
     return std::max(0, end);
 }
@@ -155,7 +157,10 @@ void PlaybackController::tick()
     // instead of slowing the picture down (issue #130).
     const qint64 frameOffset = (elapsedNs * qint64(m_fps)) / 1000000000LL;
     int target = m_anchorFrame + int(frameOffset);
-    target = std::min(target, m_endFrame);
+    // m_endFrame is exclusive; clamp the picture to the last real frame so the
+    // empty boundary frame is never presented.
+    const bool finished = target >= m_endFrame;
+    target = std::min(target, std::max(0, m_endFrame - 1));
     // The clock is monotonic; a weird clock reading must never rewind the
     // playhead or retrigger the same frame.
     target = std::max(target, m_lastTarget);
@@ -182,7 +187,7 @@ void PlaybackController::tick()
         }
     }
 
-    if (target >= m_endFrame)
+    if (finished)
         pause();
 }
 

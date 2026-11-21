@@ -541,15 +541,15 @@ QString ProjectDocument::root() const
 
 int ProjectDocument::contentEnd() const
 {
-    // Same definition as PlaybackController::contentEnd(): the furthest frame
-    // reached by any root entity.  Private timeline children stay inside their
-    // parent's range.
+    // Same definition as PlaybackController::contentEnd(): the exclusive
+    // boundary one past the furthest closed root entity end.  Private timeline
+    // children stay inside their parent's range.
     int end = 0;
     const auto& entities = m_store->project().entities;
     for (auto it = entities.constBegin(); it != entities.constEnd(); ++it)
     {
         if (it.value().parentUuid.isEmpty())
-            end = std::max(end, it.value().end);
+            end = std::max(end, it.value().end + 1);
     }
     return std::max(0, end);
 }
@@ -592,7 +592,7 @@ void ProjectDocument::loadPlayheadState()
     // bound applies.
     const int end = contentEnd();
     const int frame = value.toInt();
-    m_playhead = end > 0 ? std::clamp(frame, 0, end)
+    m_playhead = end > 0 ? std::clamp(frame, 0, end - 1)
                          : std::clamp(frame, 0, 100000);
 }
 

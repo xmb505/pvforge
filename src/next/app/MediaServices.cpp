@@ -40,12 +40,13 @@ int floorFrame(double value)
 
 int projectContentEnd(const model::Project& project)
 {
+    // Exclusive boundary one past the furthest closed root end.
     int end = 0;
     for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
          ++it)
     {
         if (it.value().parentUuid.isEmpty())
-            end = std::max(end, it.value().end);
+            end = std::max(end, it.value().end + 1);
     }
     return end;
 }
@@ -363,7 +364,7 @@ void MediaServices::prepareHtmlPreview(int maxWaitMs){
         if (entity.content.kind != ContentKind::Asset
             || entity.content.asset.type != AssetType::Html)
             continue;
-        if (playhead < entity.start || playhead >= entity.end)
+        if (playhead < entity.start || playhead > entity.end)
             continue;
 
         const auto asset = m_document->assets().get(entity.content.asset.hash);
@@ -439,14 +440,14 @@ QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
         if (entity.content.kind != ContentKind::Asset
             || entity.content.asset.type != AssetType::Html)
             continue;
-        if (frame < entity.start || frame >= entity.end)
+        if (frame < entity.start || frame > entity.end)
             continue;
 
         const auto asset = m_document->assets().get(entity.content.asset.hash);
         if (!asset)
             continue;
 
-        int segmentEnd = entity.end;
+        int segmentEnd = entity.end + 1;
         if (contentEnd > 0)
             segmentEnd = std::min(segmentEnd, contentEnd);
         if (segmentEnd <= frame)
