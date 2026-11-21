@@ -4,6 +4,7 @@
 #include <QPalette>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace pvf {
@@ -17,16 +18,70 @@ int TimelinePanel::timelineSnapPx() const
     return std::max(1, kTimelineSnapPx);
 }
 
+QVector<TimelinePanel::SnapCandidate> TimelinePanel::snapCandidates() const
+{
+    // Playhead first, then markers, then the sibling clip edges.  The frame
+    // set is de-duplicated while the priority is kept on the surviving entry:
+    // the snap routines break pixel-distance ties by that rank instead of by
+    // container order.
+    QVector<SnapCandidate> candidates;
+    QHash<int, int> indexByFrame;
+    auto add = [&candidates, &indexByFrame](int frame, int priority) {
+        if (frame < 0)
+            return;
+        const auto it = indexByFrame.constFind(frame);
+        if (it == indexByFrame.constEnd())
+        {
+            indexByFrame.insert(frame, int(candidates.size()));
+            candidates.append({frame, priority});
+            return;
+        }
+        SnapCandidate& existing = candidates[it.value()];
+        existing.priority = std::min(existing.priority, priority);
+    };
+
+    if (m_frame >= 0)
+        add(m_frame, 0);
+    for (const TimelineMarkerView& marker : m_snapshot.markers)
+        add(marker.frame, 1);
+
+    // Same-parent siblings contribute both closed-range edges: the left edge
+    // is start, the painted right edge is end + 1.  Read the gesture-start
+    // snapshot so a live preview cannot attract a clip towards its own moving
+    // position; outside a gesture the current snapshot is already correct.
+    const bool dragging = m_dragMode != DragMode::None
+                          && !m_sessionBaseSnapshot.entities.isEmpty();
+    const QVector<Entity>& siblings =
+        dragging ? m_sessionBaseSnapshot.entities : activeEntities();
+    for (const Entity& entity : siblings)
+    {
+        if (entity.parent != m_owner)
+            continue;
+        if (entity.id == m_dragEntity)
+            continue;
+        const Uuid uuid = uuidForEntityId(entity.id);
+        if (!uuid.isEmpty() && m_dragRoots.contains(uuid))
+            continue;
+        // The snapshot exposes the closed model range as modelStart/modelEnd
+        // with clipStart/clipEnd as the painted fallback.
+        const int start =
+            entity.data.value(QStringLiteral("modelStart"), clipStartOf(entity))
+                .toInt();
+        const int end =
+            entity.data
+                .value(QStringLiteral("modelEnd"), clipEndOf(entity) - 1)
+                .toInt();
+        add(start, 2);
+        add(end + 1, 2);
+    }
+    return candidates;
+}
+
 QVector<int> TimelinePanel::snapTargetFrames() const
 {
-    // Playhead first, then markers.  A marker sitting on the playhead is the
-    // same visual line and must not become a second candidate.
     QVector<int> targets;
-    if (m_frame >= 0)
-        targets.append(m_frame);
-    for (const TimelineMarkerView& marker : m_snapshot.markers)
-        if (!targets.contains(marker.frame))
-            targets.append(marker.frame);
+    for (const SnapCandidate& candidate : snapCandidates())
+        targets.append(candidate.frame);
     return targets;
 }
 
@@ -35,16 +90,21 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapTrimStart(
 {
     TimelineSnapResult result{proposedStart, -1};
     int bestDistance = timelineSnapPx() + 1;
-    for (int line : snapTargetFrames())
+    int bestPriority = INT_MAX;
+    for (const SnapCandidate& candidate : snapCandidates())
     {
+        const int line = candidate.frame;
         if (line < lower || line > upper)
             continue;
         const int distance = std::abs(mouseX - xFromFrame(line));
         if (distance < bestDistance
-            || (distance == bestDistance && result.line >= 0
-                && line < result.line))
+            || (distance == bestDistance
+                && (candidate.priority < bestPriority
+                    || (candidate.priority == bestPriority && result.line >= 0
+                        && line < result.line))))
         {
             bestDistance = distance;
+            bestPriority = candidate.priority;
             result.value = line;
             result.line = line;
         }
@@ -59,8 +119,11 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapTrimEnd(
 {
     TimelineSnapResult result{proposedEnd, -1};
     int bestDistance = timelineSnapPx() + 1;
-    for (int line : snapTargetFrames())
+    int bestPriority = INT_MAX;
+    int bestSideRank = INT_MAX;
+    for (const SnapCandidate& candidate : snapCandidates())
     {
+        const int line = candidate.frame;
         // The right edge is painted at x(end + 1).  Both closed-range
         // readings are legal candidates:
         //   end == line      the clip includes the target frame and ends there
@@ -69,17 +132,25 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapTrimEnd(
         // edge the user is actually approaching.
         const bool rightOfLine = mouseX >= xFromFrame(line);
         const int candidates[2] = {line, line - 1};
-        for (int index = 0; index < 2; ++index)
+        for (int sideRank = 0; sideRank < 2; ++sideRank)
         {
-            const int candidate = candidates[rightOfLine ? index : 1 - index];
-            if (candidate < lower || candidate > upper)
+            const int value =
+                candidates[rightOfLine ? sideRank : 1 - sideRank];
+            if (value < lower || value > upper)
                 continue;
             const int distance =
-                std::abs(mouseX - xFromFrame(candidate + 1));
-            if (distance < bestDistance)
+                std::abs(mouseX - xFromFrame(value + 1));
+            if (distance < bestDistance
+                || (distance == bestDistance
+                    && (candidate.priority < bestPriority
+                        || (candidate.priority == bestPriority
+                            && line == result.line
+                            && sideRank < bestSideRank))))
             {
                 bestDistance = distance;
-                result.value = candidate;
+                bestPriority = candidate.priority;
+                bestSideRank = sideRank;
+                result.value = value;
                 result.line = line;
             }
         }
@@ -94,31 +165,37 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapMoveDelta(
 {
     TimelineSnapResult result{proposedDelta, -1};
     int bestDistance = timelineSnapPx() + 1;
-    for (int line : snapTargetFrames())
+    int bestPriority = INT_MAX;
+    for (const SnapCandidate& candidate : snapCandidates())
     {
+        const int line = candidate.frame;
         // The left edge is x(start), the right edge is x(end + 1).  The
         // distance that matters is from the *freely dragged* edge to the
         // target line; the candidate delta then parks that edge on the line.
         const int leftDelta = line - startFrame;
         const int rightDelta = line - endExclusive;
         const int deltas[2] = {leftDelta, rightDelta};
-        for (int candidate : deltas)
+        for (int candidateDelta : deltas)
         {
-            if (candidate < lowerDelta)
+            if (candidateDelta < lowerDelta)
                 continue;
-            const int freeEdge = candidate == leftDelta
+            const int freeEdge = candidateDelta == leftDelta
                                      ? startFrame + proposedDelta
                                      : endExclusive + proposedDelta;
             const int distance =
                 std::abs(xFromFrame(freeEdge) - xFromFrame(line));
             const int currentBias = std::abs(result.value - proposedDelta);
-            const int candidateBias = std::abs(candidate - proposedDelta);
+            const int candidateBias = std::abs(candidateDelta - proposedDelta);
             if (distance < bestDistance
-                || (distance == bestDistance && result.line >= 0
-                    && candidateBias < currentBias))
+                || (distance == bestDistance
+                    && (candidate.priority < bestPriority
+                        || (candidate.priority == bestPriority
+                            && result.line >= 0
+                            && candidateBias < currentBias))))
             {
                 bestDistance = distance;
-                result.value = candidate;
+                bestPriority = candidate.priority;
+                result.value = candidateDelta;
                 result.line = line;
             }
         }
