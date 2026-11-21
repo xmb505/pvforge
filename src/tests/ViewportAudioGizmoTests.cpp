@@ -208,7 +208,7 @@ int audioGizmoTest(QApplication& app)
     check(properties && properties->isVisible(),
           "properties panel hidden for audio");
     auto* audioVolume = properties
-                            ? properties->findChild<QSpinBox*>(
+                            ? properties->findChild<QDoubleSpinBox*>(
                                   QStringLiteral("audioVolume"))
                             : nullptr;
     check(audioVolume && audioVolume->isVisible(),

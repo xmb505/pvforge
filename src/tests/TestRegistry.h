@@ -41,6 +41,7 @@ private:
 // registers. TestRegistry.cpp owns the list so main() stays a single call.
 void registerSessionTests(Registry& registry);
 void registerPropertiesTests(Registry& registry);
+void registerPropertiesAudioTests(Registry& registry);
 void registerSolverTests(Registry& registry);
 void registerProfileFixtures(Registry& registry);
 void registerTimelineTests(Registry& registry);
