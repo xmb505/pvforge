@@ -4,6 +4,10 @@
 
 #include "model/Query.h"
 
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+
 namespace {
 
 bool writeTestPng(const QString& path, const QColor& color, const QSize& size = QSize(64, 40))
@@ -56,15 +60,19 @@ QString makeTestVideo(const QString& directory, const QString& name,
     return path;
 }
 
-QString makeTestPvhtml(const QString& directory)
+QString makeTestPvhtml(const QString& directory,
+                       const QString& name = QStringLiteral("html"))
 {
-    const QString path = QDir(directory).filePath(QStringLiteral("html"));
+    const QString path = QDir(directory).filePath(name);
     if (!QDir().mkpath(path))
         return {};
     QFile html(QDir(path).filePath(QStringLiteral("index.html")));
     if (!html.open(QIODevice::WriteOnly))
         return {};
-    html.write("<!doctype html><html><body style='background:#123'>PVForge</body></html>");
+    html.write(QStringLiteral("<!doctype html><html><body style='background:#123'>"
+                              "PVForge %1</body></html>")
+                   .arg(name)
+                   .toUtf8());
     html.close();
 
     QJsonObject manifest;
@@ -452,6 +460,259 @@ int assetImportTest(QApplication& app)
 
     if (failures == 0)
         qInfo() << "asset-import-test OK: image/video/audio/pvhtml, WAV split, failure status";
+    return failures == 0 ? 0 : 1;
+}
+
+int assetExternalDropTest(QApplication& app)
+{
+    Q_UNUSED(app);
+    QTemporaryDir temp;
+    if (!temp.isValid())
+        return 1;
+
+    const QString projectDir =
+        QDir(temp.path()).filePath(QStringLiteral("p5-external-drop.pvproj"));
+    pvf::model::ProjectSettings settings;
+    settings.name = QStringLiteral("P5 外部拖入");
+    settings.width = 640;
+    settings.height = 360;
+    settings.fps = 30;
+
+    QString error;
+    auto session = pvf::EditorSession::createProject(projectDir, settings, &error);
+    if (!session)
+    {
+        qCritical() << "asset-external-drop-test: create failed" << error;
+        return 1;
+    }
+
+    auto makePng = [&temp](const QString& name, const QColor& color) {
+        const QString path = QDir(temp.path()).filePath(name);
+        return writeTestPng(path, color) ? path : QString();
+    };
+    const QString imageA = makePng(QStringLiteral("drop-a.png"), QColor(220, 80, 80));
+    const QString imageB = makePng(QStringLiteral("drop-b.png"), QColor(80, 200, 120));
+    const QString imageC = makePng(QStringLiteral("drop-c.png"), QColor(70, 130, 220));
+    const QString imageD = makePng(QStringLiteral("drop-d.png"), QColor(230, 200, 70));
+    const QString imageE = makePng(QStringLiteral("drop-e.png"), QColor(180, 100, 230));
+    const QString imageF = makePng(QStringLiteral("drop-f.png"), QColor(90, 220, 220));
+    const QString htmlDir =
+        makeTestPvhtml(temp.path(), QStringLiteral("drop-html"));
+    const QString notePath = QDir(temp.path()).filePath(QStringLiteral("note.txt"));
+    {
+        QFile note(notePath);
+        if (!note.open(QIODevice::WriteOnly))
+        {
+            qCritical() << "asset-external-drop-test: cannot create note.txt";
+            return 1;
+        }
+        note.write("not an asset");
+    }
+    if (imageA.isEmpty() || imageB.isEmpty() || imageC.isEmpty() || imageD.isEmpty()
+        || imageE.isEmpty() || imageF.isEmpty() || htmlDir.isEmpty())
+    {
+        qCritical() << "asset-external-drop-test: cannot create test media";
+        return 1;
+    }
+
+    pvf::AssetLibraryPanel panel(session.get());
+    QString lastStatus;
+    int assetsChangedCount = 0;
+    QObject::connect(&panel, &pvf::AssetLibraryPanel::statusMessage,
+                     [&lastStatus](const QString& text) { lastStatus = text; });
+    QObject::connect(&panel, &pvf::AssetLibraryPanel::assetsChanged,
+                     [&assetsChangedCount] { ++assetsChangedCount; });
+
+    auto* list = panel.findChild<QListWidget*>(QStringLiteral("assetList"));
+    if (!list)
+    {
+        qCritical() << "asset-external-drop-test: asset list missing";
+        return 1;
+    }
+
+    int failures = 0;
+    auto check = [&failures](bool condition, const QString& message) {
+        if (!condition)
+        {
+            qCritical() << "asset-external-drop-test:" << message;
+            ++failures;
+        }
+        return condition;
+    };
+
+    check(panel.acceptDrops(), QStringLiteral("panel does not accept drops"));
+    check(list->acceptDrops(), QStringLiteral("asset list does not accept drops"));
+    check(list->viewport()->acceptDrops(),
+          QStringLiteral("asset list viewport does not accept drops"));
+
+    auto dragEnter = [](QWidget* target, QMimeData& mime) {
+        QDragEnterEvent event(QPoint(12, 12), Qt::CopyAction, &mime,
+                              Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    auto dragMove = [](QWidget* target, QMimeData& mime) {
+        QDragMoveEvent event(QPoint(12, 12), Qt::CopyAction, &mime,
+                             Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    auto performDrop = [](QWidget* target, QMimeData& mime) {
+        QDropEvent event(QPointF(12, 12), Qt::CopyAction, &mime,
+                         Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    auto dropPaths = [&](QWidget* target, const QStringList& paths) {
+        QMimeData mime;
+        QList<QUrl> urls;
+        for (const QString& path : paths)
+            urls.append(QUrl::fromLocalFile(path));
+        mime.setUrls(urls);
+        const bool entered = dragEnter(target, mime);
+        dragMove(target, mime);
+        const bool dropped = performDrop(target, mime);
+        QApplication::processEvents();
+        return entered && dropped;
+    };
+    auto rowForName = [&panel](const QString& name) {
+        for (int row = 0; row < panel.assetCount(); ++row)
+            if (panel.assetNameAt(row) == name)
+                return row;
+        return -1;
+    };
+    auto waitRows = [&panel](int expected) {
+        for (int i = 0; i < 200 && panel.assetCount() < expected; ++i)
+        {
+            QThread::msleep(10);
+            QApplication::processEvents();
+        }
+        return panel.assetCount() >= expected;
+    };
+
+    // Empty bin: a two-file drop on the panel itself imports both through the
+    // same pipeline as the "+" button.
+    check(dropPaths(&panel, {imageA, imageB}),
+          QStringLiteral("panel rejected a local file drop"));
+    check(waitRows(2), QStringLiteral("panel drop did not import both files"));
+    check(rowForName(QStringLiteral("drop-a.png")) >= 0
+              && rowForName(QStringLiteral("drop-b.png")) >= 0,
+          QStringLiteral("panel drop assets are missing from the list"));
+
+    // The list viewport is a drop target too. Duplicate URLs in one drop are
+    // normalised and imported once.
+    check(dropPaths(list->viewport(), {imageC, imageC}),
+          QStringLiteral("viewport rejected a local file drop"));
+    check(waitRows(3), QStringLiteral("viewport drop did not import the file"));
+    int cRows = 0;
+    for (int row = 0; row < panel.assetCount(); ++row)
+        if (panel.assetNameAt(row) == QStringLiteral("drop-c.png"))
+            ++cRows;
+    check(rowForName(QStringLiteral("drop-c.png")) >= 0 && cRows == 1,
+          QStringLiteral("duplicate URL in one drop was imported twice"));
+
+    // Single file on the viewport.
+    check(dropPaths(list->viewport(), {imageD}),
+          QStringLiteral("viewport rejected a single file drop"));
+    check(waitRows(4), QStringLiteral("single file drop did not import"));
+    check(rowForName(QStringLiteral("drop-d.png")) >= 0,
+          QStringLiteral("single file drop asset missing"));
+
+    // Mixed drop: a file plus a .pvhtml directory use both pipelines.
+    check(dropPaths(list->viewport(), {imageE, htmlDir}),
+          QStringLiteral("viewport rejected a mixed file/directory drop"));
+    check(waitRows(6), QStringLiteral("mixed drop did not import both entries"));
+    check(rowForName(QStringLiteral("drop-e.png")) >= 0
+              && rowForName(QStringLiteral("drop-html")) >= 0,
+          QStringLiteral("mixed drop is missing an entry"));
+    bool htmlTyped = false;
+    for (const pvf::assets::StoredAsset& asset : session->assets().list())
+        if (asset.name == QStringLiteral("drop-html")
+            && asset.type == pvf::AssetType::Html)
+            htmlTyped = true;
+    check(htmlTyped, QStringLiteral("dropped directory was not imported as HTML"));
+
+    // Dragging an asset from the bin back onto the bin must not re-import it.
+    const int beforeInternal = panel.assetCount();
+    const int changesBeforeInternal = assetsChangedCount;
+    QMimeData internal;
+    internal.setData(QStringLiteral("application/x-pvforge-asset"),
+                     QByteArrayLiteral("0123456789abcdef"));
+    internal.setText(QStringLiteral("0123456789abcdef"));
+    check(!dragEnter(list->viewport(), internal),
+          QStringLiteral("internal MIME drag was accepted"));
+    check(!performDrop(list->viewport(), internal),
+          QStringLiteral("internal MIME drop was accepted"));
+    check(panel.assetCount() == beforeInternal
+              && assetsChangedCount == changesBeforeInternal,
+          QStringLiteral("internal MIME drop triggered an import"));
+
+    // Re-dropping the same path while its asset exists is skipped.
+    const int beforeRepeat = panel.assetCount();
+    lastStatus.clear();
+    check(dropPaths(&panel, {imageA}),
+          QStringLiteral("repeat drop was not accepted by the target"));
+    check(panel.assetCount() == beforeRepeat,
+          QStringLiteral("repeat drop imported the same path again"));
+    check(lastStatus.contains(QStringLiteral("未重复导入")),
+          QStringLiteral("repeat drop did not explain the skip"));
+
+    // Export/AI write lock: refuse and report instead of importing.
+    session->document()->setWritesLocked(true);
+    lastStatus.clear();
+    const int beforeLocked = panel.assetCount();
+    {
+        QMimeData lockedMime;
+        lockedMime.setUrls({QUrl::fromLocalFile(imageF)});
+        check(!dragEnter(&panel, lockedMime),
+              QStringLiteral("drop was accepted while writes are locked"));
+        check(!performDrop(&panel, lockedMime),
+              QStringLiteral("locked drop was accepted"));
+    }
+    check(panel.assetCount() == beforeLocked,
+          QStringLiteral("locked drop imported an asset"));
+    check(lastStatus.contains(QStringLiteral("只读")),
+          QStringLiteral("locked drop did not report the read-only state: %1")
+              .arg(lastStatus));
+    session->document()->setWritesLocked(false);
+
+    // The view itself (scrollbars and child targets resolve to it) forwards to
+    // the panel policy as well.
+    const int beforeViewTarget = panel.assetCount();
+    check(dropPaths(list, {imageF}),
+          QStringLiteral("list widget rejected a file drop"));
+    check(panel.assetCount() == beforeViewTarget + 1
+              && rowForName(QStringLiteral("drop-f.png")) >= 0,
+          QStringLiteral("list widget drop did not import the file"));
+
+    // Unsupported/missing paths report through the status instead of vanishing.
+    lastStatus.clear();
+    const int beforeInvalid = panel.assetCount();
+    dropPaths(&panel,
+              {QDir(temp.path()).filePath(QStringLiteral("missing.png")),
+               notePath});
+    check(panel.assetCount() == beforeInvalid,
+          QStringLiteral("invalid drop imported something"));
+    check(lastStatus.contains(QStringLiteral("文件不存在"))
+              && lastStatus.contains(QStringLiteral("不支持的素材类型")),
+          QStringLiteral("invalid drop did not report every failure"));
+
+    // No session: the drop is refused with an explicit message.
+    pvf::AssetLibraryPanel noSession(nullptr);
+    QString noSessionStatus;
+    QObject::connect(&noSession, &pvf::AssetLibraryPanel::statusMessage,
+                     [&noSessionStatus](const QString& text) {
+                         noSessionStatus = text;
+                     });
+    check(!dropPaths(&noSession, {imageA}),
+          QStringLiteral("no-session drop was accepted"));
+    check(noSessionStatus.contains(QStringLiteral("没有打开的工程")),
+          QStringLiteral("no-session drop did not explain the refusal: %1")
+              .arg(noSessionStatus));
+
+    if (failures == 0)
+        qInfo() << "asset-external-drop-test OK: panel/viewport files, mixed "
+                   "pvhtml, internal MIME, repeat, lock, invalid";
     return failures == 0 ? 0 : 1;
 }
 
@@ -1119,6 +1380,8 @@ void registerAssetTests(Registry& registry)
                  [](QApplication& app) { return assetsTest(app); });
     registry.add(QStringLiteral("--asset-import-test"),
                  [](QApplication& app) { return assetImportTest(app); });
+    registry.add(QStringLiteral("--asset-external-drop-test"),
+                 [](QApplication& app) { return assetExternalDropTest(app); });
     registry.add(QStringLiteral("--asset-drag-test"),
                  [](QApplication& app) { return assetDragTest(app); });
     registry.add(QStringLiteral("--asset-replace-test"),
