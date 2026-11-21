@@ -38,6 +38,7 @@ void TimelinePanel::beginSessionDrag()
     m_sessionPlanValid = false;
     m_dragging = false;
     m_moved = false;
+    clearSnap();
     if (m_autoScroll)
         m_autoScroll->start(30);
     update();
@@ -83,6 +84,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
     QString error;
     if (m_dragMode == DragMode::MoveKeyframe)
     {
+        clearSnap();
         const int delta = frameFromX(int(std::lround(pos.x()))) - m_keyDragStart;
         const int movedFrame = std::max(0, m_keyDragStart + delta);
         if (movedFrame != m_frame)
@@ -122,9 +124,17 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         const int deltaRows = targetRow - m_dragStartRow;
         if (delta == 0 && deltaRows == 0)
         {
+            clearSnap();
             resetSessionPreview();
             return;
         }
+        // A single clip moved inside its row snaps either edge to the
+        // playhead/markers.  Multi-selection and cross-row moves keep the
+        // original free drag, so block edits are never pulled sideways.
+        const TimelineSnapResult snap =
+            snapMoveForDrag(delta, lower, deltaRows);
+        delta = snap.value;
+        setSnapFrame(snap.line);
         // A multi-selection moves as one block in time and rows; a single clip
         // is pinned to the row under the pointer.  Shared rows may split once
         // the whole block shifts, so validation decides instead of a silent
@@ -138,12 +148,14 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         {
             // A rejected plan (parent bounds, lock) restores the base preview;
             // the release handler reports the error once.
+            clearSnap();
             resetSessionPreview();
             return;
         }
     }
     else
     {
+        const int mouseX = int(std::lround(pos.x()));
         int newStart = m_dragClipStart;
         int newEnd = m_dragClipEnd;
         if (m_dragMode == DragMode::TrimStart)
@@ -151,17 +163,43 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
             const int lower = actions->minTrimStart(uuid);
             const int upper = m_dragClipEnd;
             if (upper < lower)
+            {
+                clearSnap();
+                resetSessionPreview();
                 return;
-            newStart = std::clamp(frameFromX(int(std::lround(pos.x()))), lower,
-                                  upper);
+            }
+            const int proposed = std::clamp(frameFromX(mouseX), lower, upper);
+            if (!m_dragSnapDisabled)
+            {
+                const TimelineSnapResult snap =
+                    snapTrimStart(proposed, lower, upper, mouseX);
+                newStart = snap.value;
+                setSnapFrame(snap.line);
+            }
+            else
+            {
+                newStart = proposed;
+                clearSnap();
+            }
         }
         else
         {
             const int lower = m_dragClipStart;
             const int upper =
                 std::max(lower, actions->maxTrimEnd(uuid));
-            newEnd = std::clamp(frameFromX(int(std::lround(pos.x()))), lower,
-                                upper);
+            const int proposed = std::clamp(frameFromX(mouseX), lower, upper);
+            if (!m_dragSnapDisabled)
+            {
+                const TimelineSnapResult snap =
+                    snapTrimEnd(proposed, lower, upper, mouseX);
+                newEnd = snap.value;
+                setSnapFrame(snap.line);
+            }
+            else
+            {
+                newEnd = proposed;
+                clearSnap();
+            }
         }
         if (newStart == m_dragClipStart && newEnd == m_dragClipEnd)
         {
@@ -169,7 +207,11 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
             return;
         }
         if (!actions->planTrim(uuid, newStart, newEnd, &plan, &error))
+        {
+            clearSnap();
+            resetSessionPreview();
             return;
+        }
     }
 
     if (plan.isEmpty())
@@ -447,6 +489,17 @@ void TimelinePanel::deleteSelectedEntities()
 
 void TimelinePanel::finishSessionDrag()
 {
+    // Sync the preview to the release position first, then commit that exact
+    // plan.  The shared snap helpers read the cached Ctrl state, not the
+    // release event: Qt can deliver the release after the modifier is gone.
+    if (m_dragMode == DragMode::MoveClip
+        || m_dragMode == DragMode::TrimStart
+        || m_dragMode == DragMode::TrimEnd
+        || m_dragMode == DragMode::MoveKeyframe)
+    {
+        updateSessionDragPreview(m_lastDragPos);
+    }
+    clearSnap();
     if (m_autoScroll)
         m_autoScroll->stop();
     const DragMode mode = m_dragMode;
@@ -456,7 +509,6 @@ void TimelinePanel::finishSessionDrag()
     // Resolve the drop row before clearing the drag mode: the clamp uses the
     // rows captured when the gesture started.
     const int releaseRow = dropRowForY(int(std::lround(releasePos.y())));
-    const int releaseDeltaRows = releaseRow - m_dragStartRow;
     const QVector<Entity> baseEntities = m_sessionBaseSnapshot.entities;
 
     m_dragging = false;
@@ -481,10 +533,6 @@ void TimelinePanel::finishSessionDrag()
 
     if (mode == DragMode::MoveClip)
     {
-        int delta = frameFromX(int(std::lround(releasePos.x()))) - m_dragStartFrame;
-        const QVector<Uuid> clampRoots =
-            dragRoots.size() > 1 ? dragRoots : QVector<Uuid>{uuid};
-        delta = std::max(delta, actions->minMoveDelta(clampRoots));
         const EntityId targetId = sessionBaseEntityAtRow(releaseRow);
         const Entity* target = findEntity(baseEntities, targetId);
         const Uuid targetUuid = uuidForEntityId(targetId);
@@ -517,16 +565,28 @@ void TimelinePanel::finishSessionDrag()
             return;
         }
 
+        // Preview and commit share snapMoveForDrag(), so the snapped delta is
+        // identical.  Re-planning here also keeps the rejected-drop error
+        // report that the silent preview deliberately suppresses.
+        int delta =
+            frameFromX(int(std::lround(releasePos.x()))) - m_dragStartFrame;
+        const QVector<Uuid> clampRoots =
+            dragRoots.size() > 1 ? dragRoots : QVector<Uuid>{uuid};
+        const int lower = actions->minMoveDelta(clampRoots);
+        delta = std::max(delta, lower);
+        const int deltaRows = releaseRow - m_dragStartRow;
+        delta = snapMoveForDrag(delta, lower, deltaRows).value;
+
         // Blank rows are first-class targets for a single clip.  A multi
         // selection moves as one time-and-row block and keeps its spacing.
-        if (multi ? (delta != 0 || releaseDeltaRows != 0)
+        if (multi ? (delta != 0 || deltaRows != 0)
                   : (releaseRow != m_dragStartRow || delta != 0))
         {
             EditPlan plan;
             QString error;
             const bool planned =
                 multi ? actions->planMoveClipsToRows(
-                            dragRoots, delta, releaseDeltaRows, &plan, &error)
+                            dragRoots, delta, deltaRows, &plan, &error)
                       : actions->planMoveToRow(uuid, delta, releaseRow, &plan,
                                                &error);
             if (planned && !plan.isEmpty())
@@ -616,6 +676,7 @@ void TimelinePanel::cancelSessionDrag()
 {
     if (m_autoScroll)
         m_autoScroll->stop();
+    clearSnap();
     m_dragging = false;
     m_sessionPlanValid = false;
     m_sessionPlan = EditPlan();

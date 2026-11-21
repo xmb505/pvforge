@@ -155,6 +155,7 @@ set(PVF_APP_SOURCES
     src/ui/TimelinePanelMenu.cpp
     src/ui/TimelinePanelKeyframes.cpp
     src/ui/TimelinePanelSessionDrag.cpp
+    src/ui/TimelinePanelSnap.cpp
     src/ui/TimelinePanelMarkers.cpp
     src/ui/TimelinePanelSolver.cpp
     src/ui/TimelinePanelPopups.cpp
@@ -228,6 +229,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/ProfileFixtures.cpp
         src/tests/TimelineTests.cpp
         src/tests/TimelineSecondsTests.cpp
+        src/tests/TimelineSnapTests.cpp
         src/tests/KeyframeClipboardTests.cpp
         src/tests/ViewportCameraTests.cpp
         src/tests/ViewportScaleLinkTests.cpp
@@ -282,6 +284,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             timeline-bottomup-test
             timeline-ui-test
             timeline-seconds-test
+            timeline-snap-test
             timeline-assets-test
             timeline-edit-test
             timeline-keys-test
@@ -329,6 +332,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             workbench-assets-test
             timeline-test timeline-bottomup-test timeline-ui-test
             timeline-seconds-test
+            timeline-snap-test
             timeline-assets-test timeline-edit-test timeline-keys-test
             timeline-split-test timeline-marker-test timeline-edit-e2e
             solver-ui-test solver-mini-preview-test solver-preview-freeze-test

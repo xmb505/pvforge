@@ -83,6 +83,18 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
         event->accept();
         return;
     }
+    // Ctrl is a live modifier during an endpoint/move drag: toggling it must
+    // update the preview even if the mouse does not move before release.
+    if (event->key() == Qt::Key_Control
+        && (m_dragMode == DragMode::MoveClip
+            || m_dragMode == DragMode::TrimStart
+            || m_dragMode == DragMode::TrimEnd))
+    {
+        m_dragSnapDisabled = true;
+        updateDragPreview(m_lastDragPos);
+        event->accept();
+        return;
+    }
     const Qt::KeyboardModifiers plain =
         event->modifiers() & ~Qt::KeypadModifier;
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
@@ -168,6 +180,16 @@ void TimelinePanel::keyReleaseEvent(QKeyEvent* event)
         event->accept();
         return;
     }
+    if (event->key() == Qt::Key_Control
+        && (m_dragMode == DragMode::MoveClip
+            || m_dragMode == DragMode::TrimStart
+            || m_dragMode == DragMode::TrimEnd))
+    {
+        m_dragSnapDisabled = false;
+        updateDragPreview(m_lastDragPos);
+        event->accept();
+        return;
+    }
     if ((event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
         && !event->isAutoRepeat())
     {
@@ -190,6 +212,7 @@ void TimelinePanel::focusOutEvent(QFocusEvent* event)
 void TimelinePanel::hideEvent(QHideEvent* event)
 {
     setAltHeld(false);
+    clearSnap();
     // Private timelines float over the main window, not inside this widget, so
     // hiding the timeline dock must explicitly take them down with it.
     for (ClipPopup* popup : m_popups)
