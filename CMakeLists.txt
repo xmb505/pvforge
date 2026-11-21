@@ -230,6 +230,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/KeyframeClipboardTests.cpp
         src/tests/ViewportCameraTests.cpp
         src/tests/ViewportScaleLinkTests.cpp
+        src/tests/ViewportAudioGizmoTests.cpp
         src/tests/EditorTests.cpp
         src/tests/RenderMediaTests.cpp
         src/tests/AssetTests.cpp
@@ -293,6 +294,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             gizmo-test
             inkscape-handles-test
             scale-link-test
+            audio-gizmo-test
             camera-monitor-test
             mcp-test
             mcp-lock-test
@@ -328,6 +330,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             timeline-split-test timeline-marker-test timeline-edit-e2e
             solver-ui-test solver-mini-preview-test solver-preview-freeze-test
             gizmo-test inkscape-handles-test scale-link-test
+            audio-gizmo-test
             camera-monitor-test closed-range-test
         )
         foreach(case IN LISTS PVF_SELF_TEST_UI)
