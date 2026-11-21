@@ -5,6 +5,7 @@
 
 
 #include <QHash>
+#include <QImage>
 #include <QPixmap>
 #include <QStringList>
 #include <QVector>
@@ -79,6 +80,27 @@ public:
     bool assetMissingAt(int index) const;
     QString assetMissingReasonAt(int index) const;
     QPixmap assetThumbnailAt(int index) const;
+#ifdef PVFORGE_TEST_HOOKS
+    // HTML thumbnails come from an injected renderer instead of html2 when one
+    // is set: the callback receives the asset hash and the requested size and
+    // returns a null image to mean "still rendering".  An empty function
+    // restores the real MediaServices path.
+    using HtmlThumbnailRenderer =
+        std::function<QImage(const AssetHash&, const QSize&)>;
+    void setHtmlThumbnailRendererForTest(HtmlThumbnailRenderer renderer);
+    // Bumped every time a finished HTML thumbnail invalidated the icons; the
+    // test uses it as the "callback refreshed the list" signal.
+    int htmlThumbnailRefreshCountForTest() const
+    {
+        return m_htmlThumbRefreshCount;
+    }
+    // The hover card: its frame style and its palette roles, so a test can
+    // assert it follows the system theme instead of a hardcoded dark QSS.
+    void showHoverPreviewAtForTest(int index);
+    QFrame* hoverPreviewForTest() const { return m_hoverPreview; }
+    // Drives the htmlFrameReady handler without a running browser.
+    void handleHtmlFrameReadyForTest() { refreshHtmlThumbnails(); }
+#endif
     void setSearchText(const QString& text);
     QString searchText() const;
     QStringList tagFilters() const;
@@ -187,6 +209,14 @@ private:
     void setStatus(const QString& text);
     QPixmap iconFor(const SessionEntry& entry);
     QPixmap previewFor(const SessionEntry& entry, const QSize& size);
+    // HTML asset thumbnail: the html2 cache first, then one asynchronous
+    // request per entry.  A null result means "not rendered yet, keep the
+    // placeholder"; the frameReady callback drops the memo and rebuilds the
+    // list, which picks the finished image up.
+    QImage htmlThumbnail(const SessionEntry& entry, const QSize& target);
+    // Re-runs thumbnailFor()/previewFor() for every HTML row after a render.
+    void refreshHtmlThumbnails();
+    void ensureHoverPreview();
     QListWidgetItem* makeSessionItem(const SessionEntry& entry);
     QString selectedHash() const;
     AssetType entryTypeForHash(const AssetHash& hash) const;
@@ -227,6 +257,16 @@ private:
     video2::VideoExtractionQueue* m_extractionQueue = nullptr;
     QVector<SessionEntry> m_entries;
     QHash<AssetHash, QPixmap> m_iconCache;
+    // HTML 0-frame thumbnails, keyed by asset hash.  Only finished images are
+    // stored: a miss is re-asked on the next paint and MediaServices never
+    // queues the same asset twice while its render is in flight.
+    QHash<AssetHash, QImage> m_htmlThumbs;
+    QMetaObject::Connection m_htmlFrameConnection;
+    int m_lastHoverIndex = -1;
+#ifdef PVFORGE_TEST_HOOKS
+    HtmlThumbnailRenderer m_htmlThumbnailForTest;
+    int m_htmlThumbRefreshCount = 0;
+#endif
     QString m_lastImportDir;
     QStringList m_sessionSignature;
 

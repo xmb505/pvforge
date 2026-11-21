@@ -3,6 +3,7 @@
 #include "AssetLibraryPanelInternal.h"
 
 #include "app/EditorSession.h"
+#include "next/app/MediaServices.h"
 #include "video2/VideoFrames.h"
 
 #include <QCursor>
@@ -15,6 +16,7 @@
 #include <QListView>
 #include <QListWidget>
 #include <QPainter>
+#include <QPalette>
 #include <QScreen>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -22,6 +24,29 @@
 #include <algorithm>
 
 namespace pvf {
+
+namespace {
+
+// Shared by the list icon and the hover card: the real 0-frame render when the
+// cache has it, the HTML placeholder until then (and forever when Chrome is
+// unavailable, because htmlThumbnail() never returns an image then).
+QPixmap htmlThumbPixmap(const QImage& frame, const QSize& size,
+                        const QString& caption)
+{
+    if (frame.isNull())
+        return assetlibdetail::htmlPlaceholder(size, caption);
+
+    QPixmap pixmap(size);
+    pixmap.fill(QColor(18, 20, 26));
+    QPainter painter(&pixmap);
+    const QImage scaled =
+        frame.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    painter.drawImage((size.width() - scaled.width()) / 2,
+                      (size.height() - scaled.height()) / 2, scaled);
+    return pixmap;
+}
+
+} // namespace
 
 QPixmap AssetLibraryPanel::iconFor(const SessionEntry& entry)
 {
@@ -115,19 +140,9 @@ QPixmap AssetLibraryPanel::iconFor(const SessionEntry& entry)
             break;
         }
         case AssetType::Html:
-        {
-            pixmap = QPixmap(size);
-            pixmap.fill(QColor(18, 20, 26));
-            QPainter painter(&pixmap);
-            QFont font = painter.font();
-            font.setPixelSize(13);
-            font.setBold(true);
-            painter.setFont(font);
-            painter.setPen(QColor(QStringLiteral("#ffcf6b")));
-            painter.drawText(pixmap.rect(), Qt::AlignCenter,
-                             QStringLiteral("</>"));
+            pixmap = htmlThumbPixmap(htmlThumbnail(entry, size), size,
+                                     QStringLiteral("HTML"));
             break;
-        }
         }
     }
 
@@ -172,7 +187,8 @@ QPixmap AssetLibraryPanel::previewFor(const SessionEntry& entry, const QSize& si
             return QPixmap::fromImage(frame);
     }
     if (entry.type == AssetType::Html)
-        return assetlibdetail::htmlPlaceholder(size, QStringLiteral("HTML"));
+        return htmlThumbPixmap(htmlThumbnail(entry, size), size,
+                               QStringLiteral("HTML"));
     if (entry.type == AssetType::Audio)
     {
         QPixmap pixmap(size);
@@ -190,6 +206,84 @@ QPixmap AssetLibraryPanel::previewFor(const SessionEntry& entry, const QSize& si
     }
     return iconFor(entry);
 }
+
+QImage AssetLibraryPanel::htmlThumbnail(const SessionEntry& entry,
+                                        const QSize& target)
+{
+#ifdef PVFORGE_TEST_HOOKS
+    if (m_htmlThumbnailForTest)
+    {
+        const auto cached = m_htmlThumbs.constFind(entry.hash);
+        if (cached != m_htmlThumbs.constEnd())
+            return *cached;
+        const QImage image = m_htmlThumbnailForTest(entry.hash, target);
+        if (!image.isNull())
+            m_htmlThumbs.insert(entry.hash, image);
+        return image;
+    }
+#endif
+    if (!m_session || entry.missing || entry.hash.isEmpty())
+        return {};
+
+    const auto cached = m_htmlThumbs.constFind(entry.hash);
+    if (cached != m_htmlThumbs.constEnd())
+        return *cached;
+
+    next::MediaServices* media = m_session->media();
+    if (!media)
+        return {};
+
+    // Never subscribes twice: the reload happens on every finished frame.
+    if (!m_htmlFrameConnection)
+    {
+        m_htmlFrameConnection = connect(media, &next::MediaServices::htmlFrameReady,
+                                        this, [this] { refreshHtmlThumbnails(); });
+    }
+
+    const QImage image = media->htmlThumbnail(entry.hash, target);
+    if (!image.isNull())
+        m_htmlThumbs.insert(entry.hash, image);
+    return image;
+}
+
+void AssetLibraryPanel::refreshHtmlThumbnails()
+{
+#ifdef PVFORGE_TEST_HOOKS
+    ++m_htmlThumbRefreshCount;
+#endif
+    // The render cache changed, not the project: drop the memoised icons and
+    // rebuild in place so both views pick the finished frame up.  The hover
+    // card is refreshed separately because it is not part of the list.
+    m_iconCache.clear();
+    applySessionFilter();
+
+    if (m_lastHoverIndex >= 0 && m_list && m_hoverPreview
+        && m_hoverPreview->isVisible() && m_lastHoverIndex < m_list->count())
+    {
+        showHoverPreview(m_list->item(m_lastHoverIndex));
+    }
+}
+
+#ifdef PVFORGE_TEST_HOOKS
+void AssetLibraryPanel::setHtmlThumbnailRendererForTest(
+    HtmlThumbnailRenderer renderer)
+{
+    m_htmlThumbnailForTest = std::move(renderer);
+    m_htmlThumbs.clear();
+    m_iconCache.clear();
+    // Rows already hold the placeholder icon; rebuild them against the new
+    // renderer so the assertion sees the hook's answer.
+    applySessionFilter();
+    m_htmlFrameConnection = QMetaObject::Connection();
+}
+
+void AssetLibraryPanel::showHoverPreviewAtForTest(int index)
+{
+    if (!m_list || index < 0 || index >= m_list->count())
+        return;
+    showHoverPreview(m_list->item(index));
+}
+#endif
 
 void AssetLibraryPanel::setIconView(bool iconView)
 {
@@ -222,8 +316,49 @@ void AssetLibraryPanel::setIconView(bool iconView)
 
 void AssetLibraryPanel::hideHoverPreview()
 {
+    m_lastHoverIndex = -1;
     if (m_hoverPreview)
         m_hoverPreview->hide();
+}
+
+void AssetLibraryPanel::ensureHoverPreview()
+{
+    if (m_hoverPreview)
+        return;
+
+    // Native tool-tip look: StyledPanel plus the tool-tip palette roles, so
+    // the card follows the system light/dark theme instead of a fixed dark
+    // sheet (the old #1e1f24 frame).
+    m_hoverPreview = new QFrame(this, Qt::ToolTip);
+    m_hoverPreview->setObjectName(QStringLiteral("assetHoverPreview"));
+    m_hoverPreview->setAttribute(Qt::WA_ShowWithoutActivating);
+    m_hoverPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_hoverPreview->setFrameShape(QFrame::StyledPanel);
+    m_hoverPreview->setFrameShadow(QFrame::Plain);
+    m_hoverPreview->setAutoFillBackground(true);
+
+    QPalette palette = m_hoverPreview->palette();
+    const QPalette appPalette = QGuiApplication::palette();
+    palette.setColor(QPalette::Window, appPalette.color(QPalette::ToolTipBase));
+    palette.setColor(QPalette::WindowText, appPalette.color(QPalette::ToolTipText));
+    // Mid is the same separator role a styled panel uses for its border.
+    palette.setColor(QPalette::Mid, appPalette.color(QPalette::Mid));
+    m_hoverPreview->setPalette(palette);
+
+    auto* hoverLayout = new QVBoxLayout(m_hoverPreview);
+    hoverLayout->setContentsMargins(4, 4, 4, 4);
+    hoverLayout->setSpacing(3);
+    m_hoverImage = new QLabel(m_hoverPreview);
+    m_hoverCaption = new QLabel(m_hoverPreview);
+    m_hoverCaption->setWordWrap(true);
+    m_hoverCaption->setMaximumWidth(240);
+    for (QLabel* label : {m_hoverImage, m_hoverCaption})
+    {
+        label->setForegroundRole(QPalette::WindowText);
+        label->setBackgroundRole(QPalette::NoRole);
+    }
+    hoverLayout->addWidget(m_hoverImage);
+    hoverLayout->addWidget(m_hoverCaption);
 }
 
 void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
@@ -250,26 +385,10 @@ void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
         return;
     }
 
-    if (!m_hoverPreview)
-    {
-        m_hoverPreview = new QFrame(this, Qt::ToolTip);
-        m_hoverPreview->setObjectName(QStringLiteral("assetHoverPreview"));
-        m_hoverPreview->setAttribute(Qt::WA_ShowWithoutActivating);
-        m_hoverPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
-        m_hoverPreview->setStyleSheet(QStringLiteral(
-            "QFrame { background: #1e1f24; border: 1px solid #4a4d55; }"
-            "QLabel { background: transparent; border: none; color: #d8dce4; }"));
-        auto* hoverLayout = new QVBoxLayout(m_hoverPreview);
-        hoverLayout->setContentsMargins(4, 4, 4, 4);
-        hoverLayout->setSpacing(3);
-        m_hoverImage = new QLabel(m_hoverPreview);
-        m_hoverCaption = new QLabel(m_hoverPreview);
-        m_hoverCaption->setWordWrap(true);
-        m_hoverCaption->setMaximumWidth(240);
-        hoverLayout->addWidget(m_hoverImage);
-        hoverLayout->addWidget(m_hoverCaption);
-    }
+    ensureHoverPreview();
 
+    if (m_list)
+        m_lastHoverIndex = m_list->row(item);
     m_hoverImage->setPixmap(preview);
     m_hoverCaption->setText(item->text());
     m_hoverPreview->adjustSize();
