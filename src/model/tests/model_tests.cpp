@@ -900,12 +900,12 @@ void testEntityValidation()
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
-    bad.end = bad.start;
+    bad.end = bad.start - 1;
     CHECK(!validateEntity(bad, &error));
 
     bad = valid;
-    bad.end = bad.start - 3;
-    CHECK(!validateEntity(bad, &error));
+    bad.end = bad.start;
+    CHECK(validateEntity(bad, &error));
 
     bad = valid;
     bad.row = -1;
@@ -989,7 +989,7 @@ void testSolverValidation()
     openEnded.solvers = {makeSolver(SolverEffect::BlackHole, 10, -1)};
     CHECK(validateEntity(openEnded));
 
-    openEnded.solvers.append(makeSolver(SolverEffect::Orbit, 100, -1));
+    openEnded.solvers.append(makeSolver(SolverEffect::Orbit, 101, -1));
     CHECK(!validateEntity(openEnded, &error));
 
     Entity gravity = makeEntity(0, 100);
@@ -1298,7 +1298,7 @@ void testInvalidJson()
     CHECK(!entityFromJson(badUuid, &error).has_value());
 
     QJsonObject badRange = toJson(makeEntity(0, 10));
-    badRange.insert(QStringLiteral("end"), 0);
+    badRange.insert(QStringLiteral("end"), -1);
     CHECK(!entityFromJson(badRange, &error).has_value());
 
     Entity badKeyframe = makeEntity(0, 10);
@@ -1373,7 +1373,7 @@ void testDefaults()
     const auto parsedEnd = entityFromJson(missingEnd, &error);
     CHECK_DETAIL(parsedEnd.has_value(), error);
     if (parsedEnd)
-        CHECK(parsedEnd->end == 26);
+        CHECK(parsedEnd->end == 25);
 }
 
 void testChildrenAndRootSorting()
