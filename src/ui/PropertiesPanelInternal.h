@@ -25,6 +25,15 @@ QString contentKindLabel(ContentKind kind);
 // Localised label for an asset type.
 QString assetTypeLabel(AssetType type);
 
+// Audio assets are timeline/mixer objects: the properties panel keeps their
+// range, source, gain and fades, but hides every stage transform/solver field.
+bool isAudioAsset(const model::Entity& entity);
+
+// The model stores audio volume as a linear multiplier (content.volume); the
+// properties panel presents it as dB. -60 dB is the mute floor.
+double audioGainDbFromLinear(double volume);
+double audioLinearGainFromDb(double db);
+
 // Serialised colour string used by the model (hex RGB, or ARGB with alpha).
 QString colorString(const QColor& color);
 

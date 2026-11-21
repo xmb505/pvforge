@@ -223,6 +223,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/TestRegistry.cpp
         src/tests/SessionTests.cpp
         src/tests/PropertiesTests.cpp
+        src/tests/PropertiesAudioTests.cpp
         src/tests/SolverTests.cpp
         src/tests/ProfileFixtures.cpp
         src/tests/TimelineTests.cpp
@@ -265,6 +266,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             rename-test
             panel-layout-test
             properties-test
+            properties-audio-test
             keyframe-easing-group-test
             html-vars-test
             text-layout-test
@@ -319,6 +321,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         set(PVF_SELF_TEST_UI
             session-test welcome-test settings-test rename-test panel-layout-test
             properties-test keyframe-easing-group-test
+            properties-audio-test
             html-vars-test text-layout-test
             export-dialog-test
             assets-test asset-import-test asset-external-drop-test

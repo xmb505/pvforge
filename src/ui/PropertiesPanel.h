@@ -309,13 +309,14 @@ private:
     QLineEdit* m_assetHash = nullptr;
     QLabel* m_assetType = nullptr;
     QSpinBox* m_assetSourceIn = nullptr;
-    QDoubleSpinBox* m_assetVolume = nullptr;
     QSpinBox* m_audioStart = nullptr;
     QDoubleSpinBox* m_audioTrimStart = nullptr;
     QDoubleSpinBox* m_audioTrimEnd = nullptr;
     QDoubleSpinBox* m_audioFadeIn = nullptr;
     QDoubleSpinBox* m_audioFadeOut = nullptr;
-    QSpinBox* m_audioVolume = nullptr;
+    // Audio gain is stored as a linear multiplier but presented in dB; this is
+    // the only loudness control (the media section has no duplicate).
+    QDoubleSpinBox* m_audioVolume = nullptr;
 
     // Basic entity fields (session only).
     CollapsibleSection* m_basicSection = nullptr;

@@ -35,6 +35,7 @@ Registry buildRegistry()
     Registry registry;
     registerSessionTests(registry);
     registerPropertiesTests(registry);
+    registerPropertiesAudioTests(registry);
     registerSolverTests(registry);
     registerProfileFixtures(registry);
     registerTimelineTests(registry);

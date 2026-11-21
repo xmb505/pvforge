@@ -643,24 +643,25 @@ int propertiesTest(QApplication& app)
                QStringLiteral("camera scale did not write a uniform key")))
         return 1;
 
-    // Audio volume is an animated content parameter.
+    // Audio gain is an animated content parameter.  The panel edits dB; the
+    // model keeps the linear multiplier in key.content.volume.
     document->setSelection(audio);
     live->setPlayhead(5);
     QApplication::processEvents();
     auto* audioVolume =
-        panel->findChild<QSpinBox*>(QStringLiteral("audioVolume"));
-    if (!check(audioVolume, QStringLiteral("audio volume widget missing")))
+        panel->findChild<QDoubleSpinBox*>(QStringLiteral("audioVolume"));
+    if (!check(audioVolume, QStringLiteral("audio gain widget missing")))
         return 1;
-    audioVolume->setValue(50);
+    audioVolume->setValue(-6.0);
     QApplication::processEvents();
     flush();
     if (!check(keyAt(live, audio, 5)
                    && std::abs(keyAt(live, audio, 5)
                                    ->content.value(QStringLiteral("volume"))
                                    .toDouble()
-                               - 0.5)
+                               - std::pow(10.0, -6.0 / 20.0))
                           < 1e-6,
-               QStringLiteral("audio volume did not create a content key")))
+               QStringLiteral("audio gain did not create a content key")))
         return 1;
 
     // Linked scale preserves the entity's current aspect ratio and is one

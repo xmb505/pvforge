@@ -11,7 +11,17 @@
 #include <QSpinBox>
 #include <QWidget>
 
+#include <algorithm>
+#include <cmath>
+
 namespace pvf::ui::detail {
+
+namespace {
+
+constexpr double kAudioMuteDb = -60.0;
+constexpr double kAudioMaxDb = 24.0;
+
+} // namespace
 
 QString contentKindLabel(ContentKind kind)
 {
@@ -51,6 +61,24 @@ QString colorString(const QColor& color)
 {
     return color.alpha() == 255 ? color.name(QColor::HexRgb)
                                 : color.name(QColor::HexArgb);
+}
+
+bool isAudioAsset(const model::Entity& entity)
+{
+    return entity.content.kind == ContentKind::Asset
+           && entity.content.asset.type == AssetType::Audio;
+}
+
+double audioGainDbFromLinear(double volume)
+{
+    if (volume <= 1e-3)
+        return kAudioMuteDb;
+    return std::clamp(20.0 * std::log10(volume), kAudioMuteDb, kAudioMaxDb);
+}
+
+double audioLinearGainFromDb(double db)
+{
+    return db <= kAudioMuteDb ? 0.0 : std::pow(10.0, db / 20.0);
 }
 
 bool isDescendant(const model::Project& project, const Uuid& candidate,

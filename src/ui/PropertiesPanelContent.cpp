@@ -379,6 +379,7 @@ void PropertiesPanel::buildMediaSection(QVBoxLayout* layout)
     });
     mediaLayout->addWidget(m_replaceSource);
     m_mediaSection = new CollapsibleSection(QStringLiteral("素材"), content, this);
+    m_mediaSection->setObjectName(QStringLiteral("mediaSection"));
     m_mediaSection->setExpanded(true);
     layout->addWidget(m_mediaSection);
 }
@@ -436,6 +437,7 @@ void PropertiesPanel::buildPivotSection(QVBoxLayout* layout)
     });
 
     m_pivotSection = new CollapsibleSection(QStringLiteral("轴心"), content, this);
+    m_pivotSection->setObjectName(QStringLiteral("pivotSection"));
     m_pivotSection->setExpanded(false);
     layout->addWidget(m_pivotSection);
 }
