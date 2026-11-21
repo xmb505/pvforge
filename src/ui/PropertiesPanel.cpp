@@ -367,7 +367,7 @@ bool PropertiesPanel::applyBatchKeyframeEdit(
 }
 
 bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
-                                          bool boolean)
+                                          bool boolean, bool linkedScale)
 {
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
@@ -385,9 +385,53 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
         return false;
     }
     const bool camera = entity->content.kind == ContentKind::Camera;
+    const bool linked = linkedScale && !boolean
+                        && (property == QLatin1String("scaleX")
+                            || property == QLatin1String("scaleY"));
     if (camera && (property == QLatin1String("scaleX")
                    || property == QLatin1String("scaleY")))
         value = std::clamp(std::abs(value), 0.05, 1.0);
+
+    // Apply one logical property to one keyframe.  Linked scale keeps each
+    // frame's own aspect ratio: ratio = new / oldChanged, other *= ratio.
+    auto applyToKey = [&](model::Keyframe& key) {
+        if (boolean)
+        {
+            wholeframe::setBoolValue(key, property, value != 0.0);
+            return;
+        }
+        if (!linked)
+        {
+            wholeframe::setValue(key, property, value);
+            if (camera
+                && (property == QLatin1String("scaleX")
+                    || property == QLatin1String("scaleY")))
+            {
+                const QString other = property == QLatin1String("scaleX")
+                                          ? QStringLiteral("scaleY")
+                                          : QStringLiteral("scaleX");
+                wholeframe::setValue(key, other,
+                                     std::abs(value) > 1e-9 ? value
+                                                            : wholeframe::value(
+                                                                  key, other)
+                                                                  .value_or(value));
+            }
+            return;
+        }
+
+        const bool isX = property == QLatin1String("scaleX");
+        const QString other = isX ? QStringLiteral("scaleY")
+                                  : QStringLiteral("scaleX");
+        const double oldChanged = isX ? key.scaleX : key.scaleY;
+        const double oldOther = isX ? key.scaleY : key.scaleX;
+        double newOther = std::abs(oldChanged) > 1e-9
+                              ? oldOther * (value / oldChanged)
+                              : value;
+        if (camera)
+            newOther = std::clamp(std::abs(newOther), 0.05, 1.0);
+        wholeframe::setValue(key, property, value);
+        wholeframe::setValue(key, other, newOther);
+    };
 
     if (targets.size() > 1)
     {
@@ -419,8 +463,7 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
 
         return runSessionEdit(
             QStringLiteral("pvf: batch edit %1").arg(property),
-            [this, property, value, boolean, camera,
-             writable](model::Entity& e) {
+            [this, writable, &applyToKey](model::Entity& e) {
                 bool changed = false;
                 for (int target : writable)
                 {
@@ -428,19 +471,7 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
                         continue;
                     model::Keyframe key =
                         wholeframe::keyAt(e, target, m_session);
-                    if (boolean)
-                        wholeframe::setBoolValue(key, property, value != 0.0);
-                    else
-                        wholeframe::setValue(key, property, value);
-                    if (camera && !boolean)
-                    {
-                        if (property == QLatin1String("scaleX"))
-                            key.scaleY =
-                                std::abs(value) > 1e-9 ? value : key.scaleY;
-                        else if (property == QLatin1String("scaleY"))
-                            key.scaleX =
-                                std::abs(value) > 1e-9 ? value : key.scaleX;
-                    }
+                    applyToKey(key);
                     model::upsertKeyframe(e.keyframes, key);
                     changed = true;
                 }
@@ -472,29 +503,37 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
     bool outOfRange = false;
     const bool ok = runSessionEdit(
         QStringLiteral("pvf: edit %1").arg(property),
-        [this, property, value, boolean, camera, inRange,
-         &outOfRange](model::Entity& e) {
+        [this, property, value, boolean, camera, linked, inRange,
+         &outOfRange, &applyToKey](model::Entity& e) {
             if (inRange)
             {
                 const int target = activeKeyFrame(e);
                 model::Keyframe key = wholeframe::keyAt(e, target, m_session);
-                if (boolean)
-                    wholeframe::setBoolValue(key, property, value != 0.0);
-                else
-                    wholeframe::setValue(key, property, value);
-                if (camera && !boolean)
-                {
-                    if (property == QLatin1String("scaleX"))
-                        key.scaleY = std::abs(value) > 1e-9 ? value : key.scaleY;
-                    else if (property == QLatin1String("scaleY"))
-                        key.scaleX = std::abs(value) > 1e-9 ? value : key.scaleX;
-                }
+                applyToKey(key);
                 model::upsertKeyframe(e.keyframes, key);
                 return true;
             }
             outOfRange = true;
             if (boolean)
                 return wholeframe::setStaticBoolValue(e, property, value != 0.0);
+            if (linked && !boolean)
+            {
+                const bool isX = property == QLatin1String("scaleX");
+                const QString other = isX ? QStringLiteral("scaleY")
+                                          : QStringLiteral("scaleX");
+                const double oldChanged =
+                    isX ? e.transform.scaleX : e.transform.scaleY;
+                const double oldOther =
+                    isX ? e.transform.scaleY : e.transform.scaleX;
+                double newOther = std::abs(oldChanged) > 1e-9
+                                      ? oldOther * (value / oldChanged)
+                                      : value;
+                if (camera)
+                    newOther = std::clamp(std::abs(newOther), 0.05, 1.0);
+                wholeframe::setStaticValue(e, property, value);
+                wholeframe::setStaticValue(e, other, newOther);
+                return true;
+            }
             if (camera && !boolean)
             {
                 if (property == QLatin1String("scaleX")

@@ -193,7 +193,8 @@ private:
     // frames are returned verbatim; callers write static values instead.
     int prepareAnimationEdit(const model::Entity& entity);
     bool writeAnimationValue(const QString& property, double value,
-                             bool boolean = false);
+                             bool boolean = false,
+                             bool linkedScale = false);
     bool writeHtmlVariable(const QString& name, double value);
     void deleteActiveKeyframe();
     void reloadSessionHtml(const model::Entity& entity);

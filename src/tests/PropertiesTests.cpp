@@ -663,6 +663,64 @@ int propertiesTest(QApplication& app)
                QStringLiteral("audio volume did not create a content key")))
         return 1;
 
+    // Linked scale preserves the entity's current aspect ratio and is one
+    // commit, not two independent scale writes.
+    {
+        auto& setup = live->mutableProject();
+        setup.entities[vector].keyframes.clear();
+        setup.entities[vector].transform.scaleX = 1.6;
+        setup.entities[vector].transform.scaleY = 0.9;
+        QString scaleError;
+        if (!document->commitEntity(vector,
+                                    QStringLiteral("pvf: scale setup"),
+                                    &scaleError))
+        {
+            qCritical() << "properties-test: scale setup failed" << scaleError;
+            return 1;
+        }
+        flush();
+        document->setSelection(vector);
+        live->setPlayhead(10);
+        QApplication::processEvents();
+
+        auto* scaleX =
+            panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_scaleX"));
+        auto* scaleY =
+            panel->findChild<QDoubleSpinBox*>(QStringLiteral("row_scaleY"));
+        auto* link =
+            panel->findChild<QCheckBox*>(QStringLiteral("transformLink"));
+        if (!check(scaleX && scaleY && link
+                       && link->text() == QStringLiteral("等比缩放"),
+                   QStringLiteral("linked scale widgets missing/wrong label")))
+            return 1;
+        link->setChecked(true);
+        const int scaleDepth = depth();
+        scaleX->setValue(3.2);
+        QApplication::processEvents();
+        flush();
+        const Keyframe* scaleKey = keyAt(live, vector, 0);
+        if (!check(scaleKey
+                       && std::abs(scaleKey->scaleX - 3.2) < 1e-6
+                       && std::abs(scaleKey->scaleY - 1.8) < 1e-6,
+                   QStringLiteral("linked scale did not preserve 16:9: %1/%2 "
+                                  "link=%3 spin=%4")
+                       .arg(scaleKey ? scaleKey->scaleX : -1)
+                       .arg(scaleKey ? scaleKey->scaleY : -1)
+                       .arg(link->isChecked())
+                       .arg(scaleX->value()))
+            || !check(depth() == scaleDepth + 1,
+                      QStringLiteral("linked scale was not one commit")))
+            return 1;
+        if (!document->undo())
+            return 1;
+        const auto& restored = live->project().entities.value(vector);
+        if (!check(std::abs(restored.transform.scaleX - 1.6) < 1e-6
+                       && std::abs(restored.transform.scaleY - 0.9) < 1e-6,
+                   QStringLiteral("one undo did not restore both scale axes")))
+            return 1;
+        link->setChecked(false);
+    }
+
     // Solver conversion from the last key and cancellation.
     document->setSelection(solverRoot);
     live->setPlayhead(0);

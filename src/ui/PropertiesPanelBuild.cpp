@@ -75,6 +75,21 @@ void PropertiesPanel::buildUi()
            -100, 100, 3, 0.01);
     addRow(transformForm, QStringLiteral("缩放 Y"), QStringLiteral("scaleY"),
            -100, 100, 3, 0.01);
+
+    // Keep the equivalent-scale toggle directly under the two scale rows,
+    // where it belongs; the top row is only for whole-transform operations.
+    auto* linkRow = new QWidget(transformContent);
+    auto* linkLayout = new QHBoxLayout(linkRow);
+    linkLayout->setContentsMargins(0, 0, 0, 0);
+    linkLayout->setSpacing(4);
+    m_transformLink = new QCheckBox(QStringLiteral("等比缩放"), linkRow);
+    m_transformLink->setObjectName(QStringLiteral("transformLink"));
+    m_transformLink->setToolTip(
+        QStringLiteral("勾选后修改缩放 X/Y 会按当前比例联动另一轴"));
+    linkLayout->addWidget(m_transformLink);
+    linkLayout->addStretch(1);
+    transformForm->addRow(linkRow);
+
     addRow(transformForm, QStringLiteral("透明度"), QStringLiteral("opacity"),
            0, 100, 0, 1, 0.01);
 
@@ -82,17 +97,12 @@ void PropertiesPanel::buildUi()
     auto* opsLayout = new QHBoxLayout(transformOps);
     opsLayout->setContentsMargins(0, 0, 0, 0);
     opsLayout->setSpacing(4);
-    m_transformLink = new QCheckBox(QStringLiteral("Link"), transformOps);
-    m_transformLink->setObjectName(QStringLiteral("transformLink"));
-    m_transformLink->setToolTip(
-        QStringLiteral("勾选后缩放 X/Y 联动；MI 式 Link"));
     auto* copy = new QPushButton(QStringLiteral("复制"), transformOps);
     copy->setObjectName(QStringLiteral("transformCopy"));
     auto* paste = new QPushButton(QStringLiteral("粘贴"), transformOps);
     paste->setObjectName(QStringLiteral("transformPaste"));
     auto* reset = new QPushButton(QStringLiteral("重置"), transformOps);
     reset->setObjectName(QStringLiteral("transformReset"));
-    opsLayout->addWidget(m_transformLink);
     // The three operation buttons share the remaining width instead of
     // overflowing a narrow dock.
     for (QPushButton* button : {copy, paste, reset})
@@ -580,16 +590,11 @@ void PropertiesPanel::addRow(QFormLayout* form, const QString& label,
                 rowFactor = row.factor;
                 break;
             }
-        writeAnimationValue(prop, v * rowFactor);
-        if (m_transformLink && m_transformLink->isChecked()
+        const bool linkedScale =
+            m_transformLink && m_transformLink->isChecked()
             && (prop == QLatin1String("scaleX")
-                || prop == QLatin1String("scaleY")))
-        {
-            const QString other = prop == QLatin1String("scaleX")
-                                      ? QStringLiteral("scaleY")
-                                      : QStringLiteral("scaleX");
-            writeAnimationValue(other, v * rowFactor);
-        }
+                || prop == QLatin1String("scaleY"));
+        writeAnimationValue(prop, v * rowFactor, false, linkedScale);
     });
 }
 
