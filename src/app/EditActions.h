@@ -85,6 +85,16 @@ public:
     // clip is rejected by validation instead of silently swapping rows.
     bool planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
                        EditPlan* plan, QString* error = nullptr) const;
+    // Moves a multi-selection as one block: every selected top-level entity
+    // shifts by deltaRows while its relative row spacing stays intact, and the
+    // whole subtree shifts by deltaFrames.  Root rows are clamped so the block
+    // cannot fall below row 0; private-timeline rows keep their positive /
+    // negative layer order (the 0 divider is never an entity slot).  A
+    // selection spanning different parents is rejected when deltaRows != 0.
+    // Row conflicts with an unselected sibling are rejected, never overwritten.
+    bool planMoveClipsToRows(const QVector<Uuid>& roots, int deltaFrames,
+                             int deltaRows, EditPlan* plan,
+                             QString* error = nullptr) const;
     bool planTrim(const Uuid& uuid, int newStart, int newEnd, EditPlan* plan,
                   QString* error = nullptr) const;
     bool planReparent(const Uuid& uuid, const Uuid& newParent, bool keepWorld,

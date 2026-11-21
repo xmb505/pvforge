@@ -9,6 +9,7 @@
 #include "next/core/EntityLock.h"
 #include "next/timeline/EntityRange.h"
 
+#include <QHash>
 #include <QMessageBox>
 #include <QSet>
 
@@ -199,6 +200,152 @@ bool EditActions::planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
         return false;
     }
 
+    *plan = std::move(moved);
+    return true;
+}
+
+bool EditActions::planMoveClipsToRows(const QVector<Uuid>& roots,
+                                      int deltaFrames, int deltaRows,
+                                      EditPlan* plan, QString* error) const
+{
+    if (error)
+        error->clear();
+    if (!isValid() || !plan)
+    {
+        setError(error, QStringLiteral("内部错误：没有可编辑的工程"));
+        return false;
+    }
+    if (roots.isEmpty())
+    {
+        setError(error, QStringLiteral("没有选中的片段"));
+        return false;
+    }
+
+    const model::Project& project = m_session->project();
+    const QVector<Uuid> selected = uniqueRoots(project, roots, error);
+    if (selected.isEmpty())
+        return false;
+
+    // One block can only cross rows inside one parent timeline.  Mixing a root
+    // with a private child (or children of different parents) has no shared
+    // row axis, so the honest answer is to reject the vertical part.
+    const Uuid parent = project.entities.value(selected.first()).parentUuid;
+    for (const Uuid& root : selected)
+    {
+        if (project.entities.value(root).parentUuid != parent)
+        {
+            setError(error,
+                     QStringLiteral("选中的片段来自不同父级，不能一起上下跨行；"
+                                    "请只水平移动或分别移动"));
+            return false;
+        }
+    }
+
+    // The root timeline is one-sided: clamp the whole block at row 0 so the
+    // selected rows keep their relative spacing instead of piling up on row 0.
+    int effectiveRows = deltaRows;
+    if (parent.isEmpty() && deltaRows < 0)
+    {
+        int minRow = INT_MAX;
+        for (const Uuid& root : selected)
+            minRow = std::min(minRow, project.entities.value(root).row);
+        effectiveRows = std::max(deltaRows, -minRow);
+    }
+
+    // Nothing to do: return a valid empty plan.  The drag preview treats it as
+    // no movement and the release handler skips the commit.
+    if (effectiveRows == 0 && deltaFrames == 0)
+    {
+        plan->project = project;
+        plan->upserts.clear();
+        plan->deletes.clear();
+        plan->message = QStringLiteral("移动片段");
+        return true;
+    }
+
+    // Reuse the horizontal move for time, subtree, lock and parent-range
+    // checks; only the layer assignment differs.
+    EditPlan moved;
+    if (!planMove(selected, deltaFrames, {}, &moved, error))
+        return false;
+
+    if (effectiveRows == 0)
+    {
+        *plan = std::move(moved);
+        return true;
+    }
+
+    QSet<Uuid> movedNodes;
+    for (const Uuid& root : selected)
+    {
+        for (const Uuid& node : subtree(moved.project, root))
+            movedNodes.insert(node);
+    }
+
+    // Index the unselected siblings before the row shift so an occupied target
+    // layer is reported by name instead of relying on the validator's UUID
+    // dump.  A track is a layer: sharing is legal until the time ranges overlap.
+    QHash<QString, QVector<Uuid>> unselectedByTrack;
+    for (auto it = moved.project.entities.constBegin();
+         it != moved.project.entities.constEnd(); ++it)
+    {
+        if (movedNodes.contains(it.key()))
+            continue;
+        const QString key = it.value().parentUuid + QLatin1Char('\n')
+                            + QString::number(it.value().row);
+        unselectedByTrack[key].append(it.key());
+    }
+
+    QVector<Uuid> upserts = moved.upserts;
+    QSet<Uuid> upsertSet(upserts.begin(), upserts.end());
+    for (const Uuid& root : selected)
+    {
+        model::Entity& entity = moved.project.entities[root];
+        entity.row += effectiveRows;
+        // Private timelines run from +1, +2 ... above the divider to -1, -2 ...
+        // below it; model row 0 is the first positive layer.  A uniform shift
+        // keeps that order and never parks a clip on the divider itself.
+        addUpsert(&upserts, &upsertSet, root);
+    }
+
+    for (const Uuid& node : std::as_const(movedNodes))
+    {
+        const model::Entity& entity = moved.project.entities[node];
+        const QString key = entity.parentUuid + QLatin1Char('\n')
+                            + QString::number(entity.row);
+        const auto occupants = unselectedByTrack.constFind(key);
+        if (occupants == unselectedByTrack.constEnd())
+            continue;
+        for (const Uuid& otherUuid : occupants.value())
+        {
+            const model::Entity& other = moved.project.entities.value(otherUuid);
+            if (entity.start >= other.end || other.start >= entity.end)
+                continue;
+            setError(error,
+                     QStringLiteral("片段 %1 移到第 %2 行后会与未选中的片段 %3 "
+                                    "时间重叠（[%4, %5) 与 [%6, %7)），已拒绝跨行移动")
+                         .arg(displayName(entity))
+                         .arg(entity.row)
+                         .arg(displayName(other))
+                         .arg(entity.start)
+                         .arg(entity.end)
+                         .arg(other.start)
+                         .arg(other.end));
+            return false;
+        }
+    }
+
+    QString validationError;
+    if (!model::validateProject(moved.project, &validationError))
+    {
+        setError(error, QStringLiteral("移动后工程校验失败：%1")
+                            .arg(validationError));
+        return false;
+    }
+
+    moved.upserts = upserts;
+    moved.message = deltaFrames == 0 ? QStringLiteral("调整片段行")
+                                     : QStringLiteral("移动片段");
     *plan = std::move(moved);
     return true;
 }
