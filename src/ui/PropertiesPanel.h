@@ -3,6 +3,7 @@
 #include "app/EditActions.h"
 #include "common/Types.h"
 #include "core/EntityId.h"
+#include "model/Easing.h"
 
 #include <QColor>
 #include <QHash>
@@ -65,11 +66,20 @@ public:
     void setSelectedKeyframes(const QVector<KeyRef>& selection);
     int selectedKeyframeCount() const { return int(m_selectedKeys.size()); }
 
+    // Writes one whole-frame easing: the selected key, every selected key of
+    // this entity (one commit), or the playhead key.  No key -> status hint.
+    void applyKeyframeEasing(const model::EasingSpec& spec);
+
     // Playback freeze for the mini solver preview.
     void setPlaybackActive(bool active);
 #ifdef PVFORGE_TEST_HOOKS
     bool playbackActiveForTest() const { return m_playbackActive; }
     int activeEditFrameForTest() const;
+    // Replaces the modal bezier dialog so the custom path stays testable.
+    using EasingCustomEditor =
+        std::function<bool(const model::EasingSpec& current,
+                           model::EasingSpec* result)>;
+    void setEasingCustomEditorForTest(EasingCustomEditor editor);
 #endif
 
 signals:
@@ -206,6 +216,7 @@ private:
     void reloadSolverConvert(const model::Entity& entity);
     bool canConvertCurrentKey(const model::Entity& entity,
                               QString* reason = nullptr) const;
+    void openKeyframeEasingMenu();
     void promptGroupBezier();
     void showSolverConvertMenu();
     void convertSolverFromKey(SolverEffect effect);
@@ -320,11 +331,14 @@ private:
     QWidget* m_keyStatusRow = nullptr;
     QLabel* m_keyStatus = nullptr;
     QPushButton* m_keyDelete = nullptr;
-    QComboBox* m_groupEasing = nullptr;
+    QToolButton* m_keyEasingButton = nullptr;
     QLineEdit* m_keyNote = nullptr;
     QPushButton* m_convertSolverButton = nullptr;
     QPushButton* m_cancelSolverButton = nullptr;
     QLabel* m_convertSolverHint = nullptr;
+#ifdef PVFORGE_TEST_HOOKS
+    EasingCustomEditor m_easingCustomEditor;
+#endif
 
     // Transform section MI operations.  The clipboard holds one whole-frame
     // animation payload (public fields + content + htmlVars).

@@ -132,6 +132,10 @@ set(PVF_APP_SOURCES
     src/ui/AssetLibraryPanelSession.cpp
     src/ui/AssetLibraryPanelThumbs.cpp
     src/ui/BezierEditorDialog.cpp
+    src/ui/EasingChooser.cpp
+    src/ui/EasingChooser.h
+    src/ui/EasingPicker.cpp
+    src/ui/EasingPicker.h
     src/ui/CameraMonitor.cpp
     src/ui/McpLogPanel.cpp
     src/ui/PerfMonitorWindow.cpp
