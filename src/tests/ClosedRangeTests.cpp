@@ -261,7 +261,7 @@ void testTimelineGeometry()
               QStringLiteral("clip right edge is %1, expected %2")
                   .arg(rect.right() + 1)
                   .arg(timeline->frameXForTest(134)));
-        check(timeline->clipRangeTextForTest(id) == QStringLiteral("0–133 · 134f"),
+        check(timeline->clipRangeTextForTest(id) == QStringLiteral("0–133"),
               QStringLiteral("clip range text is \"%1\"")
                   .arg(timeline->clipRangeTextForTest(id)));
     }
