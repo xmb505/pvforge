@@ -1394,15 +1394,20 @@ int runTimelineEditE2eTest(QApplication& app)
                           timeline->rowCenterYForTest(row));
         const QPoint to(timeline->frameXForTest(grabFrame + delta),
                         timeline->rowCenterYForTest(row));
+        // Ctrl is held for the move, not the press: pressing Ctrl on a clip
+        // body toggles the multi-selection.  The cached modifier disables
+        // sibling-edge snapping so this stays an exact free drag (without it
+        // the audio left edge would park on the image right edge, 51).
         QMouseEvent press(QEvent::MouseButtonPress, QPointF(from),
                           QPointF(timeline->mapToGlobal(from)), Qt::LeftButton,
                           Qt::LeftButton, Qt::NoModifier);
         QMouseEvent move(QEvent::MouseMove, QPointF(to),
                          QPointF(timeline->mapToGlobal(to)), Qt::NoButton,
-                         Qt::LeftButton, Qt::NoModifier);
+                         Qt::LeftButton, Qt::ControlModifier);
         QMouseEvent release(QEvent::MouseButtonRelease, QPointF(to),
                             QPointF(timeline->mapToGlobal(to)),
-                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                            Qt::LeftButton, Qt::NoButton,
+                            Qt::ControlModifier);
         QApplication::sendEvent(timeline, &press);
         QApplication::sendEvent(timeline, &move);
         QApplication::sendEvent(timeline, &release);
