@@ -11,6 +11,7 @@
 #include <QDataStream>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QImageReader>
 #include <QImageWriter>
 
@@ -107,12 +108,16 @@ QImage decodeFrame(const QString& path, const QString& codec)
     return reader.read();
 }
 
-QString frameKey(int frame)
-{
-    return QString::number(frame);
-}
-
 } // namespace
+
+QString frameContentKey(const FrameMeta& meta)
+{
+    const QByteArray digest =
+        meta.sha1.isEmpty()
+            ? QCryptographicHash::hash(meta.bytes, QCryptographicHash::Sha1)
+            : meta.sha1;
+    return QString::fromLatin1(digest.toHex());
+}
 
 struct Cache::Impl
 {
@@ -123,6 +128,10 @@ struct Cache::Impl
 
     std::unique_ptr<framecache::Store> store;
     framecache::ImageLru memory{0};
+    // Frame number -> content key learned by store()/lookup().  The index
+    // itself only knows content keys, so this map powers cachedFrames() and
+    // disappears with the process (a reopened cache proves hits via matches()).
+    QHash<int, QString> frameToKey;
 };
 
 Cache::Cache(QString root, QString cameraKey, Options options, QObject* parent)
@@ -211,7 +220,7 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
         return {};
     }
 
-    const QString key = frameKey(frame);
+    const QString key = frameContentKey(current);
     const auto record = d->store->record(key);
     if (!record)
     {
@@ -222,8 +231,8 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
     const FrameMeta stored{record->payload, record->tag};
     if (!stored.equals(current))
     {
-        // The old image deliberately stays on disk: it may still match after
-        // the user undoes the edit.
+        // Same SHA-1 but different bytes: a theoretical collision, never a
+        // hit.  The old image deliberately stays on disk.
         d->store->noteMiss();
         return {};
     }
@@ -232,6 +241,7 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
     {
         d->store->touch(key);
         d->store->noteHit();
+        d->frameToKey.insert(frame, key);
         if (hit)
             *hit = true;
         return *memory;
@@ -241,8 +251,16 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
         decodeFrame(d->store->pathFor(*record), record->codec);
     if (image.isNull())
     {
-        // The index still matched but the file is gone/corrupt; drop the row.
+        // The index still matched but the file is gone/corrupt; drop the row
+        // and every frame that pointed at it.
         d->store->remove(key, true);
+        for (auto it = d->frameToKey.begin(); it != d->frameToKey.end();)
+        {
+            if (it.value() == key)
+                it = d->frameToKey.erase(it);
+            else
+                ++it;
+        }
         d->store->noteMiss();
         return {};
     }
@@ -250,6 +268,7 @@ QImage Cache::lookup(int frame, const FrameMeta& current, bool* hit)
     d->store->touch(key);
     d->memory.put(key, image);
     d->store->noteHit();
+    d->frameToKey.insert(frame, key);
     if (hit)
         *hit = true;
     return image;
@@ -320,7 +339,7 @@ bool Cache::storeEncoded(int frame, const FrameMeta& meta,
         return fail(QStringLiteral("cannot store empty encoded bytes"));
 
     const QString codec = normalizedCodec(encoded.codec);
-    const QString key = frameKey(frame);
+    const QString key = frameContentKey(meta);
 
     framecache::Record record;
     record.key = key;
@@ -340,15 +359,17 @@ bool Cache::storeEncoded(int frame, const FrameMeta& meta,
     }
 
     d->memory.put(key, encoded.image);
+    d->frameToKey.insert(frame, key);
     perf::FrameProfiler::instance().noteCacheStore(codec == kWebpCodec);
     return true;
 }
 
 bool Cache::matches(int frame, const FrameMeta& current) const
 {
+    Q_UNUSED(frame);
     if (!d->valid || !d->store)
         return false;
-    const auto record = d->store->record(frameKey(frame));
+    const auto record = d->store->record(frameContentKey(current));
     if (!record)
         return false;
     return FrameMeta{record->payload, record->tag}.equals(current);
@@ -359,9 +380,14 @@ QSet<int> Cache::cachedFrames() const
     QSet<int> frames;
     if (!d->valid || !d->store)
         return frames;
-    for (auto it = d->store->records().cbegin();
-         it != d->store->records().cend(); ++it)
-        frames.insert(it.key().toInt());
+    const QHash<QString, framecache::Record>& records = d->store->records();
+    for (auto it = d->frameToKey.cbegin(); it != d->frameToKey.cend(); ++it)
+    {
+        // The shared disk LRU may have evicted the content since the frame was
+        // learned; a stale mapping must not claim the frame is still cached.
+        if (records.contains(it.value()))
+            frames.insert(it.key());
+    }
     return frames;
 }
 
@@ -390,6 +416,7 @@ void Cache::clear()
         return;
     d->store->clear();
     d->memory.clear();
+    d->frameToKey.clear();
 }
 
 } // namespace pvf::workbench

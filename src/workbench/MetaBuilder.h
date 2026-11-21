@@ -49,8 +49,11 @@ struct FrameMeta
     bool equals(const FrameMeta& other) const;
 };
 
-// Builds FrameMeta without modifying the project.  Only entities active at the
-// requested frame and their parent chain are serialised, sorted by UUID.
+// Builds FrameMeta without modifying the project.  Only entities that can put
+// pixels on the canvas at the requested frame and the parent chain they inherit
+// from are serialised, sorted by UUID.  Audio-only entities, standalone
+// cameras/groups and invisible leaves are omitted so an unchanged picture keeps
+// one byte-identical meta across frames.
 //
 // `sharedSolverResults` is optional and borrowed (it must outlive the builder):
 // the WorkbenchServices path passes the session store so the poses serialised

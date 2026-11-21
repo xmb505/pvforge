@@ -36,21 +36,30 @@ struct EncodedFrame
     QImage image;
 };
 
+// Stable content key for a frame: the 40-character lowercase hex SHA-1 from
+// FrameMeta::sha1 (bytes are hashed only when a caller built a meta by hand).
+// Identical visual states share one key, so different frames reuse one record.
+QString frameContentKey(const FrameMeta& meta);
+
 // One camera's frame cache: <root>/<signature>/<cameraKey|nocamera>/.
 //
-// Frames without raster assets are stored as <frame>.qoi (built-in codec,
-// lossless alpha, ~2 ms encode at 1280x720); frames containing an image, video
-// or HTML asset stay <frame>.webp so photos do not balloon the disk.  The
-// shared framecache Store keeps one row per frame in frame_entries, with the
-// full FrameMeta in its payload blob and the sha1 in its tag blob.  A lookup
-// only hits when the current meta is byte-identical to the stored one; stale
-// images are left in place until store() overwrites them.  Loading the index
-// also drops rows whose file disappeared and deletes frame files that have no
-// row (leftovers from an interrupted store).
+// Records are addressed by frameContentKey(meta), not by frame number: frames
+// whose picture is unchanged share a single <sha1>.qoi / <sha1>.webp file.
+// Frames without raster assets use the built-in QOI codec (lossless alpha,
+// ~2 ms encode at 1280x720); frames containing an image, video or HTML asset
+// stay WebP so photos do not balloon the disk.  The shared framecache Store
+// keeps one row per content key in frame_entries, with the full FrameMeta in
+// its payload blob and the sha1 in its tag blob.  A lookup only hits when the
+// current meta is byte-identical to the stored one; stale images are left in
+// place until a new content key is stored (the old one may match after undo).
+// Loading the index also drops rows whose file disappeared and deletes frame
+// files that have no row (leftovers from an interrupted store).
 //
 // Existing caches from the WebP-only format and the v2 codec column are
 // imported into frame_entries on first open (the old table is kept as a
-// read-only backup), and orphan cleanup understands both extensions.
+// read-only backup), and orphan cleanup understands both extensions.  Rows
+// written by the pre-content-addressed workbench keep their numeric keys and
+// are simply never matched again; kMetaFormat invalidates their payloads too.
 //
 // Encoding is a pure function of (image, targetSize, hasRaster): encode() may
 // run on a worker thread, while storeEncoded() and store() write the file and
@@ -99,6 +108,10 @@ public:
     // Meta-only comparison; never touches image files or LRU counters.
     bool matches(int frame, const FrameMeta& current) const;
 
+    // Frames whose content this process has stored or looked up and whose
+    // record is still on disk.  The index only persists content keys, so a
+    // reopened cache returns an empty set until a frame is looked up; use
+    // matches() (or lookup()) as the persisted authority.
     QSet<int> cachedFrames() const;
     CacheStats stats() const;
 
