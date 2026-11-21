@@ -174,6 +174,7 @@ Result solverList(Tx& tx, const QJsonObject& args);
 Result solverEvaluate(Tx& tx, const QJsonObject& args);
 
 Result previewRenderFrame(Tx& tx, const QJsonObject& args);
+Result previewRenderRange(Tx& tx, const QJsonObject& args);
 Result viewStateGet(Tx& tx, const QJsonObject& args);
 
 // Parses one `solvers[]` element (fields same as solver.create without

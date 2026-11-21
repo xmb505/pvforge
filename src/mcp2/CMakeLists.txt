@@ -153,6 +153,41 @@ if(BUILD_TESTING)
         Qt6::Network
     )
 
+    # PR3 acceptance tests live in their own binary: they exercise the contact
+    # sheet, the HTTP image content block and the summary/tree read models.
+    add_executable(pvf_mcp2_pr3_tests tests/mcp2_pr3_tests.cpp)
+    target_link_libraries(pvf_mcp2_pr3_tests PRIVATE
+        pvf_mcp2
+        Qt6::Test
+        Qt6::Network
+    )
+    set(PVF_MCP2_PR3_TEST_CASES
+        renderRangeFromFrames
+        renderRangeFromToCount
+        renderRangeRejectsInvalidArguments
+        renderRangeCountsAsOnePreviewSlot
+        renderRangeBase64Output
+        httpImageContentBlock
+        summaryTimelineRows
+        entityListTreeNesting
+        entityListTreeCycleGuard
+    )
+    foreach(test_case IN LISTS PVF_MCP2_PR3_TEST_CASES)
+        add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_pr3_tests ${test_case})
+        set_tests_properties(mcp2.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+    endforeach()
+    # These cases share the per-user preview directory with the preview tests
+    # above; serialise them so LRU/TTL pruning cannot race across processes.
+    set_tests_properties(
+        mcp2.renderRangeFromFrames
+        mcp2.renderRangeFromToCount
+        mcp2.renderRangeRejectsInvalidArguments
+        mcp2.renderRangeCountsAsOnePreviewSlot
+        mcp2.renderRangeBase64Output
+        mcp2.httpImageContentBlock
+        PROPERTIES RESOURCE_LOCK pvforge_preview_dir)
+
     # Safety regressions live in their own binary: the historical test file is
     # under a size ratchet and a second process would only duplicate the
     # fixture.

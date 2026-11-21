@@ -5,14 +5,38 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 #include <QTransform>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace pvf::mcp2::detail {
 
 using namespace entity;
+
+namespace {
+
+// entity.list appendices shared by the flat and tree modes.
+void appendEntityExtras(const model::Entity& entity, bool includeKeyframes,
+                        bool includeSolvers, QJsonObject* object)
+{
+    if (includeKeyframes)
+    {
+        object->insert(QStringLiteral("keyframes"),
+                       model::toJson(entity.keyframes));
+    }
+    if (includeSolvers)
+    {
+        QJsonArray solvers;
+        for (const model::SolverSegment& segment : entity.solvers)
+            solvers.append(model::toJson(segment));
+        object->insert(QStringLiteral("solvers"), solvers);
+    }
+}
+
+} // namespace
 
 Result entityGet(Tx& tx, const QJsonObject& args)
 {
@@ -148,9 +172,59 @@ Result entityList(Tx& tx, const QJsonObject& args)
 
     bool includeKeyframes = false;
     bool includeSolvers = false;
+    bool tree = false;
     if (!readBool(args, "includeKeyframes", &includeKeyframes, &error)
-        || !readBool(args, "includeSolvers", &includeSolvers, &error))
+        || !readBool(args, "includeSolvers", &includeSolvers, &error)
+        || !readBool(args, "tree", &tree, &error))
         return error;
+
+    if (tree)
+    {
+        const model::ChildrenIndex index(tx.p());
+        QSet<Uuid> visited;
+        std::function<QJsonObject(const Uuid&)> build =
+            [&](const Uuid& uuid) -> QJsonObject {
+            visited.insert(uuid);
+            const model::Entity* entity = findEntity(tx.p(), uuid);
+            QJsonObject object = entityBrief(*entity);
+            // "kind" is the content kind name; entityBrief already exposes it
+            // as contentKind, the tree contract names it kind.
+            object.insert(QStringLiteral("kind"),
+                          contentKindName(entity->content.kind));
+            appendEntityExtras(*entity, includeKeyframes, includeSolvers,
+                               &object);
+
+            QJsonArray children;
+            for (const Uuid& childUuid : index.children(uuid))
+            {
+                // Dirty data may contain a cycle; never recurse into a node
+                // that is already on the current path or already emitted.
+                if (visited.contains(childUuid))
+                    continue;
+                children.append(build(childUuid));
+            }
+            object.insert(QStringLiteral("children"), children);
+            return object;
+        };
+
+        // An empty parentUuid selects every top-level entity, a concrete one
+        // starts from that parent's direct children.
+        const QVector<Uuid> roots = index.children(parentUuid);
+        QJsonArray array;
+        for (const Uuid& rootUuid : roots)
+        {
+            if (visited.contains(rootUuid))
+                continue;
+            array.append(build(rootUuid));
+        }
+
+        QJsonObject data;
+        data.insert(QStringLiteral("entities"), array);
+        data.insert(QStringLiteral("page"),
+                    pageJson(0, std::max(1, int(roots.size())),
+                             int(roots.size())));
+        return success(data);
+    }
 
     QVector<model::Entity> entities;
     for (auto it = tx.p().entities.constBegin(); it != tx.p().entities.constEnd();
@@ -173,18 +247,8 @@ Result entityList(Tx& tx, const QJsonObject& args)
     for (int i = offset; i < entities.size() && i < offset + limit; ++i)
     {
         QJsonObject object = entityBrief(entities.at(i));
-        if (includeKeyframes)
-        {
-            object.insert(QStringLiteral("keyframes"),
-                          model::toJson(entities.at(i).keyframes));
-        }
-        if (includeSolvers)
-        {
-            QJsonArray solvers;
-            for (const model::SolverSegment& segment : entities.at(i).solvers)
-                solvers.append(model::toJson(segment));
-            object.insert(QStringLiteral("solvers"), solvers);
-        }
+        appendEntityExtras(entities.at(i), includeKeyframes, includeSolvers,
+                           &object);
         array.append(object);
     }
 

@@ -272,13 +272,19 @@ QJsonObject schemaTopic(const QString& topic)
     if (topic == QLatin1String("preview"))
     {
         return openSchema({
-            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，默认播放头"))},
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("render_frame：全局帧号，默认播放头"))},
+            {QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("render_range：帧号数组，去重保序，最多 16 个；与 from/to 二选一"))},
+            {QStringLiteral("from"), prop(QStringLiteral("integer"), QStringLiteral("render_range：闭区间起始帧"))},
+            {QStringLiteral("to"), prop(QStringLiteral("integer"), QStringLiteral("render_range：闭区间结束帧"))},
+            {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("render_range：均匀采样数量，1..16，默认 6"))},
+            {QStringLiteral("cols"), prop(QStringLiteral("integer"), QStringLiteral("render_range：每行列数 1..6"))},
             {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("默认 view.state 摄像机；null = 全画布"))},
-            {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程宽度"))},
-            {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程高度"))},
+            {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("render_frame 1..4096；render_range 单格 64..1024"))},
+            {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("render_frame：1..4096，默认工程高度"))},
             {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
             {QStringLiteral("includeBase64"),
              prop(QStringLiteral("boolean"), QStringLiteral("在返回 JSON 里附带 PNG base64；不传则只给临时 path"))},
+            {QStringLiteral("showFrameLabel"), prop(QStringLiteral("boolean"), QStringLiteral("render_range：默认 true，每格叠加帧号角标"))},
         });
     }
     if (topic == QLatin1String("view"))
@@ -351,8 +357,11 @@ QString guideMarkdown(const QString& topic)
             "# 预览\n"
             "- `view.state` 读取播放头、选中实体、私有时间线、活动摄像机和视口范围。\n"
             "- `preview.render_frame` 渲染指定全局帧并写入临时 PNG；默认帧是播放头、默认摄像机来自 `view.state`。\n"
+            "- `preview.render_range` 一次渲染多帧并拼成网格接触表 PNG：帧选择用 `frames` 或 `from`+`to`+`count` 二选一；"
+            "`cols`/`width`/`showFrameLabel` 控制排版，整张只按 1 次预览限流计算。\n"
             "- 输出宽高限制 1..4096，PNG 不超过 20MB；预览不修改工程、不产生 commit。\n"
-            "- 返回 `path` 后可直接读取图片；渲染失败返回 `internal_error`。\n");
+            "- 返回 `path` 后可直接读取图片；带 `includeBase64: true` 时 HTTP 返回还会带标准 MCP image content block。\n"
+            "- 渲染失败返回 `internal_error`。\n");
     if (topic == QLatin1String("assets"))
         return QStringLiteral(
             "# 素材\n"
@@ -502,12 +511,14 @@ QJsonObject listTools()
                       {QStringLiteral("includeChildren"), prop(QStringLiteral("boolean"), QString())}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
-        QStringLiteral("entity.list"), QStringLiteral("按父级/根层分页列出实体"),
-        objectSchema({{QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("省略 = 全部"))},
-                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QString())},
-                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500"))},
+        QStringLiteral("entity.list"),
+        QStringLiteral("按父级/根层分页列出实体；tree=true 时一次返回完整嵌套树"),
+        objectSchema({{QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QStringLiteral("省略 = 全部；tree=true 时省略 = 从所有顶层实体开始"))},
+                      {QStringLiteral("offset"), prop(QStringLiteral("integer"), QStringLiteral("仅扁平模式分页用"))},
+                      {QStringLiteral("limit"), prop(QStringLiteral("integer"), QStringLiteral("1..500；仅扁平模式分页用"))},
                       {QStringLiteral("includeKeyframes"), prop(QStringLiteral("boolean"), QStringLiteral("返回整帧关键帧数组"))},
-                      {QStringLiteral("includeSolvers"), prop(QStringLiteral("boolean"), QString())}})));
+                      {QStringLiteral("includeSolvers"), prop(QStringLiteral("boolean"), QString())},
+                      {QStringLiteral("tree"), prop(QStringLiteral("boolean"), QStringLiteral("默认 false；true 时从根节点递归返回 children 嵌套树"))}})));
     tools.append(toolSchema(
         QStringLiteral("entity.update"), QStringLiteral("局部修改实体（不改时间/父级/关键帧/素材引用）"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
@@ -657,6 +668,20 @@ QJsonObject listTools()
                       {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096"))},
                       {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
                       {QStringLiteral("includeBase64"), prop(QStringLiteral("boolean"), QStringLiteral("返回 PNG base64"))}})));
+    tools.append(toolSchema(
+        QStringLiteral("preview.render_range"),
+        QStringLiteral("把多帧渲染成一张网格接触表 PNG（只读，整张只算 1 次限流）；"
+                       "帧选择用 frames 或 from/to/count 二选一"),
+        objectSchema({{QStringLiteral("frames"), arrayOf(QStringLiteral("integer"), QStringLiteral("帧号数组，去重保序，最多 16 个；与 from/to 二选一"))},
+                      {QStringLiteral("from"), prop(QStringLiteral("integer"), QStringLiteral("闭区间起始帧，0..1000000；与 frames 二选一"))},
+                      {QStringLiteral("to"), prop(QStringLiteral("integer"), QStringLiteral("闭区间结束帧，>= from；必须与 from 同时提供"))},
+                      {QStringLiteral("count"), prop(QStringLiteral("integer"), QStringLiteral("默认 6，1..16；均匀采样 [from,to]，含首尾"))},
+                      {QStringLiteral("cols"), prop(QStringLiteral("integer"), QStringLiteral("每行列数，1..6，默认 min(帧数,4)"))},
+                      {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("单格宽度 64..1024，默认 320；高度按工程宽高比"))},
+                      {QStringLiteral("cameraUuid"), prop(QStringLiteral("string|null"), QStringLiteral("必须是摄像机实体；默认 view.state 摄像机"))},
+                      {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
+                      {QStringLiteral("includeBase64"), prop(QStringLiteral("boolean"), QStringLiteral("返回 PNG base64"))},
+                      {QStringLiteral("showFrameLabel"), prop(QStringLiteral("boolean"), QStringLiteral("默认 true，每格左上角叠加帧号角标"))}})));
     tools.append(toolSchema(
         QStringLiteral("view.state"),
         QStringLiteral("读取 playheadFrame/selectedUuids/openTimelineOwnerUuid/view 及写权限"),

@@ -1245,7 +1245,7 @@ void Mcp2Tests::listToolsAndSchema()
 
     const QJsonObject tools = fixture.service->listTools();
     const QJsonArray array = tools.value(QStringLiteral("tools")).toArray();
-    QCOMPARE(array.size(), 47);
+    QCOMPARE(array.size(), 48);
 
     QStringList names;
     for (const QJsonValue& value : array)
@@ -1257,6 +1257,7 @@ void Mcp2Tests::listToolsAndSchema()
     QVERIFY(names.contains(QStringLiteral("solver.create")));
     QVERIFY(names.contains(QStringLiteral("solver.evaluate")));
     QVERIFY(names.contains(QStringLiteral("preview.render_frame")));
+    QVERIFY(names.contains(QStringLiteral("preview.render_range")));
     QVERIFY(names.contains(QStringLiteral("view.state")));
     QVERIFY(names.contains(QStringLiteral("asset.import")));
     QVERIFY(names.contains(QStringLiteral("markers.set")));

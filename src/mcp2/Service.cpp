@@ -102,6 +102,7 @@ const ToolEntry kTools[] = {
     {"solver.evaluate", &detail::solverEvaluate},
 
     {"preview.render_frame", &detail::previewRenderFrame},
+    {"preview.render_range", &detail::previewRenderRange},
     {"view.state", &detail::viewStateGet},
 
     {"asset.import", &detail::assetImport},
@@ -221,6 +222,7 @@ bool Service::isWriteTool(const QString& tool)
         QStringLiteral("solver.list"),
         QStringLiteral("solver.evaluate"),
         QStringLiteral("preview.render_frame"),
+        QStringLiteral("preview.render_range"),
         QStringLiteral("view.state"),
         QStringLiteral("asset.list"),
         QStringLiteral("asset.get"),

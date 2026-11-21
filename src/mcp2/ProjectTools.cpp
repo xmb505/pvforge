@@ -149,6 +149,68 @@ Result projectSummary(Tx& tx, const QJsonObject& args)
          ++it)
         durationFrames = std::max(durationFrames, it.value().end + 1);
 
+    // Main-timeline overview: one entry per occupied row. Private-timeline
+    // (nested) entities keep their own rows inside the parent clip, so only
+    // entities with an empty parentUuid are listed here.
+    QHash<int, QVector<const model::Entity*>> clipsByRow;
+    for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
+         ++it)
+    {
+        if (!it.value().parentUuid.isEmpty())
+            continue;
+        clipsByRow[it.value().row].append(&it.value());
+    }
+    QVector<int> rowNumbers;
+    rowNumbers.reserve(clipsByRow.size());
+    for (auto it = clipsByRow.constBegin(); it != clipsByRow.constEnd(); ++it)
+        rowNumbers.append(it.key());
+    std::sort(rowNumbers.begin(), rowNumbers.end());
+
+    const model::ChildrenIndex childrenIndex(project);
+    QJsonArray timelineRows;
+    for (const int row : std::as_const(rowNumbers))
+    {
+        QVector<const model::Entity*> clips = clipsByRow.value(row);
+        std::sort(clips.begin(), clips.end(),
+                  [](const model::Entity* a, const model::Entity* b) {
+                      if (a->start != b->start)
+                          return a->start < b->start;
+                      return a->uuid < b->uuid;
+                  });
+
+        int minStart = clips.first()->start;
+        int maxEnd = clips.first()->end;
+        QJsonArray clipArray;
+        for (const model::Entity* clip : std::as_const(clips))
+        {
+            minStart = std::min(minStart, clip->start);
+            maxEnd = std::max(maxEnd, clip->end);
+            QJsonObject clipJson;
+            clipJson.insert(QStringLiteral("uuid"), clip->uuid);
+            clipJson.insert(QStringLiteral("name"), clip->name);
+            clipJson.insert(QStringLiteral("kind"),
+                            contentKindName(clip->content.kind));
+            clipJson.insert(QStringLiteral("start"), clip->start);
+            clipJson.insert(QStringLiteral("end"), clip->end);
+            clipJson.insert(QStringLiteral("hidden"), clip->hidden);
+            clipJson.insert(QStringLiteral("locked"), clip->locked);
+            clipJson.insert(
+                QStringLiteral("childCount"),
+                childrenIndex.children(clip->uuid).size());
+            clipArray.append(clipJson);
+        }
+
+        QJsonObject rowJson;
+        rowJson.insert(QStringLiteral("row"), row);
+        rowJson.insert(QStringLiteral("minStart"), minStart);
+        rowJson.insert(QStringLiteral("maxEnd"), maxEnd);
+        rowJson.insert(QStringLiteral("clips"), clipArray);
+        timelineRows.append(rowJson);
+    }
+
+    QJsonObject timeline;
+    timeline.insert(QStringLiteral("rows"), timelineRows);
+
     QJsonObject data;
     data.insert(QStringLiteral("name"), project.settings.name);
     data.insert(QStringLiteral("width"), project.settings.width);
@@ -169,6 +231,7 @@ Result projectSummary(Tx& tx, const QJsonObject& args)
                     : QJsonValue(tx.viewState.cameraUuid));
     data.insert(QStringLiteral("writeEnabled"),
                 tx.writesEnabled && !tx.stopped);
+    data.insert(QStringLiteral("timeline"), timeline);
     return success(data);
 }
 
