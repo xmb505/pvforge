@@ -608,7 +608,10 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
 
     case SessionDragKind::Scale:
     {
-        const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
+        // Shift is the temporary lock; the properties panel toggle makes it
+        // persistent.  Both expand to the same uniform corner factor.
+        const bool uniform = modifiers.testFlag(Qt::ShiftModifier)
+                             || m_scaleLinkEnabled;
         QPointF mouseLocal =
             gizmo::worldToLocal(m_sessionDragTransform, mouseParent)
             + m_sessionDragGrabOffset;
@@ -648,7 +651,8 @@ void Viewport::applySessionGizmoDrag(const QPointF& pos,
 
     case SessionDragKind::CenterScale:
     {
-        const bool uniform = modifiers.testFlag(Qt::ShiftModifier);
+        const bool uniform = modifiers.testFlag(Qt::ShiftModifier)
+                             || m_scaleLinkEnabled;
         QPointF mouseLocal = gizmo::worldToLocalAxesPixels(
             m_sessionDragTransform, mouseParent, m_sessionDragViewScale);
         if (snapActive)

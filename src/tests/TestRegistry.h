@@ -46,6 +46,7 @@ void registerProfileFixtures(Registry& registry);
 void registerTimelineTests(Registry& registry);
 void registerKeyframeClipboardTests(Registry& registry);
 void registerViewportCameraTests(Registry& registry);
+void registerViewportScaleLinkTests(Registry& registry);
 void registerEditorTests(Registry& registry);
 void registerRenderMediaTests(Registry& registry);
 void registerAssetTests(Registry& registry);

@@ -334,6 +334,9 @@ void MainWindow::buildSessionShell()
                 });
         connect(m_props, &PropertiesPanel::sessionReplaceSourceRequested, this,
                 &MainWindow::replaceSessionAssetFromDialog);
+        if (m_viewport)
+            connect(m_props, &PropertiesPanel::scaleLinkChanged, m_viewport,
+                    &Viewport::setScaleLinkEnabled);
     }
     if (m_library)
     {

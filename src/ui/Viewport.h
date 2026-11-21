@@ -104,6 +104,10 @@ public:
     void setEditingEnabled(bool on) { m_editingEnabled = on; }
     bool editingEnabled() const { return m_editingEnabled; }
 
+    // Properties panel "等比缩放" toggle.  While on, corner and centre scale
+    // gestures use one factor for both axes, keeping scaleX : scaleY intact.
+    void setScaleLinkEnabled(bool on) { m_scaleLinkEnabled = on; }
+
 #ifdef PVFORGE_TEST_HOOKS
     // Session gizmo test hooks.
     gizmo::Transform gizmoTransformForTest(const Uuid& uuid) const;
@@ -129,6 +133,7 @@ public:
         return m_sessionDragKind != SessionDragKind::None;
     }
     Uuid sessionDragUuidForTest() const { return m_sessionDragUuid; }
+    bool scaleLinkEnabledForTest() const { return m_scaleLinkEnabled; }
 #endif
 
 signals:
@@ -286,6 +291,7 @@ private:
 
     // ---- session gizmo state --------------------------------------------
     bool m_editingEnabled = true;
+    bool m_scaleLinkEnabled = false;
     SessionDragKind m_sessionDragKind = SessionDragKind::None;
     Uuid m_sessionDragUuid;
     model::Entity m_sessionDragStart;

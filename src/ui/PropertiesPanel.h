@@ -87,6 +87,8 @@ signals:
     // Informational status (out-of-range playhead etc.), not an edit failure.
     void sessionStatusMessage(const QString& message);
     void sessionReplaceSourceRequested(const Uuid& uuid);
+    // "等比缩放" toggled; the shell mirrors it onto the viewport gizmo.
+    void scaleLinkChanged(bool enabled);
     // A solver card was activated; the viewport keeps that trajectory visible.
     void solverSelected(const Uuid& entityUuid, const Uuid& solverId);
 

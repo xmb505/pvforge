@@ -86,6 +86,8 @@ void PropertiesPanel::buildUi()
     m_transformLink->setObjectName(QStringLiteral("transformLink"));
     m_transformLink->setToolTip(
         QStringLiteral("勾选后修改缩放 X/Y 会按当前比例联动另一轴"));
+    connect(m_transformLink, &QCheckBox::toggled, this,
+            &PropertiesPanel::scaleLinkChanged);
     linkLayout->addWidget(m_transformLink);
     linkLayout->addStretch(1);
     transformForm->addRow(linkRow);
