@@ -38,6 +38,11 @@ public:
     void toggle();
     bool isPlaying() const { return m_playing; }
 
+    // Frame-scrub audition.  Ignored while playing or when the user disabled
+    // audio scrubbing; the caller never has to know about the audio backend.
+    void scrub(int fromFrame, int toFrame);
+    void setAudioScrubEnabled(bool enabled) { m_audioScrubEnabled = enabled; }
+
     // Exclusive content boundary: the furthest root entity's closed `end`
     // plus one.  0 means no content.
     int contentEnd() const;
@@ -83,6 +88,7 @@ private:
     QMetaObject::Connection m_playheadConnection;
     bool m_playing = false;
     bool m_advancing = false;
+    bool m_audioScrubEnabled = true;
     int m_endFrame = 0;
     int m_fps = 30;
     int m_watchdogMs = 3000;
