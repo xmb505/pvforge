@@ -262,24 +262,10 @@ void MainWindow::buildSessionShell()
     {
         m_sessionHistory = new next::HistoryPanel(this);
         m_sessionHistory->setObjectName(QStringLiteral("sessionHistoryPanel"));
-        QPalette dark = m_sessionHistory->palette();
-        dark.setColor(QPalette::Window, QColor(35, 38, 41));
-        dark.setColor(QPalette::WindowText, QColor(239, 240, 241));
-        dark.setColor(QPalette::Base, QColor(27, 30, 32));
-        dark.setColor(QPalette::AlternateBase, QColor(42, 46, 50));
-        dark.setColor(QPalette::Text, QColor(239, 240, 241));
-        dark.setColor(QPalette::Button, QColor(42, 46, 50));
-        dark.setColor(QPalette::ButtonText, QColor(239, 240, 241));
-        dark.setColor(QPalette::Mid, QColor(90, 95, 100));
-        dark.setColor(QPalette::Highlight, QColor(61, 174, 233));
-        dark.setColor(QPalette::HighlightedText, Qt::white);
-        m_sessionHistory->setPalette(dark);
-        m_sessionHistory->setAutoFillBackground(true);
 
         m_sessionHistoryDock = new QDockWidget(QStringLiteral("Git 历史"), this);
         m_sessionHistoryDock->setObjectName(QStringLiteral("sessionHistoryDock"));
-        m_sessionHistoryDock->setAllowedAreas(Qt::RightDockWidgetArea
-                                              | Qt::BottomDockWidgetArea);
+        m_sessionHistoryDock->setAllowedAreas(Qt::AllDockWidgetAreas);
         m_sessionHistoryDock->setFeatures(QDockWidget::DockWidgetClosable
                                           | QDockWidget::DockWidgetMovable
                                           | QDockWidget::DockWidgetFloatable);

@@ -6,9 +6,12 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
+#include <QStyleOption>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -18,6 +21,40 @@
 namespace pvf::next {
 
 namespace {
+
+// Status/error strings can be arbitrarily long.  A normal QLabel reports the
+// full text width as its minimum size hint, which makes a QDockWidget refuse
+// to shrink.  This label paints one elided line and keeps a zero-width
+// minimum hint; the full text stays in the tooltip.
+class ElidingLabel : public QLabel
+{
+public:
+    using QLabel::QLabel;
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(0, QLabel::minimumSizeHint().height());
+    }
+
+    QSize sizeHint() const override
+    {
+        return QSize(0, QLabel::sizeHint().height());
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        QStyleOption option;
+        option.initFrom(this);
+        style()->drawPrimitive(QStyle::PE_Widget, &option, &painter, this);
+        painter.setPen(palette().color(QPalette::WindowText));
+        const QRect area = contentsRect();
+        painter.drawText(area, alignment() | Qt::TextSingleLine,
+                         fontMetrics().elidedText(text(), Qt::ElideRight,
+                                                  area.width()));
+    }
+};
 
 constexpr int kHashRole = Qt::UserRole;
 constexpr int kMessageRole = Qt::UserRole + 1;
@@ -50,73 +87,7 @@ HistoryPanel::HistoryPanel(QWidget* parent)
 {
     setObjectName(QStringLiteral("historyPanel"));
     setWindowTitle(QStringLiteral("Git 历史"));
-    setAttribute(Qt::WA_StyledBackground, true);
-    setMinimumWidth(300);
-
-    setStyleSheet(QStringLiteral(R"(
-        QWidget#historyPanel { background: #151920; }
-        QWidget#historyTitleBar {
-            background: #1b212b;
-            border-bottom: 1px solid #2b323e;
-        }
-        QWidget#historyStatusBar {
-            background: #151920;
-            border-top: 1px solid #262e3a;
-        }
-        QLabel#historyTitle {
-            color: #e4e9f1;
-            font-weight: 600;
-        }
-        QLabel#historyStatusLabel { color: #8b96a8; }
-        QLabel#historyEmptyLabel { color: #626d7e; }
-        QPushButton {
-            background: #212834;
-            border: 1px solid #333d4c;
-            color: #e4e9f1;
-            padding: 3px 9px;
-        }
-        QPushButton:hover { background: #2a3341; }
-        QPushButton:pressed { background: #1a2029; }
-        QPushButton:disabled {
-            color: #626d7e;
-            border-color: #262d38;
-            background: #1a2029;
-        }
-        QPushButton#historyRestoreButton {
-            background: #2f5f8f;
-            border-color: #274d74;
-        }
-        QPushButton#historyRestoreButton:hover { background: #3a709f; }
-        QPushButton#historyRestoreButton:pressed { background: #274d74; }
-        QPushButton#historyRestoreButton:disabled {
-            background: #1a2029;
-            border-color: #262d38;
-            color: #626d7e;
-        }
-        QTreeWidget#historyTree {
-            background: #10141a;
-            alternate-background-color: #141922;
-            border: 0;
-            color: #d8dfe9;
-            outline: 0;
-        }
-        QTreeWidget#historyTree::item {
-            padding: 2px 3px;
-            border-bottom: 1px solid #1b212b;
-        }
-        QTreeWidget#historyTree::item:selected {
-            background: #24405c;
-            color: #ffffff;
-        }
-        QHeaderView::section {
-            background: #1b212b;
-            color: #8b96a8;
-            border: 0;
-            border-right: 1px solid #262e3a;
-            border-bottom: 1px solid #262e3a;
-            padding: 3px 4px;
-        }
-    )"));
+    setMinimumSize(180, 120);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -128,9 +99,6 @@ HistoryPanel::HistoryPanel(QWidget* parent)
     titleLayout->setContentsMargins(8, 4, 6, 4);
     titleLayout->setSpacing(6);
 
-    auto* title = new QLabel(QStringLiteral("Git 历史"), titleBar);
-    title->setObjectName(QStringLiteral("historyTitle"));
-
     m_refreshButton = new QPushButton(QStringLiteral("刷新"), titleBar);
     m_refreshButton->setObjectName(QStringLiteral("historyRefreshButton"));
     m_refreshButton->setToolTip(QStringLiteral("重新读取提交历史"));
@@ -141,7 +109,6 @@ HistoryPanel::HistoryPanel(QWidget* parent)
     m_restoreButton->setToolTip(QStringLiteral("把工程回退到选中的提交"));
     m_restoreButton->setFocusPolicy(Qt::NoFocus);
 
-    titleLayout->addWidget(title);
     titleLayout->addStretch(1);
     titleLayout->addWidget(m_refreshButton);
     titleLayout->addWidget(m_restoreButton);
@@ -160,9 +127,14 @@ HistoryPanel::HistoryPanel(QWidget* parent)
     m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tree->setTextElideMode(Qt::ElideRight);
     m_tree->setAllColumnsShowFocus(true);
-    m_tree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_tree->setMinimumSize(0, 0);
+    m_tree->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_tree->header()->setMinimumSectionSize(40);
+    m_tree->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_tree->header()->setSectionResizeMode(1, QHeaderView::Interactive);
     m_tree->header()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_tree->header()->resizeSection(0, 120);
+    m_tree->header()->resizeSection(1, 68);
 
     auto* emptyPage = new QWidget(this);
     auto* emptyLayout = new QVBoxLayout(emptyPage);
@@ -175,6 +147,8 @@ HistoryPanel::HistoryPanel(QWidget* parent)
 
     m_stack = new QStackedWidget(this);
     m_stack->setObjectName(QStringLiteral("historyStack"));
+    m_stack->setMinimumSize(0, 0);
+    m_stack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_stack->addWidget(m_tree);
     m_stack->addWidget(emptyPage);
     root->addWidget(m_stack, 1);
@@ -184,9 +158,11 @@ HistoryPanel::HistoryPanel(QWidget* parent)
     auto* statusLayout = new QHBoxLayout(m_statusBar);
     statusLayout->setContentsMargins(8, 3, 6, 3);
     statusLayout->setSpacing(6);
-    m_statusLabel = new QLabel(m_statusBar);
+    m_statusLabel = new ElidingLabel(m_statusBar);
     m_statusLabel->setObjectName(QStringLiteral("historyStatusLabel"));
-    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_statusLabel->setMinimumWidth(0);
+    m_statusLabel->setWordWrap(false);
     statusLayout->addWidget(m_statusLabel, 1);
     root->addWidget(m_statusBar);
     m_statusBar->hide();
@@ -215,7 +191,7 @@ HistoryPanel::HistoryPanel(QWidget* parent)
 
 QSize HistoryPanel::sizeHint() const
 {
-    return QSize(460, 320);
+    return QSize(320, 260);
 }
 
 void HistoryPanel::setCommits(const QVector<store::GitCommit>& commits)
@@ -333,6 +309,7 @@ void HistoryPanel::updateStatus()
     if (text.isEmpty() && m_busy)
         text = QStringLiteral("处理中…");
     m_statusLabel->setText(text);
+    m_statusLabel->setToolTip(text);
     m_statusBar->setVisible(!text.isEmpty());
 }
 

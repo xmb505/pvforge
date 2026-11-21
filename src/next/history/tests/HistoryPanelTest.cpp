@@ -1,5 +1,6 @@
 #include "next/history/HistoryPanel.h"
 
+#include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -64,6 +65,9 @@ private slots:
     void busyDisablesButtonsAndShowsStatus();
     void commitLimitKeepsNewest();
     void selectionSurvivesRefresh();
+    void nativeThemeAndCompactDock();
+    void longStatusDoesNotGrowMinimumWidth();
+    void columnsStayInteractive();
 };
 
 void HistoryPanelTest::emptyState()
@@ -240,6 +244,42 @@ void HistoryPanelTest::selectionSurvivesRefresh()
     panel.setCommits({commits[0]});
     QVERIFY(panel.selectedHash().isEmpty());
     QVERIFY(!button(panel, "historyRestoreButton")->isEnabled());
+}
+
+void HistoryPanelTest::nativeThemeAndCompactDock()
+{
+    HistoryPanel panel;
+    QVERIFY(panel.styleSheet().isEmpty());
+    QVERIFY(!panel.testAttribute(Qt::WA_StyledBackground));
+    QVERIFY(panel.minimumWidth() <= 180);
+    QVERIFY(!label(panel, "historyTitle"));
+    QCOMPARE(panel.sizeHint(), QSize(320, 260));
+}
+
+void HistoryPanelTest::longStatusDoesNotGrowMinimumWidth()
+{
+    HistoryPanel panel;
+    panel.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&panel));
+    panel.setStatus(QString(200, QLatin1Char('x')));
+    QApplication::processEvents();
+
+    QVERIFY(panel.minimumSizeHint().width() <= 260);
+    panel.resize(220, 160);
+    QApplication::processEvents();
+    QCOMPARE(panel.size(), QSize(220, 160));
+    QCOMPARE(label(panel, "historyStatusLabel")->toolTip(),
+             QString(200, QLatin1Char('x')));
+}
+
+void HistoryPanelTest::columnsStayInteractive()
+{
+    HistoryPanel panel;
+    QHeaderView* header = tree(panel)->header();
+    QCOMPARE(header->sectionResizeMode(0), QHeaderView::Interactive);
+    QCOMPARE(header->sectionResizeMode(1), QHeaderView::Interactive);
+    QCOMPARE(header->sectionResizeMode(2), QHeaderView::Stretch);
+    QVERIFY(header->minimumSectionSize() >= 40);
 }
 
 QTEST_MAIN(HistoryPanelTest)
