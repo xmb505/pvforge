@@ -119,18 +119,22 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         const int lower = actions->minMoveDelta(clampRoots);
         delta = std::max(delta, lower);
         const int targetRow = dropRowForY(int(std::lround(pos.y())));
-        if (delta == 0 && targetRow == m_dragStartRow)
+        const int deltaRows = targetRow - m_dragStartRow;
+        if (delta == 0 && deltaRows == 0)
         {
             resetSessionPreview();
             return;
         }
-        // A multi-selection moves as one block in time; the pointer row only
-        // pins a single dragged clip.  Shared rows may split once the whole
-        // block shifts, so validation decides instead of a silent swap.
+        // A multi-selection moves as one block in time and rows; a single clip
+        // is pinned to the row under the pointer.  Shared rows may split once
+        // the whole block shifts, so validation decides instead of a silent
+        // swap.
         const bool multi = m_dragRoots.size() > 1;
-        if (multi ? !actions->planMove(m_dragRoots, delta, {}, &plan, &error)
-                  : !actions->planMoveToRow(uuid, delta, targetRow, &plan,
-                                            &error))
+        if (multi
+                ? !actions->planMoveClipsToRows(m_dragRoots, delta, deltaRows,
+                                                &plan, &error)
+                : !actions->planMoveToRow(uuid, delta, targetRow, &plan,
+                                          &error))
         {
             // A rejected plan (parent bounds, lock) restores the base preview;
             // the release handler reports the error once.
@@ -452,6 +456,7 @@ void TimelinePanel::finishSessionDrag()
     // Resolve the drop row before clearing the drag mode: the clamp uses the
     // rows captured when the gesture started.
     const int releaseRow = dropRowForY(int(std::lround(releasePos.y())));
+    const int releaseDeltaRows = releaseRow - m_dragStartRow;
     const QVector<Entity> baseEntities = m_sessionBaseSnapshot.entities;
 
     m_dragging = false;
@@ -513,23 +518,24 @@ void TimelinePanel::finishSessionDrag()
         }
 
         // Blank rows are first-class targets for a single clip.  A multi
-        // selection moves as one time block and keeps every row.
-        if (multi ? delta != 0
+        // selection moves as one time-and-row block and keeps its spacing.
+        if (multi ? (delta != 0 || releaseDeltaRows != 0)
                   : (releaseRow != m_dragStartRow || delta != 0))
         {
             EditPlan plan;
             QString error;
             const bool planned =
-                multi ? actions->planMove(dragRoots, delta, {}, &plan, &error)
+                multi ? actions->planMoveClipsToRows(
+                            dragRoots, delta, releaseDeltaRows, &plan, &error)
                       : actions->planMoveToRow(uuid, delta, releaseRow, &plan,
                                                &error);
-            if (planned)
+            if (planned && !plan.isEmpty())
             {
                 m_sessionPlan = plan;
                 m_sessionPlanValid = true;
                 m_moved = true;
             }
-            else if (!error.isEmpty())
+            else if (!planned && !error.isEmpty())
             {
                 emit editFailed(error);
             }

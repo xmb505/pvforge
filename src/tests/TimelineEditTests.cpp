@@ -1,6 +1,7 @@
 #include "TimelineEditTests.h"
 
 #include "TestApp.h"
+#include "TimelineRowMoveChecks.h"
 
 #include <QDockWidget>
 #include <QThread>
@@ -1025,6 +1026,11 @@ namespace pvf::tests {
 
 int runTimelineEditTest(QApplication& app)
 {
+    // Multi-clip vertical move lives in its own translation unit to keep this
+    // file under the size budget; it still runs as part of this test case.
+    if (runTimelineRowMoveChecks(app) != 0)
+        return 1;
+
     Q_UNUSED(app);
     QTemporaryDir temp;
     if (!temp.isValid())
