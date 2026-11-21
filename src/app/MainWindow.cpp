@@ -541,6 +541,8 @@ void MainWindow::buildSessionShell()
                                 int(std::lround(item.frame)) - it->start});
                         }
                         m_props->setSelectedKeyframes(refs);
+                        if (m_viewport)
+                            m_viewport->setSelectedKeyframes(refs);
                     });
             connect(m_timeline, &TimelinePanel::editCommitted, this,
                     [this](const QString& text) {

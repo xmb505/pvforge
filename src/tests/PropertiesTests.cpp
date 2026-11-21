@@ -315,20 +315,123 @@ int propertiesTest(QApplication& app)
                   QStringLiteral("single selected key edit created a playhead key")))
         return 1;
 
-    // Multi-selection edits only the playhead frame; the set itself is not
-    // rewritten or collapsed.
+    // Multi-selection: the edited field is absolutely overwritten on every
+    // selected key, while every other field keeps that key's own value.
+    {
+        auto& textEntity = live->mutableProject().entities[text];
+        Keyframe first = *pvf::model::keyframeAt(textEntity.keyframes, 0);
+        first.frame = 0;
+        first.x = 0.0;
+        first.rotation = 0.0;
+        first.note = QStringLiteral("第一帧");
+        Keyframe second = *pvf::model::keyframeAt(textEntity.keyframes, 10);
+        second.frame = 10;
+        second.x = 50.0;
+        second.rotation = 45.0;
+        second.note = QStringLiteral("第二帧");
+        Keyframe third;
+        third.frame = 20;
+        third.x = 100.0;
+        third.rotation = 90.0;
+        third.note = QStringLiteral("第三帧");
+        pvf::model::upsertKeyframe(textEntity.keyframes, first);
+        pvf::model::upsertKeyframe(textEntity.keyframes, second);
+        pvf::model::upsertKeyframe(textEntity.keyframes, third);
+        if (!document->commitEntity(text, QStringLiteral("batch setup"), &error))
+            return 1;
+        flush();
+    }
     panel->setSelectedKeyframes(
-        {pvf::KeyRef{text, 0}, pvf::KeyRef{text, 10}});
+        {pvf::KeyRef{text, 0}, pvf::KeyRef{text, 10}, pvf::KeyRef{text, 20}});
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    if (!check(status->text().contains(QStringLiteral("正在批量编辑"))
+                   && status->text().contains(QStringLiteral("3 个关键帧")),
+               QStringLiteral("batch status text wrong: %1").arg(status->text())))
+        return 1;
+    // An unselected playhead must not supply the displayed baseline: frame 7
+    // interpolates x=35, but the earliest selected key (frame 0) has x=0.
+    xSpin->clearFocus();
     live->setPlayhead(7);
     QApplication::processEvents();
-    rotationSpin->setValue(11.0);
+    if (!check(std::abs(xSpin->value()) < 1e-6,
+               QStringLiteral("batch display used the unselected playhead value: %1")
+                   .arg(xSpin->value())))
+        return 1;
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    before = depth();
+    xSpin->setValue(200.0);
     QApplication::processEvents();
     flush();
-    if (!check(keyAt(live, text, 7)
-                   && std::abs(keyAt(live, text, 7)->rotation - 11.0) < 1e-6,
-               QStringLiteral("multi-selection did not edit the playhead frame"))
-        || !check(panel->selectedKeyframeCount() == 2,
-                  QStringLiteral("multi-selection was collapsed by an edit")))
+    if (!check(countKeys(live, text) == 3,
+               QStringLiteral("batch x edit added or removed keys"))
+        || !check(keyAt(live, text, 0) && keyAt(live, text, 10)
+                      && keyAt(live, text, 20)
+                      && std::abs(keyAt(live, text, 0)->x - 200.0) < 1e-6
+                      && std::abs(keyAt(live, text, 10)->x - 200.0) < 1e-6
+                      && std::abs(keyAt(live, text, 20)->x - 200.0) < 1e-6,
+                  QStringLiteral("batch x did not rewrite all selected keys"))
+        || !check(std::abs(keyAt(live, text, 0)->rotation) < 1e-6
+                      && std::abs(keyAt(live, text, 10)->rotation - 45.0) < 1e-6
+                      && std::abs(keyAt(live, text, 20)->rotation - 90.0) < 1e-6,
+                  QStringLiteral("batch x clobbered per-key rotations"))
+        || !check(keyAt(live, text, 0)->note == QStringLiteral("第一帧")
+                      && keyAt(live, text, 10)->note == QStringLiteral("第二帧")
+                      && keyAt(live, text, 20)->note == QStringLiteral("第三帧"),
+                  QStringLiteral("batch x clobbered per-key notes"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("batch x edit was not one commit")))
+        return 1;
+
+    document->undo();
+    QApplication::processEvents();
+    if (!check(keyAt(live, text, 0)
+                   && std::abs(keyAt(live, text, 0)->x) < 1e-6
+                   && std::abs(keyAt(live, text, 10)->x - 50.0) < 1e-6
+                   && std::abs(keyAt(live, text, 20)->x - 100.0) < 1e-6,
+               QStringLiteral("one undo did not restore the batch edit")))
+        return 1;
+    document->redo();
+    QApplication::processEvents();
+
+    const int beforeEasing = depth();
+    auto* batchEasing = panel->findChild<QComboBox*>(
+        QStringLiteral("keyframeEasingGroup"));
+    if (!check(batchEasing, QStringLiteral("batch easing widget missing")))
+        return 1;
+    batchEasing->setCurrentIndex(
+        batchEasing->findData(QStringLiteral("easeinoutquad")));
+    QApplication::processEvents();
+    flush();
+    if (!check(keyAt(live, text, 0)
+                   && keyAt(live, text, 0)->easing.type
+                          == QStringLiteral("easeinoutquad")
+                   && keyAt(live, text, 10)->easing.type
+                          == QStringLiteral("easeinoutquad")
+                   && keyAt(live, text, 20)->easing.type
+                          == QStringLiteral("easeinoutquad"),
+               QStringLiteral("batch easing did not reach all selected keys"))
+        || !check(depth() == beforeEasing + 1,
+                  QStringLiteral("batch easing was not one commit")))
+        return 1;
+
+    auto* batchNote =
+        panel->findChild<QLineEdit*>(QStringLiteral("keyframeNote"));
+    if (!check(batchNote, QStringLiteral("batch note widget missing")))
+        return 1;
+    const int beforeNote = depth();
+    batchNote->setText(QStringLiteral("批量注释"));
+    QMetaObject::invokeMethod(batchNote, "editingFinished",
+                              Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(keyAt(live, text, 0)->note == QStringLiteral("批量注释")
+                   && keyAt(live, text, 10)->note == QStringLiteral("批量注释")
+                   && keyAt(live, text, 20)->note == QStringLiteral("批量注释"),
+               QStringLiteral("batch note did not reach all selected keys"))
+        || !check(depth() == beforeNote + 1,
+                  QStringLiteral("batch note was not one commit")))
         return 1;
 
     // Out of range: static parameters only, no key, status message.
@@ -397,6 +500,20 @@ int propertiesTest(QApplication& app)
                    && keyAt(live, text, 10)->note
                           == QStringLiteral("副歌第一拍"),
                QStringLiteral("keyframe note was not written")))
+        return 1;
+
+    // The delete button removes the whole multi-selection in one commit.
+    panel->setSelectedKeyframes(
+        {pvf::KeyRef{text, 10}, pvf::KeyRef{text, 20}});
+    QApplication::processEvents();
+    before = depth();
+    deleteKey->click();
+    QApplication::processEvents();
+    flush();
+    if (!check(!keyAt(live, text, 10) && !keyAt(live, text, 20),
+               QStringLiteral("batch delete did not remove every selected key"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("batch delete was not one commit")))
         return 1;
 
     // Content-animation parameters use the same whole-frame rule.

@@ -407,7 +407,97 @@ int sessionGizmoTest(QApplication& app)
         ++failures;
     }
 
-    // 7) Playback's whole-frame cache path: a live gizmo drag bypasses both
+    // 7) Multi-selected whole-frame keys: a stage gizmo drag applies the same
+    //    relative delta to every selected key and commits exactly once.  The
+    //    two keys have different x and rotation, so preserving each rotation
+    //    proves this is not a single playhead overwrite.
+    {
+        auto& batchEntity = sessionPtr->mutableProject().entities[uuid];
+        batchEntity.transform.x = 0.0;
+        batchEntity.transform.y = 0.0;
+        batchEntity.transform.rotation = 0.0;
+        pvf::model::Keyframe key0;
+        key0.frame = 0;
+        key0.x = 0.0;
+        key0.y = 0.0;
+        key0.rotation = 0.0;
+        pvf::model::Keyframe key10;
+        key10.frame = 10;
+        key10.x = 50.0;
+        key10.y = 0.0;
+        key10.rotation = 45.0;
+        batchEntity.keyframes = {key0, key10};
+        if (!document->commitEntity(uuid, QStringLiteral("batch key setup"),
+                                    &error))
+            return 1;
+        flushSession();
+        sessionPtr->setPlayhead(0);
+        viewport->setSelectedKeyframes(
+            {pvf::KeyRef{uuid, 0}, pvf::KeyRef{uuid, 10}});
+        QApplication::processEvents();
+
+        const int depthBeforeBatch = undoDepth();
+        const QPointF batchStart =
+            viewport->gizmoHandleForTest(uuid, pvf::gizmo::Handle::MoveX);
+        // Screen pixels -> model units; Ctrl disables snapping so the delta is
+        // exactly +100.  The selected keys start at x=0 and x=50.
+        mouse.drag(batchStart, batchStart + QPointF(100.0 * scale, 0.0),
+                   Qt::ControlModifier);
+        QApplication::processEvents();
+        flushSession();
+
+        const auto& afterBatch = sessionPtr->project().entities[uuid];
+        const pvf::model::Keyframe* batch0 =
+            pvf::model::keyframeAt(afterBatch.keyframes, 0);
+        const pvf::model::Keyframe* batch10 =
+            pvf::model::keyframeAt(afterBatch.keyframes, 10);
+        if (!batch0 || !batch10
+            || std::abs(batch0->x - 100.0) > 0.01
+            || std::abs(batch10->x - 150.0) > 0.01)
+        {
+            qCritical() << "gizmo-test: multi-key move was not a relative delta"
+                        << (batch0 ? batch0->x : -1.0)
+                        << (batch10 ? batch10->x : -1.0);
+            ++failures;
+        }
+        if (!batch0 || !batch10
+            || std::abs(batch0->rotation) > 1e-6
+            || std::abs(std::remainder(batch10->rotation - 45.0, 360.0))
+                   > 1e-6)
+        {
+            qCritical() << "gizmo-test: multi-key move changed rotations"
+                        << (batch0 ? batch0->rotation : -1.0)
+                        << (batch10 ? batch10->rotation : -1.0);
+            ++failures;
+        }
+        if (undoDepth() != depthBeforeBatch + 1)
+        {
+            qCritical() << "gizmo-test: multi-key drag was not one commit"
+                        << depthBeforeBatch << undoDepth();
+            ++failures;
+        }
+
+        document->undo();
+        QApplication::processEvents();
+        const auto& undone = sessionPtr->project().entities[uuid];
+        const pvf::model::Keyframe* undone0 =
+            pvf::model::keyframeAt(undone.keyframes, 0);
+        const pvf::model::Keyframe* undone10 =
+            pvf::model::keyframeAt(undone.keyframes, 10);
+        if (!undone0 || !undone10
+            || std::abs(undone0->x) > 0.01
+            || std::abs(undone10->x - 50.0) > 0.01)
+        {
+            qCritical() << "gizmo-test: one undo did not restore batch keys"
+                        << (undone0 ? undone0->x : -1.0)
+                        << (undone10 ? undone10->x : -1.0);
+            ++failures;
+        }
+        viewport->setSelectedKeyframes({});
+        QApplication::processEvents();
+    }
+
+    // 8) Playback's whole-frame cache path: a live gizmo drag bypasses both
     //    lookup and store; once released, the committed meta misses and the
     //    next cached-frame render refreshes the stored picture.  Paused stage
     //    paints draw vector content natively (blueprint #6), so this drives

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditActions.h"
 #include "common/Types.h"
 #include "core/EntityId.h"
 #include "gizmo/Gizmo.h"
@@ -62,6 +63,10 @@ public:
 
     void setCurrentFrame(int frame);
     void setSelectedEntity(EntityId id);
+    // Timeline whole-frame key selection.  A multi-selection on the current
+    // entity turns gizmo drags into relative deltas over every selected key.
+    void setSelectedKeyframes(const QVector<KeyRef>& selection);
+    QVector<KeyRef> selectedKeyframes() const { return m_selectedKeyframes; }
     void resetView();
 
     // Drops the cached render2 frame and repaints (document/media changes).
@@ -284,6 +289,17 @@ private:
     SessionDragKind m_sessionDragKind = SessionDragKind::None;
     Uuid m_sessionDragUuid;
     model::Entity m_sessionDragStart;
+
+    // Multi-key gesture: each selected whole-frame key's snapshot at press.
+    // Viewport deltas are applied relative to these, never to the playhead.
+    struct SessionDragKeyStart
+    {
+        int frame = 0;
+        model::Keyframe key;
+    };
+    QVector<KeyRef> m_selectedKeyframes;
+    QVector<SessionDragKeyStart> m_sessionDragKeyStart;
+    bool m_sessionDragMultiKey = false;
     gizmo::Handle m_sessionDragHandle = gizmo::Handle::MoveX;
     gizmo::Transform m_sessionDragTransform;
     gizmo::Bounds m_sessionDragBounds;

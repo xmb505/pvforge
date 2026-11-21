@@ -120,6 +120,20 @@ void Viewport::setSelectedEntity(EntityId id)
     update();
 }
 
+void Viewport::setSelectedKeyframes(const QVector<KeyRef>& selection)
+{
+    bool same = m_selectedKeyframes.size() == selection.size();
+    for (int i = 0; same && i < selection.size(); ++i)
+    {
+        same = m_selectedKeyframes.at(i).entity == selection.at(i).entity
+               && m_selectedKeyframes.at(i).frame == selection.at(i).frame;
+    }
+    if (same)
+        return;
+    m_selectedKeyframes = selection;
+    update();
+}
+
 void Viewport::setCameraFrameVisible(bool on)
 {
     if (m_showCameraFrame == on)

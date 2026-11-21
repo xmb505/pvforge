@@ -149,24 +149,57 @@ int PropertiesPanel::playheadRelative(const model::Entity& entity) const
     return playhead - entity.start;
 }
 
-int PropertiesPanel::selectedSingleKeyFrame(const model::Entity& entity) const
+QVector<int> PropertiesPanel::activeTargetKeyFrames(
+    const model::Entity& entity) const
 {
-    if (m_selectedKeys.size() != 1)
-        return -1;
-    const KeyRef& ref = m_selectedKeys.first();
-    if (ref.entity != entity.uuid
-        || !model::hasKeyframeAt(entity.keyframes, ref.frame))
-        return -1;
-    return ref.frame;
+    if (m_selectedKeys.isEmpty())
+        return {playheadRelative(entity)};
+
+    if (m_selectedKeys.size() == 1)
+    {
+        const KeyRef& ref = m_selectedKeys.first();
+        if (ref.entity == entity.uuid
+            && model::hasKeyframeAt(entity.keyframes, ref.frame))
+            return {ref.frame};
+        // A single selected key on another entity must not hijack this
+        // entity's playhead.
+        return {playheadRelative(entity)};
+    }
+
+    QVector<int> frames;
+    for (const KeyRef& ref : m_selectedKeys)
+    {
+        if (ref.entity == entity.uuid
+            && model::hasKeyframeAt(entity.keyframes, ref.frame))
+            frames.append(ref.frame);
+    }
+    std::sort(frames.begin(), frames.end());
+    frames.erase(std::unique(frames.begin(), frames.end()), frames.end());
+    return frames;
+}
+
+int PropertiesPanel::activeDisplayKeyFrame(const model::Entity& entity) const
+{
+    const QVector<int> targets = activeTargetKeyFrames(entity);
+    if (targets.isEmpty())
+        return playheadRelative(entity);
+    if (targets.size() == 1)
+        return targets.first();
+
+    const int playhead = playheadRelative(entity);
+    if (targets.contains(playhead))
+        return playhead;
+    return targets.first();
 }
 
 int PropertiesPanel::activeKeyFrame(const model::Entity& entity) const
 {
-    // One selected whole-frame key wins.  A multi-selection only affects
-    // offset/delete/copy, never the parameter write target.
-    const int selected = selectedSingleKeyFrame(entity);
-    if (selected >= 0)
-        return selected;
+    // Legacy single-target callers (solver conversion, copy/paste transform):
+    // one selected key wins.  Multi-selection keeps the old playhead target;
+    // the batch writers use activeTargetKeyFrames() instead.
+    const QVector<int> targets = activeTargetKeyFrames(entity);
+    if (!m_selectedKeys.isEmpty() && targets.size() == 1)
+        return targets.first();
     return playheadRelative(entity);
 }
 
@@ -273,6 +306,64 @@ int PropertiesPanel::prepareAnimationEdit(const model::Entity& entity)
     return activeKeyFrame(entity);
 }
 
+bool PropertiesPanel::applyBatchKeyframeEdit(
+    const QString& message,
+    const std::function<void(model::Keyframe&)>& mutate)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return false;
+    prepareAnimationEdit(*entity);
+    entity = sessionEntity();
+    if (!entity)
+        return false;
+
+    const QVector<int> targets = activeTargetKeyFrames(*entity);
+    if (targets.size() < 2)
+        return false;
+
+    QVector<int> writable;
+    QVector<int> blocked;
+    for (int frame : targets)
+    {
+        if (wholeframe::canWriteKeyAt(*entity, frame))
+            writable.append(frame);
+        else
+            blocked.append(frame);
+    }
+    if (writable.isEmpty())
+    {
+        QString reason;
+        if (!blocked.isEmpty())
+            wholeframe::canWriteKeyAt(*entity, blocked.first(), &reason);
+        reportSessionError(
+            reason.isEmpty()
+                ? QStringLiteral("选中的关键帧均位于显式求解段内，不能批量修改")
+                : reason);
+        refresh();
+        return false;
+    }
+    if (!blocked.isEmpty())
+        emit sessionStatusMessage(
+            QStringLiteral("已跳过 %1 个由显式求解段驱动的关键帧")
+                .arg(blocked.size()));
+
+    return runSessionEdit(
+        message, [this, writable, mutate](model::Entity& e) {
+            bool changed = false;
+            for (int frame : writable)
+            {
+                if (!wholeframe::canWriteKeyAt(e, frame))
+                    continue;
+                model::Keyframe key = wholeframe::keyAt(e, frame, m_session);
+                mutate(key);
+                model::upsertKeyframe(e.keyframes, key);
+                changed = true;
+            }
+            return changed;
+        });
+}
+
 bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
                                           bool boolean)
 {
@@ -281,11 +372,81 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
         return false;
 
     const int frame = prepareAnimationEdit(*entity);
-    const bool inRange = frame >= 0 && frame <= entity->duration();
+    entity = sessionEntity();
+    if (!entity)
+        return false;
+    const QVector<int> targets = activeTargetKeyFrames(*entity);
+    if (m_selectedKeys.size() > 1 && targets.isEmpty())
+    {
+        emit sessionStatusMessage(QStringLiteral(
+            "选中的关键帧不属于当前实体：未修改任何参数"));
+        return false;
+    }
     const bool camera = entity->content.kind == ContentKind::Camera;
     if (camera && (property == QLatin1String("scaleX")
                    || property == QLatin1String("scaleY")))
         value = std::clamp(std::abs(value), 0.05, 1.0);
+
+    if (targets.size() > 1)
+    {
+        QVector<int> writable;
+        QVector<int> blocked;
+        for (int target : targets)
+        {
+            if (wholeframe::canWriteKeyAt(*entity, target))
+                writable.append(target);
+            else
+                blocked.append(target);
+        }
+        if (writable.isEmpty())
+        {
+            QString reason;
+            if (!blocked.isEmpty())
+                wholeframe::canWriteKeyAt(*entity, blocked.first(), &reason);
+            reportSessionError(
+                reason.isEmpty()
+                    ? QStringLiteral("选中的关键帧均位于显式求解段内，不能批量修改")
+                    : reason);
+            refresh();
+            return false;
+        }
+        if (!blocked.isEmpty())
+            emit sessionStatusMessage(
+                QStringLiteral("已跳过 %1 个由显式求解段驱动的关键帧")
+                    .arg(blocked.size()));
+
+        return runSessionEdit(
+            QStringLiteral("pvf: batch edit %1").arg(property),
+            [this, property, value, boolean, camera,
+             writable](model::Entity& e) {
+                bool changed = false;
+                for (int target : writable)
+                {
+                    if (!wholeframe::canWriteKeyAt(e, target))
+                        continue;
+                    model::Keyframe key =
+                        wholeframe::keyAt(e, target, m_session);
+                    if (boolean)
+                        wholeframe::setBoolValue(key, property, value != 0.0);
+                    else
+                        wholeframe::setValue(key, property, value);
+                    if (camera && !boolean)
+                    {
+                        if (property == QLatin1String("scaleX"))
+                            key.scaleY =
+                                std::abs(value) > 1e-9 ? value : key.scaleY;
+                        else if (property == QLatin1String("scaleY"))
+                            key.scaleX =
+                                std::abs(value) > 1e-9 ? value : key.scaleX;
+                    }
+                    model::upsertKeyframe(e.keyframes, key);
+                    changed = true;
+                }
+                return changed;
+            });
+    }
+
+    const bool inRange = frame >= 0 && frame <= entity->duration();
 
     // A playhead inside an explicit solver segment is in range, but the frame
     // is driven and cannot accept a normal keyframe.  This is not the
@@ -355,8 +516,64 @@ bool PropertiesPanel::writeHtmlVariable(const QString& name, double value)
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
         return false;
+    if (entity->content.kind != ContentKind::Asset
+        || entity->content.asset.type != AssetType::Html)
+        return false;
 
-    const int frame = prepareAnimationEdit(*entity);
+    prepareAnimationEdit(*entity);
+    entity = sessionEntity();
+    if (!entity)
+        return false;
+    const QVector<int> targets = activeTargetKeyFrames(*entity);
+    if (m_selectedKeys.size() > 1 && targets.isEmpty())
+    {
+        emit sessionStatusMessage(QStringLiteral(
+            "选中的关键帧不属于当前实体：未修改任何 HTML 变量"));
+        return false;
+    }
+
+    if (targets.size() > 1)
+    {
+        QVector<int> writable;
+        QVector<int> blocked;
+        for (int target : targets)
+        {
+            if (target >= 0 && target <= entity->duration()
+                && wholeframe::canWriteKeyAt(*entity, target))
+                writable.append(target);
+            else
+                blocked.append(target);
+        }
+        if (writable.isEmpty())
+        {
+            reportSessionError(QStringLiteral(
+                "选中的关键帧均位于显式求解段内，不能批量写入 HTML 变量"));
+            refresh();
+            return false;
+        }
+        if (!blocked.isEmpty())
+            emit sessionStatusMessage(
+                QStringLiteral("已跳过 %1 个由显式求解段驱动的关键帧")
+                    .arg(blocked.size()));
+        return runSessionEdit(
+            QStringLiteral("pvf: batch edit HTML variable"),
+            [this, name, value, writable](model::Entity& e) {
+                bool changed = false;
+                for (int target : writable)
+                {
+                    if (!wholeframe::canWriteKeyAt(e, target))
+                        continue;
+                    model::Keyframe key =
+                        wholeframe::keyAt(e, target, m_session);
+                    wholeframe::setHtmlVar(key, name, value);
+                    model::upsertKeyframe(e.keyframes, key);
+                    changed = true;
+                }
+                return changed;
+            });
+    }
+
+    const int frame = activeKeyFrame(*entity);
     if (frame < 0 || frame > entity->duration())
     {
         emit sessionStatusMessage(QStringLiteral(
@@ -389,18 +606,40 @@ void PropertiesPanel::deleteActiveKeyframe()
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
         return;
-    const int frame = activeKeyFrame(*entity);
-    if (!model::hasKeyframeAt(entity->keyframes, frame))
+
+    QVector<KeyRef> refs;
+    for (int frame : activeTargetKeyFrames(*entity))
+    {
+        if (model::hasKeyframeAt(entity->keyframes, frame))
+            refs.append(KeyRef{entity->uuid, frame});
+    }
+    if (refs.isEmpty())
         return;
+
     m_editing = true;
     QString error;
-    const bool ok = m_session->editActions()->deleteKeyframes(
-        {KeyRef{entity->uuid, frame}}, &error);
+    const bool ok = m_session->editActions()->deleteKeyframes(refs, &error);
     m_editing = false;
     if (!ok)
+    {
         reportSessionError(error);
+    }
     else
-        m_selectedKeys.clear();
+    {
+        // Drop only this entity's deleted keys; a cross-entity selection keeps
+        // the other entities' entries.
+        QVector<KeyRef> remaining;
+        for (const KeyRef& ref : m_selectedKeys)
+        {
+            bool removed = false;
+            for (const KeyRef& deleted : refs)
+                if (ref.entity == deleted.entity && ref.frame == deleted.frame)
+                    removed = true;
+            if (!removed)
+                remaining.append(ref);
+        }
+        m_selectedKeys = remaining;
+    }
     refresh();
 }
 
@@ -413,7 +652,7 @@ void PropertiesPanel::refreshPlayheadOnly()
         return;
 
     m_frame = m_session->playhead();
-    const int relative = activeKeyFrame(*entity);
+    const int relative = activeDisplayKeyFrame(*entity);
     const bool inRange = relative >= 0 && relative <= entity->duration();
     const bool editable = sessionEditable();
 
@@ -512,24 +751,43 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
 {
     if (!m_keyStatus || !m_keyDelete)
         return;
-    const int frame = activeKeyFrame(entity);
+    const QVector<int> targets = activeTargetKeyFrames(entity);
+    const bool batch = targets.size() > 1;
+    const bool foreignSelection =
+        m_selectedKeys.size() > 1 && targets.isEmpty();
+    const int frame = activeDisplayKeyFrame(entity);
     const bool inRange = frame >= 0 && frame <= entity.duration();
-    const bool hasKey = inRange && model::hasKeyframeAt(entity.keyframes, frame);
+    const bool hasKey =
+        !foreignSelection && inRange
+        && model::hasKeyframeAt(entity.keyframes, frame);
     const bool editable = sessionEditable();
     const int displayFrame = entity.start + frame;
 
     QFont statusFont = m_keyStatus->font();
-    statusFont.setBold(hasKey);
+    statusFont.setBold(hasKey || batch);
     m_keyStatus->setFont(statusFont);
     QPalette statusPalette = m_keyStatus->palette();
     // Use the untouched Text role as the normal colour: WindowText itself is
     // rewritten below on every refresh.
     statusPalette.setColor(
         QPalette::WindowText,
-        hasKey ? statusPalette.color(QPalette::Text)
-               : statusPalette.color(QPalette::Disabled, QPalette::WindowText));
+        (hasKey || batch)
+            ? statusPalette.color(QPalette::Text)
+            : statusPalette.color(QPalette::Disabled, QPalette::WindowText));
     m_keyStatus->setPalette(statusPalette);
-    if (hasKey)
+    if (batch)
+    {
+        m_keyStatus->setText(
+            QStringLiteral("◆ 正在批量编辑：已选中 %1 个关键帧"
+                           "（修改任意参数将同步更新这 %1 帧）")
+                .arg(targets.size()));
+    }
+    else if (foreignSelection)
+    {
+        m_keyStatus->setText(QStringLiteral(
+            "◆ 已选中其他实体的关键帧（当前实体没有可批量编辑的帧）"));
+    }
+    else if (hasKey)
     {
         m_keyStatus->setText(
             QStringLiteral("◆ 正在编辑：第 %1 帧（整帧关键帧）").arg(displayFrame));
@@ -542,10 +800,11 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
             QStringLiteral("▶ 播放针第 %1 帧（当前无关键帧，改任意参数自动新建）")
                 .arg(displayPlayhead));
     }
-    m_keyDelete->setEnabled(editable && hasKey);
-    m_keyDelete->setToolTip(hasKey
-                                ? QStringLiteral("整帧删除当前关键帧")
-                                : QStringLiteral("当前帧没有关键帧"));
+    m_keyDelete->setEnabled(editable && (hasKey || batch));
+    m_keyDelete->setToolTip(
+        batch ? QStringLiteral("整批删除选中的 %1 个关键帧").arg(targets.size())
+            : hasKey ? QStringLiteral("整帧删除当前关键帧")
+                     : QStringLiteral("当前帧没有关键帧"));
 
     const model::Keyframe* key =
         hasKey ? model::keyframeAt(entity.keyframes, frame) : nullptr;
@@ -736,7 +995,7 @@ void PropertiesPanel::refreshSession()
         setAudioSpin(m_audioTrimStart, trimStart, maximum);
         setAudioSpin(m_audioTrimEnd, trimEnd, maximum);
         {
-            const int audioFrame = activeKeyFrame(*entity);
+            const int audioFrame = activeDisplayKeyFrame(*entity);
             double volume = assetContent.volume;
             if (audioFrame >= 0 && audioFrame <= entity->duration())
             {
@@ -799,7 +1058,7 @@ void PropertiesPanel::refreshSession()
     if (m_parentLabel)
         m_parentLabel->show();
 
-    const int relative = activeKeyFrame(*entity);
+    const int relative = activeDisplayKeyFrame(*entity);
     const bool inRange = relative >= 0 && relative <= entity->duration();
 
     for (Row& row : m_rows)

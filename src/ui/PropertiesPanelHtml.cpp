@@ -310,7 +310,7 @@ void PropertiesPanel::reloadSessionHtml(const model::Entity& entity)
 
 void PropertiesPanel::reloadSessionHtmlValues(const model::Entity& entity)
 {
-    const int relative = activeKeyFrame(entity);
+    const int relative = activeDisplayKeyFrame(entity);
     const bool inRange = relative >= 0 && relative <= entity.duration();
     const bool editable = sessionEditable();
 

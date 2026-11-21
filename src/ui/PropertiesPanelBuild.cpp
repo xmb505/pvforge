@@ -280,9 +280,6 @@ void PropertiesPanel::buildSessionUi()
         const model::Entity* entity = sessionEntity();
         if (!entity || !sessionEditable())
             return;
-        const int frame = activeKeyFrame(*entity);
-        if (!model::hasKeyframeAt(entity->keyframes, frame))
-            return;
         if (type == QLatin1String("bezier"))
         {
             promptGroupBezier();
@@ -290,6 +287,16 @@ void PropertiesPanel::buildSessionUi()
         }
         model::EasingSpec spec;
         spec.type = model::canonicalEasingName(type);
+        if (activeTargetKeyFrames(*entity).size() > 1)
+        {
+            applyBatchKeyframeEdit(
+                QStringLiteral("pvf: batch set keyframe easing"),
+                [spec](model::Keyframe& key) { key.easing = spec; });
+            return;
+        }
+        const int frame = activeKeyFrame(*entity);
+        if (!model::hasKeyframeAt(entity->keyframes, frame))
+            return;
         m_editing = true;
         QString error;
         const bool ok = m_session->editActions()->setKeyframeEasing(
@@ -314,14 +321,36 @@ void PropertiesPanel::buildSessionUi()
         const model::Entity* entity = sessionEntity();
         if (!entity || !sessionEditable())
             return;
+        const QString note = m_keyNote->text();
+        if (activeTargetKeyFrames(*entity).size() > 1)
+        {
+            bool allSame = true;
+            for (int frame : activeTargetKeyFrames(*entity))
+            {
+                const model::Keyframe* key =
+                    model::keyframeAt(entity->keyframes, frame);
+                if (!key || key->note != note)
+                {
+                    allSame = false;
+                    break;
+                }
+            }
+            if (allSame)
+                return;
+            if (!applyBatchKeyframeEdit(
+                    QStringLiteral("pvf: batch set keyframe note"),
+                    [note](model::Keyframe& key) { key.note = note; }))
+                refresh();
+            return;
+        }
         const int frame = activeKeyFrame(*entity);
         const model::Keyframe* key = model::keyframeAt(entity->keyframes, frame);
-        if (!key || key->note == m_keyNote->text())
+        if (!key || key->note == note)
             return;
         m_editing = true;
         QString error;
         const bool ok = m_session->editActions()->setKeyframeNote(
-            {KeyRef{entity->uuid, frame}}, m_keyNote->text(), &error);
+            {KeyRef{entity->uuid, frame}}, note, &error);
         m_editing = false;
         if (!ok)
             reportSessionError(error);
