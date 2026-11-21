@@ -277,7 +277,8 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程宽度"))},
             {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("1..4096，默认工程高度"))},
             {QStringLiteral("background"), prop(QStringLiteral("string"), QStringLiteral("CSS 颜色"))},
-            {QStringLiteral("path"), prop(QStringLiteral("string"), QStringLiteral("临时 PNG 路径"))},
+            {QStringLiteral("includeBase64"),
+             prop(QStringLiteral("boolean"), QStringLiteral("在返回 JSON 里附带 PNG base64；不传则只给临时 path"))},
         });
     }
     if (topic == QLatin1String("view"))
