@@ -10,6 +10,7 @@
 #include <QStringList>
 #include <QVariant>
 #include <QVariantMap>
+#include <QVector>
 
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,10 @@
 namespace pvf::workbench {
 namespace {
 
-constexpr quint32 kMetaFormat = 3;
+// Bumped from 3 when the absolute project frame number and per-frame audio
+// playback state were removed: a cached frame now describes only the picture,
+// so replacing the format keeps pre-existing rows from ever comparing equal.
+constexpr quint32 kMetaFormat = 4;
 
 // Explicit, ordered QVariant serialisation.  QVariant's own stream operator is
 // stable for a given Qt build but depends on the exact stored type, while
@@ -112,27 +116,136 @@ bool activeAt(const model::Entity& entity, int frame)
     return frame >= entity.start && frame <= entity.end;
 }
 
-// Every entity visible at this frame, plus the chain of parents whose
-// transforms/visibility feed into those entities.  An inactive parent is still
-// included when an active child inherits from it, but inactive siblings are
-// not: editing an entity in another clip cannot invalidate this frame.
-QSet<Uuid> collectEntities(const model::Project& project, int frame)
+bool isAudio(const model::Entity& entity)
 {
-    QSet<Uuid> result;
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
+    return entity.content.kind == ContentKind::Asset
+           && entity.content.asset.type == AssetType::Audio;
+}
+
+// Content kinds that put pixels on the canvas.  Camera and Empty entities only
+// contribute a transform (to their children) and audio never contributes at
+// all, so a standalone one must not enter the frame meta.
+bool paintsPixels(const model::Entity& entity)
+{
+    switch (entity.content.kind)
     {
-        if (!activeAt(it.value(), frame))
+    case ContentKind::Text:
+    case ContentKind::Vector:
+        return true;
+    case ContentKind::Asset: {
+        const AssetType type = entity.content.asset.type;
+        return type == AssetType::Image || type == AssetType::Video
+               || type == AssetType::Html;
+    }
+    case ContentKind::Camera:
+    case ContentKind::Empty:
+        return false;
+    }
+    return false;
+}
+
+// Mirrors RenderScene's editor-hidden propagation: `hidden` also hides a child
+// that inherits visibility, and the flag follows the same chain down.
+bool editorHiddenAt(const model::Project& project, const Uuid& uuid)
+{
+    QVector<const model::Entity*> chain;
+    QSet<Uuid> visited;
+    Uuid current = uuid;
+    while (!current.isEmpty() && !visited.contains(current))
+    {
+        visited.insert(current);
+        const auto found = project.entities.constFind(current);
+        if (found == project.entities.constEnd())
+            break;
+        chain.prepend(&found.value());
+        current = found->parentUuid;
+    }
+
+    bool hidden = false;
+    for (const model::Entity* entity : chain)
+        hidden = entity->hidden || (hidden && entity->inheritVisibility);
+    return hidden;
+}
+
+struct FrameEntities
+{
+    QSet<Uuid> uuids;
+    QHash<Uuid, anim::Pose> poses;
+    bool hasRaster = false;
+};
+
+// Every entity that can paint at this frame, plus the parent chain whose
+// transforms/visibility feed into it.  An inactive parent is still included
+// when a drawing child inherits from it, but inactive siblings are not:
+// editing an entity in another clip cannot invalidate this frame.
+//
+// Entities that cannot change the picture are deliberately left out:
+//   - audio assets (no pixels, and their sourceFrame advances every frame);
+//   - invisible/editor-hidden leaves (opacity <= 0, !visible, hidden) when no
+//     visible child depends on them (an invisible physics collider is kept
+//     because it can still move the visible entities that hit it);
+//   - standalone Camera/Empty entities (only their children can paint).
+// Audio or invisible ancestors of a visible child are still serialised to keep
+// transform inheritance, but writeAssetDetails() omits their playback state.
+FrameEntities collectEntities(const model::Project& project, int frame,
+                              render2::SceneWorld& world, anim::Cache& cache)
+{
+    FrameEntities result;
+
+    // Evaluate in UUID order instead of QHash order: pose evaluation may fill
+    // shared caches, and the serialised bytes must not depend on bucket order.
+    QStringList activeUuids;
+    for (auto it = project.entities.constBegin();
+         it != project.entities.constEnd(); ++it)
+    {
+        if (activeAt(it.value(), frame))
+            activeUuids.append(it.key());
+    }
+    std::sort(activeUuids.begin(), activeUuids.end());
+
+    for (const Uuid& uuid : activeUuids)
+    {
+        const auto found = project.entities.constFind(uuid);
+        if (found == project.entities.constEnd())
+            continue;
+        const model::Entity& entity = found.value();
+
+        const anim::Pose pose =
+            anim::evaluateEntity(project, uuid, frame, world, cache);
+        result.poses.insert(uuid, pose);
+
+        const bool draws = paintsPixels(entity) && pose.visible
+                           && pose.opacity > 0.0
+                           && !editorHiddenAt(project, uuid);
+        // An invisible entity normally cannot change the picture, but a
+        // physics collider still moves the visible entities that hit it.
+        if (!draws && !entity.physicsInteract)
             continue;
 
+        result.uuids.insert(uuid);
+        if (draws && entity.content.kind == ContentKind::Asset)
+        {
+            const AssetType type = entity.content.asset.type;
+            if (type == AssetType::Image || type == AssetType::Video
+                || type == AssetType::Html)
+                result.hasRaster = true;
+        }
+
         QSet<Uuid> visited;
-        Uuid current = it.key();
+        Uuid current = entity.parentUuid;
         while (!current.isEmpty() && !visited.contains(current))
         {
             visited.insert(current);
             const auto found = project.entities.constFind(current);
             if (found == project.entities.constEnd())
                 break;
-            result.insert(current);
+            result.uuids.insert(current);
+            if (!result.poses.contains(current))
+            {
+                result.poses.insert(
+                    current,
+                    anim::evaluateEntity(project, current, frame, world, cache));
+            }
             current = found->parentUuid;
         }
     }
@@ -180,15 +293,24 @@ void writeAssetDetails(QDataStream& out, const model::Entity& entity, int frame,
                        int fps, const assets::StoredAsset* stored)
 {
     const model::AssetContent& asset = entity.content.asset;
-    out << asset.sourceIn << asset.volume;
+
+    // Audio never paints.  It can only reach this function as an ancestor of a
+    // visible entity that inherits its transform, and its per-frame playback
+    // state (sourceFrame) and volume must not make the picture key miss.
+    if (isAudio(entity))
+        return;
+
     out << bool(stored != nullptr);
 
-    // Actual source frame requested from a timed asset.  Video and audio share
-    // the sourceIn + (frame - start) rule; images ignore sourceIn.
-    qint64 sourceFrame = -1;
-    if (asset.type == AssetType::Video || asset.type == AssetType::Audio)
-        sourceFrame = qint64(asset.sourceIn) + (frame - entity.start);
-    out << sourceFrame;
+    if (asset.type == AssetType::Video)
+    {
+        // Actual source frame requested from a timed video.  Images ignore
+        // sourceIn and HTML has its own request frame/variables below.
+        out << asset.sourceIn << asset.volume;
+        const qint64 sourceFrame =
+            qint64(asset.sourceIn) + (frame - entity.start);
+        out << sourceFrame;
+    }
 
     QVariantMap defaults;
     QVariantMap overrides;
@@ -296,7 +418,7 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     out.setFloatingPointPrecision(QDataStream::DoublePrecision);
 
     out << kMetaFormat;
-    out << qint32(frame) << qint32(m_project.settings.fps)
+    out << qint32(m_project.settings.fps)
         << qint32(m_project.settings.width) << qint32(m_project.settings.height)
         << m_project.settings.background << options.targetSize
         << qint32(options.scalePercent) << qint32(options.expandPercent)
@@ -309,11 +431,9 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
 
     out << cameraPose.world << cameraPose.opacity << cameraPose.visible;
 
-    QSet<Uuid> collected = collectEntities(m_project, frame);
-    QStringList uuids = collected.values();
+    const FrameEntities collected = collectEntities(m_project, frame, world, cache);
+    QStringList uuids = collected.uuids.values();
     std::sort(uuids.begin(), uuids.end());
-
-    bool hasRaster = false;
 
     out << quint32(uuids.size());
     for (const Uuid& uuid : uuids)
@@ -322,17 +442,7 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
         if (found == m_project.entities.constEnd())
             continue;
         const model::Entity& entity = found.value();
-
-        if (!hasRaster && activeAt(entity, frame) && !entity.hidden
-            && entity.visible && entity.content.kind == ContentKind::Asset)
-        {
-            const AssetType type = entity.content.asset.type;
-            hasRaster = type == AssetType::Image || type == AssetType::Video
-                        || type == AssetType::Html;
-        }
-
-        const anim::Pose pose =
-            anim::evaluateEntity(m_project, uuid, frame, world, cache);
+        const anim::Pose pose = collected.poses.value(uuid);
 
         out << entity.uuid << entity.parentUuid << qint32(entity.row)
             << entity.hidden << entity.visible << entity.inheritVisibility;
@@ -352,7 +462,7 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     FrameMeta meta;
     meta.bytes = buffer;
     meta.sha1 = QCryptographicHash::hash(buffer, QCryptographicHash::Sha1);
-    meta.hasRaster = hasRaster;
+    meta.hasRaster = collected.hasRaster;
     return meta;
 }
 
