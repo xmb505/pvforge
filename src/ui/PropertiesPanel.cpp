@@ -579,7 +579,8 @@ bool PropertiesPanel::writeHtmlVariable(const QString& name, double value)
         QVector<int> blocked;
         for (int target : targets)
         {
-            if (target >= 0 && target <= entity->duration()
+            // Closed range: duration() itself is already outside the clip.
+            if (target >= 0 && target < entity->duration()
                 && wholeframe::canWriteKeyAt(*entity, target))
                 writable.append(target);
             else
@@ -615,7 +616,7 @@ bool PropertiesPanel::writeHtmlVariable(const QString& name, double value)
     }
 
     const int frame = activeKeyFrame(*entity);
-    if (frame < 0 || frame > entity->duration())
+    if (frame < 0 || frame >= entity->duration())
     {
         emit sessionStatusMessage(QStringLiteral(
             "播放针不在实体范围内：HTML 变量只能存进整帧关键帧"));
@@ -797,7 +798,7 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
     const bool foreignSelection =
         m_selectedKeys.size() > 1 && targets.isEmpty();
     const int frame = activeDisplayKeyFrame(entity);
-    const bool inRange = frame >= 0 && frame <= entity.duration();
+    const bool inRange = frame >= 0 && frame < entity.duration();
     const bool hasKey =
         !foreignSelection && inRange
         && model::hasKeyframeAt(entity.keyframes, frame);

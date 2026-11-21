@@ -1282,7 +1282,26 @@ int htmlVarsTest(QApplication& app)
         return 1;
 
     panel->setSelectedKeyframes({});
-    live->setPlayhead(200);
+    // Closed range [0, 120]: the end frame itself is writable...
+    live->setPlayhead(120);
+    QApplication::processEvents();
+    before = depth();
+    speedSpin->setValue(7.0);
+    QMetaObject::invokeMethod(speedSpin, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(keyAt(live, uuid, 120)
+                   && keyAt(live, uuid, 120)
+                          ->htmlVars.value(QStringLiteral("speed"))
+                          .toDouble()
+                      == 7.0,
+               QStringLiteral("HTML edit did not key the closed end frame"))
+        || !check(depth() == before + 1,
+                  QStringLiteral("end-frame HTML edit was not one commit")))
+        return 1;
+
+    // ...but frame == duration (end + 1) is outside and must not commit.
+    live->setPlayhead(121);
     QApplication::processEvents();
     lastError.clear();
     before = depth();
@@ -1294,6 +1313,20 @@ int htmlVarsTest(QApplication& app)
                QStringLiteral("out-of-range HTML edit added a commit"))
         || !check(lastError.contains(QStringLiteral("范围")),
                   QStringLiteral("out-of-range HTML edit did not report")))
+        return 1;
+
+    live->setPlayhead(200);
+    QApplication::processEvents();
+    lastError.clear();
+    before = depth();
+    speedSpin->setValue(8.0);
+    QMetaObject::invokeMethod(speedSpin, "editingFinished", Qt::DirectConnection);
+    QApplication::processEvents();
+    flush();
+    if (!check(depth() == before,
+               QStringLiteral("far out-of-range HTML edit added a commit"))
+        || !check(lastError.contains(QStringLiteral("范围")),
+                  QStringLiteral("far out-of-range HTML edit did not report")))
         return 1;
 
     window->close();
