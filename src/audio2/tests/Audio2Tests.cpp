@@ -16,8 +16,10 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
+#include <utility>
 
 using namespace pvf;
 using namespace pvf::model;
@@ -176,6 +178,24 @@ double maxDifference(const QByteArray& first, const QByteArray& second)
                               std::abs(double(a[i]) - double(b[i])));
     }
     return difference;
+}
+
+QByteArray reverseSampleFrames(const QByteArray& pcm, int channels)
+{
+    QByteArray reversed = pcm;
+    auto* samples = reinterpret_cast<float*>(reversed.data());
+    const int values = reversed.size() / int(sizeof(float));
+    const int frames = values / channels;
+    for (int i = 0; i < frames / 2; ++i)
+    {
+        const int opposite = frames - 1 - i;
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            std::swap(samples[i * channels + channel],
+                      samples[opposite * channels + channel]);
+        }
+    }
+    return reversed;
 }
 
 double peak(const QByteArray& pcm)
@@ -438,6 +458,140 @@ void testNoAudio()
 
     CHECK(audio2::mixRange(project, store, mixOptions(0, 30)).isEmpty());
     CHECK(audio2::mixRange(project, store, mixOptions(10, 10)).isEmpty());
+}
+
+void testScrubSlice()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    // A full-scale ramp makes every sample frame asymmetric, so a reversed
+    // blip cannot pass as a forward one by accident.
+    const int sourceSamples = kSampleRate * 2;
+    QString error;
+    const auto asset = store.importFile(
+        writeWav(directory.path() + QStringLiteral("/ramp.wav"), kSampleRate,
+                 sourceSamples,
+                 [sourceSamples](int i) {
+                     return -0.8
+                            + 1.6 * double(i) / double(sourceSamples - 1);
+                 }),
+        &error);
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    addAudioEntity(project, QStringLiteral("ramp"), asset->hash, 0, 59);
+
+    for (const int fps : std::array<int, 3>{24, 30, 48})
+    {
+        const int samplesPerFrame = kSampleRate / fps;
+        const QByteArray forward =
+            audio2::buildScrubSlice(project, store, 10, 11, fps);
+        const QByteArray backward =
+            audio2::buildScrubSlice(project, store, 11, 10, fps);
+        CHECK(outputFrames(forward) == samplesPerFrame);
+        CHECK(outputFrames(backward) == samplesPerFrame);
+        CHECK(forward.size() == backward.size());
+        if (forward.size() != backward.size())
+            continue;
+
+        // Both calls traverse the same half-open range, so the left move is
+        // the exact sample-frame reversal of the right move (the symmetric
+        // de-click ramp reverses with it).
+        CHECK(maxDifference(backward, reverseSampleFrames(forward, kChannels))
+              < 1.0e-6);
+        CHECK(maxDifference(forward, backward) > 1.0e-4);
+
+        // The interior must also reverse when the 2 ms envelope is excluded.
+        const int fade = std::min(
+            samplesPerFrame / 2, std::max(1, kSampleRate * 2 / 1000));
+        const auto* f = reinterpret_cast<const float*>(forward.constData());
+        const auto* b = reinterpret_cast<const float*>(backward.constData());
+        double interiorDifference = 0.0;
+        for (int i = fade; i < samplesPerFrame - fade; ++i)
+        {
+            for (int channel = 0; channel < kChannels; ++channel)
+            {
+                const int tail = samplesPerFrame - 1 - i;
+                interiorDifference = std::max(
+                    interiorDifference,
+                    std::abs(double(b[i * kChannels + channel])
+                             - double(f[tail * kChannels + channel])));
+            }
+        }
+        CHECK(interiorDifference < 1.0e-6);
+
+        // De-click: both endpoints are silent.
+        CHECK(std::abs(double(f[0])) < 1.0e-6);
+        CHECK(std::abs(double(f[(samplesPerFrame - 1) * kChannels]))
+              < 1.0e-6);
+    }
+
+    // Three-frame blips stay three frames and reverse as a whole.
+    const QByteArray forward3 =
+        audio2::buildScrubSlice(project, store, 10, 13, 30);
+    const QByteArray backward3 =
+        audio2::buildScrubSlice(project, store, 13, 10, 30);
+    CHECK(outputFrames(forward3) == 3 * (kSampleRate / 30));
+    CHECK(outputFrames(backward3) == 3 * (kSampleRate / 30));
+    CHECK(maxDifference(backward3, reverseSampleFrames(forward3, kChannels))
+          < 1.0e-6);
+    CHECK(maxDifference(forward3, backward3) > 1.0e-3);
+
+    // A long drag is capped to the last three traversed frames.
+    CHECK(outputFrames(audio2::buildScrubSlice(project, store, 0, 40, 30))
+          == 3 * (kSampleRate / 30));
+    CHECK(outputFrames(audio2::buildScrubSlice(project, store, 40, 0, 30))
+          == 3 * (kSampleRate / 30));
+
+    // Empty ranges and projects without audio are silent, not a crash.
+    CHECK(audio2::buildScrubSlice(project, store, 5, 5, 30).isEmpty());
+    Project silent = makeProject();
+    CHECK(audio2::buildScrubSlice(silent, store, 0, 1, 30).isEmpty());
+}
+
+void testScrubPlayback()
+{
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    assets::AssetStore store(directory.path());
+
+    QString error;
+    const auto asset = store.importFile(
+        writeToneWav(directory.path() + QStringLiteral("/tone.wav"), 440.0,
+                     0.5),
+        &error);
+    CHECK(asset.has_value());
+    if (!asset)
+        return;
+
+    Project project = makeProject();
+    addAudioEntity(project, QStringLiteral("tone"), asset->hash, 0, 30);
+
+    audio2::Playback playback(project, store);
+    CHECK(!playback.isPlaying());
+    CHECK(!playback.scrub(10, 10, 30)); // empty range
+    if (QMediaDevices::defaultAudioOutput().isNull())
+    {
+        // No device: safe no-op, never an exception or a stuck state.
+        CHECK(!playback.scrub(10, 11, 30));
+        CHECK(!playback.isPlaying());
+    }
+
+#ifdef PVFORGE_TEST_HOOKS
+    // A scrub may never interrupt the main playback stream.  Forcing the
+    // playing flag is the only way to exercise this without a device.
+    playback.setPlayingForTest(true);
+    CHECK(!playback.scrub(10, 11, 30));
+    CHECK(playback.isPlaying());
+    CHECK(playback.startFrame() == 0);
+    CHECK(playback.endFrame() == 0);
+    playback.stop();
+    CHECK(!playback.isPlaying());
+#endif
 }
 
 void testHiddenAndInvisible()
@@ -808,6 +962,16 @@ int main(int argc, char** argv){
     {
         known = true;
         testNoAudio();
+    }
+    if (run("scrubSlice"))
+    {
+        known = true;
+        testScrubSlice();
+    }
+    if (run("scrubPlayback"))
+    {
+        known = true;
+        testScrubPlayback();
     }
     if (run("hiddenAndInvisible"))
     {

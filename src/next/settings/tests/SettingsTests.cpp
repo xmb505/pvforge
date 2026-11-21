@@ -52,6 +52,7 @@ void verifySettingsEqual(const AppSettings& actual, const AppSettings& expected)
     QCOMPARE(actual.workbenchCacheMemoryBytes, expected.workbenchCacheMemoryBytes);
     QCOMPARE(actual.workbenchCacheWriterThreads,
              expected.workbenchCacheWriterThreads);
+    QCOMPARE(actual.audioScrub, expected.audioScrub);
     QCOMPARE(actual.snapPixels, expected.snapPixels);
     QCOMPARE(actual.snapCanvasCenter, expected.snapCanvasCenter);
     QCOMPARE(actual.snapEntityEdges, expected.snapEntityEdges);
@@ -141,6 +142,7 @@ void SettingsTests::storeRoundTrip()
     expected.videoProxyEnabled = false;
     expected.videoProxyWidth = 1280;
     expected.videoMemoryFrames = 128;
+    expected.audioScrub = false;
     expected.mcpPort = 51234;
     expected.humanCommitDelayMs = 2500;
     expected.gitEnabled = true;
@@ -162,6 +164,7 @@ void SettingsTests::storeRoundTrip()
     QVERIFY(raw.contains(QStringLiteral("video/proxyEnabled")));
     QVERIFY(raw.contains(QStringLiteral("video/proxyWidth")));
     QVERIFY(raw.contains(QStringLiteral("video/memoryFrames")));
+    QVERIFY(raw.contains(QStringLiteral("editor/audioScrub")));
     QVERIFY(raw.contains(QStringLiteral("mcp/port")));
     QVERIFY(raw.contains(QStringLiteral("git/humanCommitDelayMs")));
     QVERIFY(raw.contains(QStringLiteral("git/enabled")));
@@ -540,8 +543,10 @@ void SettingsTests::editorDialogRoundTrip()
     QVERIFY(!findWidget<QCheckBox>(dialog, "snapAngle30")->isChecked());
     QVERIFY(!findWidget<QCheckBox>(dialog, "snapAngle45")->isChecked());
     QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle90")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "audioScrub")->isChecked());
 
     findWidget<QSpinBox>(dialog, "snapPixels")->setValue(20);
+    findWidget<QCheckBox>(dialog, "audioScrub")->setChecked(false);
     findWidget<QSpinBox>(dialog, "autoSaveMinutes")->setValue(12);
     findWidget<QCheckBox>(dialog, "snapCanvasCenter")->setChecked(false);
     findWidget<QCheckBox>(dialog, "snapEntityEdges")->setChecked(false);
@@ -550,6 +555,7 @@ void SettingsTests::editorDialogRoundTrip()
     findWidget<QCheckBox>(dialog, "snapAngle45")->setChecked(true);
 
     const AppSettings edited = dialog.settings();
+    QCOMPARE(edited.audioScrub, false);
     QCOMPARE(edited.snapPixels, 20);
     QCOMPARE(edited.autoSaveMinutes, 12);
     QCOMPARE(edited.snapCanvasCenter, false);
@@ -566,6 +572,7 @@ void SettingsTests::editorDialogRoundTrip()
     QCOMPARE(findWidget<QSpinBox>(dialog, "snapPixels")->value(), 6);
     QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle0")->isChecked());
     QVERIFY(findWidget<QCheckBox>(dialog, "snapAngle90")->isChecked());
+    QVERIFY(findWidget<QCheckBox>(dialog, "audioScrub")->isChecked());
 }
 
 void SettingsTests::workbenchDialogRoundTrip()
