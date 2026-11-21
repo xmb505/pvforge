@@ -73,6 +73,9 @@ void AssetLibraryPanel::setCompactMode(bool compact)
 void AssetLibraryPanel::buildUi()
 {
     setObjectName(QStringLiteral("assetPanel"));
+    // External file-manager drops are accepted by the panel (margins, header,
+    // empty space) and by the list viewport, so any drop position works.
+    setAcceptDrops(true);
     m_layout = new QVBoxLayout(this);
     auto* layout = m_layout;
     layout->setContentsMargins(10, 10, 10, 10);
@@ -122,6 +125,9 @@ void AssetLibraryPanel::buildUi()
     m_search->setPlaceholderText(
         Lang::t(QStringLiteral("search.assets"), QStringLiteral("搜索素材…")));
     m_search->setClearButtonEnabled(true);
+    // QLineEdit accepts text drops by default; let file drops fall through to
+    // the panel instead of inserting the path into the search box.
+    m_search->setAcceptDrops(false);
 
     auto* searchRow = new QHBoxLayout();
     searchRow->addWidget(m_search, 1);
@@ -165,6 +171,13 @@ void AssetLibraryPanel::buildUi()
     list->sessionMimeFactory = [this](const QString& hash) {
         return assetMimeData(hash);
     };
+    list->externalDragHandler = [this](QDragMoveEvent* event) {
+        return handleExternalDragMove(event);
+    };
+    list->externalDropHandler = [this](QDropEvent* event) {
+        return handleExternalDrop(event);
+    };
+    list->externalDragLeaveHandler = [this] { setExternalDragActive(false); };
     m_list->setObjectName(QStringLiteral("assetList"));
     m_list->setIconSize(QSize(40, 40));
     m_list->setAlternatingRowColors(true);
@@ -175,6 +188,11 @@ void AssetLibraryPanel::buildUi()
     m_list->setMouseTracking(true);
     m_list->setDragEnabled(true);
     m_list->setDragDropMode(QAbstractItemView::DragOnly);
+    // DragOnly resets acceptDrops on the view; re-enable it for the external
+    // file drop and keep the internal drag-out behaviour untouched. The panel
+    // event filter handles the viewport events before the item view does.
+    m_list->setAcceptDrops(true);
+    m_list->viewport()->setAcceptDrops(true);
     m_list->setDefaultDropAction(Qt::CopyAction);
     m_list->viewport()->installEventFilter(this);
     connect(m_list, &QListWidget::itemEntered, this,

@@ -13,6 +13,10 @@
 #include <functional>
 
 class QComboBox;
+class QDragEnterEvent;
+class QDragLeaveEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QEvent;
 class QFrame;
 class QLabel;
@@ -20,6 +24,7 @@ class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QMimeData;
+class QPaintEvent;
 class QPushButton;
 class QToolButton;
 class QVBoxLayout;
@@ -81,8 +86,11 @@ public:
     QString tagFilter() const;
 
     // Session-mode imports and asset metadata edits. Each refreshes the list;
-    // imports and metadata edits schedule one project commit.
-    bool importPaths(const QStringList& paths, QString* error = nullptr);
+    // imports and metadata edits schedule one project commit. When
+    // `importedByPath` is given, successfully imported input paths are mapped
+    // to their content hash (the drop path uses it to skip repeated drops).
+    bool importPaths(const QStringList& paths, QString* error = nullptr,
+                     QHash<QString, AssetHash>* importedByPath = nullptr);
     bool renameAsset(const AssetHash& hash, const QString& name,
                      QString* error = nullptr);
     bool setAssetTags(const AssetHash& hash, const QStringList& tags,
@@ -116,6 +124,11 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     struct SessionEntry
@@ -155,6 +168,16 @@ private:
     void updateSessionSelection();
     void chooseSessionImportFiles();
     void chooseSessionImportHtml();
+
+    // External file-manager drops reuse the import buttons' pipeline. The
+    // panel and the list viewport share these handlers so a drop anywhere in
+    // the (possibly empty) bin lands in the same place.
+    bool externalDropAvailable(const QMimeData* mime, const QObject* source) const;
+    bool handleExternalDragMove(QDragMoveEvent* event);
+    bool handleExternalDrop(QDropEvent* event);
+    void importDroppedPaths(const QStringList& paths);
+    QString externalImportBlockedReason() const;
+    void setExternalDragActive(bool active);
     void renameSessionSelected();
     void editSessionTags();
     void deleteSessionSelected();
@@ -206,6 +229,12 @@ private:
     QHash<AssetHash, QPixmap> m_iconCache;
     QString m_lastImportDir;
     QStringList m_sessionSignature;
+
+    // External drops: canonical path -> content hash. A repeated drop of the
+    // same path is skipped while its asset is still in the store; dropping it
+    // again after a delete imports it back.
+    QHash<QString, AssetHash> m_droppedPathHashes;
+    bool m_externalDragActive = false;
 };
 
 } // namespace pvf

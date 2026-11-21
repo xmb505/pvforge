@@ -125,6 +125,7 @@ set(PVF_APP_SOURCES
     src/next/properties/TextLayoutDialog.cpp
     src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
+    src/ui/AssetLibraryPanelDrop.cpp
     src/ui/AssetLibraryPanelHelpers.cpp
     src/ui/AssetLibraryPanelImport.cpp
     src/ui/AssetLibraryPanelInternal.h
@@ -270,6 +271,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             export-test
             assets-test
             asset-import-test
+            asset-external-drop-test
             asset-drag-test
             asset-replace-test
             workbench-assets-test
@@ -317,7 +319,8 @@ if(PVFORGE_BUILD_SELF_TESTS)
             properties-test keyframe-easing-group-test
             html-vars-test text-layout-test
             export-dialog-test
-            assets-test asset-import-test asset-drag-test asset-replace-test
+            assets-test asset-import-test asset-external-drop-test
+            asset-drag-test asset-replace-test
             workbench-assets-test
             timeline-test timeline-bottomup-test timeline-ui-test
             timeline-seconds-test

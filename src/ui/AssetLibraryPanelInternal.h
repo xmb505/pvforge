@@ -17,7 +17,12 @@
 
 #include <functional>
 
+class QDragEnterEvent;
+class QDragLeaveEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QListWidgetItem;
+class QPaintEvent;
 
 namespace pvf {
 namespace assetlibdetail {
@@ -42,8 +47,28 @@ public:
 
     std::function<QMimeData*(const QString&)> sessionMimeFactory;
 
+    // The panel owns the external-drop policy. The list forwards events it
+    // receives directly (scrollbar/any child that resolves to the view) so the
+    // whole bin behaves the same as the panel and the viewport.
+    std::function<bool(QDragMoveEvent*)> externalDragHandler;
+    std::function<bool(QDropEvent*)> externalDropHandler;
+    std::function<void()> externalDragLeaveHandler;
+
+    // Lightweight native cue while an external file drag hovers the bin: a
+    // 2 px QPalette::Highlight frame drawn over the viewport. It never touches
+    // the selection or item styles and disappears on drag leave/drop.
+    void setExternalDragHighlight(bool active);
+
 protected:
     QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override;
+    void paintEvent(QPaintEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
+private:
+    bool m_externalDragHighlight = false;
 };
 
 } // namespace assetlibdetail
