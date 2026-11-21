@@ -120,6 +120,11 @@ int solverEffectiveEnd(const model::Entity& entity, const model::SolverSegment& 
 int defaultRow(const model::Project& project, const Uuid& parentUuid, int start, int end);
 bool isFiniteNumber(double value);
 
+// The main timeline is one-sided: root entities need row >= 0.  A private
+// timeline (parentUuid non-empty) may use negative rows, which render behind
+// the parent clip; both timelines bound row to +/-kMaxFrame.
+bool validateRow(int row, bool onMainTimeline, Result* error);
+
 struct TrimSummary
 {
     int removedKeyframes = 0;
@@ -132,8 +137,15 @@ struct TrimSummary
 Result trimEntityRange(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
                        TrimSummary* summary);
 
-// Easing helpers accept both the lowercase presets from docs/AI/MCP_TOOLS.md and
-// the canonical camelCase names used by model::EasingSpec.
+// Every easing name parseEasing accepts, in canonical lowercase form.  This is
+// exactly what model::canonicalEasingName()/easedProgress() support: linear,
+// instant, bezier, the 30 presets and the legacy aliases (easein/easeout/
+// easeinout/step).  Lookup is case-insensitive.
+QStringList acceptedEasingNames();
+
+// Parses a string/object easing and normalizes string names to the canonical
+// lowercase model name (e.g. "EaseOutCubic" -> "easeoutcubic",
+// "easeInOut" -> "easeinoutquad", "step" -> "instant").
 bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
                  QJsonValue* normalized, Result* error);
 QJsonValue easingJson(const model::EasingSpec& easing);

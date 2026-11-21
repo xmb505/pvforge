@@ -121,6 +121,78 @@ Result alignFollowingRange(Tx& tx, const Uuid& uuid)
     return trimEntityRange(tx, uuid, newStart, newEnd, &summary);
 }
 
+Result validateContentPatchShape(const QJsonObject& update, ContentKind target,
+                                 const QString& kindName)
+{
+    QString expected;
+    switch (target)
+    {
+    case ContentKind::Text:
+        expected = QStringLiteral("text");
+        break;
+    case ContentKind::Vector:
+        expected = QStringLiteral("vector");
+        break;
+    case ContentKind::Asset:
+        expected = QStringLiteral("asset");
+        break;
+    case ContentKind::Camera:
+        expected = QStringLiteral("camera");
+        break;
+    case ContentKind::Empty:
+        break;
+    }
+
+    QStringList unexpected;
+    for (auto it = update.constBegin(); it != update.constEnd(); ++it)
+    {
+        if (it.key() == QLatin1String("kind"))
+            continue;
+        if (!expected.isEmpty() && it.key() == expected)
+        {
+            if (!it.value().isObject())
+                return failure(
+                    QStringLiteral("invalid_argument"),
+                    QStringLiteral("content.%1 必须是对象").arg(expected));
+            if (target == ContentKind::Camera
+                && !it.value().toObject().isEmpty())
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("expectedContentPath"), expected);
+                details.insert(QStringLiteral("unexpectedKeys"),
+                               QJsonArray::fromStringList(
+                                   it.value().toObject().keys()));
+                return failure(
+                    QStringLiteral("invalid_argument"),
+                    QStringLiteral("content.camera 只接受空对象（相机没有可更新的"
+                                   "字段）"),
+                    details);
+            }
+            continue;
+        }
+        unexpected.append(it.key());
+    }
+    if (unexpected.isEmpty())
+        return success();
+
+    // The model reads text/vector/asset fields from nested sub-objects and
+    // keeps unknown top-level keys as verbatim extras.  Merging a flat patch
+    // would therefore return ok while silently changing nothing (issue #146
+    // P0-1), so reject it and point at the correct nesting instead.
+    QJsonObject details;
+    details.insert(QStringLiteral("expectedContentPath"), expected);
+    details.insert(QStringLiteral("unexpectedKeys"),
+                   QJsonArray::fromStringList(unexpected));
+    const QString message =
+        expected.isEmpty()
+            ? QStringLiteral("content 不接受顶层字段 %1（%2 内容没有嵌套子对象）")
+                  .arg(unexpected.join(QStringLiteral(", ")), kindName)
+            : QStringLiteral("content 字段必须放在嵌套子对象 content.%1 中"
+                             "（收到顶层字段：%2）")
+                  .arg(expected, unexpected.join(QStringLiteral(", ")));
+    return failure(QStringLiteral("invalid_argument"), message, details);
+}
+
 Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
                         QStringList* changed)
 {
@@ -160,9 +232,8 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
         int row = entity.row;
         if (!readInt(patch, "row", &row, &error, true))
             return error;
-        if (row < 0 || row > kMaxFrame)
-            return failure(QStringLiteral("invalid_argument"),
-                           QStringLiteral("row 必须 >= 0"));
+        if (!validateRow(row, entity.parentUuid.isEmpty(), &error))
+            return error;
         if (row != entity.row)
         {
             entity.row = row;
@@ -313,6 +384,9 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
                 || update.contains(QStringLiteral("assetType")))
                 return failure(QStringLiteral("invalid_argument"),
                                QStringLiteral("assetHash/assetType 不能通过 entity.update 修改"));
+            Result shapeError = validateContentPatchShape(update, target, kindName);
+            if (!shapeError.ok)
+                return shapeError;
             const QJsonValue assetValue = update.value(QStringLiteral("asset"));
             if (!assetValue.isUndefined() && !assetValue.isNull())
             {
@@ -363,6 +437,9 @@ Result applyEntityPatch(Tx& tx, model::Entity& entity, const QJsonObject& patch,
         }
         else
         {
+            Result shapeError = validateContentPatchShape(update, target, kindName);
+            if (!shapeError.ok)
+                return shapeError;
             QJsonObject merged = model::toJson(entity.content);
             merged.insert(QStringLiteral("kind"), kindName);
             for (auto it = update.constBegin(); it != update.constEnd(); ++it)
@@ -566,9 +643,8 @@ Result entityMove(Tx& tx, const QJsonObject& args)
     int row = entity->row;
     if (hasRow && !readInt(args, "row", &row, &error, true))
         return error;
-    if (row < 0 || row > kMaxFrame)
-        return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("row 必须 >= 0"));
+    if (!validateRow(row, entity->parentUuid.isEmpty(), &error))
+        return error;
 
     const int newStart = entity->start + delta;
     const int newEnd = entity->end + delta;
@@ -691,9 +767,8 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
     {
         if (!readInt(args, "row", &row, &error, true))
             return error;
-        if (row < 0)
-            return failure(QStringLiteral("invalid_argument"),
-                           QStringLiteral("row 必须 >= 0"));
+        if (!validateRow(row, newParent.isEmpty(), &error))
+            return error;
     }
     else
     {
@@ -701,6 +776,11 @@ Result entityReparent(Tx& tx, const QJsonObject& args)
         const int rowEnd = parent && followsParent ? parent->end : entity->end;
         row = defaultRow(tx.p(), newParent, rowStart, rowEnd);
     }
+    // Reparenting to the main timeline must never leave a negative row behind:
+    // an explicit negative row was rejected above, and the computed default is
+    // non-negative because every root sibling is validated at row >= 0.
+    if (newParent.isEmpty() && row < 0)
+        row = 0;
 
     QSet<Uuid> moved{uuid};
     for (const Uuid& descendant : subtree(tx.p(), uuid))
@@ -883,9 +963,8 @@ Result entityDuplicate(Tx& tx, const QJsonObject& args)
     if (!hasRow)
         rootRow = defaultRow(tx.p(), targetParent, source->start + offsetFrames,
                              source->end + offsetFrames);
-    if (rootRow < 0)
-        return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("row 必须 >= 0"));
+    if (!validateRow(rootRow, targetParent.isEmpty(), &error))
+        return error;
 
     QJsonArray uuidMap;
     for (const Uuid& node : std::as_const(nodes))

@@ -1,4 +1,5 @@
 #include "mcp2/Internal.h"
+#include "mcp2/EntityToolsInternal.h"
 
 #include <QDir>
 #include <QFile>
@@ -15,41 +16,6 @@ namespace pvf::mcp2::detail {
 
 namespace {
 
-const QSet<QString>& camelEasings()
-{
-    static const QSet<QString> names = {
-        QStringLiteral("linear"),    QStringLiteral("instant"),
-        QStringLiteral("step"),      QStringLiteral("bezier"),
-        QStringLiteral("easeIn"),    QStringLiteral("easeOut"),
-        QStringLiteral("easeInOut"),
-    };
-    return names;
-}
-
-const QSet<QString>& presetEasings()
-{
-    static const QSet<QString> names = {
-        QStringLiteral("linear"),          QStringLiteral("instant"),
-        QStringLiteral("bezier"),          QStringLiteral("easeinquad"),
-        QStringLiteral("easeoutquad"),     QStringLiteral("easeinoutquad"),
-        QStringLiteral("easeincubic"),     QStringLiteral("easeoutcubic"),
-        QStringLiteral("easeinoutcubic"),  QStringLiteral("easeinquart"),
-        QStringLiteral("easeoutquart"),    QStringLiteral("easeinoutquart"),
-        QStringLiteral("easeinquint"),     QStringLiteral("easeoutquint"),
-        QStringLiteral("easeinoutquint"),  QStringLiteral("easeinsine"),
-        QStringLiteral("easeoutsine"),     QStringLiteral("easeinoutsine"),
-        QStringLiteral("easeinexpo"),      QStringLiteral("easeoutexpo"),
-        QStringLiteral("easeinoutexpo"),   QStringLiteral("easeincirc"),
-        QStringLiteral("easeoutcirc"),     QStringLiteral("easeinoutcirc"),
-        QStringLiteral("easeinelastic"),   QStringLiteral("easeoutelastic"),
-        QStringLiteral("easeinoutelastic"),QStringLiteral("easeinback"),
-        QStringLiteral("easeoutback"),     QStringLiteral("easeinoutback"),
-        QStringLiteral("easeinbounce"),    QStringLiteral("easeoutbounce"),
-        QStringLiteral("easeinoutbounce"),
-    };
-    return names;
-}
-
 QJsonValue metadataValue(const QJsonObject& metadata, const QString& key)
 {
     const QJsonValue value = metadata.value(key);
@@ -57,6 +23,22 @@ QJsonValue metadataValue(const QJsonObject& metadata, const QString& key)
 }
 
 } // namespace
+
+QStringList acceptedEasingNames()
+{
+    // Keep this list derived from the model so MCP cannot drift from what
+    // model::easedProgress() actually evaluates.  Aliases are the ones
+    // model::canonicalEasingName() understands.
+    static const QStringList names = [] {
+        QStringList list{QStringLiteral("linear"), QStringLiteral("instant"),
+                         QStringLiteral("bezier")};
+        list.append(model::easingPresetNames());
+        list << QStringLiteral("easein") << QStringLiteral("easeout")
+             << QStringLiteral("easeinout") << QStringLiteral("step");
+        return list;
+    }();
+    return names;
+}
 
 Result failure(const QString& code, const QString& message,
                const QJsonObject& details)
@@ -695,6 +677,33 @@ bool isFiniteNumber(double value)
     return std::isfinite(value) && std::abs(value) <= 1e9;
 }
 
+bool validateRow(int row, bool onMainTimeline, Result* error)
+{
+    if (onMainTimeline && row < 0)
+    {
+        *error = failure(QStringLiteral("invalid_argument"),
+                         QStringLiteral("主时间线 row 必须 >= 0（私有时间线允许负 "
+                                        "row）"));
+        return false;
+    }
+    if (row < -entity::kMaxFrame || row > entity::kMaxFrame)
+    {
+        QJsonObject range;
+        range.insert(QStringLiteral("min"), -entity::kMaxFrame);
+        range.insert(QStringLiteral("max"), entity::kMaxFrame);
+        QJsonObject details;
+        details.insert(QStringLiteral("allowedRange"), range);
+        *error = failure(
+            QStringLiteral("invalid_argument"),
+            QStringLiteral("row 必须在 %1..%2 之间")
+                .arg(-entity::kMaxFrame)
+                .arg(entity::kMaxFrame),
+            details);
+        return false;
+    }
+    return true;
+}
+
 bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
                  QJsonValue* normalized, Result* error)
 {
@@ -713,13 +722,20 @@ bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
     if (value.isString())
     {
         const QString name = value.toString();
-        if (camelEasings().contains(name) || presetEasings().contains(name))
+        const QString trimmed = name.trimmed();
+        const QString canonical = model::canonicalEasingName(trimmed);
+        if (acceptedEasingNames().contains(trimmed.toLower()))
         {
-            out->type = name;
-            *normalized = name;
+            // Normalize to the model's canonical lowercase name so the value
+            // reported back matches what a reload from disk would produce
+            // (e.g. "easeInOut" -> "easeinoutquad", "step" -> "instant").
+            out->type = canonical;
+            *normalized = canonical;
             return true;
         }
-        return invalid(QStringLiteral("未知缓动：%1").arg(name));
+        return invalid(QStringLiteral("未知缓动：%1（允许：%2）")
+                           .arg(name, acceptedEasingNames().join(
+                                         QStringLiteral(", "))));
     }
 
     if (!value.isObject())

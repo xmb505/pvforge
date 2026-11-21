@@ -10,6 +10,12 @@ namespace pvf::mcp2::detail {
 
 namespace {
 
+QString easingWhitelist()
+{
+    static const QString list = acceptedEasingNames().join(QStringLiteral(", "));
+    return list;
+}
+
 QJsonObject prop(const QString& type, const QString& description)
 {
     QJsonObject object;
@@ -174,7 +180,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("followParentRange"), prop(QStringLiteral("boolean"), QStringLiteral("true 时区间必须等于直接父区间"))},
             {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= 0"))},
             {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= start（闭区间，含 end）"))},
-            {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral(">= 0，0 在最底"))},
+            {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("主时间线 >= 0；私有时间线（parentUuid 非空）允许负 row（-1000000..1000000），负 row 画在父实体后面"))},
             {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
             {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QStringLiteral("锁定后 MCP 不能写"))},
             {QStringLiteral("inheritVisibility"), prop(QStringLiteral("boolean"), QString())},
@@ -200,7 +206,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("必填，步骤值"))},
             {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("必填；该内容类型的全部动画参数：文本 pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth；矢量 width/height/cornerRadius/strokeWidth；音频 volume；定义参数不能写进来"))},
             {QStringLiteral("htmlVars"), prop(QStringLiteral("object"), QStringLiteral("HTML manifest 数字变量覆盖值；非数字变量不进关键帧"))},
-            {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QStringLiteral("预设名或 {type:bezier,inX,inY,outX,outY}"))},
+            {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QStringLiteral("缓动名（大小写不敏感）：") + easingWhitelist() + QStringLiteral("；别名 easein/easeout/easeinout/step 归一化为 easeinquad/easeoutquad/easeinoutquad/instant；也可用 {type:bezier,inX,inY,outX,outY}"))},
             {QStringLiteral("note"), prop(QStringLiteral("string"), QStringLiteral("最长 4096"))},
         });
     }
@@ -323,7 +329,11 @@ QString guideMarkdown(const QString& topic)
             "- 批量工具全成功或全回滚。\n"
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"
-            "- 整帧关键帧：一个关键帧 = 该帧的全部动画参数 + 一个整体缓动 + 可选注释。没有 `track`，没有单参数轨道；`keyframes.set` 每个对象必须含 `frame,x,y,rotation,scaleX,scaleY,opacity,visible,physicsInteract`，以及该内容类型的全部 `content` 动画参数。\n"
+            "- 整帧关键帧：一个关键帧 = 该帧的全部动画参数 + 一个整体缓动 + 可选注释。没有 `track`，没有单参数轨道；`keyframes.set` 每个对象必须含 `frame,x,y,rotation,scaleX,scaleY,opacity,visible,physicsInteract`，以及该内容类型的全部 `content` 动画参数。缺多个动画参数时一次返回 `details.missingFields` 与 `details.requiredFields`。\n")
+            + QStringLiteral("- 缓动名大小写不敏感；完整白名单：") + easingWhitelist()
+            + QStringLiteral("（别名 easein/easeout/easeinout/step 分别归一化为 "
+                             "easeinquad/easeoutquad/easeinoutquad/instant）。\n")
+            + QStringLiteral(
             "- 动画参数：文本 `pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth`；矢量 `width/height/cornerRadius/strokeWidth`；音频 `volume`；HTML 数字变量写在 `htmlVars`。定义参数（文字内容、字体、颜色、形状类型、素材引用等）不能写进关键帧。\n"
             "- 改单个字段用 `keyframes.upsert`：服务端先按该帧求值补全全部动画参数，再覆盖传入字段。\n"
             "- 改完用 `entity.get` 或 `keyframes.get` 自查。\n");
@@ -470,7 +480,7 @@ QJsonObject listTools()
          {QStringLiteral("followParentRange"), prop(QStringLiteral("boolean"), QStringLiteral("true 时区间必须等于直接父区间"))},
          {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("必填"))},
          {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("默认按内容类型"))},
-         {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1"))},
+         {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("默认最高占用 +1；根时间线 >= 0，私有时间线可为负"))},
          {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("kind: empty|text|vector|camera|asset；定义参数见 schema.get entity，动画参数见 keyframes"))},
          {QStringLiteral("transform"), prop(QStringLiteral("object"), QString())},
          {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
@@ -523,7 +533,7 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("与 delta 二选一"))},
                       {QStringLiteral("delta"), prop(QStringLiteral("integer"), QStringLiteral("与 start 二选一"))},
-                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("主时间线 >= 0；私有时间线可为负"))}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
         QStringLiteral("entity.trim"), QStringLiteral("裁剪实体并级联裁剪子实体；删子实体需 confirm"),
@@ -539,7 +549,7 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
                       {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
                       {QStringLiteral("mode"), prop(QStringLiteral("string"), QStringLiteral("preserveWorld|keepLocal"))},
-                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("主时间线 >= 0；私有时间线可为负"))},
                       {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QStringLiteral("有求解段依赖时必须为 true"))}},
                      {QStringLiteral("uuid"), QStringLiteral("parentUuid"), QStringLiteral("mode")})));
     tools.append(toolSchema(
@@ -549,7 +559,7 @@ QJsonObject listTools()
                       {QStringLiteral("offsetFrames"), prop(QStringLiteral("integer"), QString())},
                       {QStringLiteral("parentUuid"), prop(QStringLiteral("string|null"), QString())},
                       {QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QString())}},
+                      {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral("主时间线 >= 0；私有时间线可为负"))}},
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
         QStringLiteral("entity.delete"),
