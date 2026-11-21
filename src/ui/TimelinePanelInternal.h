@@ -34,7 +34,7 @@ struct SecondsGrid
 
 SecondsGrid secondsGrid(int fps, double pixelsPerFrame);
 
-// Human-readable closed range shown inside a clip: "0–133 · 134f".  The
+// Human-readable closed range shown inside a clip: "0–133".  The
 // painter and the self-tests share this so the off-by-one contract cannot
 // drift apart.
 QString clipRangeText(int startFrame, int endExclusive);
