@@ -18,7 +18,7 @@ class EditorSession;
 
 namespace ui::wholeframe {
 
-// True for 0..duration when no explicitly ended solver segment owns the
+// True for 0..duration-1 when no explicitly ended solver segment owns the
 // frame.  An open solver segment accepts a key (that key becomes its end).
 bool canWriteKeyAt(const model::Entity& entity, int frame,
                    QString* reason = nullptr);

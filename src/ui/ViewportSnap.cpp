@@ -51,7 +51,7 @@ void Viewport::collectSessionSnapTargets(const Uuid& uuid)
         const model::Entity& entity = it.value();
         if (it.key() == uuid || entity.content.kind == ContentKind::Camera)
             continue;
-        if (frame < entity.start || frame >= entity.end)
+        if (frame < entity.start || frame > entity.end)
             continue;
 
         bool descendant = false;

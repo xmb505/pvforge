@@ -93,9 +93,9 @@ bool EditActions::planMove(const QVector<Uuid>& roots, int deltaFrames,
                          .arg(displayName(entity), parent));
             return false;
         }
-        if (entity.end + deltaFrames <= 0)
+        if (entity.end + deltaFrames < 0)
         {
-            setError(error, QStringLiteral("片段 %1 的结束帧必须大于 0")
+            setError(error, QStringLiteral("片段 %1 的结束帧不能小于 0")
                                 .arg(displayName(entity)));
             return false;
         }
@@ -319,11 +319,11 @@ bool EditActions::planMoveClipsToRows(const QVector<Uuid>& roots,
         for (const Uuid& otherUuid : occupants.value())
         {
             const model::Entity& other = moved.project.entities.value(otherUuid);
-            if (entity.start >= other.end || other.start >= entity.end)
+            if (entity.start > other.end || other.start > entity.end)
                 continue;
             setError(error,
                      QStringLiteral("片段 %1 移到第 %2 行后会与未选中的片段 %3 "
-                                    "时间重叠（[%4, %5) 与 [%6, %7)），已拒绝跨行移动")
+                                    "时间重叠（[%4, %5] 与 [%6, %7]），已拒绝跨行移动")
                          .arg(displayName(entity))
                          .arg(entity.row)
                          .arg(displayName(other))
@@ -501,7 +501,7 @@ bool EditActions::planReparent(const Uuid& uuid, const Uuid& newParent,
         if (newStart < parent.start || newEnd > parent.end)
         {
             setError(error,
-                     QStringLiteral("%1后，片段 %2 的范围 [%3, %4) 超出新父级 %5 的 [%6, %7)")
+                     QStringLiteral("%1后，片段 %2 的范围 [%3, %4] 超出新父级 %5 的 [%6, %7]")
                          .arg(keepWorld ? QStringLiteral("保持世界位置")
                                         : QStringLiteral("保持局部坐标"))
                          .arg(displayName(entity))
@@ -659,7 +659,9 @@ int EditActions::maxTrimEnd(const Uuid& uuid) const
     if (frames > 0)
     {
         maximum = std::min(
-            maximum, entity.start + std::max(0, frames - entity.content.asset.sourceIn));
+            maximum,
+            entity.start + std::max(0, frames - entity.content.asset.sourceIn)
+                - 1);
     }
     return maximum;
 }

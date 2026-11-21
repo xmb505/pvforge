@@ -479,7 +479,7 @@ bool PropertiesPanel::writeAnimationValue(const QString& property, double value,
             });
     }
 
-    const bool inRange = frame >= 0 && frame <= entity->duration();
+    const bool inRange = frame >= 0 && frame < entity->duration();
 
     // A playhead inside an explicit solver segment is in range, but the frame
     // is driven and cannot accept a normal keyframe.  This is not the
@@ -694,7 +694,7 @@ void PropertiesPanel::refreshPlayheadOnly()
 
     m_frame = m_session->playhead();
     const int relative = activeDisplayKeyFrame(*entity);
-    const bool inRange = relative >= 0 && relative <= entity->duration();
+    const bool inRange = relative >= 0 && relative < entity->duration();
     const bool editable = sessionEditable();
 
     for (Row& row : m_rows)
@@ -1017,7 +1017,7 @@ void PropertiesPanel::refreshSession()
                                  .value(QStringLiteral("durationFrames"))
                                  .toInt(0);
         const double trimStart = double(assetContent.sourceIn) / fps;
-        const double clipSeconds = double(entity->end - entity->start) / fps;
+        const double clipSeconds = double(entity->duration()) / fps;
         const double mediaSeconds =
             durationFrames > 0 ? double(durationFrames) / fps : clipSeconds;
         const double trimEnd =
@@ -1035,7 +1035,7 @@ void PropertiesPanel::refreshSession()
         {
             const int audioFrame = activeDisplayKeyFrame(*entity);
             double volume = assetContent.volume;
-            if (audioFrame >= 0 && audioFrame <= entity->duration())
+            if (audioFrame >= 0 && audioFrame < entity->duration())
             {
                 const model::Keyframe key =
                     wholeframe::keyAt(*entity, audioFrame, m_session);
@@ -1097,7 +1097,7 @@ void PropertiesPanel::refreshSession()
         m_parentLabel->show();
 
     const int relative = activeDisplayKeyFrame(*entity);
-    const bool inRange = relative >= 0 && relative <= entity->duration();
+    const bool inRange = relative >= 0 && relative < entity->duration();
 
     for (Row& row : m_rows)
     {

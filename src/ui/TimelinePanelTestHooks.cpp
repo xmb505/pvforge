@@ -79,6 +79,14 @@ QString TimelinePanel::clipNameTextForTest(EntityId id) const
                                            available);
 }
 
+QString TimelinePanel::clipRangeTextForTest(EntityId id) const
+{
+    const Entity* entity = entityById(id);
+    if (!entity)
+        return QString();
+    return ui::detail::clipRangeText(clipStartOf(*entity), clipEndOf(*entity));
+}
+
 bool TimelinePanel::clipNameElidedForTest(EntityId id) const
 {
     const Entity* entity = entityById(id);

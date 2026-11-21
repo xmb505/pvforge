@@ -32,7 +32,7 @@ bool TimelinePanel::splitEntityAtPlayhead(EntityId id)
     if (!entity)
         return false;
     const int cut = m_session->playhead();
-    if (cut <= entity->start || cut >= entity->end)
+    if (cut <= entity->start || cut > entity->end)
     {
         emit editFailed(QStringLiteral("播放头必须位于片段内部才能切分（%1–%2，播放头 %3）")
                             .arg(entity->start)

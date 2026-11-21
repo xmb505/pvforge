@@ -80,7 +80,9 @@ QRect TimelinePanel::solverBandRect(const Uuid& entityUuid,
     const int clipRightFrame = std::min(clipEndOf(*legacy), contentEnd());
     const int bandStart =
         std::max(clipLeftFrame, it->start + chosen->startFrame);
-    const int bandEnd = std::min(clipRightFrame, it->start + stopFrame);
+    // stopFrame is an inclusive entity-relative frame; the painted band is an
+    // exclusive rectangle, so its right edge sits at start + stopFrame + 1.
+    const int bandEnd = std::min(clipRightFrame, it->start + stopFrame + 1);
     if (bandEnd <= bandStart)
         return {};
 

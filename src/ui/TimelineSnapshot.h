@@ -82,7 +82,7 @@ struct TimelineSnapshot
     QVector<TimelineMarkerView> markers;
     int fps = 30;
     int playhead = 0;
-    int contentEnd = 0;         // furthest root entity end
+    int contentEnd = 0;         // exclusive: furthest root end + 1
 };
 
 } // namespace pvf

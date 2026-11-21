@@ -374,9 +374,9 @@ int solverUiTest(QApplication& app)
         || !check(bandStop == stopFrame,
                   QStringLiteral("timeline band stop frame wrong"))
         || !check(std::abs(band.right()
-                           - (timeline->frameXForTest(stopFrame) - 1))
+                           - (timeline->frameXForTest(stopFrame + 1) - 1))
                   <= 2,
-                  QStringLiteral("timeline band does not end at stopFrame")))
+                  QStringLiteral("timeline band does not cover stopFrame")))
         return 1;
 
     // Screenshot with the solver card and the mini trajectory window visible.
@@ -1757,7 +1757,7 @@ int solverConvertTest(QApplication& app)
     const pvf::Uuid gravityId = ballAfterCreate.solvers.first().id;
     if (!check(pvf::model::solverStructuralEnd(
                    ballAfterCreate, ballAfterCreate.solvers.first())
-                   == 59,
+                   == 60,
                QStringLiteral("automatic structural end is not the clip end")))
         return 1;
 
@@ -1823,9 +1823,9 @@ int solverConvertTest(QApplication& app)
         const auto& entity = live->project().entities.value(ball);
         if (!check(pvf::model::solverStructuralEnd(entity,
                                                    entity.solvers.first())
-                       == 59,
+                       == 60,
                    QStringLiteral("deleting the end key did not restore auto"))
-            || !check(pvf::anim::solverAt(entity, 59) != nullptr,
+            || !check(pvf::anim::solverAt(entity, 60) != nullptr,
                       QStringLiteral("restored auto solver does not reach clip end")))
             return 1;
     }
@@ -1857,7 +1857,7 @@ int solverConvertTest(QApplication& app)
                       QStringLiteral("first segment did not end before second"))
             || !check(pvf::model::solverStructuralEnd(entity,
                                                        entity.solvers.at(1))
-                          == 59,
+                          == 60,
                       QStringLiteral("second segment structural end wrong"))
             || !check(undoDepth() == beforeSecond + 1,
                       QStringLiteral("second conversion was not one commit")))

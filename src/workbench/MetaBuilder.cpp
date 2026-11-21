@@ -109,7 +109,7 @@ void writeVariantMap(QDataStream& out, const QVariantMap& map)
 
 bool activeAt(const model::Entity& entity, int frame)
 {
-    return frame >= entity.start && frame < entity.end;
+    return frame >= entity.start && frame <= entity.end;
 }
 
 // Every entity visible at this frame, plus the chain of parents whose

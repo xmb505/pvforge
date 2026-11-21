@@ -48,11 +48,11 @@ std::optional<solver::Sample> solverSampleAt(EditorSession* session,
 bool validateKeyframeFrame(const model::Entity& entity, int frame,
                            QString* error)
 {
-    if (frame < 0 || frame > entity.duration())
+    if (frame < 0 || frame >= entity.duration())
     {
         setError(error, QStringLiteral("关键帧 %1 超出实体范围 0..%2")
                             .arg(frame)
-                            .arg(entity.duration()));
+                            .arg(entity.duration() - 1));
         return false;
     }
     if (keyframeBlockedAt(entity, frame))
@@ -302,8 +302,9 @@ bool EditActions::planMoveKeyframes(const QVector<KeyRef>& keys, int delta,
             model::keyframeAt(entity.keyframes, ref.frame);
         Move move{ref.entity, ref.frame, *key, true};
         // Frames dragged past the clip boundary are dropped, matching the
-        // timeline gesture contract.  frame == duration stays legal.
-        if (target < 0 || target > entity.duration())
+        // timeline gesture contract.  The last legal relative frame is
+        // duration() - 1.
+        if (target < 0 || target >= entity.duration())
         {
             move.keep = false;
             moves.append(move);
@@ -628,7 +629,7 @@ bool EditActions::planCopyKeyframeParams(const KeyRef& source,
             return false;
         }
         // Out-of-range targets are dropped rather than rejected.
-        if (ref.frame < 0 || ref.frame > entityIt.value().duration())
+        if (ref.frame < 0 || ref.frame >= entityIt.value().duration())
             continue;
 
         ResolvedKey key;
@@ -719,7 +720,7 @@ bool EditActions::planPasteKeyframes(const KeyframeClipboard& clipboard,
     {
         const int frame = anchor + entry.offset;
         // Pasted frames never stretch the clip: out-of-range entries vanish.
-        if (frame < 0 || frame > entity.duration())
+        if (frame < 0 || frame >= entity.duration())
         {
             ++dropped;
             continue;

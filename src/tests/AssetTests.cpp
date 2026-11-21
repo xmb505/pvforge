@@ -547,7 +547,7 @@ int assetDragTest(QApplication& app)
               && imageEntity.content.asset.hash == image->hash
               && imageEntity.content.asset.type == pvf::AssetType::Image,
           QStringLiteral("image entity content wrong"));
-    check(imageEntity.start == 45 && imageEntity.end == 75,
+    check(imageEntity.start == 45 && imageEntity.end == 74,
           QStringLiteral("image drop range wrong: %1..%2")
               .arg(imageEntity.start)
               .arg(imageEntity.end));
@@ -565,7 +565,7 @@ int assetDragTest(QApplication& app)
     const pvf::Uuid videoUuid = timeline->uuidForEntityId(videoId);
     const pvf::model::Entity videoEntity =
         live->project().entities.value(videoUuid);
-    check(videoEntity.start == 60 && videoEntity.end == 120,
+    check(videoEntity.start == 60 && videoEntity.end == 119,
           QStringLiteral("video drop range wrong"));
     check(videoEntity.row == 1, QStringLiteral("video auto row wrong: %1")
                                     .arg(videoEntity.row));
@@ -578,7 +578,7 @@ int assetDragTest(QApplication& app)
         if (entity.content.kind == pvf::ContentKind::Asset
             && entity.content.asset.type == pvf::AssetType::Audio
             && entity.content.asset.hash == audioHash
-            && entity.start == 60 && entity.end == 120)
+            && entity.start == 60 && entity.end == 119)
         {
             paired = true;
             pairedAudioUuid = entity.uuid;
@@ -602,9 +602,9 @@ int assetDragTest(QApplication& app)
         live->project().entities.value(videoUuid);
     const pvf::model::Entity movedAudio =
         live->project().entities.value(pairedAudioUuid);
-    check(movedVideo.start == 65 && movedVideo.end == 125,
+    check(movedVideo.start == 65 && movedVideo.end == 124,
           QStringLiteral("video move range wrong"));
-    check(movedAudio.start == 65 && movedAudio.end == 125,
+    check(movedAudio.start == 65 && movedAudio.end == 124,
           QStringLiteral("audio did not follow the moved video: %1..%2")
               .arg(movedAudio.start)
               .arg(movedAudio.end));
@@ -629,7 +629,7 @@ int assetDragTest(QApplication& app)
     const pvf::model::Entity audioEntity =
         live->project().entities.value(audioUuid);
     check(audioEntity.content.asset.type == pvf::AssetType::Audio
-              && audioEntity.start == 0 && audioEntity.end == 60,
+              && audioEntity.start == 0 && audioEntity.end == 59,
           QStringLiteral("audio drop content/range wrong"));
     flush();
     check(depth() == audioDepth + 1, QStringLiteral("audio drop was not one commit"));
@@ -819,7 +819,7 @@ int assetReplaceTest(QApplication& app)
                                                            shortVideo->hash, &error);
     check(!trimmed && error.contains(QStringLiteral("子实体")),
           QStringLiteral("out-of-range child was not rejected"));
-    live->mutableProject().entities[childEntity].end = 35;
+    live->mutableProject().entities[childEntity].end = 34;
     if (!live->document()->commitEntity(childEntity,
                                         QStringLiteral("p5 child trim"), &error))
     {
@@ -838,7 +838,7 @@ int assetReplaceTest(QApplication& app)
         shortVideo->metadata.value(QStringLiteral("durationFrames")).toInt();
     check(shortFrames > 0, QStringLiteral("short video has no durationFrames"));
     const int expectedDuration = shortFrames - 5;
-    check(replaced.end == replaced.start + expectedDuration,
+    check(replaced.end == replaced.start + expectedDuration - 1,
           QStringLiteral("end was not trimmed: %1..%2 expected duration %3")
               .arg(replaced.start)
               .arg(replaced.end)
@@ -848,7 +848,7 @@ int assetReplaceTest(QApplication& app)
           QStringLiteral("asset/sourceIn not updated"));
     bool outOfRangeKey = false;
     for (const pvf::model::Keyframe& key : replaced.keyframes)
-        if (key.frame > expectedDuration)
+        if (key.frame >= expectedDuration)
             outOfRangeKey = true;
     check(!outOfRangeKey, QStringLiteral("out-of-range keys were kept"));
     flush();
@@ -865,7 +865,7 @@ int assetReplaceTest(QApplication& app)
     check(clamped.content.asset.sourceIn == shortFrames - 1,
           QStringLiteral("sourceIn was not clamped: %1")
               .arg(clamped.content.asset.sourceIn));
-    check(clamped.start == 0 && clamped.end == 1,
+    check(clamped.start == 0 && clamped.end == 0,
           QStringLiteral("clamped entity range wrong: %1..%2")
               .arg(clamped.start)
               .arg(clamped.end));
@@ -1030,7 +1030,7 @@ int workbenchAssetsTest(QApplication& app)
     check(mediaEntity.content.kind == pvf::ContentKind::Asset
               && mediaEntity.content.asset.hash == image->hash,
           QStringLiteral("media creation did not use the asset store"));
-    check(mediaEntity.start == 90 && mediaEntity.end == 120,
+    check(mediaEntity.start == 90 && mediaEntity.end == 119,
           QStringLiteral("media start is not the playhead"));
     check(depth() == mediaDepth + 1,
           QStringLiteral("media creation was not one commit"));
@@ -1052,7 +1052,7 @@ int workbenchAssetsTest(QApplication& app)
     check(textEntity.content.kind == pvf::ContentKind::Text
               && textEntity.content.text.text == QStringLiteral("P5 标题"),
           QStringLiteral("text content wrong"));
-    check(textEntity.start == 90 && textEntity.end == 120,
+    check(textEntity.start == 90 && textEntity.end == 119,
           QStringLiteral("text start is not the playhead"));
     check(textEntity.row == 1,
           QStringLiteral("text auto row wrong: %1").arg(textEntity.row));
@@ -1071,7 +1071,7 @@ int workbenchAssetsTest(QApplication& app)
     pvf::model::Entity vectorEntity = lastEntity();
     check(vectorEntity.content.kind == pvf::ContentKind::Vector,
           QStringLiteral("vector content wrong"));
-    check(vectorEntity.start == 90 && vectorEntity.end == 120,
+    check(vectorEntity.start == 90 && vectorEntity.end == 119,
           QStringLiteral("vector start is not the playhead"));
     check(vectorEntity.row == 2,
           QStringLiteral("vector auto row wrong: %1").arg(vectorEntity.row));
@@ -1094,7 +1094,7 @@ int workbenchAssetsTest(QApplication& app)
     check(cameraEntity.content.kind == pvf::ContentKind::Camera
               && cameraEntity.name == QStringLiteral("测试机位"),
           QStringLiteral("camera content/name wrong"));
-    check(cameraEntity.start == 90 && cameraEntity.end == 120,
+    check(cameraEntity.start == 90 && cameraEntity.end == 119,
           QStringLiteral("camera start is not the playhead"));
     check(cameraEntity.row == 3,
           QStringLiteral("camera auto row wrong: %1").arg(cameraEntity.row));

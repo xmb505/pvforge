@@ -81,7 +81,7 @@ public:
                   QString* error = nullptr) const;
     // Moves one root in time and pins it to the model row under the pointer.
     // A track is a layer, not a fixed slot: several clips may share a row when
-    // their [start, end) ranges do not overlap.  Dropping on an overlapping
+    // their [start, end] ranges do not overlap.  Dropping on an overlapping
     // clip is rejected by validation instead of silently swapping rows.
     bool planMoveToRow(const Uuid& uuid, int deltaFrames, int row,
                        EditPlan* plan, QString* error = nullptr) const;
@@ -122,7 +122,7 @@ public:
     // Copies animation parameters (public fields, content and htmlVars) from
     // the source key onto every in-range target key.  Each target keeps its
     // own frame, easing, note and extras.  Targets outside the target entity's
-    // 0..duration range are dropped.  Content/htmlVars are only copied between
+    // 0..duration-1 range are dropped.  Content/htmlVars are only copied between
     // entities with a compatible content type (and the same HTML asset).
     bool planCopyKeyframeParams(const KeyRef& source,
                                 const QVector<KeyRef>& targets, EditPlan* plan,

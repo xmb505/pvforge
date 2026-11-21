@@ -172,7 +172,7 @@ int editModelChecks(pvf::EditorSession* session, pvf::EditActions* actions,
                QStringLiteral("solver trim failed: %1").arg(error)))
         return 1;
     if (!check(entity(solverRoot).solvers.size() == 1
-                   && entity(solverRoot).solvers.first().endFrame == 39,
+                   && entity(solverRoot).solvers.first().endFrame == 40,
                QStringLiteral("open solver segment was not pinned")))
         return 1;
     if (!undo())

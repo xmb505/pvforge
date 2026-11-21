@@ -97,7 +97,8 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
     m_dragStartFrame = frameFromX(x);
     m_dragStartRow = row;
     m_dragClipStart = clipStartOf(*entity);
-    m_dragClipEnd = clipEndOf(*entity);
+    // Gestures and the model speak the same closed inclusive end.
+    m_dragClipEnd = clipEndOf(*entity) - 1;
     m_lastDragPos = pos;
     m_moved = false;
 
@@ -259,11 +260,11 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
         {
             const QRect clip = clipRect(*entity);
             const int startFrame = clipStartOf(*entity);
-            const int endFrame = clipEndOf(*entity);
+            const int endFrame = clipEndOf(*entity); // exclusive
             setToolTip(QStringLiteral("%1\n%2–%3 帧 · 时长 %4 帧")
                            .arg(entity->name)
                            .arg(startFrame)
-                           .arg(endFrame)
+                           .arg(endFrame - 1)
                            .arg(endFrame - startFrame));
             QString tip = toolTip();
             if (entity->locked)
