@@ -20,6 +20,25 @@ namespace {
 constexpr int kSampleRate = 48000;
 constexpr int kChannels = 2;
 
+QByteArray convertScrubPcm(const QByteArray& pcm,
+                           QAudioFormat::SampleFormat format)
+{
+    if (format != QAudioFormat::Int16)
+        return pcm;
+
+    const auto* source = reinterpret_cast<const float*>(pcm.constData());
+    const int count = pcm.size() / int(sizeof(float));
+    QByteArray converted;
+    converted.resize(count * int(sizeof(qint16)));
+    auto* target = reinterpret_cast<qint16*>(converted.data());
+    for (int i = 0; i < count; ++i)
+    {
+        target[i] = qint16(std::lround(
+            std::clamp(source[i], -1.0f, 1.0f) * 32767.0f));
+    }
+    return converted;
+}
+
 } // namespace
 
 Playback::Playback(const model::Project& project,
@@ -33,6 +52,83 @@ Playback::Playback(const model::Project& project,
 Playback::~Playback()
 {
     stop();
+}
+
+void Playback::stopScrub()
+{
+    if (m_scrubSink)
+        m_scrubSink->stop();
+    if (m_scrubBuffer.isOpen())
+        m_scrubBuffer.close();
+}
+
+bool Playback::ensureScrubFormat(const QAudioDevice& device)
+{
+    if (m_scrubSink && m_scrubDeviceId == device.id())
+        return true;
+
+    if (m_scrubSink)
+    {
+        m_scrubSink->stop();
+        delete m_scrubSink;
+        m_scrubSink = nullptr;
+    }
+
+    QAudioFormat format;
+    format.setSampleRate(kSampleRate);
+    format.setChannelCount(kChannels);
+    format.setSampleFormat(QAudioFormat::Float);
+    if (!device.isFormatSupported(format))
+    {
+        format.setSampleFormat(QAudioFormat::Int16);
+        if (!device.isFormatSupported(format))
+            return false;
+    }
+
+    m_scrubFormat = format;
+    m_scrubDeviceId = device.id();
+    m_scrubSink = new QAudioSink(device, format, this);
+    return true;
+}
+
+bool Playback::scrub(int fromFrame, int toFrame, int fps)
+{
+    // Full playback owns the device; a scrub blip may never interrupt it.
+    if (m_playing || fps <= 0)
+        return false;
+
+    // Check the device before mixing: headless/offscreen runs must not open
+    // audio files just to discover there is nowhere to play them.
+    const QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (device.isNull())
+        return false;
+
+    const QByteArray pcm = buildScrubSlice(m_project, m_assets, fromFrame,
+                                           toFrame, fps, kSampleRate,
+                                           kChannels);
+    if (pcm.isEmpty())
+        return false;
+    if (!ensureScrubFormat(device))
+        return false;
+
+    // The previous blip is discarded immediately; cut it with the envelope
+    // rather than letting two scrub buffers overlap on the device.
+    m_scrubSink->stop();
+    m_scrubPcm = convertScrubPcm(pcm, m_scrubFormat.sampleFormat());
+    m_scrubBuffer.close();
+    m_scrubBuffer.setData(m_scrubPcm);
+    m_scrubBuffer.open(QIODevice::ReadOnly);
+    m_scrubSink->start(&m_scrubBuffer);
+    if (m_scrubSink->error() != QAudio::NoError)
+    {
+        m_scrubSink->stop();
+        delete m_scrubSink;
+        m_scrubSink = nullptr;
+        m_scrubDeviceId.clear();
+        m_scrubBuffer.close();
+        return false;
+    }
+    return true;
 }
 
 bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
@@ -119,6 +215,7 @@ bool Playback::play(int startFrame, int endFrame, int fps, QString* error)
 
 void Playback::stop()
 {
+    stopScrub();
     if (m_sink)
     {
         m_sink->stop();
