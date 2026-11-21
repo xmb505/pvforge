@@ -402,10 +402,12 @@ void WorkbenchIntegrationTest::vectorFramesAreStoredAsQoi()
 
     const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
     QVERIFY(!services.cacheDirectory().isEmpty());
+    const QString key =
+        workbench::frameContentKey(services.buildMetaForTest(5));
     QVERIFY(QFileInfo::exists(
-        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+        QDir(services.cacheDirectory()).filePath(key + QStringLiteral(".qoi"))));
     QVERIFY(!QFileInfo::exists(
-        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+        QDir(services.cacheDirectory()).filePath(key + QStringLiteral(".webp"))));
     QCOMPARE(qoiCount(cacheRoot), 1);
     QCOMPARE(webpCount(cacheRoot), 0);
 
@@ -445,10 +447,12 @@ void WorkbenchIntegrationTest::rasterAssetFramesUseWebp()
     services.store(5, Uuid(), rendered);
 
     const QString cacheRoot = projectDir + QStringLiteral("/.cache/workbench");
+    const QString key =
+        workbench::frameContentKey(services.buildMetaForTest(5));
     QVERIFY(QFileInfo::exists(
-        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.webp"))));
+        QDir(services.cacheDirectory()).filePath(key + QStringLiteral(".webp"))));
     QVERIFY(!QFileInfo::exists(
-        QDir(services.cacheDirectory()).filePath(QStringLiteral("5.qoi"))));
+        QDir(services.cacheDirectory()).filePath(key + QStringLiteral(".qoi"))));
     QCOMPARE(webpCount(cacheRoot), 1);
     QCOMPARE(qoiCount(cacheRoot), 0);
 
@@ -478,13 +482,17 @@ void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
     const WorkbenchPrewarmProgress first = services.prewarmProgressForTest();
     QCOMPARE(first.total, kLastFrame + 1);
     QCOMPARE(first.done, kLastFrame + 1);
-    QCOMPARE(first.cached, kLastFrame + 1);
+    // The red rect is static: every frame has the same content key, so only
+    // the first frame renders and stores; the remaining frames are already
+    // hits.  This is exactly the cross-frame reuse content addressing adds.
+    QCOMPARE(first.cached, 1);
+    QCOMPARE(first.hits, kLastFrame);
     QCOMPARE(first.skipped, 0);
     QCOMPARE(first.failed, 0);
 
     const workbench::CacheStats afterFirst = services.stats();
-    QCOMPARE(afterFirst.entries, kLastFrame + 1);
-    QCOMPARE(afterFirst.stores, quint64(kLastFrame + 1));
+    QCOMPARE(afterFirst.entries, 1);
+    QCOMPARE(afterFirst.stores, quint64(1));
     QVERIFY(!services.cacheDirectory().isEmpty());
     QVERIFY(QDir(services.cacheDirectory()).exists());
 
@@ -500,7 +508,7 @@ void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
     const WorkbenchPrewarmProgress second = services.prewarmProgressForTest();
     QCOMPARE(second.hits, kLastFrame + 1);
     QCOMPARE(second.cached, 0);
-    QCOMPARE(services.stats().stores, quint64(kLastFrame + 1));
+    QCOMPARE(services.stats().stores, quint64(1));
 }
 
 void WorkbenchIntegrationTest::cacheSurvivesReopen()
@@ -521,7 +529,7 @@ void WorkbenchIntegrationTest::cacheSurvivesReopen()
         services.startScanNow();
         QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning,
                                  15000);
-        QCOMPARE(services.prewarmProgressForTest().cached, kLastFrame + 1);
+        QCOMPARE(services.prewarmProgressForTest().cached, 1);
     }
 
     auto reopened = ProjectDocument::open(path, &error, false);
@@ -534,7 +542,7 @@ void WorkbenchIntegrationTest::cacheSurvivesReopen()
     const WorkbenchPrewarmProgress progress = services.prewarmProgressForTest();
     QCOMPARE(progress.hits, kLastFrame + 1);
     QCOMPARE(progress.cached, 0);
-    QCOMPARE(services.stats().entries, kLastFrame + 1);
+    QCOMPARE(services.stats().entries, 1);
     QVERIFY(!services.lookupForTest(5, Uuid()).isNull());
 }
 
@@ -688,7 +696,7 @@ void WorkbenchIntegrationTest::playbackPausesAndResumesScan()
     QVERIFY(!services.playbackActive());
     QVERIFY(!services.prewarmProgressForTest().paused);
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
-    QCOMPARE(services.stats().entries, kLastFrame + 1);
+    QCOMPARE(services.stats().entries, 1); // static picture, one content key
 }
 
 void WorkbenchIntegrationTest::cacheToPlayheadLimitsRange()
@@ -709,7 +717,7 @@ void WorkbenchIntegrationTest::cacheToPlayheadLimitsRange()
 
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
     QCOMPARE(services.prewarmProgressForTest().total, 6);
-    QCOMPARE(services.stats().entries, 6);
+    QCOMPARE(services.stats().entries, 1); // six frames of the same red rect
 }
 
 void WorkbenchIntegrationTest::expandSettingChangesCacheKey()
@@ -913,13 +921,13 @@ void WorkbenchIntegrationTest::playbackRasterStoreIsQueued()
     QCOMPARE(services.pendingStores(), 0);
     QCOMPARE(services.asyncStoresWritten(), quint64(64));
     QCOMPARE(services.workerEncodes(), quint64(64));
-    QCOMPARE(services.stats().entries, 64);
+    QCOMPARE(services.stats().entries, 1); // every frame has the same picture
     QCOMPARE(services.stats().pendingStores, 0);
 
-    // The newest frames survived the drop, so returning to the playhead after
-    // playback is a hit.
+    // The stored picture is shared by every frame, so even a frame dropped
+    // from the queue is a hit once any frame of the same content was written.
     QVERIFY(!services.lookupForTest(kFrames - 1, Uuid()).isNull());
-    QVERIFY(services.lookupForTest(0, Uuid()).isNull());
+    QVERIFY(!services.lookupForTest(0, Uuid()).isNull());
     QVERIFY(services.workerEncodeMeanMs() > 0.0);
 
     services.setPlaybackActive(false);
@@ -1004,6 +1012,7 @@ void WorkbenchIntegrationTest::shutdownDiscardsQueuedRasterStores()
         QString(), options);
     QVERIFY2(reopened.isValid(), qPrintable(reopened.error()));
     QCOMPARE(reopened.cachedFrames().size(), 0);
+    QCOMPARE(reopened.stats().entries, 0);
 }
 
 void WorkbenchIntegrationTest::writerThreadsRetuneWithoutDropping()
@@ -1179,7 +1188,7 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
     // though a stale scheduleStoreDispatch() call may still be posted.
     QCOMPARE(services.workerEncodes(), quint64(kFrames));
     QCOMPARE(services.asyncStoresWritten(), quint64(kFrames));
-    QCOMPARE(services.stats().entries, kFrames);
+    QCOMPARE(services.stats().entries, 1); // all frames share one picture
     QCOMPARE(services.droppedStores(), quint64(0));
 
     // The wait still ran the completions: the cached frames are real hits.
@@ -1256,7 +1265,7 @@ void WorkbenchIntegrationTest::waitForPendingStoresDoesNotReenterEventLoop()
     expectedEncodes += kPostedFrames;
     QCOMPARE(services.workerEncodes(), expectedEncodes);
     QCOMPARE(services.asyncStoresWritten(), expectedEncodes);
-    QCOMPARE(services.stats().entries, int(expectedEncodes));
+    QCOMPARE(services.stats().entries, 1); // identical pictures, one record
     QVERIFY(!services.lookupForTest(600, Uuid()).isNull());
 
     // The timer was only held back by the wait, not disabled.

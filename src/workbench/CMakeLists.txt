@@ -69,6 +69,23 @@ if(BUILD_TESTING)
         metaMarksRasterAssets
         qoiRoundtrip
         qoiRejectsInvalid
+    )
+
+    foreach(test_case IN LISTS PVF_WORKBENCH_TEST_CASES)
+        add_test(NAME workbench.${test_case}
+                 COMMAND pvf_workbench_tests ${test_case})
+        set_tests_properties(workbench.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
+            TIMEOUT 120
+        )
+    endforeach()
+
+    add_executable(pvf_workbench_cache_store_tests
+                   tests/WorkbenchCacheStoreTests.cpp)
+    target_link_libraries(pvf_workbench_cache_store_tests
+                          PRIVATE pvf_workbench Qt6::Test)
+
+    set(PVF_WORKBENCH_CACHE_STORE_TEST_CASES
         cacheStoreLookup
         cacheEncodeStoreEncoded
         cacheEncodesWebpOnWorkerThread
@@ -80,15 +97,21 @@ if(BUILD_TESTING)
         cacheClear
         cacheCleansOrphanFrames
         cacheStoresRasterAsWebp
-        cacheReadsLegacyWebp
+        cacheMigratesLegacyIndexWithoutFalseHits
         cacheSwitchesCodecWhenRasterChanges
         cachePerCameraDirectories
         cacheUsageMatchesStats
+        audioOnlyFramesShareOneRecord
+        audioAncestorKeepsTransformWithoutPlaybackState
+        staticEntityReusesFrameZero
+        dynamicMediaDoesNotReuseFrameZero
+        editAndUndoInvalidateThenHit
+        emptyAndNonVisualFramesShareOneMeta
     )
 
-    foreach(test_case IN LISTS PVF_WORKBENCH_TEST_CASES)
+    foreach(test_case IN LISTS PVF_WORKBENCH_CACHE_STORE_TEST_CASES)
         add_test(NAME workbench.${test_case}
-                 COMMAND pvf_workbench_tests ${test_case})
+                 COMMAND pvf_workbench_cache_store_tests ${test_case})
         set_tests_properties(workbench.${test_case} PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none"
             TIMEOUT 120
