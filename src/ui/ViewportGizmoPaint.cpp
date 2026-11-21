@@ -17,37 +17,49 @@
 namespace pvf::ui::detail {
 
 // Inkscape's draw_carrow(): one closed path with a 90-degree outer arc, a
-// 90-degree inner arc and two triangular arrow heads.  The control points are
-// the same as src/display/control/ctrl-handle-rendering.cpp, translated so the
-// glyph is centred on the origin of its own S x S box.
+// 90-degree inner arc and two barbed triangular arrow heads.  The heads are
+// wider than the shaft (barb > halfShaft) so the glyph reads as an arrow
+// instead of a banana.  Control points follow
+// src/display/control/ctrl-handle-rendering.cpp, translated so the glyph is
+// centred on the origin of its own S x S box.
 QPainterPath carrowGlyphPath()
 {
     const double size = gizmo::kRotateHandleSize;
-    const double delta = std::round(1.5 + (size - 3.0) / 4.0) - 1.5;
-    const double arcCenterX = 1.5 + delta;
-    const double arcCenterY = size - 1.5 - delta;
-    const double outerRadius = size - 3.0 - 1.5 * delta;
-    const double innerRadius = size - 3.0 - 2.5 * delta;
+    const double midRadius = 7.5;
+    const double halfShaft = 1.1;
+    const double outerRadius = midRadius + halfShaft;
+    const double innerRadius = midRadius - halfShaft;
+    const double barb = 2.2;
+    const double headLen = 3.8;
 
-    const double midRadius = (outerRadius + innerRadius) / 2.0;
+    // The outline spans headLen to the left and below and outerRadius + barb
+    // to the right and above.  Keep the arc centre off-centre so the whole
+    // glyph, heads included, stays centred inside the handle box.
+    const double shift = (outerRadius + barb - headLen) / 2.0;
+    const double arcCenterX = size / 2.0 - shift;
+    const double arcCenterY = size / 2.0 + shift;
 
-    // Closed 90-degree annular sector with one triangular head at each end.
-    // Order: outer arc start -> outer arc end -> bottom tip -> inner arc start
-    // -> inner arc end -> top tip -> close.  Every head base is a radial chord
-    // on the sector, so the outline never crosses itself.
+    // One clockwise loop, no crossing edges:
+    // 12 o'clock outer arc -> 3 o'clock outer barb -> 3 o'clock tip ->
+    // 3 o'clock inner barb -> inner arc back to 12 o'clock -> 12 o'clock inner
+    // barb -> 12 o'clock tip -> 12 o'clock outer barb -> close.
     QPainterPath path;
     path.moveTo(arcCenterX, arcCenterY - outerRadius);
     // 90-degree outer arc from 12 o'clock to 3 o'clock (Qt angles: 90 -> 0).
     path.arcTo(QRectF(arcCenterX - outerRadius, arcCenterY - outerRadius,
                       2.0 * outerRadius, 2.0 * outerRadius),
                90.0, -90.0);
-    path.lineTo(arcCenterX + midRadius, arcCenterY + delta);
+    path.lineTo(arcCenterX + outerRadius + barb, arcCenterY);
+    path.lineTo(arcCenterX + midRadius, arcCenterY + headLen);
+    path.lineTo(arcCenterX + innerRadius - barb, arcCenterY);
     path.lineTo(arcCenterX + innerRadius, arcCenterY);
     // 90-degree inner arc back from 3 o'clock to 12 o'clock.
     path.arcTo(QRectF(arcCenterX - innerRadius, arcCenterY - innerRadius,
                       2.0 * innerRadius, 2.0 * innerRadius),
                0.0, 90.0);
-    path.lineTo(arcCenterX - delta, arcCenterY - midRadius);
+    path.lineTo(arcCenterX, arcCenterY - innerRadius + barb);
+    path.lineTo(arcCenterX - headLen, arcCenterY - midRadius);
+    path.lineTo(arcCenterX, arcCenterY - outerRadius - barb);
     path.closeSubpath();
     return path.translated(-size / 2.0, -size / 2.0);
 }
@@ -61,12 +73,13 @@ void drawRotateGlyph(QPainter& painter, QPointF center, double angleDegrees,
     painter.rotate(angleDegrees);
     // Dark halo under a light fill: the old UI's light-icon/dark-stroke style
     // stays readable on white entities while the light core shows on dark
-    // backgrounds (same trick as Inkscape's outline).
-    painter.setPen(QPen(QColor(18, 21, 26), 2.2, Qt::SolidLine, Qt::RoundCap,
+    // backgrounds (same trick as Inkscape's outline).  Keep the halo and the
+    // edge thin so the narrow shaft and the barbs stay legible.
+    painter.setPen(QPen(QColor(18, 21, 26), 1.6, Qt::SolidLine, Qt::RoundCap,
                         Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(path);
-    painter.setPen(QPen(QColor(18, 21, 26), 1.0, Qt::SolidLine, Qt::RoundCap,
+    painter.setPen(QPen(QColor(18, 21, 26), 0.8, Qt::SolidLine, Qt::RoundCap,
                         Qt::RoundJoin));
     painter.setBrush(highlighted ? QColor(116, 206, 255) : QColor(246, 249, 255));
     painter.drawPath(path);
