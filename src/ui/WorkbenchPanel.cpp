@@ -22,7 +22,6 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QShortcut>
 #include <QShowEvent>
 #include <QStackedWidget>
 #include <QToolButton>
@@ -34,14 +33,13 @@ namespace pvf {
 
 namespace {
 
-QString workbenchStyle(bool floating)
+QString workbenchStyle()
 {
     return QStringLiteral(
-               "QFrame#workbench { background: palette(window); border: %1; }"
-               "QWidget#workbenchHeader { background: palette(midlight);"
-               " border-bottom: 1px solid palette(mid); }")
-        .arg(floating ? QStringLiteral("none")
-                      : QStringLiteral("1px solid palette(mid)"));
+        "QFrame#workbench { background: palette(window);"
+        " border: 1px solid palette(mid); }"
+        "QWidget#workbenchHeader { background: palette(midlight);"
+        " border-bottom: 1px solid palette(mid); }");
 }
 
 } // namespace
@@ -92,7 +90,7 @@ void WorkbenchPanel::buildUi()
 {
     setObjectName(QStringLiteral("workbench"));
     setFrameShape(QFrame::StyledPanel);
-    setStyleSheet(workbenchStyle(false));
+    setStyleSheet(workbenchStyle());
     // The old wall is 640x560, but it must fit above the timeline in smaller
     // viewports. showDocked() shrinks it to the viewport; the page stack
     // scrolls while the create button stays outside the scroll area.
@@ -163,14 +161,6 @@ void WorkbenchPanel::buildUi()
     right->addWidget(m_create);
     contentRow->addLayout(right, 1);
 
-    m_escapeShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-    m_escapeShortcut->setContext(Qt::WindowShortcut);
-    m_escapeShortcut->setEnabled(false);
-    connect(m_escapeShortcut, &QShortcut::activated, this, [this] {
-        if (m_floating)
-            emit dockRequested();
-    });
-
     connect(m_types, &QListWidget::currentRowChanged, this, [this](int row) {
         if (row >= 0)
             m_pages->setCurrentIndex(row);
@@ -189,7 +179,6 @@ void WorkbenchPanel::showDocked(const QRect& rect)
 {
     refreshMediaLibrary();
 
-    setFloatingChrome(false);
     resize(rect.size());
     move(rect.topLeft());
 
@@ -200,36 +189,6 @@ void WorkbenchPanel::showDocked(const QRect& rect)
     }
     show();
     raise();
-}
-
-void WorkbenchPanel::setFloatingChrome(bool floating)
-{
-    m_floating = floating;
-    setFrameShape(floating ? QFrame::NoFrame : QFrame::StyledPanel);
-    setStyleSheet(workbenchStyle(floating));
-
-    if (floating)
-    {
-        // A drop shadow on a top-level window is clipped by the window edge
-        // and leaves a border around the native frame.
-        setGraphicsEffect(nullptr);
-    }
-    else if (!graphicsEffect())
-    {
-        auto* shadow = new QGraphicsDropShadowEffect(this);
-        shadow->setBlurRadius(28);
-        shadow->setOffset(0, 8);
-        shadow->setColor(QColor(0, 0, 0, 170));
-        setGraphicsEffect(shadow);
-    }
-
-    if (m_closeButton)
-        m_closeButton->setToolTip(QStringLiteral("关闭工作台"));
-    if (m_escapeShortcut)
-        m_escapeShortcut->setEnabled(floating);
-    if (floating)
-        setWindowTitle(Lang::t(QStringLiteral("panel.workbench"),
-                               QStringLiteral("工作台")));
 }
 
 void WorkbenchPanel::hidePanel()
@@ -255,15 +214,10 @@ void WorkbenchPanel::hideEvent(QHideEvent* event)
 
 void WorkbenchPanel::closeEvent(QCloseEvent* event)
 {
-    if (m_floating)
-    {
-        // Closing the floating window only hides it; the panel and its session
-        // stay alive and the host keeps the floating mode/geometry.
-        event->ignore();
-        emit hideRequested();
-        return;
-    }
-    QFrame::closeEvent(event);
+    // The stage-bound panel has no separate window to close: closing only
+    // hides it and keeps the session alive.
+    event->ignore();
+    emit hideRequested();
 }
 
 bool WorkbenchPanel::eventFilter(QObject* watched, QEvent* event)

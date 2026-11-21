@@ -16,7 +16,6 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
-class QShortcut;
 class QSpinBox;
 class QStackedWidget;
 class QToolButton;
@@ -25,13 +24,11 @@ namespace pvf {
 
 class EditorSession;
 
-// Floating creation panel modelled after the Mine-imator workbench.
+// Creation panel modelled after the Mine-imator workbench.
 //
-// The panel always carries a slim 22 px header (title + float/dock + close).
-// Docked it is a QFrame child of the viewport; floating it is the same widget
-// reparented to the main window as a native Qt::Window.  The host owns the
-// parent/geometry transitions; the panel only swaps its chrome and reports
-// user intent through signals.
+// The panel always carries a slim 22 px header (title + close) and is a QFrame
+// child of the viewport.  It follows the stage: closing only hides it and it
+// never becomes a separate native window.
 class WorkbenchPanel : public QFrame
 {
     Q_OBJECT
@@ -41,15 +38,11 @@ public:
     // creation goes through EditorSession so it is one undo step.
     explicit WorkbenchPanel(EditorSession* session, QWidget* parent = nullptr);
 
-    // Show docked at an explicit viewport rectangle.  Installs the click-away
-    // filter while docked and makes sure no stale app filter survives a float.
+    // Show at an explicit viewport rectangle and install the click-away
+    // filter.  The panel is always a child of the stage.
     void showDocked(const QRect& rect);
     void hidePanel();
     void setIgnoreMouseWidget(QWidget* widget) { m_ignoreWidget = widget; }
-    // Floating chrome: drop the drop shadow / QFrame border and swap the
-    // header button to "dock"; docked restores the old look.
-    void setFloatingChrome(bool floating);
-    bool isFloating() const { return m_floating; }
     // Session-mode refresh after an external (MCP) project change: re-reads
     // the wall summary and media choices from the document/assets.
     void refreshSession();
@@ -63,7 +56,6 @@ signals:
     void sessionCreated(const Uuid& uuid);
     // User intent from the built-in header.
     void hideRequested();
-    void dockRequested();
     void visibilityChanged(bool visible);
 
 protected:
@@ -101,8 +93,6 @@ private:
     QWidget* m_header = nullptr;
     QLabel* m_title = nullptr;
     QToolButton* m_closeButton = nullptr;
-    QShortcut* m_escapeShortcut = nullptr;
-    bool m_floating = false;
     QListWidget* m_types = nullptr;
     QStackedWidget* m_pages = nullptr;
     QPushButton* m_create = nullptr;

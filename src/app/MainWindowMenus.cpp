@@ -189,6 +189,7 @@ void MainWindow::createSessionMenus()
 
     auto* viewMenu =
         menuBar()->addMenu(Lang::t(QStringLiteral("menu.view"), QStringLiteral("视图")));
+    viewMenu->setObjectName(QStringLiteral("viewMenu"));
     auto* cameraFrameAction = new QAction(
         Lang::t(QStringLiteral("action.cameraFrame"),
                 QStringLiteral("显示摄像机取景框")),
@@ -215,9 +216,9 @@ void MainWindow::createSessionMenus()
     });
     viewMenu->addAction(monitorAction);
 
-    // Workbench panel: show/hide plus dock/floating mode.  The same actions
-    // are added to the panel so the shortcuts keep working while it is a
-    // separate native window.
+    // Workbench panel: a stage-bound popup, never a view-menu panel.  The
+    // action keeps the shortcut on the window (and inside the panel) so the
+    // "视图" menu matches the confirmed stage mockup.
     auto* workbenchAction =
         new QAction(Lang::t(QStringLiteral("panel.workbench"),
                             QStringLiteral("工作台")),
@@ -242,7 +243,6 @@ void MainWindow::createSessionMenus()
                 });
     }
     addAction(workbenchAction);
-    viewMenu->addAction(workbenchAction);
     if (m_workbench)
         m_workbench->addAction(workbenchAction);
 

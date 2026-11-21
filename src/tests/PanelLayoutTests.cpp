@@ -118,6 +118,22 @@ int panelLayoutTest(QApplication& app)
     check(!panel->isWindow(), QStringLiteral("docked workbench is a window"));
     check(header->height() == 22, QStringLiteral("header is not 22 px"));
 
+    // The workbench belongs to the stage, not to the "视图" menu.  The
+    // Ctrl+Shift+W action stays on the window (and inside the panel).
+    auto* viewMenu = window->findChild<QMenu*>(QStringLiteral("viewMenu"));
+    auto* workbenchAction =
+        window->findChild<QAction*>(QStringLiteral("workbenchAction"));
+    if (!check(viewMenu && workbenchAction,
+               QStringLiteral("view menu or workbench action missing")))
+    {
+        return 1;
+    }
+    check(!viewMenu->actions().contains(workbenchAction),
+          QStringLiteral("workbench leaked into the view menu"));
+    check(workbenchAction->shortcut()
+              == QKeySequence(QStringLiteral("Ctrl+Shift+W")),
+          QStringLiteral("workbench shortcut moved off the window"));
+
     // 2. Open docked: visible, inside the viewport, bound to the stage.
     workbenchButton->click();
     QApplication::processEvents();
