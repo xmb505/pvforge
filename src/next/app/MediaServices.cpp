@@ -87,8 +87,9 @@ MediaServices::MediaServices(ProjectDocument* document, const AppSettings& setti
     // frameReady is already emitted through a queued invocation; the extra
     // queued hop keeps the viewport refresh out of the render completion stack.
     connect(m_html.get(), &html2::HtmlFrameService::frameReady, this,
-            [this](const AssetHash&, int, const QImage&) {
+            [this](const AssetHash& assetHash, int, const QImage&) {
                 m_htmlPending = false;
+                m_thumbnailPending.remove(assetHash);
                 emit htmlFrameReady();
             },
             Qt::QueuedConnection);
@@ -147,8 +148,9 @@ void MediaServices::applySettings(const AppSettings& settings)
             settings.htmlMemoryBytes, settings.htmlDiskBytes);
         m_html->setChromeExecutable(settings.chromeExecutable);
         connect(m_html.get(), &html2::HtmlFrameService::frameReady, this,
-                [this](const AssetHash&, int, const QImage&) {
+                [this](const AssetHash& assetHash, int, const QImage&) {
                     m_htmlPending = false;
+                    m_thumbnailPending.remove(assetHash);
                     emit htmlFrameReady();
                 },
                 Qt::QueuedConnection);
@@ -514,6 +516,54 @@ QImage MediaServices::htmlFrameBlocking(const Uuid& entityUuid,
     const QImage image = m_html->lowResWait(request, maxWaitMs);
     m_htmlInFlight = false;
     return image;
+}
+
+QImage MediaServices::htmlThumbnail(const AssetHash& hash, const QSize& target)
+{
+    if (!m_html || !m_document || hash.isEmpty())
+        return {};
+    if (!target.isValid() || target.isEmpty())
+        return {};
+
+    const auto asset = m_document->assets().get(hash);
+    if (!asset || asset->type != AssetType::Html)
+        return {};
+
+    // Downscale before requesting: a keyframe-sized render would be one more
+    // full-size browser frame per icon, and thumbnails are meant to be cheap.
+    const QSize logical = htmlLogicalSize(*asset);
+    const QSize size = QSize(logical.width(), logical.height()).scaled(
+        target, Qt::KeepAspectRatio);
+    if (size.isEmpty())
+        return {};
+
+    html2::FrameRequest request;
+    request.assetHash = hash;
+    request.bundleDir = QDir(asset->directory).filePath(QStringLiteral("bundle"));
+    request.entry = asset->metadata.value(QStringLiteral("entry")).toString();
+    if (request.entry.isEmpty())
+        request.entry = QStringLiteral("index.html");
+    request.timeDependent =
+        asset->metadata.value(QStringLiteral("timeDependent")).toBool(true);
+    // Frame 0 with the declared defaults: no entity, no keyframe sample.
+    request.localFrame = 0;
+    request.time = 0.0;
+    request.size = size;
+    request.vars =
+        asset->metadata.value(QStringLiteral("variables")).toObject().toVariantMap();
+
+    const QImage cached = m_html->cachedLowRes(request);
+    if (!cached.isNull())
+        return cached;
+
+    // A project whose browsers failed to start stays on the placeholder: the
+    // asset bin repaints often and must not restart Chrome on every icon.
+    if (!m_htmlStartFailed && (m_html->isRunning() || !m_thumbnailPending.contains(hash)))
+    {
+        m_html->requestLowRes(request);
+        m_thumbnailPending.insert(hash);
+    }
+    return {};
 }
 
 QImage MediaServices::exportVideoFrame(const Uuid& entityUuid,

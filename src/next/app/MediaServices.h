@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QImage>
 #include <QObject>
+#include <QSet>
 #include <QSize>
 #include <QString>
 #include <QVector>
@@ -114,6 +115,16 @@ public:
     QImage htmlFrameBlocking(const Uuid& entityUuid, double projectFrame,
                              int maxWaitMs = 300);
 
+    // Asset thumbnail for the asset library: the first frame of an HTML asset
+    // rendered with its default variables, scaled into `target` (aspect ratio
+    // kept, longest side bounded by ~max(target) so a 48x48 icon and a 240x150
+    // hover card share one cache entry).  Never blocks: a cache hit returns the
+    // finished image, a miss queues the frontend worker and returns a null
+    // image, and the frame arrives through the existing htmlFrameReady signal
+    // (htmlThumbnail() then hits the cache).  A project whose HTML browsers
+    // could not start returns null forever, so callers keep their placeholder.
+    QImage htmlThumbnail(const AssetHash& hash, const QSize& target);
+
     // Export providers (src/export2).  Unlike the viewport providers they
     // never use the proxy/WebP sequence or the low-resolution HTML browsers.
     //
@@ -201,6 +212,9 @@ private:
     bool m_preparingHtml = false;
     // Set by a missed htmlFrame() request, cleared by htmlFrameReady.
     bool m_htmlPending = false;
+    // Assets whose 0-frame thumbnail was queued but has not reported back; a
+    // repeated icon repaint must not re-queue the same render.
+    QSet<AssetHash> m_thumbnailPending;
 };
 
 } // namespace pvf::next

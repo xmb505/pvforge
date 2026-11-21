@@ -10,6 +10,8 @@
 #include <QString>
 #include <QStringList>
 
+class QTimer;
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -150,6 +152,14 @@ public:
     // function restores the real dialog.
     static void setExternalImportConfirmerForTest(
         std::function<bool(const QString&)> confirmer);
+    // Counts the prefetchHtml() calls this session issued and the last
+    // (frame, force) pair, so a test can assert the open/edit/playhead paths
+    // without a running Chrome.
+    int htmlPrefetchCountForTest() const { return m_htmlPrefetchCount; }
+    int htmlPrefetchLastFrameForTest() const { return m_htmlPrefetchLastFrame; }
+    bool htmlPrefetchLastForceForTest() const { return m_htmlPrefetchLastForce; }
+    // Applies the pending prefetch debounce immediately.
+    void flushHtmlPrefetchDebounceForTest();
 #endif
 
     // AI write lock.  While false every human write path (EditActions and
@@ -198,6 +208,15 @@ private:
     // in the shared map.  Never runs while playback is advancing.
     void precomputeSolverResults();
 
+    // HTML prefetch.  The batches are built and handed to the background
+    // HtmlFrameService by MediaServices::prefetchHtml(), so none of these run
+    // a render on the UI thread: the debounce only coalesces the requests a
+    // burst of edits or scrub steps would otherwise produce.
+    void prefetchHtmlNow(int frame, bool force);
+    // Queues one forced prefetch at the current playhead after
+    // kHtmlEditPrefetchDelayMs, replacing an earlier pending one.
+    void scheduleHtmlPrefetch();
+
     // Declared before the services so the services die first.
     std::unique_ptr<next::ProjectDocument> m_document;
     // Shared solver results; declared early so every borrowing service
@@ -228,6 +247,17 @@ private:
     QString m_mcpError;
     std::function<void(mcp2::ViewState&)> m_viewStateExtras;
     bool m_humanEditingEnabled = true;
+    // HTML prefetch debounce (README: docs/AI/HTML_PREFETCH_*).  Owned by the
+    // session and parented to the document so a destroyed session cancels it.
+    QTimer* m_htmlPrefetchTimer = nullptr;
+    // Guards the queued prefetch: whichever edit arrives while a timer is
+    // pending is folded into that single run.
+    bool m_htmlPrefetchScheduled = false;
+#ifdef PVFORGE_TEST_HOOKS
+    int m_htmlPrefetchCount = 0;
+    int m_htmlPrefetchLastFrame = -1;
+    bool m_htmlPrefetchLastForce = false;
+#endif
     Uuid m_monitorCamera;
     bool m_monitorCameraExplicit = false;
     bool m_monitorCameraFromSelection = false;

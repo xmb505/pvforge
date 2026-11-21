@@ -27,6 +27,10 @@ namespace {
 
 constexpr auto kRecentKey = "recentProjects";
 constexpr int kRecentLimit = 10;
+// HTML prefetch: an edit burst produces one forced prefetch after this settle
+// window instead of one per keystroke.  A scrub needs no timer of its own;
+// MediaServices::prefetchHtml() already ignores a frame it has just planned.
+constexpr int kHtmlEditPrefetchDelayMs = 120;
 
 #ifdef PVFORGE_TEST_HOOKS
 QString g_mcpConfigPathForTest;
@@ -70,6 +74,9 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
     m_media->setSolverResults(&m_solverResults);
     QString ignored;
     m_media->start(&ignored);
+    // The service is up (or already known to be unavailable): warm the frames
+    // around the saved playhead before the first repaint can ask for them.
+    prefetchHtmlNow(m_document ? m_document->playhead() : 0, true);
 
     m_playback = std::make_unique<next::PlaybackController>();
     m_playback->setWatchdogMs(m_appSettings.watchdogMs);
@@ -105,6 +112,25 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
                      });
     invalidateAnimCache();
 
+    // Prefetch hooks.  The cache key covers the whole-frame HTML variables, so
+    // any saved edit (structure, keyframes, vars) invalidates the warm frames;
+    // the debounce keeps a drag or a text edit from queueing one batch per
+    // commit.
+    QObject::connect(m_document.get(), &next::Document::changed, m_document.get(),
+                     [this] { scheduleHtmlPrefetch(); });
+    QObject::connect(m_document.get(), &next::Document::playheadChanged,
+                     m_document.get(), [this] {
+                         if (m_playback && m_playback->isPlaying())
+                             return;
+                         prefetchHtmlNow(m_document->playhead(), false);
+                     });
+    QObject::connect(m_playback.get(),
+                     &next::PlaybackController::playbackStateChanged,
+                     m_playback.get(), [this](bool playing) {
+                         if (playing)
+                             prefetchHtmlNow(m_document->playhead(), false);
+                     });
+
     m_editActions = std::make_unique<EditActions>(this);
 
     // The workbench cache is created lazily by the first viewport lookup; do
@@ -121,6 +147,8 @@ EditorSession::~EditorSession()
     // added: stop the MCP listener, stop the frame clock, release the cache,
     // then the media services.
     stopMcpServer();
+    if (m_htmlPrefetchTimer)
+        m_htmlPrefetchTimer->stop();
     if (m_playback)
         m_playback->setDocument(nullptr);
     m_workbench.reset();
@@ -448,6 +476,52 @@ void EditorSession::precomputeSolverResults()
 
     m_solverPrecomputeRunning = false;
 }
+
+void EditorSession::prefetchHtmlNow(int frame, bool force)
+{
+    if (!m_media)
+        return;
+#ifdef PVFORGE_TEST_HOOKS
+    ++m_htmlPrefetchCount;
+    m_htmlPrefetchLastFrame = frame;
+    m_htmlPrefetchLastForce = force;
+#endif
+    // MediaServices builds the batch and hands it to the background
+    // HtmlFrameService: no render happens on this thread.
+    m_media->prefetchHtml(frame, force);
+}
+
+void EditorSession::scheduleHtmlPrefetch()
+{
+    if (!m_document || m_htmlPrefetchScheduled)
+        return;
+    m_htmlPrefetchScheduled = true;
+    if (!m_htmlPrefetchTimer)
+    {
+        m_htmlPrefetchTimer = new QTimer(m_document.get());
+        m_htmlPrefetchTimer->setSingleShot(true);
+        m_htmlPrefetchTimer->setTimerType(Qt::CoarseTimer);
+        QObject::connect(m_htmlPrefetchTimer, &QTimer::timeout,
+                         m_document.get(), [this] {
+                             m_htmlPrefetchScheduled = false;
+                             prefetchHtmlNow(m_document->playhead(), true);
+                         });
+    }
+    m_htmlPrefetchTimer->start(kHtmlEditPrefetchDelayMs);
+}
+
+#ifdef PVFORGE_TEST_HOOKS
+void EditorSession::flushHtmlPrefetchDebounceForTest()
+{
+    if (!m_htmlPrefetchTimer || !m_htmlPrefetchTimer->isActive())
+        return;
+    m_htmlPrefetchTimer->stop();
+    if (!m_htmlPrefetchScheduled)
+        return;
+    m_htmlPrefetchScheduled = false;
+    prefetchHtmlNow(m_document ? m_document->playhead() : 0, true);
+}
+#endif
 
 bool EditorSession::applyAppSettings(const next::AppSettings& settings,
                                      QString* error)

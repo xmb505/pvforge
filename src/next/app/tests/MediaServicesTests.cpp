@@ -135,6 +135,7 @@ private slots:
     void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
     void exportSnapshotSurvivesDocumentEdits();
+    void htmlThumbnailRendersFrameZeroOfAsset();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -570,6 +571,64 @@ void MediaServicesTests::exportSnapshotSurvivesDocumentEdits()
     QCOMPARE(frame.size(), QSize(96, 54));
     QVERIFY(session.videoFrame(QStringLiteral("gone"), 12.5).isNull());
     session.finish();
+}
+
+void MediaServicesTests::htmlThumbnailRendersFrameZeroOfAsset()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/thumb.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    MediaServices media(document.get(), AppSettings());
+
+    // The asset does not have to be on the timeline: the thumbnail is keyed by
+    // the asset, rendered at frame 0 with the declared default variables, and
+    // scaled into the requested box (48x48 icon and 240x150 card share the
+    // 240x36 entry of the 800x120 default logical size).
+    const QImage first = media.htmlThumbnail(stored->hash, QSize(48, 48));
+    QVERIFY(first.isNull());
+    const QImage again = media.htmlThumbnail(stored->hash, QSize(48, 48));
+    if (!media.htmlStartFailed())
+    {
+        // Whatever the renderer does, it must never throw an image back from
+        // an unfinished request.
+        QVERIFY(again.isNull());
+    }
+
+    QString startError;
+    const bool started = media.start(&startError);
+    if (!started)
+    {
+        // No Chrome: the asset bin keeps its placeholder and the call is
+        // side-effect free apart from the recorded failure.
+        QVERIFY(media.htmlStartFailed());
+        QVERIFY(media.htmlThumbnail(stored->hash, QSize(48, 48)).isNull());
+        QSKIP("Chrome/Chromium is not installed");
+    }
+
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull(), 120000);
+    const QImage thumb = media.htmlThumbnail(stored->hash, QSize(48, 48));
+    QVERIFY(!thumb.isNull());
+    QCOMPARE(thumb.size(), QSize(240, 36));
+
+    // Unknown hash / non-HTML / invalid size are no-ops.
+    QVERIFY(media.htmlThumbnail(AssetHash(), QSize(48, 48)).isNull());
+    QVERIFY(media.htmlThumbnail(stored->hash, QSize()).isNull());
+    // A second icon repaint is a cache hit, never another browser request.
+    QCOMPARE(media.htmlThumbnail(stored->hash, QSize(48, 48)), thumb);
 }
 
 QTEST_MAIN(MediaServicesTests)
