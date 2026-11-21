@@ -170,6 +170,23 @@ if(BUILD_TESTING)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
     endforeach()
 
+    # PR2 self-description contracts (tool descriptions, error catalogue,
+    # pitfalls guide, dead project.update argument) live in their own binary so
+    # the historical mcp2 test file stays under its size ratchet.
+    add_executable(pvf_mcp2_pr2_tests tests/mcp2_pr2_tests.cpp)
+    target_link_libraries(pvf_mcp2_pr2_tests PRIVATE pvf_mcp2 Qt6::Test)
+    set(PVF_MCP2_PR2_TEST_CASES
+        toolsListDocumentsKeyframeAnimationParams
+        errorsSchemaListsAllCodes
+        guidePitfallsTopicAvailable
+        projectUpdateRejectsDeadConfirm
+    )
+    foreach(test_case IN LISTS PVF_MCP2_PR2_TEST_CASES)
+        add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_pr2_tests ${test_case})
+        set_tests_properties(mcp2.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+    endforeach()
+
     set(PVF_MCP2_HTTP_TEST_CASES
         httpInitialize
         httpToolsList

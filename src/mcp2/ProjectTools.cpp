@@ -177,7 +177,7 @@ Result projectUpdate(Tx& tx, const QJsonObject& args)
     static const QStringList allowed = {
         QStringLiteral("name"),    QStringLiteral("width"),
         QStringLiteral("height"),  QStringLiteral("fps"),
-        QStringLiteral("background"), QStringLiteral("confirm"),
+        QStringLiteral("background"),
     };
     for (auto it = args.constBegin(); it != args.constEnd(); ++it)
     {
