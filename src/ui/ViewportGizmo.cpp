@@ -267,7 +267,7 @@ std::optional<gizmo::Handle> Viewport::hitSessionGizmo(const QPointF& pos) const
     const auto it = m_session->project().entities.constFind(selected);
     if (it == m_session->project().entities.constEnd()
         || next::isEntityLocked(m_session->project(), selected)
-        || it->content.kind == ContentKind::Camera)
+        || !ui::detail::hasStageGizmo(it.value()))
         return std::nullopt;
 
     // Hit testing happens in widget space: the rotate handles use 18 px
@@ -366,7 +366,8 @@ void Viewport::startSessionGizmoDrag(const Uuid& uuid, SessionDragKind kind,
     }
 
     const auto it = m_session->project().entities.constFind(uuid);
-    if (it == m_session->project().entities.constEnd())
+    if (it == m_session->project().entities.constEnd()
+        || !ui::detail::hasStageGizmo(it.value()))
         return;
 
     m_sessionDragKind = kind;

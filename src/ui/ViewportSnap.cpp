@@ -49,7 +49,7 @@ void Viewport::collectSessionSnapTargets(const Uuid& uuid)
          ++it)
     {
         const model::Entity& entity = it.value();
-        if (it.key() == uuid || entity.content.kind == ContentKind::Camera)
+        if (it.key() == uuid || !ui::detail::hasStageGizmo(entity))
             continue;
         if (frame < entity.start || frame > entity.end)
             continue;

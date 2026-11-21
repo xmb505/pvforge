@@ -1,5 +1,7 @@
 #include "Viewport.h"
 
+#include "ui/ViewportInternal.h"
+
 #include "anim/Anim.h"
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
@@ -214,13 +216,10 @@ namespace {
 
 bool pickableContent(const model::Entity& entity)
 {
-    if (entity.content.kind == ContentKind::Camera
-        || entity.content.kind == ContentKind::Empty)
-        return false;
-    if (entity.content.kind == ContentKind::Asset
-        && entity.content.asset.type == AssetType::Audio)
-        return false;
-    return true;
+    // Empty rows are timeline containers (for example solver roots) and are
+    // selected from the timeline, not by clicking the stage.
+    return entity.content.kind != ContentKind::Empty
+           && ui::detail::hasStageGizmo(entity);
 }
 
 // Mirrors render2::RenderScene's layer walk: negative-row children first, then
@@ -305,7 +304,7 @@ void Viewport::drawSessionSelection(QPainter& painter)
     if (it == project.entities.constEnd())
         return;
     if (next::isEntityLocked(project, selected)
-        || it->content.kind == ContentKind::Camera)
+        || !ui::detail::hasStageGizmo(*it))
         return;
 
     drawSessionGizmo(painter);
