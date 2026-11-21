@@ -96,7 +96,7 @@ QJsonObject contentSchema()
     });
 
     const QJsonObject vector = objectSchema({
-        {QStringLiteral("shape"), prop(QStringLiteral("string"), QStringLiteral("ellipse|rect|triangle|polygon|star"))},
+        {QStringLiteral("shape"), prop(QStringLiteral("integer"), QStringLiteral("整数枚举：0 rect、1 ellipse、2 line、3 rounded rect、4 triangle、5 heart、6 star、7 polygon、8 arrow（字符串名不会被解析，传整数）"))},
         {QStringLiteral("width"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；静态基准值"))},
         {QStringLiteral("height"), prop(QStringLiteral("number"), QStringLiteral("1..1000000；静态基准值"))},
         {QStringLiteral("cornerRadius"), prop(QStringLiteral("number"), QStringLiteral("0..1000000；静态基准值"))},
