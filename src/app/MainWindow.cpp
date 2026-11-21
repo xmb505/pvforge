@@ -304,6 +304,30 @@ void MainWindow::buildSessionShell()
     connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::sessionAutoSave);
     updateAutosaveTimer();
 
+    // Scrub blips are coalesced: at most one mix/start per interval, so a
+    // held arrow key or a fast drag cannot rebuild a slice every mouse event.
+    m_scrubTimer = new QTimer(this);
+    m_scrubTimer->setSingleShot(true);
+    connect(m_scrubTimer, &QTimer::timeout, this, [this] {
+        if (!m_session || m_pendingScrubFrame < 0)
+            return;
+        auto* playback = m_session->playback();
+        const int toFrame = m_pendingScrubFrame;
+        m_pendingScrubFrame = -1;
+        const bool audible =
+            playback && !playback->isPlaying()
+            && m_session->appSettings().audioScrub;
+        if (!audible || m_lastScrubFrame < 0
+            || m_lastScrubFrame == toFrame)
+        {
+            m_lastScrubFrame = toFrame;
+            return;
+        }
+        playback->scrub(m_lastScrubFrame, toFrame);
+        m_lastScrubFrame = toFrame;
+        m_scrubClock.restart();
+    });
+
     connect(m_sessionProps, &ProjectPropertiesPanel::settingsChanged, this,
             [this] {
                 updateWindowTitle();
@@ -456,7 +480,13 @@ void MainWindow::buildSessionShell()
                 connect(m_viewport, &Viewport::framePresented, playback,
                         [playback](int) { playback->noteFramePresented(); });
                 connect(playback, &next::PlaybackController::playbackStateChanged,
-                        this, [this](bool) { updateSessionPlaybackUi(); });
+                        this, [this](bool) {
+                            updateSessionPlaybackUi();
+                            // Never audition across a playback run or a pause:
+                            // the next step starts from the frame on screen.
+                            resetScrubAudio(m_session ? m_session->playhead()
+                                                      : 0);
+                        });
                 connect(playback, &next::PlaybackController::stalled, this,
                         [this](const QString& message) {
                             statusBar()->showMessage(message, 5000);
@@ -498,6 +528,8 @@ void MainWindow::buildSessionShell()
         {
             connect(m_timeline, &TimelinePanel::frameRequested, this,
                     [this](int frame) { sessionGoToFrame(frame); });
+            connect(m_timeline, &TimelinePanel::scrubFrameRequested, this,
+                    [this](int frame) { sessionGoToFrame(frame, true); });
             connect(m_timeline, &TimelinePanel::entitySelected, this,
                     [this](EntityId id) {
                         if (!m_session || !m_timeline)
@@ -548,6 +580,8 @@ void MainWindow::buildSessionShell()
         // the project carries a persisted playhead.
         m_session->setPlayhead(0);
         m_frame = m_session->playhead();
+        // Opening a project positions the playhead without an audible blip.
+        resetScrubAudio(m_frame);
         m_selected = m_timeline
                          ? m_timeline->entityIdForUuid(document->selection())
                          : kInvalidEntity;
@@ -630,10 +664,11 @@ void MainWindow::refreshSession()
     updateSessionActionStates();
 }
 
-void MainWindow::sessionGoToFrame(int frame)
+void MainWindow::sessionGoToFrame(int frame, bool audible)
 {
     if (!m_session)
         return;
+    const int previous = m_session->playhead();
     const int clamped = std::max(0, frame);
     m_session->setPlayhead(clamped);
     m_frame = clamped;
@@ -644,6 +679,56 @@ void MainWindow::sessionGoToFrame(int frame)
     if (m_monitor)
         m_monitor->setFrame(clamped);
     updateSessionStatus();
+
+    if (audible)
+        requestScrubAudio(previous, clamped);
+    else if (clamped != previous)
+        resetScrubAudio(clamped);
+}
+
+void MainWindow::resetScrubAudio(int frame)
+{
+    if (m_scrubTimer)
+        m_scrubTimer->stop();
+    m_pendingScrubFrame = -1;
+    m_lastScrubFrame = std::max(0, frame);
+}
+
+void MainWindow::requestScrubAudio(int fromFrame, int toFrame)
+{
+    if (!m_session || !m_scrubTimer)
+        return;
+    // A pointer that moved inside the same frame must not cancel a blip that
+    // is still inside the throttle window.
+    if (toFrame == fromFrame)
+        return;
+
+    auto* playback = m_session->playback();
+    const bool audible = playback && !playback->isPlaying()
+                         && m_session->appSettings().audioScrub;
+    if (!audible)
+    {
+        resetScrubAudio(toFrame);
+        return;
+    }
+
+    if (m_lastScrubFrame < 0)
+        m_lastScrubFrame = fromFrame;
+    m_pendingScrubFrame = toFrame;
+
+    constexpr int kScrubIntervalMs = 30;
+    const qint64 elapsed =
+        m_scrubClock.isValid() ? m_scrubClock.elapsed() : kScrubIntervalMs;
+    if (elapsed >= kScrubIntervalMs)
+    {
+        if (m_lastScrubFrame != toFrame)
+            playback->scrub(m_lastScrubFrame, toFrame);
+        m_lastScrubFrame = toFrame;
+        m_pendingScrubFrame = -1;
+        m_scrubClock.restart();
+        return;
+    }
+    m_scrubTimer->start(int(kScrubIntervalMs - elapsed));
 }
 
 void MainWindow::updateSessionPlaybackUi()
@@ -868,7 +953,8 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
             if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Right)
             {
                 const int direction = event->key() == Qt::Key_Right ? 1 : -1;
-                sessionGoToFrame(std::max(0, m_session->playhead() + direction));
+                sessionGoToFrame(std::max(0, m_session->playhead() + direction),
+                                 true);
                 event->accept();
                 return;
             }

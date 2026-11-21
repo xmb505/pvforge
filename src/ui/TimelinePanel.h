@@ -277,6 +277,10 @@ public:
 
 signals:
     void frameRequested(int frame);
+    // Same frame change as frameRequested, but only from an interactive scrub
+    // gesture (ruler drag or arrow-key holding).  The shell uses it to
+    // audition the traversed audio without touching programmatic seeks.
+    void scrubFrameRequested(int frame);
     void scrubStarted();
     void displayFramesChanged(bool frames);
     void entitySelected(EntityId id);

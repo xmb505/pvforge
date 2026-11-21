@@ -245,7 +245,11 @@ private:
     void refreshSession();
     void updateSessionStatus();
     void updateSessionPlaybackUi();
-    void sessionGoToFrame(int frame);
+    // `audible` is set only by user frame-stepping / playhead scrubbing; it
+    // auditions the traversed audio while the session is paused.
+    void sessionGoToFrame(int frame, bool audible = false);
+    void requestScrubAudio(int fromFrame, int toFrame);
+    void resetScrubAudio(int frame);
     bool saveSessionProject();
     void openSessionProject();
     void createSessionProject();
@@ -350,7 +354,10 @@ private:
     QTimer* m_autosaveTimer = nullptr;
     QElapsedTimer m_playClock;
     QElapsedTimer m_scrubClock;
+    // Last frame whose audio was pushed to the scrub sink; the throttle
+    // accumulates every step since then into the next blip.
     int m_lastScrubFrame = -1;
+    int m_pendingScrubFrame = -1;
     QLabel* m_status = nullptr;
     QLabel* m_perfLabel = nullptr;
     QToolButton* m_mcpStatusButton = nullptr;

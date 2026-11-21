@@ -73,6 +73,7 @@ EditorSession::EditorSession(std::unique_ptr<next::ProjectDocument> document)
 
     m_playback = std::make_unique<next::PlaybackController>();
     m_playback->setWatchdogMs(m_appSettings.watchdogMs);
+    m_playback->setAudioScrubEnabled(m_appSettings.audioScrub);
     m_playback->setDocument(m_document.get());
 
     // Any saved edit invalidates the cache.  The re-warm is queued so the
@@ -462,7 +463,10 @@ bool EditorSession::applyAppSettings(const next::AppSettings& settings,
     if (m_media)
         m_media->applySettings(m_appSettings);
     if (m_playback)
+    {
         m_playback->setWatchdogMs(m_appSettings.watchdogMs);
+        m_playback->setAudioScrubEnabled(m_appSettings.audioScrub);
+    }
     if (m_document)
         m_document->setHumanCommitDelayMs(m_appSettings.humanCommitDelayMs);
 

@@ -108,6 +108,16 @@ void PlaybackController::pause()
         emit playbackStateChanged(false);
 }
 
+void PlaybackController::scrub(int fromFrame, int toFrame)
+{
+    if (!m_document || !m_audio || m_playing || !m_audioScrubEnabled)
+        return;
+    if (fromFrame == toFrame)
+        return;
+    const int fps = std::max(1, m_document->project().settings.fps);
+    m_audio->scrub(fromFrame, toFrame, fps);
+}
+
 void PlaybackController::noteFramePresented()
 {
     m_lastFrame.start();

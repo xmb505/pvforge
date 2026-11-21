@@ -159,6 +159,13 @@ void SettingsDialog::buildEditorPage()
     angleLayout->addStretch(1);
     form->addRow(angles);
 
+    m_audioScrub =
+        new QCheckBox(QStringLiteral("拖动 / 逐帧时播放音频（音频擦洗）"), page);
+    m_audioScrub->setObjectName(QStringLiteral("audioScrub"));
+    m_audioScrub->setToolTip(
+        QStringLiteral("仅影响暂停时的逐帧和拖动预览，正式播放不受影响。"));
+    form->addRow(m_audioScrub);
+
     form->addRow(selectableLabel(
         QStringLiteral("按住 <b>Ctrl</b> 拖动可临时关闭吸附（中心线、实体边缘、"
                        "边缘中点和像素网格）。Shift 旋转时强制吸附到勾选角度，"
@@ -442,6 +449,7 @@ AppSettings SettingsDialog::settings() const
     settings.workbenchCacheWriterThreads =
         m_workbenchWriterThreads->currentData().toInt();
 
+    settings.audioScrub = m_audioScrub->isChecked();
     settings.snapPixels = m_snapPixels->value();
     settings.snapCanvasCenter = m_snapCanvasCenter->isChecked();
     settings.snapEntityEdges = m_snapEntityEdges->isChecked();
@@ -502,6 +510,7 @@ void SettingsDialog::setSettings(const AppSettings& settings)
     if (workbenchThreadsIndex >= 0)
         m_workbenchWriterThreads->setCurrentIndex(workbenchThreadsIndex);
 
+    m_audioScrub->setChecked(value.audioScrub);
     m_snapPixels->setValue(value.snapPixels);
     m_snapCanvasCenter->setChecked(value.snapCanvasCenter);
     m_snapEntityEdges->setChecked(value.snapEntityEdges);

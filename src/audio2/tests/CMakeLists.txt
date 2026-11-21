@@ -14,6 +14,8 @@ set(PVF_AUDIO2_TEST_CASES
     sourceOffset
     shortAudioPadding
     noAudio
+    scrubSlice
+    scrubPlayback
     hiddenAndInvisible
     playbackNoAudio
     playbackNoDevice
@@ -30,6 +32,6 @@ foreach(test_case IN LISTS PVF_AUDIO2_TEST_CASES)
 endforeach()
 
 # Guarantee that this test really runs without an audio output device.
-set_tests_properties(audio2.playbackNoDevice PROPERTIES
+set_tests_properties(audio2.playbackNoDevice audio2.scrubPlayback PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;XDG_RUNTIME_DIR=/nonexistent")
 set_tests_properties(audio2.peaks PROPERTIES SKIP_RETURN_CODE 77)

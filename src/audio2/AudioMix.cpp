@@ -24,6 +24,11 @@ extern "C" {
 namespace pvf::audio2 {
 namespace {
 
+// A scrub blip spans at most this many project frames, so a fast drag cannot
+// mix a long range on the UI thread.
+constexpr int kMaxScrubFrames = 3;
+constexpr int kScrubFadeMs = 2;
+
 QString ffmpegError(int code)
 {
     char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
@@ -537,6 +542,96 @@ QByteArray mixRangeWithPaths(const model::Project& project,
     }
     if (!nonzero)
         return {};
+
+    return pcm;
+}
+
+QByteArray buildScrubSlice(const model::Project& project,
+                           const assets::AssetStore& assets,
+                           int fromFrame, int toFrame, int fps,
+                           int sampleRate, int channels)
+{
+    if (fps <= 0 || sampleRate <= 0 || channels <= 0)
+        return {};
+
+    fromFrame = std::max(0, fromFrame);
+    toFrame = std::max(0, toFrame);
+    if (fromFrame == toFrame)
+        return {};
+
+    const bool reverse = toFrame < fromFrame;
+    // The blip covers the traversed half-open range [fromFrame, toFrame) or
+    // [toFrame, fromFrame), capped to the last kMaxScrubFrames frames next to
+    // the destination.  Excluding the destination is what keeps a one-frame
+    // step exactly one frame long instead of replaying the previous blip.
+    const int startFrame =
+        reverse ? toFrame
+                : std::max(fromFrame, toFrame - kMaxScrubFrames);
+    const int endFrame =
+        reverse ? std::min(fromFrame, toFrame + kMaxScrubFrames) : toFrame;
+    if (endFrame <= startFrame)
+        return {};
+
+    MixOptions options;
+    options.startFrame = startFrame;
+    options.endFrame = endFrame;
+    options.fps = fps;
+    options.sampleRate = sampleRate;
+    options.channels = channels;
+
+    QByteArray pcm = mixRange(project, assets, options);
+    if (pcm.isEmpty())
+        return {};
+
+    // One project frame is exactly sampleRate / fps PCM frames.  mixRange uses
+    // a rounded range length, so pad/trim to keep every blip sample-exact and
+    // to make forward/backward slices the same length.
+    const int samplesPerFrame = std::max(1, sampleRate / fps);
+    const int64_t totalFrames =
+        int64_t(endFrame - startFrame) * int64_t(samplesPerFrame);
+    const int64_t totalValues = totalFrames * int64_t(channels);
+    const int64_t totalBytes = totalValues * int64_t(sizeof(float));
+    if (totalBytes <= 0
+        || totalValues > std::numeric_limits<int>::max()
+               / int64_t(sizeof(float)))
+    {
+        return {};
+    }
+    if (pcm.size() < int(totalBytes))
+        pcm.append(int(totalBytes - pcm.size()), '\0');
+    else if (pcm.size() > int(totalBytes))
+        pcm.truncate(int(totalBytes));
+
+    float* samples = reinterpret_cast<float*>(pcm.data());
+    const int64_t sampleFrames = totalFrames;
+
+    if (reverse)
+    {
+        // Flip whole interleaved sample frames so left/right stay paired.
+        for (int64_t i = 0; i < sampleFrames / 2; ++i)
+        {
+            const int64_t opposite = sampleFrames - 1 - i;
+            for (int channel = 0; channel < channels; ++channel)
+            {
+                std::swap(samples[i * channels + channel],
+                          samples[opposite * channels + channel]);
+            }
+        }
+    }
+
+    const int64_t fadeFrames = std::min<int64_t>(
+        sampleFrames / 2,
+        std::max(1, int(llround(double(sampleRate) * kScrubFadeMs / 1000.0))));
+    for (int64_t i = 0; i < fadeFrames; ++i)
+    {
+        const float gain = float(i) / float(fadeFrames);
+        const int64_t tail = sampleFrames - 1 - i;
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            samples[i * channels + channel] *= gain;
+            samples[tail * channels + channel] *= gain;
+        }
+    }
 
     return pcm;
 }

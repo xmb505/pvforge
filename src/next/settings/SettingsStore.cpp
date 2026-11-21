@@ -219,6 +219,10 @@ AppSettings SettingsStore::load() const
                    settings.workbenchCacheWriterThreads)
             .toInt();
 
+    settings.audioScrub =
+        m_settings.value(QStringLiteral("editor/audioScrub"), settings.audioScrub)
+            .toBool();
+
     settings.snapPixels =
         m_settings.value(QStringLiteral("snap/pixels"), settings.snapPixels).toInt();
     settings.snapCanvasCenter =
@@ -285,6 +289,8 @@ void SettingsStore::save(const AppSettings& settings)
                         value.workbenchCacheMemoryBytes);
     m_settings.setValue(QStringLiteral("workbench/writerThreads"),
                         value.workbenchCacheWriterThreads);
+
+    m_settings.setValue(QStringLiteral("editor/audioScrub"), value.audioScrub);
 
     m_settings.setValue(QStringLiteral("snap/pixels"), value.snapPixels);
     m_settings.setValue(QStringLiteral("snap/canvasCenter"),

@@ -110,6 +110,8 @@ private:
         // up the chain so the main panel's MainWindow connections fire once.
         connect(m_panel, &TimelinePanel::frameRequested, m_source,
                 &TimelinePanel::frameRequested);
+        connect(m_panel, &TimelinePanel::scrubFrameRequested, m_source,
+                &TimelinePanel::scrubFrameRequested);
         connect(m_panel, &TimelinePanel::scrubStarted, m_source,
                 &TimelinePanel::scrubStarted);
         connect(m_panel, &TimelinePanel::entitySelected, m_source,
