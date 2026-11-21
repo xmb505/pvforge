@@ -56,18 +56,17 @@ Result parseWholeFrameKeyframe(const model::Content& content, int duration,
     if (!readInt(object, "frame", &keyframe.frame, &error, true))
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("%1.%2").arg(label, error.message));
-    if (keyframe.frame < 0 || keyframe.frame > duration)
+    if (keyframe.frame < 0 || keyframe.frame >= duration)
     {
         QJsonObject range;
         range.insert(QStringLiteral("min"), 0);
-        range.insert(QStringLiteral("max"), duration);
+        range.insert(QStringLiteral("max"), duration - 1);
         QJsonObject details;
         details.insert(QStringLiteral("allowedRange"), range);
         return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("%1.frame 超出实体范围 0..%2"
-                                      "（frame == duration 允许）")
+                       QStringLiteral("%1.frame 超出实体范围 0..%2")
                            .arg(label)
-                           .arg(duration),
+                           .arg(duration - 1),
                        details);
     }
 

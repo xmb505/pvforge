@@ -25,7 +25,7 @@ int trimKeyframes(QVector<model::Keyframe>& keyframes, int deltaStart,
     {
         model::Keyframe shifted = key;
         shifted.frame -= deltaStart;
-        if (shifted.frame < 0 || shifted.frame > newDuration)
+        if (shifted.frame < 0 || shifted.frame >= newDuration)
         {
             ++removed;
             continue;
@@ -157,7 +157,7 @@ Result trimChildren(Tx& tx, const Uuid& parentUuid, int newStart, int newEnd,
         // jumped to a disjoint range.
         const int start = childFollows ? newStart : std::max(child->start, newStart);
         const int end = childFollows ? newEnd : std::min(child->end, newEnd);
-        if (start >= end)
+        if (start > end)
         {
             if (childFollows)
                 continue; // a parent range is always valid; defensive only
@@ -192,7 +192,7 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
 
     const model::Entity old = *entity;
     const int deltaStart = newStart - old.start;
-    if (newEnd - newStart <= 0)
+    if (newEnd - newStart < 0)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("裁剪后时长必须大于 0"));
 
@@ -212,15 +212,15 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
             if (frames > 0 && newSourceIn >= frames)
                 return failure(QStringLiteral("conflict"),
                                QStringLiteral("sourceIn 超出素材长度 %1").arg(frames));
-            if (frames > 0 && newSourceIn + (newEnd - newStart) > frames)
+            if (frames > 0 && newSourceIn + (newEnd - newStart + 1) > frames)
             {
                 if (isRoot)
                     return failure(
                         QStringLiteral("invalid_argument"),
                         QStringLiteral("裁剪范围超出素材剩余长度 %1")
                             .arg(frames - newSourceIn));
-                adjustedEnd = newStart + (frames - newSourceIn);
-                if (adjustedEnd <= newStart)
+                adjustedEnd = newStart + (frames - newSourceIn) - 1;
+                if (adjustedEnd < newStart)
                 {
                     const QVector<Uuid> descendants = subtree(tx.p(), uuid);
                     stats->deletedUuids << uuid;
@@ -237,7 +237,7 @@ Result trimRecursive(Tx& tx, const Uuid& uuid, int newStart, int newEnd,
         }
     }
 
-    const int newDuration = adjustedEnd - newStart;
+    const int newDuration = adjustedEnd - newStart + 1;
     if (newDuration <= 0)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("裁剪后时长必须大于 0"));
@@ -350,9 +350,9 @@ Result entityTrim(Tx& tx, const QJsonObject& args)
     if (newStart < 0 || newEnd > kMaxFrame)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("裁剪范围必须在 0..%1").arg(kMaxFrame));
-    if (newEnd <= newStart)
+    if (newEnd < newStart)
         return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("裁剪后 end 必须大于 start"));
+                       QStringLiteral("裁剪后 end 必须不小于 start"));
 
     if (entity->followParentRange)
     {
@@ -412,7 +412,7 @@ Result entityTrim(Tx& tx, const QJsonObject& args)
     data.insert(QStringLiteral("deletedUuids"),
                 QJsonArray::fromStringList(stats.deletedUuids));
     return tx.finish(data,
-                     QStringLiteral("pvf: trim entity \"%1\" [%2,%3)")
+                     QStringLiteral("pvf: trim entity \"%1\" [%2,%3]")
                          .arg(trimmedEntity->name)
                          .arg(trimmedEntity->start)
                          .arg(trimmedEntity->end));

@@ -683,7 +683,7 @@ int defaultRow(const model::Project& project, const Uuid& parentUuid, int start,
         const model::Entity& other = it.value();
         if (other.parentUuid != parentUuid)
             continue;
-        if (other.start >= end || other.end <= start)
+        if (other.start > end || other.end < start)
             continue;
         highest = std::max(highest, other.row);
     }

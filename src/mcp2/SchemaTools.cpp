@@ -173,7 +173,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("space"), prop(QStringLiteral("string"), QStringLiteral("parent|canvas；canvas 不继承父级 transform"))},
             {QStringLiteral("followParentRange"), prop(QStringLiteral("boolean"), QStringLiteral("true 时区间必须等于直接父区间"))},
             {QStringLiteral("start"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= 0"))},
-            {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，> start"))},
+            {QStringLiteral("end"), prop(QStringLiteral("integer"), QStringLiteral("全局帧号，>= start（闭区间，含 end）"))},
             {QStringLiteral("row"), prop(QStringLiteral("integer"), QStringLiteral(">= 0，0 在最底"))},
             {QStringLiteral("hidden"), prop(QStringLiteral("boolean"), QString())},
             {QStringLiteral("locked"), prop(QStringLiteral("boolean"), QStringLiteral("锁定后 MCP 不能写"))},
@@ -189,7 +189,7 @@ QJsonObject schemaTopic(const QString& topic)
     if (topic == QLatin1String("keyframes"))
     {
         return openSchema({
-            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration（frame == duration 允许）"))},
+            {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("相对实体 start，0..duration-1"))},
             {QStringLiteral("x"), prop(QStringLiteral("number"), QStringLiteral("必填；整帧关键帧包含全部动画参数"))},
             {QStringLiteral("y"), prop(QStringLiteral("number"), QStringLiteral("必填"))},
             {QStringLiteral("rotation"), prop(QStringLiteral("number"), QStringLiteral("必填，度"))},
@@ -315,7 +315,7 @@ QString guideMarkdown(const QString& topic)
         return QStringLiteral(
             "# 编写规则\n"
             "- 先读 `project.summary` 和 `entity.list`，再改。\n"
-            "- 实体时间用全局帧 `[start,end)`；关键帧帧号相对实体 start，范围 `0..duration`（`frame == duration` 允许，作为末端插值目标）。\n"
+            "- 实体时间用全局帧闭区间 `[start,end]`（含 end 帧，时长 `end-start+1`）；关键帧帧号相对实体 start，范围 `0..duration-1`。\n"
             "- 一次工具调用只做一个逻辑操作；有文本 diff 的写工具各自产生一个 commit。\n"
             "- git 只管理文本；素材不进 git，纯素材导入可能没有 commit。\n"
             "- 没有启用 Git 时 MCP 只读；写工具返回 `permission_denied`（details.reason=`git_disabled`），不要重试，先让人类启用 Git。\n"
@@ -584,7 +584,7 @@ QJsonObject listTools()
         QStringLiteral("keyframes.upsert"),
         QStringLiteral("按帧写入部分字段：先求值补全全部动画参数，再覆盖传入字段"),
         objectSchema({{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("0..duration"))},
+                      {QStringLiteral("frame"), prop(QStringLiteral("integer"), QStringLiteral("0..duration-1"))},
                       {QStringLiteral("partial"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/opacity/visible/physicsInteract/content/htmlVars/easing/note 的子集"))}},
                      {QStringLiteral("uuid"), QStringLiteral("frame")})));
     tools.append(toolSchema(

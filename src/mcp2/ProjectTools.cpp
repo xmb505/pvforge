@@ -147,7 +147,7 @@ Result projectSummary(Tx& tx, const QJsonObject& args)
     int durationFrames = 0;
     for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
          ++it)
-        durationFrames = std::max(durationFrames, it.value().end);
+        durationFrames = std::max(durationFrames, it.value().end + 1);
 
     QJsonObject data;
     data.insert(QStringLiteral("name"), project.settings.name);

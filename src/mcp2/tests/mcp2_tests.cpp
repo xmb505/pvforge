@@ -469,7 +469,7 @@ void Mcp2Tests::trimSolverRules()
                             .value(QStringLiteral("message")).toString()));
     const model::Entity& frozen = fixture.store->project().entities.value(ball2);
     QCOMPARE(frozen.solvers.size(), 1);
-    QCOMPARE(frozen.solvers.first().endFrame, 29);
+    QCOMPARE(frozen.solvers.first().endFrame, 30);
 
     // Extending the clip again must not revive the pinned open segment.
     result = fixture.call(QStringLiteral("entity.trim"),
@@ -482,7 +482,7 @@ void Mcp2Tests::trimSolverRules()
     QCOMPARE(extended.end, 40);
     QCOMPARE(extended.solvers.size(), 1);
     QCOMPARE(extended.solvers.first().startFrame, 0);
-    QCOMPARE(extended.solvers.first().endFrame, 29);
+    QCOMPARE(extended.solvers.first().endFrame, 30);
 }
 
 void Mcp2Tests::trimSolverCutPose()
@@ -1018,7 +1018,7 @@ void Mcp2Tests::createManyRollsBack()
 
     QJsonArray entities;
     entities.append(entityArgs(QStringLiteral("好"), 0, 30));
-    entities.append(entityArgs(QStringLiteral("坏"), 10, 10));
+    entities.append(entityArgs(QStringLiteral("坏"), 10, 9));
 
     QJsonObject result = fixture.call(QStringLiteral("entity.createMany"),
                                       QJsonObject{{QStringLiteral("entities"), entities}});
@@ -1376,7 +1376,7 @@ void Mcp2Tests::solverCreateUpdateDelete()
                           QJsonObject{{QStringLiteral("entityUuid"), ball}});
     QVERIFY2(result.value(QStringLiteral("ok")).toBool(), qPrintable(errorCode(result)));
     QJsonObject data = result.value(QStringLiteral("data")).toObject();
-    QCOMPARE(data.value(QStringLiteral("duration")).toInt(), 120);
+    QCOMPARE(data.value(QStringLiteral("duration")).toInt(), 121);
     QCOMPARE(data.value(QStringLiteral("solvers")).toArray().size(), 1);
     QCOMPARE(data.value(QStringLiteral("solvers")).toArray().at(0).toObject()
                  .value(QStringLiteral("startFrame")).toInt(),
