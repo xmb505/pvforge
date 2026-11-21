@@ -288,11 +288,4 @@ void AssetLibraryPanel::showHoverPreview(QListWidgetItem* item)
     m_hoverPreview->raise();
 }
 
-bool AssetLibraryPanel::eventFilter(QObject* watched, QEvent* event)
-{
-    if (watched == m_list->viewport() && event->type() == QEvent::Leave)
-        hideHoverPreview();
-    return QWidget::eventFilter(watched, event);
-}
-
 } // namespace pvf

@@ -125,6 +125,7 @@ set(PVF_APP_SOURCES
     src/next/properties/TextLayoutDialog.cpp
     src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
+    src/ui/AssetLibraryPanelDrop.cpp
     src/ui/AssetLibraryPanelHelpers.cpp
     src/ui/AssetLibraryPanelImport.cpp
     src/ui/AssetLibraryPanelInternal.h

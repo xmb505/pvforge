@@ -1,8 +1,12 @@
 #include "AssetLibraryPanelInternal.h"
 
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QListWidgetItem>
+#include <QPaintEvent>
 #include <QPainter>
 
 #include <algorithm>
@@ -113,6 +117,58 @@ QPixmap htmlPlaceholder(const QSize& size, const QString& text)
 AssetListWidget::AssetListWidget(QWidget* parent)
     : QListWidget(parent)
 {
+}
+
+void AssetListWidget::setExternalDragHighlight(bool active)
+{
+    if (m_externalDragHighlight == active)
+        return;
+    m_externalDragHighlight = active;
+    viewport()->update();
+}
+
+void AssetListWidget::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (externalDragHandler && externalDragHandler(event))
+        return;
+    QListWidget::dragEnterEvent(event);
+}
+
+void AssetListWidget::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (externalDragHandler && externalDragHandler(event))
+        return;
+    QListWidget::dragMoveEvent(event);
+}
+
+void AssetListWidget::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    if (externalDragLeaveHandler)
+        externalDragLeaveHandler();
+    QListWidget::dragLeaveEvent(event);
+}
+
+void AssetListWidget::dropEvent(QDropEvent* event)
+{
+    if (externalDropHandler && externalDropHandler(event))
+        return;
+    QListWidget::dropEvent(event);
+}
+
+void AssetListWidget::paintEvent(QPaintEvent* event)
+{
+    QListWidget::paintEvent(event);
+    if (!m_externalDragHighlight)
+        return;
+
+    QPainter painter(viewport());
+    const QPalette::ColorGroup group =
+        isActiveWindow() ? QPalette::Active : QPalette::Inactive;
+    QPen pen(palette().color(group, QPalette::Highlight));
+    pen.setWidth(2);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(viewport()->rect().adjusted(1, 1, -2, -2));
 }
 
 QMimeData* AssetListWidget::mimeData(const QList<QListWidgetItem*>& items) const

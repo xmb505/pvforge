@@ -35,10 +35,13 @@
 
 namespace pvf {
 
-bool AssetLibraryPanel::importPaths(const QStringList& paths, QString* error)
+bool AssetLibraryPanel::importPaths(const QStringList& paths, QString* error,
+                                    QHash<QString, AssetHash>* importedByPath)
 {
     if (error)
         error->clear();
+    if (importedByPath)
+        importedByPath->clear();
     if (!m_session)
     {
         if (error)
@@ -106,6 +109,8 @@ bool AssetLibraryPanel::importPaths(const QStringList& paths, QString* error)
             continue;
         }
         imported.append(stored->name);
+        if (importedByPath)
+            importedByPath->insert(path, stored->hash);
         if (stored->type == AssetType::Video)
             enqueueVideoExtraction(*stored);
     }
