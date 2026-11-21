@@ -66,6 +66,7 @@ private:
     QTabWidget* m_tabs = nullptr;
 
     QSpinBox* m_snapPixels = nullptr;
+    QCheckBox* m_audioScrub = nullptr;
     QSpinBox* m_autoSaveMinutes = nullptr;
     QCheckBox* m_snapCanvasCenter = nullptr;
     QCheckBox* m_snapEntityEdges = nullptr;

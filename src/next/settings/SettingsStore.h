@@ -39,6 +39,10 @@ struct AppSettings
     // roughly cover a 30 fps 1280x720 miss stream; one falls behind.
     int workbenchCacheWriterThreads = 2;
 
+    // Audition the traversed frames while stepping or dragging the playhead.
+    // Scrubbing is editor feedback only; full playback is unaffected.
+    bool audioScrub = true;
+
     // Viewport snapping.  snapPixels is the screen-pixel threshold for canvas
     // centre lines and entity edges (1..32); the pixel grid step stays at one
     // project pixel.  Angles are absolute degrees; Ctrl disables snapping for
