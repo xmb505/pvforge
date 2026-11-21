@@ -639,8 +639,8 @@ int inkscapeHandlesTest(QApplication& app)
     //    fixed 3 px inset, and each hit box is an 18 px axis-aligned square.
     const std::array<double, 4> baseAngles{270.0, 0.0, 90.0, 180.0};
     {
-        // One closed outline, two triangular heads and a hollow 90-degree
-        // band: no self-crossing and no trace of the old bow-tie order.
+        // One closed outline, two barbed heads and a hollow 90-degree band:
+        // no self-crossing and no trace of the old bow-tie order.
         const QPainterPath glyph = viewport->gizmoRotateGlyphPathForTest();
         const QRectF box = glyph.boundingRect();
         if (glyph.toFillPolygons().size() != 1
@@ -651,6 +651,33 @@ int inkscapeHandlesTest(QApplication& app)
             || box.left() < -9.0 || box.right() > 9.0)
         {
             qCritical() << "inkscape-handles-test: carrow path is not clean";
+            ++failures;
+        }
+
+        // The 18 px box centres the arc at (-3.5, 3.5).  On the 45-degree
+        // shaft, probes 0.1 px inside either arc edge hit and 0.1 px outside
+        // miss: the shaft is ~2.2 px thick, inside the 2.0..2.4 px budget.
+        const double diagonal = std::sqrt(0.5);
+        const auto radiusPoint = [&](double radius) {
+            return QPointF(-3.5 + radius * diagonal,
+                           3.5 - radius * diagonal);
+        };
+        const bool shaftThickness =
+            glyph.contains(radiusPoint(6.5))
+            && glyph.contains(radiusPoint(8.5))
+            && !glyph.contains(radiusPoint(6.3))
+            && !glyph.contains(radiusPoint(8.7));
+        // The 3 o'clock head base is clearly wider than the shaft: both
+        // flanks 2.5 px either side of the arc midpoint are filled.
+        const bool headWiderThanShaft =
+            glyph.contains(QPointF(1.5, 3.9))
+            && glyph.contains(QPointF(6.5, 3.9))
+            && !glyph.contains(QPointF(0.4, 3.9))
+            && !glyph.contains(QPointF(7.6, 3.9));
+        if (!shaftThickness || !headWiderThanShaft)
+        {
+            qCritical() << "inkscape-handles-test: carrow shaft/head ratio"
+                        << shaftThickness << headWiderThanShaft;
             ++failures;
         }
     }

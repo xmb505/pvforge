@@ -111,7 +111,22 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
         requestDeleteSelection();
         return;
     }
+    // Linux-terminal style split: Ctrl+C/V is the keyframe clipboard,
+    // Ctrl+Shift+C/V is the clip clipboard, Alt+Shift+C copies whole-frame
+    // parameters onto the selected diamonds.
     if (plain == (Qt::ControlModifier | Qt::ShiftModifier)
+        && event->key() == Qt::Key_C)
+    {
+        copySelectedClips();
+        return;
+    }
+    if (plain == (Qt::ControlModifier | Qt::ShiftModifier)
+        && event->key() == Qt::Key_V)
+    {
+        pasteClips();
+        return;
+    }
+    if (plain == (Qt::AltModifier | Qt::ShiftModifier)
         && event->key() == Qt::Key_C)
     {
         copyParamsToSelectedKeyframes();
@@ -119,12 +134,12 @@ void TimelinePanel::keyPressEvent(QKeyEvent* event)
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_C)
     {
-        copySelectedClips();
+        copyKeyframesToClipboard();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_V)
     {
-        pasteClips();
+        pasteKeyframesFromClipboard();
         return;
     }
     if (plain == Qt::ControlModifier && event->key() == Qt::Key_D)

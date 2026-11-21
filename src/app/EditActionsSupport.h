@@ -201,18 +201,24 @@ inline void copyAnimationParams(const model::Keyframe& source,
 
 // Content animation parameters only make sense between entities with the same
 // content schema.  HTML variables additionally belong to one asset manifest.
+inline bool contentSchemasCompatible(const model::Content& source,
+                                     const model::Content& target)
+{
+    if (source.kind != target.kind)
+        return false;
+    if (source.kind != ContentKind::Asset)
+        return true;
+    if (source.asset.type != target.asset.type)
+        return false;
+    if (source.asset.type == AssetType::Html)
+        return source.asset.hash == target.asset.hash;
+    return true;
+}
+
 inline bool keyframeParamsCompatible(const model::Entity& source,
                                      const model::Entity& target)
 {
-    if (source.content.kind != target.content.kind)
-        return false;
-    if (source.content.kind != ContentKind::Asset)
-        return true;
-    if (source.content.asset.type != target.content.asset.type)
-        return false;
-    if (source.content.asset.type == AssetType::Html)
-        return source.content.asset.hash == target.content.asset.hash;
-    return true;
+    return contentSchemasCompatible(source.content, target.content);
 }
 
 inline model::Keyframe* mutableKeyframeAt(QVector<model::Keyframe>& keyframes,

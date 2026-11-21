@@ -347,6 +347,10 @@ private:
     QVector<KeyRef> selectedKeyRefs() const;
     void deleteSelectedKeyframes();
     void copyParamsToSelectedKeyframes();
+    // Linux-terminal style timeline clipboard: Ctrl+C / Ctrl+V move whole
+    // keyframes only, Ctrl+Shift+C / Ctrl+Shift+V stay on the clip layer.
+    void copyKeyframesToClipboard();
+    void pasteKeyframesFromClipboard();
 
     // Alt + fast double-click inline rename.  Enter/focus-out commits, Esc
     // cancels.
@@ -518,6 +522,7 @@ private:
     QLineEdit* m_renameEdit = nullptr;
     EntityId m_renameEntity = kInvalidEntity;
     QVector<model::Entity> m_clipClipboard;
+    KeyframeClipboard m_keyframeClipboard;
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;
     int m_markerDragFrame = 0;

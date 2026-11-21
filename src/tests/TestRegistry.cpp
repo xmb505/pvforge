@@ -38,6 +38,7 @@ Registry buildRegistry()
     registerSolverTests(registry);
     registerProfileFixtures(registry);
     registerTimelineTests(registry);
+    registerKeyframeClipboardTests(registry);
     registerViewportCameraTests(registry);
     registerEditorTests(registry);
     registerRenderMediaTests(registry);
