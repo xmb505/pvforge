@@ -1,5 +1,7 @@
 #include "PropertiesPanel.h"
 
+#include "EasingChooser.h"
+#include "EasingPicker.h"
 #include "PropertiesPanelInternal.h"
 #include "WholeFrameEdit.h"
 #include "app/EditActions.h"
@@ -11,6 +13,7 @@
 
 #include <QJsonObject>
 #include <QStringList>
+#include <QToolButton>
 
 #include <algorithm>
 
@@ -19,63 +22,147 @@ namespace pvf {
 using namespace ui::detail;
 namespace wholeframe = ui::wholeframe;
 
-void PropertiesPanel::promptGroupBezier()
+void PropertiesPanel::openKeyframeEasingMenu()
 {
     const model::Entity* entity = sessionEntity();
-    if (!entity || !sessionEditable())
+    if (!entity || !sessionEditable() || !m_keyEasingButton)
         return;
     const int frame = activeDisplayKeyFrame(*entity);
     const model::Keyframe* key = model::keyframeAt(entity->keyframes, frame);
     if (!key)
-        return;
-
-    const model::EasingSpec& current = key->easing;
-    EasingSpec legacy;
-    legacy.easing = easingFromName(model::canonicalEasingName(current.type));
-    legacy.inX = current.inX;
-    legacy.inY = current.inY;
-    legacy.outX = current.outX;
-    legacy.outY = current.outY;
-    if (legacy.easing != Easing::Bezier)
     {
-        legacy.easing = Easing::Bezier;
-        legacy.inX = 0.42;
-        legacy.inY = 0.0;
-        legacy.outX = 0.58;
-        legacy.outY = 1.0;
-    }
-
-    BezierEditorDialog dialog(legacy, this);
-    if (dialog.exec() != QDialog::Accepted)
-    {
+        emit sessionStatusMessage(
+            QStringLiteral("当前帧无关键帧：先在时间轴创建关键帧"));
         refresh();
         return;
     }
-    const EasingSpec edited = dialog.easing();
-    model::EasingSpec spec;
-    spec.type = easingName(edited.easing);
-    spec.inX = edited.inX;
-    spec.inY = edited.inY;
-    spec.outX = edited.outX;
-    spec.outY = edited.outY;
 
-    if (activeTargetKeyFrames(*entity).size() > 1)
+    auto* menu = new EasingPopup(key->easing, this);
+    connect(menu, &EasingPopup::picked, this,
+            [this](const model::EasingSpec& spec) {
+                applyKeyframeEasing(spec);
+            });
+    connect(menu, &EasingPopup::customRequested, this,
+            &PropertiesPanel::promptGroupBezier);
+    menu->popup(
+        m_keyEasingButton->mapToGlobal(QPoint(0, m_keyEasingButton->height())));
+}
+
+void PropertiesPanel::applyKeyframeEasing(const model::EasingSpec& spec)
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+
+    const QVector<int> targets = activeTargetKeyFrames(*entity);
+    if (m_selectedKeys.size() > 1 && targets.isEmpty())
+    {
+        emit sessionStatusMessage(QStringLiteral(
+            "选中的关键帧不属于当前实体：未修改任何缓动"));
+        return;
+    }
+
+    if (targets.size() > 1)
     {
         applyBatchKeyframeEdit(
-            QStringLiteral("pvf: batch set keyframe bezier"),
-            [spec](model::Keyframe& target) { target.easing = spec; });
+            QStringLiteral("pvf: batch set keyframe easing"),
+            [spec](model::Keyframe& key) { key.easing = spec; });
+        return;
+    }
+
+    const int frame =
+        targets.isEmpty() ? activeKeyFrame(*entity) : targets.first();
+    if (!model::hasKeyframeAt(entity->keyframes, frame))
+    {
+        emit sessionStatusMessage(
+            QStringLiteral("当前帧无关键帧：先在时间轴创建关键帧"));
+        refresh();
         return;
     }
 
     m_editing = true;
     QString error;
     const bool ok = m_session->editActions()->setKeyframeEasing(
-        {KeyRef{entity->uuid, activeKeyFrame(*entity)}}, spec, &error);
+        {KeyRef{entity->uuid, frame}}, spec, &error);
     m_editing = false;
     if (!ok)
         reportSessionError(error);
     refresh();
 }
+
+void PropertiesPanel::promptGroupBezier()
+{
+    const model::Entity* entity = sessionEntity();
+    if (!entity || !sessionEditable())
+        return;
+    if (m_selectedKeys.size() > 1 && activeTargetKeyFrames(*entity).isEmpty())
+    {
+        emit sessionStatusMessage(QStringLiteral(
+            "选中的关键帧不属于当前实体：未修改任何缓动"));
+        return;
+    }
+    const int frame = activeDisplayKeyFrame(*entity);
+    const model::Keyframe* key = model::keyframeAt(entity->keyframes, frame);
+    if (!key)
+    {
+        emit sessionStatusMessage(
+            QStringLiteral("当前帧无关键帧：先在时间轴创建关键帧"));
+        refresh();
+        return;
+    }
+
+    const model::EasingSpec current = key->easing;
+    model::EasingSpec edited;
+    edited.type = QStringLiteral("bezier");
+    if (model::canonicalEasingName(current.type) == QLatin1String("bezier"))
+    {
+        edited.inX = current.inX;
+        edited.inY = current.inY;
+        edited.outX = current.outX;
+        edited.outY = current.outY;
+    }
+
+#ifdef PVFORGE_TEST_HOOKS
+    if (m_easingCustomEditor)
+    {
+        if (!m_easingCustomEditor(current, &edited))
+        {
+            refresh();
+            return;
+        }
+    }
+    else
+#endif
+    {
+        EasingSpec legacy;
+        legacy.easing = Easing::Bezier;
+        legacy.inX = edited.inX;
+        legacy.inY = edited.inY;
+        legacy.outX = edited.outX;
+        legacy.outY = edited.outY;
+        BezierEditorDialog dialog(legacy, this);
+        if (dialog.exec() != QDialog::Accepted)
+        {
+            refresh();
+            return;
+        }
+        const EasingSpec result = dialog.easing();
+        edited.type = QStringLiteral("bezier");
+        edited.inX = result.inX;
+        edited.inY = result.inY;
+        edited.outX = result.outX;
+        edited.outY = result.outY;
+    }
+
+    applyKeyframeEasing(edited);
+}
+
+#ifdef PVFORGE_TEST_HOOKS
+void PropertiesPanel::setEasingCustomEditorForTest(EasingCustomEditor editor)
+{
+    m_easingCustomEditor = editor;
+}
+#endif
 
 namespace {
 

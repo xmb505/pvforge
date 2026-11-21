@@ -6,7 +6,6 @@
 #include "app/EditActions.h"
 #include "app/EditorSession.h"
 #include "model/Content.h"
-#include "model/Easing.h"
 #include "model/Entity.h"
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
@@ -23,6 +22,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <functional>
@@ -260,52 +260,18 @@ void PropertiesPanel::buildSessionUi()
     easingLayout->setContentsMargins(0, 0, 0, 0);
     easingLayout->setSpacing(6);
     easingLayout->addWidget(new QLabel(QStringLiteral("整帧缓动"), easingRow));
-    m_groupEasing = new QComboBox(easingRow);
-    m_groupEasing->setObjectName(QStringLiteral("keyframeEasingGroup"));
-    m_groupEasing->setToolTip(
-        QStringLiteral("整帧共用一条缓动：从本关键帧到下一关键帧"));
-    m_groupEasing->addItem(QStringLiteral("linear"), QStringLiteral("linear"));
-    m_groupEasing->addItem(QStringLiteral("instant"), QStringLiteral("instant"));
-    for (const QString& preset : model::easingPresetNames())
-        m_groupEasing->addItem(preset, preset);
-    m_groupEasing->addItem(QStringLiteral("bezier"), QStringLiteral("bezier"));
-    easingLayout->addWidget(m_groupEasing, 1);
+    m_keyEasingButton = new QToolButton(easingRow);
+    m_keyEasingButton->setObjectName(QStringLiteral("keyframeEasingGroup"));
+    m_keyEasingButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_keyEasingButton->setIconSize(QSize(40, 22));
+    m_keyEasingButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_keyEasingButton->setToolTip(
+        QStringLiteral("整帧共用一条缓动：从本关键帧到下一关键帧。"
+                       "点开选择曲线缩略图，或自定义贝塞尔"));
+    easingLayout->addWidget(m_keyEasingButton, 1);
     m_keyLayout->addWidget(easingRow);
-    connect(m_groupEasing, &QComboBox::currentIndexChanged, this, [this](int) {
-        if (m_editing || !m_groupEasing)
-            return;
-        const QString type = m_groupEasing->currentData().toString();
-        if (type.isEmpty())
-            return;
-        const model::Entity* entity = sessionEntity();
-        if (!entity || !sessionEditable())
-            return;
-        if (type == QLatin1String("bezier"))
-        {
-            promptGroupBezier();
-            return;
-        }
-        model::EasingSpec spec;
-        spec.type = model::canonicalEasingName(type);
-        if (activeTargetKeyFrames(*entity).size() > 1)
-        {
-            applyBatchKeyframeEdit(
-                QStringLiteral("pvf: batch set keyframe easing"),
-                [spec](model::Keyframe& key) { key.easing = spec; });
-            return;
-        }
-        const int frame = activeKeyFrame(*entity);
-        if (!model::hasKeyframeAt(entity->keyframes, frame))
-            return;
-        m_editing = true;
-        QString error;
-        const bool ok = m_session->editActions()->setKeyframeEasing(
-            {KeyRef{entity->uuid, frame}}, spec, &error);
-        m_editing = false;
-        if (!ok)
-            reportSessionError(error);
-        refresh();
-    });
+    connect(m_keyEasingButton, &QToolButton::clicked, this,
+            &PropertiesPanel::openKeyframeEasingMenu);
 
     auto* noteRow = new QWidget(this);
     auto* noteLayout = new QHBoxLayout(noteRow);

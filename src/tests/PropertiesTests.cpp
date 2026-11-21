@@ -1,12 +1,48 @@
 #include "TestApp.h"
 #include "TestRegistry.h"
+#include "ui/EasingPicker.h"
 
 #include <QFormLayout>
 #include <QJsonArray>
+#include <QMouseEvent>
 
 namespace {
 
 using pvf::model::Keyframe;
+
+// Drives the MI easing grid exactly like a user: click the button with the
+// current-curve preview, then the tile inside the popup.  Returns false when
+// the control is missing or disabled (no keyframe under the playhead).
+pvf::EasingPicker* openEasingGrid(pvf::PropertiesPanel* panel)
+{
+    auto* button =
+        panel->findChild<QToolButton*>(QStringLiteral("keyframeEasingGroup"));
+    if (!button || !button->isEnabled())
+        return nullptr;
+    button->click();
+    QApplication::processEvents();
+    const auto pickers = panel->findChildren<pvf::EasingPicker*>();
+    for (pvf::EasingPicker* picker : pickers)
+        if (picker->isVisible())
+            return picker;
+    return pickers.isEmpty() ? nullptr : pickers.last();
+}
+
+bool chooseEasing(pvf::PropertiesPanel* panel, const QString& type)
+{
+    pvf::EasingPicker* picker = openEasingGrid(panel);
+    if (!picker)
+        return false;
+    const QRect tile = picker->tileRect(type);
+    if (!tile.isValid())
+        return false;
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(tile.center()),
+                      QPointF(picker->mapToGlobal(tile.center())),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(picker, &press);
+    QApplication::processEvents();
+    return true;
+}
 
 const Keyframe* keyAt(const pvf::EditorSession* session, const pvf::Uuid& uuid,
                       int frame)
@@ -396,12 +432,9 @@ int propertiesTest(QApplication& app)
     QApplication::processEvents();
 
     const int beforeEasing = depth();
-    auto* batchEasing = panel->findChild<QComboBox*>(
-        QStringLiteral("keyframeEasingGroup"));
-    if (!check(batchEasing, QStringLiteral("batch easing widget missing")))
+    if (!check(chooseEasing(panel, QStringLiteral("easeinoutquad")),
+               QStringLiteral("batch easing grid could not choose a preset")))
         return 1;
-    batchEasing->setCurrentIndex(
-        batchEasing->findData(QStringLiteral("easeinoutquad")));
     QApplication::processEvents();
     flush();
     if (!check(keyAt(live, text, 0)
@@ -415,6 +448,19 @@ int propertiesTest(QApplication& app)
         || !check(depth() == beforeEasing + 1,
                   QStringLiteral("batch easing was not one commit")))
         return 1;
+    document->undo();
+    QApplication::processEvents();
+    if (!check(keyAt(live, text, 0)
+                   && keyAt(live, text, 0)->easing.type
+                          == QStringLiteral("linear")
+                   && keyAt(live, text, 10)->easing.type
+                          == QStringLiteral("linear")
+                   && keyAt(live, text, 20)->easing.type
+                          == QStringLiteral("linear"),
+               QStringLiteral("one undo did not restore the batch easing")))
+        return 1;
+    document->redo();
+    QApplication::processEvents();
 
     auto* batchNote =
         panel->findChild<QLineEdit*>(QStringLiteral("keyframeNote"));
@@ -476,13 +522,20 @@ int propertiesTest(QApplication& app)
     live->setPlayhead(10);
     panel->setSelectedKeyframes({pvf::KeyRef{text, 10}});
     QApplication::processEvents();
-    auto* easing =
-        panel->findChild<QComboBox*>(QStringLiteral("keyframeEasingGroup"));
+    auto* easingButton =
+        panel->findChild<QToolButton*>(QStringLiteral("keyframeEasingGroup"));
     auto* note = panel->findChild<QLineEdit*>(QStringLiteral("keyframeNote"));
-    if (!check(easing && note, QStringLiteral("easing/note widgets missing")))
+    if (!check(easingButton && note,
+               QStringLiteral("easing/note widgets missing")))
+        return 1;
+    if (!check(!panel->findChild<QComboBox*>(
+                   QStringLiteral("keyframeEasingGroup")),
+               QStringLiteral("plain-text easing combo still present")))
         return 1;
     before = depth();
-    easing->setCurrentIndex(easing->findData(QStringLiteral("easeinoutcubic")));
+    if (!check(chooseEasing(panel, QStringLiteral("easeinoutcubic")),
+               QStringLiteral("easing grid could not choose a preset")))
+        return 1;
     QApplication::processEvents();
     flush();
     if (!check(keyAt(live, text, 10)
@@ -719,8 +772,10 @@ int propertiesTest(QApplication& app)
                   QStringLiteral("cancel solver was not one commit")))
         return 1;
 
-    // Easing combo is a single whole-frame control; no per-track combos.
-    if (!check(!panel->findChild<QComboBox*>(QStringLiteral("trackEasing_x")),
+    // Easing is one whole-frame control (visual grid, not a text combo); no
+    // per-track easing combos.
+    if (!check(!panel->findChild<QComboBox*>(
+                   QStringLiteral("trackEasing_x")),
                QStringLiteral("per-track easing combo still present")))
         return 1;
 
@@ -821,15 +876,40 @@ int keyframeEasingGroupTest(QApplication& app)
     document->setSelection(uuid);
     live->setPlayhead(10);
     QApplication::processEvents();
-    auto* easing =
-        panel->findChild<QComboBox*>(QStringLiteral("keyframeEasingGroup"));
-    if (!check(easing, QStringLiteral("whole-frame easing combo missing")))
+    auto* easingButton =
+        panel->findChild<QToolButton*>(QStringLiteral("keyframeEasingGroup"));
+    if (!check(easingButton,
+               QStringLiteral("whole-frame easing button missing")))
         return 1;
-    if (!check(easing->findData(QStringLiteral("bezier")) >= 0,
-               QStringLiteral("bezier entry missing")))
+    if (!check(!panel->findChild<QComboBox*>(
+                   QStringLiteral("keyframeEasingGroup")),
+               QStringLiteral("plain-text easing combo still present")))
         return 1;
+    if (!check(!easingButton->icon().isNull(),
+               QStringLiteral("current easing curve preview missing")))
+        return 1;
+
+    // The whole preset table is a curve grid, grouped in/out/in-out, with
+    // linear, instant and the custom bezier row.
+    pvf::EasingPicker* picker = openEasingGrid(panel);
+    if (!check(picker, QStringLiteral("easing grid popup missing")))
+        return 1;
+    if (!check(picker->tileRect(QStringLiteral("linear")).isValid()
+                   && picker->tileRect(QStringLiteral("instant")).isValid()
+                   && picker->tileRect(QStringLiteral("easeinquad")).isValid()
+                   && picker->tileRect(QStringLiteral("easeoutsine")).isValid()
+                   && picker->tileRect(QStringLiteral("easeinoutbounce"))
+                          .isValid()
+                   && picker->tileRect(QStringLiteral("bezier")).isValid(),
+               QStringLiteral("easing grid is missing presets")))
+        return 1;
+    picker->window()->close();
+    QApplication::processEvents();
+
     const int before = depth();
-    easing->setCurrentIndex(easing->findData(QStringLiteral("easeinoutcubic")));
+    if (!check(chooseEasing(panel, QStringLiteral("easeinoutcubic")),
+               QStringLiteral("easing grid could not choose a preset")))
+        return 1;
     QApplication::processEvents();
     flush();
     if (!check(keyAt(live, uuid, 10)
@@ -844,11 +924,102 @@ int keyframeEasingGroupTest(QApplication& app)
                   QStringLiteral("easing edit was not one commit")))
         return 1;
 
-    // The first key owns an outgoing segment too: the combo stays enabled.
+    document->undo();
+    QApplication::processEvents();
+    if (!check(keyAt(live, uuid, 10)
+                   && keyAt(live, uuid, 10)->easing.type
+                          == QStringLiteral("linear"),
+               QStringLiteral("one undo did not roll back the easing")))
+        return 1;
+    document->redo();
+    QApplication::processEvents();
+
+    // Custom bezier row: the modal dialog is replaced by the test hook, so the
+    // full grid -> customRequested -> apply wiring is exercised.
+    panel->setEasingCustomEditorForTest(
+        [](const pvf::model::EasingSpec& current,
+           pvf::model::EasingSpec* result) {
+            Q_UNUSED(current);
+            result->type = QStringLiteral("bezier");
+            result->inX = 0.2;
+            result->inY = 0.0;
+            result->outX = 0.35;
+            result->outY = 1.0;
+            return true;
+        });
+    const int beforeCustom = depth();
+    if (!check(chooseEasing(panel, QStringLiteral("bezier")),
+               QStringLiteral("custom bezier row missing")))
+        return 1;
+    QApplication::processEvents();
+    flush();
+    const Keyframe* customKey = keyAt(live, uuid, 10);
+    if (!check(customKey && customKey->easing.type == QStringLiteral("bezier")
+                   && std::abs(customKey->easing.inX - 0.2) < 1e-6
+                   && std::abs(customKey->easing.outX - 0.35) < 1e-6,
+               QStringLiteral("custom bezier was not written to frame 10"))
+        || !check(depth() == beforeCustom + 1,
+                  QStringLiteral("custom bezier was not one commit")))
+        return 1;
+    document->undo();
+    QApplication::processEvents();
+    if (!check(keyAt(live, uuid, 10)
+                   && keyAt(live, uuid, 10)->easing.type
+                          == QStringLiteral("easeinoutcubic"),
+               QStringLiteral("one undo did not roll back the custom bezier")))
+        return 1;
+    document->redo();
+    QApplication::processEvents();
+
+    // Multi-selection: one custom bezier choice rewrites every selected key in
+    // one commit, and one undo restores them.
+    panel->setSelectedKeyframes(
+        {pvf::KeyRef{uuid, 0}, pvf::KeyRef{uuid, 10}});
+    live->setPlayhead(10);
+    QApplication::processEvents();
+    const int beforeBatchCustom = depth();
+    if (!check(chooseEasing(panel, QStringLiteral("bezier")),
+               QStringLiteral("batch custom bezier row missing")))
+        return 1;
+    QApplication::processEvents();
+    flush();
+    if (!check(keyAt(live, uuid, 0)
+                   && keyAt(live, uuid, 0)->easing.type
+                          == QStringLiteral("bezier")
+                   && keyAt(live, uuid, 10)
+                   && keyAt(live, uuid, 10)->easing.type
+                          == QStringLiteral("bezier"),
+               QStringLiteral("batch custom bezier missed a selected key"))
+        || !check(depth() == beforeBatchCustom + 1,
+                  QStringLiteral("batch custom bezier was not one commit")))
+        return 1;
+    document->undo();
+    QApplication::processEvents();
+    if (!check(keyAt(live, uuid, 0)
+                   && keyAt(live, uuid, 0)->easing.type
+                          == QStringLiteral("linear")
+                   && keyAt(live, uuid, 10)
+                   && keyAt(live, uuid, 10)->easing.type
+                          == QStringLiteral("bezier"),
+               QStringLiteral("one undo did not roll back the batch bezier")))
+        return 1;
+
+    // The first key owns an outgoing segment too: the control stays enabled.
+    panel->setSelectedKeyframes({pvf::KeyRef{uuid, 0}});
     live->setPlayhead(0);
     QApplication::processEvents();
-    if (!check(easing->isEnabled(),
+    if (!check(easingButton->isEnabled(),
                QStringLiteral("first key should own an outgoing segment")))
+        return 1;
+
+    // An empty playhead frame disables the grid and explains why.
+    panel->setSelectedKeyframes({});
+    live->setPlayhead(30);
+    QApplication::processEvents();
+    if (!check(!easingButton->isEnabled(),
+               QStringLiteral("empty frame should disable the easing grid"))
+        || !check(easingButton->text().contains(QStringLiteral("无关键帧")),
+                  QStringLiteral("empty frame hint missing")))
         return 1;
 
     QString detail;
@@ -858,8 +1029,8 @@ int keyframeEasingGroupTest(QApplication& app)
 
     window->close();
     QApplication::processEvents();
-    qInfo() << "keyframe-easing-group-test OK: one whole-frame easing, "
-               "one commit";
+    qInfo() << "keyframe-easing-group-test OK: visual curve grid, single/"
+               "batch custom bezier, undo";
     return 0;
 }
 

@@ -1,6 +1,8 @@
 #include "PropertiesPanel.h"
 
 #include "CollapsibleSection.h"
+#include "EasingChooser.h"
+#include "EasingPicker.h"
 #include "PropertiesPanelInternal.h"
 #include "WholeFrameEdit.h"
 #include "app/EditActions.h"
@@ -808,28 +810,24 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
 
     const model::Keyframe* key =
         hasKey ? model::keyframeAt(entity.keyframes, frame) : nullptr;
-    if (m_groupEasing)
+    if (m_keyEasingButton)
     {
-        const QSignalBlocker blocker(m_groupEasing);
-        if (key)
-        {
-            const QString type = model::canonicalEasingName(key->easing.type);
-            int index = m_groupEasing->findData(type);
-            if (index < 0)
-            {
-                m_groupEasing->addItem(type, type);
-                index = m_groupEasing->count() - 1;
-            }
-            m_groupEasing->setCurrentIndex(index);
-        }
-        else
-        {
-            m_groupEasing->setCurrentIndex(-1);
-        }
-        m_groupEasing->setPlaceholderText(
-            key ? QStringLiteral("整帧缓动（本帧 → 下一帧）")
+        const model::EasingSpec spec =
+            key ? key->easing : model::EasingSpec{};
+        m_keyEasingButton->setEnabled(editable && (hasKey || batch));
+        m_keyEasingButton->setIcon(QIcon(EasingPicker::curvePreview(
+            spec, m_keyEasingButton->palette(), QSize(40, 22))));
+        m_keyEasingButton->setText(
+            key ? easingDisplayName(spec)
                 : QStringLiteral("当前帧无关键帧"));
-        m_groupEasing->setEnabled(editable && key);
+        m_keyEasingButton->setToolTip(
+            key
+                ? (batch ? QStringLiteral("整帧缓动（批量 %1 帧）：点开"
+                                          "选择曲线缩略图或自定义贝塞尔")
+                               .arg(targets.size())
+                         : QStringLiteral("整帧缓动（本帧 → 下一帧）：点开"
+                                          "选择曲线缩略图或自定义贝塞尔"))
+                : QStringLiteral("当前帧无关键帧：先在时间轴创建关键帧"));
     }
     if (m_keyNote)
     {
