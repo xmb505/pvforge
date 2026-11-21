@@ -51,6 +51,13 @@ public:
     bool exportCallTree(const QString& path, QString* error = nullptr);
     void refreshNow();
 
+#ifdef PVFORGE_TEST_HOOKS
+    // Native-theme regression: the window must not install a style sheet that
+    // overrides QGroupBox/QTableWidget/QHeaderView/QPushButton/QComboBox/
+    // QLineEdit/QPlainTextEdit, and its custom charts must paint from palette().
+    QString styleSheetForTest() const { return styleSheet(); }
+#endif
+
 signals:
     void closed();
 

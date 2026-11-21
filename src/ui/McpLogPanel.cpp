@@ -1,6 +1,7 @@
 #include "McpLogPanel.h"
 
 #include "core/Settings.h"
+#include "ui/TimelinePanelInternal.h"
 
 #include <QApplication>
 #include <QBrush>
@@ -8,6 +9,7 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QHeaderView>
+#include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -16,6 +18,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QShowEvent>
@@ -150,11 +153,26 @@ McpLogPanel::McpLogPanel(QWidget* viewport, QWidget* parent)
     m_stopButton->setFocusPolicy(Qt::NoFocus);
     m_stopButton->setToolTip(
         QStringLiteral("急停：停止 AI 写操作，之后的写调用返回 stopped_by_human"));
-    m_stopButton->setStyleSheet(
-        QStringLiteral("QToolButton { background: #b8342b; color: white; "
-                       "border: 1px solid #7f221c; padding: 2px 6px; }"
-                       "QToolButton:disabled { background: #7a3a35; "
-                       "color: #bbbbbb; }"));
+    // No style sheet: an emergency stop is a crime-prevention command, so it
+    // keeps the native QToolButton frame and only borrows the "destructive"
+    // icon when the icon theme provides one.  A bold label marks it as the
+    // strongest action without hardcoding a red background that would clash
+    // with a light or a dark system theme.
+    {
+        QFont stopFont = m_stopButton->font();
+        stopFont.setBold(true);
+        m_stopButton->setFont(stopFont);
+        const QPixmap stopGlyph = ui::detail::themedGlyph(
+            {QStringLiteral("process-stop"), QStringLiteral("dialog-warning")},
+            14, QColor());
+        if (!stopGlyph.isNull())
+        {
+            m_stopButton->setIcon(QIcon(stopGlyph));
+            m_stopButton->setIconSize(QSize(14, 14));
+            m_stopButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            m_stopButton->setFixedWidth(48);
+        }
+    }
     connect(m_stopButton, &QToolButton::clicked, this,
             &McpLogPanel::stopAiRequested);
 
@@ -778,6 +796,11 @@ void McpLogPanel::activateEntryForTest(int row)
         return;
     m_tree->setCurrentItem(item);
     activateItem(item);
+}
+
+QString McpLogPanel::stopButtonStyleSheetForTest() const
+{
+    return m_stopButton ? m_stopButton->styleSheet() : QString();
 }
 #endif
 

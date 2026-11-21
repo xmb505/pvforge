@@ -308,6 +308,8 @@ if(PVFORGE_BUILD_SELF_TESTS)
             mcp-test
             mcp-lock-test
             mcp-bridge-test
+            perf-monitor-test
+            perf-flame-test
             perf-scale-test
             closed-range-test
         )

@@ -18,6 +18,14 @@
 
 namespace pvf {
 
+// Native replacements for the popup's old fixed-dark style sheet: the header
+// sits one palette step (Midlight) away from the window colour so a light and
+// a dark system theme both look like the host style instead of a fixed box.
+inline QColor popupHeaderColor(const QPalette& palette)
+{
+    return palette.color(QPalette::Midlight);
+}
+
 class ClipPopup : public QWidget
 {
 public:
@@ -33,17 +41,10 @@ private:
         , m_source(source)
     {
         setObjectName(QStringLiteral("clipPopup"));
-        setAttribute(Qt::WA_StyledBackground, true);
-        setStyleSheet(QStringLiteral(
-            "QWidget#clipPopup { background: #1e1f24; border: 1px solid #4a4d55;"
-            " border-radius: 6px; }"
-            "QWidget#clipPopupHeader { background: #2a2c33; border: none;"
-            " border-bottom: 1px solid #3a3d45; border-top-left-radius: 5px;"
-            " border-top-right-radius: 5px; }"
-            "QWidget#clipPopup QLabel { background: transparent; color: #d8dce4; }"
-            "QWidget#clipPopup QToolButton { background: #32353d; color: #e8eaf0;"
-            " border: 1px solid #4a4d55; border-radius: 3px; padding: 1px 7px; }"
-            "QWidget#clipPopup QToolButton:hover { background: #3c404a; }"));
+        setAutoFillBackground(true);
+        // No style sheet: the popup, its header and its buttons take the host
+        // QPalette/theme, so it stops looking like a fixed dark box inside a
+        // light (or dark) main window.
         setMinimumWidth(160);
 
         auto* layout = new QVBoxLayout(this);
@@ -52,6 +53,12 @@ private:
 
         auto* header = new QWidget(this);
         header->setObjectName(QStringLiteral("clipPopupHeader"));
+        header->setAutoFillBackground(true);
+        {
+            QPalette headerPalette = header->palette();
+            headerPalette.setColor(QPalette::Window, popupHeaderColor(palette()));
+            header->setPalette(headerPalette);
+        }
         header->setMinimumHeight(28);
         auto* headerLayout = new QHBoxLayout(header);
         headerLayout->setContentsMargins(8, 3, 4, 3);
@@ -67,10 +74,12 @@ private:
         m_timeMode->setToolTip(QStringLiteral("切换相对 / 绝对时间"));
         headerLayout->addWidget(m_timeMode);
         auto* close = new QToolButton(header);
+        // Recolour the theme glyph with the palette, not a fixed light colour,
+        // so the close button stays visible on a light header too.
         const QPixmap closeGlyph =
             ui::detail::themedGlyph({QStringLiteral("window-close"),
                                      QStringLiteral("window-close-symbolic")},
-                                    16, QColor(232, 234, 240));
+                                    16, palette().color(QPalette::WindowText));
         if (!closeGlyph.isNull())
         {
             close->setIcon(QIcon(closeGlyph));
