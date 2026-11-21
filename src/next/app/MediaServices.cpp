@@ -556,9 +556,13 @@ QImage MediaServices::htmlThumbnail(const AssetHash& hash, const QSize& target)
     if (!cached.isNull())
         return cached;
 
-    // A project whose browsers failed to start stays on the placeholder: the
-    // asset bin repaints often and must not restart Chrome on every icon.
-    if (!m_htmlStartFailed && (m_html->isRunning() || !m_thumbnailPending.contains(hash)))
+    // Queue only while the browser pipeline is actually running.  Asking a
+    // stopped service leaves a pending frame that never reports back, so the
+    // pending entry (and the worker it pins) outlives the request and blocks
+    // teardown; a project whose browsers failed to start must stay on the
+    // placeholder anyway, and the asset bin repaints often enough that
+    // restarting Chrome per icon is not an option either.
+    if (m_html->isRunning() && !m_thumbnailPending.contains(hash))
     {
         m_html->requestLowRes(request);
         m_thumbnailPending.insert(hash);
