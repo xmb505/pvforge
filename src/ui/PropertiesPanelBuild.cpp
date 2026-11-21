@@ -48,22 +48,6 @@ void PropertiesPanel::buildUi()
     auto* transformContent = new QWidget(this);
     auto* transformForm = new QFormLayout(transformContent);
     configurePropertyForm(transformForm);
-    m_parentRow = new QWidget(transformContent);
-    auto* parentLayout = new QHBoxLayout(m_parentRow);
-    parentLayout->setContentsMargins(0, 0, 0, 0);
-    m_parent = new QComboBox(m_parentRow);
-    m_parent->setObjectName(QStringLiteral("parentCombo"));
-    m_parent->setToolTip(
-        QStringLiteral("选择实体的坐标系：工作台或另一个实体；子级的位置/旋转/缩放相对父级"));
-    parentLayout->addWidget(m_parent);
-    transformForm->addRow(QStringLiteral("父级"), m_parentRow);
-    m_parentLabel = qobject_cast<QLabel*>(transformForm->labelForField(m_parentRow));
-    connect(m_parent, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this](int) {
-                if (m_sessionUuid.isEmpty() || m_parent->currentIndex() < 0)
-                    return;
-                applySessionParent(m_parent->currentData().toString());
-            });
 
     addRow(transformForm, QStringLiteral("X"), QStringLiteral("x"), -10000,
            10000, 1, 1);
@@ -123,6 +107,7 @@ void PropertiesPanel::buildUi()
 
     m_transformSection =
         new CollapsibleSection(QStringLiteral("变换"), transformContent, this);
+    m_transformSection->setObjectName(QStringLiteral("transformSection"));
     m_transformSection->setExpanded(true);
     layout->addWidget(m_transformSection);
 
@@ -249,16 +234,6 @@ void PropertiesPanel::buildSessionUi()
         applySessionAsset(QStringLiteral("sourceIn"), value);
     });
     assetForm->addRow(QStringLiteral("素材起点"), m_assetSourceIn);
-    m_assetVolume = new QDoubleSpinBox(this);
-    m_assetVolume->setObjectName(QStringLiteral("assetVolume"));
-    m_assetVolume->setRange(0.0, 2.0);
-    m_assetVolume->setDecimals(3);
-    m_assetVolume->setSingleStep(0.05);
-    m_assetVolume->setSuffix(QStringLiteral(" ×"));
-    connect(m_assetVolume, &QDoubleSpinBox::valueChanged, this, [this](double value) {
-        writeAnimationValue(QStringLiteral("volume"), value);
-    });
-    assetForm->addRow(QStringLiteral("音量"), m_assetVolume);
     m_mediaLayout->addLayout(assetForm);
 
     buildSessionHtmlSection(m_rootLayout);
@@ -391,6 +366,26 @@ void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
     auto* content = new QWidget(this);
     auto* form = new QFormLayout(content);
     configurePropertyForm(form);
+
+    // Parent selection is identity/range information, not a visual transform:
+    // it lives in the basic section so audio clips keep it while the transform
+    // section is hidden.
+    m_parentRow = new QWidget(content);
+    auto* parentLayout = new QHBoxLayout(m_parentRow);
+    parentLayout->setContentsMargins(0, 0, 0, 0);
+    m_parent = new QComboBox(m_parentRow);
+    m_parent->setObjectName(QStringLiteral("parentCombo"));
+    m_parent->setToolTip(
+        QStringLiteral("选择实体的父级；子级的位置/旋转/缩放相对父级"));
+    parentLayout->addWidget(m_parent);
+    form->addRow(QStringLiteral("父级"), m_parentRow);
+    m_parentLabel = qobject_cast<QLabel*>(form->labelForField(m_parentRow));
+    connect(m_parent, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                if (m_sessionUuid.isEmpty() || m_parent->currentIndex() < 0)
+                    return;
+                applySessionParent(m_parent->currentData().toString());
+            });
 
     m_basicName = new QLineEdit(content);
     m_basicName->setObjectName(QStringLiteral("entityName"));
@@ -540,6 +535,7 @@ void PropertiesPanel::buildBasicSection(QVBoxLayout* layout)
     form->addRow(m_basicFollow);
 
     m_basicSection = new CollapsibleSection(QStringLiteral("实体"), content, this);
+    m_basicSection->setObjectName(QStringLiteral("basicSection"));
     m_basicSection->setExpanded(true);
     layout->insertWidget(2, m_basicSection);
 }
@@ -667,12 +663,17 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
                   QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；前面的波形保持原位"),
                   [this] {});
 
-    m_audioVolume = new QSpinBox(content);
+    m_audioVolume = new QDoubleSpinBox(content);
     m_audioVolume->setObjectName(QStringLiteral("audioVolume"));
-    m_audioVolume->setRange(0, 200);
-    m_audioVolume->setSuffix(QStringLiteral(" %"));
+    m_audioVolume->setRange(-60.0, 24.0);
+    m_audioVolume->setDecimals(1);
+    m_audioVolume->setSingleStep(0.5);
+    m_audioVolume->setSuffix(QStringLiteral(" dB"));
     m_audioVolume->setKeyboardTracking(false);
-    form->addRow(QStringLiteral("音量"), m_audioVolume);
+    m_audioVolume->setToolTip(
+        QStringLiteral("音频增益；-60 dB 为静音。底层仍存线性倍率，"
+                       "修改会自动写整帧关键帧"));
+    form->addRow(QStringLiteral("增益"), m_audioVolume);
 
     m_audioFadeIn = new QDoubleSpinBox(content);
     m_audioFadeIn->setObjectName(QStringLiteral("audioFadeIn"));
@@ -702,6 +703,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     form->addRow(hint);
 
     m_audioSection = new CollapsibleSection(QStringLiteral("音频"), content, this);
+    m_audioSection->setObjectName(QStringLiteral("audioSection"));
     m_audioSection->setExpanded(true);
     layout->addWidget(m_audioSection);
 
@@ -717,9 +719,10 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
             [this](double value) {
                 applySessionData(QStringLiteral("trimEnd"), value);
             });
-    connect(m_audioVolume, &QSpinBox::valueChanged, this,
-            [this](int value) {
-                writeAnimationValue(QStringLiteral("volume"), value / 100.0);
+    connect(m_audioVolume, &QDoubleSpinBox::valueChanged, this,
+            [this](double db) {
+                writeAnimationValue(QStringLiteral("volume"),
+                                    audioLinearGainFromDb(db));
             });
     connect(m_audioFadeIn, &QDoubleSpinBox::valueChanged, this,
             [this](double value) {

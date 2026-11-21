@@ -764,20 +764,12 @@ void PropertiesPanel::refreshPlayheadOnly()
                           keyOr(QStringLiteral("strokeWidth"),
                                 vector.strokeWidth));
         }
-        else if (entity->content.kind == ContentKind::Asset)
+        else if (isAudioAsset(*entity))
         {
-            const model::AssetContent& asset = entity->content.asset;
             const double volume = keyOr(QStringLiteral("volume"),
-                                        asset.volume);
-            if (asset.type == AssetType::Audio)
-            {
-                const QSignalBlocker blocker(m_audioVolume);
-                m_audioVolume->setValue(int(std::lround(volume * 100.0)));
-            }
-            else
-            {
-                setSpinIfIdle(m_assetVolume, volume);
-            }
+                                        entity->content.asset.volume);
+            const QSignalBlocker blocker(m_audioVolume);
+            m_audioVolume->setValue(audioGainDbFromLinear(volume));
         }
     }
 
@@ -926,14 +918,16 @@ void PropertiesPanel::refreshSession()
     const bool text = kind == ContentKind::Text;
     const bool vector = kind == ContentKind::Vector;
     const bool asset = kind == ContentKind::Asset;
-    const bool audio = asset && entity->content.asset.type == AssetType::Audio;
+    const bool audio = isAudioAsset(*entity);
 
     m_title->setText(entity->name + QStringLiteral(" · ")
                      + contentKindLabel(kind));
 
     m_keyStatusRow->show();
     m_basicSection->show();
-    m_transformSection->show();
+    // Audio has no visual or spatial shape: keep only range/parent/asset/gain
+    // information, not the transform, pivot or solver pages.
+    m_transformSection->setVisible(!audio);
     m_keySection->show();
     m_pivotSection->setVisible(!audio);
     m_textSection->setVisible(text);
@@ -942,7 +936,13 @@ void PropertiesPanel::refreshSession()
     m_audioSection->setVisible(audio);
     m_audioSection->setEnabled(editable);
     m_cameraSection->setVisible(camera);
-    m_solverSection->show();
+    m_solverSection->setVisible(!audio);
+
+    // Stage visibility / physics inheritance / coordinate-space controls are
+    // meaningless for an audio clip.
+    m_basicInherit->setVisible(!audio);
+    m_basicVisible->setVisible(!audio);
+    m_basicPhysics->setVisible(!audio);
 
     m_basicSection->setEnabled(true);
     m_transformSection->setEnabled(editable);
@@ -1044,7 +1044,7 @@ void PropertiesPanel::refreshSession()
                              .value_or(volume);
             }
             const QSignalBlocker blocker(m_audioVolume);
-            m_audioVolume->setValue(int(std::lround(volume * 100.0)));
+            m_audioVolume->setValue(audioGainDbFromLinear(volume));
         }
         setAudioSpin(m_audioFadeIn, assetContent.fadeIn, maximum);
         setAudioSpin(m_audioFadeOut, assetContent.fadeOut, maximum);
@@ -1274,25 +1274,7 @@ void PropertiesPanel::refreshSession()
         m_assetSourceIn->setMaximum(frames > 0 ? std::max(0, frames - 1)
                                                : 1000000);
         setSpinIfIdle(m_assetSourceIn, content.sourceIn);
-        if (inRange)
-        {
-            const model::Keyframe key =
-                wholeframe::keyAt(*entity, relative, m_session);
-            if (const auto volume = wholeframe::value(key, QStringLiteral("volume")))
-                setSpinIfIdle(m_assetVolume, *volume);
-            else
-                setSpinIfIdle(m_assetVolume, content.volume);
-        }
-        else
-        {
-            setSpinIfIdle(m_assetVolume, content.volume);
-        }
-        // Volume is an animated parameter only for audio; image/video have no
-        // volume animation key, so their static volume field stays hidden.
-        const bool audioAsset = content.type == AssetType::Audio;
-        m_assetVolume->setVisible(audioAsset);
         m_assetSourceIn->setEnabled(editable);
-        m_assetVolume->setEnabled(editable);
         m_replaceSource->show();
         m_replaceSource->setEnabled(editable);
 

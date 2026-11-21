@@ -421,6 +421,12 @@ void PropertiesPanel::reloadSolverConvert(const model::Entity& entity)
 {
     if (!m_convertSolverButton || !m_solverCreateButton)
         return;
+    // Audio has no stage transform or physics: it only keeps the keyframe
+    // status/easing/note controls.
+    const bool audio = isAudioAsset(entity);
+    m_convertSolverButton->setVisible(!audio);
+    if (m_convertSolverHint)
+        m_convertSolverHint->setVisible(!audio);
     QString reason;
     const bool convert = sessionEditable()
                          && canConvertCurrentKey(entity, &reason);
@@ -465,6 +471,12 @@ void PropertiesPanel::updateSolverPreview(
 {
     if (!m_solverPreview)
         return;
+    if (isAudioAsset(entity))
+    {
+        m_solverPreview->clearSolver();
+        m_solverPreview->hide();
+        return;
+    }
 
     // Follow the card selection; without one fall back to the segment under
     // the playhead, then to the first segment, so the window is never empty
