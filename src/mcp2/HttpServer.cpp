@@ -1249,12 +1249,41 @@ void HttpServer::handleRpc(QTcpSocket* socket, const QJsonObject& request)
             const QByteArray serviceJson = compactJson(serviceResult);
             const qint64 elapsed = timer.elapsed();
 
+            // A preview with includeBase64: true carries hundreds of KB of
+            // base64. Standard MCP clients only see pixels through an `image`
+            // content block, so append one and drop `data.base64` from the text
+            // block to avoid duplicating the same bytes in the model context.
+            // structuredContent keeps the complete result for existing callers.
+            QJsonObject textResult = serviceResult;
+            QJsonObject imageBlock;
+            if (ok)
+            {
+                QJsonObject data =
+                    serviceResult.value(QStringLiteral("data")).toObject();
+                const QString base64 =
+                    data.value(QStringLiteral("base64")).toString();
+                const QString mimeType =
+                    data.value(QStringLiteral("mimeType")).toString();
+                if (!base64.isEmpty()
+                    && mimeType.startsWith(QStringLiteral("image/")))
+                {
+                    data.remove(QStringLiteral("base64"));
+                    textResult.insert(QStringLiteral("data"), data);
+                    imageBlock.insert(QStringLiteral("type"),
+                                      QStringLiteral("image"));
+                    imageBlock.insert(QStringLiteral("data"), base64);
+                    imageBlock.insert(QStringLiteral("mimeType"), mimeType);
+                }
+            }
+
             QJsonObject textContent;
             textContent.insert(QStringLiteral("type"), QStringLiteral("text"));
             textContent.insert(QStringLiteral("text"),
-                               QString::fromUtf8(serviceJson));
+                               QString::fromUtf8(compactJson(textResult)));
             QJsonArray content;
             content.append(textContent);
+            if (!imageBlock.isEmpty())
+                content.append(imageBlock);
 
             QJsonObject result;
             result.insert(QStringLiteral("content"), content);

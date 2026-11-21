@@ -8,9 +8,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
+#include <QFontMetrics>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPainter>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -29,6 +32,12 @@ constexpr int kMaxPreviewSide = 4096;
 constexpr qint64 kMaxPreviewBytes = 20LL * 1024LL * 1024LL;
 constexpr int kMaxPreviewFiles = 32;
 constexpr qint64 kPreviewTtlSeconds = 60 * 60;
+
+// preview.render_range limits from docs/AI/MCP_AGENT_USABILITY_IMPROVEMENTS.md.
+constexpr int kMaxRangeFrames = 16;
+constexpr int kMaxRangeCols = 6;
+constexpr int kMinCellWidth = 64;
+constexpr int kMaxCellWidth = 1024;
 
 // Per-user directory: mode 0700, PNGs mode 0600, TTL and LRU pruning. /tmp is
 // shared, so a fixed 0644 file name would let other local users read frames of
@@ -137,6 +146,175 @@ bool validCamera(const model::Project& project, const Uuid& cameraUuid)
         return true;
     const model::Entity* camera = findEntity(project, cameraUuid);
     return camera && camera->content.kind == ContentKind::Camera;
+}
+
+// Defense in depth for issue #123: base64 is the only channel that copies
+// arbitrary user pixels into the AI response. A project whose metadata says an
+// MCP import was never human-approved is not allowed to use it.
+Result base64Guard(const Tx& tx)
+{
+    for (const assets::StoredAsset& asset : tx.store->assets().listIncludingMissing())
+    {
+        const QJsonObject metadata = asset.metadata;
+        if (metadata.value(QStringLiteral("importedBy")).toString()
+                != QLatin1String("mcp"))
+            continue;
+        if (metadata.value(QStringLiteral("humanApproved")).toBool())
+            continue;
+        QJsonObject details;
+        details.insert(QStringLiteral("assetHash"), asset.hash);
+        details.insert(QStringLiteral("reason"),
+                       QStringLiteral("unapproved_import"));
+        return failure(
+            QStringLiteral("permission_denied"),
+            QStringLiteral("存在未经人类确认导入的素材，禁止 base64 预览输出"),
+            details);
+    }
+    return success();
+}
+
+// Shared by render_frame and render_range: writes one PNG into the per-user
+// preview directory (0600, LRU/TTL pruning, 20MB cap) and returns its path.
+Result savePreviewPng(const QImage& image, QString* path)
+{
+    const QString directory = previewDirectory();
+    if (directory.isEmpty())
+        return failure(QStringLiteral("internal_error"),
+                       QStringLiteral("无法创建预览临时目录"));
+    prunePreviewDirectory(directory);
+
+    *path = directory + QStringLiteral("/pvforge-preview-") + model::newUuid()
+            + QStringLiteral(".png");
+    if (!image.save(*path, "PNG"))
+        return failure(QStringLiteral("internal_error"),
+                       QStringLiteral("无法保存预览 PNG"));
+    setOwnerOnly(*path, false);
+    if (QFileInfo(*path).size() > kMaxPreviewBytes)
+    {
+        QFile::remove(*path);
+        QJsonObject details;
+        details.insert(QStringLiteral("maxBytes"), double(kMaxPreviewBytes));
+        return failure(QStringLiteral("limit_exceeded"),
+                       QStringLiteral("预览 PNG 超过 20MB"), details);
+    }
+    return success();
+}
+
+Result readPreviewBase64(const QString& path, QString* base64)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return failure(QStringLiteral("internal_error"),
+                       QStringLiteral("无法读取预览 PNG"));
+    *base64 = QString::fromLatin1(file.readAll().toBase64());
+    return success();
+}
+
+// Draws the `#30` frame badge in the top-left corner of one contact-sheet cell:
+// a translucent black rounded rectangle with white text.
+void drawFrameLabel(QPainter* painter, const QRect& cell, int frame)
+{
+    const int pixelSize = std::clamp(cell.width() / 12, 12, 48);
+    const int padding = std::max(4, pixelSize / 3);
+
+    QFont font = painter->font();
+    font.setPixelSize(pixelSize);
+    font.setBold(true);
+    painter->setFont(font);
+
+    const QString text = QStringLiteral("#%1").arg(frame);
+    const QFontMetrics metrics(font);
+    const QRect textRect = metrics.boundingRect(text);
+    const QRect badge(cell.left() + padding, cell.top() + padding,
+                      textRect.width() + padding * 2,
+                      textRect.height() + padding);
+
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColor(0, 0, 0, 160));
+    painter->drawRoundedRect(badge, padding / 2, padding / 2);
+    painter->setPen(Qt::white);
+    painter->drawText(badge, Qt::AlignCenter, text);
+}
+
+// Parses the mutually exclusive frame selectors of preview.render_range.
+// `frames` is deduplicated while keeping its order; `from/to/count` samples the
+// closed interval [from, to] uniformly and always includes both ends when
+// count >= 2.
+bool parseRangeFrames(const QJsonObject& args, QVector<int>* frames,
+                      Result* error)
+{
+    const auto invalid = [error](const QString& message) {
+        *error = failure(QStringLiteral("invalid_argument"), message);
+        return false;
+    };
+
+    const bool hasFrames = args.contains(QStringLiteral("frames"));
+    const bool hasRange = args.contains(QStringLiteral("from"))
+                          || args.contains(QStringLiteral("to"));
+    if (hasFrames && hasRange)
+        return invalid(QStringLiteral("frames 与 from/to 不能同时使用"));
+    if (!hasFrames && !hasRange)
+        return invalid(
+            QStringLiteral("必须提供 frames 或 from+to 来选择要渲染的帧"));
+
+    if (hasFrames)
+    {
+        const QJsonValue value = args.value(QStringLiteral("frames"));
+        if (!value.isArray())
+            return invalid(QStringLiteral("frames 必须是整数数组"));
+        const QJsonArray array = value.toArray();
+        if (array.isEmpty() || array.size() > kMaxRangeFrames)
+            return invalid(QStringLiteral("frames 必须包含 1..16 个帧号"));
+
+        QSet<int> seen;
+        for (const QJsonValue& item : array)
+        {
+            const double number = item.toDouble();
+            if (!item.isDouble() || !std::isfinite(number)
+                || std::floor(number) != number || number < 0.0
+                || number > 1000000.0)
+                return invalid(
+                    QStringLiteral("frames 的每一项必须是 0..1000000 的整数"));
+            const int frame = int(number);
+            if (seen.contains(frame))
+                continue;
+            seen.insert(frame);
+            frames->append(frame);
+        }
+        return true;
+    }
+
+    if (!args.contains(QStringLiteral("from"))
+        || !args.contains(QStringLiteral("to")))
+        return invalid(QStringLiteral("from 和 to 必须同时提供"));
+
+    int from = 0;
+    int to = 0;
+    int count = 6;
+    if (!readInt(args, "from", &from, error) || !readInt(args, "to", &to, error)
+        || !readInt(args, "count", &count, error))
+        return false;
+    if (from < 0 || from > to || to > 1000000)
+        return invalid(
+            QStringLiteral("from/to 必须满足 0 <= from <= to <= 1000000"));
+    if (count < 1 || count > kMaxRangeFrames)
+        return invalid(QStringLiteral("count 必须在 1..16"));
+
+    QSet<int> seen;
+    for (int index = 0; index < count; ++index)
+    {
+        const int frame =
+            count == 1
+                ? from
+                : int(std::llround(double(from)
+                                   + double(to - from) * index
+                                         / double(count - 1)));
+        if (seen.contains(frame))
+            continue;
+        seen.insert(frame);
+        frames->append(frame);
+    }
+    return true;
 }
 
 } // namespace
@@ -255,28 +433,11 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
     if (!readBool(args, "includeBase64", &includeBase64, &error))
         return error;
 
-    // Defense in depth for issue #123: base64 is the only channel that copies
-    // arbitrary user pixels into the AI response. A project whose metadata says
-    // an MCP import was never human-approved is not allowed to use it.
     if (includeBase64)
     {
-        for (const assets::StoredAsset& asset : tx.store->assets().listIncludingMissing())
-        {
-            const QJsonObject metadata = asset.metadata;
-            if (metadata.value(QStringLiteral("importedBy")).toString()
-                    != QLatin1String("mcp"))
-                continue;
-            if (metadata.value(QStringLiteral("humanApproved")).toBool())
-                continue;
-            QJsonObject details;
-            details.insert(QStringLiteral("assetHash"), asset.hash);
-            details.insert(QStringLiteral("reason"),
-                           QStringLiteral("unapproved_import"));
-            return failure(
-                QStringLiteral("permission_denied"),
-                QStringLiteral("存在未经人类确认导入的素材，禁止 base64 预览输出"),
-                details);
-        }
+        const Result guard = base64Guard(tx);
+        if (!guard.ok)
+            return guard;
     }
 
     if (tx.previewSlot && !tx.previewSlot())
@@ -304,26 +465,10 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("internal_error"),
                        QStringLiteral("预览渲染失败"));
 
-    const QString directory = previewDirectory();
-    if (directory.isEmpty())
-        return failure(QStringLiteral("internal_error"),
-                       QStringLiteral("无法创建预览临时目录"));
-    prunePreviewDirectory(directory);
-
-    const QString path = directory + QStringLiteral("/pvforge-preview-")
-                         + model::newUuid() + QStringLiteral(".png");
-    if (!image.save(path, "PNG"))
-        return failure(QStringLiteral("internal_error"),
-                       QStringLiteral("无法保存预览 PNG"));
-    setOwnerOnly(path, false);
-    if (QFileInfo(path).size() > kMaxPreviewBytes)
-    {
-        QFile::remove(path);
-        QJsonObject details;
-        details.insert(QStringLiteral("maxBytes"), double(kMaxPreviewBytes));
-        return failure(QStringLiteral("limit_exceeded"),
-                       QStringLiteral("预览 PNG 超过 20MB"), details);
-    }
+    QString path;
+    const Result saved = savePreviewPng(image, &path);
+    if (!saved.ok)
+        return saved;
 
     QJsonObject data;
     data.insert(QStringLiteral("path"), path);
@@ -336,12 +481,199 @@ Result previewRenderFrame(Tx& tx, const QJsonObject& args)
 
     if (includeBase64)
     {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly))
-            return failure(QStringLiteral("internal_error"),
-                           QStringLiteral("无法读取预览 PNG"));
-        data.insert(QStringLiteral("base64"),
-                    QString::fromLatin1(file.readAll().toBase64()));
+        QString base64;
+        const Result read = readPreviewBase64(path, &base64);
+        if (!read.ok)
+            return read;
+        data.insert(QStringLiteral("base64"), base64);
+    }
+    return success(data);
+}
+
+Result previewRenderRange(Tx& tx, const QJsonObject& args)
+{
+    static const QStringList allowed = {
+        QStringLiteral("frames"),         QStringLiteral("from"),
+        QStringLiteral("to"),             QStringLiteral("count"),
+        QStringLiteral("cols"),           QStringLiteral("width"),
+        QStringLiteral("cameraUuid"),     QStringLiteral("background"),
+        QStringLiteral("includeBase64"),  QStringLiteral("showFrameLabel"),
+    };
+    for (auto it = args.constBegin(); it != args.constEnd(); ++it)
+    {
+        if (!allowed.contains(it.key()))
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("未知参数 %1").arg(it.key()));
+    }
+
+    Result error;
+    const model::Project& project = tx.p();
+
+    QVector<int> frames;
+    if (!parseRangeFrames(args, &frames, &error))
+        return error;
+    if (frames.isEmpty())
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("没有可渲染的帧"));
+
+    int cols = std::min<int>(int(frames.size()), 4);
+    if (!readInt(args, "cols", &cols, &error))
+        return error;
+    if (args.contains(QStringLiteral("cols"))
+        && (cols < 1 || cols > kMaxRangeCols))
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("cols 必须在 1..6"));
+
+    int cellWidth = 320;
+    if (!readInt(args, "width", &cellWidth, &error))
+        return error;
+    if (args.contains(QStringLiteral("width"))
+        && (cellWidth < kMinCellWidth || cellWidth > kMaxCellWidth))
+        return failure(
+            QStringLiteral("invalid_argument"),
+            QStringLiteral("width 必须在 64..1024（单格宽度）"));
+
+    const int projectWidth = std::max(1, project.settings.width);
+    const int projectHeight = std::max(1, project.settings.height);
+    const int cellHeight = std::max(
+        1, int(std::lround(double(cellWidth) * projectHeight / projectWidth)));
+
+    const int rows = (int(frames.size()) + cols - 1) / cols;
+    const qint64 sheetWidth = qint64(cols) * cellWidth;
+    const qint64 sheetHeight = qint64(rows) * cellHeight;
+    if (sheetWidth > kMaxPreviewSide || sheetHeight > kMaxPreviewSide)
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("maxSide"), kMaxPreviewSide);
+        details.insert(QStringLiteral("width"), double(sheetWidth));
+        details.insert(QStringLiteral("height"), double(sheetHeight));
+        return failure(QStringLiteral("limit_exceeded"),
+                       QStringLiteral("接触表尺寸 %1x%2 超过 %3 像素上限")
+                           .arg(sheetWidth)
+                           .arg(sheetHeight)
+                           .arg(kMaxPreviewSide),
+                       details);
+    }
+
+    Uuid cameraUuid = tx.viewState.cameraUuid;
+    if (!readUuid(args, "cameraUuid", &cameraUuid, &error, false, true))
+        return error;
+    if (!validCamera(project, cameraUuid))
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("cameraUuid"), cameraUuid);
+        return failure(QStringLiteral("invalid_argument"),
+                       QStringLiteral("cameraUuid 必须是已存在的摄像机实体"),
+                       details);
+    }
+
+    QColor background;
+    if (args.contains(QStringLiteral("background")))
+    {
+        QString color;
+        if (!readString(args, "background", &color, &error, true))
+            return error;
+        background = QColor(color);
+        if (!background.isValid())
+            return failure(QStringLiteral("invalid_argument"),
+                           QStringLiteral("background 必须是 CSS 颜色"));
+    }
+
+    bool includeBase64 = false;
+    bool showFrameLabel = true;
+    if (!readBool(args, "includeBase64", &includeBase64, &error)
+        || !readBool(args, "showFrameLabel", &showFrameLabel, &error))
+        return error;
+
+    if (includeBase64)
+    {
+        const Result guard = base64Guard(tx);
+        if (!guard.ok)
+            return guard;
+    }
+
+    // The whole sheet costs one slot of the 2 renders/second limiter, which is
+    // the whole point of a contact sheet.
+    if (tx.previewSlot && !tx.previewSlot())
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("limitPerSecond"), 2);
+        return failure(QStringLiteral("limit_exceeded"),
+                       QStringLiteral("预览渲染限流：约 2 次/秒，请稍后重试"),
+                       details);
+    }
+
+    QColor sheetBackground = background;
+    if (!sheetBackground.isValid())
+        sheetBackground = QColor(project.settings.background);
+    QImage sheet(int(sheetWidth), int(sheetHeight),
+                 QImage::Format_ARGB32_Premultiplied);
+    if (sheet.isNull())
+        return failure(QStringLiteral("internal_error"),
+                       QStringLiteral("无法分配接触表画布"));
+    sheet.fill(sheetBackground.isValid() ? sheetBackground : QColor(Qt::black));
+
+    render2::SceneWorld world(project, tx.store->assets());
+    anim::Cache cache;
+    QPainter painter(&sheet);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    for (int index = 0; index < frames.size(); ++index)
+    {
+        const int frame = frames.at(index);
+        render2::Options options;
+        options.projectFrame = frame;
+        options.cameraUuid = cameraUuid;
+        options.outputSize = QSize(cellWidth, cellHeight);
+        options.background = background;
+        options.videoFrame = tx.videoFrameProvider;
+        options.htmlFrame = tx.htmlFrameProvider;
+
+        const QImage image = render2::renderFrame(project, tx.store->assets(),
+                                                  options, world, cache);
+        if (image.isNull())
+        {
+            painter.end();
+            return failure(
+                QStringLiteral("internal_error"),
+                QStringLiteral("预览渲染失败（帧 %1）").arg(frame));
+        }
+
+        const QRect cell((index % cols) * cellWidth,
+                         (index / cols) * cellHeight, cellWidth, cellHeight);
+        painter.drawImage(cell, image);
+        if (showFrameLabel)
+            drawFrameLabel(&painter, cell, frame);
+    }
+    painter.end();
+
+    QString path;
+    const Result saved = savePreviewPng(sheet, &path);
+    if (!saved.ok)
+        return saved;
+
+    QJsonArray frameArray;
+    for (const int frame : std::as_const(frames))
+        frameArray.append(frame);
+
+    QJsonObject data;
+    data.insert(QStringLiteral("path"), path);
+    data.insert(QStringLiteral("mimeType"), QStringLiteral("image/png"));
+    data.insert(QStringLiteral("width"), sheet.width());
+    data.insert(QStringLiteral("height"), sheet.height());
+    data.insert(QStringLiteral("cellWidth"), cellWidth);
+    data.insert(QStringLiteral("cellHeight"), cellHeight);
+    data.insert(QStringLiteral("cols"), cols);
+    data.insert(QStringLiteral("rows"), rows);
+    data.insert(QStringLiteral("frames"), frameArray);
+    data.insert(QStringLiteral("cameraUuid"), uuidValue(cameraUuid));
+
+    if (includeBase64)
+    {
+        QString base64;
+        const Result read = readPreviewBase64(path, &base64);
+        if (!read.ok)
+            return read;
+        data.insert(QStringLiteral("base64"), base64);
     }
     return success(data);
 }
