@@ -1166,8 +1166,6 @@ void Mcp2Tests::projectUpdateRejectsFpsAndResolution()
 
     QVector<QJsonObject> lockedPatches;
     lockedPatches.append(QJsonObject{{QStringLiteral("fps"), 24}});
-    lockedPatches.append(QJsonObject{{QStringLiteral("fps"), 24},
-                                     {QStringLiteral("confirm"), true}});
     lockedPatches.append(QJsonObject{{QStringLiteral("width"), 1280}});
     lockedPatches.append(QJsonObject{{QStringLiteral("height"), 720}});
     for (const QJsonObject& patch : std::as_const(lockedPatches))

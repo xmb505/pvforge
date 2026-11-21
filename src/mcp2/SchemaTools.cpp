@@ -70,6 +70,21 @@ QJsonObject toolSchema(const QString& name, const QString& description,
     return object;
 }
 
+// Single source of truth for the per-kind animation parameter contract.  It is
+// repeated in tools/list descriptions and schema.get so an agent that reads
+// only one of them still learns the complete required set instead of failing
+// one missing field at a time.
+QString animationParamsSummary()
+{
+    return QStringLiteral(
+        "各 content.kind 必填的动画参数：text → pixelSize/lineHeight/"
+        "letterSpacing/padding/boxWidth/boxHeight/strokeWidth；"
+        "vector → width/height/cornerRadius/strokeWidth；"
+        "audio（asset.type=audio）→ volume；"
+        "image/video/html/camera/empty → 无（content 可省略或传 {}；"
+        "HTML 数字变量写进 htmlVars）");
+}
+
 // Content is a tagged union: `kind` plus a same-named sub-object (text/vector/
 // camera) or flat asset fields.  It only holds definition parameters; the
 // animation parameters live in each whole-frame keyframe's `content` object.
@@ -144,10 +159,9 @@ QJsonObject contentSchema()
         QStringLiteral("description"),
         QStringLiteral("实体静态内容。这里只放定义参数（文字内容/字体/颜色、"
                        "形状类型、素材引用等）；动画参数由整帧关键帧的 content "
-                       "承载：文本 pixelSize/lineHeight/letterSpacing/padding/"
-                       "boxWidth/boxHeight/strokeWidth，矢量 width/height/"
-                       "cornerRadius/strokeWidth，音频 volume，HTML 数字变量在 "
-                       "htmlVars。定义参数不能写进关键帧。"));
+                       "承载。")
+            + animationParamsSummary()
+            + QStringLiteral("。定义参数不能写进关键帧。"));
     schema.insert(QStringLiteral("properties"), properties);
     return schema;
 }
@@ -182,7 +196,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("参与碰撞"))},
             {QStringLiteral("transform"), prop(QStringLiteral("object"), QStringLiteral("x/y/rotation/scaleX/scaleY/pivotX/pivotY/opacity（静态回退）"))},
             {QStringLiteral("content"), contentSchema()},
-            {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整帧关键帧数组；每个对象含 frame/x/y/rotation/scaleX/scaleY/opacity/visible/physicsInteract/content/htmlVars/easing/note，没有 track"))},
+            {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整帧关键帧数组；每个对象含 frame/x/y/rotation/scaleX/scaleY/opacity/visible/physicsInteract/content/htmlVars/easing/note，没有 track。") + animationParamsSummary())},
             {QStringLiteral("solvers"), arrayOf(QStringLiteral("object"), QStringLiteral("求解段，字段同 solver.create 去掉 entityUuid"))},
         });
     }
@@ -198,7 +212,7 @@ QJsonObject schemaTopic(const QString& topic)
             {QStringLiteral("opacity"), prop(QStringLiteral("number"), QStringLiteral("必填，0..1"))},
             {QStringLiteral("visible"), prop(QStringLiteral("boolean"), QStringLiteral("必填，步骤值"))},
             {QStringLiteral("physicsInteract"), prop(QStringLiteral("boolean"), QStringLiteral("必填，步骤值"))},
-            {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("必填；该内容类型的全部动画参数：文本 pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth；矢量 width/height/cornerRadius/strokeWidth；音频 volume；定义参数不能写进来"))},
+            {QStringLiteral("content"), prop(QStringLiteral("object"), QStringLiteral("必填；该内容类型的全部动画参数。") + animationParamsSummary() + QStringLiteral("。定义参数不能写进来"))},
             {QStringLiteral("htmlVars"), prop(QStringLiteral("object"), QStringLiteral("HTML manifest 数字变量覆盖值；非数字变量不进关键帧"))},
             {QStringLiteral("easing"), prop(QStringLiteral("string|object"), QStringLiteral("预设名或 {type:bezier,inX,inY,outX,outY}"))},
             {QStringLiteral("note"), prop(QStringLiteral("string"), QStringLiteral("最长 4096"))},
@@ -237,10 +251,12 @@ QJsonObject schemaTopic(const QString& topic)
     {
         QJsonArray codes;
         for (const QString& code :
-             {QStringLiteral("invalid_argument"), QStringLiteral("permission_denied"),
-              QStringLiteral("confirm_required"), QStringLiteral("conflict"),
-              QStringLiteral("limit_exceeded"), QStringLiteral("stopped_by_human"),
-              QStringLiteral("not_available"), QStringLiteral("internal_error")})
+             {QStringLiteral("invalid_argument"), QStringLiteral("conflict"),
+              QStringLiteral("internal_error"), QStringLiteral("limit_exceeded"),
+              QStringLiteral("confirm_required"), QStringLiteral("not_available"),
+              QStringLiteral("permission_denied"),
+              QStringLiteral("stopped_by_human"),
+              QStringLiteral("request_timeout")})
             codes.append(code);
         QJsonObject schema;
         schema.insert(QStringLiteral("codes"), codes);
@@ -324,7 +340,7 @@ QString guideMarkdown(const QString& topic)
             "- 锁定实体和祖先不能写；MCP 不能解锁。\n"
             "- 删除实体/素材必须带 `confirm: true`。\n"
             "- 整帧关键帧：一个关键帧 = 该帧的全部动画参数 + 一个整体缓动 + 可选注释。没有 `track`，没有单参数轨道；`keyframes.set` 每个对象必须含 `frame,x,y,rotation,scaleX,scaleY,opacity,visible,physicsInteract`，以及该内容类型的全部 `content` 动画参数。\n"
-            "- 动画参数：文本 `pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth`；矢量 `width/height/cornerRadius/strokeWidth`；音频 `volume`；HTML 数字变量写在 `htmlVars`。定义参数（文字内容、字体、颜色、形状类型、素材引用等）不能写进关键帧。\n"
+            "- 动画参数：文本 `pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth`；矢量 `width/height/cornerRadius/strokeWidth`；音频 `volume`；image/video/html/camera/empty 无动画参数（`content` 可省略或传 `{}`，HTML 数字变量写进 `htmlVars`）。定义参数（文字内容、字体、颜色、形状类型、素材引用等）不能写进关键帧。\n"
             "- 改单个字段用 `keyframes.upsert`：服务端先按该帧求值补全全部动画参数，再覆盖传入字段。\n"
             "- 改完用 `entity.get` 或 `keyframes.get` 自查。\n");
     if (topic == QLatin1String("workflow"))
@@ -383,6 +399,21 @@ QString guideMarkdown(const QString& topic)
             "```\n"
             "对所有关键帧调用 `keyframes.setMany`，帧号按各实体自己的 start 计算；"
             "只改一个字段时用 `keyframes.upsert`。\n");
+    if (topic == QLatin1String("pitfalls"))
+        return QStringLiteral(
+            "# 高频坑点（与当前实现一致）\n"
+            "- `entity.update` 的 `patch.content` 必须用嵌套写法：text → `content.text{...}`，vector → `content.vector{...}`，asset → `content.assetHash/assetType/sourceIn/volume/fadeIn/fadeOut`。把 `shape`、`width` 等扁平字段放在 `content` 顶层会返回 `invalid_argument`（details.expectedContentPath / details.unexpectedKeys），不会再静默丢字段；换素材引用请用 `asset.assign`。\n"
+            "- `content.assetType` 只是声明值：`entity.create` 和 `asset.assign` 都会用素材库里的真实类型覆盖它，写错会被改回，也不能靠它把图片当音频。换素材前先 `asset.get` 看 `type`。\n"
+            "- `asset.import` 的 `audioAsset` 是素材对象（与 `asset` 同结构），视频默认拆出 WAV 时非 null；`extractAudio:false` 或非视频时为 `null`。不要按布尔值或 hash 字符串来读。\n"
+            "- `fadeIn` / `fadeOut` 是 asset 内容的通用字段：任意素材类型都能写，单位秒、范围 0..36000，只有音频混音真正生效；视觉素材写了不会报错。\n"
+            "- `project.update` 只能改 `name` / `background`；`fps`、`width`、`height` 创建后锁定，传了返回 `conflict`（不是静默忽略）。`confirm` 不是合法参数，传了返回 `invalid_argument`。\n"
+            "- `row` 规则：主时间线（`parentUuid` 为空）必须 `row >= 0`；私有时间线允许负 `row`，可把子实体放到父实体下层。reparent 回主时间线时不能留负 row。\n"
+            "- `keyframes.setMany` 的格式是 `{items:[{uuid,keyframes:[整帧...]}]}`。每个整帧必须含 `frame,x,y,rotation,scaleX,scaleY,opacity,visible,physicsInteract` 和该内容类型的全部动画参数，`frame` 相对实体 start、范围 `0..duration-1`，没有 `track`。缺字段会一次返回全部 `details.missingFields`；只改单个字段用 `keyframes.upsert`。\n"
+            "- 动画参数按内容类型：text `pixelSize/lineHeight/letterSpacing/padding/boxWidth/boxHeight/strokeWidth`；vector `width/height/cornerRadius/strokeWidth`；audio `volume`；image/video/html/camera/empty 无（`content` 可省略或传 `{}`，HTML 数字变量写进 `htmlVars`）。\n"
+            "- `asset.assign` 会冲突：camera 不能换素材；text/vector 必须先用 `entity.update` 把 `patch.content` 改成 `{\"kind\":\"empty\"}`，再 assign；音频与 image/video/html 互不兼容。实体时长超过素材剩余长度时会自动裁剪实体，若会删除子实体则返回 `conflict`。\n"
+            "- 工程未打开时所有工具返回 `not_available`；Git 未启用时写工具返回 `permission_denied`（details.reason=`git_disabled`），只读工具仍可用，不要重试写操作。\n"
+            "- 单次工具执行超过 15 秒会返回 `request_timeout` 并回滚，不留下半成品。\n"
+            "- 删除实体/素材必须带 `confirm: true`；`entity.trim` 会级联裁剪子实体，删子实体同样需要 confirm。\n");
     return QString();
 }
 
@@ -430,6 +461,7 @@ Result guideGet(Tx& tx, const QJsonObject& args)
         QStringLiteral("authoring"), QStringLiteral("workflow"),
         QStringLiteral("solver"),    QStringLiteral("preview"),
         QStringLiteral("assets"),    QStringLiteral("examples"),
+        QStringLiteral("pitfalls"),
     };
     if (!topics.contains(topic))
         return failure(QStringLiteral("invalid_argument"),
@@ -460,8 +492,7 @@ QJsonObject listTools()
                       {QStringLiteral("width"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
                       {QStringLiteral("height"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
                       {QStringLiteral("fps"), prop(QStringLiteral("integer"), QStringLiteral("创建后锁定，传了会被拒绝"))},
-                      {QStringLiteral("background"), prop(QStringLiteral("string"), QString())},
-                      {QStringLiteral("confirm"), prop(QStringLiteral("boolean"), QString())}})));
+                      {QStringLiteral("background"), prop(QStringLiteral("string"), QString())}})));
 
     const QJsonObject entityCreateSchema = objectSchema(
         {{QStringLiteral("name"), prop(QStringLiteral("string"), QString())},
@@ -565,7 +596,7 @@ QJsonObject listTools()
 
     const QJsonObject keyframesSetSchema = objectSchema(
         {{QStringLiteral("uuid"), prop(QStringLiteral("string"), QString())},
-         {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整组替换；每个对象必须含该实体类型的全部动画参数，缺字段报错"))}},
+         {QStringLiteral("keyframes"), arrayOf(QStringLiteral("object"), QStringLiteral("整组替换；每个对象必须含该实体类型的全部动画参数，缺字段报错。") + animationParamsSummary())}},
         {QStringLiteral("uuid"), QStringLiteral("keyframes")});
     tools.append(toolSchema(
         QStringLiteral("keyframes.get"),
@@ -574,12 +605,14 @@ QJsonObject listTools()
                      {QStringLiteral("uuid")})));
     tools.append(toolSchema(
         QStringLiteral("keyframes.set"),
-        QStringLiteral("严格整组替换整帧关键帧；每个关键帧必须含全部动画参数，没有 track"),
+        QStringLiteral("严格整组替换整帧关键帧；每个关键帧必须含全部动画参数，没有 track。")
+            + animationParamsSummary(),
         keyframesSetSchema));
     tools.append(toolSchema(
         QStringLiteral("keyframes.setMany"),
-        QStringLiteral("一次替换多个实体的整帧关键帧，整批一个 commit"),
-        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,keyframes}"))}},
+        QStringLiteral("一次替换多个实体的整帧关键帧，整批一个 commit。")
+            + animationParamsSummary(),
+        objectSchema({{QStringLiteral("items"), arrayOf(QStringLiteral("object"), QStringLiteral("1..200 个 {uuid,keyframes}；每个 keyframe 的要求同 keyframes.set。") + animationParamsSummary())}},
                      {QStringLiteral("items")})));
     tools.append(toolSchema(
         QStringLiteral("keyframes.upsert"),
@@ -750,7 +783,7 @@ QJsonObject listTools()
         objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("project|entity|keyframes|asset|markers|errors|solver|preview|view|all"))}})));
     tools.append(toolSchema(
         QStringLiteral("guide.get"), QStringLiteral("读取 Markdown 编写指南"),
-        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("authoring|workflow|solver|preview|assets|examples"))}})));
+        objectSchema({{QStringLiteral("topic"), prop(QStringLiteral("string"), QStringLiteral("authoring|workflow|solver|preview|assets|examples|pitfalls"))}})));
 
     QJsonObject result;
     result.insert(QStringLiteral("tools"), tools);
