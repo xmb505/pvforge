@@ -598,6 +598,9 @@ void TimelinePanel::setScrubFrame(double rawX)
     const int x = std::clamp(int(std::lround(rawX)), nameWidth() + 1,
                              width() - kScrollBarSize - 1);
     m_frame = std::max(0, frameFromX(x));
+    // Audible signal first so the shell can capture the previous playhead
+    // before the generic frameRequested connection updates its widget state.
+    emit scrubFrameRequested(m_frame);
     emit frameRequested(m_frame);
     update();
 }
@@ -617,6 +620,7 @@ void TimelinePanel::stepFrame(int delta)
         next = 0;
 
     m_frame = std::max(0, next);
+    emit scrubFrameRequested(m_frame);
     emit frameRequested(m_frame);
     update();
 }
