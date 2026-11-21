@@ -71,11 +71,11 @@ Project makeProject(int frames = 10)
     project.settings.fps = 30;
     project.settings.background = QStringLiteral("#101014");
 
-    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames);
+    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames - 1);
     camera.content.kind = ContentKind::Camera;
     project.entities.insert(camera.uuid, camera);
 
-    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames);
+    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames - 1);
     rect.content.kind = ContentKind::Vector;
     rect.content.vector.shape = 0;
     rect.content.vector.width = 100.0;
@@ -394,7 +394,7 @@ void testHiddenAudioIsExported()
 
     Project project = makeProject(30);
     Entity audio =
-        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 29);
     audio.hidden = true;
     project.entities.insert(audio.uuid, audio);
 
@@ -420,11 +420,11 @@ void testHiddenParentDoesNotMuteChild()
         return;
 
     Project project = makeProject(30);
-    Entity parent = makeEntity(QStringLiteral("parent"), 0, 30);
+    Entity parent = makeEntity(QStringLiteral("parent"), 0, 29);
     parent.hidden = true;
     project.entities.insert(parent.uuid, parent);
     Entity audio =
-        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 30);
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 29);
     audio.parentUuid = parent.uuid;
     project.entities.insert(audio.uuid, audio);
 

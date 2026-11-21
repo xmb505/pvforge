@@ -70,7 +70,7 @@ Project makeProject(int frames = 10)
     project.settings.fps = 30;
     project.settings.background = QStringLiteral("#101014");
 
-    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames);
+    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames - 1);
     camera.content.kind = ContentKind::Camera;
     camera.transform.x = 0.0; // canvas centre
     camera.transform.y = 0.0;
@@ -78,7 +78,7 @@ Project makeProject(int frames = 10)
     camera.transform.scaleY = 1.0;
     project.entities.insert(camera.uuid, camera);
 
-    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames);
+    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames - 1);
     rect.transform.x = 0.0;
     rect.transform.y = 0.0;
     rect.content.kind = ContentKind::Vector;

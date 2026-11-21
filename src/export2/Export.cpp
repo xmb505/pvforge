@@ -189,7 +189,7 @@ bool mixAudioEntity(const model::Project& project,
                     QString* error)
 {
     const int overlapStart = std::max(entity.start, exportStart);
-    const int overlapEnd = std::min(entity.end, exportStart + totalFrames);
+    const int overlapEnd = std::min(entity.end + 1, exportStart + totalFrames);
     if (overlapEnd <= overlapStart)
         return true;
 
@@ -501,11 +501,11 @@ AudioMix mixProjectAudio(const model::Project& project,
         if (entity.content.kind != ContentKind::Asset
             || entity.content.asset.type != AssetType::Audio)
             continue;
-        if (entity.end <= entity.start)
+        if (entity.end < entity.start)
             continue;
 
         const int overlapStart = std::max(entity.start, exportStart);
-        const int overlapEnd = std::min(entity.end, exportStart + totalFrames);
+        const int overlapEnd = std::min(entity.end + 1, exportStart + totalFrames);
         if (overlapEnd <= overlapStart)
             continue;
 
@@ -601,7 +601,7 @@ Result exportVideo(const model::Project& project,
     const model::Entity& camera = cameraIt.value();
     if (camera.content.kind != ContentKind::Camera)
         return fail(QStringLiteral("指定实体不是摄像机"));
-    if (camera.end <= camera.start)
+    if (camera.end < camera.start)
         return fail(QStringLiteral("摄像机时间范围无效"));
 
     int start = options.startFrame;
@@ -609,9 +609,11 @@ Result exportVideo(const model::Project& project,
     if (end <= start)
     {
         start = camera.start;
-        end = camera.end;
+        // Internally the export range stays half-open; the closed camera range
+        // [start, end] becomes [start, end + 1).
+        end = camera.end + 1;
     }
-    if (start < camera.start || end > camera.end || end <= start)
+    if (start < camera.start || end > camera.end + 1 || end <= start)
         return fail(QStringLiteral("导出范围必须位于摄像机范围内"));
 
     // Already validated to 0..51 above.

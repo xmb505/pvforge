@@ -28,7 +28,8 @@ using LegacyProgress = std::function<bool(int frame, int total)>;
 // Options for one synchronous MP4 export.
 //
 // The camera is mandatory: `cameraUuid` must name an entity whose content kind
-// is Camera.  The default frame range is the camera's own [start, end).
+// is Camera.  The default frame range is the camera's closed [start, end]
+// range, converted to the internal half-open [start, end + 1).
 //
 // `startFrame` / `endFrame` override that range only when they describe a
 // non-empty range (`endFrame > startFrame`); otherwise the camera range is

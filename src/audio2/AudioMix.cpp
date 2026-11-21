@@ -105,8 +105,10 @@ bool mixAudioEntity(const model::Project& project,
     const model::AssetContent& content = entity.content.asset;
     const int64_t overlapStart =
         std::max<int64_t>(entity.start, options.startFrame);
+    // entity.end is the closed clip's last frame; its exclusive sample
+    // boundary is end + 1.
     const int64_t overlapEnd =
-        std::min<int64_t>(entity.end, options.endFrame);
+        std::min<int64_t>(entity.end + 1, options.endFrame);
     if (overlapEnd <= overlapStart)
         return true;
 
@@ -502,7 +504,7 @@ QByteArray mixRangeWithPaths(const model::Project& project,
         const model::Entity& entity = it.value();
         if (entity.content.kind != ContentKind::Asset
             || entity.content.asset.type != AssetType::Audio
-            || entity.end <= entity.start)
+            || entity.end < entity.start)
         {
             continue;
         }
@@ -553,7 +555,7 @@ QByteArray mixRange(const model::Project& project,
         const model::Entity& entity = it.value();
         if (entity.content.kind != ContentKind::Asset
             || entity.content.asset.type != AssetType::Audio
-            || entity.end <= options.startFrame
+            || entity.end < options.startFrame
             || entity.start >= options.endFrame)
         {
             continue;

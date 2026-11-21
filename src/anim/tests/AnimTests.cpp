@@ -1019,7 +1019,8 @@ void testSolverAtOpenEnded()
     CHECK(anim::solverAt(entity, 2) == nullptr);
     CHECK(anim::solverAt(entity, 3) != nullptr);
     CHECK(anim::solverAt(entity, 19) != nullptr);
-    CHECK(anim::solverAt(entity, 20) == nullptr);
+    CHECK(anim::solverAt(entity, 20) != nullptr);
+    CHECK(anim::solverAt(entity, 21) == nullptr);
 }
 
 void testCache()

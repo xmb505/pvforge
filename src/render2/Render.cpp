@@ -46,8 +46,12 @@ QColor colorOr(const QString& value, const QColor& fallback)
 
 bool activeAt(const model::Entity& entity, double projectFrame)
 {
+    // Closed range [start, end] covers the whole frame interval
+    // [start, end + 1).  The fractional form also covers integer frames and
+    // 2x/4x export samples: frame 133.5 of a 0–133 clip is visible, 134.0 is
+    // not.
     return projectFrame >= double(entity.start)
-           && projectFrame < double(entity.end);
+           && projectFrame < double(entity.end + 1);
 }
 
 QVariantMap textStyleData(const model::TextContent& text)
