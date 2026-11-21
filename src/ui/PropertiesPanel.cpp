@@ -816,7 +816,8 @@ void PropertiesPanel::refreshKeyframeStatus(const model::Entity& entity)
             key ? key->easing : model::EasingSpec{};
         m_keyEasingButton->setEnabled(editable && (hasKey || batch));
         m_keyEasingButton->setIcon(QIcon(EasingPicker::curvePreview(
-            spec, m_keyEasingButton->palette(), QSize(40, 22))));
+            spec, m_keyEasingButton->palette(), QSize(40, 22), 3,
+            m_keyEasingButton->devicePixelRatioF())));
         m_keyEasingButton->setText(
             key ? easingDisplayName(spec)
                 : QStringLiteral("当前帧无关键帧"));

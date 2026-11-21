@@ -36,10 +36,13 @@ public:
     // customRequested() for the bezier row.
     bool activate(const QString& type);
 
-    // Curve thumbnail used by the properties panel button and the grid.
+    // Curve thumbnail used by the properties panel button.  The grid itself
+    // paints vectors directly; this bitmap is only for QToolButton::setIcon.
+    // Pass the target widget's devicePixelRatioF() so HiDPI icons stay sharp.
     static QPixmap curvePreview(const model::EasingSpec& spec,
                                 const QPalette& palette, const QSize& size,
-                                int margin = 3);
+                                int margin = 3,
+                                qreal devicePixelRatio = 1.0);
 
 signals:
     void picked(const model::EasingSpec& spec);
@@ -68,6 +71,9 @@ private:
     };
 
     void buildLayout();
+    static void drawCurve(QPainter& painter, const QRectF& rect,
+                          const model::EasingSpec& spec,
+                          const QPalette& palette, qreal margin);
     void paintCurve(QPainter& painter, const QRect& rect,
                     const model::EasingSpec& spec) const;
     int itemAt(const QPoint& pos) const;

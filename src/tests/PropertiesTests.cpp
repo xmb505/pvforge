@@ -87,6 +87,23 @@ bool noSingleParameterUi(pvf::PropertiesPanel* panel, QString* detail)
 int propertiesTest(QApplication& app)
 {
     Q_UNUSED(app);
+
+    // HiDPI button icons must be rasterised at DPR=2, not a 1x bitmap that Qt
+    // upscales on a scaled display.
+    {
+        pvf::model::EasingSpec spec;
+        spec.type = QStringLiteral("easeinoutcubic");
+        const QPixmap preview = pvf::EasingPicker::curvePreview(
+            spec, QPalette(), QSize(40, 22), 3, 2.0);
+        if (preview.size() != QSize(80, 44)
+            || !qFuzzyCompare(preview.devicePixelRatio(), 2.0))
+        {
+            qCritical() << "properties-test: HiDPI easing preview is wrong"
+                        << preview.size() << preview.devicePixelRatio();
+            return 1;
+        }
+    }
+
     QTemporaryDir temp;
     if (!temp.isValid())
         return 1;

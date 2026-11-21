@@ -120,21 +120,13 @@ void EasingPicker::buildLayout()
     m_size = QSize(kMargin * 2 + gridWidth, y);
 }
 
-QPixmap EasingPicker::curvePreview(const model::EasingSpec& spec,
-                                   const QPalette& palette, const QSize& size,
-                                   int margin)
+void EasingPicker::drawCurve(QPainter& painter, const QRectF& rect,
+                             const model::EasingSpec& spec,
+                             const QPalette& palette, qreal margin)
 {
-    QPixmap pixmap(size);
-    pixmap.fill(Qt::transparent);
-    if (size.width() <= 0 || size.height() <= 0)
-        return pixmap;
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const QRectF inner = QRectF(pixmap.rect()).adjusted(margin, margin, -margin,
-                                                        -margin);
+    const QRectF inner = rect.adjusted(margin, margin, -margin, -margin);
     if (inner.width() <= 0.0 || inner.height() <= 0.0)
-        return pixmap;
+        return;
 
     constexpr int steps = 48;
     double minimum = 0.0;
@@ -162,9 +154,32 @@ QPixmap EasingPicker::curvePreview(const model::EasingSpec& spec,
         else
             path.lineTo(point);
     }
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(palette.color(QPalette::Highlight), 1.6));
     painter.drawPath(path);
+    painter.restore();
+}
+
+QPixmap EasingPicker::curvePreview(const model::EasingSpec& spec,
+                                   const QPalette& palette, const QSize& size,
+                                   int margin, qreal devicePixelRatio)
+{
+    const qreal dpr = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
+    const QSize pixelSize(qCeil(size.width() * dpr),
+                          qCeil(size.height() * dpr));
+    QPixmap pixmap(pixelSize);
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+    if (size.width() <= 0 || size.height() <= 0)
+        return pixmap;
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    drawCurve(painter, QRectF(0, 0, size.width(), size.height()), spec,
+              palette, margin);
     return pixmap;
 }
 
@@ -206,7 +221,9 @@ bool EasingPicker::isCurrent(const Item& item) const
 void EasingPicker::paintCurve(QPainter& painter, const QRect& rect,
                               const model::EasingSpec& spec) const
 {
-    painter.drawPixmap(rect, curvePreview(spec, palette(), rect.size(), 5));
+    // Keep the grid fully vector: rasterising a 36x36 thumbnail here would be
+    // resampled on HiDPI displays and turn every curve into a blurry smear.
+    drawCurve(painter, QRectF(rect), spec, palette(), 5);
 }
 
 void EasingPicker::paintEvent(QPaintEvent*)
