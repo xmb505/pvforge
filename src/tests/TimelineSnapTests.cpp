@@ -216,18 +216,19 @@ int timelineSnapTest(QApplication& app)
     check(entity(longUuid).start == 0,
           QStringLiteral("TrimStart undo did not restore the start"));
 
-    // TrimEnd, closed-range candidate end == playhead - 1: the painted edge
-    // x(end + 1) sits on the playhead line.
+    // TrimEnd onto the playhead: the playhead frame must end up *inside* the
+    // clip (end == 3000), otherwise releasing on the playhead deletes the
+    // frame the user is standing on.  Approach from the left first.
     clip = timeline->clipRectFor(longId);
     const QPoint trimEndFrom(clip.right() - 1, longRowY);
     const QPoint trimEndLeft(playheadX - 1, longRowY);
     press(trimEndFrom, Qt::NoModifier);
     move(trimEndLeft, Qt::NoModifier);
     check(timeline->snapFrameForTest() == 3000,
-          QStringLiteral("TrimEnd(end-1) highlights %1, expected 3000")
+          QStringLiteral("TrimEnd highlights %1, expected 3000")
               .arg(timeline->snapFrameForTest()));
-    check(timeline->rowEndForTest(longRow) == 2999,
-          QStringLiteral("TrimEnd(end-1) preview is %1, expected 2999")
+    check(timeline->rowEndForTest(longRow) == 3000,
+          QStringLiteral("TrimEnd preview is %1, expected 3000")
               .arg(timeline->rowEndForTest(longRow)));
     // Ctrl can be toggled mid-drag without moving the mouse: the preview
     // updates on the key event and the cached state decides the release.
@@ -237,6 +238,7 @@ int timelineSnapTest(QApplication& app)
     QApplication::processEvents();
     check(timeline->snapFrameForTest() == -1,
           QStringLiteral("Ctrl key press did not clear the snap line"));
+    // Ctrl drops back to the freely dragged end for the same pointer x.
     check(timeline->rowEndForTest(longRow) == 2980,
           QStringLiteral("Ctrl key press preview is %1, expected 2980")
               .arg(timeline->rowEndForTest(longRow)));
@@ -246,32 +248,10 @@ int timelineSnapTest(QApplication& app)
     QApplication::processEvents();
     check(timeline->snapFrameForTest() == 3000,
           QStringLiteral("Ctrl release did not restore the snap line"));
-    check(timeline->rowEndForTest(longRow) == 2999,
-          QStringLiteral("Ctrl release preview is %1, expected 2999")
+    check(timeline->rowEndForTest(longRow) == 3000,
+          QStringLiteral("Ctrl release preview is %1, expected 3000")
               .arg(timeline->rowEndForTest(longRow)));
     release(trimEndLeft, Qt::NoModifier);
-    live->flush();
-    check(entity(longUuid).end == 2999,
-          QStringLiteral("TrimEnd(end-1) committed %1, expected 2999")
-              .arg(entity(longUuid).end));
-    undo(QStringLiteral("TrimEnd(end-1)"));
-    check(entity(longUuid).end == 5399,
-          QStringLiteral("TrimEnd(end-1) undo did not restore the end"));
-
-    // TrimEnd, closed-range candidate end == playhead: the clip includes the
-    // playhead frame and ends there.
-    clip = timeline->clipRectFor(longId);
-    const QPoint trimEndRight(playheadX + 1, longRowY);
-    press(QPoint(clip.right() - 1, longRowY), Qt::NoModifier);
-    move(trimEndRight, Qt::NoModifier);
-    check(timeline->snapFrameForTest() == 3000,
-          QStringLiteral("TrimEnd(playhead) highlights %1, expected 3000")
-              .arg(timeline->snapFrameForTest()));
-    check(timeline->rowEndForTest(longRow) == 3000,
-          QStringLiteral("TrimEnd(playhead) preview is %1, expected 3000")
-              .arg(timeline->rowEndForTest(longRow)));
-    // Release at the same position: the commit must keep the snapped end.
-    release(trimEndRight, Qt::NoModifier);
     live->flush();
     check(entity(longUuid).end == 3000,
           QStringLiteral("TrimEnd(playhead) committed %1, expected 3000")
@@ -279,6 +259,32 @@ int timelineSnapTest(QApplication& app)
     undo(QStringLiteral("TrimEnd(playhead)"));
     check(entity(longUuid).end == 5399,
           QStringLiteral("TrimEnd(playhead) undo did not restore the end"));
+
+    // The same snap approached from the right side of the playhead line still
+    // includes frame 3000: the playhead never truncates the clip by a frame.
+    clip = timeline->clipRectFor(longId);
+    const QPoint trimEndRight(playheadX + 1, longRowY);
+    press(QPoint(clip.right() - 1, longRowY), Qt::NoModifier);
+    move(trimEndRight, Qt::NoModifier);
+    check(timeline->snapFrameForTest() == 3000,
+          QStringLiteral("TrimEnd(playhead, right) highlights %1, expected"
+                         " 3000")
+              .arg(timeline->snapFrameForTest()));
+    check(timeline->rowEndForTest(longRow) == 3000,
+          QStringLiteral("TrimEnd(playhead, right) preview is %1, expected"
+                         " 3000")
+              .arg(timeline->rowEndForTest(longRow)));
+    // Release at the same position: the commit must keep the snapped end.
+    release(trimEndRight, Qt::NoModifier);
+    live->flush();
+    check(entity(longUuid).end == 3000,
+          QStringLiteral("TrimEnd(playhead, right) committed %1, expected"
+                         " 3000")
+              .arg(entity(longUuid).end));
+    undo(QStringLiteral("TrimEnd(playhead, right)"));
+    check(entity(longUuid).end == 5399,
+          QStringLiteral("TrimEnd(playhead, right) undo did not restore the"
+                         " end"));
 
     // Ctrl during the same trim disables snapping.  The release has no Ctrl
     // so the cached modifier is the only thing that can keep it free.
@@ -371,12 +377,66 @@ int timelineSnapTest(QApplication& app)
     check(entity(shortUuid).end == 110,
           QStringLiteral("high-zoom undo did not restore the end"));
 
+    // Double-click on the painted right edge must write a keyframe inside the
+    // clip's own closed range [90,110].  clipEndOf() is the exclusive edge 111
+    // and clip.right() sits on x(end + 1), so frameFromX() there returns 111;
+    // the old clamp passed that straight to canWriteKeyAt(), which rejected it
+    // as out of range.  The "+" affordance covers the frame *inside* the edge,
+    // so the free spot that still resolves to 111 is the edge pixel itself.
+    const pvf::Uuid keyUuid = shortEntity.uuid;
+    const int keyRowY = shortRowY;
+    const int endFrame = entity(keyUuid).end;
+    auto keyframes = [live, keyUuid] {
+        return live->project().entities.value(keyUuid).keyframes.size();
+    };
+    // Only the double-click event: the press half of the gesture would start
+    // (and the release half commit) a right-edge trim on the very pixel under
+    // test, which is a different code path.
+    auto doubleClick = [&](const QPoint& point) {
+        QMouseEvent event(QEvent::MouseButtonDblClick, QPointF(point),
+                          QPointF(timeline->mapToGlobal(point)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(timeline, &event);
+        QApplication::processEvents();
+    };
+    const QRect keyClip = timeline->clipRectFor(shortId);
+    if (!check(!keyClip.isEmpty(),
+               QStringLiteral("end-frame clip rect missing")))
+        return 1;
+    doubleClick(QPoint(keyClip.right(), keyRowY));
+    live->flush();
+    check(timeline->currentFrameForTest() == endFrame,
+          QStringLiteral("edge double-click parked the playhead on %1,"
+                         " expected %2")
+              .arg(timeline->currentFrameForTest())
+              .arg(endFrame));
+    check(keyframes() == 1,
+          QStringLiteral("edge double-click wrote %1 keyframes, expected 1")
+              .arg(keyframes()));
+    check(pvf::model::keyframeAt(
+              live->project().entities.value(keyUuid).keyframes,
+              double(endFrame - shortEntity.start))
+              != nullptr,
+          QStringLiteral("edge double-click did not key the end frame %1")
+              .arg(endFrame));
+    for (const pvf::model::Keyframe& key :
+         live->project().entities.value(keyUuid).keyframes)
+        check(key.frame >= 0 && key.frame <= endFrame - shortEntity.start,
+              QStringLiteral("edge double-click wrote out-of-range relative"
+                             " frame %1")
+                  .arg(key.frame));
+    undo(QStringLiteral("end-frame keyframe"));
+    check(keyframes() == 0,
+          QStringLiteral("end-frame keyframe undo left %1 keyframes")
+              .arg(keyframes()));
+
     window->close();
     QApplication::processEvents();
     if (gFailures == 0)
     {
-        qInfo() << "timeline-snap-test OK: pixel threshold, closed-range"
-                   " TrimEnd, Ctrl, MoveClip, markers, high zoom";
+        qInfo() << "timeline-snap-test OK: pixel threshold, playhead-inclusive"
+                   " TrimEnd, Ctrl, MoveClip, markers, high zoom, end-frame"
+                   " double-click";
     }
     return gFailures == 0 ? 0 : 1;
 }

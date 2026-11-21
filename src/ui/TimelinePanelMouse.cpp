@@ -519,8 +519,12 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
         return;
     }
 
+    // clipEndOf() is the exclusive right edge (end + 1), so clamping to it
+    // would allow one frame past the model range and canWriteKeyAt() would
+    // reject every double-click on the painted right edge.
     const int frame = std::clamp(frameFromX(x), clipStartOf(*entity),
-                                 clipEndOf(*entity));
+                                 std::max(clipStartOf(*entity),
+                                          clipEndOf(*entity) - 1));
     m_frame = frame;
     emit frameRequested(m_frame);
     selectEntity(id, true);

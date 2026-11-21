@@ -511,7 +511,10 @@ private:
 
     // PR-style endpoint snapping to the playhead and timeline markers.  Every
     // frame is absolute; distances are measured through xFromFrame(), so the
-    // threshold stays a screen-pixel value at every zoom.
+    // threshold stays a screen-pixel value at every zoom.  snapTrimEnd() is
+    // priority driven: a playhead/marker line becomes the clip's last frame
+    // (end == line), a sibling clip edge parks the painted edge on the line
+    // (end == line - 1) so touching clips never overlap.
     struct TimelineSnapResult
     {
         int value = 0;   // snapped start/end frame, or MoveClip delta

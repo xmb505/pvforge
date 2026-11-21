@@ -76,6 +76,12 @@ int timelineEdgeSnapTest(QApplication& app)
         QStringLiteral("音频"), 10, 299, 0, pvf::ContentKind::Asset);
     const pvf::model::Entity camera = makeClip(
         QStringLiteral("摄像机"), 50, 120, 1, pvf::ContentKind::Camera);
+    // On its own track (rowIds() shows one entity per row, so it cannot share
+    // the camera's row).  Its start edge sits inside the gap between the
+    // camera and the audio right edge, so it can pull the camera's end without
+    // shrinking the camera below a single frame.
+    pvf::model::Entity shadow = makeClip(
+        QStringLiteral("影子"), 200, 260, 3, pvf::ContentKind::Text);
     // A folder with two children covers the private timeline: the same-parent
     // edge snapping must also work inside the floating child timeline.
     const pvf::model::Entity folder =
@@ -88,12 +94,14 @@ int timelineEdgeSnapTest(QApplication& app)
     childB.parentUuid = folder.uuid;
     project.entities.insert(audio.uuid, audio);
     project.entities.insert(camera.uuid, camera);
+    project.entities.insert(shadow.uuid, shadow);
     project.entities.insert(folder.uuid, folder);
     project.entities.insert(childA.uuid, childA);
     project.entities.insert(childB.uuid, childB);
 
     if (!session->document()->commitEntities(
-            {audio.uuid, camera.uuid, folder.uuid, childA.uuid, childB.uuid},
+            {audio.uuid, camera.uuid, shadow.uuid, folder.uuid, childA.uuid,
+             childB.uuid},
             QStringLiteral("edge snap setup"), &error)
         || !session->commitProject(QStringLiteral("edge snap project"), &error))
     {
@@ -130,6 +138,7 @@ int timelineEdgeSnapTest(QApplication& app)
 
     const pvf::Uuid audioUuid = audio.uuid;
     const pvf::Uuid cameraUuid = camera.uuid;
+    const pvf::Uuid shadowUuid = shadow.uuid;
     const pvf::Uuid folderUuid = folder.uuid;
     const pvf::Uuid childBUuid = childB.uuid;
     auto entity = [live](const pvf::Uuid& uuid) {
@@ -202,7 +211,6 @@ int timelineEdgeSnapTest(QApplication& app)
 
     const int cameraRowY = timeline->rowCenterYForTest(cameraRow);
 
-    // TrimStart: camera left edge -> audio left edge (10).
     QRect cameraRect = timeline->clipRectFor(cameraId);
     if (!check(!cameraRect.isEmpty(),
                QStringLiteral("camera clip rect missing")))
@@ -222,8 +230,9 @@ int timelineEdgeSnapTest(QApplication& app)
     undo(QStringLiteral("TrimStart"));
     expectRange(QStringLiteral("TrimStart undo"), cameraUuid, 50, 120);
 
-    // TrimEnd: the audio visual right edge is end + 1 = 300, so a closed-range
-    // trim that lands on the line stores end == 299.
+    // TrimEnd: the audio visual right edge is end + 1 = 300.  A sibling edge
+    // is a boundary rather than a frame, so the painted edge parks on the line
+    // and the stored end is 299: both clips end on the same frame.
     cameraRect = timeline->clipRectFor(cameraId);
     const QPoint trimEndTo(timeline->frameXForTest(300), cameraRowY);
     press(QPoint(cameraRect.right() - 1, cameraRowY), Qt::NoModifier);
@@ -239,6 +248,30 @@ int timelineEdgeSnapTest(QApplication& app)
     expectRange(QStringLiteral("TrimEnd"), cameraUuid, 50, 299);
     undo(QStringLiteral("TrimEnd"));
     expectRange(QStringLiteral("TrimEnd undo"), cameraUuid, 50, 120);
+
+    // TrimEnd onto a same-row sibling's *start* (200): the sibling edge is a
+    // boundary, not a frame, so the painted edge parks on it with end == 199.
+    // The two clips end up adjacent (camera [50,199], shadow [200,260]) with
+    // no shared frame, which is the no-overlap guarantee.
+    cameraRect = timeline->clipRectFor(cameraId);
+    const QPoint trimEndStartTo(timeline->frameXForTest(200), cameraRowY);
+    press(QPoint(cameraRect.right() - 1, cameraRowY), Qt::NoModifier);
+    move(trimEndStartTo, Qt::NoModifier);
+    check(timeline->snapFrameForTest() == 200,
+          QStringLiteral("TrimEnd(start edge) highlighted %1, expected 200")
+              .arg(timeline->snapFrameForTest()));
+    check(timeline->rowEndForTest(cameraRow) == 199,
+          QStringLiteral("TrimEnd(start edge) preview is %1, expected 199")
+              .arg(timeline->rowEndForTest(cameraRow)));
+    release(trimEndStartTo, Qt::NoModifier);
+    live->flush(&error);
+    expectRange(QStringLiteral("TrimEnd(start edge)"), cameraUuid, 50, 199);
+    // Adjacent, not overlapping: the sibling still owns frame 200.
+    expectRange(QStringLiteral("TrimEnd(start edge) sibling"), shadowUuid, 200,
+                260);
+    undo(QStringLiteral("TrimEnd(start edge)"));
+    expectRange(QStringLiteral("TrimEnd(start edge) undo"), cameraUuid, 50,
+                120);
 
     // MoveClip right edge onto 300 => right aligned with the audio [10,299].
     // A 178-frame drag parks the free right edge at 299, 2 px short of the
@@ -422,7 +455,7 @@ int timelineEdgeSnapTest(QApplication& app)
     if (gFailures == 0)
     {
         qInfo() << "timeline-edge-snap-test OK: sibling start/end+1 edges,"
-                   " closed-range trim, move alignment, self exclusion, Ctrl,"
+                   " adjacent trim end, move alignment, self exclusion, Ctrl,"
                    " dedupe, playhead priority, private timeline";
     }
     return gFailures == 0 ? 0 : 1;
