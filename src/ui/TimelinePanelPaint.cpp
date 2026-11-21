@@ -774,14 +774,33 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     const bool playheadInOwner =
         m_owner < 0 || (m_frame >= contentStart() && m_frame < contentEnd());
     const int playhead = xFromFrame(m_frame);
-    if (playheadInOwner && playhead >= nameWidth() && playhead <= right)
+    const bool playheadVisible =
+        playheadInOwner && playhead >= nameWidth() && playhead <= right;
+    if (playheadVisible)
     {
         p.setPen(QPen(accent, 1.5));
         p.drawLine(playhead, 0, playhead, bottom);
+    }
 
+    // Endpoint snap feedback: one bright line through the ruler and every row
+    // at the target frame.  It is painted over the playhead (complementary
+    // hue) so a playhead snap is still visibly different from the ordinary
+    // accent line, and it never resembles the soft grey second grid.
+    if (m_snapFrame >= 0)
+    {
+        const int snapX = xFromFrame(m_snapFrame);
+        if (snapX >= nameWidth() && snapX <= right)
+        {
+            p.setPen(QPen(snapHighlightColor(pal), 1.5));
+            p.drawLine(snapX, 0, snapX, bottom);
+        }
+    }
+
+    if (playheadVisible)
+    {
         // A 14x11 grab handle sits on the ruler's top edge: wide flat top,
         // short shoulders, pointed tip.  The dark outline keeps it readable
-        // on both light and dark accents.
+        // on both light and dark accents.  It stays above the snap line.
         const double half = kPlayheadHandleWidth / 2.0;
         const double shoulder = 5.0;
         const QPolygonF marker{

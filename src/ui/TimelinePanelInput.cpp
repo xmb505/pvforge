@@ -190,6 +190,7 @@ void TimelinePanel::focusOutEvent(QFocusEvent* event)
 void TimelinePanel::hideEvent(QHideEvent* event)
 {
     setAltHeld(false);
+    clearSnap();
     // Private timelines float over the main window, not inside this widget, so
     // hiding the timeline dock must explicitly take them down with it.
     for (ClipPopup* popup : m_popups)

@@ -12,6 +12,7 @@
 
 #include <memory>
 
+class QColor;
 class QKeyEvent;
 class QLineEdit;
 class QContextMenuEvent;
@@ -150,6 +151,11 @@ public:
         return hitKeyframeRow(row, x, y);
     }
     int entitySelectionCountForTest() const { return int(m_entitySelection.size()); }
+    // Snap feedback is internal state: the test drives the real mouse events
+    // and reads the line the painter would highlight.
+    int snapFrameForTest() const { return m_snapFrame; }
+    QVector<int> snapTargetsForTest() const { return snapTargetFrames(); }
+    int snapThresholdPxForTest() const { return timelineSnapPx(); }
 #endif
 
     bool displayFrames() const { return m_displayFrames; }
@@ -502,6 +508,32 @@ private:
     void endDrag(const QString& text);
     void resetPreview();
     void updateDragPreview(const QPointF& pos);
+
+    // PR-style endpoint snapping to the playhead and timeline markers.  Every
+    // frame is absolute; distances are measured through xFromFrame(), so the
+    // threshold stays a screen-pixel value at every zoom.
+    struct TimelineSnapResult
+    {
+        int value = 0;   // snapped start/end frame, or MoveClip delta
+        int line = -1;   // target frame for the highlight; -1 = no snap
+    };
+    static constexpr int kTimelineSnapPx = 8;
+    int timelineSnapPx() const;
+    QVector<int> snapTargetFrames() const;
+    TimelineSnapResult snapTrimStart(int proposedStart, int lower, int upper,
+                                     int mouseX) const;
+    TimelineSnapResult snapTrimEnd(int proposedEnd, int lower, int upper,
+                                   int mouseX) const;
+    TimelineSnapResult snapMoveDelta(int proposedDelta, int lowerDelta,
+                                     int startFrame, int endExclusive) const;
+    // Gesture-level guard: multi-selection and cross-row moves stay free, and
+    // Ctrl (cached for the drag) disables snapping.
+    TimelineSnapResult snapMoveForDrag(int proposedDelta, int lowerDelta,
+                                       int deltaRows) const;
+    static QColor snapHighlightColor(const QPalette& palette);
+    void setSnapFrame(int line);
+    void clearSnap() { setSnapFrame(-1); }
+
     void applyShift(QVector<Entity>& entities, EntityId id, int delta);
     void setClipRange(Entity& entity, int start, int end);
     void cleanKeys(Entity& entity);
@@ -583,6 +615,8 @@ private:
     bool m_dragging = false;
     bool m_moved = false;
     bool m_dropActive = false;
+    bool m_dragSnapDisabled = false; // Ctrl cached for the whole drag
+    int m_snapFrame = -1;            // highlighted snap line; -1 = none
     int m_dropFrame = 0;
     int m_hoverRow = -1;
     bool m_hoverLeft = false;

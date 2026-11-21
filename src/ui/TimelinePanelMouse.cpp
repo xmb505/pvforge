@@ -21,6 +21,10 @@ void TimelinePanel::mousePressEvent(QMouseEvent* event)
 {
     if (!sessionMode() || event->button() != Qt::LeftButton)
         return;
+    // Cache Ctrl for the whole gesture.  The release event can arrive after
+    // the modifier was let go, and the commit must match the last preview.
+    m_dragSnapDisabled = (event->modifiers() & Qt::ControlModifier) != 0;
+    clearSnap();
     setFocus(Qt::MouseFocusReason);
     if (event->modifiers() & Qt::AltModifier)
         setAltHeld(true);
@@ -208,6 +212,9 @@ void TimelinePanel::mouseMoveEvent(QMouseEvent* event)
 {
     if (!sessionMode())
         return;
+    // Mid-drag Ctrl changes take effect immediately; the cached value is what
+    // finishSessionDrag() will use on release.
+    m_dragSnapDisabled = (event->modifiers() & Qt::ControlModifier) != 0;
     if (event->modifiers() & Qt::AltModifier)
         setAltHeld(true);
     if (m_dragMode == DragMode::MoveMarker)
@@ -478,6 +485,7 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
     // The second press of a double-click has already armed a clip gesture.
     m_autoScroll->stop();
     m_dragMode = DragMode::None;
+    clearSnap();
     m_sessionPlanValid = false;
     m_moved = false;
 
