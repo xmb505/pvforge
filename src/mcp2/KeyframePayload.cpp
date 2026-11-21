@@ -131,10 +131,18 @@ Result parseWholeFrameKeyframe(const model::Content& content, int duration,
     if (contentValue.isUndefined() || contentValue.isNull())
     {
         if (!animationKeys.isEmpty())
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("missingFields"),
+                           QJsonArray::fromStringList(animationKeys));
+            details.insert(QStringLiteral("requiredFields"),
+                           QJsonArray::fromStringList(animationKeys));
             return failure(
                 QStringLiteral("invalid_argument"),
                 QStringLiteral("%1 缺少 content（该内容类型的动画参数：%2）")
-                    .arg(label, animationKeys.join(QStringLiteral(", "))));
+                    .arg(label, animationKeys.join(QStringLiteral(", "))),
+                details);
+        }
     }
     else if (!contentValue.isObject())
     {
@@ -161,14 +169,29 @@ Result parseWholeFrameKeyframe(const model::Content& content, int duration,
                                    .arg(label, it.key()));
             keyframe.content.insert(it.key(), it.value());
         }
+        // Report every missing animation parameter at once.  Returning the
+        // first one forced text entities into up to seven retries (issue #146
+        // P0-2).
+        QStringList missing;
         for (const QString& key : animationKeys)
         {
             if (!values.contains(key))
-                return failure(
-                    QStringLiteral("invalid_argument"),
-                    QStringLiteral("%1.content 缺少动画参数 %2（整帧关键帧必须"
-                                   "包含该内容类型的全部动画参数）")
-                        .arg(label, key));
+                missing.append(key);
+        }
+        if (!missing.isEmpty())
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("missingFields"),
+                           QJsonArray::fromStringList(missing));
+            details.insert(QStringLiteral("requiredFields"),
+                           QJsonArray::fromStringList(animationKeys));
+            return failure(
+                QStringLiteral("invalid_argument"),
+                QStringLiteral("%1.content 缺少动画参数：%2（该内容类型的全部动画"
+                               "参数：%3）")
+                    .arg(label, missing.join(QStringLiteral(", ")),
+                         animationKeys.join(QStringLiteral(", "))),
+                details);
         }
     }
 

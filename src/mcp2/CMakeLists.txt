@@ -146,6 +146,23 @@ if(BUILD_TESTING)
         mcp2.previewRateLimit
         PROPERTIES RESOURCE_LOCK pvforge_preview_dir)
 
+    # PR1 (#146) regressions live in their own binary/file: the historical
+    # mcp2_tests.cpp is under a size ratchet and must not grow for new cases.
+    add_executable(pvf_mcp2_pr1_tests tests/mcp2_pr1_tests.cpp)
+    target_link_libraries(pvf_mcp2_pr1_tests PRIVATE pvf_mcp2 Qt6::Test)
+    set(PVF_MCP2_PR1_TEST_CASES
+        pr1UpdateRejectsFlatContent
+        pr1KeyframesMissingFieldsListedAtOnce
+        pr1EasingNamesAreCaseInsensitive
+        pr1PrivateTimelineAllowsNegativeRow
+        pr1ReparentToMainTimelineDropsNegativeRow
+    )
+    foreach(test_case IN LISTS PVF_MCP2_PR1_TEST_CASES)
+        add_test(NAME mcp2.${test_case} COMMAND pvf_mcp2_pr1_tests ${test_case})
+        set_tests_properties(mcp2.${test_case} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none")
+    endforeach()
+
     add_executable(pvf_mcp2_http_tests tests/http_server_tests.cpp)
     target_link_libraries(pvf_mcp2_http_tests PRIVATE
         pvf_mcp2

@@ -133,9 +133,8 @@ Result createEntityInternal(Tx& tx, const QJsonObject& args,
     {
         if (!readInt(args, "row", &row, &error, true))
             return error;
-        if (row < 0 || row > kMaxFrame)
-            return failure(QStringLiteral("invalid_argument"),
-                           QStringLiteral("row 必须 >= 0"));
+        if (!validateRow(row, parentUuid.isEmpty(), &error))
+            return error;
     }
     else
     {

@@ -3,7 +3,7 @@
 # PVForge MCP 动画制作指南（给 AI 代理）
 
 > 目标读者：通过 MCP 操作 PVForge 的另一个 AI。  
-> 事实来源：当前代码（HEAD `9dab06a` 之后的本地工作区）+ 实测。  
+> 事实来源：当前代码（PR1 基线 `05c0324` + 本 PR 的 MCP 行为修正）。  
 > 与 `docs/human/` 冲突时以人类规范为准；本文档只描述如何用 MCP 做动画。
 
 ---
@@ -179,7 +179,8 @@ class PvForge:
 ### 2.3 行（row）与父子
 
 - 同一父级、同一 `row` 的实体闭区间**不能重叠**。要在同一时间叠多层，请用不同 row。
-- `row` 越大越靠上（后绘制）。根时间轴 row ≥ 0；私有时间线允许负 row（负 row 画在父实体后面）。
+- `row` 越大越靠上（后绘制）。根时间轴 row ≥ 0；私有时间线允许负 row（负 row 画在父实体后面，`entity.update`/`entity.move`/`entity.create`/`entity.reparent` 都遵守这条；MCP 可写范围 `-1000000..1000000`）。
+- `entity.reparent` 到主时间线（`parentUuid=null`）时不能留下负 row：显式负 row 会被拒绝，不给 row 时自动分配非负行号。
 - 子实体范围必须落在父实体范围内。
 - `parentUuid` 为空 = 根实体；`space`：
   - `parent`（默认）：继承父级 transform；
@@ -191,15 +192,19 @@ class PvForge:
 `content` 只放**定义参数**（文字内容、字体、颜色、形状类型、素材引用等）。  
 动画参数放在每个整帧关键帧的 `content` 里。
 
+**嵌套规则**：`text`/`vector` 的定义参数必须放在嵌套子对象里（`content.text` / `content.vector`）；`asset`/`camera`/`empty` 的字段放在 `content` 顶层（`assetHash`/`assetType`/`sourceIn`/`volume`/`fadeIn`/`fadeOut`）。`entity.create` 与 `entity.update` 都遵守这个规则；`entity.update` 传扁平字段（例如 `{"kind":"vector","shape":5}`）会返回 `invalid_argument`，`details.expectedContentPath` 给出正确嵌套路径，`details.unexpectedKeys` 列出被拒的顶层键。
+
 | content.kind | 定义参数（静态） | 关键帧里的动画参数（必须全给） |
 |---|---|---|
 | `text` | `text`、`fontFamily`、`color`、`strokeColor`、`align`、`bold`、`italic`、`underline`、`vertical`、`verticalRtl` | `pixelSize`、`lineHeight`、`letterSpacing`、`padding`、`boxWidth`、`boxHeight`、`strokeWidth` |
 | `vector` | `shape`、`sides`、`innerRatio`、`fillColor`、`strokeColor` | `width`、`height`、`cornerRadius`、`strokeWidth` |
-| `asset` image/video | `assetHash`、`assetType`、`sourceIn` | 无（用整帧的 transform 做动画） |
+| `asset` image/video | `assetHash`、`assetType`、`sourceIn`、`volume`、`fadeIn`、`fadeOut` | 无（用整帧的 transform 做动画） |
 | `asset` audio | `assetHash`、`assetType`、`sourceIn`、`volume`、`fadeIn`、`fadeOut` | `volume`（线性增益） |
-| `asset` html | `assetHash`、`assetType` | 无；数字变量放 `htmlVars` |
-| `camera` | `{}` | 无（用整帧 transform 做运镜） |
+| `asset` html | `assetHash`、`assetType`、`sourceIn`、`volume`、`fadeIn`、`fadeOut` | 无；数字变量放 `htmlVars` |
+| `camera` | `{}`（`content.camera` 只接受空对象） | 无（用整帧 transform 做运镜） |
 | `empty` | `{}` | 无（可做父级/重力目标） |
+
+`volume`/`fadeIn`/`fadeOut` 是 asset 通用字段：任何 `assetType` 都能写，不会被拒（它们只影响音频混音；`volume` 是线性增益，`fadeIn`/`fadeOut` 单位是秒、按实体区间裁剪）。
 
 **矢量 `shape` 是整数，不是字符串**（字符串会被忽略并退回 0=矩形）：
 
@@ -245,7 +250,7 @@ class PvForge:
 - 第一个关键帧之前、最后一个关键帧之后保持首/尾值。
 - 关键帧按 frame 排序，重复帧会被拒绝。
 
-常用缓动名（大小写不敏感，序列化统一小写）：
+完整缓动白名单（**大小写不敏感**；接受后统一归一化为模型规范名，序列化/回读都是下列小写名）：
 
 ```text
 linear, instant, bezier,
@@ -260,6 +265,9 @@ easeinelastic/easeoutelastic/easeinoutelastic,
 easeinback/easeoutback/easeinoutback,
 easeinbounce/easeoutbounce/easeinoutbounce
 ```
+
+兼容别名（同样大小写不敏感，归一化后写入规范名）：`easein` → `easeinquad`、`easeout` → `easeoutquad`、`easeinout` → `easeinoutquad`、`step` → `instant`。  
+也就是说 `EaseOutCubic`、`easeoutcubic`、`easeInOut`、`easeinout`、`step`、`Step` 都能用；未知名字仍然返回 `invalid_argument`。对象写法 `{type:"bezier",...}` 与字符串 `"bezier"` 都走贝塞尔分支。
 
 自定义贝塞尔：
 
@@ -291,7 +299,7 @@ easeinbounce/easeoutbounce/easeinoutbounce
 
 - 同一父级按 row 从小到大绘制；row 越大越靠上。
 - 私有时间线：负 row 子实体先于父实体绘制，非负 row 在父实体之后。
-- `hidden` 是编辑器隐藏（不会进预览/导出）；`visible` 是画面可见（可以关键帧化）。
+- `hidden` 只是**工作台/编辑器画布**的可见性（`skipHidden` 时隐藏，不影响导出、摄像机监视器和 MCP `preview.render_frame`）；要控制最终画面请用 `visible`（可以关键帧化）。
 - `inheritVisibility=true` 时父级 `visible` 会级联隐藏子级。
 
 ---
@@ -314,12 +322,12 @@ easeinbounce/easeoutbounce/easeinoutbounce
 
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
-| `entity.create` | `start` 必填；`end`、`row`、`parentUuid`、`space`、`content`、`transform`、`keyframes`、`solvers` | 非 timed 默认时长 1 秒（`end=start+fps-1`）；音频/视频默认取素材剩余长度；row 默认最高占用 +1 |
+| `entity.create` | `start` 必填；`end`、`row`、`parentUuid`、`space`、`content`、`transform`、`keyframes`、`solvers` | 非 timed 默认时长 1 秒（`end=start+fps-1`）；音频/视频默认取素材剩余长度；row 默认最高占用 +1（根时间线结果非负，私有时间线可为负）；`row` 可写 `-1000000..1000000`，根实体必须 ≥ 0 |
 | `entity.createMany` | `entities[]` | 1..200 个，整批一个 commit；每个可带自己的 `parentUuid`（必须是调用前已存在） |
 | `entity.createTree` | `parentUuid`、`root` | 递归 `children`；子节点省略 start/end 时继承父节点区间；最多 200 节点/深度限制 |
 | `entity.get` | `uuid`、`frame`、`includeChildren` | 返回完整实体、关键帧、求解段、指定帧 `evaluated` |
 | `entity.list` | `parentUuid`、`offset`、`limit`、`includeKeyframes`、`includeSolvers` | 分页；`parentUuid` 省略 = 全部 |
-| `entity.update` | `uuid`、`patch` | 局部改 `name/row/hidden/locked/visible/inheritVisibility/physicsInteract/space/followParentRange/transform/content`；不改时间/父级/关键帧/素材引用 |
+| `entity.update` | `uuid`、`patch` | 局部改 `name/row/hidden/locked/visible/inheritVisibility/physicsInteract/space/followParentRange/transform/content`；不改时间/父级/关键帧/素材引用。`patch.content` 必须按 §2.4 嵌套写（`content.text`/`content.vector`）；扁平字段返回 `invalid_argument` + `details.expectedContentPath`/`unexpectedKeys`。`row` 规则同 create |
 | `entity.updateMany` | `items[{uuid,patch}]` | 1..200，整批一个 commit |
 | `entity.move` | `uuid`、`start` 或 `delta`、`row` | 移动子树；`start`/`delta` 二选一 |
 | `entity.trim` | `uuid`、`start`、`end` | 至少给一个；级联裁剪子树；删子实体需要 `confirm` |
@@ -333,8 +341,8 @@ easeinbounce/easeoutbounce/easeinoutbounce
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
 | `keyframes.get` | `uuid` | 返回 `duration`、`count`、`keyframes[]` |
-| `keyframes.set` | `uuid`、`keyframes[]` | 整组替换；缺动画参数直接报错 |
-| `keyframes.setMany` | `items[{uuid,keyframes}]` | 多实体整组替换，一个 commit |
+| `keyframes.set` | `uuid`、`keyframes[]` | 整组替换；缺多个动画参数时一次返回 `invalid_argument`，`details.missingFields` 列全部缺失字段、`details.requiredFields` 列该内容类型全部必填字段 |
+| `keyframes.setMany` | `items[{uuid,keyframes}]` | 多实体整组替换，一个 commit；每项只能有 `uuid` 和 `keyframes` 两个键，同批 uuid 不能重复 |
 | `keyframes.upsert` | `uuid`、`frame`、`partial` | 先按该帧求值补全全部动画参数，再覆盖 `partial`；求解段内会取当前求解姿态 |
 | `keyframes.remove` | `uuid`、`frames[]` | 幂等；求解起点不能删 |
 | `keyframes.move` | `uuid`、`fromFrame`、`toFrame`、`overwrite` | 移动一个整帧 |
@@ -345,7 +353,7 @@ easeinbounce/easeoutbounce/easeinoutbounce
 
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
-| `asset.import` | `path` 绝对路径；`name`、`type`、`extractAudio` | 工程内路径直接导入；工程外要人类在 GUI 确认；视频默认拆 WAV，返回 `asset` + `audioAsset`；同内容 sha256 去重 |
+| `asset.import` | `path` 绝对路径；`name`、`type`、`extractAudio` | 工程内路径直接导入；工程外要人类在 GUI 确认；视频默认拆 WAV，返回 `asset` + `audioAsset`（两者都是**完整素材对象**，hash 取 `audioAsset.hash`，不是字符串）；同内容 sha256 去重 |
 | `asset.list` | `type`、`query`、`offset`、`limit` | 素材没有 UUID，只有 `hash` |
 | `asset.get` | `hash` | 含 `usedBy` 引用列表 |
 | `asset.assign` | `entityUuid`、`assetHash`、`sourceIn`、`volume` | 只用于 empty/asset；视觉↔视觉、音频↔音频兼容；视频/音频会按可用长度裁短实体 |
@@ -356,7 +364,7 @@ easeinbounce/easeoutbounce/easeinoutbounce
 
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
-| `markers.set` | `frame`、`title`；`id` 省略=新建 | 标记不渲染，给人类/AI 标节拍 |
+| `markers.set` | `frame`、`title`、`tags`（最多 32 个）、`color`（CSS hex）；`id` 省略=新建 | 标记不渲染，给人类/AI 标节拍 |
 | `markers.list` | `fromFrame`、`toFrame`、分页 | |
 | `markers.remove` | `id` | |
 | `history.undo` / `history.redo` | `steps` 1..10 | 内存撤销/重做，不产生新 git commit |
@@ -711,8 +719,9 @@ pv.must("solver.create", {
 | `confirm_required` | 删除/外部导入需要人类确认 | 停下来，把 `details.path`/`affected` 告诉人类 |
 | `stopped_by_human` | 人类按了急停 | 停止所有写操作，等待人类恢复 |
 | `limit_exceeded` | 预览限流、批量超限、素材过大 | 降低频率/数量/尺寸 |
-| `not_available` | 没有可用浏览器/设备/功能 | 报告人类，不要循环重试 |
-| `internal_error` | 工程未打开/内部失败 | 读 message；必要时让人类重开工程 |
+| `request_timeout` | 工具执行超过 15 秒死线，已拒写并回滚 | 缩小单次操作或分批，重读状态后再试一次；不要假设已写入 |
+| `not_available` | 工程未打开，或没有可用浏览器/设备/功能 | 先让人类打开工程；其余情况报告人类，不要循环重试 |
+| `internal_error` | 工程未打开以外的内部失败 | 读 message；必要时让人类重开工程 |
 
 协作约定：
 
