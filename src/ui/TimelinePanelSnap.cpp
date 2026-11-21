@@ -120,39 +120,37 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapTrimEnd(
     TimelineSnapResult result{proposedEnd, -1};
     int bestDistance = timelineSnapPx() + 1;
     int bestPriority = INT_MAX;
-    int bestSideRank = INT_MAX;
     for (const SnapCandidate& candidate : snapCandidates())
     {
         const int line = candidate.frame;
-        // The right edge is painted at x(end + 1).  Both closed-range
-        // readings are legal candidates:
-        //   end == line      the clip includes the target frame and ends there
-        //   end == line - 1  the painted edge sits exactly on the target line
-        // Order them by the mouse side so equal pixel distances resolve to the
-        // edge the user is actually approaching.
-        const bool rightOfLine = mouseX >= xFromFrame(line);
-        const int candidates[2] = {line, line - 1};
-        for (int sideRank = 0; sideRank < 2; ++sideRank)
+        // The playhead and the timeline markers are single frames the user
+        // wants *inside* the clip, so the right edge takes end == line: the
+        // target frame survives the trim and a keyframe can still be written
+        // on it.  A sibling clip edge is a boundary, not a frame, so it parks
+        // the painted edge x(end + 1) on the line instead (end == line - 1):
+        // touching the sibling start never overlaps it, and landing on the
+        // sibling end + 1 makes both clips end on the same frame.
+        const bool includeLine = candidate.priority <= 1;
+        const int value = includeLine ? line : line - 1;
+        if (value < lower || value > upper)
+            continue;
+        // Measure from the *painted* edge: x(end + 1).  The exclusive frame is
+        // a legal drop target the pointer can sit on (clipEndOf() is end + 1),
+        // so the distance stays zero while the mouse is on the boundary
+        // instead of flickering by one pixel between the two readings.
+        const int distance = std::abs(mouseX - xFromFrame(value + 1));
+        const int currentBias = std::abs(result.value - proposedEnd);
+        const int candidateBias = std::abs(value - proposedEnd);
+        if (distance < bestDistance
+            || (distance == bestDistance
+                && (candidate.priority < bestPriority
+                    || (candidate.priority == bestPriority
+                        && candidateBias < currentBias))))
         {
-            const int value =
-                candidates[rightOfLine ? sideRank : 1 - sideRank];
-            if (value < lower || value > upper)
-                continue;
-            const int distance =
-                std::abs(mouseX - xFromFrame(value + 1));
-            if (distance < bestDistance
-                || (distance == bestDistance
-                    && (candidate.priority < bestPriority
-                        || (candidate.priority == bestPriority
-                            && line == result.line
-                            && sideRank < bestSideRank))))
-            {
-                bestDistance = distance;
-                bestPriority = candidate.priority;
-                bestSideRank = sideRank;
-                result.value = value;
-                result.line = line;
-            }
+            bestDistance = distance;
+            bestPriority = candidate.priority;
+            result.value = value;
+            result.line = line;
         }
     }
     if (result.line < 0 || bestDistance > timelineSnapPx())
