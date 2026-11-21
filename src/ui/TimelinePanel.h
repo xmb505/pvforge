@@ -25,6 +25,7 @@ class QShowEvent;
 class QMimeData;
 class QMouseEvent;
 class QPainter;
+class QPalette;
 class QScrollBar;
 class QTimer;
 class QToolButton;
@@ -97,6 +98,19 @@ public:
 #endif
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
+
+    // Whole-second grid shared by the painter and the self-tests.  The step
+    // widens through 1s -> 2s -> 5s -> 10s -> 30s -> 60s (then doubles) as the
+    // timeline zooms out, so the lines never merge into a grey wall.  Frames
+    // are always whole-second multiples of the project frame rate.
+    static int secondGridStep(int fps, double pixelsPerFrame);
+    static int secondGridFrames(int fps, double pixelsPerFrame);
+    // Whole-second frames in [firstFrame, lastFrame], counted from originFrame
+    // (0 for absolute time, the parent clip start for relative private time).
+    static QVector<int> secondGridFrameList(int fps, double pixelsPerFrame,
+                                            int originFrame, int firstFrame,
+                                            int lastFrame);
+
 #ifdef PVFORGE_TEST_HOOKS
     int horizontalScrollForTest() const { return m_scrollX; }
     void setHorizontalScrollForTest(int value)
@@ -145,6 +159,13 @@ public:
     int rulerLabelStepForTest() const;
     int secondsCellStepForTest() const;
     int secondsLabelStepForTest() const;
+    int secondGridOriginForTest() const { return secondGridOrigin(); }
+    QVector<int> secondGridFrameListForTest(int firstFrame,
+                                            int lastFrame) const
+    {
+        return secondGridFrameList(currentFps(), m_pixelsPerFrame,
+                                   secondGridOrigin(), firstFrame, lastFrame);
+    }
     int rowCountForTest() const { return int(rowIds().size()); }
     // Rows that actually contain an entity (rowIds() pads the view).
     int entityRowCountForTest() const;
@@ -494,6 +515,14 @@ private:
     QRect playheadHandleRect() const;
     void drawAudioClip(QPainter& painter, const Entity& entity,
                        const QRect& clip) const;
+
+    // Whole-second grid: absolute origin (or the parent clip start in a
+    // relative private timeline), a palette-adaptive soft grey, and the body
+    // lines drawn after the track backgrounds but before the clips.
+    int secondGridOrigin() const;
+    static QColor secondGridColor(const QPalette& palette);
+    void paintSecondGrid(QPainter& painter, const QVector<int>& frames,
+                         const QHash<EntityId, QRect>& clipRects) const;
 
     // Interaction.
     EntityId hitClipRow(int row, int x) const;
