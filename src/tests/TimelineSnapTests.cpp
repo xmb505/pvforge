@@ -229,6 +229,26 @@ int timelineSnapTest(QApplication& app)
     check(timeline->rowEndForTest(longRow) == 2999,
           QStringLiteral("TrimEnd(end-1) preview is %1, expected 2999")
               .arg(timeline->rowEndForTest(longRow)));
+    // Ctrl can be toggled mid-drag without moving the mouse: the preview
+    // updates on the key event and the cached state decides the release.
+    QKeyEvent ctrlPress(QEvent::KeyPress, Qt::Key_Control,
+                        Qt::ControlModifier);
+    QApplication::sendEvent(timeline, &ctrlPress);
+    QApplication::processEvents();
+    check(timeline->snapFrameForTest() == -1,
+          QStringLiteral("Ctrl key press did not clear the snap line"));
+    check(timeline->rowEndForTest(longRow) == 2980,
+          QStringLiteral("Ctrl key press preview is %1, expected 2980")
+              .arg(timeline->rowEndForTest(longRow)));
+    QKeyEvent ctrlRelease(QEvent::KeyRelease, Qt::Key_Control,
+                          Qt::NoModifier);
+    QApplication::sendEvent(timeline, &ctrlRelease);
+    QApplication::processEvents();
+    check(timeline->snapFrameForTest() == 3000,
+          QStringLiteral("Ctrl release did not restore the snap line"));
+    check(timeline->rowEndForTest(longRow) == 2999,
+          QStringLiteral("Ctrl release preview is %1, expected 2999")
+              .arg(timeline->rowEndForTest(longRow)));
     release(trimEndLeft, Qt::NoModifier);
     live->flush();
     check(entity(longUuid).end == 2999,
