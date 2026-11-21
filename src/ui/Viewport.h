@@ -120,6 +120,9 @@ public:
     QPainterPath gizmoRotateGlyphPathForTest() const;
     QPointF gizmoOppositeCornerForTest(const Uuid& uuid, gizmo::Handle handle) const;
     std::optional<gizmo::Handle> gizmoHandleAtForTest(const QPointF& pos) const;
+    // Number of pixels drawSessionSelection() paints for the current selection
+    // onto a transparent image.  0 means the selected entity draws no gizmo.
+    int sessionSelectionGizmoPixelsForTest() const;
     bool gizmoCornerHandlesVisibleForTest() const
     {
         return m_sessionDragKind != SessionDragKind::Rotate;

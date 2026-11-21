@@ -42,6 +42,7 @@ Registry buildRegistry()
     registerKeyframeClipboardTests(registry);
     registerViewportCameraTests(registry);
     registerViewportScaleLinkTests(registry);
+    registerViewportAudioGizmoTests(registry);
     registerEditorTests(registry);
     registerRenderMediaTests(registry);
     registerAssetTests(registry);

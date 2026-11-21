@@ -24,6 +24,23 @@ namespace pvf::ui::detail {
 
 constexpr double kSessionSnapAngleTolerance = 3.0;
 
+// Audio assets are timeline-only: they have no visual shape on the stage, so
+// no selection gizmo is drawn and no stage hit test may react to them.
+inline bool isAudioEntity(const model::Entity& entity)
+{
+    return entity.content.kind == ContentKind::Asset
+           && entity.content.asset.type == AssetType::Audio;
+}
+
+// True when the entity owns the on-stage entity gizmo and its alignment-snap
+// footprint.  Cameras are edited through their own viewfinder overlay and
+// audio has no visual shape, so both are excluded from the shared gizmo,
+// picking and stage-snap paths.
+inline bool hasStageGizmo(const model::Entity& entity)
+{
+    return entity.content.kind != ContentKind::Camera && !isAudioEntity(entity);
+}
+
 double distanceToSegment(const QPointF& point, const QPointF& a,
                          const QPointF& b);
 

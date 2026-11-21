@@ -6,6 +6,8 @@
 #include "next/app/ProjectDocument.h"
 #include "next/core/Document.h"
 
+#include <QPainter>
+
 #ifdef PVFORGE_TEST_HOOKS
 
 namespace pvf {
@@ -102,6 +104,30 @@ QPointF Viewport::gizmoOppositeCornerForTest(const Uuid& uuid,
 std::optional<gizmo::Handle> Viewport::gizmoHandleAtForTest(const QPointF& pos) const
 {
     return hitSessionGizmo(pos);
+}
+
+int Viewport::sessionSelectionGizmoPixelsForTest() const
+{
+    QImage image(size(), QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return 0;
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        const_cast<Viewport*>(this)->drawSessionSelection(painter);
+    }
+
+    int painted = 0;
+    for (int y = 0; y < image.height(); ++y)
+    {
+        const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+        for (int x = 0; x < image.width(); ++x)
+        {
+            if (qAlpha(line[x]) != 0)
+                ++painted;
+        }
+    }
+    return painted;
 }
 
 QPointF Viewport::sessionPivotForTest() const

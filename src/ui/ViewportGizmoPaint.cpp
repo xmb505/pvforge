@@ -160,7 +160,7 @@ void Viewport::drawSessionGizmo(QPainter& painter)
     const auto it = m_session->project().entities.constFind(selected);
     if (it == m_session->project().entities.constEnd()
         || next::isEntityLocked(m_session->project(), selected)
-        || it->content.kind == ContentKind::Camera)
+        || !ui::detail::hasStageGizmo(it.value()))
         return;
 
     const model::Entity& entity = it.value();
