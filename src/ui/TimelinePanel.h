@@ -519,6 +519,15 @@ private:
     };
     static constexpr int kTimelineSnapPx = 8;
     int timelineSnapPx() const;
+    // A snap line plus its tie-break rank.  Lower priority wins when two
+    // candidates sit the same number of screen pixels from the mouse:
+    // playhead (0) > marker (1) > sibling clip edge (2).
+    struct SnapCandidate
+    {
+        int frame = 0;
+        int priority = 0;
+    };
+    QVector<SnapCandidate> snapCandidates() const;
     QVector<int> snapTargetFrames() const;
     TimelineSnapResult snapTrimStart(int proposedStart, int lower, int upper,
                                      int mouseX) const;
