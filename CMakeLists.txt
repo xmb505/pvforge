@@ -324,6 +324,12 @@ if(PVFORGE_BUILD_SELF_TESTS)
         foreach(case IN LISTS PVF_SELF_TEST_UI)
             set_tests_properties(pvf.${case} PROPERTIES LABELS "self-test;ui")
         endforeach()
+        # html-vars-test launches a headless Chrome renderer; share the Chrome
+        # lock with html2.* and next.media_services so concurrent startups do
+        # not starve Browser.getVersion on 2-core CI runners.
+        set_tests_properties(pvf.html-vars-test PROPERTIES
+            RESOURCE_LOCK "pvforge_mcp_port;pvforge_chrome"
+        )
         set(PVF_SELF_TEST_CORE
             self-test git-test solver-convert-test
         )
