@@ -44,6 +44,7 @@ Registry buildRegistry()
     registerTimelineEdgeSnapTests(registry);
     registerKeyframeClipboardTests(registry);
     registerViewportCameraTests(registry);
+    registerCameraMonitorDragTests(registry);
     registerViewportScaleLinkTests(registry);
     registerViewportAudioGizmoTests(registry);
     registerEditorTests(registry);

@@ -163,6 +163,9 @@ private:
     bool m_initialized = false;
     bool m_dragging = false;
     bool m_resizing = false;
+    // The compositor owns the drag of a detached window (Wayland ignores
+    // move() on top-levels), so the platform drag is requested on press.
+    bool m_systemMove = false;
     QPoint m_pressGlobal;
     QRect m_pressGeometry;
 

@@ -804,6 +804,8 @@ void CameraMonitor::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    // A new gesture supersedes a platform drag whose release never arrived.
+    m_systemMove = false;
     if (gripRect().contains(event->position().toPoint()))
     {
         m_resizing = true;
@@ -813,6 +815,21 @@ void CameraMonitor::mousePressEvent(QMouseEvent* event)
     }
     if (titleRect().contains(event->position().toPoint()))
     {
+        // A detached monitor is a real top-level window.  Wayland lets the
+        // compositor own that window's position, so a plain move() is
+        // ignored; the platform drag has to be requested instead.  Only an
+        // exposed handle may take part: asking a freshly created, still
+        // unconfigured xdg_toplevel for a system move is a fatal protocol
+        // error that kills the whole process.
+        if (m_detached && windowHandle() && windowHandle()->isExposed()
+            && windowHandle()->startSystemMove())
+        {
+            // The compositor owns the drag now; our own move() must not fight
+            // it, but the release still has to persist the new geometry.
+            m_systemMove = true;
+            m_dragging = false;
+            return;
+        }
         m_dragging = true;
         m_pressGlobal = event->globalPosition().toPoint();
         m_pressGeometry = geometry();
@@ -841,26 +858,9 @@ void CameraMonitor::mouseMoveEvent(QMouseEvent* event)
     if (m_dragging)
     {
         const QPoint globalPos = event->globalPosition().toPoint();
-        if (!m_detached && m_viewport)
-        {
-            const QRect stageGlobal(m_viewport->mapToGlobal(QPoint(0, 0)),
-                                    m_viewport->size());
-            if (!stageGlobal.adjusted(-16, -16, 16, 16).contains(globalPos))
-            {
-                detachWindow();
-                move(globalPos - QPoint(width() / 2, 12));
-                if (windowHandle() && windowHandle()->startSystemMove())
-                {
-                    m_dragging = false;
-                }
-                else
-                {
-                    m_pressGlobal = globalPos;
-                    m_pressGeometry = geometry();
-                }
-                return;
-            }
-        }
+        // The docked monitor never leaves the stage while dragging: detaching
+        // mid-gesture creates a fresh xdg_toplevel, and asking an unconfigured
+        // top-level for a system move is a fatal Wayland protocol error.
         const QPoint delta = globalPos - m_pressGlobal;
         if (m_detached)
             move(m_pressGeometry.topLeft() + delta);
@@ -879,9 +879,13 @@ void CameraMonitor::mouseReleaseEvent(QMouseEvent* event)
 
     if (m_dragging && !m_detached && m_viewport)
     {
-        const QWidget* mainWindow = m_viewport->window();
-        const QRect frame = mainWindow ? mainWindow->frameGeometry() : QRect();
-        if (!frame.contains(event->globalPosition().toPoint()))
+        // Releasing outside the stage pops the monitor out into its own
+        // window.  The stage, not the main window, is the boundary: the
+        // monitor is docked to the stage and leaves with it.
+        const QRect stageGlobal(m_viewport->mapToGlobal(QPoint(0, 0)),
+                                m_viewport->size());
+        if (!stageGlobal.adjusted(-16, -16, 16, 16).contains(
+                event->globalPosition().toPoint()))
         {
             m_dragging = false;
             const QPoint globalPos = event->globalPosition().toPoint();
@@ -891,7 +895,7 @@ void CameraMonitor::mouseReleaseEvent(QMouseEvent* event)
         }
     }
 
-    if (m_dragging || m_resizing)
+    if (m_dragging || m_resizing || m_systemMove)
     {
         if (m_detached)
             Settings::setMonitorWindowGeometry(geometry());
@@ -900,6 +904,7 @@ void CameraMonitor::mouseReleaseEvent(QMouseEvent* event)
     }
     m_dragging = false;
     m_resizing = false;
+    m_systemMove = false;
 }
 
 void CameraMonitor::closeEvent(QCloseEvent* event)

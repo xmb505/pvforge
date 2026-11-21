@@ -50,6 +50,7 @@ void registerTimelineSnapTests(Registry& registry);
 void registerTimelineEdgeSnapTests(Registry& registry);
 void registerKeyframeClipboardTests(Registry& registry);
 void registerViewportCameraTests(Registry& registry);
+void registerCameraMonitorDragTests(Registry& registry);
 void registerViewportScaleLinkTests(Registry& registry);
 void registerViewportAudioGizmoTests(Registry& registry);
 void registerEditorTests(Registry& registry);
