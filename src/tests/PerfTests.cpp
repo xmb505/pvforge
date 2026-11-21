@@ -156,6 +156,22 @@ int perfMonitorTest(QApplication& app)
 
     check(window.windowTitle() == QStringLiteral("性能监视"),
           QStringLiteral("window title changed"));
+    // Native theme: no window-level style sheet may override QGroupBox,
+    // QTableWidget/QHeaderView, QPushButton, QComboBox, QLineEdit or
+    // QPlainTextEdit, otherwise KDE Breeze degrades to square boxes.
+    check(window.styleSheetForTest().isEmpty(),
+          QStringLiteral("perf monitor still installs a style sheet: %1")
+              .arg(window.styleSheetForTest().left(120)));
+    for (QWidget* child : window.findChildren<QWidget*>())
+    {
+        if (!child->styleSheet().isEmpty())
+        {
+            check(false,
+                  QStringLiteral("perf monitor child %1 carries a style sheet")
+                      .arg(child->objectName()));
+            break;
+        }
+    }
     check(window.findChild<QLabel*>(QStringLiteral("perfSummaryLabel")),
           QStringLiteral("summary label missing"));
     check(window.findChild<QWidget*>(QStringLiteral("perfSparkline")),

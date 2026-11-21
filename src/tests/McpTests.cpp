@@ -439,6 +439,17 @@ int mcpLockTest(QApplication& app)
                              : nullptr;
     check(stopButton && stopButton->isEnabled(),
           QStringLiteral("MCP log stop button is not enabled"));
+    // Native theme: the log panel and its emergency-stop button must not carry
+    // a hardcoded style sheet; both follow the host QPalette/theme instead.
+    if (log)
+    {
+        check(log->styleSheetForTest().isEmpty(),
+              QStringLiteral("MCP log panel carries a style sheet: %1")
+                  .arg(log->styleSheetForTest().left(120)));
+        check(log->stopButtonStyleSheetForTest().isEmpty(),
+              QStringLiteral("MCP log stop button carries a style sheet: %1")
+                  .arg(log->stopButtonStyleSheetForTest().left(120)));
+    }
     if (stopButton)
         stopButton->click();
     QApplication::processEvents();

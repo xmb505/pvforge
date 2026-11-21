@@ -823,29 +823,11 @@ void PerfMonitorWindow::buildUi()
 
     buildAdvancedArea(root);
 
-    // Palette-derived chrome only: borders come from QPalette::Mid, grid lines
-    // use a slightly darker Mid and backgrounds are left to the native style,
-    // so the window matches a light or a dark main UI instead of forcing its
-    // own dark theme.
-    const QColor border = palette().color(QPalette::Mid);
-    const QColor grid = border.darker(120);
-    setStyleSheet(
-        QStringLiteral("QWidget { border-radius: 0px; }"
-                       "QGroupBox { border: 1px solid %1; margin-top: 9px; }"
-                       "QGroupBox::title { subcontrol-origin: margin;"
-                       " left: 8px; padding: 0px 3px; }"
-                       "QTableWidget { border: 1px solid %1;"
-                       " gridline-color: %2; }"
-                       "QHeaderView::section { border: 0px;"
-                       " border-right: 1px solid %2;"
-                       " border-bottom: 1px solid %2; padding: 3px; }"
-                       "QPushButton, QComboBox { border: 1px solid %1;"
-                       " border-radius: 0px; padding: 3px 10px; }"
-                       "QLineEdit { border: 1px solid %1;"
-                       " border-radius: 0px; padding: 2px 5px; }"
-                       "QPlainTextEdit { border: 1px solid %1;"
-                       " border-radius: 0px; }")
-            .arg(border.name(), grid.name()));
+    // No widget-level style sheet: QGroupBox, QTableWidget, QHeaderView,
+    // QPushButton, QComboBox, QLineEdit and QPlainTextEdit keep the native
+    // Qt/KDE style (Breeze), which already follows the system palette.  Only
+    // the custom-painted charts draw chrome themselves, and they derive it
+    // from palette() (Base/Text/Mid) for both light and dark themes.
 }
 
 void PerfMonitorWindow::buildAdvancedArea(QVBoxLayout* root)

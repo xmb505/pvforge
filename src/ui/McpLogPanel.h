@@ -53,6 +53,10 @@ public:
     QString entryTargetForTest(int row) const;
     QString entryDetailForTest(int row) const;
     void activateEntryForTest(int row);
+    // Native-theme regression: the panel and its emergency-stop button must
+    // keep the Qt/KDE style instead of a hardcoded red box.
+    QString styleSheetForTest() const { return styleSheet(); }
+    QString stopButtonStyleSheetForTest() const;
 #endif
 
 signals:
