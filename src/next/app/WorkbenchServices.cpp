@@ -808,11 +808,13 @@ int WorkbenchServices::contentEnd() const
     if (!m_document)
         return 0;
 
+    // Exclusive boundary: last renderable frame = root end, so total frames
+    // (and the scan limit) sit at end + 1.
     int end = 0;
     const auto& entities = m_document->project().entities;
     for (auto it = entities.constBegin(); it != entities.constEnd(); ++it) {
         if (it.value().parentUuid.isEmpty())
-            end = std::max(end, it.value().end);
+            end = std::max(end, it.value().end + 1);
     }
     return std::max(0, end);
 }

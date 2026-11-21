@@ -369,7 +369,7 @@ void MainWindow::exportVideo()
     if (dialog.exec() != QDialog::Accepted)
         return;
     startSessionExport(dialog.cameraUuid(), dialog.startFrame(),
-                       dialog.endFrame(), dialog.outputPath(),
+                       dialog.endFrame() + 1, dialog.outputPath(),
                        dialog.includeAudio(), dialog.outputFps(),
                        dialog.resolutionScale(), dialog.crf(),
                        dialog.encoder(), dialog.preset(),
@@ -451,7 +451,7 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
         if (camera != project->entities.constEnd())
         {
             rangeStart = camera->start;
-            rangeEnd = camera->end;
+            rangeEnd = camera->end + 1;
         }
     }
     const double durationSeconds =

@@ -222,7 +222,7 @@ void StoreTests::saveEntityReopen()
     QCOMPARE(it->keyframes.size(), 1);
     QCOMPARE(it->keyframes.first().x, 3.5);
 
-    model::Entity invalid = makeEntity(QStringLiteral("坏实体"), 10, 10);
+    model::Entity invalid = makeEntity(QStringLiteral("坏实体"), 10, 9);
     store->mutableProject().entities.insert(invalid.uuid, invalid);
     error.clear();
     QVERIFY(!store->saveEntity(invalid.uuid, &error));

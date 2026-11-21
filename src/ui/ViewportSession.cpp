@@ -255,7 +255,7 @@ void collectPickOrder(const model::Project& project, const Uuid& parentUuid,
     {
         const model::Entity& entity = it.value();
         if (!editorHidden && entity.visible && frame >= entity.start
-            && frame < entity.end && pickableContent(entity)
+            && frame <= entity.end && pickableContent(entity)
             && !next::isEntityLocked(project, entity.uuid))
             order.append(&entity);
     }

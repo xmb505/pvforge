@@ -76,13 +76,13 @@ Project makeProject(int frames = 10)
     project.settings.fps = 30;
     project.settings.background = QStringLiteral("#101014");
 
-    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames);
+    Entity camera = makeEntity(QStringLiteral("camera"), 0, frames - 1);
     camera.content.kind = ContentKind::Camera;
     camera.transform.x = 0.0;
     camera.transform.y = 0.0;
     project.entities.insert(camera.uuid, camera);
 
-    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames);
+    Entity rect = makeEntity(QStringLiteral("rect"), 0, frames - 1);
     rect.transform.x = 0.0;
     rect.transform.y = 0.0;
     rect.content.kind = ContentKind::Vector;
@@ -337,7 +337,7 @@ void testAudioStopsAtEntityEnd()
 
     Project project = makeProject(300); // 10 s at 30 fps
     const Entity audio =
-        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 90); // 3 s
+        makeAudioEntity(QStringLiteral("audio"), stored->hash, 0, 89); // 3 s
     project.entities.insert(audio.uuid, audio);
 
     const QString path = directory.path() + QStringLiteral("/trimmed.mp4");

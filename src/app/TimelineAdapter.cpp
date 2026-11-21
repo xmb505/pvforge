@@ -104,7 +104,9 @@ void fillViewFields(Entity& view, const model::Entity& source,
     QVariantMap& data = view.data;
     data.insert(QStringLiteral("timelineRow"), source.row);
     data.insert(QStringLiteral("clipStart"), source.start);
-    data.insert(QStringLiteral("clipEnd"), source.end);
+    // The painter works with an exclusive right edge: frame f owns
+    // [x(f), x(f+1)), so a closed [start, end] clip is drawn to end + 1.
+    data.insert(QStringLiteral("clipEnd"), source.end + 1);
     data.insert(QStringLiteral("modelStart"), source.start);
     data.insert(QStringLiteral("modelEnd"), source.end);
     data.insert(QStringLiteral("modelDuration"), source.duration());
@@ -124,7 +126,7 @@ void fillViewFields(Entity& view, const model::Entity& source,
             const double trimStart = double(asset.sourceIn) / safeFps;
             const int frames = data.value(QStringLiteral("assetDurationFrames"))
                                    .toInt();
-            const int clipFrames = std::max(0, source.end - source.start);
+            const int clipFrames = std::max(0, source.duration());
             const int left = frames > 0
                                  ? std::max(0, frames - asset.sourceIn
                                                     - clipFrames)
@@ -275,7 +277,7 @@ TimelineSnapshot TimelineAdapter::buildSnapshot(const model::Project& project,
         }
 
         if (source.parentUuid.isEmpty())
-            contentEnd = std::max(contentEnd, source.end);
+            contentEnd = std::max(contentEnd, source.end + 1);
         snapshot.entities.append(view);
     }
     snapshot.contentEnd = contentEnd;
@@ -326,7 +328,7 @@ bool TimelineAdapter::patchSnapshot(TimelineSnapshot& snapshot,
                           : idForUuid(source->parentUuid);
         fillViewFields(view, *source, project, project.settings.fps);
         if (source->parentUuid.isEmpty())
-            contentEnd = std::max(contentEnd, source->end);
+            contentEnd = std::max(contentEnd, source->end + 1);
     }
 
     snapshot.playhead = playhead;

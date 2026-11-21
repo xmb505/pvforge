@@ -15,10 +15,8 @@ namespace pvf::model {
 // One whole-frame keyframe.  A keyframe always carries every animation
 // parameter of the entity; there are no per-property tracks.
 //
-// `frame` is entity-relative and may be 0 .. duration (duration is the end
-// boundary).  frame == duration is an ordinary keyframe that may serve as an
-// interpolation target at the clip boundary; the entity itself is only rendered
-// on [start, end), so that keyframe is never sampled for a rendered frame.
+// `frame` is entity-relative and must be 0 .. duration()-1: the closed range
+// [start, end] renders every relative frame from 0 through end-start.
 struct Keyframe
 {
     int frame = 0;
@@ -104,14 +102,14 @@ QJsonArray toJson(const QVector<Keyframe>& keyframes);
 // object (or any non-array value) is rejected with the "旧分轨工程格式已废弃"
 // message.  Duplicate frames are rejected.  When `content` is non-null the
 // per-type content schema is validated, and a non-negative `duration` checks
-// the 0..duration frame range.
+// the 0..duration-1 frame range.
 std::optional<QVector<Keyframe>> keyframesFromJson(
     const QJsonValue& value, const ParseOptions& options,
     const Content* content, int duration, QString* error = nullptr);
 std::optional<QVector<Keyframe>> keyframesFromJson(const QJsonValue& value,
                                                    QString* error = nullptr);
 
-// Frames must be strictly increasing inside 0..duration, non-finite animation
+// Frames must be strictly increasing inside 0..duration-1, non-finite animation
 // values are rejected, content keys must belong to the entity type's animation
 // schema, and htmlVars values must be finite numbers.
 bool validateKeyframes(const QVector<Keyframe>& keyframes, int duration,

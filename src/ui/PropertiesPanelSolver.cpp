@@ -380,12 +380,12 @@ bool PropertiesPanel::canConvertCurrentKey(const model::Entity& entity,
                                            QString* reason) const
 {
     const int relative = activeKeyFrame(entity);
-    if (relative < 0 || relative > entity.duration())
+    if (relative < 0 || relative >= entity.duration())
     {
         if (reason)
             *reason = QStringLiteral("播放头不在片段范围内：相对帧 %1，允许 0..%2")
                           .arg(relative)
-                          .arg(entity.duration());
+                          .arg(entity.duration() - 1);
         return false;
     }
     if (!model::hasKeyframeAt(entity.keyframes, relative))

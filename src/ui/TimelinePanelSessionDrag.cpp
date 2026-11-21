@@ -149,7 +149,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         if (m_dragMode == DragMode::TrimStart)
         {
             const int lower = actions->minTrimStart(uuid);
-            const int upper = m_dragClipEnd - 1;
+            const int upper = m_dragClipEnd;
             if (upper < lower)
                 return;
             newStart = std::clamp(frameFromX(int(std::lround(pos.x()))), lower,
@@ -157,7 +157,7 @@ void TimelinePanel::updateSessionDragPreview(const QPointF& pos)
         }
         else
         {
-            const int lower = m_dragClipStart + 1;
+            const int lower = m_dragClipStart;
             const int upper =
                 std::max(lower, actions->maxTrimEnd(uuid));
             newEnd = std::clamp(frameFromX(int(std::lround(pos.x()))), lower,

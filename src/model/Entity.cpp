@@ -287,8 +287,8 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
         object, QStringLiteral("start"), entity.start, options);
     entity.end = detail::hasField(object, QStringLiteral("end"))
                      ? detail::jsonInt(object, QStringLiteral("end"),
-                                       entity.start + 1)
-                     : entity.start + 1;
+                                       entity.start)
+                     : entity.start;
     entity.row = detail::optionalInt(
         object, QStringLiteral("row"), entity.row, options);
     entity.hidden = detail::optionalBool(
@@ -529,8 +529,8 @@ bool flattenNode(const EntityTreeNode& node, QHash<Uuid, Entity>* entities,
             detail::setError(
                 error,
                 label
-                    + QStringLiteral("的时间范围 [%1, %2) 超出父实体 %3 的 "
-                                     "[%4, %5)")
+                    + QStringLiteral("的时间范围 [%1, %2] 超出父实体 %3 的 "
+                                     "[%4, %5]")
                           .arg(entity.start)
                           .arg(entity.end)
                           .arg(parentEntity.uuid)
@@ -546,8 +546,8 @@ bool flattenNode(const EntityTreeNode& node, QHash<Uuid, Entity>* entities,
                 error,
                 label
                     + QStringLiteral("的 followParentRange=true，但时间范围 "
-                                     "[%1, %2) 不等于直接父实体 %3 的 "
-                                     "[%4, %5)")
+                                     "[%1, %2] 不等于直接父实体 %3 的 "
+                                     "[%4, %5]")
                           .arg(entity.start)
                           .arg(entity.end)
                           .arg(parentEntity.uuid)
@@ -642,9 +642,7 @@ int solverStructuralEnd(const Entity& entity, const SolverSegment& segment)
 
     // The first ordinary key created after the solver start is the end
     // marker: the solver stops at N-1 and the key at N belongs to the normal
-    // animation that follows.  A key at frame == duration is an ordinary
-    // interpolation target at the end boundary and yields duration-1, which is
-    // already the clip's last frame.
+    // animation that follows.  The last legal relative frame is duration()-1.
     for (const Keyframe& keyframe : entity.keyframes)
     {
         if (keyframe.frame > segment.startFrame)
@@ -804,11 +802,14 @@ bool validateEntity(const Entity& entity, QString* error)
         return false;
     }
 
-    if (entity.end <= entity.start)
+    if (entity.end < entity.start)
     {
         detail::setError(
             error,
-            QStringLiteral("实体 %1 的 end 必须大于 start").arg(entity.uuid));
+            QStringLiteral("实体 %1 的 end 不能小于 start（当前 [%2, %3]）")
+                .arg(entity.uuid)
+                .arg(entity.start)
+                .arg(entity.end));
         return false;
     }
 

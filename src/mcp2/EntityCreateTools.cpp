@@ -96,26 +96,28 @@ Result createEntityInternal(Tx& tx, const QJsonObject& args,
             if (frames <= content.asset.sourceIn)
                 return failure(QStringLiteral("invalid_argument"),
                                QStringLiteral("sourceIn 超出素材长度"));
-            end = start + (frames - content.asset.sourceIn);
+            end = start + (frames - content.asset.sourceIn) - 1;
         }
         else
         {
-            end = start + std::max(1, project.settings.fps);
+            // One second: fps frames means end = start + fps - 1.
+            end = start + std::max(1, project.settings.fps) - 1;
         }
     }
-    if (end <= start || end > kMaxFrame)
+    if (end < start || end > kMaxFrame)
         return failure(QStringLiteral("invalid_argument"),
-                       QStringLiteral("end 必须大于 start 且不超过 %1").arg(kMaxFrame));
+                       QStringLiteral("end 必须不小于 start 且不超过 %1").arg(kMaxFrame));
 
     if (parent && (start < parent->start || end > parent->end))
         return failure(QStringLiteral("conflict"),
-                       QStringLiteral("实体范围 [%1,%2) 超出父实体范围 [%3,%4)")
+                       QStringLiteral("实体范围 [%1,%2] 超出父实体范围 [%3,%4]")
                            .arg(start)
                            .arg(end)
                            .arg(parent->start)
                            .arg(parent->end));
 
-    contentResult = checkAssetDuration(tx.store->assets(), content, end - start);
+    contentResult = checkAssetDuration(tx.store->assets(), content,
+                                       end - start + 1);
     if (!contentResult.ok)
         return contentResult;
 

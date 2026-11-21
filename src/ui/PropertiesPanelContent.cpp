@@ -586,11 +586,11 @@ void PropertiesPanel::applySessionData(const QString& key, const QVariant& value
                     return;
                 const int current = std::max(
                     0, mediaFrames - asset.sourceIn
-                           - (entity->end - entity->start));
+                           - entity->duration());
                 const int target = std::max(
                     0, int(std::lround(value.toDouble() * fps)));
                 const int nextEnd = entity->end - (target - current);
-                if (target != current && nextEnd > entity->start)
+                if (target != current && nextEnd >= entity->start)
                     trimAudio(entity->start, nextEnd);
                 return;
             }

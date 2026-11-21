@@ -24,7 +24,7 @@ bool overlaps(const model::Entity& entity, int startFrame, int endFrame)
 {
     return entity.content.kind == ContentKind::Asset
            && entity.content.asset.type == AssetType::Audio
-           && entity.end > startFrame && entity.start < endFrame;
+           && entity.end >= startFrame && entity.start < endFrame;
 }
 
 } // namespace

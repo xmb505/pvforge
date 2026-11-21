@@ -68,7 +68,7 @@ int nextAutoRow(const Project& project, const Uuid& parentUuid, int start,
         const Entity& entity = it.value();
         if (entity.parentUuid != parentUuid)
             continue;
-        if (entity.start < end && start < entity.end)
+        if (entity.start <= end && start <= entity.end)
             highest = std::max(highest, entity.row);
     }
     return std::max(0, highest + 1);

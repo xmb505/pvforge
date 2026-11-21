@@ -90,12 +90,12 @@ std::optional<solver::Sample> solverSampleAt(EditorSession* session,
 
 bool canWriteKeyAt(const model::Entity& entity, int frame, QString* reason)
 {
-    if (frame < 0 || frame > entity.duration())
+    if (frame < 0 || frame >= entity.duration())
     {
         if (reason)
             *reason = QStringLiteral("播放针不在实体范围内：相对帧 %1，允许 0..%2")
                           .arg(frame)
-                          .arg(entity.duration());
+                          .arg(entity.duration() - 1);
         return false;
     }
     for (const model::SolverSegment& solver : entity.solvers)

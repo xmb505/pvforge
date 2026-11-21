@@ -190,7 +190,7 @@ bool rowIsOccupied(const model::Project& project, const Uuid& parent,
         const model::Entity& entity = it.value();
         if (entity.parentUuid != parent || entity.row != row)
             continue;
-        if (entity.start < end && start < entity.end)
+        if (entity.start <= end && start <= entity.end)
             return true;
     }
     return false;
@@ -222,7 +222,7 @@ QVector<Uuid> EditActions::addAssetEntities(const AssetHash& hash, int startFram
     const int fps = std::max(1, project.settings.fps);
     const int start = std::max(0, startFrame);
     const int duration = assetDurationFrames(*asset, fps);
-    const int end = start + duration;
+    const int end = start + duration - 1;
 
     if (!parent.isEmpty())
     {
@@ -240,7 +240,7 @@ QVector<Uuid> EditActions::addAssetEntities(const AssetHash& hash, int startFram
         if (start < it->start || end > it->end)
         {
             setError(error,
-                     QStringLiteral("素材范围 [%1, %2) 超出父实体 [%3, %4)")
+                     QStringLiteral("素材范围 [%1, %2] 超出父实体 [%3, %4]")
                          .arg(start)
                          .arg(end)
                          .arg(it->start)
@@ -604,7 +604,7 @@ bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
     }
     if (duration <= 0)
         duration = std::max(1, fps);
-    const int newEnd = entity.start + duration;
+    const int newEnd = entity.start + duration - 1;
 
     // The split-out audio track of a video is a following child (issue #128).
     // It is updated together with its picture, or removed when the new video
@@ -681,7 +681,7 @@ bool EditActions::replaceAsset(const Uuid& uuid, const AssetHash& hash,
     target.content.asset.hash = asset.hash;
     target.content.asset.type = asset.type;
     target.content.asset.sourceIn = sourceIn;
-    target.end = target.start + duration;
+    target.end = target.start + duration - 1;
 
     if (audioChild)
     {

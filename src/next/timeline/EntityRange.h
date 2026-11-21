@@ -14,11 +14,13 @@ namespace pvf::next {
 int timedAssetDurationFrames(const assets::AssetStore& assets,
                              const model::Entity& entity);
 
-// Applies a new absolute start/end range to `uuid` and its subtree.  The whole
-// project is edited on a copy, validated with model::validateProject(), and
-// only then written to `result`; on failure `result` is untouched and `error`
-// explains why.  The rules mirror the timeline trim:
-//   - the new range must stay inside the parent;
+// Applies a new absolute closed start/end range to `uuid` and its subtree.
+// The whole project is edited on a copy, validated with
+// model::validateProject(), and only then written to `result`; on failure
+// `result` is untouched and `error` explains why.  The rules mirror the
+// timeline trim:
+//   - the new range [newStart, newEnd] must satisfy 0 <= newStart <= newEnd
+//     and stay inside the parent;
 //   - trimming start shifts/crops ordinary keys, updates video/audio sourceIn
 //     (never below 0) and cascades into children;
 //   - trimming end drops out-of-range keys, clamps/pins solver segments and
@@ -51,11 +53,12 @@ bool applyFollowParentRange(const model::Project& project,
                             QString* error = nullptr);
 
 // Splits `uuid` at the absolute frame `frame` into two sibling entities:
-//   - the original entity keeps the left range [start, frame);
-//   - a new entity with a fresh UUID takes the right range [frame, end).
+//   - the original entity keeps the left range [start, frame - 1];
+//   - a new entity with a fresh UUID takes the right range [frame, end].
 // Video/audio sourceIn is shifted on the right half, keyframes are cropped and
 // shifted, solver segments are cut, and children are split recursively.  The
-// cut must be strictly inside the entity.  `result` is only written on success;
+// cut must satisfy start < frame <= end (a cut at end yields a single-frame
+// right half).  `result` is only written on success;
 // `upserts` contains both halves and every surviving descendant, `deletes` the
 // original descendants that fall entirely inside the left half's discarded
 // right-hand region.

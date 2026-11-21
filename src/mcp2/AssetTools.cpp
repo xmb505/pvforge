@@ -183,7 +183,8 @@ Result applyAsset(Tx& tx, model::Entity& entity, const assets::StoredAsset& asse
             {
                 TrimSummary summary;
                 Result trimmed = trimEntityRange(tx, entity.uuid, entity.start,
-                                                 entity.start + available, &summary);
+                                                 entity.start + available - 1,
+                                                 &summary);
                 if (!trimmed.ok)
                     return trimmed;
                 if (!summary.deletedUuids.isEmpty())

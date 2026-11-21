@@ -477,13 +477,13 @@ std::optional<QVector<Keyframe>> keyframesFromJson(
         const QString durationError = QStringLiteral("时长 %1").arg(duration);
         for (const Keyframe& keyframe : keyframes)
         {
-            if (keyframe.frame < 0 || keyframe.frame > duration)
+            if (keyframe.frame < 0 || keyframe.frame >= duration)
             {
                 detail::setError(
                     error,
                     QStringLiteral("关键帧帧号 %1 超出允许范围 0..%2（%3）")
                         .arg(keyframe.frame)
-                        .arg(duration)
+                        .arg(duration - 1)
                         .arg(durationError));
                 return std::nullopt;
             }
@@ -523,13 +523,13 @@ bool validateKeyframes(const QVector<Keyframe>& keyframes, int duration,
     QSet<int> seenFrames;
     for (const Keyframe& keyframe : keyframes)
     {
-        if (keyframe.frame < 0 || keyframe.frame > duration)
+        if (keyframe.frame < 0 || keyframe.frame >= duration)
         {
             detail::setError(
                 error,
                 QStringLiteral("关键帧帧号 %1 超出允许范围 0..%2")
                     .arg(keyframe.frame)
-                    .arg(duration));
+                    .arg(duration - 1));
             return false;
         }
         if (seenFrames.contains(keyframe.frame))

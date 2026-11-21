@@ -542,12 +542,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const int textRight =
             plus.isEmpty() ? clip.right() - 5 : plus.left() - 4;
         const int startFrame = clipStartOf(*entity);
-        const int endFrame = clipEndOf(*entity);
+        const int endFrame = clipEndOf(*entity); // exclusive right edge
         QString rangeInfo =
-            QStringLiteral("%1–%2 · %3f")
-                .arg(startFrame)
-                .arg(endFrame)
-                .arg(endFrame - startFrame);
+            ui::detail::clipRangeText(startFrame, endFrame);
         if (entity->isAudio())
         {
             const double seconds =
@@ -595,15 +592,15 @@ void TimelinePanel::paintEvent(QPaintEvent*)
         const QVector<int> keyframesForEntity =
             paintCache.keyframes.value(entity->id);
         const int clipStart = clipStartOf(*entity);
-        const int clipEnd = clipEndOf(*entity);
+        const int clipEnd = clipEndOf(*entity); // exclusive right edge
         p.save();
         if (m_altHeld)
             p.setOpacity(0.35);
         for (int keyFrame : keyframesForEntity)
         {
-            // frame == clipEnd is the ordinary key at the clip's end boundary;
-            // the diamond is drawn half outside the clip body.
-            if (keyFrame < clipStart || keyFrame > clipEnd)
+            // Keyframes live inside the closed clip range, i.e. before the
+            // exclusive right edge.
+            if (keyFrame < clipStart || keyFrame >= clipEnd)
                 continue;
             const int x = xFromFrame(keyFrame);
             if (x < clip.left() - 8 || x > clip.right() + 8)

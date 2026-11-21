@@ -119,18 +119,18 @@ QJsonObject keyframeList(const model::Entity& entity)
 
 Result checkFrameValue(int frame, int duration)
 {
-    if (frame < 0 || frame > duration)
+    if (frame < 0 || frame >= duration)
     {
         QJsonObject range;
         range.insert(QStringLiteral("min"), 0);
-        range.insert(QStringLiteral("max"), duration);
+        range.insert(QStringLiteral("max"), duration - 1);
         QJsonObject details;
         details.insert(QStringLiteral("allowedRange"), range);
         return failure(
             QStringLiteral("invalid_argument"),
-            QStringLiteral("帧号 %1 超出实体范围 0..%2（frame == duration 允许）")
+            QStringLiteral("帧号 %1 超出实体范围 0..%2")
                 .arg(frame)
-                .arg(duration),
+                .arg(duration - 1),
             details);
     }
     return success();
@@ -308,17 +308,17 @@ Result readFrames(const QJsonValue& value, int duration, QVector<int>* frames)
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("frames 必须是整数数组"));
         const int frame = int(item.toDouble());
-        if (frame < 0 || frame > duration)
+        if (frame < 0 || frame >= duration)
         {
             QJsonObject range;
             range.insert(QStringLiteral("min"), 0);
-            range.insert(QStringLiteral("max"), duration);
+            range.insert(QStringLiteral("max"), duration - 1);
             QJsonObject details;
             details.insert(QStringLiteral("allowedRange"), range);
             return failure(QStringLiteral("invalid_argument"),
                            QStringLiteral("帧号 %1 超出实体范围 0..%2")
                                .arg(frame)
-                               .arg(duration),
+                               .arg(duration - 1),
                            details);
         }
         if (seen.contains(frame))

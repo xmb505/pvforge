@@ -369,7 +369,7 @@ bool WorkbenchPanel::createSessionText()
                                        : style.text.left(24);
     const int fps = std::max(1, m_session->settings().fps);
     entity.start = std::max(0, m_session->playhead());
-    entity.end = entity.start + fps;
+    entity.end = entity.start + fps - 1;
     entity.row = -1;
     entity.content.kind = ContentKind::Text;
     model::TextContent& text = entity.content.text;
@@ -412,7 +412,7 @@ bool WorkbenchPanel::createSessionVector()
                                           : QStringLiteral("矩形");
     const int fps = std::max(1, m_session->settings().fps);
     entity.start = std::max(0, m_session->playhead());
-    entity.end = entity.start + fps;
+    entity.end = entity.start + fps - 1;
     entity.row = -1;
     entity.content.kind = ContentKind::Vector;
     model::VectorContent& vector = entity.content.vector;
@@ -451,7 +451,7 @@ bool WorkbenchPanel::createSessionCamera()
     entity.name = name;
     const int fps = std::max(1, m_session->settings().fps);
     entity.start = std::max(0, m_session->playhead());
-    entity.end = entity.start + fps;
+    entity.end = entity.start + fps - 1;
     entity.row = -1;
     entity.content.kind = ContentKind::Camera;
 

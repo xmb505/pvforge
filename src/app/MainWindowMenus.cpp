@@ -150,7 +150,7 @@ void MainWindow::createSessionMenus()
     m_endAction->setShortcut(QKeySequence(Qt::Key_End));
     connect(m_endAction, &QAction::triggered, this, [this] {
         if (m_session && m_session->playback())
-            sessionGoToFrame(m_session->playback()->contentEnd());
+            sessionGoToFrame(std::max(0, m_session->playback()->contentEnd() - 1));
     });
     addAction(m_endAction);
     playMenu->addAction(m_endAction);

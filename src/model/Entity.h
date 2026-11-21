@@ -71,7 +71,9 @@ struct Entity
     // an external tool survive a load/save cycle.
     QJsonObject extras;
 
-    int duration() const { return end - start; }
+    // Closed range [start, end]: both boundary frames are rendered, so a
+    // single-frame entity (start == end) has duration 1.
+    int duration() const { return end - start + 1; }
     bool isRoot() const { return parentUuid.isEmpty(); }
 };
 

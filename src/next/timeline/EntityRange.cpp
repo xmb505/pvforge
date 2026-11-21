@@ -167,9 +167,9 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
     model::Entity& entity = it.value();
     const int oldStart = entity.start;
     const int oldEnd = entity.end;
-    if (newStart >= newEnd)
+    if (newStart > newEnd)
     {
-        setError(error, QStringLiteral("实体 %1 的新范围 [%2, %3) 无效")
+        setError(error, QStringLiteral("实体 %1 的新范围 [%2, %3] 无效")
                             .arg(displayName(entity))
                             .arg(newStart)
                             .arg(newEnd));
@@ -186,15 +186,14 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
     // The whole subtree is outside the new range: delete it explicitly.
     // A forced rebase (reparenting a following entity) instead moves the
     // entity to the new range and keeps whatever keys/solvers still fit.
-    if (!forceRange && (oldStart >= newEnd || oldEnd <= newStart))
+    if (!forceRange && (oldStart > newEnd || oldEnd < newStart))
         return collectSubtreeDeletes(project, uuid, deletes, error);
 
     if (newStart == oldStart && newEnd == oldEnd)
         return true;
 
-    const int oldDuration = std::max(1, oldEnd - oldStart);
     const int deltaStart = newStart - oldStart;
-    const int newDuration = newEnd - newStart;
+    const int newDuration = newEnd - newStart + 1;
 
     int newSourceIn = 0;
     if (isTimedAsset(entity))
@@ -265,13 +264,13 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
     }
 
     // Shift / crop the whole-frame keyframes.  Frame numbers are
-    // entity-relative and frame == newDuration is a legal end-boundary key.
+    // entity-relative; the last legal frame is newDuration - 1.
     QVector<model::Keyframe> shiftedKeys;
     shiftedKeys.reserve(entity.keyframes.size());
     for (model::Keyframe key : entity.keyframes)
     {
         key.frame -= deltaStart;
-        if (key.frame < 0 || key.frame > newDuration)
+        if (key.frame < 0 || key.frame >= newDuration)
             continue;
         shiftedKeys.append(key);
     }
@@ -327,7 +326,7 @@ bool trimNode(model::Project& project, const assets::AssetStore& assets,
             childFollows ? newStart : std::max(childIt.value().start, newStart);
         const int childEnd =
             childFollows ? newEnd : std::min(childIt.value().end, newEnd);
-        if (childStart >= childEnd)
+        if (childStart > childEnd)
         {
             if (!collectSubtreeDeletes(project, child, deletes, error))
                 return false;
@@ -378,9 +377,9 @@ bool applyEntityRange(const model::Project& project,
         setError(error, QStringLiteral("开始帧不能小于 0：%1").arg(newStart));
         return false;
     }
-    if (newStart >= newEnd)
+    if (newStart > newEnd)
     {
-        setError(error, QStringLiteral("开始帧 %1 必须小于结束帧 %2")
+        setError(error, QStringLiteral("开始帧 %1 必须不大于结束帧 %2")
                             .arg(newStart)
                             .arg(newEnd));
         return false;
@@ -405,7 +404,7 @@ bool applyEntityRange(const model::Project& project,
         if (newStart < parent.value().start || newEnd > parent.value().end)
         {
             setError(error,
-                     QStringLiteral("实体 %1 的新范围 [%2, %3) 超出父实体 %4 的 [%5, %6)")
+                     QStringLiteral("实体 %1 的新范围 [%2, %3] 超出父实体 %4 的 [%5, %6]")
                          .arg(displayName(it.value()))
                          .arg(newStart)
                          .arg(newEnd)
@@ -544,10 +543,10 @@ bool splitEntityAt(const model::Project& project,
                             .arg(displayName(entity)));
         return false;
     }
-    if (frame <= entity.start || frame >= entity.end)
+    if (frame <= entity.start || frame > entity.end)
     {
         setError(error,
-                 QStringLiteral("切分帧 %1 必须位于实体 %2 的范围 [%3, %4) 内部")
+                 QStringLiteral("切分帧 %1 必须位于实体 %2 的范围 [%3, %4] 内部")
                      .arg(frame)
                      .arg(displayName(entity))
                      .arg(entity.start)
@@ -559,12 +558,12 @@ bool splitEntityAt(const model::Project& project,
     model::Project left;
     QVector<Uuid> leftUpserts;
     QVector<Uuid> leftDeletes;
-    if (!applyEntityRange(project, assets, uuid, entity.start, frame, &left,
+    if (!applyEntityRange(project, assets, uuid, entity.start, frame - 1, &left,
                           &leftUpserts, &leftDeletes, error))
         return false;
 
     // Right half: clone the whole subtree with fresh UUIDs, then trim the
-    // clone to [frame, end).  The destructive trim shifts sourceIn,
+    // clone to [frame, end].  The destructive trim shifts sourceIn,
     // keyframes, solvers and children exactly like a normal trim.
     QVector<Uuid> order;
     QSet<Uuid> visited;

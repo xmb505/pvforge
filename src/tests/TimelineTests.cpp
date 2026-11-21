@@ -687,7 +687,7 @@ int timelineBottomUpTest(QApplication& app)
     changedSignals = 0;
     dragFrom = QPoint(timeline->frameXForTest(30),
                       timeline->rowCenterYForTest(1));
-    dragTo = QPoint(timeline->frameXForTest(70),
+    dragTo = QPoint(timeline->frameXForTest(71),
                     timeline->rowCenterYForTest(2));
     sendDrag(dragFrom, dragTo);
     sendRelease(dragTo);
@@ -1891,14 +1891,14 @@ int timelineSplitTest(QApplication& app)
                           == rightParent,
                QStringLiteral("child was not split under the right parent")))
         return 1;
-    if (!check(plan.project.entities.value(parent).end == 30
+    if (!check(plan.project.entities.value(parent).end == 29
                    && plan.project.entities.value(rightParent).end == 60
-                   && plan.project.entities.value(child).end == 30
+                   && plan.project.entities.value(child).end == 29
                    && plan.project.entities.value(rightChild).end == 50,
                QStringLiteral("split ranges are wrong")))
         return 1;
     if (!check(keyFrames(plan.project, parent, QStringLiteral("x"))
-                       == QVector<int>({0, 10, 30})
+                       == QVector<int>({0, 10})
                    && keyFrames(plan.project, rightParent, QStringLiteral("x"))
                           == QVector<int>({0, 20}),
                QStringLiteral("split keys were not cropped/shifted")))
@@ -1939,8 +1939,8 @@ int timelineSplitTest(QApplication& app)
     const int entityCount = session->project().entities.size();
     if (!check(!actions->splitClip(video.uuid, 0, &error),
                QStringLiteral("split at the start should fail"))
-        || !check(!actions->splitClip(video.uuid, 40, &error),
-                  QStringLiteral("split at the end should fail"))
+        || !check(!actions->splitClip(video.uuid, 41, &error),
+                  QStringLiteral("split past the end should fail"))
         || !check(!actions->splitClip(locked, 20, &error),
                   QStringLiteral("split of a locked entity should fail"))
         || !check(session->project().entities.size() == entityCount,
@@ -1976,7 +1976,7 @@ int timelineSplitTest(QApplication& app)
         return pvf::Uuid();
     }();
     if (!check(!rightByS.isEmpty()
-                   && live->project().entities.value(parent).end == 15,
+                   && live->project().entities.value(parent).end == 14,
                QStringLiteral("S did not split at the playhead")))
         return 1;
     if (!check(depth() == beforeDepth + 1,

@@ -34,6 +34,11 @@ struct SecondsGrid
 
 SecondsGrid secondsGrid(int fps, double pixelsPerFrame);
 
+// Human-readable closed range shown inside a clip: "0–133 · 134f".  The
+// painter and the self-tests share this so the off-by-one contract cannot
+// drift apart.
+QString clipRangeText(int startFrame, int endExclusive);
+
 QRect plusButtonRect(const QRect& clip, int visibleRight);
 
 // Recolours a theme icon so clip buttons stay readable on dark clips.

@@ -141,6 +141,7 @@ public:
     int nameColumnWidthForTest() const { return nameWidth(); }
     bool clipNameElidedForTest(EntityId id) const;
     QString clipNameTextForTest(EntityId id) const;
+    QString clipRangeTextForTest(EntityId id) const;
     int clipCornerRadiusForTest() const { return 0; }
     // Bottom-up drop row under y, clamped to row 0..highest occupied + 1.
     int dropRowForTest(int y) const { return dropRowForY(y); }
@@ -467,7 +468,7 @@ private:
     int contentStart() const;
     int contentEnd() const;
     // Converts an absolute project frame to the number the ruler shows.
-    // Private timelines in relative mode label their own 0..duration window;
+    // Private timelines in relative mode label their own 0..duration-1 window;
     // every other panel keeps global project frames.
     int displayFrame(int frame) const;
     const Entity* rangeOwner() const;

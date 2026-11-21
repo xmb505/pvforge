@@ -207,7 +207,7 @@ void PropertiesPanel::copyTransformParams()
     if (!entity)
         return;
     const int frame = activeKeyFrame(*entity);
-    if (frame < 0 || frame > entity->duration())
+    if (frame < 0 || frame >= entity->duration())
         return;
     m_transformClipboard =
         transformClipboardPayload(wholeframe::keyAt(*entity, frame, m_session));
@@ -220,7 +220,7 @@ void PropertiesPanel::pasteTransformParams()
     if (!entity || !sessionEditable() || !m_hasTransformClipboard)
         return;
     const int frame = prepareAnimationEdit(*entity);
-    if (frame < 0 || frame > entity->duration())
+    if (frame < 0 || frame >= entity->duration())
     {
         reportSessionError(QStringLiteral(
             "播放针不在实体范围内：不能粘贴整帧参数"));
@@ -257,7 +257,7 @@ void PropertiesPanel::resetTransformParams()
     if (!entity || !sessionEditable())
         return;
     const int frame = prepareAnimationEdit(*entity);
-    if (frame < 0 || frame > entity->duration())
+    if (frame < 0 || frame >= entity->duration())
     {
         reportSessionError(QStringLiteral(
             "播放针不在实体范围内：不能重置整帧参数"));

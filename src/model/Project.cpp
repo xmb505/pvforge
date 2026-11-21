@@ -323,7 +323,7 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
         {
             detail::setError(
                 error,
-                QStringLiteral("实体 %1 的时间范围 [%2, %3) 超出父实体 %4 的 [%5, %6)")
+                QStringLiteral("实体 %1 的时间范围 [%2, %3] 超出父实体 %4 的 [%5, %6]")
                     .arg(entity.uuid)
                     .arg(entity.start)
                     .arg(entity.end)
@@ -340,7 +340,7 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
             detail::setError(
                 error,
                 QStringLiteral("实体 %1 的 followParentRange=true，但时间范围 "
-                               "[%2, %3) 不等于直接父实体 %4 的 [%5, %6)")
+                               "[%2, %3] 不等于直接父实体 %4 的 [%5, %6]")
                     .arg(entity.uuid)
                     .arg(entity.start)
                     .arg(entity.end)
@@ -354,7 +354,7 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
     }
 
     // A track is a layer, not an entity-exclusive slot: several clips may share
-    // one (parent, row) as long as their half-open [start, end) ranges do not
+    // one (parent, row) as long as their closed [start, end] ranges do not
     // overlap.  Validate that before anything renders or exports the project.
     QHash<QString, QVector<const Entity*>> tracks;
     tracks.reserve(nodes.size());
@@ -379,12 +379,12 @@ bool validateProjectCore(const Project& project, const QSet<Uuid>* removed,
         {
             const Entity& previous = *track.at(i - 1);
             const Entity& current = *track.at(i);
-            if (current.start >= previous.end)
+            if (current.start > previous.end)
                 continue;
             detail::setError(
                 error,
                 QStringLiteral("实体 %1 与 %2 在同一父级 %3 的第 %4 行重叠："
-                               "[%5, %6) 与 [%7, %8)")
+                               "[%5, %6] 与 [%7, %8]")
                     .arg(previous.uuid, current.uuid,
                          current.parentUuid.isEmpty()
                              ? QStringLiteral("（根）")

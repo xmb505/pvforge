@@ -110,6 +110,14 @@ SecondsGrid secondsGrid(int fps, double pixelsPerFrame)
     return grid;
 }
 
+QString clipRangeText(int startFrame, int endExclusive)
+{
+    return QStringLiteral("%1–%2 · %3f")
+        .arg(startFrame)
+        .arg(endExclusive - 1)
+        .arg(endExclusive - startFrame);
+}
+
 QRect plusButtonRect(const QRect& clip, int visibleRight)
 {
     const int left = std::max(0, clip.left());

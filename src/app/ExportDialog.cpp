@@ -338,7 +338,7 @@ void ExportDialog::updateCameraInfo()
     }
     m_startFrame = it.value().start;
     m_endFrame = it.value().end;
-    const int frames = std::max(0, m_endFrame - m_startFrame);
+    const int frames = std::max(0, m_endFrame - m_startFrame + 1);
     const double seconds =
         frames / double(std::max(1, m_project.settings.fps));
     m_range->setText(QStringLiteral("%1 .. %2（%3 帧 · %4 秒）")
@@ -352,7 +352,7 @@ void ExportDialog::updateSummary()
 {
     const int projectFps = std::max(1, m_project.settings.fps);
     const int outFps = outputFps();
-    const int frames = std::max(0, m_endFrame - m_startFrame);
+    const int frames = std::max(0, m_endFrame - m_startFrame + 1);
     const double seconds = frames / double(projectFps);
     const int outputFrames =
         std::max(1, int(std::llround(seconds * outFps)));

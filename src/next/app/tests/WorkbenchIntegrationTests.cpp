@@ -27,7 +27,7 @@ using namespace pvf::model;
 
 namespace {
 
-constexpr int kLastFrame = 12; // entity end; frames 0..11 are cached
+constexpr int kLastFrame = 11; // entity end; frames 0..11 are cached
 
 std::unique_ptr<ProjectDocument> createProject(const QString& projectDir,
                                                QString* error)
@@ -476,15 +476,15 @@ void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
     const WorkbenchPrewarmProgress first = services.prewarmProgressForTest();
-    QCOMPARE(first.total, kLastFrame);
-    QCOMPARE(first.done, kLastFrame);
-    QCOMPARE(first.cached, kLastFrame);
+    QCOMPARE(first.total, kLastFrame + 1);
+    QCOMPARE(first.done, kLastFrame + 1);
+    QCOMPARE(first.cached, kLastFrame + 1);
     QCOMPARE(first.skipped, 0);
     QCOMPARE(first.failed, 0);
 
     const workbench::CacheStats afterFirst = services.stats();
-    QCOMPARE(afterFirst.entries, kLastFrame);
-    QCOMPARE(afterFirst.stores, quint64(kLastFrame));
+    QCOMPARE(afterFirst.entries, kLastFrame + 1);
+    QCOMPARE(afterFirst.stores, quint64(kLastFrame + 1));
     QVERIFY(!services.cacheDirectory().isEmpty());
     QVERIFY(QDir(services.cacheDirectory()).exists());
 
@@ -498,9 +498,9 @@ void WorkbenchIntegrationTest::manualScanFillsCacheThenRescanHits()
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
     const WorkbenchPrewarmProgress second = services.prewarmProgressForTest();
-    QCOMPARE(second.hits, kLastFrame);
+    QCOMPARE(second.hits, kLastFrame + 1);
     QCOMPARE(second.cached, 0);
-    QCOMPARE(services.stats().stores, quint64(kLastFrame));
+    QCOMPARE(services.stats().stores, quint64(kLastFrame + 1));
 }
 
 void WorkbenchIntegrationTest::cacheSurvivesReopen()
@@ -521,7 +521,7 @@ void WorkbenchIntegrationTest::cacheSurvivesReopen()
         services.startScanNow();
         QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning,
                                  15000);
-        QCOMPARE(services.prewarmProgressForTest().cached, kLastFrame);
+        QCOMPARE(services.prewarmProgressForTest().cached, kLastFrame + 1);
     }
 
     auto reopened = ProjectDocument::open(path, &error, false);
@@ -532,9 +532,9 @@ void WorkbenchIntegrationTest::cacheSurvivesReopen()
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
 
     const WorkbenchPrewarmProgress progress = services.prewarmProgressForTest();
-    QCOMPARE(progress.hits, kLastFrame);
+    QCOMPARE(progress.hits, kLastFrame + 1);
     QCOMPARE(progress.cached, 0);
-    QCOMPARE(services.stats().entries, kLastFrame);
+    QCOMPARE(services.stats().entries, kLastFrame + 1);
     QVERIFY(!services.lookupForTest(5, Uuid()).isNull());
 }
 
@@ -591,8 +591,8 @@ void WorkbenchIntegrationTest::htmlMissIsNotCached()
                              15000);
 
     const WorkbenchPrewarmProgress progress = services.prewarmProgressForTest();
-    QCOMPARE(progress.total, kLastFrame);
-    QCOMPARE(progress.skipped, kLastFrame);
+    QCOMPARE(progress.total, kLastFrame + 1);
+    QCOMPARE(progress.skipped, kLastFrame + 1);
     QCOMPARE(progress.cached, 0);
     QCOMPARE(services.stats().entries, 0);
 }
@@ -688,7 +688,7 @@ void WorkbenchIntegrationTest::playbackPausesAndResumesScan()
     QVERIFY(!services.playbackActive());
     QVERIFY(!services.prewarmProgressForTest().paused);
     QTRY_VERIFY_WITH_TIMEOUT(!services.prewarmProgressForTest().scanning, 15000);
-    QCOMPARE(services.stats().entries, kLastFrame);
+    QCOMPARE(services.stats().entries, kLastFrame + 1);
 }
 
 void WorkbenchIntegrationTest::cacheToPlayheadLimitsRange()
