@@ -24,7 +24,7 @@ void PropertiesPanel::promptGroupBezier()
     const model::Entity* entity = sessionEntity();
     if (!entity || !sessionEditable())
         return;
-    const int frame = activeKeyFrame(*entity);
+    const int frame = activeDisplayKeyFrame(*entity);
     const model::Keyframe* key = model::keyframeAt(entity->keyframes, frame);
     if (!key)
         return;
@@ -59,10 +59,18 @@ void PropertiesPanel::promptGroupBezier()
     spec.outX = edited.outX;
     spec.outY = edited.outY;
 
+    if (activeTargetKeyFrames(*entity).size() > 1)
+    {
+        applyBatchKeyframeEdit(
+            QStringLiteral("pvf: batch set keyframe bezier"),
+            [spec](model::Keyframe& target) { target.easing = spec; });
+        return;
+    }
+
     m_editing = true;
     QString error;
     const bool ok = m_session->editActions()->setKeyframeEasing(
-        {KeyRef{entity->uuid, frame}}, spec, &error);
+        {KeyRef{entity->uuid, activeKeyFrame(*entity)}}, spec, &error);
     m_editing = false;
     if (!ok)
         reportSessionError(error);

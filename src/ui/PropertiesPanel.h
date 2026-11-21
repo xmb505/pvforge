@@ -60,8 +60,8 @@ public:
     Uuid selectedSolverId() const { return m_selectedSolverId; }
 
     // Timeline selection.  A single selected whole-frame key takes priority
-    // for property edits; a multi-selection only participates in time
-    // offset/delete/copy-params, so the panel edits the playhead frame.
+    // for property edits; a multi-selection rewrites only the edited field on
+    // every selected key of this entity and commits once.
     void setSelectedKeyframes(const QVector<KeyRef>& selection);
     int selectedKeyframeCount() const { return int(m_selectedKeys.size()); }
 
@@ -159,10 +159,20 @@ private:
     const model::Entity* sessionEntity() const;
     bool sessionEditable() const;
     int playheadRelative(const model::Entity& entity) const;
-    // Selected single key's entity-relative frame, or -1.  Multi-selection
-    // deliberately returns -1 so the playhead frame is edited.
-    int selectedSingleKeyFrame(const model::Entity& entity) const;
+    // Every key this entity should receive the edit: one selected key, all
+    // selected keys of this entity (ascending), or the playhead when nothing
+    // is selected.  Other entities' selected keys are ignored.
+    QVector<int> activeTargetKeyFrames(const model::Entity& entity) const;
+    // Value/control display frame.  With several targets the playhead wins
+    // only when it is itself selected; otherwise the earliest selected frame is
+    // used, so an unselected playhead never supplies the displayed values.
+    int activeDisplayKeyFrame(const model::Entity& entity) const;
     int activeKeyFrame(const model::Entity& entity) const;
+    // Applies one whole-frame field to all target keys (>= 2) in one commit.
+    // Frames inside an explicit solver segment are skipped.
+    bool applyBatchKeyframeEdit(
+        const QString& message,
+        const std::function<void(model::Keyframe&)>& mutate);
 
     bool runSessionEdit(const QString& message,
                         const std::function<bool(model::Entity&)>& mutate,
