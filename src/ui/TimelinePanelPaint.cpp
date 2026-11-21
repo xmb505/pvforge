@@ -280,7 +280,22 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                    Qt::AlignHCenter | Qt::AlignVCenter, label);
     };
 
+    // Whole seconds get a taller, two-pixel tick that echoes the body grid.
+    // Labels and the ordinary major ticks are painted afterwards and stay on
+    // top, so the ruler text/layout is unchanged.
+    const QColor secondColor = secondGridColor(pal);
+    auto drawSecondTick = [&](int frame) {
+        const int x = xFromFrame(frame);
+        if (x < nameWidth() || x > right)
+            return;
+        p.setPen(QPen(secondColor, 2));
+        p.drawLine(x, kRulerHeight - 9, x, kRulerHeight);
+    };
+
     const int leftFrame = frameFromX(nameWidth());
+    const QVector<int> secondFrames =
+        secondGridFrameList(fps, m_pixelsPerFrame, secondGridOrigin(),
+                            leftFrame, frameFromX(right) + 1);
     if (m_displayFrames)
     {
         int tickStep = 0;
@@ -295,6 +310,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             const bool major = frame % labelStep == 0;
             drawTick(frame, major ? 9 : 4, major ? text : mid);
         }
+        for (int frame : secondFrames)
+            drawSecondTick(frame);
         const int firstLabel =
             ((leftFrame + labelStep - 1) / labelStep) * labelStep;
         for (int frame = firstLabel; frame <= lastFrame; frame += labelStep)
@@ -321,6 +338,8 @@ void TimelinePanel::paintEvent(QPaintEvent*)
                     drawTick(frame, 7, mid);
             }
         }
+        for (int frame : secondFrames)
+            drawSecondTick(frame);
 
         const int firstLabel =
             ((leftFrame + grid.labelFrames - 1) / grid.labelFrames)
@@ -369,6 +388,9 @@ void TimelinePanel::paintEvent(QPaintEvent*)
     p.save();
     p.setClipRect(QRect(0, kRulerHeight, right, bottom - kRulerHeight));
     const bool hasAnyEntity = paintCache.hasAnyEntity;
+
+    // Track backgrounds first: the whole-second grid sits above the lane
+    // fills but below every clip.
     for (const PaintCache::Row& drawRow : drawRows)
     {
         const int row = drawRow.row;
@@ -393,8 +415,15 @@ void TimelinePanel::paintEvent(QPaintEvent*)
             p.fillRect(rowRect, QColor(alt.red(), alt.green(), alt.blue(), 90));
         p.setPen(QColor(mid.red(), mid.green(), mid.blue(), 70));
         p.drawLine(0, top + kRowHeight - 1, right, top + kRowHeight - 1);
+    }
 
-        for (const Entity* entity : rowEntities)
+    paintSecondGrid(p, secondFrames, paintCache.clipRects);
+
+    for (const PaintCache::Row& drawRow : drawRows)
+    {
+        if (drawRow.top + kRowHeight < kRulerHeight || drawRow.top > bottom)
+            continue;
+        for (const Entity* entity : drawRow.entities)
         {
             if (!entity)
                 continue;
