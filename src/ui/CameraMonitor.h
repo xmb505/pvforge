@@ -1,8 +1,6 @@
 #pragma once
 
 #include "common/Types.h"
-#include "core/EntityId.h"
-
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -60,14 +58,12 @@ public:
     void updateFromViewport();
 
     bool isDetached() const { return m_detached; }
-    bool isHighQuality() const { return m_highQuality; }
 
     // Programmatic trace import.
     bool loadTraceVideo(const QString& path);
     void setTraceOpacity(double opacity);
 
 #ifdef PVFORGE_TEST_HOOKS
-    void clearTraceForTest() { clearTraceVideo(); }
     // Session test hooks.
     QImage previewImageForTest() const { return m_sessionPreview; }
     QImage traceImageForTest() const { return m_traceImage; }
@@ -78,7 +74,6 @@ public:
     bool sessionMode() const { return m_session != nullptr; }
 
 signals:
-    void cameraActivated(EntityId id);
     // Session shell: the monitor combo switched the framing camera.
     void cameraUuidActivated(const Uuid& uuid);
     void visibilityChanged(bool visible);
@@ -98,7 +93,6 @@ private:
     QRect gripRect() const;
     QRect fitRect() const;
     void layoutChildren();
-    void rebuildCameraCombo();
     void updateButtons();
     void updateFpsLabel();
     void toggleQuality();
@@ -138,7 +132,6 @@ private:
     QSlider* m_traceOpacitySlider = nullptr;
     QLabel* m_traceOpacityLabel = nullptr;
     QString m_tracePath;
-    EntityId m_traceEntity = kInvalidEntity;
     QImage m_traceImage;
     double m_traceOpacity = 0.45;
 

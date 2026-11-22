@@ -645,10 +645,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimStart->setKeyboardTracking(false);
     m_audioTrimStart->setToolTip(
         QStringLiteral("裁掉音频开头的秒数；不改变音频在时间轴上的位置"));
-    addCaptureRow(QStringLiteral("裁掉开头"), m_audioTrimStart,
-                  QStringLiteral("audioTrimStartFromPlayhead"),
-                  QStringLiteral("从播放头对应的音频位置开始，裁掉前面部分；后面的波形保持原位"),
-                  [this] {});
+    form->addRow(QStringLiteral("裁掉开头"), m_audioTrimStart);
 
     m_audioTrimEnd = new QDoubleSpinBox(content);
     m_audioTrimEnd->setObjectName(QStringLiteral("audioTrimEnd"));
@@ -658,10 +655,7 @@ void PropertiesPanel::buildAudioSection(QVBoxLayout* layout)
     m_audioTrimEnd->setKeyboardTracking(false);
     m_audioTrimEnd->setToolTip(
         QStringLiteral("裁掉音频结尾的秒数；不改变音频在时间轴上的位置"));
-    addCaptureRow(QStringLiteral("裁掉结尾"), m_audioTrimEnd,
-                  QStringLiteral("audioTrimEndFromPlayhead"),
-                  QStringLiteral("在播放头对应的音频位置结束，裁掉后面部分；前面的波形保持原位"),
-                  [this] {});
+    form->addRow(QStringLiteral("裁掉结尾"), m_audioTrimEnd);
 
     m_audioVolume = new QDoubleSpinBox(content);
     m_audioVolume->setObjectName(QStringLiteral("audioVolume"));

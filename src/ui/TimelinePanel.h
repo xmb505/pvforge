@@ -113,7 +113,6 @@ public:
                                             int lastFrame);
 
 #ifdef PVFORGE_TEST_HOOKS
-    int horizontalScrollForTest() const { return m_scrollX; }
     void setHorizontalScrollForTest(int value)
     {
         m_scrollX = std::max(0, value);
@@ -158,7 +157,6 @@ public:
     int snapThresholdPxForTest() const { return timelineSnapPx(); }
 #endif
 
-    bool displayFrames() const { return m_displayFrames; }
     void setDisplayFrames(bool frames);
 #ifdef PVFORGE_TEST_HOOKS
     void setPixelsPerFrameForTest(double pixels);
@@ -184,55 +182,10 @@ public:
     int rowEndForTest(int row) const;
     bool rowIsAudioForTest(int row) const;
     QString rowAssetHashForTest(int row) const;
-    double rowAssetSecondsForTest(int row) const;
     int currentFrameForTest() const { return m_frame; }
     int markerCountForTest() const { return int(m_snapshot.markers.size()); }
     int markerFrameForTest(int index) const;
     QRect markerRectForTest(int index) const { return markerRect(index); }
-    bool rowCollapsedForTest(EntityId id) const
-    {
-        Q_UNUSED(id);
-        return false;
-    }
-    QRect folderArrowRectForTest(int row) const
-    {
-        Q_UNUSED(row);
-        return QRect();
-    }
-
-    // Scenes and annotations are not drawn by the clip timeline yet. The
-    // accessors stay so the existing UI self-tests keep compiling.
-    QString selectedSceneForTest() const { return QString(); }
-    QRect sceneBandRectForTest(const QString& id) const
-    {
-        Q_UNUSED(id);
-        return QRect();
-    }
-    QRect annotationRectForTest(const QString& id) const
-    {
-        Q_UNUSED(id);
-        return QRect();
-    }
-    int sceneBandCenterYForTest() const { return 0; }
-    int annotationLaneCenterYForTest() const { return 0; }
-    bool sceneActiveForTest(const QString& id) const
-    {
-        Q_UNUSED(id);
-        return false;
-    }
-    bool keyframeHasNoteForTest(EntityId id, double frame) const
-    {
-        return keyframeHasNote(id, frame);
-    }
-#endif
-
-    EntityId owner() const { return m_owner; }
-#ifdef PVFORGE_TEST_HOOKS
-    bool playheadVisibleForTest() const
-    {
-        return m_owner < 0
-               || (m_frame >= contentStart() && m_frame < contentEnd());
-    }
     int displayFrameForTest(int frame) const { return displayFrame(frame); }
     bool relativeTimeForTest() const { return m_relativeTime; }
     void setRelativeTimeForTest(bool relative)
@@ -291,32 +244,9 @@ signals:
     void displayFramesChanged(bool frames);
     void entitySelected(EntityId id);
     void entityFlagChanged(EntityId id, EntityFlag flag, bool value);
-    void deleteKeyframesRequested();
     void deleteEntityRequested(EntityId id);
-    void entityRenamed(EntityId id, const QString& name);
     void audioMoved(EntityId id, double startFrame);
-    void entityMoveRequested(EntityId id, EntityId parent, int index);
-    void entitiesMoveRequested(const QVector<EntityId>& ids, EntityId parent,
-                               int index);
-    void folderCreateRequested(EntityId parent);
-    void replaceSourceRequested(EntityId id);
-    void copyEntityRequested(EntityId id);
-    void duplicateEntityRequested(EntityId id);
-    void pasteEntityRequested();
-    void groupIntoFolderRequested(const QVector<EntityId>& ids);
-    void sceneCreateRequested();
-    void sceneEditRequested(const QString& id);
-    void sceneDeleteRequested(const QString& id);
-    void sceneRetireRequested(const QString& id, bool retire);
-    void annotationCreateRequested(int frame);
-    void annotationEditRequested(const QString& id);
-    void annotationDeleteRequested(const QString& id);
     void keyframeSelectionChanged(const QVector<KeyframeSelection>& selection);
-
-    // One undoable whole-project edit produced by a clip/keyframe drag.
-    void snapshotEditRequested(const QVector<Entity>& before,
-                               const QVector<Entity>& after,
-                               const QString& text);
 
     // Session-backed edits report their result so the shell can show it in the
     // status bar; a failed commit has already been rolled back.
@@ -474,7 +404,6 @@ private:
     int depthOf(EntityId id) const;
     int rowOfEntity(const Entity& entity) const;
     void assignMissingRows();
-    void moveEntityToRow(QVector<Entity>& entities, EntityId id, int targetRow);
     int contentStart() const;
     int contentEnd() const;
     // Converts an absolute project frame to the number the ruler shows.
@@ -486,7 +415,6 @@ private:
     int clipEndOf(const Entity& entity) const;
     QRect clipRect(const Entity& entity) const;
     QVector<int> keyframeFrames(const Entity& entity) const;
-    bool keyframeHasNote(EntityId id, double frame) const;
 
     // Scroll and coordinates.
     int visibleWidth() const;
@@ -504,9 +432,6 @@ private:
     // Live preview during a drag.
     const QVector<Entity>& activeEntities() const;
     Entity* activeEntity(EntityId id);
-    void beginDrag();
-    void endDrag(const QString& text);
-    void resetPreview();
     void updateDragPreview(const QPointF& pos);
 
     // PR-style endpoint snapping to the playhead and timeline markers.  Every
@@ -546,21 +471,6 @@ private:
     void setSnapFrame(int line);
     void clearSnap() { setSnapFrame(-1); }
 
-    void applyShift(QVector<Entity>& entities, EntityId id, int delta);
-    void setClipRange(Entity& entity, int start, int end);
-    void cleanKeys(Entity& entity);
-    void trimStart(QVector<Entity>& entities, EntityId id, int newStart);
-    void trimEnd(QVector<Entity>& entities, EntityId id, int newEnd);
-    void trimStartRec(QVector<Entity>& entities, EntityId parentId, int limit,
-                      QSet<EntityId>& doomed);
-    void trimEndRec(QVector<Entity>& entities, EntityId parentId, int limit,
-                    QSet<EntityId>& doomed);
-    void removeEntities(QVector<Entity>& entities, const QSet<EntityId>& doomed);
-    void reorderChild(QVector<Entity>& entities, EntityId owner, EntityId id,
-                      int targetRow);
-    void moveKeys(QVector<Entity>& entities, const QVector<KeyframeSelection>& keys,
-                  int delta);
-    QRect keyRect(const Entity& entity, int frame) const;
     QRect playheadHandleRect() const;
     void drawAudioClip(QPainter& painter, const Entity& entity,
                        const QRect& clip) const;
@@ -663,15 +573,12 @@ private:
 
     QHash<EntityId, ClipPopup*> m_popups;
 
-    // No left name column: clips carry their entity names. The constant stays
-    // at zero so the existing coordinate helpers keep one shared origin.
-    static constexpr int kNameWidth = 0;
+    // Clip-first timeline: clips carry their entity names.
     static constexpr int kRowHeight = 30;
     static constexpr int kPopupDividerHeight = 14;
     static constexpr int kInvalidRow = -1000000;
     static constexpr int kRulerHeight = 28;
     static constexpr int kScrollBarSize = 14;
-    static constexpr int kPlusWidth = 30;
     static constexpr int kTrimGrab = 6;
     static constexpr int kButtonSize = 14;
     static constexpr int kButtonGap = 2;

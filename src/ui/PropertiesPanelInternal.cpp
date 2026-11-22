@@ -5,7 +5,6 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QPalette>
-#include <QSet>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -79,26 +78,6 @@ double audioGainDbFromLinear(double volume)
 double audioLinearGainFromDb(double db)
 {
     return db <= kAudioMuteDb ? 0.0 : std::pow(10.0, db / 20.0);
-}
-
-bool isDescendant(const model::Project& project, const Uuid& candidate,
-                  const Uuid& ancestor)
-{
-    if (candidate == ancestor)
-        return true;
-    Uuid parent = project.entities.value(candidate).parentUuid;
-    QSet<Uuid> seen;
-    while (!parent.isEmpty() && !seen.contains(parent))
-    {
-        if (parent == ancestor)
-            return true;
-        seen.insert(parent);
-        const auto it = project.entities.constFind(parent);
-        if (it == project.entities.constEnd())
-            break;
-        parent = it.value().parentUuid;
-    }
-    return false;
 }
 
 void selectComboData(QComboBox* combo, int value)

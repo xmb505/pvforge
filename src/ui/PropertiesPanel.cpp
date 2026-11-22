@@ -6,6 +6,7 @@
 #include "PropertiesPanelInternal.h"
 #include "WholeFrameEdit.h"
 #include "app/EditActions.h"
+#include "app/EditActionsSupport.h"
 #include "app/EditorSession.h"
 #include "assets/AssetStore.h"
 #include "model/Content.h"
@@ -204,14 +205,6 @@ int PropertiesPanel::activeKeyFrame(const model::Entity& entity) const
         return targets.first();
     return playheadRelative(entity);
 }
-
-#ifdef PVFORGE_TEST_HOOKS
-int PropertiesPanel::activeEditFrameForTest() const
-{
-    const model::Entity* entity = sessionEntity();
-    return entity ? activeKeyFrame(*entity) : -1;
-}
-#endif
 
 void PropertiesPanel::setSelectedKeyframes(const QVector<KeyRef>& selection)
 {
@@ -1067,7 +1060,8 @@ void PropertiesPanel::refreshSession()
                 for (const Uuid& uuid : model::childrenOf(project, parent))
                 {
                     if (uuid == entity->uuid
-                        || isDescendant(project, uuid, entity->uuid))
+                        || edit_detail::isDescendant(project, uuid,
+                                                     entity->uuid))
                         continue;
                     const model::Entity& candidate = project.entities[uuid];
                     if (camera

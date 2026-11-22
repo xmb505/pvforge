@@ -128,15 +128,6 @@ QString TimelinePanel::rowAssetHashForTest(int row) const
                   : QString();
 }
 
-double TimelinePanel::rowAssetSecondsForTest(int row) const
-{
-    const Entity* entity = entityById(entityAtRow(row));
-    return entity ? entity->data
-                        .value(QStringLiteral("assetDurationSeconds"))
-                        .toDouble()
-                  : 0.0;
-}
-
 int TimelinePanel::markerFrameForTest(int index) const
 {
     return index >= 0 && index < m_snapshot.markers.size()

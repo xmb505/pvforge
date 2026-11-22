@@ -483,17 +483,6 @@ QVector<int> TimelinePanel::keyframeFrames(const Entity& entity) const
     return result;
 }
 
-bool TimelinePanel::keyframeHasNote(EntityId id, double frame) const
-{
-    const Entity* entity = entityById(id);
-    if (!entity)
-        return false;
-    for (const Keyframe& key : entity->keyframes)
-        if (std::abs(key.frame - frame) < 0.5 && !key.note.isEmpty())
-            return true;
-    return false;
-}
-
 int TimelinePanel::visibleWidth() const
 {
     return std::max(1, width() - nameWidth() - kScrollBarSize);

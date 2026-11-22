@@ -145,13 +145,6 @@ signals:
     void uuidSelected(const Uuid& uuid);
     // A complete render2 frame reached the screen (playback watchdog input).
     void framePresented(int frame);
-    void valueEdited(EntityId id, const QString& prop, double value);
-    void positionEdited(EntityId id, double x, double y);
-    void scaleEdited(EntityId id, double sx, double sy, double x, double y);
-    void pivotEdited(EntityId id, double ax, double ay);
-    void cameraEdited(EntityId id, double x, double y, double scale, double rotation);
-    // The comic balloon spike was dragged to a new tip position.
-    void comicTipEdited(EntityId id, double tipX, double tipY);
     void workbenchRequested();
     void viewChanged();
     // A session gizmo/camera commit failed; the shell shows the message.

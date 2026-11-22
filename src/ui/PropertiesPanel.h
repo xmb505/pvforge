@@ -74,7 +74,6 @@ public:
     void setPlaybackActive(bool active);
 #ifdef PVFORGE_TEST_HOOKS
     bool playbackActiveForTest() const { return m_playbackActive; }
-    int activeEditFrameForTest() const;
     // Replaces the modal bezier dialog so the custom path stays testable.
     using EasingCustomEditor =
         std::function<bool(const model::EasingSpec& current,
@@ -158,8 +157,6 @@ private:
     void buildPivotSection(QVBoxLayout* layout);
     void buildSessionHtmlSection(QVBoxLayout* layout);
     void applyData(const QString& key, const QVariant& value);
-    void applyAudioTrimStart(int playheadFrame);
-    void applyAudioTrimEnd(int playheadFrame);
     void setColorButton(QPushButton* button, const QColor& color);
     QColor pickColor(const QColor& initial, const QString& title);
 
