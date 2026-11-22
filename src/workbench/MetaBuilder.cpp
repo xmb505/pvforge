@@ -364,24 +364,6 @@ void writeSolvers(QDataStream& out, const model::Entity& entity)
     }
 }
 
-bool projectHasHtml(const model::Project& project)
-{
-    for (auto it = project.entities.constBegin(); it != project.entities.constEnd(); ++it)
-    {
-        const model::Entity& entity = it.value();
-        if (entity.content.kind == ContentKind::Asset
-            && entity.content.asset.type == AssetType::Html)
-            return true;
-    }
-    return false;
-}
-
-QString sha1Hex(const QByteArray& bytes)
-{
-    return QString::fromLatin1(
-        QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
-}
-
 } // namespace
 
 bool FrameMeta::equals(const FrameMeta& other) const
@@ -464,30 +446,6 @@ FrameMeta MetaBuilder::build(int frame, const Uuid& cameraUuid,
     meta.sha1 = QCryptographicHash::hash(buffer, QCryptographicHash::Sha1);
     meta.hasRaster = collected.hasRaster;
     return meta;
-}
-
-QString renderSignature(const model::Project& project, const Options& options)
-{
-    QByteArray payload;
-    QDataStream out(&payload, QIODevice::WriteOnly);
-    out.setVersion(QDataStream::Qt_6_0);
-
-    out << quint32(1) << options.rendererVersion << qint32(options.scalePercent)
-        << qint32(options.expandPercent)
-        << quint8(options.transparentOutsideCanvas ? 1 : 0)
-        << qint32(project.settings.fps) << qint32(project.settings.width)
-        << qint32(project.settings.height);
-
-    const QRectF worldRect = renderRect(project, options.expandPercent);
-    out << worldRect.left() << worldRect.top() << worldRect.width()
-        << worldRect.height();
-
-    const bool html = projectHasHtml(project);
-    out << html;
-    if (html)
-        out << options.chromeVersion;
-
-    return QStringLiteral("wb1-") + sha1Hex(payload);
 }
 
 QRectF renderRect(const model::Project& project, int expandPercent)

@@ -423,7 +423,6 @@ void MainWindow::startSessionExport(const Uuid& cameraUuid, int startFrame,
     options.startFrame = startFrame;
     options.endFrame = endFrame;
     options.outputSize = QSize(); // project size * resolutionScale
-    options.fps = selectedFps;
     options.outputFps = selectedFps;
     options.resolutionScale = scale;
     options.crf = std::clamp(crf, 0, 51);

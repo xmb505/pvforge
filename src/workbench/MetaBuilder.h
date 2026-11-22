@@ -73,12 +73,6 @@ private:
     QHash<QString, solver::Result>* m_sharedSolverResults = nullptr;
 };
 
-// Project-wide cache directory key: renderer version, scale, expand percent,
-// transparent-outside mode, fps, project size, plus the Chrome version when the
-// project contains HTML.  Returns a filesystem-safe string with a stable
-// prefix and a SHA-1 digest.
-QString renderSignature(const model::Project& project, const Options& options);
-
 // World rectangle rendered by the workbench cache: the project canvas
 // (0,0,width,height) expanded by width*percent/100 on the left/right and
 // height*percent/100 on the top/bottom.  percent is clamped to 0..200.
