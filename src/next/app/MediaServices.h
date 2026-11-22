@@ -98,8 +98,15 @@ public:
     void prepareHtmlPreview(int maxWaitMs = 300);
     // Queues background low-resolution renders for the active HTML entities:
     // from `frame` forward to the next var.* keyframe, clip end or project end,
-    // then backwards for earlier frames.  At most 60 requests per call and
-    // never blocks.  A repeated call for the same frame is ignored unless
+    // then backwards for earlier frames (each entity in insertion order).
+    //
+    // The budget is demand-driven, not a flat request count: one plan aims to
+    // keep one second of playback warm for every active HTML entity, i.e.
+    // fps x activeEntities requests, clamped to 600 (a serial prefetch worker
+    // with ~11.5 ms renders must not queue tens of seconds of stale work; a
+    // static timeDependent=false layer costs 1 request instead of a second) --
+    // see kMaxHtmlPrefetchFrames/kPrefetchCoverSeconds in MediaServices.cpp.
+    // Never blocks.  A repeated call for the same frame is ignored unless
     // force is set (used after document edits).  No-op while the service is
     // stopped; callers should skip this during active playback.
     void prefetchHtml(int frame, bool force = false);

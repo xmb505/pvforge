@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QFutureWatcher>
 #include <QMetaObject>
 #include <QMutexLocker>
@@ -26,6 +27,12 @@ namespace pvf::html2 {
 namespace {
 
 constexpr int kDiskStartTimeoutMs = 60000;
+
+// Upper bound of the per-service entry-hash memo. The number of distinct
+// entry files is small (one per HTML entity), so the limit is rarely
+// reached; when it is, the memo is flushed instead of evicted one by one
+// (no per-hit bookkeeping, no LRU timestamps to maintain).
+constexpr int kEntryHashMemoLimit = 512;
 
 } // namespace
 
@@ -1250,14 +1257,45 @@ QString HtmlFrameService::entryHashFor(const QString& bundleDir, const QString& 
     if (bundleDir.isEmpty() || entry.isEmpty())
         return QString();
 
-    QFile file(QDir(bundleDir).filePath(entry));
+    // The memo key is the absolute path of the entry file, so every frame of
+    // the same HTML entity reuses one hash instead of re-reading and
+    // re-hashing the file. canonicalFilePath() is deliberately not used: it
+    // costs extra syscalls on every call and returns an empty string for a
+    // file that does not exist (which would break the key).
+    const QFileInfo info(QDir(bundleDir).filePath(entry));
+    const QString path = info.absoluteFilePath();
+    const qint64 size = info.size();
+    const qint64 modifiedMs = info.lastModified().toMSecsSinceEpoch();
+
+    {
+        QMutexLocker locker(&m_entryHashMutex);
+        const auto it = m_entryHashMemo.constFind(path);
+        if (it != m_entryHashMemo.constEnd() && it->size == size
+            && it->modifiedMs == modifiedMs)
+        {
+            // Same file, same size, same mtime: the hash cannot have changed.
+            return it->sha256;
+        }
+    }
+
+    // The lock is released before the (expensive) file read, so concurrent
+    // callers never block each other on I/O.
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return QString();
 
     QCryptographicHash hash(QCryptographicHash::Sha256);
     if (!hash.addData(&file))
         return QString();
-    return QString::fromLatin1(hash.result().toHex());
+    const QString digest = QString::fromLatin1(hash.result().toHex());
+
+    {
+        QMutexLocker locker(&m_entryHashMutex);
+        if (m_entryHashMemo.size() >= kEntryHashMemoLimit)
+            m_entryHashMemo.clear();
+        m_entryHashMemo.insert(path, EntryHashMemo{size, modifiedMs, digest});
+    }
+    return digest;
 }
 
 HtmlFrameService::CacheTier HtmlFrameService::lookupCached(const htmlcache::FrameKey& key,

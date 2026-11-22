@@ -4,6 +4,7 @@
 #include "htmlcache/FrameKey.h"
 
 #include <QFuture>
+#include <QHash>
 #include <QImage>
 #include <QMutex>
 #include <QMutexLocker>
@@ -172,6 +173,15 @@ private:
     struct LowResOutcome;
     struct LowResSubmission;
 
+    // Memoised entry-file hash: the key is the absolute path of the entry
+    // file, the value its size, its modification time and its SHA-256.
+    struct EntryHashMemo
+    {
+        qint64 size = 0;
+        qint64 modifiedMs = 0;
+        QString sha256;
+    };
+
     bool ensureStarted(QString* error);
     FrameRequest normalizedRequest(const FrameRequest& request) const;
     htmlcache::FrameKey keyFor(const FrameRequest& request) const;
@@ -222,6 +232,12 @@ private:
     std::unique_ptr<FrameCacheWorker> m_cacheWorker;
 
     QMutex m_cacheMutex;
+    // Memo for entryHashFor(), read from the UI thread, the frontend thread
+    // and the prefetch thread. It has its own lock: m_cacheMutex guards the
+    // memory tier and must stay independent, and the memo lock is never held
+    // across file I/O.
+    mutable QMutex m_entryHashMutex;
+    mutable QHash<QString, EntryHashMemo> m_entryHashMemo;
     std::unique_ptr<htmlcache::MemoryCache> m_memory;
     std::unique_ptr<FrameDiskWorker> m_diskWorker;
     std::unique_ptr<LockedFrameCache> m_memoryProxy;

@@ -13,12 +13,15 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -207,7 +210,11 @@ private slots:
     void exportVideoFrameUsesFullResolution();
     void htmlProviderRendersBundle();
     void htmlPrefetchStopsAtVariableChange();
-    void htmlPrefetchCapsAtSixtyFrames();
+    void htmlPrefetchCoversOneSecondPerActiveEntity();
+    void htmlPrefetchScalesWithActiveEntityCount();
+    void htmlPrefetchStaticEntityCostsOneRequest();
+    void htmlPrefetchCapsAtHardLimit();
+    void htmlPrefetchCappedPlanKeepsFillOrder();
     void htmlPrefetchFillsCache();
     void exportHtmlFrameUsesRequestedSize();
     void htmlScaleChangesRequestSize();
@@ -448,7 +455,211 @@ void MediaServicesTests::htmlPrefetchStopsAtVariableChange()
     }
 }
 
-void MediaServicesTests::htmlPrefetchCapsAtSixtyFrames()
+// Timeline frames of a plan: how many distinct local frames one asset hash
+// covers.  A plan is one batch for all active HTML entities, so the coverage
+// of the playback window is per entity, not the raw batch size.
+int localFrameSpan(const QVector<html2::FrameRequest>& requests,
+                   const AssetHash& hash)
+{
+    int low = std::numeric_limits<int>::max();
+    int high = std::numeric_limits<int>::min();
+    for (const html2::FrameRequest& request : requests)
+    {
+        if (request.assetHash != hash)
+            continue;
+        low = std::min(low, request.localFrame);
+        high = std::max(high, request.localFrame);
+    }
+    return high < low ? 0 : high - low + 1;
+}
+
+// `count` time-dependent HTML entities spanning the same timeline range, all
+// sharing one imported bundle (identical pixels, distinct entity slots).  The
+// bundle must not declare timeDependent=false, so it keeps the default true.
+QVector<Entity> makePrefetchEntities(ProjectDocument& document,
+                                     const QString& bundle, int count,
+                                     int start, int end, QString* error)
+{
+    QVector<Entity> entities;
+    const auto stored = document.assets().importPvhtml(bundle, error);
+    if (!stored.has_value())
+        return entities;
+    for (int i = 0; i < count; ++i)
+    {
+        Entity entity = makeAssetEntity(AssetType::Html, stored->hash, start, 0);
+        entity.end = end;
+        document.mutableProject().entities.insert(entity.uuid, entity);
+        entities.append(entity);
+    }
+    return entities;
+}
+
+// Imports a bundle whose manifest declares timeDependent=false, then rewrites
+// the stored asset metadata to match (importPvhtml reads pvhtml.json, the
+// timeline request reads the asset metadata).
+bool forceStoredAssetStatic(ProjectDocument& document, const AssetHash& hash)
+{
+    const QString metadataPath =
+        QDir(document.assets().assetsDirectory())
+            .filePath(hash + QStringLiteral("/asset.json"));
+    QFile file(metadataPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    QJsonObject metadata = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    metadata.insert(QStringLiteral("timeDependent"), false);
+    return writeTestFile(metadataPath, QJsonDocument(metadata).toJson());
+}
+
+QVector<html2::FrameRequest> capturePrefetch(MediaServices& media, int frame)
+{
+    QVector<html2::FrameRequest> captured;
+    media.setHtmlPrefetchSinkForTest(
+        [&captured](const QVector<html2::FrameRequest>& requests) {
+            captured = requests;
+        });
+    media.prefetchHtml(frame, true);
+    return captured;
+}
+
+// The 11 x 1920x1080 HTML entity project from the playback report: the old
+// flat 60-request budget covered 5 timeline frames (0.17 s) at 30 fps and the
+// background renderer could never catch up.  One plan must now cover at least
+// one second of playback per active entity.
+void MediaServicesTests::htmlPrefetchCoversOneSecondPerActiveEntity()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/eleven.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    constexpr int kEntities = 11;
+    constexpr int kStart = 100;
+    const QVector<Entity> entities = makePrefetchEntities(
+        *document, makePvhtmlBundle(temp.path() + QStringLiteral("/source")),
+        kEntities, kStart, kStart + 10000, &error);
+    QVERIFY2(entities.size() == kEntities, qPrintable(error));
+
+    MediaServices media(document.get(), AppSettings());
+    const int fps = document->project().settings.fps;
+    const int playhead = kStart + 300;
+    const QVector<html2::FrameRequest> plan = capturePrefetch(media, playhead);
+
+    // 11 entity slots, each covering the first second of playback: the old
+    // 60-request plan gave one entity 60/kEntities = 5 frames, this one gives
+    // it a full fps frames.
+    const AssetHash hash = entities.first().content.asset.hash;
+    QCOMPARE(plan.size(), kEntities * fps);
+    QVERIFY2(localFrameSpan(plan, hash) >= fps,
+             qPrintable(QStringLiteral("per-entity span %1 < fps %2")
+                            .arg(localFrameSpan(plan, hash))
+                            .arg(fps)));
+    // Forward first: the playhead frame leads its entity's run...
+    QCOMPARE(plan.at(0).localFrame, playhead - kStart);
+    // ...and the next entity's second starts right after the first one's.
+    QCOMPARE(plan.at(fps).localFrame, playhead - kStart);
+    QCOMPARE(plan.last().localFrame, playhead - kStart + fps - 1);
+}
+
+// Two entities and one entity: the budget follows activeEntities x fps, and an
+// entity outside the playhead is excluded from both the count and the fill.
+void MediaServicesTests::htmlPrefetchScalesWithActiveEntityCount()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/scale.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const QVector<Entity> entities =
+        makePrefetchEntities(*document, bundle, 2, 100, 10000, &error);
+    QCOMPARE(entities.size(), 2);
+
+    // A third HTML clip that ends long before the playhead must not add demand.
+    Entity past = makeAssetEntity(AssetType::Html, entities.first().content.asset.hash,
+                                  0, 0);
+    past.end = 50;
+    document->mutableProject().entities.insert(past.uuid, past);
+
+    MediaServices media(document.get(), AppSettings());
+    const int fps = document->project().settings.fps;
+
+    // Same bundle, two entity slots: the batch is twice a single second.
+    const QVector<html2::FrameRequest> two = capturePrefetch(media, 300);
+    QCOMPARE(two.size(), 2 * fps);
+    QVERIFY(localFrameSpan(two, entities.first().content.asset.hash) >= fps);
+    QCOMPARE(two.at(0).localFrame, 200);
+    QCOMPARE(two.at(fps).localFrame, 200);
+
+    // Move the playhead past the second entity's end (kept at 10000, so shrink
+    // it first): the plan is then one entity's second.
+    Entity shortened = entities.at(1);
+    shortened.end = 150;
+    document->mutableProject().entities.insert(shortened.uuid, shortened);
+    const QVector<html2::FrameRequest> one = capturePrefetch(media, 300);
+    QCOMPARE(one.size(), fps);
+    // One entity's whole second is warmed forward from the playhead, so the run
+    // is the playhead frame followed by the rest of that second, not the same
+    // frame repeated.
+    for (int i = 0; i < one.size(); ++i)
+        QCOMPARE(one.at(i).localFrame, 200 + i);
+}
+
+// A timeDependent=false layer shares one cache entry for every timeline frame:
+// it keeps its single request and does not eat a second of the budget.
+void MediaServicesTests::htmlPrefetchStaticEntityCostsOneRequest()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/static.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const QVector<Entity> entities =
+        makePrefetchEntities(*document, bundle, 3, 100, 10000, &error);
+    QCOMPARE(entities.size(), 3);
+
+    const AssetHash hash = entities.first().content.asset.hash;
+    QVERIFY(forceStoredAssetStatic(*document, hash));
+
+    MediaServices media(document.get(), AppSettings());
+    const int fps = document->project().settings.fps;
+    const QVector<html2::FrameRequest> plan = capturePrefetch(media, 300);
+
+    // 3 static entities -> 3 requests, all at the playhead frame, none cached
+    // as time-dependent and no follows-on frames.
+    QCOMPARE(plan.size(), 3);
+    QVERIFY(plan.size() < fps);
+    for (const html2::FrameRequest& request : plan)
+    {
+        QVERIFY(!request.timeDependent);
+        QCOMPARE(request.localFrame, 200);
+    }
+}
+
+// The hard ceiling keeps a pathological project (or a 60 fps one with many
+// layers) from submitting an unbounded batch to the serial prefetch worker.
+void MediaServicesTests::htmlPrefetchCapsAtHardLimit()
 {
     if (!gitAvailable())
         QSKIP("git is unavailable");
@@ -463,34 +674,56 @@ void MediaServicesTests::htmlPrefetchCapsAtSixtyFrames()
 
     const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
     QVERIFY(!bundle.isEmpty());
-    const auto stored = document->assets().importPvhtml(bundle, &error);
-    QVERIFY2(stored.has_value(), qPrintable(error));
-
-    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 0, 0);
-    entity.end = 10000;
-    document->mutableProject().entities.insert(entity.uuid, entity);
+    // 20 entities x 60 fps = 1200 demanded > 600 hard cap.
+    const QVector<Entity> entities =
+        makePrefetchEntities(*document, bundle, 20, 100, 10000, &error);
+    QCOMPARE(entities.size(), 20);
+    document->mutableProject().settings.fps = 60;
 
     MediaServices media(document.get(), AppSettings());
-    int calls = 0;
-    QVector<html2::FrameRequest> captured;
-    media.setHtmlPrefetchSinkForTest(
-        [&](const QVector<html2::FrameRequest>& requests) {
-            ++calls;
-            captured = requests;
-        });
+    // Playhead 400: 300 frames remain before the first entity's clip start.
+    const QVector<html2::FrameRequest> plan = capturePrefetch(media, 400);
+    QCOMPARE(plan.size(), 600);
+    QCOMPARE(plan.at(0).localFrame, 300);
+    // 600 requests / 20 entity slots = 30 forward frames each (60 fps demands
+    // 60), then the budget is gone and no backward fill starts.
+    QCOMPARE(plan.at(20).localFrame, 301);
+    QCOMPARE(plan.at(599).localFrame, 329);
+}
 
-    media.prefetchHtml(0, true);
-    QCOMPARE(calls, 1);
-    QCOMPARE(captured.size(), 60);
-    QCOMPARE(captured.at(0).localFrame, 0);
-    QCOMPARE(captured.last().localFrame, 59);
+// Truncated to the cap, the plan still fills forward before backward: at the
+// cap the playhead frame comes first and the frames just before it come last.
+void MediaServicesTests::htmlPrefetchCappedPlanKeepsFillOrder()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
 
-    // The same playhead does not resubmit the batch.
-    media.prefetchHtml(0);
-    QCOMPARE(calls, 1);
-    // A document edit forces a rebuild at the same playhead.
-    media.prefetchHtml(0, true);
-    QCOMPARE(calls, 2);
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/order.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    QVector<Entity> entities =
+        makePrefetchEntities(*document, bundle, 1, 100, 10000, &error);
+    QCOMPARE(entities.size(), 1);
+    document->mutableProject().settings.fps = 60;
+
+    // One entity, no keyframes: forward from the playhead up to the cap (60
+    // demanded), then backwards for the remaining 540 frames.
+    MediaServices media(document.get(), AppSettings());
+    const QVector<html2::FrameRequest> capped = capturePrefetch(media, 700);
+    QCOMPARE(capped.size(), 600);
+    QCOMPARE(capped.at(0).localFrame, 600);
+    // Forward fill covers the first second...
+    QCOMPARE(capped.at(59).localFrame, 659);
+    // ...and the rest goes backwards, ending just below the playhead.
+    QCOMPARE(capped.at(60).localFrame, 599);
+    QCOMPARE(capped.at(61).localFrame, 598);
 }
 
 void MediaServicesTests::htmlPrefetchFillsCache()

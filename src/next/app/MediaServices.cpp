@@ -28,7 +28,29 @@ namespace {
 constexpr qint64 kVideoDiskBudgetBytes = 2LL * 1024 * 1024 * 1024;
 constexpr int kDefaultVideoProxyWidth = 960;
 constexpr int kDefaultVideoMemoryFrames = 64;
-constexpr int kMaxHtmlPrefetchFrames = 60;
+// HTML prefetch budget, in requests per plan (one plan is submitted whenever
+// the playhead moves, playback starts or a debounced edit lands).
+//
+// One timeline frame costs one request per *active, time-dependent* HTML
+// entity, so a fixed request count only ever covered a fraction of a second:
+// with the previous flat 60 a project showing 11 HTML layers at 30 fps got 5
+// timeline frames (0.17 s) of warm cache, and the background renderer can
+// never catch up with playback.  The plan therefore targets one second of
+// playback scaled by the number of active HTML entities (kPrefetchCoverSeconds
+// x fps x activeEntities, static layers cost 1 each).
+//
+// Hard ceiling reasoning: the plan replaces the pending HtmlFrameService
+// prefetch batch, and that worker renders strictly serially, so a huge batch is
+// not "more cache", it is a very long queue: 600 requests at ~11.5 ms/render is
+// ~7 s of backlog, already far past the point where the next playhead move
+// throws the batch away.  600 also matches the largest useful case measured
+// here (11 entities x 30 fps = 330) with headroom for 60 fps projects, and
+// bounds the transient memory of the replacement batch (~600 x 400x60 RGB
+// preview frames is a few tens of MB before the cache's own byte budget
+// evicts older entries).
+constexpr int kMaxHtmlPrefetchFrames = 600;
+// Seconds of playback a single prefetch plan should keep warm.
+constexpr int kPrefetchCoverSeconds = 1;
 // Mirrors render2's fallback for an HTML asset without a declared logicalSize.
 constexpr int kDefaultHtmlWidth = 800;
 constexpr int kDefaultHtmlHeight = 120;
@@ -454,8 +476,22 @@ QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
 
     const model::Project& project = m_document->project();
     const int contentEnd = projectContentEnd(project);
-    int remaining = kMaxHtmlPrefetchFrames;
+    const int fps = projectFps();
 
+    // The active HTML layers, each one with its own quota.  "Active" is the
+    // same test the fill applies: the playhead lies inside the clip and the
+    // asset still exists.  A static page shares one cache entry for every
+    // timeline frame, so it costs a single request, never a whole second.
+    struct HtmlLayer
+    {
+        const model::Entity* entity = nullptr;
+        std::optional<assets::StoredAsset> asset;
+        bool timeDependent = true;
+        int quota = 0;
+        int boundary = 0;    // the first frame whose cache key can differ
+        int nextHistory = 0; // the first frame before the playhead still free
+    };
+    QVector<HtmlLayer> layers;
     for (auto it = project.entities.constBegin(); it != project.entities.constEnd();
          ++it)
     {
@@ -465,7 +501,6 @@ QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
             continue;
         if (frame < entity.start || frame > entity.end)
             continue;
-
         const auto asset = m_document->assets().get(entity.content.asset.hash);
         if (!asset)
             continue;
@@ -490,30 +525,114 @@ QVector<html2::FrameRequest> MediaServices::buildHtmlPrefetchRequests(
             }
         }
 
-        const html2::FrameRequest current =
-            makeHtmlRequest(entity, *asset, double(frame));
-        // A static page shares one cache entry for every timeline frame.
-        if (!current.timeDependent)
+        HtmlLayer layer;
+        layer.entity = &entity;
+        layer.asset = asset;
+        layer.timeDependent =
+            asset->metadata.value(QStringLiteral("timeDependent")).toBool(true);
+        layer.boundary = boundary;
+        layer.nextHistory = frame - 1;
+        layers.append(layer);
+    }
+    if (layers.isEmpty())
+        return requests;
+
+    // The demand: one second of playback per time-dependent layer, a single
+    // request per static one.
+    int demand = 0;
+    for (const HtmlLayer& layer : layers)
+        demand += layer.timeDependent ? fps * kPrefetchCoverSeconds : 1;
+
+    // The hard cap.  Every layer gets its own quota, never a shared counter:
+    // with one shared counter the first layer filled the whole budget from
+    // the playhead to its keyframe boundary and every other layer got
+    // nothing.  When the demand does not fit the cap, the quota is scaled
+    // down proportionally so that every layer keeps a share (never zero).
+    const bool capped = demand > kMaxHtmlPrefetchFrames;
+    const int share = std::max(1, kMaxHtmlPrefetchFrames / int(layers.size()));
+    int maxQuota = 0;
+    for (HtmlLayer& layer : layers)
+    {
+        layer.quota = layer.timeDependent
+                          ? (capped ? share : fps * kPrefetchCoverSeconds)
+                          : 1;
+        maxQuota = std::max(maxQuota, layer.quota);
+    }
+
+    if (capped)
+    {
+        // The batch sits at the hard cap and the renderer walks it serially,
+        // so it is filled in rounds, one frame per layer per round: every
+        // layer reaches its earliest frames first and the truncation stays
+        // fair instead of favouring the first layer of the list.
+        for (int round = 0; round < maxQuota; ++round)
         {
-            requests.append(current);
-            if (--remaining <= 0)
-                break;
+            for (const HtmlLayer& layer : layers)
+            {
+                if (round >= layer.quota)
+                    continue;
+                const int f = layer.timeDependent ? frame + round : frame;
+                if (f >= layer.boundary)
+                    continue;
+                requests.append(
+                    makeHtmlRequest(*layer.entity, *layer.asset, double(f)));
+                if (requests.size() >= kMaxHtmlPrefetchFrames)
+                    return requests;
+            }
+        }
+        return requests;
+    }
+
+    // The batch fits the hard cap: every layer spends its own quota, forward
+    // first (up to its keyframe boundary), then the frames before the
+    // playhead for scrubbing backwards.
+    for (HtmlLayer& layer : layers)
+    {
+        if (!layer.timeDependent)
+        {
+            // A static page shares one cache entry for every timeline frame.
+            requests.append(
+                makeHtmlRequest(*layer.entity, *layer.asset, double(frame)));
             continue;
         }
 
-        for (int f = frame; f < boundary && remaining > 0; ++f)
+        int used = 0;
+        for (int f = frame; f < layer.boundary && used < layer.quota; ++f)
         {
-            requests.append(makeHtmlRequest(entity, *asset, double(f)));
-            --remaining;
+            requests.append(
+                makeHtmlRequest(*layer.entity, *layer.asset, double(f)));
+            ++used;
         }
         // Then fill the frames before the playhead for scrubbing backwards.
-        for (int f = frame - 1; f >= entity.start && remaining > 0; --f)
+        for (int f = layer.nextHistory; f >= layer.entity->start && used < layer.quota;
+             --f)
         {
-            requests.append(makeHtmlRequest(entity, *asset, double(f)));
-            --remaining;
+            requests.append(
+                makeHtmlRequest(*layer.entity, *layer.asset, double(f)));
+            ++used;
+            layer.nextHistory = f - 1;
         }
-        if (remaining <= 0)
-            break;
+    }
+
+    // A lone layer owns the whole hard cap: its batch may also reach back
+    // through the layer's own history.  That only happens when the clip
+    // reaches that far back, otherwise the batch would end in a half covered
+    // window; a layer that shares the budget keeps its quota only.
+    if (layers.size() == 1 && layers.first().timeDependent)
+    {
+        const HtmlLayer& layer = layers.first();
+        int leftover = kMaxHtmlPrefetchFrames - demand;
+        const int history = layer.nextHistory - layer.entity->start + 1;
+        if (leftover > 0 && history >= leftover)
+        {
+            for (int f = layer.nextHistory; f >= layer.entity->start && leftover > 0;
+                 --f)
+            {
+                requests.append(
+                    makeHtmlRequest(*layer.entity, *layer.asset, double(f)));
+                --leftover;
+            }
+        }
     }
     return requests;
 }
