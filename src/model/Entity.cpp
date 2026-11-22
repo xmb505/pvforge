@@ -142,12 +142,6 @@ std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
     return segment;
 }
 
-std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
-                                            QString* error)
-{
-    return solverFromJson(object, ParseOptions{}, error);
-}
-
 QJsonObject toJson(const Entity& entity)
 {
     QJsonObject object;
@@ -403,11 +397,6 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
     return entity;
 }
 
-std::optional<Entity> entityFromJson(const QJsonObject& object, QString* error)
-{
-    return entityFromJson(object, ParseOptions{}, error);
-}
-
 QJsonObject toJson(const EntityTreeNode& node)
 {
     QJsonObject object = toJson(node.entity);
@@ -462,12 +451,6 @@ std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
         node.children.append(std::move(*child));
     }
     return node;
-}
-
-std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
-                                                 QString* error)
-{
-    return entityTreeFromJson(object, ParseOptions{}, error);
 }
 
 namespace {

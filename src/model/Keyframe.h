@@ -93,8 +93,6 @@ QJsonObject toJson(const Keyframe& keyframe);
 std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
                                          const ParseOptions& options,
                                          QString* error = nullptr);
-std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
-                                         QString* error = nullptr);
 
 QJsonArray toJson(const QVector<Keyframe>& keyframes);
 
@@ -106,8 +104,6 @@ QJsonArray toJson(const QVector<Keyframe>& keyframes);
 std::optional<QVector<Keyframe>> keyframesFromJson(
     const QJsonValue& value, const ParseOptions& options,
     const Content* content, int duration, QString* error = nullptr);
-std::optional<QVector<Keyframe>> keyframesFromJson(const QJsonValue& value,
-                                                   QString* error = nullptr);
 
 // Frames must be strictly increasing inside 0..duration-1, non-finite animation
 // values are rejected, content keys must belong to the entity type's animation

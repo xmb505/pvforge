@@ -68,7 +68,7 @@ void testSpaceAndFollowJsonRoundTrip()
     CHECK(!json.value(QStringLiteral("followParentRange")).toBool());
 
     QString error;
-    const auto parsed = entityFromJson(json, &error);
+    const auto parsed = entityFromJson(json, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
     {
@@ -82,7 +82,7 @@ void testSpaceAndFollowJsonRoundTrip()
     const QJsonObject plainJson = toJson(plain);
     CHECK(plainJson.value(QStringLiteral("space")).toString()
           == QStringLiteral("parent"));
-    const auto plainParsed = entityFromJson(plainJson, &error);
+    const auto plainParsed = entityFromJson(plainJson, ParseOptions{}, &error);
     CHECK_DETAIL(plainParsed.has_value(), error);
     if (plainParsed)
         CHECK(plainParsed->space == EntitySpace::Parent);
@@ -91,7 +91,7 @@ void testSpaceAndFollowJsonRoundTrip()
     QJsonObject bad = plainJson;
     bad.insert(QStringLiteral("space"), QStringLiteral("world"));
     error.clear();
-    CHECK(!entityFromJson(bad, &error).has_value());
+    CHECK(!entityFromJson(bad, ParseOptions{}, &error).has_value());
     CHECK_DETAIL(error.contains(QStringLiteral("space")), error);
 }
 
@@ -130,7 +130,7 @@ void testNestedTreeJsonRoundTrip()
               .toBool());
 
     QString error;
-    const auto parsed = entityTreeFromJson(json, &error);
+    const auto parsed = entityTreeFromJson(json, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (!parsed)
         return;
@@ -147,7 +147,7 @@ void testNestedTreeJsonRoundTrip()
     // same document shape older fixtures use).
     QJsonObject withoutChildren = json;
     withoutChildren.remove(QStringLiteral("children"));
-    const auto leaf = entityTreeFromJson(withoutChildren, &error);
+    const auto leaf = entityTreeFromJson(withoutChildren, ParseOptions{}, &error);
     CHECK_DETAIL(leaf.has_value(), error);
     if (leaf)
     {
@@ -339,7 +339,7 @@ void testAudioFadeJsonAndValidation()
     CHECK(content.value(QStringLiteral("fadeOut")).toDouble() == 1.5);
 
     QString error;
-    const auto parsed = entityFromJson(json, &error);
+    const auto parsed = entityFromJson(json, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
     {

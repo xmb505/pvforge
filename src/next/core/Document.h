@@ -62,8 +62,8 @@ public:
     // Commits any pending debounced write immediately. Call before closing,
     // switching projects or exporting. *error is set (and commitFailed is
     // emitted) when the git commit fails; the saved edits stay on disk.
-    virtual void flush(QString* error = nullptr);
-    virtual bool hasPendingCommit() const;
+    void flush(QString* error = nullptr);
+    bool hasPendingCommit() const;
 
 signals:
     void changed();

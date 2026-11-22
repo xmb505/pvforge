@@ -124,8 +124,6 @@ QJsonObject toJson(const SolverSegment& segment);
 std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
                                             const ParseOptions& options,
                                             QString* error = nullptr);
-std::optional<SolverSegment> solverFromJson(const QJsonObject& object,
-                                            QString* error = nullptr);
 
 QJsonObject toJson(const Entity& entity);
 // Entity documents carry their own "format" ("pvforge-entity") and "version"
@@ -136,8 +134,6 @@ QJsonObject toJson(const Entity& entity);
 std::optional<Entity> entityFromJson(const QJsonObject& object,
                                      const ParseOptions& options,
                                      QString* error = nullptr);
-std::optional<Entity> entityFromJson(const QJsonObject& object,
-                                     QString* error = nullptr);
 
 // Root-subtree document helpers. toJson() always writes a "children" array
 // (possibly empty); entityTreeFromJson() accepts a missing array as an empty
@@ -145,8 +141,6 @@ std::optional<Entity> entityFromJson(const QJsonObject& object,
 QJsonObject toJson(const EntityTreeNode& node);
 std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
                                                  const ParseOptions& options,
-                                                 QString* error = nullptr);
-std::optional<EntityTreeNode> entityTreeFromJson(const QJsonObject& object,
                                                  QString* error = nullptr);
 
 // Flattens one tree into `entities` and checks:
