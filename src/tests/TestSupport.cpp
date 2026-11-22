@@ -1,6 +1,5 @@
 #include "TestSupport.h"
 
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -107,39 +106,6 @@ McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
     return mcpExchange(port,
                        mcpPostRequest(port, payload, token, contentType,
                                       declaredLength, extraHeaders, hostHeader));
-}
-
-bool mcpWaitUntil(const std::function<bool()>& predicate, int timeoutMs)
-{
-    QElapsedTimer elapsed;
-    elapsed.start();
-    while (!predicate() && elapsed.elapsed() < timeoutMs)
-    {
-        QEventLoop loop;
-        QTimer::singleShot(5, &loop, &QEventLoop::quit);
-        loop.exec();
-    }
-    return predicate();
-}
-
-int mcpStatusFromRaw(const QByteArray& received)
-{
-    const int headerEnd = received.indexOf("\r\n\r\n");
-    const QByteArray head =
-        headerEnd >= 0 ? received.left(headerEnd) : received;
-    const QList<QByteArray> statusLine =
-        head.split('\n').first().trimmed().split(' ');
-    return statusLine.size() >= 2 ? statusLine.at(1).toInt() : -1;
-}
-
-QJsonObject mcpRpc(quint16 port, const QByteArray& token, const QJsonObject& request,
-                   int* statusOut)
-{
-    const McpHttpResponse response = mcpHttpPost(
-        port, QJsonDocument(request).toJson(QJsonDocument::Compact), token);
-    if (statusOut)
-        *statusOut = response.status;
-    return QJsonDocument::fromJson(response.body).object();
 }
 
 QJsonObject mcpStructuredResult(const McpHttpResponse& response)

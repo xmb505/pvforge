@@ -12,8 +12,6 @@ namespace Settings {
 
 QString language();                     // e.g. "zh_CN"
 
-bool autoKeyDefault();
-
 int defaultWidth();
 int defaultHeight();
 int defaultFps();

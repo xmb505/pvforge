@@ -17,11 +17,6 @@ QString language()
     return store().value(QStringLiteral("ui/language"), QStringLiteral("zh_CN")).toString();
 }
 
-bool autoKeyDefault()
-{
-    return store().value(QStringLiteral("editor/autoKeyDefault"), true).toBool();
-}
-
 int defaultWidth()
 {
     return store().value(QStringLiteral("project/width"), 1920).toInt();

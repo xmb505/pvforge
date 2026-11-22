@@ -11,6 +11,13 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Sql)
 
 include(CTest)
 
+# The sizing/introspection accessors on DiskCache/MemoryCache exist only for
+# the tests below; keep them compiled in test-enabled builds (the root project
+# defines the same macro globally).
+if(BUILD_TESTING)
+    add_compile_definitions(PVFORGE_TEST_HOOKS)
+endif()
+
 # Standalone builds pull in the shared frame-cache layer and the sibling
 # assets module. When htmlcache is added by a parent project that already
 # defines those targets, reuse them.

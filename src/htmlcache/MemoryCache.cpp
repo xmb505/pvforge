@@ -24,7 +24,8 @@ struct MemoryCache::Impl
 MemoryCache::MemoryCache(qint64 maxBytes)
     : d(std::make_unique<Impl>())
 {
-    setMaxBytes(maxBytes);
+    d->maxBytes = effectiveMaxBytes(maxBytes);
+    d->lru.setBudgetBytes(d->maxBytes);
 }
 
 MemoryCache::~MemoryCache() = default;
@@ -44,6 +45,9 @@ void MemoryCache::clearAsset(const AssetHash& assetHash)
     d->lru.removeTag(assetHash);
 }
 
+// Sizing introspection has no production caller; only the htmlcache tests
+// look at it, so it is compiled into test builds only.
+#ifdef PVFORGE_TEST_HOOKS
 qint64 MemoryCache::currentBytes() const
 {
     return d->lru.bytes();
@@ -64,5 +68,6 @@ qint64 MemoryCache::maxBytes() const
 {
     return d->maxBytes;
 }
+#endif
 
 } // namespace pvf::htmlcache
