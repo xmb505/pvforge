@@ -1,5 +1,7 @@
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "anim/Anim.h"
 #include "model/Model.h"
 #include "render2/Render.h"
@@ -14,67 +16,18 @@
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QProcess>
-#include <QTemporaryDir>
 #include <QTransform>
 #include <QtMath>
 #include <QtTest>
 #include <cmath>
-#include <memory>
-#include <optional>
 using namespace pvf;
 
+using pvf::mcp2test::errorCode;
+using pvf::mcp2test::gitAvailable;
+using pvf::mcp2test::kSkipMessage;
+using Fixture = pvf::mcp2test::Fixture;
+
 namespace {
-bool gitAvailable()
-{
-    // Production only needs `git`; git-lfs is not a runtime dependency.
-    QProcess process;
-    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
-    if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
-        return false;
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-}
-
-struct Fixture
-{
-    QTemporaryDir temp;
-    std::optional<store::ProjectStore> store;
-    std::unique_ptr<mcp2::Service> service;
-
-    bool init()
-    {
-        if (!temp.isValid())
-            return false;
-        QString error;
-        model::ProjectSettings settings;
-        auto created = store::ProjectStore::create(temp.filePath("Demo.pvproj"),
-                                                   settings, &error);
-        if (!created)
-        {
-            qWarning("ProjectStore::create failed: %s", qPrintable(error));
-            return false;
-        }
-        store = std::move(*created);
-        service = std::make_unique<mcp2::Service>(&*store, &store->assets());
-        return true;
-    }
-
-    QJsonObject call(const QString& tool, const QJsonObject& args = QJsonObject())
-    {
-        return service->execute(tool, args);
-    }
-
-    int historySize() { return store->history(0).size(); }
-};
-
-QString errorCode(const QJsonObject& result)
-{
-    return result.value(QStringLiteral("error"))
-        .toObject()
-        .value(QStringLiteral("code"))
-        .toString();
-}
-
 QString uuidOf(const QJsonObject& result)
 {
     return result.value(QStringLiteral("data"))
@@ -124,7 +77,6 @@ QJsonArray wholeKeys(std::initializer_list<QJsonObject> values)
         array.append(value);
     return array;
 }
-constexpr char kSkipMessage[] = "git 不可用，跳过依赖 git 的测试";
 constexpr char kReadOnlyMessage[] =
     "Git 未启用，MCP 当前只读；请先在设置中启用 Git";
 

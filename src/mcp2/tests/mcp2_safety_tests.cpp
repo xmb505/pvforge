@@ -1,6 +1,8 @@
 #include "mcp2/Internal.h"
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "store/Store.h"
 
 #include <QDir>
@@ -9,54 +11,23 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QJsonObject>
-#include <QTemporaryDir>
 #include <QtTest>
 
 using namespace pvf;
 
 namespace {
 
-struct Fixture
-{
-    QTemporaryDir temp;
-    std::optional<store::ProjectStore> store;
-    std::unique_ptr<mcp2::Service> service;
+using pvf::mcp2test::errorCode;
 
+// These tests exercise data safety, not the human-confirmation dialog, so
+// external imports are auto-approved.
+struct Fixture : pvf::mcp2test::Fixture
+{
     bool init()
     {
-        if (!temp.isValid())
-            return false;
-        QString error;
-        auto created = store::ProjectStore::create(
-            temp.filePath(QStringLiteral("Demo.pvproj")),
-            model::ProjectSettings(), &error);
-        if (!created)
-        {
-            qWarning("ProjectStore::create failed: %s", qPrintable(error));
-            return false;
-        }
-        store = std::move(*created);
-        service = std::make_unique<mcp2::Service>(&*store, &store->assets());
-        // These tests exercise data safety, not the human-confirmation dialog.
-        service->setExternalImportConfirmer([](const QString&) { return true; });
-        return true;
+        return pvf::mcp2test::Fixture::init(QStringLiteral("Demo.pvproj"), true);
     }
-
-    QJsonObject call(const QString& tool, const QJsonObject& args = QJsonObject())
-    {
-        return service->execute(tool, args);
-    }
-
-    int historySize() { return store->history(0).size(); }
 };
-
-QString errorCode(const QJsonObject& result)
-{
-    return result.value(QStringLiteral("error"))
-        .toObject()
-        .value(QStringLiteral("code"))
-        .toString();
-}
 
 QJsonObject entityArgs(const QString& name, int start, int end)
 {

@@ -6,6 +6,8 @@
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "model/Model.h"
 #include "store/Store.h"
 
@@ -34,24 +36,9 @@ using namespace pvf;
 
 namespace {
 
-bool gitAvailable()
-{
-    QProcess process;
-    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
-    if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
-        return false;
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-}
-
-constexpr char kSkipMessage[] = "git 不可用，跳过依赖 git 的测试";
-
-QString errorCode(const QJsonObject& result)
-{
-    return result.value(QStringLiteral("error"))
-        .toObject()
-        .value(QStringLiteral("code"))
-        .toString();
-}
+using pvf::mcp2test::errorCode;
+using pvf::mcp2test::gitAvailable;
+using pvf::mcp2test::kSkipMessage;
 
 QByteArray errorMessage(const QJsonObject& result)
 {
@@ -72,35 +59,9 @@ bool isOk(const QJsonObject& result)
     return result.value(QStringLiteral("ok")).toBool();
 }
 
-struct Fixture
+struct Fixture : pvf::mcp2test::Fixture
 {
-    QTemporaryDir temp;
-    std::optional<store::ProjectStore> store;
-    std::unique_ptr<mcp2::Service> service;
     qint64 clock = 1000;
-
-    bool init()
-    {
-        if (!temp.isValid())
-            return false;
-        QString error;
-        auto created = store::ProjectStore::create(temp.filePath("Demo.pvproj"),
-                                                   model::ProjectSettings(),
-                                                   &error);
-        if (!created)
-        {
-            qWarning("ProjectStore::create failed: %s", qPrintable(error));
-            return false;
-        }
-        store = std::move(*created);
-        service = std::make_unique<mcp2::Service>(&*store, &store->assets());
-        return true;
-    }
-
-    QJsonObject call(const QString& tool, const QJsonObject& args = QJsonObject())
-    {
-        return service->execute(tool, args);
-    }
 
     // Every preview render consumes one slot; tests that make several calls
     // advance the wall clock so each call starts a new 1s window.

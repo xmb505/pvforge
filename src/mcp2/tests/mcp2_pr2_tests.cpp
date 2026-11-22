@@ -4,59 +4,22 @@
 // mcp2 test file stays under its size ratchet.
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "store/Store.h"
 
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStringList>
-#include <QTemporaryDir>
 #include <QtTest>
-
-#include <memory>
-#include <optional>
 
 using namespace pvf;
 
+using pvf::mcp2test::errorCode;
+using Fixture = pvf::mcp2test::Fixture;
+
 namespace {
-
-struct Fixture
-{
-    QTemporaryDir temp;
-    std::optional<store::ProjectStore> store;
-    std::unique_ptr<mcp2::Service> service;
-
-    bool init()
-    {
-        if (!temp.isValid())
-            return false;
-        QString error;
-        auto created = store::ProjectStore::create(
-            temp.filePath(QStringLiteral("Demo.pvproj")),
-            model::ProjectSettings(), &error);
-        if (!created)
-        {
-            qWarning("ProjectStore::create failed: %s", qPrintable(error));
-            return false;
-        }
-        store = std::move(*created);
-        service = std::make_unique<mcp2::Service>(&*store, &store->assets());
-        return true;
-    }
-
-    QJsonObject call(const QString& tool, const QJsonObject& args = QJsonObject())
-    {
-        return service->execute(tool, args);
-    }
-};
-
-QString errorCode(const QJsonObject& result)
-{
-    return result.value(QStringLiteral("error"))
-        .toObject()
-        .value(QStringLiteral("code"))
-        .toString();
-}
 
 QString errorMessage(const QJsonObject& result)
 {

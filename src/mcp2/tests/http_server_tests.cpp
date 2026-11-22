@@ -1,6 +1,8 @@
 #include "mcp2/HttpServer.h"
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "model/Model.h"
 #include "store/Store.h"
 
@@ -31,17 +33,9 @@
 
 using namespace pvf;
 
-namespace {
+using pvf::mcp2test::gitAvailable;
 
-bool gitAvailable()
-{
-    // Production only needs `git`; git-lfs is not a runtime dependency.
-    QProcess process;
-    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
-    if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
-        return false;
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-}
+namespace {
 
 bool writeJsonFile(const QString& path, const QJsonObject& object)
 {

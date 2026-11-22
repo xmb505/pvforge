@@ -4,69 +4,32 @@
 // historical mcp2_tests.cpp size ratchet does not have to grow.
 #include "mcp2/Service.h"
 
+#include "mcp2_test_fixture.h"
+
 #include "model/Model.h"
 #include "store/Store.h"
 
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QProcess>
-#include <QTemporaryDir>
 #include <QtTest>
-
-#include <memory>
-#include <optional>
 
 using namespace pvf;
 
 namespace {
 
-bool gitAvailable()
-{
-    QProcess process;
-    process.start(QStringLiteral("git"), {QStringLiteral("--version")});
-    if (!process.waitForStarted(5000) || !process.waitForFinished(10000))
-        return false;
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-}
+using pvf::mcp2test::errorCode;
+using pvf::mcp2test::gitAvailable;
 
-struct Fixture
+// The temp project keeps its historical name so failure output still names the
+// suite that produced it.
+struct Fixture : pvf::mcp2test::Fixture
 {
-    QTemporaryDir temp;
-    std::optional<store::ProjectStore> store;
-    std::unique_ptr<mcp2::Service> service;
-
     bool init()
     {
-        if (!temp.isValid())
-            return false;
-        QString error;
-        model::ProjectSettings settings;
-        auto created = store::ProjectStore::create(
-            temp.filePath(QStringLiteral("Pr1.pvproj")), settings, &error);
-        if (!created)
-        {
-            qWarning("ProjectStore::create failed: %s", qPrintable(error));
-            return false;
-        }
-        store = std::move(*created);
-        service = std::make_unique<mcp2::Service>(&*store, &store->assets());
-        return true;
-    }
-
-    QJsonObject call(const QString& tool, const QJsonObject& args = QJsonObject())
-    {
-        return service->execute(tool, args);
+        return pvf::mcp2test::Fixture::init(QStringLiteral("Pr1.pvproj"));
     }
 };
-
-QString errorCode(const QJsonObject& result)
-{
-    return result.value(QStringLiteral("error"))
-        .toObject()
-        .value(QStringLiteral("code"))
-        .toString();
-}
 
 QJsonObject errorDetails(const QJsonObject& result)
 {
@@ -209,7 +172,7 @@ private slots:
 void Mcp2Pr1Tests::initTestCase()
 {
     if (!gitAvailable())
-        QSKIP("git 不可用，跳过依赖 git 的测试");
+        QSKIP(mcp2test::kSkipMessage);
 }
 
 void Mcp2Pr1Tests::pr1UpdateRejectsFlatContent()
