@@ -27,6 +27,12 @@ namespace pvf {
 
 namespace {
 
+// One render size for every HTML thumbnail: the hover card's 240x150.  Asking
+// Chrome for the 48x48 list icon instead cached a 48x27 frame that the hover
+// card then upscaled five times.  Both views now downscale this sharp base
+// image on demand.
+constexpr QSize kHtmlThumbRenderSize(240, 150);
+
 // Shared by the list icon and the hover card: the real 0-frame render when the
 // cache has it, the HTML placeholder until then (and forever when Chrome is
 // unavailable, because htmlThumbnail() never returns an image then).
@@ -48,9 +54,14 @@ QPixmap htmlThumbPixmap(const QImage& frame, const QSize& size,
 
 } // namespace
 
+QString AssetLibraryPanel::iconCacheKey(const SessionEntry& entry) const
+{
+    return QStringLiteral("%1|%2").arg(entry.hash, entry.missingReason);
+}
+
 QPixmap AssetLibraryPanel::iconFor(const SessionEntry& entry)
 {
-    const QString key = QStringLiteral("%1|%2").arg(entry.hash, entry.missingReason);
+    const QString key = iconCacheKey(entry);
     if (const auto cached = m_iconCache.constFind(key); cached != m_iconCache.cend())
         return *cached;
 
@@ -140,8 +151,8 @@ QPixmap AssetLibraryPanel::iconFor(const SessionEntry& entry)
             break;
         }
         case AssetType::Html:
-            pixmap = htmlThumbPixmap(htmlThumbnail(entry, size), size,
-                                     QStringLiteral("HTML"));
+            pixmap = htmlThumbPixmap(htmlThumbnail(entry, kHtmlThumbRenderSize),
+                                     size, QStringLiteral("HTML"));
             break;
         }
     }
@@ -187,7 +198,7 @@ QPixmap AssetLibraryPanel::previewFor(const SessionEntry& entry, const QSize& si
             return QPixmap::fromImage(frame);
     }
     if (entry.type == AssetType::Html)
-        return htmlThumbPixmap(htmlThumbnail(entry, size), size,
+        return htmlThumbPixmap(htmlThumbnail(entry, kHtmlThumbRenderSize), size,
                                QStringLiteral("HTML"));
     if (entry.type == AssetType::Audio)
     {
@@ -248,20 +259,55 @@ QImage AssetLibraryPanel::htmlThumbnail(const SessionEntry& entry,
 
 void AssetLibraryPanel::refreshHtmlThumbnails()
 {
+    // htmlFrameReady fires for every rendered frame while an HTML project
+    // plays.  Clearing the whole icon cache and rebuilding the list here meant
+    // a full rebuild 30 times a second (video icons decode frame 0 in
+    // iconFor()), so only the rows that just gained a fresh frame are touched.
+    QVector<const SessionEntry*> finished;
+    for (const SessionEntry& entry : m_entries)
+    {
+        if (entry.type != AssetType::Html || entry.missing)
+            continue;
+        if (m_htmlThumbs.contains(entry.hash))
+            continue; // already shows its frame: nothing to redo
+        if (!htmlThumbnail(entry, kHtmlThumbRenderSize).isNull())
+            finished.append(&entry);
+    }
+    if (finished.isEmpty())
+        return; // no new frame: O(HTML entries), no rebuild, no cache drop
+
 #ifdef PVFORGE_TEST_HOOKS
     ++m_htmlThumbRefreshCount;
 #endif
-    // The render cache changed, not the project: drop the memoised icons and
-    // rebuild in place so both views pick the finished frame up.  The hover
-    // card is refreshed separately because it is not part of the list.
-    m_iconCache.clear();
-    applySessionFilter();
 
-    if (m_lastHoverIndex >= 0 && m_list && m_hoverPreview
-        && m_hoverPreview->isVisible() && m_lastHoverIndex < m_list->count())
+    QListWidgetItem* hoverItem = m_lastHoverIndex >= 0 && m_list
+                                     && m_lastHoverIndex < m_list->count()
+                                 ? m_list->item(m_lastHoverIndex)
+                                 : nullptr;
+    bool hoverDirty = false;
+    for (const SessionEntry* entry : finished)
     {
-        showHoverPreview(m_list->item(m_lastHoverIndex));
+        // Only this entry's memoised icon is stale; the rest of the cache
+        // (images, videos, audio) stays warm.
+        m_iconCache.remove(iconCacheKey(*entry));
+        if (m_list)
+        {
+            for (int row = 0; row < m_list->count(); ++row)
+            {
+                QListWidgetItem* item = m_list->item(row);
+                if (item->data(Qt::UserRole).toString() != entry->hash)
+                    continue;
+                item->setIcon(QIcon(iconFor(*entry)));
+                hoverDirty = hoverDirty || item == hoverItem;
+                break;
+            }
+        }
     }
+
+    // The hover card is not part of the list, so it is refreshed on its own and
+    // only when it is showing a row that just finished rendering.
+    if (hoverDirty && m_hoverPreview && m_hoverPreview->isVisible())
+        showHoverPreview(hoverItem);
 }
 
 #ifdef PVFORGE_TEST_HOOKS
@@ -275,6 +321,18 @@ void AssetLibraryPanel::setHtmlThumbnailRendererForTest(
     // renderer so the assertion sees the hook's answer.
     applySessionFilter();
     m_htmlFrameConnection = QMetaObject::Connection();
+}
+
+QListWidgetItem* AssetLibraryPanel::assetItemAtForTest(int index) const
+{
+    if (!m_list || index < 0 || index >= m_list->count())
+        return nullptr;
+    return m_list->item(index);
+}
+
+int AssetLibraryPanel::iconCacheSizeForTest() const
+{
+    return m_iconCache.size();
 }
 
 void AssetLibraryPanel::showHoverPreviewAtForTest(int index)
