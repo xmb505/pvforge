@@ -218,6 +218,7 @@ private slots:
     void htmlThumbnailSharesOneRenderSize();
     void htmlVarsKeyframesDriveRenderedFrames();
     void htmlProgressBundleFillIsMonotonic();
+    void htmlExportFrameMatchesPreview();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -1063,6 +1064,96 @@ void MediaServicesTests::htmlProgressBundleFillIsMonotonic()
 
     // Same frame twice -> identical pixels.
     QCOMPARE(fillPixels(50), filled[2]);
+}
+
+
+void MediaServicesTests::htmlExportFrameMatchesPreview()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+    if (!chromeAvailable())
+        QSKIP("Chrome/Chromium is not installed");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/parity.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 0, 0);
+    entity.end = 29;
+    // A non-trivial transform: both paths must place and scale the layer the
+    // same way, so a mismatch in either would show up in the pixel diff.
+    entity.transform.x = 37.0;
+    entity.transform.y = -11.0;
+    entity.transform.scaleX = 1.2;
+    entity.transform.scaleY = 0.8;
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    QString startError;
+    QVERIFY2(media.start(&startError), qPrintable(startError));
+    QVERIFY(media.htmlRunning());
+
+    const int frame = 12;
+    const QImage preview = media.htmlFrameBlocking(entity.uuid, frame, 15000);
+    QVERIFY2(!preview.isNull(), "preview renderer produced no frame");
+
+    // Export path: final (third) browser.  exportPixelSize is the encoded
+    // canvas, so a 2x canvas doubles the layer's logical size (800x120 -> the
+    // request size below); the composition must stay identical to the preview.
+    const QSize canvas(2 * document->project().settings.width,
+                       2 * document->project().settings.height);
+    const QImage exported = media.exportHtmlFrame(entity.uuid, frame, canvas);
+    QVERIFY2(!exported.isNull(), "export renderer produced no frame");
+    media.stopExportHtml();
+
+    QCOMPARE(preview.size(), media.htmlRequestSizeForTest(entity.uuid));
+    QCOMPARE(exported.size(), QSize(1600, 240));
+
+    // Compare at the preview resolution: the export's extra sharpness is not a
+    // composition difference.
+    const QImage scaled = exported.scaled(preview.size(), Qt::IgnoreAspectRatio,
+                                          Qt::SmoothTransformation);
+    qint64 channelDiff = 0;
+    qint64 samples = 0;
+    int maxDiff = 0;
+    int overTolerance = 0;
+    for (int y = 0; y < preview.height(); ++y)
+    {
+        for (int x = 0; x < preview.width(); ++x)
+        {
+            const QColor a = preview.pixelColor(x, y);
+            const QColor b = scaled.pixelColor(x, y);
+            const int dr = std::abs(a.red() - b.red());
+            const int dg = std::abs(a.green() - b.green());
+            const int db = std::abs(a.blue() - b.blue());
+            channelDiff += dr + dg + db;
+            samples += 3;
+            maxDiff = std::max({maxDiff, dr, dg, db});
+            if (dr > 16 || dg > 16 || db > 16)
+                ++overTolerance;
+        }
+    }
+    const qint64 pixels = qint64(preview.width()) * preview.height();
+    const double meanDiff = double(channelDiff) / double(samples);
+    // A few pixels along the layer edge legitimately differ (the low-res
+    // texture is upscaled by the viewport, the export is rendered sharp), so
+    // allow a small band: mean channel error under 8 and at most 2% of pixels
+    // off by more than 16.
+    QVERIFY2(meanDiff < 8.0,
+             qPrintable(QStringLiteral("mean channel diff %1 (max %2)")
+                            .arg(meanDiff).arg(maxDiff)));
+    QVERIFY2(overTolerance * 100 <= pixels * 2,
+             qPrintable(QStringLiteral("%1 of %2 pixels differ by more than 16")
+                            .arg(overTolerance).arg(pixels)));
 }
 
 QTEST_MAIN(MediaServicesTests)
