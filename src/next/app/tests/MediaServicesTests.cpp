@@ -715,8 +715,10 @@ void MediaServicesTests::htmlThumbnailLazyStartsForAssetBinOnly()
     const QImage rendered = waitForThumbnail(media, stored->hash, QSize(240, 150));
     if (rendered.isNull())
         QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
-    // frameReady dropped the pending entry; the cache now serves the icon.
-    QCOMPARE(media.thumbnailPendingForTest(), 0);
+    // The cache is written before frameReady is queued, so the wait above can
+    // return while the clearing slot is still in the event queue: give the
+    // queued connection a moment before reading the pending set.
+    QTRY_COMPARE_WITH_TIMEOUT(media.thumbnailPendingForTest(), 0, 5000);
     QCOMPARE(media.htmlThumbnail(stored->hash, QSize(48, 48)), rendered);
 }
 
@@ -789,7 +791,7 @@ void MediaServicesTests::htmlThumbnailDoesNotRestartAfterStop()
                                                  QSize(240, 150));
         if (rendered.isNull())
             QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
-        QCOMPARE(media.thumbnailPendingForTest(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(media.thumbnailPendingForTest(), 0, 5000);
     }
     else
     {
