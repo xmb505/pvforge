@@ -200,43 +200,21 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
-    void createActions();
-    void createMenus();
-    void createToolBar();
-
     void setFrame(int frame);
+    // Referenced by the inline test hooks above; kept even with no other caller.
     void setSelectedEntity(EntityId id);
-    void applyValue(EntityId id, const QString& prop, double value);
-    void applyPosition(EntityId id, double x, double y);
-    void applyScale(EntityId id, double sx, double sy, double x, double y);
     void applyPivot(EntityId id, double ax, double ay);
-    void applyEntityData(EntityId id, const QVariantMap& data);
-    void replaceSourceFromDialog(EntityId id);
+    void applyCamera(EntityId id, double x, double y, double scale, double rotation);
+    void pasteEntity();
     void replaceSessionAssetFromDialog(const QString& uuid);
 
-    void copySelectedEntity();
-    void pasteEntity();
-    void duplicateEntity(EntityId id);
-    void groupEntitiesIntoFolder(const QVector<EntityId>& ids);
-    void applyCamera(EntityId id, double x, double y, double scale, double rotation);
     void refreshAll();
-    void onPlayTick();
-    void updateStatus();
-    void updateMcpStatus();
     void arrangeMcpLog();
     void toggleWorkbench();
-    void deleteSelectedEntity();
-    void onUndo();
-    void onRedo();
-    void onEntityCreated(EntityId id);
     void updateWindowTitle();
-    void updatePerfLabel();
     QAction* createPerfMonitorWindowAction();
     void showPerfMonitorWindow(bool show);
-    void showImportBusy(int count);
-    void hideImportBusy();
     bool saveProject();
-    bool saveProjectAs();
 
     // ---- P1 session shell -----------------------------------------------
     void buildSessionShell();
@@ -289,28 +267,6 @@ private:
     bool restoreSessionCommitInternal(const QString& hash, QString* error);
     void showSessionOnboardingIfNeeded();
     void sessionAutoSave();
-
-    // Scene and annotation UI helpers.
-    void showSceneDialog(const QString& sceneId = QString());
-    void showAnnotationDialog(const QString& annotationId = QString(),
-                              int frame = -1);
-    bool commitSceneCreate(const QString& name, int startFrame, int endFrame,
-                           const QColor& color, const QString& note,
-                           QString* error = nullptr, QString* createdId = nullptr);
-    bool commitSceneUpdate(const QString& id, const QString& name, int startFrame,
-                           int endFrame, const QColor& color, const QString& note,
-                           QString* error = nullptr);
-    bool commitSceneRemove(const QString& id);
-    bool commitSceneRetired(const QString& id, bool retired);
-    bool commitAnnotationCreate(int frame, const QString& title,
-                                const QString& note, const QStringList& tags,
-                                const QColor& color, QString* error = nullptr,
-                                QString* createdId = nullptr);
-    bool commitAnnotationUpdate(const QString& id, int frame, const QString& title,
-                                const QString& note, const QStringList& tags,
-                                const QColor& color, QString* error = nullptr);
-    bool commitAnnotationRemove(const QString& id);
-    void applyActiveSceneParent(EntityId id);
 
     EditorSession* m_session = nullptr;
     // Declared before the session-mode panels so the session outlives them.
