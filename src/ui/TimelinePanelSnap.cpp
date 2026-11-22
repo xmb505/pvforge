@@ -138,7 +138,19 @@ TimelinePanel::TimelineSnapResult TimelinePanel::snapTrimEnd(
         // a legal drop target the pointer can sit on (clipEndOf() is end + 1),
         // so the distance stays zero while the mouse is on the boundary
         // instead of flickering by one pixel between the two readings.
-        const int distance = std::abs(mouseX - xFromFrame(value + 1));
+        //
+        // A playhead or marker line is painted as a single vertical stroke on
+        // x(line), so the user parks the pointer *on the stroke* to grab it.
+        // With value == line the painted edge sits one frame further right, and
+        // once the zoom passes the snap threshold in pixels (pixelsPerFrame >
+        // threshold) that pixel gap alone exceeds it: dragging exactly onto the
+        // playhead no longer snapped.  Accept either reading, both of which
+        // resolve to end == line.
+        const int edgeDistance = std::abs(mouseX - xFromFrame(value + 1));
+        const int distance =
+            includeLine ? std::min(std::abs(mouseX - xFromFrame(line)),
+                                   edgeDistance)
+                        : edgeDistance;
         const int currentBias = std::abs(result.value - proposedEnd);
         const int candidateBias = std::abs(value - proposedEnd);
         if (distance < bestDistance

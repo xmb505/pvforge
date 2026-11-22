@@ -439,6 +439,29 @@ int mcpLockTest(QApplication& app)
                              : nullptr;
     check(stopButton && stopButton->isEnabled(),
           QStringLiteral("MCP log stop button is not enabled"));
+    // Header layout: the emergency stop carries a themed icon plus a bold
+    // label, so a hardcoded 48 px width used to clip it.  The laid-out button
+    // must be at least as wide as its own sizeHint().
+    if (check(log && log->stopButtonForTest(),
+              QStringLiteral("MCP log stop button accessor is missing")))
+    {
+        auto* laidOut = log->stopButtonForTest();
+        check(laidOut->width() >= laidOut->sizeHint().width(),
+              QStringLiteral("stop button width %1 < sizeHint %2")
+                  .arg(laidOut->width())
+                  .arg(laidOut->sizeHint().width()));
+        if (auto* resume = log->resumeButtonForTest())
+            check(!resume->isVisible()
+                      || resume->width() >= resume->sizeHint().width(),
+                  QStringLiteral("resume button width %1 < sizeHint %2")
+                      .arg(resume->width())
+                      .arg(resume->sizeHint().width()));
+        if (auto* clear = log->clearButtonForTest())
+            check(clear->width() >= clear->sizeHint().width(),
+                  QStringLiteral("clear button width %1 < sizeHint %2")
+                      .arg(clear->width())
+                      .arg(clear->sizeHint().width()));
+    }
     // Native theme: the log panel and its emergency-stop button must not carry
     // a hardcoded style sheet; both follow the host QPalette/theme instead.
     if (log)

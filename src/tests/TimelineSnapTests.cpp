@@ -377,6 +377,68 @@ int timelineSnapTest(QApplication& app)
     check(entity(shortUuid).end == 110,
           QStringLiteral("high-zoom undo did not restore the end"));
 
+    // Very high zoom: 20 px/frame.  A single frame is 20 px, i.e. wider than
+    // the 8 px snap threshold, so the old *only* measure of x(end + 1) put the
+    // playhead line a full frame away from the value's painted edge and the
+    // pointer resting exactly on the playhead stroke could not snap at all.
+    // Both readings must now snap and both must resolve to end == playhead.
+    live->document()->setPlayhead(100);
+    timeline->setPixelsPerFrameForTest(20.0);
+    timeline->setHorizontalScrollForTest(100 * 20 - 600);
+    QApplication::processEvents();
+    const int densePlayheadX = timeline->frameXForTest(100);
+    if (!check(densePlayheadX == 600,
+               QStringLiteral("dense-zoom playhead x is %1, expected 600")
+                   .arg(densePlayheadX)))
+        return 1;
+    if (!check(timeline->frameXForTest(101) - densePlayheadX > 8,
+               QStringLiteral("dense zoom frame gap is %1 px, expected > 8")
+                   .arg(timeline->frameXForTest(101) - densePlayheadX)))
+        return 1;
+    const QRect denseClip = timeline->clipRectFor(shortId);
+    if (!check(!denseClip.isEmpty(),
+               QStringLiteral("dense-zoom clip rect missing")))
+        return 1;
+    // Drag the right edge until the pointer sits exactly on the playhead line.
+    press(QPoint(denseClip.right() - 1, shortRowY), Qt::NoModifier);
+    move(QPoint(densePlayheadX, shortRowY), Qt::NoModifier);
+    check(timeline->snapFrameForTest() == 100,
+          QStringLiteral("dense-zoom playhead-line drag snapped to %1,"
+                         " expected 100")
+              .arg(timeline->snapFrameForTest()));
+    check(timeline->rowEndForTest(shortRow) == 100,
+          QStringLiteral("dense-zoom playhead-line preview end is %1,"
+                         " expected 100")
+              .arg(timeline->rowEndForTest(shortRow)));
+    release(QPoint(densePlayheadX, shortRowY), Qt::NoModifier);
+    live->flush();
+    check(entity(shortUuid).end == 100,
+          QStringLiteral("dense-zoom playhead-line committed end %1,"
+                         " expected 100")
+              .arg(entity(shortUuid).end));
+    undo(QStringLiteral("dense-zoom playhead-line trim"));
+    check(entity(shortUuid).end == 110,
+          QStringLiteral("dense-zoom undo did not restore the end"));
+
+    // The painted right edge x(end + 1) == x(101) keeps snapping as well: the
+    // fix widens the reading, it does not move it.
+    press(QPoint(denseClip.right() - 1, shortRowY), Qt::NoModifier);
+    move(QPoint(timeline->frameXForTest(101), shortRowY), Qt::NoModifier);
+    check(timeline->snapFrameForTest() == 100,
+          QStringLiteral("dense-zoom edge drag snapped to %1, expected 100")
+              .arg(timeline->snapFrameForTest()));
+    check(timeline->rowEndForTest(shortRow) == 100,
+          QStringLiteral("dense-zoom edge preview end is %1, expected 100")
+              .arg(timeline->rowEndForTest(shortRow)));
+    release(QPoint(timeline->frameXForTest(101), shortRowY), Qt::NoModifier);
+    live->flush();
+    check(entity(shortUuid).end == 100,
+          QStringLiteral("dense-zoom edge committed end %1, expected 100")
+              .arg(entity(shortUuid).end));
+    undo(QStringLiteral("dense-zoom edge trim"));
+    check(entity(shortUuid).end == 110,
+          QStringLiteral("dense-zoom edge undo did not restore the end"));
+
     // Double-click on the painted right edge must write a keyframe inside the
     // clip's own closed range [90,110].  clipEndOf() is the exclusive edge 111
     // and clip.right() sits on x(end + 1), so frameFromX() there returns 111;
