@@ -88,12 +88,18 @@ public:
     using HtmlThumbnailRenderer =
         std::function<QImage(const AssetHash&, const QSize&)>;
     void setHtmlThumbnailRendererForTest(HtmlThumbnailRenderer renderer);
-    // Bumped every time a finished HTML thumbnail invalidated the icons; the
-    // test uses it as the "callback refreshed the list" signal.
+    // Bumped only when a finished HTML thumbnail actually changed a row's
+    // icon; a frameReady with nothing new leaves it alone.
     int htmlThumbnailRefreshCountForTest() const
     {
         return m_htmlThumbRefreshCount;
     }
+    // §1 regression: the row pointer must survive a frameReady, which is what
+    // proves the list was not rebuilt.
+    QListWidgetItem* assetItemAtForTest(int index) const;
+    // Number of memoised icons, so a test can tell "only this row was
+    // invalidated" from "the whole cache was dropped".
+    int iconCacheSizeForTest() const;
     // The hover card: its frame style and its palette roles, so a test can
     // assert it follows the system theme instead of a hardcoded dark QSS.
     void showHoverPreviewAtForTest(int index);
@@ -209,12 +215,16 @@ private:
     void setStatus(const QString& text);
     QPixmap iconFor(const SessionEntry& entry);
     QPixmap previewFor(const SessionEntry& entry, const QSize& size);
+    // The memo key of iconFor(): the hash plus the missing reason, so a
+    // re-imported or newly-offline asset gets a fresh icon.
+    QString iconCacheKey(const SessionEntry& entry) const;
     // HTML asset thumbnail: the html2 cache first, then one asynchronous
     // request per entry.  A null result means "not rendered yet, keep the
-    // placeholder"; the frameReady callback drops the memo and rebuilds the
-    // list, which picks the finished image up.
+    // placeholder".  Always renders at the hover card's 240x150 and caches
+    // that one sharp frame; both views downscale it on demand.
     QImage htmlThumbnail(const SessionEntry& entry, const QSize& target);
-    // Re-runs thumbnailFor()/previewFor() for every HTML row after a render.
+    // Picks up the frames that finished since the last call: re-icons only the
+    // rows that gained one, and never rebuilds the list.
     void refreshHtmlThumbnails();
     void ensureHoverPreview();
     QListWidgetItem* makeSessionItem(const SessionEntry& entry);
