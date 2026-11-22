@@ -166,7 +166,7 @@ void CameraMonitor::setPlaying(bool playing)
 void CameraMonitor::setProjectChanged()
 {
     invalidateSessionPreview();
-    rebuildCameraCombo();
+    rebuildSessionCameraCombo();
     if (!m_playing)
         updateFpsLabel();
     update();
@@ -174,7 +174,7 @@ void CameraMonitor::setProjectChanged()
 
 void CameraMonitor::syncCameraView()
 {
-    rebuildCameraCombo();
+    rebuildSessionCameraCombo();
     invalidateSessionPreview();
     update();
 }
@@ -203,17 +203,6 @@ void CameraMonitor::updateFromViewport()
     if (!m_detached)
         clampDockGeometry();
     update();
-}
-
-void CameraMonitor::rebuildCameraCombo()
-{
-    if (!m_cameraCombo)
-        return;
-    if (m_session)
-    {
-        rebuildSessionCameraCombo();
-        return;
-    }
 }
 
 void CameraMonitor::rebuildSessionCameraCombo()
@@ -604,7 +593,6 @@ void CameraMonitor::clearTraceVideo()
 {
     m_traceFrames.reset();
     m_tracePath.clear();
-    m_traceEntity = kInvalidEntity;
     m_traceImage = QImage();
     m_traceError.clear();
     updateTraceMenu();

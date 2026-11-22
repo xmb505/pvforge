@@ -37,10 +37,6 @@ double audioLinearGainFromDb(double db);
 // Serialised colour string used by the model (hex RGB, or ARGB with alpha).
 QString colorString(const QColor& color);
 
-// True when `candidate` is `ancestor` or one of its descendants.
-bool isDescendant(const model::Project& project, const Uuid& candidate,
-                  const Uuid& ancestor);
-
 void selectComboData(QComboBox* combo, int value);
 void setSpinIfIdle(QDoubleSpinBox* spin, double value);
 void setSpinIfIdle(QSpinBox* spin, int value);
