@@ -169,8 +169,10 @@ McpLogPanel::McpLogPanel(QWidget* viewport, QWidget* parent)
         {
             m_stopButton->setIcon(QIcon(stopGlyph));
             m_stopButton->setIconSize(QSize(14, 14));
+            // The width is not pinned here: layoutChildren() sizes the header
+            // buttons from their own sizeHint(), so a themed 14 px icon next
+            // to the bold label cannot be truncated by a hardcoded 48 px.
             m_stopButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-            m_stopButton->setFixedWidth(48);
         }
     }
     connect(m_stopButton, &QToolButton::clicked, this,
@@ -510,16 +512,20 @@ void McpLogPanel::layoutChildren()
     right -= 48;
 
     const int headerY = kTitleHeight;
+    // Right-to-left, each header button keeps its own preferred width: a bold
+    // label plus a themed icon is wider than the old hardcoded 48 px, and the
+    // emergency stop must never be clipped into an unreadable "急".  The floor
+    // of 48 px keeps the three buttons aligned when a theme is compact.
+    auto placeButton = [&](QToolButton* button, int& cursor) {
+        const int w = std::max(48, button->sizeHint().width());
+        button->setGeometry(cursor - w, headerY + 3, w, 22);
+        cursor -= w + 4;
+    };
     right = width() - 6;
     if (m_aiMode)
-    {
-        m_resumeButton->setGeometry(right - 48, headerY + 3, 48, 22);
-        right -= 52;
-    }
-    m_stopButton->setGeometry(right - 48, headerY + 3, 48, 22);
-    right -= 52;
-    m_clearButton->setGeometry(right - 48, headerY + 3, 48, 22);
-    right -= 52;
+        placeButton(m_resumeButton, right);
+    placeButton(m_stopButton, right);
+    placeButton(m_clearButton, right);
     m_countLabel->setGeometry(right - 84, headerY + 4, 84, 20);
     right -= 88;
     m_statusLabel->setGeometry(8, headerY + 4, std::max(40, right - 12), 20);

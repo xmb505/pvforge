@@ -57,6 +57,12 @@ public:
     // keep the Qt/KDE style instead of a hardcoded red box.
     QString styleSheetForTest() const { return styleSheet(); }
     QString stopButtonStyleSheetForTest() const;
+    // Header layout regression: the emergency stop must be laid out at (at
+    // least) its own preferred width, otherwise the themed icon plus the bold
+    // label is truncated.
+    QToolButton* stopButtonForTest() const { return m_stopButton; }
+    QToolButton* resumeButtonForTest() const { return m_resumeButton; }
+    QToolButton* clearButtonForTest() const { return m_clearButton; }
 #endif
 
 signals:
