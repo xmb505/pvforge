@@ -37,7 +37,6 @@ Registry buildRegistry()
     registerPropertiesTests(registry);
     registerPropertiesAudioTests(registry);
     registerSolverTests(registry);
-    registerProfileFixtures(registry);
     registerTimelineTests(registry);
     registerTimelineSecondsTests(registry);
     registerTimelineSnapTests(registry);

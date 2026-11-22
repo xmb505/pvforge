@@ -224,7 +224,6 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/PropertiesTests.cpp
         src/tests/PropertiesAudioTests.cpp
         src/tests/SolverTests.cpp
-        src/tests/ProfileFixtures.cpp
         src/tests/TimelineTests.cpp
         src/tests/TimelineSecondsTests.cpp
         src/tests/TimelineSnapTests.cpp
@@ -254,10 +253,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
     target_link_libraries(pvforge-tests PRIVATE pvf_app pvf_mcp_bridge)
     pvf_add_lang_resources(pvforge-tests)
 
-    # Every behavioural self-test switch is a CTest case (issue #110). Only
-    # the profiling/measurement switches stay manual: they print performance
-    # numbers instead of asserting behaviour, and their numbers vary with the
-    # machine. They are listed in docs/AI/SELF_TESTS.md.
+    # Every behavioural self-test switch is a CTest case (issue #110).
     if(BUILD_TESTING)
         set(PVF_SELF_TEST_CASES
             self-test
