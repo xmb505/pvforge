@@ -118,13 +118,16 @@ public:
                              int maxWaitMs = 300);
 
     // Asset thumbnail for the asset library: the first frame of an HTML asset
-    // rendered with its default variables, scaled into `target` (aspect ratio
-    // kept, longest side bounded by ~max(target) so a 48x48 icon and a 240x150
-    // hover card share one cache entry).  Never blocks: a cache hit returns the
-    // finished image, a miss queues the frontend worker and returns a null
-    // image, and the frame arrives through the existing htmlFrameReady signal
-    // (htmlThumbnail() then hits the cache).  A project whose HTML browsers
-    // could not start returns null forever, so callers keep their placeholder.
+    // rendered with its default variables at one fixed 240x150 base box (aspect
+    // ratio kept, so the 800x120 default logical size yields 240x36).  Every
+    // caller shares that single render/cache entry and downscales it itself:
+    // `target` only bounds the accepted box (an invalid size is a no-op) and
+    // is deliberately not part of the cache key.  Never blocks: a cache hit
+    // returns the finished image, a miss queues the frontend worker and returns
+    // a null image, and the frame arrives through the existing htmlFrameReady
+    // signal (htmlThumbnail() then hits the cache).  A project whose HTML
+    // browsers could not start returns null forever, so callers keep their
+    // placeholder.
     //
     // An asset that was imported but not dropped on the timeline still gets a
     // thumbnail: the first miss lazily starts the HTML service once (the same
@@ -171,6 +174,12 @@ public:
     // True when projectHasHtml() sees HTML on the timeline or in the asset bin.
     bool projectHasHtmlForTest() const { return projectHasHtml(); }
     int thumbnailPendingForTest() const { return int(m_thumbnailPending.size()); }
+    // The render size the last htmlThumbnail() call asked the browser for.
+    // Both icons and the hover card must ask for the same 240x150 base box.
+    QSize lastThumbnailRequestSizeForTest() const
+    {
+        return m_lastThumbnailRequestSize;
+    }
 #endif
 
 signals:
@@ -207,6 +216,9 @@ private:
     // "explicitly stopped": stop() sets it and only start()/applySettings()
     // clears it, so a background repaint never revives a stopped Chrome.
     bool m_stopped = false;
+#ifdef PVFORGE_TEST_HOOKS
+    QSize m_lastThumbnailRequestSize;
+#endif
 
     std::unique_ptr<video2::VideoFrames> m_videoFrames;
     // Full-resolution sequential decoders reserved for the export worker; one

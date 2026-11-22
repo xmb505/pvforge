@@ -169,6 +169,7 @@ private slots:
     void htmlThumbnailRendersFrameZeroOfAsset();
     void htmlThumbnailLazyStartsForAssetBinOnly();
     void htmlThumbnailDoesNotRestartAfterStop();
+    void htmlThumbnailSharesOneRenderSize();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -749,9 +750,13 @@ void MediaServicesTests::htmlThumbnailDoesNotRestartAfterStop()
     }
     QVERIFY(media.htmlRunning());
 
-    // Give frameReady a chance to clear its pending entry, so the stop() below
-    // clears a non-empty set on the machines where the renderer does work.
-    waitForThumbnail(media, stored->hash, QSize(240, 150), 3000);
+    // Queue one thumbnail but do not wait for it to finish: a finished render
+    // lands in the frame cache (memory and, in real runs, disk), and after the
+    // restart below a cache hit would legitimately return an image — making the
+    // "stopped service stays down and queues nothing" assertions meaningless.
+    // This case is about the pending set, not about pixels.
+    QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
+    QCOMPARE(media.thumbnailPendingForTest(), 1);
 
     media.stop();
     QVERIFY(!media.htmlRunning());
@@ -767,17 +772,69 @@ void MediaServicesTests::htmlThumbnailDoesNotRestartAfterStop()
     }
 
     // An explicit start() (or applySettings() rebuilding the service) brings
-    // it back with an empty pending set, so requesting works again.
+    // it back with an empty pending set, so requesting works again.  A frame
+    // that was in flight while stop() joined the workers may legitimately have
+    // reached the disk tier before the caches were dropped, in which case the
+    // first call after the restart is a cache hit instead of a queue: accept
+    // both, and only require that the request ends with a usable image.
     QVERIFY2(media.start(&startError), qPrintable(startError));
     QVERIFY(media.htmlRunning());
     QCOMPARE(media.thumbnailPendingForTest(), 0);
-    QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
-    QCOMPARE(media.thumbnailPendingForTest(), 1);
-    const QImage again = waitForThumbnail(media, stored->hash, QSize(240, 150));
-    if (again.isNull())
-        QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
-    QCOMPARE(media.thumbnailPendingForTest(), 0);
+    const QImage afterRestart =
+        media.htmlThumbnail(stored->hash, QSize(240, 150));
+    if (afterRestart.isNull())
+    {
+        QCOMPARE(media.thumbnailPendingForTest(), 1);
+        const QImage rendered = waitForThumbnail(media, stored->hash,
+                                                 QSize(240, 150));
+        if (rendered.isNull())
+            QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
+        QCOMPARE(media.thumbnailPendingForTest(), 0);
+    }
+    else
+    {
+        QCOMPARE(media.thumbnailPendingForTest(), 0);
+    }
     media.stop();
+}
+
+void MediaServicesTests::htmlThumbnailSharesOneRenderSize()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/size.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    MediaServices media(document.get(), AppSettings());
+
+    // The 48x48 list icon asks first.  The renderer must still be asked for the
+    // shared 240x150 base box (800x120 logical -> 240x36), never for 48x48:
+    // a per-caller size produced 48x7 for the icon and a second cache entry,
+    // so the hover card could not reuse the icon's render (and vice versa).
+    Q_UNUSED(media.htmlThumbnail(stored->hash, QSize(48, 48)));
+    QCOMPARE(media.lastThumbnailRequestSizeForTest(), QSize(240, 36));
+
+    Q_UNUSED(media.htmlThumbnail(stored->hash, QSize(240, 150)));
+    QCOMPARE(media.lastThumbnailRequestSizeForTest(), QSize(240, 36));
+
+    // Still a no-op for the requests that never reach the renderer.
+    QVERIFY(media.htmlThumbnail(AssetHash(), QSize(48, 48)).isNull());
+    QVERIFY(media.htmlThumbnail(stored->hash, QSize()).isNull());
+
+    // Deliberately no Chrome-dependent assertion: the request size is recorded
+    // before any browser start, so this regression guard runs even when the
+    // HTML renderer is unavailable.
 }
 
 QTEST_MAIN(MediaServicesTests)

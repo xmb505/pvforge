@@ -550,13 +550,20 @@ QImage MediaServices::htmlThumbnail(const AssetHash& hash, const QSize& target)
     if (!asset || asset->type != AssetType::Html)
         return {};
 
-    // Downscale before requesting: a keyframe-sized render would be one more
-    // full-size browser frame per icon, and thumbnails are meant to be cheap.
+    // One render size for every caller: the hover card's 240x150 box.  Asking
+    // Chrome for the icon-sized frame instead would give the icon and the card
+    // different request keys (so neither reuses the other's render) and the
+    // card would upscale a 48x27 image; callers downscale the shared base
+    // image to whatever they paint.  Still far below a keyframe-sized render.
+    constexpr QSize kThumbnailBaseSize(240, 150);
     const QSize logical = htmlLogicalSize(*asset);
-    const QSize size = QSize(logical.width(), logical.height()).scaled(
-        target, Qt::KeepAspectRatio);
+    const QSize size = QSize(logical.width(), logical.height())
+                           .scaled(kThumbnailBaseSize, Qt::KeepAspectRatio);
     if (size.isEmpty())
         return {};
+#ifdef PVFORGE_TEST_HOOKS
+    m_lastThumbnailRequestSize = size;
+#endif
 
     html2::FrameRequest request;
     request.assetHash = hash;
