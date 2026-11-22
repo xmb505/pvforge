@@ -30,9 +30,9 @@ class Service;
 //
 // Port and token live in a small persistent config file. The token is rotated
 // on every successful start (so a credential cached from an earlier run stops
-// working) unless setToken() pinned an explicit one; the stdio bridge reads the
-// fresh token from the endpoint file. Every endpoint file also carries a
-// per-start nonce so shutdown only removes a file this run actually wrote.
+// working); the stdio bridge reads the fresh token from the endpoint file.
+// Every endpoint file also carries a per-start nonce so shutdown only removes
+// a file this run actually wrote.
 class HttpServer : public QObject
 {
     Q_OBJECT
@@ -44,8 +44,6 @@ public:
     explicit HttpServer(Service* service, QObject* parent = nullptr);
     ~HttpServer() override;
 
-    // Empty generates a fresh token and writes it to the config file.
-    void setToken(const QByteArray& token);
     QByteArray token() const { return m_token; }
 
     // Generates a new token, keeps the configured port, persists the config
@@ -122,9 +120,6 @@ private:
     QByteArray m_token;
     QByteArray m_sessionId;
     QByteArray m_startNonce;
-    // setToken() means the caller owns the credential; a stale endpoint must
-    // not rotate it away under a running MCP client configuration.
-    bool m_tokenPinned = false;
     QString m_endpointFilePath;
     QString m_configFilePath;
     quint16 m_configuredPort = kDefaultPort;

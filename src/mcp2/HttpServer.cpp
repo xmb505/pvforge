@@ -330,26 +330,9 @@ HttpServer::~HttpServer()
     stop();
 }
 
-void HttpServer::setToken(const QByteArray& token)
-{
-    m_token = token.isEmpty() ? generateToken() : token;
-    m_tokenPinned = true;
-    QString error;
-    if (!saveConfig(&error))
-        qWarning("mcpserver2: cannot write config %s: %s",
-                 qPrintable(configFilePath()), qPrintable(error));
-    if (isRunning())
-    {
-        if (!writeEndpointFile(&error))
-            qWarning("mcpserver2: cannot refresh endpoint file %s: %s",
-                     qPrintable(endpointFilePath()), qPrintable(error));
-    }
-}
-
 void HttpServer::resetCredentials()
 {
     m_token = generateToken();
-    m_tokenPinned = false;
     QString error;
     if (!saveConfig(&error))
         qWarning("mcpserver2: cannot write config %s: %s",
@@ -704,13 +687,12 @@ quint16 HttpServer::start(quint16 port, QString* error)
     }
     m_port = m_server->serverPort();
     m_configuredPort = m_port;
-    // Rotate the bearer token on every start unless setToken() pinned an
-    // explicit one. The stdio bridge reads the endpoint file after the GUI
-    // starts, so rotation is transparent for the normal launch flow, while a
-    // token cached from an earlier run stops working. Only rotate after the
-    // bind succeeded: a failed start must not invalidate a good token.
-    if (!m_tokenPinned)
-        m_token = generateToken();
+    // Rotate the bearer token on every start. The stdio bridge reads the
+    // endpoint file after the GUI starts, so rotation is transparent for the
+    // normal launch flow, while a token cached from an earlier run stops
+    // working. Only rotate after the bind succeeded: a failed start must not
+    // invalidate a good token.
+    m_token = generateToken();
 
     QString saveError;
     if (!saveConfig(&saveError))

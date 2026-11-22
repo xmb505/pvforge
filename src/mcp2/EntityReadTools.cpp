@@ -116,7 +116,8 @@ Result entityGet(Tx& tx, const QJsonObject& args)
                          sample.content.value(QStringLiteral("volume"))
                              .toDouble(entity->content.asset.volume));
 
-    QJsonObject data = entityFull(*entity);
+    QJsonObject data = model::toJson(*entity);
+    data.insert(QStringLiteral("duration"), entity->duration());
     data.insert(QStringLiteral("evaluated"), evaluated);
 
     QJsonArray solvers;
@@ -142,7 +143,7 @@ Result entityGet(Tx& tx, const QJsonObject& args)
     {
         if (const auto asset = tx.store->assets().get(entity->content.asset.hash))
             data.insert(QStringLiteral("asset"),
-                        assetJson(tx.store->assets(), tx.p(), *asset));
+                        assetJson(tx.p(), *asset));
         else
             data.insert(QStringLiteral("assetMissing"), true);
     }

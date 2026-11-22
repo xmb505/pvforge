@@ -26,12 +26,6 @@ Result parseWholeFrameKeyframes(const model::Content& content, int duration,
                                 const QJsonValue& value,
                                 QVector<model::Keyframe>* out);
 
-// True for a frame inside an explicitly ended solver segment
-// (startFrame < frame <= endFrame).  Ordinary whole-frame keys cannot live
-// there.  Automatic segments (endFrame == -1) end at the first key after the
-// start, so any such key is legal and becomes the end marker.
-bool isSolvedFrame(const model::Entity& entity, int frame);
-
 // Every solver starts from an ordinary whole-frame keyframe at startFrame; an
 // explicit solver band also forbids ordinary keys through its inclusive end.
 Result checkKeyframesAgainstSolvers(const model::Entity& entity,
