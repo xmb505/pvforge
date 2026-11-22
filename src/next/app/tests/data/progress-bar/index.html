@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: "DejaVu Sans", "Noto Sans CJK SC", sans-serif;
+  }
+  #wrap {
+    position: absolute;
+    left: 50%;
+    bottom: 14%;
+    transform: translateX(-50%);
+    width: 60%;
+  }
+  #label {
+    margin-bottom: 2vmin;
+    text-align: center;
+    font-size: 5vmin;
+    font-weight: 700;
+    letter-spacing: 0.2vmin;
+    color: #1b2430;
+    text-shadow: 0 0 1.2vmin rgba(255, 255, 255, 0.75);
+  }
+  #track {
+    position: relative;
+    width: 100%;
+    height: 5.5vmin;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.12);
+    box-shadow: inset 0 0 0 0.3vmin rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  #fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #39c5bb 0%, #7ad1ff 100%);
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="label">0%</div>
+  <div id="track"><div id="fill"></div></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var fill = document.getElementById('fill');
+  var label = document.getElementById('label');
+
+  function clamp(value) {
+    var n = Number(value);
+    if (!isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function render() {
+    var detail = window.__PVFORGE__ || {};
+    var vars = detail.vars || {};
+    var p = clamp(vars.progress);
+    fill.style.width = p.toFixed(2) + '%';
+    label.textContent = Math.round(p) + '%';
+  }
+
+  // Host contract: window.__PVFORGE__ = {frame, time, vars}; dispatch pvforgeframe.
+  window.addEventListener('pvforgeframe', render);
+  window.__PVFORGE_READY__ = true;
+  render();
+})();
+</script>
+</body>
+</html>

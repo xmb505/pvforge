@@ -217,6 +217,7 @@ private slots:
     void htmlThumbnailDoesNotRestartAfterStop();
     void htmlThumbnailSharesOneRenderSize();
     void htmlVarsKeyframesDriveRenderedFrames();
+    void htmlProgressBundleFillIsMonotonic();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -958,6 +959,110 @@ void MediaServicesTests::htmlVarsKeyframesDriveRenderedFrames()
     QVERIFY(!again.isNull());
     QCOMPARE(again.pixelColor(again.width() / 2, again.height() / 2).red(),
              red25);
+}
+
+
+void MediaServicesTests::htmlProgressBundleFillIsMonotonic()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+    if (!chromeAvailable())
+        QSKIP("Chrome/Chromium is not installed");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/progress.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    // The real asset used for the progress-bar experiment: transparent page,
+    // 60%-wide track at the bottom, fill painted as a teal->light-blue gradient
+    // whose width is driven by the `progress` variable.
+    const QString bundle = QFINDTESTDATA("data/progress-bar");
+    QVERIFY2(!bundle.isEmpty(), "progress-bar test data is missing");
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 0, 0);
+    entity.end = 99;
+    Keyframe atStart;
+    atStart.frame = 0;
+    atStart.htmlVars.insert(QStringLiteral("progress"), 0.0);
+    Keyframe atEnd;
+    atEnd.frame = 99;
+    atEnd.htmlVars.insert(QStringLiteral("progress"), 100.0);
+    entity.keyframes = {atStart, atEnd};
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    QString startError;
+    QVERIFY2(media.start(&startError), qPrintable(startError));
+    QVERIFY(media.htmlRunning());
+
+    // Count the gradient-coloured pixels: everything with meaningful alpha and
+    // a green/blue tint.  The translucent black track (alpha ~31), the dark
+    // label and the white label shadow all stay outside this predicate.
+    const auto fillPixels = [&](int frame) {
+        const QImage image = media.htmlFrameBlocking(entity.uuid, frame, 15000);
+        if (image.isNull())
+            return -1;
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y)
+        {
+            for (int x = 0; x < image.width(); ++x)
+            {
+                const QColor color = image.pixelColor(x, y);
+                if (color.alpha() < 60)
+                    continue;
+                if (color.blue() > 140 && color.green() > 140
+                    && color.red() < 170)
+                    ++count;
+            }
+        }
+        return count;
+    };
+
+    const int frames[] = {0, 25, 50, 75, 99};
+    int filled[5] = {-1, -1, -1, -1, -1};
+    for (int i = 0; i < 5; ++i)
+        filled[i] = fillPixels(frames[i]);
+    for (int i = 0; i < 5; ++i)
+    {
+        QVERIFY2(filled[i] >= 0,
+                 qPrintable(QStringLiteral("frame %1 rendered no image")
+                                .arg(frames[i])));
+    }
+    // progress 0 -> empty bar, 100 -> full bar.
+    QVERIFY2(filled[4] > filled[0] + 500,
+             qPrintable(QStringLiteral("frame 99 fill=%1, frame 0 fill=%2: "
+                                       "the bar never grew")
+                            .arg(filled[4]).arg(filled[0])));
+    QVERIFY2(filled[0] * 20 < filled[4],
+             qPrintable(QStringLiteral("frame 0 fill=%1 is not close to empty")
+                            .arg(filled[0])));
+    // Monotonic growth through the intermediate keyframe samples.
+    for (int i = 1; i < 5; ++i)
+    {
+        QVERIFY2(filled[i] >= filled[i - 1],
+                 qPrintable(QStringLiteral("fill shrank: frame %1 fill=%2, "
+                                           "frame %3 fill=%4")
+                                .arg(frames[i]).arg(filled[i])
+                                .arg(frames[i - 1]).arg(filled[i - 1])));
+    }
+    // The halfway frame must be visibly between the endpoints, not a step.
+    QVERIFY2(filled[2] > filled[0] + (filled[4] - filled[0]) / 5,
+             qPrintable(QStringLiteral("frame 50 fill=%1 sits too close to "
+                                       "the empty bar (%2)")
+                            .arg(filled[2]).arg(filled[0])));
+    QVERIFY2(filled[2] < filled[4] - (filled[4] - filled[0]) / 5,
+             qPrintable(QStringLiteral("frame 50 fill=%1 sits too close to "
+                                       "the full bar (%2)")
+                            .arg(filled[2]).arg(filled[4])));
+
+    // Same frame twice -> identical pixels.
+    QCOMPARE(fillPixels(50), filled[2]);
 }
 
 QTEST_MAIN(MediaServicesTests)
