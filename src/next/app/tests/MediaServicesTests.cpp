@@ -10,6 +10,7 @@
 
 #include <QColor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QProcess>
@@ -19,6 +20,7 @@
 #include <QtTest>
 
 #include <memory>
+#include <optional>
 
 using namespace pvf;
 using namespace pvf::next;
@@ -118,6 +120,35 @@ bool sameImage(const QImage& first, const QImage& second)
     return !first.isNull() && !second.isNull() && first == second;
 }
 
+// Bounded poll for a background thumbnail.  A real browser renders one 240x150
+// frame in well under a second; ten seconds means the renderer is unavailable
+// on this machine (broken Chrome sandbox, missing GPU driver) rather than slow,
+// so the case skips instead of stalling the suite into a ctest timeout.
+constexpr int kThumbnailWaitMs = 10000;
+
+QImage waitForThumbnail(MediaServices& media, const AssetHash& hash,
+                        const QSize& target, int timeoutMs = kThumbnailWaitMs)
+{
+    QElapsedTimer wait;
+    wait.start();
+    QImage image = media.htmlThumbnail(hash, target);
+    while (image.isNull() && wait.elapsed() < timeoutMs)
+    {
+        QTest::qWait(50);
+        image = media.htmlThumbnail(hash, target);
+    }
+    return image;
+}
+
+// A .pvhtml bundle plus its import, but deliberately *not* placed on the
+// timeline: the asset-bin-only case of the rework ticket (§3).
+std::optional<assets::StoredAsset> importPvhtmlOnly(ProjectDocument& document,
+                                                    const QString& bundle,
+                                                    QString* error)
+{
+    return document.assets().importPvhtml(bundle, error);
+}
+
 } // namespace
 
 class MediaServicesTests : public QObject
@@ -136,6 +167,8 @@ private slots:
     void htmlScaleChangesRequestSize();
     void exportSnapshotSurvivesDocumentEdits();
     void htmlThumbnailRendersFrameZeroOfAsset();
+    void htmlThumbnailLazyStartsForAssetBinOnly();
+    void htmlThumbnailDoesNotRestartAfterStop();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -596,16 +629,15 @@ void MediaServicesTests::htmlThumbnailRendersFrameZeroOfAsset()
     // The asset does not have to be on the timeline: the thumbnail is keyed by
     // the asset, rendered at frame 0 with the declared default variables, and
     // scaled into the requested box (48x48 icon and 240x150 card share the
-    // 240x36 entry of the 800x120 default logical size).
+    // 240x36 entry of the 800x120 default logical size).  The first miss lazily
+    // starts the HTML service, so on a machine without a working Chrome this
+    // call records the failure and keeps returning null.
     const QImage first = media.htmlThumbnail(stored->hash, QSize(48, 48));
     QVERIFY(first.isNull());
     const QImage again = media.htmlThumbnail(stored->hash, QSize(48, 48));
-    if (!media.htmlStartFailed())
-    {
-        // Whatever the renderer does, it must never throw an image back from
-        // an unfinished request.
-        QVERIFY(again.isNull());
-    }
+    // Whatever the renderer does, it must never throw an image back from an
+    // unfinished request.
+    QVERIFY(again.isNull());
 
     QString startError;
     const bool started = media.start(&startError);
@@ -620,28 +652,132 @@ void MediaServicesTests::htmlThumbnailRendersFrameZeroOfAsset()
 
     // A bounded wait, not the usual two-minute QTRY: a machine where Chrome
     // starts but never produces a frame (broken sandbox, missing GPU driver)
-    // must not stall the whole suite into a ctest timeout.  Ten seconds is
-    // plenty for a real browser to render one 240x150 frame; if it does not
-    // arrive the HTML renderer is unavailable and the case is an environment
-    // skip, exactly like the "no Chrome" branch above.
-    QElapsedTimer thumbnailWait;
-    thumbnailWait.start();
-    while (media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull()
-           && thumbnailWait.elapsed() < 10000)
-    {
-        QTest::qWait(50);
-    }
-    if (media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull())
+    // must not stall the whole suite into a ctest timeout.
+    const QImage thumb = waitForThumbnail(media, stored->hash, QSize(240, 150));
+    if (thumb.isNull())
         QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
-    const QImage thumb = media.htmlThumbnail(stored->hash, QSize(48, 48));
-    QVERIFY(!thumb.isNull());
     QCOMPARE(thumb.size(), QSize(240, 36));
+
+    // The 48x48 icon shares the same cache entry: a repaint never queues again.
+    QCOMPARE(media.htmlThumbnail(stored->hash, QSize(48, 48)), thumb);
 
     // Unknown hash / non-HTML / invalid size are no-ops.
     QVERIFY(media.htmlThumbnail(AssetHash(), QSize(48, 48)).isNull());
     QVERIFY(media.htmlThumbnail(stored->hash, QSize()).isNull());
-    // A second icon repaint is a cache hit, never another browser request.
-    QCOMPARE(media.htmlThumbnail(stored->hash, QSize(48, 48)), thumb);
+}
+
+void MediaServicesTests::htmlThumbnailLazyStartsForAssetBinOnly()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/bin-only.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = importPvhtmlOnly(*document, bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+    // The whole point of the case: the asset exists only in the asset bin.
+    QVERIFY(document->project().entities.isEmpty());
+
+    MediaServices media(document.get(), AppSettings());
+    // §3.1: the asset bin counts as HTML content, so the service may start.
+    QVERIFY(media.projectHasHtmlForTest());
+    QCOMPARE(media.thumbnailPendingForTest(), 0);
+
+    // §3.2: the first miss starts the service on demand and queues the render;
+    // a second repaint must not queue the same asset twice.
+    const QImage queued = media.htmlThumbnail(stored->hash, QSize(240, 150));
+    if (!media.htmlRunning())
+    {
+        // Real Chrome cannot run here (e.g. the SUID sandbox is broken): the
+        // lazy start recorded its failure, so the placeholder stays and the
+        // call is a no-op from now on.
+        QVERIFY(media.htmlStartFailed());
+        QCOMPARE(media.thumbnailPendingForTest(), 0);
+        QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
+        QCOMPARE(media.thumbnailPendingForTest(), 0);
+        QSKIP("Chrome/Chromium cannot start on this machine");
+    }
+
+    QVERIFY(queued.isNull());
+    QCOMPARE(media.thumbnailPendingForTest(), 1);
+    QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
+    QCOMPARE(media.thumbnailPendingForTest(), 1);
+
+    const QImage rendered = waitForThumbnail(media, stored->hash, QSize(240, 150));
+    if (rendered.isNull())
+        QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
+    // frameReady dropped the pending entry; the cache now serves the icon.
+    QCOMPARE(media.thumbnailPendingForTest(), 0);
+    QCOMPARE(media.htmlThumbnail(stored->hash, QSize(48, 48)), rendered);
+}
+
+void MediaServicesTests::htmlThumbnailDoesNotRestartAfterStop()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/stopped.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle = makePvhtmlBundle(temp.path() + QStringLiteral("/source"));
+    QVERIFY(!bundle.isEmpty());
+    // Not on the timeline: the only reason the service ever ran is the bin.
+    const auto stored = importPvhtmlOnly(*document, bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+    QVERIFY(document->project().entities.isEmpty());
+
+    MediaServices media(document.get(), AppSettings());
+    QString startError;
+    const bool started = media.start(&startError);
+    if (!started)
+    {
+        QVERIFY(media.htmlStartFailed());
+        QSKIP("Chrome/Chromium cannot start on this machine");
+    }
+    QVERIFY(media.htmlRunning());
+
+    // Give frameReady a chance to clear its pending entry, so the stop() below
+    // clears a non-empty set on the machines where the renderer does work.
+    waitForThumbnail(media, stored->hash, QSize(240, 150), 3000);
+
+    media.stop();
+    QVERIFY(!media.htmlRunning());
+    // §3.3: the queued thumbnails died with the browsers.
+    QCOMPARE(media.thumbnailPendingForTest(), 0);
+
+    // §3.2: an explicit stop() is final for thumbnails — no restart, no queue.
+    for (int i = 0; i < 3; ++i)
+    {
+        QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
+        QVERIFY(!media.htmlRunning());
+        QCOMPARE(media.thumbnailPendingForTest(), 0);
+    }
+
+    // An explicit start() (or applySettings() rebuilding the service) brings
+    // it back with an empty pending set, so requesting works again.
+    QVERIFY2(media.start(&startError), qPrintable(startError));
+    QVERIFY(media.htmlRunning());
+    QCOMPARE(media.thumbnailPendingForTest(), 0);
+    QVERIFY(media.htmlThumbnail(stored->hash, QSize(240, 150)).isNull());
+    QCOMPARE(media.thumbnailPendingForTest(), 1);
+    const QImage again = waitForThumbnail(media, stored->hash, QSize(240, 150));
+    if (again.isNull())
+        QSKIP("HTML renderer produced no thumbnail (Chrome unavailable)");
+    QCOMPARE(media.thumbnailPendingForTest(), 0);
+    media.stop();
 }
 
 QTEST_MAIN(MediaServicesTests)
