@@ -101,10 +101,8 @@ bool confirmed(const QJsonObject& args);
 // JSON views shared by the tool families.
 QJsonObject settingsJson(const model::ProjectSettings& settings);
 QJsonObject entityBrief(const model::Entity& entity);
-QJsonObject entityFull(const model::Entity& entity);
 QJsonObject pageJson(int offset, int limit, int total);
-QJsonObject assetJson(const assets::AssetStore& assetStore,
-                      const model::Project& project,
+QJsonObject assetJson(const model::Project& project,
                       const assets::StoredAsset& asset);
 
 // Model helpers.
@@ -148,7 +146,6 @@ QStringList acceptedEasingNames();
 // "easeInOut" -> "easeinoutquad", "step" -> "instant").
 bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
                  QJsonValue* normalized, Result* error);
-QJsonValue easingJson(const model::EasingSpec& easing);
 
 // Tool handlers. Each one operates on the transaction copy and leaves the
 // commit to Tx::finish().

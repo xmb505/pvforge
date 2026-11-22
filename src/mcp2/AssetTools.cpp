@@ -421,9 +421,9 @@ Result assetImport(Tx& tx, const QJsonObject& args)
 
     QJsonObject data;
     data.insert(QStringLiteral("asset"),
-                assetJson(tx.store->assets(), tx.p(), *stored));
+                assetJson(tx.p(), *stored));
     data.insert(QStringLiteral("audioAsset"),
-                extracted ? QJsonValue(assetJson(tx.store->assets(), tx.p(), *extracted))
+                extracted ? QJsonValue(assetJson(tx.p(), *extracted))
                           : QJsonValue(QJsonValue::Null));
     data.insert(QStringLiteral("deduplicated"), deduplicated);
     data.insert(QStringLiteral("extractedAudio"), extractedAudio);
@@ -472,7 +472,7 @@ Result assetList(Tx& tx, const QJsonObject& args)
 
     QJsonArray array;
     for (int i = offset; i < assets.size() && i < offset + limit; ++i)
-        array.append(assetJson(tx.store->assets(), tx.p(), assets.at(i)));
+        array.append(assetJson(tx.p(), assets.at(i)));
 
     QJsonObject data;
     data.insert(QStringLiteral("assets"), array);
@@ -490,7 +490,7 @@ Result assetGet(Tx& tx, const QJsonObject& args)
     if (!asset)
         return failure(QStringLiteral("invalid_argument"),
                        QStringLiteral("素材不存在：%1").arg(hash));
-    return success(assetJson(tx.store->assets(), tx.p(), *asset));
+    return success(assetJson(tx.p(), *asset));
 }
 
 Result assetAssign(Tx& tx, const QJsonObject& args)
@@ -586,7 +586,7 @@ Result assetAssign(Tx& tx, const QJsonObject& args)
     QJsonObject data;
     data.insert(QStringLiteral("entity"), entityBrief(*entity));
     data.insert(QStringLiteral("asset"),
-                assetJson(tx.store->assets(), tx.p(), *asset));
+                assetJson(tx.p(), *asset));
     data.insert(QStringLiteral("adjusted"), adjusted);
     return tx.finish(data, QStringLiteral("pvf: assign asset \"%1\" to \"%2\"")
                                .arg(asset->name, entity->name));
@@ -675,7 +675,7 @@ Result assetSetTags(Tx& tx, const QJsonObject& args)
         return failure(QStringLiteral("invalid_argument"), tagError);
 
     const auto refreshed = tx.store->assets().get(hash);
-    return tx.finish(assetJson(tx.store->assets(), tx.p(), *refreshed),
+    return tx.finish(assetJson(tx.p(), *refreshed),
                      QStringLiteral("pvf: set asset tags \"%1\"").arg(refreshed->name));
 }
 

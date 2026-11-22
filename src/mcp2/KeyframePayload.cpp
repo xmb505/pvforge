@@ -301,11 +301,6 @@ const model::SolverSegment* blockingSolver(const model::Entity& entity,
     return nullptr;
 }
 
-bool isSolvedFrame(const model::Entity& entity, int frame)
-{
-    return blockingSolver(entity, frame) != nullptr;
-}
-
 Result checkKeyframesAgainstSolvers(const model::Entity& entity,
                                     const QVector<model::Keyframe>& keyframes)
 {

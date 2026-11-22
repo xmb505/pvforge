@@ -488,13 +488,6 @@ QJsonObject entityBrief(const model::Entity& entity)
     return object;
 }
 
-QJsonObject entityFull(const model::Entity& entity)
-{
-    QJsonObject object = model::toJson(entity);
-    object.insert(QStringLiteral("duration"), entity.duration());
-    return object;
-}
-
 QJsonObject pageJson(int offset, int limit, int total)
 {
     const int returned = std::max(0, std::min(limit, total - offset));
@@ -509,11 +502,9 @@ QJsonObject pageJson(int offset, int limit, int total)
     return page;
 }
 
-QJsonObject assetJson(const assets::AssetStore& assetStore,
-                      const model::Project& project,
+QJsonObject assetJson(const model::Project& project,
                       const assets::StoredAsset& asset)
 {
-    Q_UNUSED(assetStore);
     const QJsonObject metadata = asset.metadata;
 
     QString path = asset.directory;
@@ -776,23 +767,6 @@ bool parseEasing(const QJsonValue& value, model::EasingSpec* out,
     objectOut.insert(QStringLiteral("outY"), spec.outY);
     *normalized = objectOut;
     return true;
-}
-
-QJsonValue easingJson(const model::EasingSpec& easing)
-{
-    if (easing.type != QLatin1String("bezier"))
-    {
-        const QString type =
-            easing.type.isEmpty() ? QStringLiteral("linear") : easing.type;
-        return type;
-    }
-    QJsonObject object;
-    object.insert(QStringLiteral("type"), QStringLiteral("bezier"));
-    object.insert(QStringLiteral("inX"), easing.inX);
-    object.insert(QStringLiteral("inY"), easing.inY);
-    object.insert(QStringLiteral("outX"), easing.outX);
-    object.insert(QStringLiteral("outY"), easing.outY);
-    return object;
 }
 
 } // namespace pvf::mcp2::detail
