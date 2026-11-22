@@ -115,6 +115,52 @@ Entity makeAssetEntity(AssetType type, const AssetHash& hash, int start, int sou
     return entity;
 }
 
+
+bool writeTestFile(const QString& path, const QByteArray& bytes)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(bytes) == bytes.size();
+}
+
+// A .pvhtml bundle whose page paints itself from the numeric `progress`
+// variable, declared with default 0 in the manifest.  The host feeds the
+// value through the pvforgeframe event (detail.vars), so a frame rendered with
+// progress 0 is black, 50 is half red and 100 is full red: a keyframe-driven
+// variable is visible in the pixels, not just in the request.
+QString makeVariableBundle(const QString& directory)
+{
+    if (!QDir().mkpath(directory))
+        return {};
+    const QByteArray manifest = R"JSON({
+  "entry": "index.html",
+  "logicalSize": { "width": 800, "height": 120 },
+  "timeDependent": false,
+  "variables": { "progress": 0 }
+})JSON";
+    const QByteArray html = R"HTML(<!doctype html><html><head><style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%;
+             background: #000000; overflow: hidden; }
+</style></head><body><script>
+(function () {
+  window.addEventListener("pvforgeframe", function (event) {
+    var vars = (event.detail || {}).vars || {};
+    var progress = Number(vars.progress || 0);
+    var red = Math.round(Math.max(0, Math.min(100, progress)) * 2.55);
+    document.body.style.background = "rgb(" + red + ",0,0)";
+  });
+})();
+</script></body></html>)HTML";
+    if (!writeTestFile(QDir(directory).filePath(QStringLiteral("pvhtml.json")),
+                       manifest))
+        return {};
+    if (!writeTestFile(QDir(directory).filePath(QStringLiteral("index.html")),
+                       html))
+        return {};
+    return directory;
+}
+
 bool sameImage(const QImage& first, const QImage& second)
 {
     return !first.isNull() && !second.isNull() && first == second;
@@ -170,6 +216,7 @@ private slots:
     void htmlThumbnailLazyStartsForAssetBinOnly();
     void htmlThumbnailDoesNotRestartAfterStop();
     void htmlThumbnailSharesOneRenderSize();
+    void htmlVarsKeyframesDriveRenderedFrames();
 };
 
 void MediaServicesTests::videoProviderMapsProjectFrames()
@@ -837,6 +884,80 @@ void MediaServicesTests::htmlThumbnailSharesOneRenderSize()
     // Deliberately no Chrome-dependent assertion: the request size is recorded
     // before any browser start, so this regression guard runs even when the
     // HTML renderer is unavailable.
+}
+
+
+void MediaServicesTests::htmlVarsKeyframesDriveRenderedFrames()
+{
+    if (!gitAvailable())
+        QSKIP("git is unavailable");
+    if (!chromeAvailable())
+        QSKIP("Chrome/Chromium is not installed");
+
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+
+    QString error;
+    auto document = makeDocument(temp.path() + QStringLiteral("/vars.pvproj"),
+                                 &error);
+    QVERIFY2(document != nullptr, qPrintable(error));
+
+    const QString bundle =
+        makeVariableBundle(temp.path() + QStringLiteral("/varsource"));
+    QVERIFY(!bundle.isEmpty());
+    const auto stored = document->assets().importPvhtml(bundle, &error);
+    QVERIFY2(stored.has_value(), qPrintable(error));
+
+    Entity entity = makeAssetEntity(AssetType::Html, stored->hash, 0, 0);
+    entity.end = 59;
+    // Whole-frame keyframes drive the numeric variable: 0 at the clip start,
+    // 100 halfway.  The linear default easing makes frame 25 render at ~50.
+    Keyframe atZero;
+    atZero.frame = 0;
+    atZero.htmlVars.insert(QStringLiteral("progress"), 0.0);
+    Keyframe atFifty;
+    atFifty.frame = 50;
+    atFifty.htmlVars.insert(QStringLiteral("progress"), 100.0);
+    entity.keyframes = {atZero, atFifty};
+    document->mutableProject().entities.insert(entity.uuid, entity);
+
+    MediaServices media(document.get(), AppSettings());
+    QString startError;
+    QVERIFY2(media.start(&startError), qPrintable(startError));
+    QVERIFY(media.htmlRunning());
+
+    const auto redAt = [&](int frame) {
+        const QImage image = media.htmlFrameBlocking(entity.uuid, frame, 15000);
+        if (image.isNull())
+            return -1;
+        return image.pixelColor(image.width() / 2, image.height() / 2).red();
+    };
+
+    const int red0 = redAt(0);
+    const int red25 = redAt(25);
+    const int red50 = redAt(50);
+    QVERIFY2(red0 >= 0 && red25 >= 0 && red50 >= 0,
+             qPrintable(QStringLiteral("renderer produced no frame: %1/%2/%3")
+                            .arg(red0).arg(red25).arg(red50)));
+
+    // progress 0 -> black body, 100 -> full red body.
+    QVERIFY2(red0 < 40, qPrintable(QStringLiteral("frame 0 red=%1, expected "
+                                                  "the manifest default 0")
+                                       .arg(red0)));
+    QVERIFY2(red50 > 215, qPrintable(QStringLiteral("frame 50 red=%1, expected "
+                                                    "progress 100")
+                                         .arg(red50)));
+    // The halfway frame must interpolate, not hold either endpoint: this is
+    // what a whole-frame htmlVars keyframe pair is supposed to do.
+    QVERIFY2(red25 > red0 + 40 && red25 < red50 - 40,
+             qPrintable(QStringLiteral("frame 25 red=%1, not between %2 and %3")
+                            .arg(red25).arg(red0).arg(red50)));
+
+    // Seeking back to the same frame renders exactly the same pixels.
+    const QImage again = media.htmlFrameBlocking(entity.uuid, 25, 15000);
+    QVERIFY(!again.isNull());
+    QCOMPARE(again.pixelColor(again.width() / 2, again.height() / 2).red(),
+             red25);
 }
 
 QTEST_MAIN(MediaServicesTests)
