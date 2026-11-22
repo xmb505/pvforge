@@ -122,8 +122,6 @@ set(PVF_APP_SOURCES
     src/ui/WholeFrameEdit.h
     src/next/properties/SolverPreviewWidget.cpp
     src/next/properties/SolverPreviewWidget.h
-    src/next/properties/TextLayoutDialog.cpp
-    src/next/properties/TextLayoutDialog.h
     src/ui/AssetLibraryPanel.cpp
     src/ui/AssetLibraryPanelDrop.cpp
     src/ui/AssetLibraryPanelHelpers.cpp
