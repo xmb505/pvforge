@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
 #include <memory>
 
 class QColor;
@@ -96,6 +97,12 @@ public:
     }
     void commitInlineRenameForTest() { finishInlineRename(true); }
     void cancelInlineRenameForTest() { finishInlineRename(false); }
+    // Double-click marker rename seam: receives the current title (pre-filled)
+    // and returns true to accept the edited value, false to cancel.
+    void setMarkerRenamePromptForTest(std::function<bool(QString*)> prompt)
+    {
+        m_markerRenamePromptForTest = std::move(prompt);
+    }
 #endif
 
     double pixelsPerFrame() const { return m_pixelsPerFrame; }
@@ -324,6 +331,8 @@ private:
     bool splitEntityAtPlayhead(EntityId id);
     void addMarkerAtPlayhead();
     void editMarker(const QString& id);
+    // Quick inline rename from a marker double-click: title only, one commit.
+    bool promptMarkerRename(const QString& id);
     void deleteMarkerWithConfirm(const QString& id);
     QString markerAt(const QPoint& pos) const;
     void beginMarkerDrag(const QString& id, int x);
@@ -514,6 +523,7 @@ private:
     QString m_dragMarkerId;
     int m_markerDragStartFrame = 0;
     int m_markerDragFrame = 0;
+    std::function<bool(QString*)> m_markerRenamePromptForTest;
 
     DragMode m_dragMode = DragMode::None;
     EntityId m_dragEntity = kInvalidEntity;

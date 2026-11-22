@@ -458,8 +458,15 @@ void TimelinePanel::mouseDoubleClickEvent(QMouseEvent* event)
 {
     if (!sessionMode() || event->button() != Qt::LeftButton)
         return;
+    // Marker flags live in the ruler band: a double-click on one renames that
+    // marker, everything else in the ruler keeps its old no-op behaviour.
     if (event->position().y() < kRulerHeight)
+    {
+        if (const QString markerId = markerAt(event->position().toPoint());
+            !markerId.isEmpty())
+            promptMarkerRename(markerId);
         return;
+    }
     if (event->position().x() < nameWidth())
         return;
     if (event->modifiers() & Qt::AltModifier)

@@ -7,6 +7,8 @@
 #include "next/core/Document.h"
 #include "next/timeline/MarkerDialog.h"
 
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QMessageBox>
 
 #include <algorithm>
@@ -80,6 +82,57 @@ QString TimelinePanel::markerAt(const QPoint& pos) const
             return m_snapshot.markers.at(i).id;
     }
     return QString();
+}
+
+bool TimelinePanel::promptMarkerRename(const QString& id)
+{
+    if (!sessionMode() || !m_session || !m_session->editActions())
+        return false;
+    const model::Marker* found = nullptr;
+    for (const model::Marker& marker : m_session->project().markers)
+    {
+        if (marker.id == id)
+        {
+            found = &marker;
+            break;
+        }
+    }
+    if (!found)
+        return false;
+
+    QString title = found->title;
+    bool accepted = false;
+    if (m_markerRenamePromptForTest)
+    {
+        accepted = m_markerRenamePromptForTest(&title);
+    }
+    else
+    {
+        bool ok = false;
+        title = QInputDialog::getText(this, QStringLiteral("重命名标记"),
+                                      QStringLiteral("标记名称："), QLineEdit::Normal,
+                                      title, &ok);
+        accepted = ok;
+    }
+    if (!accepted)
+        return false;
+
+    title = title.trimmed();
+    if (title.isEmpty() || title == found->title)
+        return false;
+
+    model::Marker updated = *found;
+    updated.title = title;
+    QString error;
+    if (!m_session->editActions()->updateMarker(updated, &error))
+    {
+        if (!error.isEmpty())
+            emit editFailed(error);
+        return false;
+    }
+    emit editCommitted(QStringLiteral("重命名标记"));
+    refreshFromSession();
+    return true;
 }
 
 void TimelinePanel::editMarker(const QString& id)

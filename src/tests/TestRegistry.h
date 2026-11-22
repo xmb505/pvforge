@@ -44,6 +44,7 @@ void registerPropertiesTests(Registry& registry);
 void registerPropertiesAudioTests(Registry& registry);
 void registerSolverTests(Registry& registry);
 void registerTimelineTests(Registry& registry);
+void registerTimelineMarkerRenameTests(Registry& registry);
 void registerTimelineSecondsTests(Registry& registry);
 void registerTimelineSnapTests(Registry& registry);
 void registerTimelineEdgeSnapTests(Registry& registry);

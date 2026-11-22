@@ -38,6 +38,7 @@ Registry buildRegistry()
     registerPropertiesAudioTests(registry);
     registerSolverTests(registry);
     registerTimelineTests(registry);
+    registerTimelineMarkerRenameTests(registry);
     registerTimelineSecondsTests(registry);
     registerTimelineSnapTests(registry);
     registerTimelineEdgeSnapTests(registry);

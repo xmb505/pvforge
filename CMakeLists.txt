@@ -224,6 +224,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
         src/tests/PropertiesAudioTests.cpp
         src/tests/SolverTests.cpp
         src/tests/TimelineTests.cpp
+        src/tests/TimelineMarkerRenameTests.cpp
         src/tests/TimelineSecondsTests.cpp
         src/tests/TimelineSnapTests.cpp
         src/tests/TimelineEdgeSnapTests.cpp
@@ -287,6 +288,7 @@ if(PVFORGE_BUILD_SELF_TESTS)
             keyframe-clipboard-test
             timeline-split-test
             timeline-marker-test
+            timeline-marker-rename-test
             timeline-edit-e2e
             solver-ui-test
             solver-mini-preview-test
