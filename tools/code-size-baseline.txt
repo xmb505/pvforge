@@ -5,10 +5,8 @@
 # 文件变小不会自动放宽：需要收紧时由人类明确要求后重新生成。
 # 不要手工抬高数字来让 CI 变绿——先拆文件。
 src/mcp2/tests/mcp2_tests.cpp	3143
-src/next/properties/tests/PropertiesPanelTest.cpp	2346
 src/model/tests/model_tests.cpp	2250
 src/tests/TimelineTests.cpp	2188
-src/next/timeline/tests/timeline_tests.cpp	2014
 src/store/tests/store_tests.cpp	1971
 src/tests/SolverTests.cpp	1945
 src/tests/PropertiesTests.cpp	1884
