@@ -155,6 +155,19 @@ void DiskCache::clearAsset(const AssetHash& assetHash)
         d->store->remove(key, true);
 }
 
+bool DiskCache::isReady() const
+{
+    return d->ready;
+}
+
+QString DiskCache::lastError() const
+{
+    return d->lastError;
+}
+
+// Sizing and stats introspection has no production caller; only the
+// htmlcache tests look at it, so it is compiled into test builds only.
+#ifdef PVFORGE_TEST_HOOKS
 qint64 DiskCache::currentBytes() const
 {
     return d->ready ? d->store->stats().diskBytes : 0;
@@ -177,21 +190,6 @@ qint64 DiskCache::maxBytes() const
     return d->maxBytes;
 }
 
-QString DiskCache::directory() const
-{
-    return d->directory;
-}
-
-bool DiskCache::isReady() const
-{
-    return d->ready;
-}
-
-QString DiskCache::lastError() const
-{
-    return d->lastError;
-}
-
 framecache::Stats DiskCache::stats() const
 {
     framecache::Stats stats;
@@ -200,5 +198,6 @@ framecache::Stats DiskCache::stats() const
         stats = d->store->stats();
     return stats;
 }
+#endif
 
 } // namespace pvf::htmlcache

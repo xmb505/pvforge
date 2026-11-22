@@ -24,10 +24,12 @@ public:
     void put(const FrameKey& key, const QImage& image) override;
     void clearAsset(const AssetHash& assetHash) override;
 
+#ifdef PVFORGE_TEST_HOOKS
     qint64 currentBytes() const;
     int entryCount() const;
     void setMaxBytes(qint64 maxBytes);
     qint64 maxBytes() const;
+#endif
 
 private:
     struct Impl;

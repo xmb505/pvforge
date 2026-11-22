@@ -11,8 +11,6 @@
 #include <QJsonObject>
 #include <QString>
 
-#include <functional>
-
 namespace pvf::tests {
 
 // Minimal HTTP client used by the MCP tests. The MCP transport is plain
@@ -41,10 +39,6 @@ McpHttpResponse mcpHttpPost(quint16 port, const QByteArray& payload,
                             qint64 declaredLength = -1,
                             const QByteArray& extraHeaders = QByteArray(),
                             const QByteArray& hostHeader = QByteArray());
-bool mcpWaitUntil(const std::function<bool()>& predicate, int timeoutMs);
-int mcpStatusFromRaw(const QByteArray& received);
-QJsonObject mcpRpc(quint16 port, const QByteArray& token,
-                   const QJsonObject& request, int* statusOut = nullptr);
 QJsonObject mcpStructuredResult(const McpHttpResponse& response);
 McpHttpResponse mcpCallTool(quint16 port, const QByteArray& token,
                             const QString& tool, const QJsonObject& args);
