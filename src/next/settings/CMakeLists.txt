@@ -14,8 +14,6 @@ add_library(pvf_next_settings STATIC
     SettingsStore.h
     GitDetect.cpp
     GitDetect.h
-    SettingsDialog.cpp
-    SettingsDialog.h
     OnboardingDialog.cpp
     OnboardingDialog.h
 )
