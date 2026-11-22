@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QString>
+#include <QtGlobal>
 
 namespace pvf {
 
@@ -63,8 +63,5 @@ struct EasingSpec
     }
     bool operator!=(const EasingSpec& other) const { return !(*this == other); }
 };
-
-QString easingName(Easing easing);
-Easing easingFromName(const QString& name);
 
 } // namespace pvf

@@ -1,4 +1,7 @@
-#include "htmlcache/HtmlCache.h"
+#include "htmlcache/DiskCache.h"
+#include "htmlcache/FrameKey.h"
+#include "htmlcache/MemoryCache.h"
+#include "htmlcache/TieredCache.h"
 
 #include <QDir>
 #include <QFile>

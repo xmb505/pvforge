@@ -86,7 +86,6 @@ set(PVF_APP_SOURCES
     src/core/TextStyle.cpp
     src/core/TextBlock.cpp
     src/core/VectorShape.cpp
-    src/core/Easing.cpp
     src/media/DecoderInfo.cpp
     src/app/AppIcon.cpp
     src/app/SystemInfo.cpp
