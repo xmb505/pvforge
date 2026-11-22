@@ -33,6 +33,32 @@ namespace {
 // image on demand.
 constexpr QSize kHtmlThumbRenderSize(240, 150);
 
+// HTML pages are authored with a transparent body on purpose, so a thumbnail
+// painted straight onto the dark list/card background is an unreadable black
+// rectangle.  Paint the classic transparency checkerboard underneath instead,
+// exactly like an image editor: transparent stays transparent but the actual
+// artwork (including dark text) is visible on the light squares.
+void paintTransparencyBackdrop(QPainter& painter, const QRect& rect,
+                               int cell = 8)
+{
+    const QColor light(255, 255, 255);
+    const QColor dark(204, 204, 204);
+    painter.fillRect(rect, light);
+    for (int y = rect.top(); y <= rect.bottom(); y += cell)
+    {
+        const int row = (y - rect.top()) / cell;
+        for (int x = rect.left(); x <= rect.right(); x += cell)
+        {
+            const int column = (x - rect.left()) / cell;
+            if ((row + column) % 2 == 0)
+                continue;
+            painter.fillRect(QRect(x, y, std::min(cell, rect.right() - x + 1),
+                                   std::min(cell, rect.bottom() - y + 1)),
+                             dark);
+        }
+    }
+}
+
 // Shared by the list icon and the hover card: the real 0-frame render when the
 // cache has it, the HTML placeholder until then (and forever when Chrome is
 // unavailable, because htmlThumbnail() never returns an image then).
@@ -43,12 +69,18 @@ QPixmap htmlThumbPixmap(const QImage& frame, const QSize& size,
         return assetlibdetail::htmlPlaceholder(size, caption);
 
     QPixmap pixmap(size);
-    pixmap.fill(QColor(18, 20, 26));
+    pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
+    paintTransparencyBackdrop(painter, QRect(QPoint(0, 0), size));
     const QImage scaled =
         frame.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     painter.drawImage((size.width() - scaled.width()) / 2,
                       (size.height() - scaled.height()) / 2, scaled);
+    // A 1 px border keeps the checkerboard from bleeding into the list
+    // background when the card sits on a similarly light theme.
+    painter.setPen(QPen(QColor(120, 120, 120), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(QRect(QPoint(0, 0), size).adjusted(0, 0, -1, -1));
     return pixmap;
 }
 
