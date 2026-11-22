@@ -59,11 +59,6 @@ std::optional<Marker> markerFromJson(const QJsonObject& object,
     return marker;
 }
 
-std::optional<Marker> markerFromJson(const QJsonObject& object, QString* error)
-{
-    return markerFromJson(object, ParseOptions{}, error);
-}
-
 QJsonObject toJson(const ProjectSettings& settings)
 {
     QJsonObject object;
@@ -103,12 +98,6 @@ std::optional<ProjectSettings> projectSettingsFromJson(
                  QStringLiteral("height"), QStringLiteral("fps"),
                  QStringLiteral("background")});
     return settings;
-}
-
-std::optional<ProjectSettings> projectSettingsFromJson(const QJsonObject& object,
-                                                       QString* error)
-{
-    return projectSettingsFromJson(object, ParseOptions{}, error);
 }
 
 namespace {

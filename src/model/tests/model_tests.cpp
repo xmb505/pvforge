@@ -178,7 +178,7 @@ void testContentJsonRoundTrip()
 
         const QJsonObject json = toJson(entity);
         QString error;
-        const auto parsed = entityFromJson(json, &error);
+        const auto parsed = entityFromJson(json, ParseOptions{}, &error);
         CHECK_DETAIL(parsed.has_value(), error);
         if (parsed)
         {
@@ -294,7 +294,7 @@ void testEntityJsonRoundTrip()
     CHECK(json.value(QStringLiteral("parentUuid")).isNull());
 
     QString error;
-    const auto parsed = entityFromJson(json, &error);
+    const auto parsed = entityFromJson(json, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (!parsed)
         return;
@@ -349,7 +349,7 @@ void testComponentJsonRoundTrip()
 
     const QJsonObject keyframeJson = toJson(keyframe);
     QString error;
-    const auto parsedKeyframe = keyframeFromJson(keyframeJson, &error);
+    const auto parsedKeyframe = keyframeFromJson(keyframeJson, ParseOptions{}, &error);
     CHECK_DETAIL(parsedKeyframe.has_value(), error);
     if (parsedKeyframe)
     {
@@ -360,7 +360,7 @@ void testComponentJsonRoundTrip()
     const QVector<Keyframe> keys = {keyframe, wholeKey(20, 9.0, 1.0, 5.0)};
     const QJsonArray keysJson = toJson(keys);
     CHECK(keysJson.size() == 2);
-    const auto parsedKeys = keyframesFromJson(keysJson, &error);
+    const auto parsedKeys = keyframesFromJson(keysJson, ParseOptions{}, nullptr, -1, &error);
     CHECK_DETAIL(parsedKeys.has_value(), error);
     if (parsedKeys)
     {
@@ -375,7 +375,7 @@ void testComponentJsonRoundTrip()
     segment.params.insert(QStringLiteral("periodFrames"), 90);
 
     const QJsonObject segmentJson = toJson(segment);
-    const auto parsedSegment = solverFromJson(segmentJson, &error);
+    const auto parsedSegment = solverFromJson(segmentJson, ParseOptions{}, &error);
     CHECK_DETAIL(parsedSegment.has_value(), error);
     if (parsedSegment)
     {
@@ -397,7 +397,7 @@ void testComponentJsonRoundTrip()
     const QJsonObject spiralJson = toJson(spiral);
     CHECK(spiralJson.value(QStringLiteral("effect")).toString()
           == QStringLiteral("spiral"));
-    const auto parsedSpiral = solverFromJson(spiralJson, &error);
+    const auto parsedSpiral = solverFromJson(spiralJson, ParseOptions{}, &error);
     CHECK_DETAIL(parsedSpiral.has_value(), error);
     if (parsedSpiral)
     {
@@ -590,7 +590,7 @@ void testKeyframeJsonAndValidation()
     key.easing.type = QStringLiteral("bezier");
 
     const QJsonObject json = toJson(key);
-    const auto parsed = keyframeFromJson(json, &error);
+    const auto parsed = keyframeFromJson(json, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
     {
@@ -600,7 +600,7 @@ void testKeyframeJsonAndValidation()
 
     // A duplicate frame is rejected both while parsing and by validation.
     const QJsonArray duplicateJson = QJsonArray{toJson(key), toJson(key)};
-    CHECK(!keyframesFromJson(duplicateJson, &error).has_value());
+    CHECK(!keyframesFromJson(duplicateJson, ParseOptions{}, nullptr, -1, &error).has_value());
     CHECK(error.contains(QStringLiteral("重复")));
 
     Entity duplicateEntity = makeEntity(0, 10);
@@ -627,7 +627,7 @@ void testKeyframeJsonAndValidation()
 
     const QJsonArray unsortedJson = QJsonArray{toJson(keyAt(5, 1.0)),
                                                toJson(keyAt(1, 2.0))};
-    const auto sorted = keyframesFromJson(unsortedJson, &error);
+    const auto sorted = keyframesFromJson(unsortedJson, ParseOptions{}, nullptr, -1, &error);
     CHECK_DETAIL(sorted.has_value(), error);
     if (sorted)
     {
@@ -640,17 +640,17 @@ void testKeyframeJsonAndValidation()
     QJsonObject oldTracks;
     oldTracks.insert(QStringLiteral("x"), QJsonArray{toJson(keyAt(0, 1.0))});
     oldEntityJson.insert(QStringLiteral("keyframes"), oldTracks);
-    CHECK(!entityFromJson(oldEntityJson, &error).has_value());
+    CHECK(!entityFromJson(oldEntityJson, ParseOptions{}, &error).has_value());
     CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
 
     oldEntityJson.insert(QStringLiteral("keyframes"), QStringLiteral("nope"));
-    CHECK(!entityFromJson(oldEntityJson, &error).has_value());
+    CHECK(!entityFromJson(oldEntityJson, ParseOptions{}, &error).has_value());
     CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
 
     QJsonObject legacyTracksJson = toJson(makeEntity(0, 10));
     legacyTracksJson.remove(QStringLiteral("keyframes"));
     legacyTracksJson.insert(QStringLiteral("tracks"), QJsonObject{});
-    CHECK(!entityFromJson(legacyTracksJson, &error).has_value());
+    CHECK(!entityFromJson(legacyTracksJson, ParseOptions{}, &error).has_value());
     CHECK(error.contains(QStringLiteral("旧分轨工程格式已废弃")));
 
     // Content keys must be animation parameters of the entity type.
@@ -807,7 +807,7 @@ void testEasingJson()
         CHECK_DETAIL(json.value(QStringLiteral("easing")).toString() == name,
                      name);
 
-        const auto parsed = keyframeFromJson(json, &error);
+        const auto parsed = keyframeFromJson(json, ParseOptions{}, &error);
         CHECK_DETAIL(parsed.has_value(), error);
         if (parsed)
         {
@@ -831,14 +831,14 @@ void testEasingJson()
     // Reading old lowercase JSON is accepted unchanged.
     QJsonObject legacy = toJson(keyAt(0, 0.0));
     legacy.insert(QStringLiteral("easing"), QStringLiteral("easeinquart"));
-    auto parsed = keyframeFromJson(legacy, &error);
+    auto parsed = keyframeFromJson(legacy, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
         CHECK(parsed->easing.type == QStringLiteral("easeinquart"));
 
     // Any casing is accepted and rewritten in canonical form.
     legacy.insert(QStringLiteral("easing"), QStringLiteral("EASEOUTSINE"));
-    parsed = keyframeFromJson(legacy, &error);
+    parsed = keyframeFromJson(legacy, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
         CHECK(parsed->easing.type == QStringLiteral("easeoutsine"));
@@ -849,7 +849,7 @@ void testEasingJson()
     CHECK(toJson(step).value(QStringLiteral("easing")).toString()
           == QStringLiteral("instant"));
     legacy.insert(QStringLiteral("easing"), QStringLiteral("step"));
-    parsed = keyframeFromJson(legacy, &error);
+    parsed = keyframeFromJson(legacy, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
         CHECK(parsed->easing.type == QStringLiteral("instant"));
@@ -1290,30 +1290,30 @@ void testProjectValidationWithoutRemoval()
 void testInvalidJson()
 {
     QString error;
-    CHECK(!entityFromJson(QJsonObject{}, &error).has_value());
+    CHECK(!entityFromJson(QJsonObject{}, ParseOptions{}, &error).has_value());
     CHECK(!error.isEmpty());
 
     QJsonObject badUuid = toJson(makeEntity());
     badUuid.insert(QStringLiteral("uuid"), QStringLiteral("nope"));
-    CHECK(!entityFromJson(badUuid, &error).has_value());
+    CHECK(!entityFromJson(badUuid, ParseOptions{}, &error).has_value());
 
     QJsonObject badRange = toJson(makeEntity(0, 10));
     badRange.insert(QStringLiteral("end"), -1);
-    CHECK(!entityFromJson(badRange, &error).has_value());
+    CHECK(!entityFromJson(badRange, ParseOptions{}, &error).has_value());
 
     Entity badKeyframe = makeEntity(0, 10);
     badKeyframe.keyframes = {keyAt(11, 1.0)};
-    CHECK(!entityFromJson(toJson(badKeyframe), &error).has_value());
+    CHECK(!entityFromJson(toJson(badKeyframe), ParseOptions{}, &error).has_value());
 
     QJsonObject unknownContent = toJson(makeEntity());
     QJsonObject content;
     content.insert(QStringLiteral("kind"), QStringLiteral("nope"));
     unknownContent.insert(QStringLiteral("content"), content);
-    CHECK(!entityFromJson(unknownContent, &error).has_value());
+    CHECK(!entityFromJson(unknownContent, ParseOptions{}, &error).has_value());
 
     QJsonObject badParent = toJson(makeEntity());
     badParent.insert(QStringLiteral("parentUuid"), 42);
-    CHECK(!entityFromJson(badParent, &error).has_value());
+    CHECK(!entityFromJson(badParent, ParseOptions{}, &error).has_value());
 
     QJsonObject badProject = toJson(Project{});
     badProject.insert(QStringLiteral("format"), QStringLiteral("legacy"));
@@ -1346,7 +1346,7 @@ void testDefaults()
     minimal.insert(QStringLiteral("end"), 10);
 
     QString error;
-    const auto parsed = entityFromJson(minimal, &error);
+    const auto parsed = entityFromJson(minimal, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (!parsed)
         return;
@@ -1370,7 +1370,7 @@ void testDefaults()
     QJsonObject missingEnd;
     missingEnd.insert(QStringLiteral("uuid"), newUuid());
     missingEnd.insert(QStringLiteral("start"), 25);
-    const auto parsedEnd = entityFromJson(missingEnd, &error);
+    const auto parsedEnd = entityFromJson(missingEnd, ParseOptions{}, &error);
     CHECK_DETAIL(parsedEnd.has_value(), error);
     if (parsedEnd)
         CHECK(parsedEnd->end == 25);
@@ -1453,7 +1453,7 @@ void testJsonDeterminism()
 
     // Parsing and re-serializing must also be byte-identical.
     QString error;
-    const auto parsed = entityFromJson(toJson(a), &error);
+    const auto parsed = entityFromJson(toJson(a), ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (!parsed)
         return;
@@ -1528,7 +1528,7 @@ void testFormatVersion()
     QJsonObject futureEntity = currentEntity;
     futureEntity.insert(QStringLiteral("version"), kProjectFormatVersion + 1);
     error.clear();
-    CHECK(!entityFromJson(futureEntity, &error).has_value());
+    CHECK(!entityFromJson(futureEntity, ParseOptions{}, &error).has_value());
     CHECK_DETAIL(error.contains(QStringLiteral("实体版本")), error);
     CHECK_DETAIL(error.contains(QStringLiteral("高于")), error);
     CHECK_DETAIL(error.contains(QStringLiteral("不会被修改")), error);
@@ -1552,7 +1552,7 @@ void testFormatVersion()
 
     // Lenient mode keeps hand-written fixtures readable.
     error.clear();
-    CHECK_DETAIL(entityFromJson(legacyEntity, &error).has_value(), error);
+    CHECK_DETAIL(entityFromJson(legacyEntity, ParseOptions{}, &error).has_value(), error);
 }
 
 void testRequiredFieldsStrict()
@@ -1703,7 +1703,7 @@ void testUnknownFieldsRoundTrip()
     entityNames += solverFill.second;
 
     QString error;
-    const auto parsed = entityFromJson(entityJson, &error);
+    const auto parsed = entityFromJson(entityJson, ParseOptions{}, &error);
     CHECK_DETAIL(parsed.has_value(), error);
     if (parsed)
     {
@@ -1728,7 +1728,7 @@ void testUnknownFieldsRoundTrip()
         }
 
         // A second pass is stable: no duplicates, no drift.
-        const auto again = entityFromJson(written, &error);
+        const auto again = entityFromJson(written, ParseOptions{}, &error);
         CHECK_DETAIL(again.has_value(), error);
         if (again)
             CHECK(toJson(*again) == written);

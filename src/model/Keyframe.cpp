@@ -406,12 +406,6 @@ std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
     return keyframe;
 }
 
-std::optional<Keyframe> keyframeFromJson(const QJsonObject& object,
-                                         QString* error)
-{
-    return keyframeFromJson(object, ParseOptions{}, error);
-}
-
 QJsonArray toJson(const QVector<Keyframe>& keyframes)
 {
     QJsonArray array;
@@ -501,12 +495,6 @@ std::optional<QVector<Keyframe>> keyframesFromJson(
     }
 
     return keyframes;
-}
-
-std::optional<QVector<Keyframe>> keyframesFromJson(const QJsonValue& value,
-                                                   QString* error)
-{
-    return keyframesFromJson(value, ParseOptions{}, nullptr, -1, error);
 }
 
 bool validateKeyframes(const QVector<Keyframe>& keyframes, int duration,

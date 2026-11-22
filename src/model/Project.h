@@ -57,15 +57,11 @@ QJsonObject toJson(const Marker& marker);
 std::optional<Marker> markerFromJson(const QJsonObject& object,
                                      const ParseOptions& options,
                                      QString* error = nullptr);
-std::optional<Marker> markerFromJson(const QJsonObject& object,
-                                     QString* error = nullptr);
 
 QJsonObject toJson(const ProjectSettings& settings);
 std::optional<ProjectSettings> projectSettingsFromJson(
     const QJsonObject& object, const ParseOptions& options,
     QString* error = nullptr);
-std::optional<ProjectSettings> projectSettingsFromJson(
-    const QJsonObject& object, QString* error = nullptr);
 
 // Checks every entity, unique UUIDs, parent existence, parent/child time
 // ranges, parent cycles, marker frames and project settings.

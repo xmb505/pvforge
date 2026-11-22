@@ -45,14 +45,8 @@ struct World
     // Return every entity that may participate in collision at `frame`.
     // evaluate() filters the list with physicsInteract(), excludes
     // Segment::entityUuid, and always considers Segment::targetUuid when it is
-    // physics-interactive.  Implementations that cannot enumerate entities can
-    // leave this empty and instead pass params["collisionUuids"] on a gravity
-    // segment.
-    virtual QVector<Uuid> physicsEntities(int frame) const
-    {
-        (void)frame;
-        return {};
-    }
+    // physics-interactive.
+    virtual QVector<Uuid> physicsEntities(int frame) const = 0;
 };
 
 // Solver segments use frames relative to the driven entity's start, matching
@@ -124,10 +118,9 @@ struct Result
 //
 // Parameter keys:
 //   Gravity:   strength (px/s^2, default 980), elasticity (0..1, default 0.35),
-//              friction (0..1, default 0.2), stopThreshold (px/s, default 2),
-//              collisionUuids (QStringList fallback when World::physicsEntities
-//              is not implemented).  Acceleration points along the target's
-//              local -Y (screen down) and rotates with the target.
+//              friction (0..1, default 0.2), stopThreshold (px/s, default 2).
+//              Acceleration points along the target's local -Y (screen down)
+//              and rotates with the target.
 //   Orbit:     aspect (minor/major, 0.01..1, default 1), angle (degrees,
 //              counter-clockwise, relative to targetUuid's local rotation),
 //              direction (+1 clockwise / -1 counter-clockwise),

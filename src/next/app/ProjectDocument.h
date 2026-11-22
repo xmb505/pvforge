@@ -67,8 +67,8 @@ public:
     void setWritesLocked(bool locked) { m_writesLocked = locked; }
     bool writesLocked() const { return m_writesLocked; }
 
-    void flush(QString* error = nullptr) override;
-    bool hasPendingCommit() const override;
+    void flush(QString* error = nullptr);
+    bool hasPendingCommit() const;
 
     // Debounce for coalescing human edits into one commit.  The production
     // default is 1 s; the settings dialog may change it at runtime.

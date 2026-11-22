@@ -1,6 +1,5 @@
 #include "SolverInternal.h"
 
-#include <QMetaType>
 #include <QPolygonF>
 #include <QRectF>
 #include <QSet>
@@ -198,37 +197,6 @@ bool resolveCollisions(QPointF &position, QPointF &velocity,
     return collided;
 }
 
-void appendCandidates(const QVariant &value, const Uuid &excludedUuid,
-                      QVector<Uuid> &out, QSet<Uuid> &seen)
-{
-    if (!value.isValid())
-        return;
-
-    QStringList list;
-    if (value.typeId() == QMetaType::QStringList)
-        list = value.toStringList();
-    else if (value.typeId() == QMetaType::QString)
-        list = value.toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
-    else if (value.canConvert<QVariantList>())
-    {
-        const QVariantList variants = value.toList();
-        for (const QVariant &variant : variants)
-        {
-            if (variant.canConvert<QString>())
-                list.append(variant.toString());
-        }
-    }
-
-    for (const QString &raw : list)
-    {
-        const Uuid uuid = raw.trimmed();
-        if (uuid.isEmpty() || uuid == excludedUuid || seen.contains(uuid))
-            continue;
-        seen.insert(uuid);
-        out.append(uuid);
-    }
-}
-
 QVector<Uuid> collisionCandidates(const Segment &segment, const World &world, int frame)
 {
     QVector<Uuid> candidates;
@@ -248,9 +216,6 @@ QVector<Uuid> collisionCandidates(const Segment &segment, const World &world, in
     // The direction/ground entity may not be enumerated by World; it always
     // participates when physicsInteract() says so (filtered in collidersAt).
     add(segment.targetUuid);
-
-    appendCandidates(segment.params.value(QStringLiteral("collisionUuids")),
-                     segment.entityUuid, candidates, seen);
     return candidates;
 }
 
