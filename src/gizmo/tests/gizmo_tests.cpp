@@ -139,9 +139,11 @@ void testLocalMatrix()
                                   (p.y() - q.y()) * transform.scaleY);
     CHECK(nearlyPoint(difference, rotated(localDifference, transform.rotation)));
 
-    CHECK(nearlyPoint(worldToLocalAxes(transform,
-                                       worldPivot(transform)
-                                           + rotated(QPointF(17, -23), transform.rotation)),
+    CHECK(nearlyPoint(worldToLocalAxesPixels(transform,
+                                             worldPivot(transform)
+                                                 + rotated(QPointF(17, -23),
+                                                           transform.rotation),
+                                             1.0),
                       QPointF(transform.pivotX + 17, transform.pivotY - 23)));
     CHECK(nearlyPoint(worldToLocalAxesPixels(transform,
                                              worldPivot(transform)
@@ -490,61 +492,6 @@ void testRotateAroundBoundsCenter()
     CHECK(nearly(implicitResult.transform.rotation, explicitResult.transform.rotation));
 }
 
-void testHitTest()
-{
-    const Bounds bounds{-100, 100, 60, -60}; // Y-up: top is +60
-    Transform transform;
-    const double viewScale = 1.0;
-
-    static constexpr Handle kHandles[] = {
-        Handle::ScaleTopLeft,     Handle::ScaleTopRight,
-        Handle::ScaleBottomRight, Handle::ScaleBottomLeft,
-        Handle::RotateTopLeft,    Handle::RotateTopRight,
-        Handle::RotateBottomRight, Handle::RotateBottomLeft,
-        Handle::CenterScale};
-
-    for (Handle handle : kHandles)
-    {
-        const QPointF position = handlePosition(handle, transform, bounds, viewScale);
-        const std::optional<Handle> hit = hitTest(position, transform, bounds, viewScale);
-        CHECK_DETAIL(hit.has_value() && *hit == handle, QStringLiteral("handle %1").arg(int(handle)));
-    }
-
-    // Move axes are picked anywhere along their stem, not only at the tip.
-    CHECK(hitTest(QPointF(kMoveAxisLength / 2.0, 0), transform, bounds, viewScale)
-          == Handle::MoveX);
-    CHECK(hitTest(QPointF(0, kMoveAxisLength / 2.0), transform, bounds, viewScale)
-          == Handle::MoveY);
-    CHECK(hitTest(QPointF(kMoveAxisLength - 1.0, 0), transform, bounds, viewScale)
-          == Handle::MoveX);
-
-    // Empty canvas and edge midpoints miss.
-    CHECK(!hitTest(QPointF(400, 400), transform, bounds, viewScale).has_value());
-    CHECK(!hitTest(QPointF(0, -60), transform, bounds, viewScale).has_value());
-    CHECK(!hitTest(QPointF(20, 20), transform, bounds, viewScale).has_value());
-
-    // Handles rotate with the entity, so the old screen position misses.
-    Transform turned = transform;
-    turned.rotation = 90.0;
-    CHECK(hitTest(handlePosition(Handle::MoveX, turned, bounds, viewScale), turned, bounds,
-                  viewScale)
-          == Handle::MoveX);
-    CHECK(!hitTest(QPointF(kMoveAxisLength, 0), turned, bounds, viewScale).has_value());
-    for (Handle handle : kHandles)
-    {
-        const QPointF position = handlePosition(handle, turned, bounds, viewScale);
-        const std::optional<Handle> hit = hitTest(position, turned, bounds, viewScale);
-        CHECK_DETAIL(hit.has_value() && *hit == handle,
-                     QStringLiteral("rotated handle %1").arg(int(handle)));
-    }
-
-    // Pixel offsets shrink with viewScale.
-    const QPointF corner = localToWorld(transform, localCorner(bounds, Handle::ScaleTopLeft));
-    const QPointF zoomed = handlePosition(Handle::ScaleTopLeft, transform, bounds, 2.0);
-    CHECK(nearly(std::hypot(zoomed.x() - corner.x(), zoomed.y() - corner.y()),
-                 kScaleHandleInset / 2.0, 1e-9));
-}
-
 void testCenterScaleHandlePosition()
 {
     const Bounds bounds{-100, 100, 60, -60};
@@ -577,7 +524,6 @@ void testCenterScaleHandlePosition()
         const DragResult result = centerScale(transform, axes, false);
         CHECK(nearly(result.transform.scaleX, transform.scaleX));
         CHECK(nearly(result.transform.scaleY, transform.scaleY));
-        CHECK(hitTest(handleAtZoom, transform, bounds, viewScale) == Handle::CenterScale);
     }
 }
 
@@ -613,35 +559,6 @@ void testRotateHandleRidesCorner()
                              .arg(viewScale));
         }
     }
-}
-
-void testRotateHandleSquareHit()
-{
-    const Bounds bounds{-100, 100, 60, -60};
-    Transform transform;
-    transform.x = 30.0;
-    transform.y = -20.0;
-    const double viewScale = 2.0;
-
-    const QPointF centre =
-        handlePosition(Handle::RotateTopRight, transform, bounds, viewScale);
-    const double half = kRotateHitSize / 2.0 / viewScale;
-
-    // Axis-aligned square in model units: the diagonal just inside the
-    // half-size hits, one pixel outside misses.
-    CHECK(hitTest(centre + QPointF(half * 0.98, half * 0.98), transform, bounds,
-                  viewScale)
-          == Handle::RotateTopRight);
-    CHECK(!hitTest(centre + QPointF(half * 1.1, 0.0), transform, bounds, viewScale)
-               .has_value());
-
-    // The square does not care about the icon's own rotation.
-    transform.rotation = 90.0;
-    const QPointF turned =
-        handlePosition(Handle::RotateTopRight, transform, bounds, viewScale);
-    CHECK(hitTest(turned + QPointF(-half * 0.9, half * 0.9), transform, bounds,
-                  viewScale)
-          == Handle::RotateTopRight);
 }
 
 void testRotateAroundWorldPoint()
@@ -699,9 +616,7 @@ int main(int argc, char** argv)
     testRotateAroundPivot();
     testRotateAroundBoundsCenter();
     testRotateAroundWorldPoint();
-    testHitTest();
     testRotateHandleRidesCorner();
-    testRotateHandleSquareHit();
     testVisualCornerFlipMapping();
     testCenterScaleHandlePosition();
 

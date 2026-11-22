@@ -43,8 +43,6 @@
 #include <QPointF>
 #include <QTransform>
 
-#include <optional>
-
 namespace pvf::gizmo {
 
 struct Transform
@@ -82,7 +80,6 @@ enum class Handle
 };
 
 bool isRotateHandle(Handle handle);
-bool isScaleHandle(Handle handle);
 
 // Handle geometry in pixels (converted with viewScale).
 inline constexpr double kHitRadius = 7.0;
@@ -110,21 +107,14 @@ int visualCornerForRotateHandle(Handle handle);
 // is drawn at a visual corner after the entity's negative scale mirrors it.
 int localCornerForVisualCorner(int visualCorner, bool flippedX, bool flippedY);
 
-QTransform localMatrix(const Transform& transform);
 QPointF localToWorld(const Transform& transform, QPointF local);
 QPointF worldToLocal(const Transform& transform, QPointF world);
 
 // World point of the pivot. Equal to (x + pivotX, y + pivotY).
 QPointF worldPivot(const Transform& transform);
 
-// Undoes translation and rotation but NOT scale:
-//     pivot + R^-1 * (world - worldPivot)
-// This is the "local axes" space used by centerScale(): +X/+Y are the
-// entity's local axes, and a point's sign directly describes the quadrant.
-QPointF worldToLocalAxes(const Transform& transform, QPointF world);
-
 // centerScale() works in pixels so the center handle can stay a fixed size on
-// screen. This helper is worldToLocalAxes() with the pivot-relative offset
+// screen: pivot + R^-1 * (world - worldPivot) with the pivot-relative offset
 // multiplied by viewScale; pass its result straight to centerScale().
 QPointF worldToLocalAxesPixels(const Transform& transform, QPointF world, double viewScale);
 
@@ -139,10 +129,6 @@ QPointF boundsCenter(const Bounds& bounds);
 // non-uniform parent transforms cannot stretch these offsets.
 QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& bounds,
                        double viewScale);
-
-// modelPos is in the same Y-up canvas space as handlePosition().
-std::optional<Handle> hitTest(QPointF modelPos, const Transform& transform, const Bounds& bounds,
-                              double viewScale);
 
 struct DragResult
 {

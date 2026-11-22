@@ -21,10 +21,6 @@ namespace pvf::export2 {
 // "cancelled".
 using Progress = std::function<bool(int frame, int total, double etaSeconds)>;
 
-// Legacy two-argument progress callback.  Existing callers keep working; they
-// simply do not receive the ETA.  The frame/total semantics are unchanged.
-using LegacyProgress = std::function<bool(int frame, int total)>;
-
 // Options for one synchronous MP4 export.
 //
 // The camera is mandatory: `cameraUuid` must name an entity whose content kind
@@ -45,9 +41,9 @@ using LegacyProgress = std::function<bool(int frame, int total)>;
 // `outputFps` is the frame rate of the exported MP4 and must be 1x/2x/4x the
 // project fps (0 = project fps).  Each output frame samples the project at
 // `outputFrame * projectFps / outputFps`, so keyframes, video and HTML are
-// time-sampled while the project data stays untouched.  `fps` is a legacy alias
-// used only when `outputFps` is 0.  `crf` is the quality factor: 0..51 is
-// accepted (lower = better), anything else fails with "invalid_crf".
+// time-sampled while the project data stays untouched.  `crf` is the quality
+// factor: 0..51 is accepted (lower = better), anything else fails with
+// "invalid_crf".
 //
 // `encoder` selects the H.264 implementation: "libx264" (software, the
 // default) or "h264_vaapi" (hardware).  VAAPI converts every frame to NV12 and
@@ -83,7 +79,6 @@ struct Options
     int startFrame = 0; // ignored unless endFrame > startFrame
     int endFrame = 0;   // exclusive
     QSize outputSize;   // empty = project size * resolutionScale
-    int fps = 0;        // legacy alias of outputFps; 0 = project fps
     int outputFps = 0;  // 0 = project fps; otherwise 1x/2x/4x project fps
     int resolutionScale = 1; // 1, 2 or 4
     int crf = 18;            // 0..51
@@ -126,10 +121,5 @@ struct Result
 Result exportVideo(const model::Project& project,
                    const assets::AssetStore& assets, const Options& options,
                    Progress progress = {});
-
-// Backwards-compatible overload for two-argument callbacks.
-Result exportVideo(const model::Project& project,
-                   const assets::AssetStore& assets, const Options& options,
-                   LegacyProgress progress);
 
 } // namespace pvf::export2

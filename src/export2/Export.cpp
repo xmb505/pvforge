@@ -580,9 +580,7 @@ Result exportVideo(const model::Project& project,
 
     // Output fps: project fps by default.  Only integer 1x/2x/4x multiples are
     // supported so every output frame maps onto a stable time grid.
-    const int requestedFps =
-        options.outputFps > 0 ? options.outputFps : options.fps;
-    const int outputFps = requestedFps > 0 ? requestedFps : projectFps;
+    const int outputFps = options.outputFps > 0 ? options.outputFps : projectFps;
     const int fpsScale = outputFps % projectFps == 0
                              ? outputFps / projectFps
                              : 0;
@@ -1286,21 +1284,6 @@ Result exportVideo(const model::Project& project,
     result.error.clear();
     result.framesWritten = framesWritten;
     return result;
-}
-
-Result exportVideo(const model::Project& project,
-                   const assets::AssetStore& assets, const Options& options,
-                   LegacyProgress progress)
-{
-    Progress adapted;
-    if (progress)
-    {
-        adapted = [callback = std::move(progress)](int frame, int total,
-                                                   double) {
-            return callback(frame, total);
-        };
-    }
-    return exportVideo(project, assets, options, std::move(adapted));
 }
 
 } // namespace pvf::export2

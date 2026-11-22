@@ -32,6 +32,17 @@
 using namespace pvf;
 using namespace pvf::workbench::testsupport;
 
+namespace {
+
+// Cache::directory() is <root>/<directorySignature()>/<cameraKey>, so the
+// project-wide cache key is the parent directory name.
+QString cacheSignatureDirName(const workbench::Cache& cache)
+{
+    return QFileInfo(cache.directory()).dir().dirName();
+}
+
+} // namespace
+
 class WorkbenchCacheTests : public QObject
 {
     Q_OBJECT
@@ -530,28 +541,53 @@ void WorkbenchCacheTests::signatureAndSize()
     QCOMPARE(workbench::cacheSizeFor(project, 100, 1280), QSize(1280, 720));
     QCOMPARE(workbench::cacheSizeFor(project, 25, 0), QSize(480, 270));
 
+    // The cache root key is Options-only: project settings live in FrameMeta.
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
     workbench::Options options;
     options.scalePercent = 50;
     options.chromeVersion = QStringLiteral("chrome-1");
-    const QString signature = workbench::renderSignature(project, options);
-    QVERIFY(!signature.isEmpty());
 
-    workbench::Options otherScale = options;
-    otherScale.scalePercent = 75;
-    QVERIFY(signature != workbench::renderSignature(project, otherScale));
+    workbench::Cache otherScaleRoot(
+        QDir(root.path()).filePath(QStringLiteral("other-scale")),
+        QStringLiteral("camera"), [&] {
+            workbench::Options changed = options;
+            changed.scalePercent = 75;
+            return changed;
+        }());
+    workbench::Cache baseRoot(QDir(root.path()).filePath(QStringLiteral("base")),
+                              QStringLiteral("camera"), options);
+    QVERIFY(baseRoot.isValid());
+    QVERIFY(otherScaleRoot.isValid());
+    QVERIFY(!cacheSignatureDirName(baseRoot).isEmpty());
+    QVERIFY(cacheSignatureDirName(baseRoot)
+            != cacheSignatureDirName(otherScaleRoot));
+    // Identical options produce the identical on-disk key.
+    workbench::Cache sameRoot(QDir(root.path()).filePath(QStringLiteral("same")),
+                              QStringLiteral("camera"), options);
+    QVERIFY(sameRoot.isValid());
+    QCOMPARE(cacheSignatureDirName(baseRoot), cacheSignatureDirName(sameRoot));
 
-    // Chrome only participates when the project actually contains HTML.
-    workbench::Options noChrome = options;
-    noChrome.chromeVersion.clear();
-    QCOMPARE(signature, workbench::renderSignature(project, noChrome));
-
+    // Chrome only participates when the project actually contains HTML, and
+    // that lives in FrameMeta, which is what invalidates the frames.
+    workbench::MetaBuilder builder(project, assets);
+    const workbench::Options noChrome = [&] {
+        workbench::Options changed = options;
+        changed.chromeVersion.clear();
+        return changed;
+    }();
+    const workbench::FrameMeta chromeMeta = builder.build(0, QString(), options);
     model::Entity html = textEntity(QStringLiteral("html"), 0, 100);
     html.content.kind = ContentKind::Asset;
     html.content.asset.type = AssetType::Html;
     project.entities.insert(html.uuid, html);
-    QVERIFY(signature != workbench::renderSignature(project, noChrome));
-    QVERIFY(workbench::renderSignature(project, options)
-            != workbench::renderSignature(project, noChrome));
+    const workbench::FrameMeta htmlChromeMeta =
+        builder.build(0, QString(), options);
+    const workbench::FrameMeta htmlNoChromeMeta =
+        builder.build(0, QString(), noChrome);
+    QVERIFY(!chromeMeta.equals(htmlChromeMeta));
+    QVERIFY(!htmlChromeMeta.equals(htmlNoChromeMeta));
 }
 
 void WorkbenchCacheTests::renderRectAndExpandedSize()
@@ -618,20 +654,45 @@ void WorkbenchCacheTests::signatureTracksExpandAndTransparency()
     project.settings.width = 320;
     project.settings.height = 180;
     project.settings.fps = 30;
+    const model::Entity entity = textEntity(QStringLiteral("e1"), 0, 30);
+    project.entities.insert(entity.uuid, entity);
 
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    assets::AssetStore assets(root.path());
+    workbench::MetaBuilder builder(project, assets);
+
+    // The cache root key must separate expansion and transparency, and so must
+    // the per-frame meta that is compared on every lookup.
     workbench::Options options;
     options.scalePercent = 50;
     options.expandPercent = 0;
-    const QString canvas = workbench::renderSignature(project, options);
+    workbench::Cache canvasRoot(
+        QDir(root.path()).filePath(QStringLiteral("canvas")),
+        QStringLiteral("camera"), options);
 
     workbench::Options expanded = options;
     expanded.expandPercent = 50;
-    QVERIFY(canvas != workbench::renderSignature(project, expanded));
+    workbench::Cache expandedRoot(
+        QDir(root.path()).filePath(QStringLiteral("expanded")),
+        QStringLiteral("camera"), expanded);
+    QVERIFY(canvasRoot.isValid());
+    QVERIFY(expandedRoot.isValid());
+    QVERIFY(cacheSignatureDirName(canvasRoot)
+            != cacheSignatureDirName(expandedRoot));
+    QVERIFY(!builder.build(3, QString(), options)
+                 .equals(builder.build(3, QString(), expanded)));
 
     workbench::Options transparent = expanded;
     transparent.transparentOutsideCanvas = true;
-    QVERIFY(workbench::renderSignature(project, expanded)
-            != workbench::renderSignature(project, transparent));
+    workbench::Cache transparentRoot(
+        QDir(root.path()).filePath(QStringLiteral("transparent")),
+        QStringLiteral("camera"), transparent);
+    QVERIFY(transparentRoot.isValid());
+    QVERIFY(cacheSignatureDirName(expandedRoot)
+            != cacheSignatureDirName(transparentRoot));
+    QVERIFY(!builder.build(3, QString(), expanded)
+                 .equals(builder.build(3, QString(), transparent)));
 }
 
 void WorkbenchCacheTests::metaMarksRasterAssets()

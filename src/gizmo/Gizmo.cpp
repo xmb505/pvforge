@@ -17,25 +17,6 @@ QPointF rotateVector(QPointF vector, double degrees)
                    vector.x() * sine + vector.y() * cosine);
 }
 
-double distance(QPointF a, QPointF b)
-{
-    return std::hypot(a.x() - b.x(), a.y() - b.y());
-}
-
-double pointSegmentDistance(QPointF point, QPointF start, QPointF end)
-{
-    const QPointF segment = end - start;
-    const double lengthSquared = segment.x() * segment.x() + segment.y() * segment.y();
-    if (lengthSquared < 1e-18)
-        return distance(point, start);
-
-    const QPointF offset = point - start;
-    const double t = std::clamp((offset.x() * segment.x() + offset.y() * segment.y())
-                                    / lengthSquared,
-                                0.0, 1.0);
-    return distance(point, start + segment * t);
-}
-
 QPointF localCorner(const Bounds& bounds, Handle handle)
 {
     switch (handle)
@@ -100,8 +81,6 @@ QPointF cornerHandlePosition(const Transform& transform, const Bounds& bounds, H
     return outside ? corner - inward * offset : corner + inward * offset;
 }
 
-} // namespace
-
 bool isScaleHandle(Handle handle)
 {
     switch (handle)
@@ -115,6 +94,29 @@ bool isScaleHandle(Handle handle)
         return false;
     }
 }
+
+QTransform localMatrix(const Transform& transform)
+{
+    QTransform matrix;
+    matrix.translate(transform.x, transform.y);
+    matrix.translate(transform.pivotX, transform.pivotY);
+    matrix.rotate(transform.rotation);
+    matrix.scale(transform.scaleX, transform.scaleY);
+    matrix.translate(-transform.pivotX, -transform.pivotY);
+    return matrix;
+}
+
+// Undoes translation and rotation but NOT scale:
+//     pivot + R^-1 * (world - worldPivot)
+// This is the "local axes" space used by centerScale(): +X/+Y are the
+// entity's local axes, and a point's sign directly describes the quadrant.
+QPointF worldToLocalAxes(const Transform& transform, QPointF world)
+{
+    return QPointF(transform.pivotX, transform.pivotY)
+           + rotateVector(world - worldPivot(transform), -transform.rotation);
+}
+
+} // namespace
 
 bool isRotateHandle(Handle handle)
 {
@@ -173,17 +175,6 @@ int localCornerForVisualCorner(int visualCorner, bool flippedX, bool flippedY)
     return local;
 }
 
-QTransform localMatrix(const Transform& transform)
-{
-    QTransform matrix;
-    matrix.translate(transform.x, transform.y);
-    matrix.translate(transform.pivotX, transform.pivotY);
-    matrix.rotate(transform.rotation);
-    matrix.scale(transform.scaleX, transform.scaleY);
-    matrix.translate(-transform.pivotX, -transform.pivotY);
-    return matrix;
-}
-
 QPointF localToWorld(const Transform& transform, QPointF local)
 {
     return localMatrix(transform).map(local);
@@ -199,12 +190,6 @@ QPointF worldToLocal(const Transform& transform, QPointF world)
 QPointF worldPivot(const Transform& transform)
 {
     return QPointF(transform.x + transform.pivotX, transform.y + transform.pivotY);
-}
-
-QPointF worldToLocalAxes(const Transform& transform, QPointF world)
-{
-    return QPointF(transform.pivotX, transform.pivotY)
-           + rotateVector(world - worldPivot(transform), -transform.rotation);
 }
 
 QPointF worldToLocalAxesPixels(const Transform& transform, QPointF world, double viewScale)
@@ -244,63 +229,6 @@ QPointF handlePosition(Handle handle, const Transform& transform, const Bounds& 
     if (isRotateHandle(handle))
         return cornerHandlePosition(transform, bounds, handle, kRotateHandleInset, false, scale);
     return pivot;
-}
-
-std::optional<Handle> hitTest(QPointF modelPos, const Transform& transform, const Bounds& bounds,
-                              double viewScale)
-{
-    const double scale = viewScale > 0.0 ? viewScale : 1.0;
-
-    // Corner handles can overlap on small boxes now that the rotate glyphs
-    // ride the corners; the nearest centre wins instead of a fixed priority.
-    std::optional<Handle> best;
-    double bestDistance = 0.0;
-    const auto consider = [&](Handle handle, bool square, double extent) {
-        const QPointF position = handlePosition(handle, transform, bounds, scale);
-        const double dx = modelPos.x() - position.x();
-        const double dy = modelPos.y() - position.y();
-        const bool inside = square ? (std::abs(dx) <= extent && std::abs(dy) <= extent)
-                                   : std::hypot(dx, dy) <= extent;
-        if (!inside)
-            return;
-        const double distance = std::hypot(dx, dy);
-        if (!best || distance < bestDistance)
-        {
-            best = handle;
-            bestDistance = distance;
-        }
-    };
-
-    static constexpr Handle kRotateHandles[] = {Handle::RotateTopLeft, Handle::RotateTopRight,
-                                                Handle::RotateBottomRight,
-                                                Handle::RotateBottomLeft};
-    // The square hit box is the Inkscape default; in model space the extent is
-    // only scalar-correct because callers pass the view scale.
-    for (Handle handle : kRotateHandles)
-        consider(handle, true, kRotateHitSize / 2.0 / scale);
-
-    static constexpr Handle kScaleHandles[] = {Handle::ScaleTopLeft, Handle::ScaleTopRight,
-                                               Handle::ScaleBottomRight,
-                                               Handle::ScaleBottomLeft};
-    for (Handle handle : kScaleHandles)
-        consider(handle, false, kHitRadius / scale);
-
-    consider(Handle::CenterScale, false, kHitRadius / scale);
-
-    if (best)
-        return best;
-
-    const QPointF pivot = worldPivot(transform);
-    const auto hitsAxis = [&](QPointF direction) {
-        const QPointF tip = pivot + direction * (kMoveAxisLength / scale);
-        return pointSegmentDistance(modelPos, pivot, tip) <= kHitRadius / scale;
-    };
-    if (hitsAxis(rotateVector(QPointF(1.0, 0.0), transform.rotation)))
-        return Handle::MoveX;
-    if (hitsAxis(rotateVector(QPointF(0.0, 1.0), transform.rotation)))
-        return Handle::MoveY;
-
-    return std::nullopt;
 }
 
 DragResult cornerScale(const Transform& transform, const Bounds& bounds, Handle handle,

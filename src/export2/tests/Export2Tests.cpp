@@ -445,7 +445,7 @@ void testExportRedVector()
     int lastTotal = 0;
     const export2::Result result =
         export2::exportVideo(project, store, makeOptions(path),
-                             [&](int frame, int total) {
+                             [&](int frame, int total, double) {
                                  ++progressCalls;
                                  lastFrame = frame;
                                  lastTotal = total;
@@ -542,7 +542,7 @@ void testCancelRemovesFile()
     int progressCalls = 0;
     const export2::Result result =
         export2::exportVideo(project, store, makeOptions(path),
-                             [&](int, int) {
+                             [&](int, int, double) {
                                  ++progressCalls;
                                  return false;
                              });
