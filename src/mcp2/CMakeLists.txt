@@ -75,6 +75,7 @@ if(BUILD_TESTING)
         tests/mcp2_tests.cpp
         tests/mcp2_security_tests.cpp
         tests/mcp2_tests.h
+        tests/mcp2_test_fixture.h
     )
     target_link_libraries(pvf_mcp2_tests PRIVATE pvf_mcp2 Qt6::Test)
 
