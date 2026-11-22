@@ -111,6 +111,9 @@ bool MediaServices::start(QString* error)
     if (error)
         error->clear();
 
+    // An explicit start always wins over a previous stop().
+    m_stopped = false;
+
     // Browsers are only kept alive for projects that actually show HTML.
     if (!projectHasHtml())
         return true;
@@ -126,9 +129,13 @@ void MediaServices::stop()
     m_exportDecoders.clear();
     if (m_html)
         m_html->stop();
+    m_stopped = true;
     m_htmlInFlight = false;
     m_htmlPending = false;
     m_lastPrefetchFrame = -1;
+    // Queued thumbnails will never report back: the browsers are gone.  Left
+    // in place they would block every later request for the same asset.
+    m_thumbnailPending.clear();
 }
 
 void MediaServices::applySettings(const AppSettings& settings)
@@ -159,6 +166,10 @@ void MediaServices::applySettings(const AppSettings& settings)
         m_lastPrefetchFrame = -1;
         m_htmlStartFailed = false;
         m_htmlError.clear();
+        // The old service is gone with its queued renders; a new one starts
+        // from a clean command line and must not inherit the stopped state.
+        m_stopped = false;
+        m_thumbnailPending.clear();
         if (projectHasHtml())
         {
             QString startError;
@@ -229,6 +240,16 @@ bool MediaServices::projectHasHtml() const
         const model::Entity& entity = it.value();
         if (entity.content.kind == ContentKind::Asset
             && entity.content.asset.type == AssetType::Html)
+            return true;
+    }
+
+    // HTML dragged from the asset bin onto the timeline is still an asset, and
+    // an asset that was imported but not placed yet must get its thumbnail.
+    // list() already drops assets whose bundle went missing.
+    const QVector<assets::StoredAsset> stored = m_document->assets().list();
+    for (const assets::StoredAsset& asset : stored)
+    {
+        if (asset.type == AssetType::Html)
             return true;
     }
     return false;
@@ -555,6 +576,18 @@ QImage MediaServices::htmlThumbnail(const AssetHash& hash, const QSize& target)
     const QImage cached = m_html->cachedLowRes(request);
     if (!cached.isNull())
         return cached;
+
+    // An HTML asset that is only in the asset bin never reaches start() (the
+    // project used to look HTML-free), so the browser pipeline is started here,
+    // once.  The conditions mirror startHtml(): never revive an explicitly
+    // stopped service, never retry after a recorded start failure, and a second
+    // icon repaint is a no-op thanks to the pending set below.
+    if (!m_html->isRunning() && !m_htmlStartFailed && !m_stopped)
+    {
+        QString startError;
+        if (!startHtml(&startError) || !m_html->isRunning())
+            return {};
+    }
 
     // Queue only while the browser pipeline is actually running.  Asking a
     // stopped service leaves a pending frame that never reports back, so the

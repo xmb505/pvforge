@@ -65,6 +65,8 @@ public:
 
     // Starts the HTML service when the project has HTML content.  Returns false
     // with *error on a start failure; video providers keep working either way.
+    // Once stop() has run the service stays down until start() or
+    // applySettings() is called again: htmlThumbnail() never revives it.
     bool start(QString* error = nullptr);
     void stop();
 
@@ -123,6 +125,11 @@ public:
     // image, and the frame arrives through the existing htmlFrameReady signal
     // (htmlThumbnail() then hits the cache).  A project whose HTML browsers
     // could not start returns null forever, so callers keep their placeholder.
+    //
+    // An asset that was imported but not dropped on the timeline still gets a
+    // thumbnail: the first miss lazily starts the HTML service once (the same
+    // start() path, so a failure here records m_htmlStartFailed and is never
+    // retried per repaint).  A service stopped with stop() is left stopped.
     QImage htmlThumbnail(const AssetHash& hash, const QSize& target);
 
     // Export providers (src/export2).  Unlike the viewport providers they
@@ -161,6 +168,9 @@ public:
     QSize htmlRequestSizeForTest(const Uuid& entityUuid) const;
     html2::HtmlFrameService* htmlServiceForTest() const { return m_html.get(); }
     video2::VideoSequenceService* videoSequenceForTest(const AssetHash& hash) const;
+    // True when projectHasHtml() sees HTML on the timeline or in the asset bin.
+    bool projectHasHtmlForTest() const { return projectHasHtml(); }
+    int thumbnailPendingForTest() const { return int(m_thumbnailPending.size()); }
 #endif
 
 signals:
@@ -193,6 +203,10 @@ private:
     QString m_cacheRoot;
     QString m_htmlError;
     bool m_htmlStartFailed = false;
+    // Distinguishes "not started yet" (htmlThumbnail may lazily start it) from
+    // "explicitly stopped": stop() sets it and only start()/applySettings()
+    // clears it, so a background repaint never revives a stopped Chrome.
+    bool m_stopped = false;
 
     std::unique_ptr<video2::VideoFrames> m_videoFrames;
     // Full-resolution sequential decoders reserved for the export worker; one
