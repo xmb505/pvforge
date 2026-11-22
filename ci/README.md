@@ -1,6 +1,7 @@
 # CI 与本地验证
 
-CI 有两道 gate：代码体量 ratchet，以及 Debug 构建 + `ctest -L self-test`。Release 仍由本地手动执行。本地命令见下。
+CI 有三道 gate：代码体量 ratchet、Debug 构建 + 全量 `ctest`（含需要 Chrome 的 HTML 图层用例），
+以及 Release 构建 + 交付检查（确认 `ForTest` 钩子没有漏进 Release）。本地命令见下。
 
 ## 依赖
 
@@ -95,8 +96,9 @@ CI 的 `code-size` job 只做文本统计，不装 Qt、不构建，**阻塞合�
 
 ## 已知限制
 
-- CI 目前只跑 `tools/check-code-size.sh`（文本统计），不装 Qt、不构建、不跑测试；
-  构建/测试/像素或视频相关断言都只在本地手动执行。
+- CI 的三道 gate 是 `code-size`（文本统计，阻塞合并）、`build-test`（Qt 6.7.3 + 全量
+  ctest，并预装 Chrome 让 HTML 图层用例真跑）和 `release`（Release 构建 + 交付检查）；
+  像素/视频相关的人工比对仍只在本地做。
 - 没有任何 Qt WebSockets 模块，走内置 RFC 6455 客户端这条分支。
 - 没有 Chrome/Chromium 时，`html2` 的浏览器相关用例会自行 SKIP；HTML 图层回归只在
   装了浏览器的机器上有效。
