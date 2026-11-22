@@ -1123,7 +1123,7 @@ void WorkbenchIntegrationTest::writerThreadsSpeedUpTheDrain()
                             .arg(oneThread, 0, 'f', 1)
                             .arg(threeThreads, 0, 'f', 1)));
     // A fourth writer must at least not be slower than a single one; whether it
-    // beats three is machine dependent and reported by --cache-miss-profile.
+    // beats three is machine dependent.
     QVERIFY2(fourThreads < oneThread,
              qPrintable(QStringLiteral("four writers slower than one: 1 "
                                        "thread %1 ms, 4 threads %2 ms")

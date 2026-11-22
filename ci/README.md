@@ -59,15 +59,9 @@ Release 语义的裁剪构建。
 
 ## 文档指标
 
-`docs/AI/STATUS.md` 顶部的指标区块不再手抄，由脚本从仓库现场计算：
-
-```bash
-bash tools/doc-metrics.sh           # 打印 Markdown 片段
-bash tools/doc-metrics.sh --write   # 替换 STATUS.md 里的标记区块
-bash tools/doc-metrics.sh --check   # 与文档比对，不一致退出 1
-```
-
-CI 的 `doc-metrics` job 已移除；脚本只在本地用。需要时手动 `--write` 更新，不靠 CI 拦数字漂移。
+`docs/AI/STATUS.md` 顶部的指标区块不再手抄。原 `tools/doc-metrics.sh` 与 CI 的
+`doc-metrics` job 已一并移除，需要数字时直接用 `tools/check-code-size.sh` 等现役工具或
+命令行统计。
 
 ## 代码体量
 

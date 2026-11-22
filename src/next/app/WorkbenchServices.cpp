@@ -28,7 +28,7 @@ constexpr qint64 kMaxPendingStoreBytes = 256LL * 1024 * 1024;
 // The Qt WebP plugin on this build is re-entrant (workbench tests encode
 // several frames at once and decode each one), but three writers already
 // saturate a 30-60 fps playback miss stream; a fourth is only useful when the
-// UI thread has headroom.  Measured with --cache-miss-profile.
+// UI thread has headroom (measured with the removed cache-miss profiler).
 constexpr int kMinWriterThreads = 1;
 constexpr int kMaxWriterThreads = 4;
 

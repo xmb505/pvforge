@@ -10,7 +10,6 @@ src/tests/TimelineTests.cpp	2188
 src/store/tests/store_tests.cpp	1971
 src/tests/SolverTests.cpp	1945
 src/tests/PropertiesTests.cpp	1884
-src/tests/ProfileFixtures.cpp	1854
 src/html2/tests/Html2Tests.cpp	1688
 src/workbench/tests/WorkbenchCacheTests.cpp	1678
 src/render2/tests/Render2Tests.cpp	1653
