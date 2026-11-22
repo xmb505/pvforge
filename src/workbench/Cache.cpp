@@ -38,8 +38,7 @@ QString sha1Hex(const QByteArray& bytes)
 
 // Options-only directory key.  Project fps/size/background are part of
 // FrameMeta, so a project change still invalidates every frame even when the
-// directories are shared.  renderSignature() remains the project-wide key
-// exposed to callers that want to nest the cache root per project.
+// directories are shared.
 QString directorySignature(const Options& options)
 {
     QByteArray payload;
