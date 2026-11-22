@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PVForge VERSION 0.3.0 DESCRIPTION "2D music PV editor with a Mine-imator style animation workflow" LANGUAGES CXX)
+project(PVForge VERSION 0.4.0 DESCRIPTION "2D music PV editor with a Mine-imator style animation workflow" LANGUAGES CXX)
 
 # Debug builds default to tests; a plain Release configure must not compile
 # test hooks or test binaries unless the caller explicitly asks for them.
